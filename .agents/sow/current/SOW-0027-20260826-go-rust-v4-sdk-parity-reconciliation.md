@@ -466,6 +466,30 @@ test failures (recovery/immutable_output/worker, identical on
 pristine HEAD, environment-dependent) are recorded for the closure
 round; Go plain + v4work suites, vet, gofmt all green at 30a30549.
 
+Mixed-language coordination matrix completed (2026-08-30): the
+external-review gap (sol: the five mixed modes did not explicitly
+cover stale reader slots and sidecar replacement) is closed by
+extending both directions of the battery
+(v4/go/mixed_live_test.go + v4/rust/iprange-livedb/tests/
+mixed_live.rs). The pinned mode now holds the foreign child's slot
+across TWO parent replacements (generations 3 and 4), asserting
+Reclaim NoChange after each and progress after release: the stale-slot
+reservation survives repeated sidecar replacements. A new sidecar
+mode in both directions proves the external reader sidecar is a full
+replacement, not an append: with a held reader slot the sidecar
+content changes across a commit while its length stays canonical (one
+header page + capacity 16-byte slots = 4160 bytes at capacity 4; the
+no-reader case rewrites identical bytes in place, so the held-slot
+shape is the observable replacement). Full matrix per direction:
+reader interop, writer exclusion (locks), stale slots (pinned across
+two replacements), sidecar replacement, transition/reservation states
+(the READY-held-release protocol spans reserve, hold-through-
+replacement, and release), publication inspection (transaction-id and
+value read-back after two foreign commits), commit resolution, and
+snapshot opening - six parent tests per direction, all green with
+IPRANGE_V4_MIXED_LIVE=1 in both directions on linux/amd64.
+
+
 
 
 

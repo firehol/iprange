@@ -13,6 +13,7 @@ package iprangedb
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -191,6 +192,17 @@ func TestMixedLiveRustChild(t *testing.T) {
 		if result.Outcome != ReclaimOutcomeNoChange {
 			t.Fatalf("reclaim while rust reader pinned = %v, want NoChange", result.Outcome)
 		}
+		// A second replacement (generation 4) keeps the stale slot
+		// pinned: the stale-slot reservation must survive repeated
+		// sidecar replacements in the foreign language.
+		commitDirect(t, w, 20, 40, 3)
+		result, err = w.Reclaim(10, 10_000, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Outcome != ReclaimOutcomeNoChange {
+			t.Fatalf("reclaim while rust reader pinned after second replacement = %v, want NoChange", result.Outcome)
+		}
 		finishChild(t, cmd, stdin, "pinned")
 		result, err = w.Reclaim(10, 10_000, nil)
 		if err != nil {
@@ -200,6 +212,51 @@ func TestMixedLiveRustChild(t *testing.T) {
 			t.Fatal("reclaim after rust reader release stayed blocked")
 		}
 		closeWriter(t, w)
+	})
+	t.Run("sidecar", func(t *testing.T) {
+		// The external reader sidecar is a full replacement on every
+		// commit (one header page plus capacity 16-byte slots: 4160
+		// bytes at capacity 4), never an append; the Rust child must
+		// read the newest generation after the Go parent replaced the
+		// sidecar twice.
+		main := liveGenPath(t, "go-parent-sidecar")
+		createDirectLive(t, main)
+		w := openWriter(t, main)
+		commitDirect(t, w, 10, 30, 1) // generation 2
+		sidecar := func() []byte {
+			bytes, err := os.ReadFile(main + ".readers")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(bytes) != 4160 {
+				t.Fatalf("sidecar length = %d, want 4160 (capacity 4 slots)", len(bytes))
+			}
+			return bytes
+		}
+		first := sidecar()
+		// A held reader slot makes the replacement visible: the slot
+		// table must record the reader across the commit, so the
+		// sidecar content changes while its canonical length stays
+		// fixed (replaced, never appended).
+		r, err := OpenLiveReader(main, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		commitDirect(t, w, 12, 18, 2) // generation 3
+		second := sidecar()
+		if bytes.Equal(first, second) {
+			t.Fatal("sidecar identical across replacement commits; want a replaced file")
+		}
+		if _, err := r.Close(); err != nil {
+			t.Fatal(err)
+		}
+		closeWriter(t, w)
+		cmd := runRustChild(binary, main, "reader")
+		cmd.Stdout = os.Stderr
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			t.Fatalf("rust reader child after sidecar replacement failed: %v", err)
+		}
 	})
 	t.Run("resolve", func(t *testing.T) {
 		main := liveGenPath(t, "go-parent-resolve")

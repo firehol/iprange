@@ -284,6 +284,16 @@ fn go_child_pins_reclamation_across_languages() {
             .unwrap(),
         ReclaimResult::NoChange
     ));
+    // A second replacement (generation 4) keeps the stale slot pinned:
+    // the stale-slot reservation must survive repeated sidecar
+    // replacements in the foreign language.
+    commit_gen(&mut writer, 20, 40, 3);
+    assert!(matches!(
+        writer
+            .reclaim(10, 10_000, &CancellationToken::new())
+            .unwrap(),
+        ReclaimResult::NoChange
+    ));
     finish_go_child(&mut run, deadline, "pinned");
     drop(run);
     match writer
@@ -312,6 +322,55 @@ fn altered_attempt(source: &CommitResult, transaction_id: u64, nonce: [u8; 16]) 
         coordination_cleanup: iprange_livedb::publication::CoordinationCleanup::None,
         cause: None,
     }
+}
+
+#[test]
+fn go_child_reads_after_sidecar_replacement() {
+    if env::var("IPRANGE_V4_MIXED_LIVE").as_deref() != Ok("1") {
+        eprintln!("mixed_live: set IPRANGE_V4_MIXED_LIVE=1 to run the cross-language battery");
+        return;
+    }
+    let Some(binary) = go_test_binary() else {
+        return;
+    };
+    let main = unique_path("sidecar");
+    create(&main);
+    let sidecar = PathBuf::from(format!("{}.readers", main.display()));
+    let mut writer = LiveWriter::open(&main, budget(), &CancellationToken::new()).unwrap();
+    // The external reader sidecar is a full replacement on every commit
+    // (one header page plus capacity 16-byte slots: 4160 bytes at
+    // capacity 4), never an append; the Go child must read the newest
+    // generation after the Rust parent replaced the sidecar twice.
+    let sidecar_bytes = || -> Vec<u8> {
+        let bytes = std::fs::read(&sidecar)
+            .unwrap_or_else(|error| panic!("read {}: {error}", sidecar.display()));
+        assert_eq!(
+            bytes.len(),
+            4160,
+            "sidecar length must be 4160 (capacity 4 slots)"
+        );
+        bytes
+    };
+    commit_gen(&mut writer, 10, 30, 1); // generation 2
+    let first = sidecar_bytes();
+    // A held reader slot makes the replacement visible: the slot table
+    // must record the reader across the commit, so the sidecar content
+    // changes while its canonical length stays fixed (replaced, never
+    // appended).
+    let mut reader = LiveReader::open(&main, &CancellationToken::new()).unwrap();
+    commit_gen(&mut writer, 12, 18, 2); // generation 3
+    let second = sidecar_bytes();
+    if first == second {
+        panic!("sidecar identical across replacement commits; want a replaced file");
+    }
+    reader.close().unwrap();
+    writer.close().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(90);
+    let mut run = run_go_child(&binary, &main, "reader");
+    finish_go_child(&mut run, deadline, "reader");
+    drop(run);
+    cleanup(&main);
+    drop(std::fs::remove_file(&binary));
 }
 
 #[test]
@@ -429,8 +488,9 @@ fn mixed_live_rust_child() {
             // Hold the pinned generation until the parent releases us.
             let mut sink = Vec::new();
             std::io::stdin().read_to_end(&mut sink).unwrap();
-            // The pinned view must survive the parent's generation 3:
-            // generation 2 values stay visible to this reader.
+            // The pinned view must survive the parent's generation 3
+            // and 4 (repeated sidecar replacements): generation 2
+            // values stay visible to this reader.
             assert_eq!(reader.lookup_direct_v4(Ipv4Key(15)).unwrap(), Some(1));
             assert_eq!(reader.lookup_direct_v4(Ipv4Key(19)).unwrap(), Some(1));
             reader.close().unwrap();
