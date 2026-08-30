@@ -796,7 +796,7 @@ func ReplaceLocalRun[T any](codec Codec[T], store Store, root *uint32, rejected 
 		header.Lower -= 2
 		header.Upper += uint16(len(cell))
 	}
-	if err := store.RestoreDirty(target.PageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return err
 	}
 	if start == 0 {

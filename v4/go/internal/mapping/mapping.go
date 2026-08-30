@@ -561,6 +561,11 @@ func (m *Mapping) Page(pgno uint32) ([]byte, error) {
 		}
 	}
 	off := uint64(pgno) << format.PageShift
+	// Necessary-work parity (Rust mapping.rs page/page_mut/page_pair
+	// count page_visited on every established full-page view): Go keeps
+	// the count at this one mapping-layer owner so reader and writer
+	// paths report the same page-visit definition.
+	work.PageVisit(1)
 	return m.View(off, format.PageSize)
 }
 

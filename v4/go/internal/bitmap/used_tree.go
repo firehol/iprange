@@ -56,7 +56,7 @@ func propagateInner(store tree.Store, frames []usedFrame, childPage uint32, chil
 		if err := setBranchChild(page, header, frame.childIndex, child, candidate); err != nil {
 			return err
 		}
-		if err := store.RestoreDirty(frame.pageNumber, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return err
 		}
 		childPage = frame.pageNumber
@@ -94,7 +94,7 @@ func removeEmptyPath(store tree.Store, root *uint32, path *editPath, limit uint6
 		if err != nil {
 			return err
 		}
-		if err := store.RestoreDirty(frame.pageNumber, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return err
 		}
 		if remaining != 0 {
@@ -164,7 +164,7 @@ func growUsedRoot(store tree.Store, root *uint32, kind Kind, required uint16, li
 		if err := setBranchChild(page, Header{Level: nextLevel}, 0, child, candidate); err != nil {
 			return err
 		}
-		if err := store.RestoreDirty(parent, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return err
 		}
 		*root = parent
@@ -192,7 +192,7 @@ func newUsedSubtree(store tree.Store, kind Kind, level uint16, base uint64, limi
 			return 0, err
 		}
 		stampLeaf(page, 1)
-		if err := store.RestoreDirty(pageNumber, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return 0, err
 		}
 		return pageNumber, nil
@@ -233,7 +233,7 @@ func newUsedSubtree(store tree.Store, kind Kind, level uint16, base uint64, limi
 	if err := setBranchChild(page, Header{Level: level}, index, child, candidate); err != nil {
 		return 0, err
 	}
-	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return 0, err
 	}
 	return pageNumber, nil

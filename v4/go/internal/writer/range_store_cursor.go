@@ -61,7 +61,7 @@ func (s selectedStore) Update(pageNumber uint32) ([]byte, uint32, error) {
 	return nil, 0, corrupt("selected base source cannot update")
 }
 
-func (s selectedStore) RestoreDirty(pageNumber uint32, tag uint32) error {
+func (s selectedStore) FinishEdit(page []byte, tag uint32) error {
 	return corrupt("selected base source cannot restore")
 }
 

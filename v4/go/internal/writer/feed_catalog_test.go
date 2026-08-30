@@ -122,7 +122,7 @@ func TestDraftFeedCatalogIndexExhaustion(t *testing.T) {
 	// A branch page must declare a nonzero item count; the zeroed
 	// summaries then report no hole at any level.
 	format.PutU16(view[format.HeaderCount:], 1)
-	if err := store.RestoreDirty(page, tag); err != nil {
+	if err := store.FinishEdit(view, tag); err != nil {
 		t.Fatal(err)
 	}
 	draft.meta.FeedUsedRoot = page

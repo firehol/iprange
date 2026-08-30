@@ -59,7 +59,7 @@ func (m *rangeMemoryStore) Update(pageNumber uint32) ([]byte, uint32, error) {
 // RestoreDirty re-arms one page's dirty marker after a successful
 // mutation; the test store keeps no dirty chain, so the re-arm is a
 // no-op.
-func (m *rangeMemoryStore) RestoreDirty(pageNumber uint32, tag uint32) error {
+func (m *rangeMemoryStore) FinishEdit(page []byte, tag uint32) error {
 	return nil
 }
 

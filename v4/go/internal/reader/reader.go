@@ -261,7 +261,9 @@ func (r *ImmutableReader) page(pgno uint32) ([]byte, error) {
 	if !format.PageNumberValid(pgno, r.meta.PageCount) {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "page number out of range"}
 	}
-	work.PageVisit(1)
+	// PageVisit is counted by mapping.Page (the mapping-layer owner,
+	// mirroring Rust mapping.rs page_visited); the reader adds the
+	// per-parse count because it decodes exactly one header per page.
 	work.PageParse(1)
 	return r.m.Page(pgno)
 }

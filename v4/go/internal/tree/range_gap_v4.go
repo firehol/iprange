@@ -262,7 +262,7 @@ func replaceBranchChild4(store Store, pageNumber uint32, index int, child uint32
 	if !ok {
 		return corrupt("B+tree child replacement no longer fits")
 	}
-	return store.RestoreDirty(pageNumber, tag)
+	return store.FinishEdit(page, tag)
 }
 
 // privateRangePath4 descends from the root, privatizing every
@@ -426,7 +426,7 @@ func applyReplacement4(codec RangeCodec4, store Store, pageNumber uint32, header
 		if err := applyCells4(page, header, edit.index, edit.cells); err != nil {
 			return branchSplit{}, false, err
 		}
-		return branchSplit{}, false, store.RestoreDirty(pageNumber, tag)
+		return branchSplit{}, false, store.FinishEdit(page, tag)
 	}
 	return splitReplacement4(codec, store, pageNumber, header, edit)
 }
@@ -539,7 +539,7 @@ func keepLeftReplacement4(store Store, pageNumber uint32, header *Header, edit R
 		if err != nil {
 			return err
 		}
-		return store.RestoreDirty(pageNumber, tag)
+		return store.FinishEdit(page, tag)
 	}
 	if middle < edit.index+len(edit.cells) {
 		left, err := truncate4(page, header, edit.index+1)
@@ -549,7 +549,7 @@ func keepLeftReplacement4(store Store, pageNumber uint32, header *Header, edit R
 		if err := applyCells4(page, &left, edit.index, edit.cells[:middle-edit.index]); err != nil {
 			return err
 		}
-		return store.RestoreDirty(pageNumber, tag)
+		return store.FinishEdit(page, tag)
 	}
 	keep := middle - (len(edit.cells) - 1)
 	left, err := truncate4(page, header, keep)
@@ -559,7 +559,7 @@ func keepLeftReplacement4(store Store, pageNumber uint32, header *Header, edit R
 	if err := applyCells4(page, &left, edit.index, edit.cells); err != nil {
 		return err
 	}
-	return store.RestoreDirty(pageNumber, tag)
+	return store.FinishEdit(page, tag)
 }
 
 // firstKey4 reads the first key of one family page (the
@@ -602,7 +602,7 @@ func splitReplacement4(codec RangeCodec4, store Store, pageNumber uint32, header
 	if err := buildReplacement4(src, header, edit, middle, total, dst); err != nil {
 		return branchSplit{}, false, err
 	}
-	if err := store.RestoreDirty(rightPage, tag); err != nil {
+	if err := store.FinishEdit(dst, tag); err != nil {
 		return branchSplit{}, false, err
 	}
 	if err := keepLeftReplacement4(store, pageNumber, header, edit, middle); err != nil {
@@ -992,7 +992,7 @@ func ReplaceLocalRun4(codec RangeCodec4, store Store, root *uint32, rejected *Lo
 		header.Lower -= 2
 		header.Upper += uint16(len(cell))
 	}
-	if err := store.RestoreDirty(target.PageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return err
 	}
 	if start == 0 {

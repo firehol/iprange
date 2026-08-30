@@ -82,7 +82,7 @@ func writeMembershipBlobLeaf[W membershipWords](store tree.Store, words W, offse
 		return membershipBlobNode{}, err
 	}
 	initializeMembershipBlobLeaf(page, txn, uint64(offsetWords)*8, dataLen)
-	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return membershipBlobNode{}, err
 	}
 	var written uint32
@@ -106,7 +106,7 @@ func writeMembershipBlobLeaf[W membershipWords](store tree.Store, words W, offse
 			at := membershipBlobLeafData + (int(written)+index)*8
 			binary.LittleEndian.PutUint64(page[at:], value)
 		}
-		if err := store.RestoreDirty(pageNumber, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return membershipBlobNode{}, err
 		}
 		written += n
@@ -122,6 +122,7 @@ func initializeMembershipBlobLeaf(page []byte, bornTxn uint64, start uint64, dat
 		uint16(membershipBlobLeafData+dataLen), format.PageSize, membershipBlobAux)
 	format.PutU64(page[membershipBlobLeafStartOffset:], start)
 	format.PutU16(page[membershipBlobLeafLengthOffset:], uint16(dataLen))
+	work.BytesMoved(10) // Rust blob_tree initialize_leaf: start + length puts
 }
 
 // pushMembershipBlobNode inserts one node into the bottom-up levels,
@@ -213,7 +214,7 @@ func flushMembershipBlobLevel(store tree.Store, level *membershipBlobLevel) (mem
 	if err := b.Finish(page); err != nil {
 		return membershipBlobNode{}, err
 	}
-	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return membershipBlobNode{}, err
 	}
 	level.len = 0 // Rust flush ends with *level = EMPTY_LEVEL

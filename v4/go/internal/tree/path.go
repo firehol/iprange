@@ -236,5 +236,5 @@ func replaceBranchChild[T any](codec Codec[T], store Store, pageNumber uint32, i
 	if !ok {
 		return corrupt("B+tree child replacement no longer fits")
 	}
-	return store.RestoreDirty(pageNumber, tag)
+	return store.FinishEdit(page, tag)
 }

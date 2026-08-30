@@ -943,21 +943,12 @@ func (b *OutputBuilder) Update(pageNumber uint32) ([]byte, uint32, error) {
 	return page, 0, nil
 }
 
-// RestoreDirty re-verifies the output ownership after a successful
-// mutation or copy and releases the armed page window (Rust
-// require_output_owner + probe drop inside with_output_protection).
-// The output has no dirty chain, so the tag is never re-armed; the
-// fetch runs inside the still-armed window.
-func (b *OutputBuilder) RestoreDirty(pageNumber uint32, tag uint32) error {
-	if err := requireOutputPage(pageNumber, b.meta.PageCount); err != nil {
-		b.consumePageWindow()
-		return err
-	}
-	page, err := b.mapping.Page(pageNumber)
-	if err != nil {
-		b.consumePageWindow()
-		return err
-	}
+// FinishEdit re-verifies the output ownership of the already-held page
+// view after a successful mutation or copy and releases the armed page
+// window (Rust require_output_owner + probe drop inside
+// with_output_protection; the tag write shares the Update view, so the
+// page is fetched exactly once per edit).
+func (b *OutputBuilder) FinishEdit(page []byte, tag uint32) error {
 	if !outputPageOwned(page, b.meta.TxnID) {
 		b.consumePageWindow()
 		return corrupt("immutable output page ownership is invalid")

@@ -176,7 +176,7 @@ func NewLeaf[T any](codec Codec[T], store Store, cell []byte) (uint32, error) {
 	if err := b.Finish(page); err != nil {
 		return 0, err
 	}
-	return pageNumber, store.RestoreDirty(pageNumber, tag)
+	return pageNumber, store.FinishEdit(page, tag)
 }
 
 // EditLeaf applies one leaf edit, splitting the page when the record does
@@ -220,7 +220,7 @@ func applyLeafEdit[T any](codec Codec[T], store Store, pageNumber uint32, header
 	if err := applyEdit(codec, page, header, edit); err != nil {
 		return err
 	}
-	return store.RestoreDirty(pageNumber, tag)
+	return store.FinishEdit(page, tag)
 }
 
 func applyEdit[T any](codec Codec[T], page []byte, header *Header, edit Edit) error {
@@ -275,7 +275,7 @@ func splitLeafAt[T any](codec Codec[T], store Store, root *uint32, target *LeafT
 	if err := buildEdit(codec, src, &target.Header, edit, middle, total, dst); err != nil {
 		return err
 	}
-	if err := store.RestoreDirty(rightPage, tag); err != nil {
+	if err := store.FinishEdit(dst, tag); err != nil {
 		return err
 	}
 	if err := keepLeftEdit(codec, store, target.PageNumber, &target.Header, edit, middle); err != nil {
@@ -333,7 +333,7 @@ func keepLeftEdit[T any](codec Codec[T], store Store, pageNumber uint32, header 
 		if err := b.Finish(page); err != nil {
 			return err
 		}
-		return store.RestoreDirty(pageNumber, tag)
+		return store.FinishEdit(page, tag)
 	}
 	left, err := truncate(codec, page, header, keep)
 	if err != nil {
@@ -344,7 +344,7 @@ func keepLeftEdit[T any](codec Codec[T], store Store, pageNumber uint32, header 
 			return err
 		}
 	}
-	return store.RestoreDirty(pageNumber, tag)
+	return store.FinishEdit(page, tag)
 }
 
 type branchSplit struct {
@@ -449,7 +449,7 @@ func insertBranch[T any](codec Codec[T], store Store, frame Frame, leftFirst Key
 		if !ok {
 			return branchSplit{}, false, corrupt("B+tree replacement insertion no longer fits")
 		}
-		if err := store.RestoreDirty(frame.PageNumber, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return branchSplit{}, false, err
 		}
 		work.FirstFenceUpdate(1)
@@ -481,7 +481,7 @@ func applyReplacement[T any](codec Codec[T], store Store, pageNumber uint32, hea
 		if err := applyCells(codec, page, header, edit.index, edit.cells); err != nil {
 			return branchSplit{}, false, err
 		}
-		return branchSplit{}, false, store.RestoreDirty(pageNumber, tag)
+		return branchSplit{}, false, store.FinishEdit(page, tag)
 	}
 	return splitReplacement(codec, store, pageNumber, header, edit)
 }
@@ -535,7 +535,7 @@ func splitReplacement[T any](codec Codec[T], store Store, pageNumber uint32, hea
 	if err := buildReplacement(codec, src, header, edit, middle, total, dst); err != nil {
 		return branchSplit{}, false, err
 	}
-	if err := store.RestoreDirty(rightPage, tag); err != nil {
+	if err := store.FinishEdit(dst, tag); err != nil {
 		return branchSplit{}, false, err
 	}
 	if err := keepLeftReplacement(codec, store, pageNumber, header, edit, middle); err != nil {
@@ -563,7 +563,7 @@ func keepLeftReplacement[T any](codec Codec[T], store Store, pageNumber uint32, 
 		if err != nil {
 			return err
 		}
-		return store.RestoreDirty(pageNumber, tag)
+		return store.FinishEdit(page, tag)
 	}
 	if middle < edit.index+len(edit.cells) {
 		left, err := truncate(codec, page, header, edit.index+1)
@@ -573,7 +573,7 @@ func keepLeftReplacement[T any](codec Codec[T], store Store, pageNumber uint32, 
 		if err := applyCells(codec, page, &left, edit.index, edit.cells[:middle-edit.index]); err != nil {
 			return err
 		}
-		return store.RestoreDirty(pageNumber, tag)
+		return store.FinishEdit(page, tag)
 	}
 	keep := middle - (len(edit.cells) - 1)
 	left, err := truncate(codec, page, header, keep)
@@ -583,7 +583,7 @@ func keepLeftReplacement[T any](codec Codec[T], store Store, pageNumber uint32, 
 	if err := applyCells(codec, page, &left, edit.index, edit.cells); err != nil {
 		return err
 	}
-	return store.RestoreDirty(pageNumber, tag)
+	return store.FinishEdit(page, tag)
 }
 
 func newRoot[T any](codec Codec[T], store Store, leftPage uint32, leftFirst Key, rightPage uint32, rightFirst Key, level uint16) (uint32, error) {
@@ -616,7 +616,7 @@ func newRoot[T any](codec Codec[T], store Store, leftPage uint32, leftFirst Key,
 	if err := b.Finish(page); err != nil {
 		return 0, err
 	}
-	return pageNumber, store.RestoreDirty(pageNumber, tag)
+	return pageNumber, store.FinishEdit(page, tag)
 }
 
 // PropagateFirst updates the ancestor first-key fences after an index-0
@@ -753,7 +753,8 @@ func MutateLeafU64[T any](codec Codec[T], store Store, root *uint32, key Key, fi
 			return RetiredPages{}, zero, err
 		}
 		format.PutU64(page[found.position.offset+fieldOffset:], mutation.Replace)
-		if err := store.RestoreDirty(leaf.PageNumber, tag); err != nil {
+		work.BytesMoved(8)
+		if err := store.FinishEdit(page, tag); err != nil {
 			return RetiredPages{}, zero, err
 		}
 		return retired, found.value, nil

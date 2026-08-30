@@ -145,7 +145,7 @@ func refreshChild(store tree.Store, pageNumber uint32, header Header, index int,
 		if err := setBranchChild(page, header, index, 0, false); err != nil {
 			return err
 		}
-		return store.RestoreDirty(pageNumber, tag)
+		return store.FinishEdit(page, tag)
 	}
 	if childBase+span <= limit {
 		return nil
@@ -158,7 +158,7 @@ func refreshChild(store tree.Store, pageNumber uint32, header Header, index int,
 		if err := setBranchChild(page, header, index, 0, true); err != nil {
 			return err
 		}
-		return store.RestoreDirty(pageNumber, tag)
+		return store.FinishEdit(page, tag)
 	}
 	refreshed, err := refreshPage(store, child, level-1, childBase, limit, kind, retired)
 	if err != nil {
@@ -175,5 +175,5 @@ func refreshChild(store tree.Store, pageNumber uint32, header Header, index int,
 	if err := setBranchChild(page, header, index, refreshed, candidate); err != nil {
 		return err
 	}
-	return store.RestoreDirty(pageNumber, tag)
+	return store.FinishEdit(page, tag)
 }

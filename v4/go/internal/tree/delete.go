@@ -115,7 +115,7 @@ func RemoveLeafRun[T any](codec Codec[T], store Store, root *uint32, key Key, in
 		if _, err := format.SlottedRemoveFixedRange(page, &leaf.Header, index, end-index, cellLen); err != nil {
 			return RemovedRun[T]{}, err
 		}
-		if err := store.RestoreDirty(leaf.PageNumber, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return RemovedRun[T]{}, err
 		}
 		if index == 0 {
@@ -151,7 +151,7 @@ func removeLeafRecord[T any](codec Codec[T], store Store, root *uint32, target *
 	if err := removeAt(codec, page, &target.Header, target.Index); err != nil {
 		return err
 	}
-	if err := store.RestoreDirty(target.PageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return err
 	}
 	if target.Index != 0 {
@@ -199,7 +199,7 @@ func removeEmptyChild[T any](codec Codec[T], store Store, root *uint32, path *Pa
 		if err := removeAt(codec, page, &header, frame.Index); err != nil {
 			return err
 		}
-		if err := store.RestoreDirty(frame.PageNumber, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return err
 		}
 		outputCount := int(header.ItemCount) - 1

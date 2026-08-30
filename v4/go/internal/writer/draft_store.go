@@ -214,16 +214,11 @@ func (s *DraftStore) Update(pageNumber uint32) ([]byte, uint32, error) {
 	return page, tag, nil
 }
 
-// RestoreDirty re-arms one page's dirty-chain tag after a successful
-// mutation (Rust Store::restore_dirty).
-func (s *DraftStore) RestoreDirty(pageNumber uint32, tag uint32) error {
-	if err := requirePage(pageNumber, s.draft.meta.PageCount); err != nil {
-		return err
-	}
-	page, err := s.mapping.Page(pageNumber)
-	if err != nil {
-		return err
-	}
+// FinishEdit stamps one page's dirty-chain tag after a successful
+// mutation, writing into the same mapping view Update returned (Rust
+// update_page/copy_page put the tag through the same PageMut, so the
+// page fetch count stays one per edit).
+func (s *DraftStore) FinishEdit(page []byte, tag uint32) error {
 	format.PutU32(page[format.PageChecksumOffset:], tag)
 	work.BytesMoved(4)
 	return nil

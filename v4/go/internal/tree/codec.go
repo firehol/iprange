@@ -11,6 +11,7 @@ import (
 	"bytes"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // Key is one ordered tree key. Fixed keys (numeric and hash) carry their
@@ -352,7 +353,11 @@ type Store interface {
 	Inspect(pageNumber uint32) ([]byte, error)
 	Allocate() (uint32, error)
 	Update(pageNumber uint32) (page []byte, tag uint32, err error)
-	RestoreDirty(pageNumber uint32, tag uint32) error
+	// FinishEdit stamps the captured dirty-chain tag into the page view
+	// that Update returned (Rust update_page/copy_page closures put the
+	// tag through the same PageMut, so the page is fetched exactly once
+	// per edit; Go's tag write reuses the already-held mapping view).
+	FinishEdit(page []byte, tag uint32) error
 	CopyPage(source, destination uint32) (sourcePage, outputPage []byte, tag uint32, err error)
 	DiscardPrivate(pageNumber uint32) error
 }
@@ -380,6 +385,7 @@ func RetireOne(page uint32) RetiredPages {
 // cleared (Rust Store::copy_for_cow). The page byte count is not counted
 // as owned memory: the destination is mapped, never a heap buffer.
 func CopyForCow(store Store, source, destination uint32) error {
+
 	target := store.TargetTxn()
 	src, dst, tag, err := store.CopyPage(source, destination)
 	if err != nil {
@@ -388,7 +394,12 @@ func CopyForCow(store Store, source, destination uint32) error {
 	copy(dst, src)
 	format.PutU64(dst[format.HeaderBorn:], target)
 	format.PutU32(dst[format.HeaderCRC:], 0)
-	return store.RestoreDirty(destination, tag)
+	// Necessary-work parity (Rust fixed_tree copy_for_cow through
+	// PageMut): one full page copy plus the born stamp and checksum
+	// clear, all counted as moved bytes (write_source / put_u64 /
+	// put_u32; the Rust clear is a put_u32(0), so nothing is zeroed).
+	work.BytesMoved(format.PageSize + 8 + 4)
+	return store.FinishEdit(dst, tag)
 }
 
 // requireCodec rejects unusable codec geometry up front (Rust

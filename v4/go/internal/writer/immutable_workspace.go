@@ -131,7 +131,7 @@ func (w *immutableWorkspace) Update(pageNumber uint32) ([]byte, uint32, error) {
 
 // RestoreDirty is the no-op tag restore of the tag-free workspace
 // (Rust PageMut has no dirty-chain re-arm).
-func (w *immutableWorkspace) RestoreDirty(pageNumber uint32, tag uint32) error {
+func (w *immutableWorkspace) FinishEdit(page []byte, tag uint32) error {
 	if tag != 0 {
 		return corrupt("immutable workspace tag restore is invalid")
 	}
@@ -179,6 +179,7 @@ func (w *immutableWorkspace) DiscardPrivate(pageNumber uint32) error {
 	format.PutU32(page[0:4], workspaceFreeMagic)
 	format.PutU32(page[workspaceFreeNext:], w.free)
 	format.PutU64(page[workspaceFreeTxn:], w.txn)
+	work.BytesMoved(16) // Rust discard_private: magic + next + txn puts
 	w.free = pageNumber
 	return nil
 }

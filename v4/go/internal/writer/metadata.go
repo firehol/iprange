@@ -17,6 +17,7 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 	"github.com/firehol/iprange/v4/go/internal/tree"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // deflateHeapOverhead is the heap charge for one bounded deflate attempt:
@@ -234,7 +235,8 @@ func metadataWriteChain(s tree.Store, compressed []byte) (uint32, error) {
 		format.PutU16(page[36:38], uint16(len(chunk)))
 		format.PutU64(page[40:48], uint64(start))
 		copy(page[48:], chunk)
-		if err := s.RestoreDirty(pages[i], tag); err != nil {
+		work.BytesMoved(14 + uint64(len(chunk))) // next + length + start + payload
+		if err := s.FinishEdit(page, tag); err != nil {
 			return 0, err
 		}
 	}

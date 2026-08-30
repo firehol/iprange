@@ -8,6 +8,7 @@ package bitmap
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/tree"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // BitmapStore is the draft store surface the free bitmap needs beyond the
@@ -117,7 +118,7 @@ func replaceChild(store BitmapStore, pageNumber uint32, header Header, index int
 	if _, err := ReplaceBranchChild(page, header, index, child, child != 0); err != nil {
 		return err
 	}
-	return store.RestoreDirty(pageNumber, tag)
+	return store.FinishEdit(page, tag)
 }
 
 func markLeafFree(store BitmapStore, cursor *freeCursor, bit uint32) error {
@@ -142,7 +143,8 @@ func markLeafFree(store BitmapStore, cursor *freeCursor, bit uint32) error {
 		count++
 	}
 	format.PutU16(page[format.HeaderCount:], uint16(count))
-	return store.RestoreDirty(cursor.pageNumber, tag)
+	work.BytesMoved(2) // Rust free_bitmap: page.put_u16 count
+	return store.FinishEdit(page, tag)
 }
 
 // TakeLowest takes the lowest allocatable free page, mirroring Rust
@@ -306,8 +308,9 @@ func clearLeafBit(store BitmapStore, leaf *freeCursor, wordIndex int, word uint6
 		return false, corrupt("free bitmap leaf count underflows")
 	}
 	format.PutU16(page[format.HeaderCount:], uint16(count))
+	work.BytesMoved(2) // Rust free_bitmap: page.put_u16 count
 	nonempty := count != 0
-	if err := store.RestoreDirty(leaf.pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return false, err
 	}
 	if !nonempty {
@@ -348,7 +351,7 @@ func pruneParent(store BitmapStore, frame freeFrame) (bool, error) {
 		return false, err
 	}
 	nonempty := count != 0
-	if err := store.RestoreDirty(frame.pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return false, err
 	}
 	if nonempty {
@@ -490,7 +493,7 @@ func growRoot(store BitmapStore, root *uint32, required uint16) error {
 		if _, err := ReplaceBranchChild(page, Header{Level: nextLevel}, 0, child, true); err != nil {
 			return err
 		}
-		if err := store.RestoreDirty(parent, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return err
 		}
 		*root = parent
@@ -516,7 +519,8 @@ func newSubtree(store BitmapStore, level uint16, bit uint32) (uint32, error) {
 			return 0, err
 		}
 		format.PutU16(page[format.HeaderCount:], 1)
-		if err := store.RestoreDirty(pageNumber, tag); err != nil {
+		work.BytesMoved(2) // Rust free_bitmap: page.put_u16 count
+		if err := store.FinishEdit(page, tag); err != nil {
 			return 0, err
 		}
 		return pageNumber, nil
@@ -542,7 +546,7 @@ func newSubtree(store BitmapStore, level uint16, bit uint32) (uint32, error) {
 	if _, err := ReplaceBranchChild(page, Header{Level: level}, index, child, true); err != nil {
 		return 0, err
 	}
-	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return 0, err
 	}
 	return pageNumber, nil

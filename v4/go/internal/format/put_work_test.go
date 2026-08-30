@@ -31,8 +31,10 @@ func TestReplaceSameSizeDoesNotScanSlots(t *testing.T) {
 		t.Fatalf("replace: %v %v", ok, err)
 	}
 	// record_start reads the target slot once; the slot array is not
-	// scanned (Rust asserts slot_scan_steps == 0 for this edit).
-	expectFmtCounters(t, work.Snapshot{SlotReads: 1})
+	// scanned (Rust asserts slot_scan_steps == 0 for this edit). The
+	// same-size replace writes the 2-byte cell plus the slot and upper
+	// stamps (2+2+2+2: Rust replace_cell write_source + put_u16 x2).
+	expectFmtCounters(t, work.Snapshot{SlotReads: 1, BytesMoved: 8})
 }
 
 // TestTruncateFailureLeavesPageUntouched pins that truncate validates the
@@ -63,8 +65,11 @@ func TestShrinkReplaceScansEverySlotExceptTarget(t *testing.T) {
 	}
 	// adjust_slots_before steps every slot (including the target, which is
 	// skipped after the step) but reads slot values without slot_read
-	// accounting; record_start reads the target slot once.
-	expectFmtCounters(t, work.Snapshot{SlotScanSteps: 3, SlotReads: 1})
+	// accounting; record_start reads the target slot once. The shrink
+	// moves 3 bytes of the trailing area, zeros 3, writes the 1-byte
+	// cell and the slot/upper stamps (6+1+2+2 moved, 3 zeroed: Rust
+	// replace_cell copy_within + zero + write_source + put_u16 x2).
+	expectFmtCounters(t, work.Snapshot{SlotScanSteps: 3, SlotReads: 1, BytesMoved: 11, BytesZeroed: 3})
 }
 
 // TestFixedPositionsScanCost pins one slot_scan_step plus one slot_read per

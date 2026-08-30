@@ -44,7 +44,7 @@ func (m *usedMemoryStore) Update(pageNumber uint32) ([]byte, uint32, error) {
 	return page, 0, nil
 }
 
-func (m *usedMemoryStore) RestoreDirty(pageNumber uint32, tag uint32) error {
+func (m *usedMemoryStore) FinishEdit(page []byte, tag uint32) error {
 	return nil
 }
 

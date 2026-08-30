@@ -44,7 +44,7 @@ func (m *bitmapMemoryStore) Update(pageNumber uint32) ([]byte, uint32, error) {
 	return page, 0, nil
 }
 
-func (m *bitmapMemoryStore) RestoreDirty(pageNumber uint32, tag uint32) error {
+func (m *bitmapMemoryStore) FinishEdit(page []byte, tag uint32) error {
 	return nil
 }
 

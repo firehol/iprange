@@ -50,6 +50,11 @@ func InitializePageHeader(page []byte, pageType PageType, bornTxn uint64, itemCo
 	PutU16(page[HeaderLower:], lower)
 	PutU16(page[HeaderUpper:], upper)
 	PutU32(page[HeaderAux:], aux)
+	// Necessary-work parity (Rust page_header::initialize through
+	// PageMut): the whole page is zeroed and the fixed header fields are
+	// written once.
+	work.BytesZeroed(PageSize)
+	work.BytesMoved(27)
 }
 
 // PageHeaderSize is the fixed common header length.
@@ -107,12 +112,14 @@ func SlottedInsert(page []byte, header *PageHeader, index int, cell []byte) (boo
 	slot := SlottedHeaderSize + index*2
 	if slot != int(l.lower) {
 		copy(page[slot+2:], page[slot:int(l.lower)])
+		work.BytesMoved(uint64(int(l.lower) - slot))
 	}
 	copy(page[upper:], cell)
 	PutU16(page[slot:], uint16(upper))
 	PutU16(page[HeaderCount:], uint16(l.count+1))
 	PutU16(page[HeaderLower:], uint16(lower))
 	PutU16(page[HeaderUpper:], uint16(upper))
+	work.BytesMoved(uint64(len(cell) + 8))
 	return true, nil
 }
 
@@ -141,6 +148,7 @@ func SlottedReplace(page []byte, header *PageHeader, index, oldLen int, cell []b
 		copy(page[newStart:], cell)
 		PutU16(page[SlottedHeaderSize+index*2:], uint16(newStart))
 		PutU16(page[HeaderUpper:], uint16(int(l.upper)-growth))
+		work.BytesMoved(uint64(start - int(l.upper) + len(cell) + 4))
 	} else {
 		shrink := oldLen - len(cell)
 		if shrink != 0 {
@@ -154,6 +162,10 @@ func SlottedReplace(page []byte, header *PageHeader, index, oldLen int, cell []b
 		copy(page[newStart:], cell)
 		PutU16(page[SlottedHeaderSize+index*2:], uint16(newStart))
 		PutU16(page[HeaderUpper:], uint16(int(l.upper)+shrink))
+		if shrink != 0 {
+			work.BytesZeroed(uint64(shrink))
+		}
+		work.BytesMoved(uint64(start - int(l.upper) + len(cell) + 4))
 	}
 	return true, nil
 }
@@ -180,6 +192,8 @@ func SlottedRemove(page []byte, header *PageHeader, index, oldLen int) error {
 	PutU16(page[HeaderCount:], uint16(l.count-1))
 	PutU16(page[HeaderLower:], uint16(int(l.lower)-2))
 	PutU16(page[HeaderUpper:], uint16(int(l.upper)+oldLen))
+	work.BytesMoved(uint64(start - int(l.upper) + 8 + int(l.lower) - slot - 2))
+	work.BytesZeroed(uint64(oldLen))
 	return nil
 }
 
@@ -209,6 +223,7 @@ func SlottedRemoveFixedRange(page []byte, header *PageHeader, start, count, cell
 			destination -= cellLen
 			copy(page[destination:], page[source:source+cellLen])
 			PutU16(page[SlottedHeaderSize+output*2:], uint16(destination))
+			work.BytesMoved(uint64(cellLen + 2))
 		}
 	}
 	lower := SlottedHeaderSize + remaining*2
@@ -217,6 +232,8 @@ func SlottedRemoveFixedRange(page []byte, header *PageHeader, start, count, cell
 	PutU16(page[HeaderCount:], uint16(remaining))
 	PutU16(page[HeaderLower:], uint16(lower))
 	PutU16(page[HeaderUpper:], uint16(destination))
+	work.BytesMoved(6)
+	work.BytesZeroed(uint64(int(header.Lower) - lower + destination - int(header.Upper)))
 	return SlottedShape{ItemCount: remaining, Lower: uint16(lower), Upper: uint16(destination)}, nil
 }
 
@@ -260,6 +277,7 @@ func SlottedTruncate(page []byte, header *PageHeader, keep int) (SlottedShape, e
 			newStart := destination - length
 			copy(page[newStart:], page[record.start:end])
 			PutU16(page[SlottedHeaderSize+record.index*2:], uint16(newStart))
+			work.BytesMoved(uint64(length + 2))
 			destination = newStart
 		}
 	}
@@ -269,6 +287,8 @@ func SlottedTruncate(page []byte, header *PageHeader, keep int) (SlottedShape, e
 	PutU16(page[HeaderCount:], uint16(keep))
 	PutU16(page[HeaderLower:], uint16(lower))
 	PutU16(page[HeaderUpper:], uint16(destination))
+	work.BytesMoved(6)
+	work.BytesZeroed(uint64(int(header.Lower) - lower + destination - int(header.Upper)))
 	return SlottedShape{ItemCount: keep, Lower: uint16(lower), Upper: uint16(destination)}, nil
 }
 
@@ -294,6 +314,7 @@ func SlottedTruncateFixed(page []byte, header *PageHeader, keep, cellLen int) (S
 			destination -= cellLen
 			copy(page[destination:], page[source:source+cellLen])
 			PutU16(page[SlottedHeaderSize+logical*2:], uint16(destination))
+			work.BytesMoved(uint64(cellLen + 2))
 		}
 	}
 	lower := SlottedHeaderSize + keep*2
@@ -302,6 +323,8 @@ func SlottedTruncateFixed(page []byte, header *PageHeader, keep, cellLen int) (S
 	PutU16(page[HeaderCount:], uint16(keep))
 	PutU16(page[HeaderLower:], uint16(lower))
 	PutU16(page[HeaderUpper:], uint16(destination))
+	work.BytesMoved(6)
+	work.BytesZeroed(uint64(int(header.Lower) - lower + destination - int(header.Upper)))
 	return SlottedShape{ItemCount: keep, Lower: uint16(lower), Upper: uint16(destination)}, nil
 }
 
@@ -332,6 +355,7 @@ func (b *SlottedBuilder) Push(page []byte, cell []byte) error {
 	}
 	copy(page[upper:], cell)
 	PutU16(page[SlottedHeaderSize+b.count*2:], uint16(upper))
+	work.BytesMoved(uint64(len(cell) + 2))
 	b.count++
 	b.upper = upper
 	return nil
@@ -345,6 +369,7 @@ func (b *SlottedBuilder) Finish(page []byte) error {
 	PutU16(page[HeaderCount:], uint16(b.count))
 	PutU16(page[HeaderLower:], uint16(SlottedHeaderSize+b.count*2))
 	PutU16(page[HeaderUpper:], uint16(b.upper))
+	work.BytesMoved(6)
 	return nil
 }
 
@@ -389,6 +414,7 @@ func (a *SlottedAppender) TryPush(page []byte, cell []byte) (bool, error) {
 	}
 	copy(page[upper:], cell)
 	PutU16(page[SlottedHeaderSize+a.count*2:], uint16(upper))
+	work.BytesMoved(uint64(len(cell) + 2))
 	a.count++
 	a.upper = upper
 	return true, nil
@@ -403,6 +429,7 @@ func (a *SlottedAppender) Finish(page []byte) error {
 	PutU16(page[HeaderCount:], uint16(a.count))
 	PutU16(page[HeaderLower:], uint16(SlottedHeaderSize+a.count*2))
 	PutU16(page[HeaderUpper:], uint16(a.upper))
+	work.BytesMoved(6)
 	return nil
 }
 
@@ -475,6 +502,7 @@ func adjustSlotsBefore(page []byte, header *PageHeader, target, before int, add 
 			return headerErr("slotted-page slot adjustment is invalid")
 		}
 		PutU16(page[at:], uint16(adjusted))
+		work.BytesMoved(2)
 	}
 	return nil
 }

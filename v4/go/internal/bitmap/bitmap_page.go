@@ -184,6 +184,7 @@ func SetLeafWord(page []byte, index int, word uint64) error {
 		return corrupt("bitmap word index is invalid")
 	}
 	format.PutU64(page[leafWordsOffset+index*8:], word)
+	work.BytesMoved(8) // Rust bitmap_page: page.put_u64
 	return nil
 }
 
@@ -202,6 +203,7 @@ func SetBranchChild(page []byte, index int, child uint32) error {
 		return corrupt("bitmap child index is invalid")
 	}
 	format.PutU32(page[BranchChildrenOff+index*4:], child)
+	work.BytesMoved(4) // Rust bitmap_page: page.put_u32
 	return nil
 }
 
@@ -248,6 +250,7 @@ func ReplaceBranchChild(page []byte, header Header, index int, child uint32, sum
 		return 0, corrupt("bitmap child count underflows")
 	}
 	format.PutU16(page[format.HeaderCount:], uint16(count))
+	work.BytesMoved(2) // Rust set_count: page.put_u16
 	return count, nil
 }
 
@@ -275,6 +278,7 @@ func SetSummary(page []byte, index int, value bool) error {
 		word &^= mask
 	}
 	format.PutU64(page[at:], word)
+	work.BytesMoved(8) // Rust summary bit set: page.put_u64
 	return nil
 }
 

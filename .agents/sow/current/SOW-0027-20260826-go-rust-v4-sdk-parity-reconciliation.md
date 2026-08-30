@@ -127,6 +127,41 @@ complete; the upper-bound calculation must cover all remaining
 dominant Go-only costs, not only the estimated 2-3% store-dispatch
 class.
 
+Sub-state (2026-08-30, direction item 2 - necessary-work parity
+completed): the counter-coverage gaps are closed at the mapped-page
+authority level, mirroring the Rust counting points (mapping.rs
+page_visited; mapped_bytes.rs PageMut byte accounting; slotted_page.rs
+mutation primitives). Changes: (a) work.PageVisit moved to the single
+mapping-layer full-page view owner, mapping.Mapping.Page, so writer and
+reader paths share one page-visit definition (reader.page keeps the
+PageParse count); (b) BytesMoved/BytesZeroed are now counted inside every
+mapped-page write authority with the Rust per-call formulas: format
+InitializePageHeader (zero PageSize + 27 header bytes) and the Slotted
+insert/replace/remove/remove-fixed-range/truncate/truncate-fixed/
+builder/appender/adjustSlotsBefore family (identical lengths to
+slotted_page.rs), tree CopyForCow (full page + born + checksum-clear),
+updateField, draft claim/discard/seal, prepare reserve fills, bitmap word
+and count writes, metadata chunks, blob leaf init, and immutable
+workspace markers; (c) the edit tag stamp now reuses the Update page view
+(new Store.FinishEdit(page, tag) replacing RestoreDirty(pageNumber, tag)
+throughout the tree/bitmap/writer flows), mirroring Rust update_page/
+copy_page closures that fetch the page exactly once per edit. Result
+(necessary-work-compare-20260830b.csv, nested-overwrite 100k, fresh Go
+and Rust harness runs): pages_visited 685,291 vs 688,025 (-2,734: Go
+fetches one fewer page per edit; the previous row was 0 vs 688,025,
+"go-less unknown"); bytes_moved 71,531,058 vs 69,145,640 (+3.4%, now
+fully attributed per authority: insert 61.4M, replace ~4.0M, truncate
+2.8M, builder 2.8M, init 5.6M, tag stamps 0.41M, claim 0.02M, seal 0.01M
+- the residual is a counting difference inside the slotted-edit stream,
+to attribute in the final review round); bytes_zeroed 8,483,850 vs
+8,487,946 (-4,096 = one full page: Go zeroes one fewer reserve/
+initialize page than Rust). Every other counter row matches or stays
+go-less (mapping_remaps 1 vs 3). Live-direct-random-lookup rows are
+unchanged (3M pages visited/parsed on both sides). Pins updated in
+draft_work_test.go, open_work_test.go, put_work_test.go to the new
+authority counts. Both full suites (plain + v4work), vet, gofmt, and
+genfamilies idempotence pass.
+
 Sub-state (2026-08-30, direction item 4a - authoritative
 expected-tree-header parser): one expected-tree-header parser now owns
 every slotted tree path. format.ParseTreeHeader (inspect.go) validates

@@ -39,7 +39,9 @@ func TestOpenTailedFileWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Close()
-	expectCounters(t, work.Snapshot{MappingRemaps: 2, FileSyncs: 1})
+	// Four mapping-layer page fetches during the tail-trimming open:
+	// the committed meta/root pages and the tail/meta re-reads.
+	expectCounters(t, work.Snapshot{MappingRemaps: 2, FileSyncs: 1, PagesVisited: 4})
 }
 
 // TestOpenNoTailWork pins the no-tail open: exactly one remap (bootstrap
@@ -52,7 +54,7 @@ func TestOpenNoTailWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Close()
-	expectCounters(t, work.Snapshot{MappingRemaps: 1})
+	expectCounters(t, work.Snapshot{MappingRemaps: 1, PagesVisited: 4})
 }
 
 // TestOpenEmptyDBWork pins the two-page database open: the committed extent
@@ -66,5 +68,5 @@ func TestOpenEmptyDBWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	c.Close()
-	expectCounters(t, work.Snapshot{})
+	expectCounters(t, work.Snapshot{PagesVisited: 4})
 }

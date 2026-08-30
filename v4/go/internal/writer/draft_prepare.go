@@ -10,6 +10,7 @@ package writer
 
 import (
 	"github.com/firehol/iprange/v4/go/internal/bitmap"
+	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/retire"
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
@@ -149,7 +150,8 @@ func (s *DraftStore) replenishReserve() error {
 				return err
 			}
 			clear(page)
-			if err := s.RestoreDirty(pageNumber, tag); err != nil {
+			work.BytesZeroed(format.PageSize) // Rust replenish_reserve: update_page(fill(0))
+			if err := s.FinishEdit(page, tag); err != nil {
 				return err
 			}
 			s.draft.meta.AllocatorReserve[i] = pageNumber

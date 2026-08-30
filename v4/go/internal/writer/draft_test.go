@@ -77,7 +77,7 @@ func initRangeLeaf(t testing.TB, store *DraftStore, pageNumber uint32, txn uint6
 	}
 	format.InitializePageHeader(page, format.PageTypeRangeLeaf, txn, 0, 0,
 		format.SlottedHeaderSize, format.PageSize, uint32(format.AddressFamilyIPv4))
-	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -184,7 +184,7 @@ func TestReusingACurrentTransactionPageKeepsOneDirtyChainEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	view[100] = 0xa5
-	if err := store.RestoreDirty(5, tag); err != nil {
+	if err := store.FinishEdit(view, tag); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.DiscardPrivate(5); err != nil {
@@ -325,7 +325,7 @@ func TestDirectPageUpdateRejectsACommittedPageBeforeMutation(t *testing.T) {
 	format.InitializePageHeader(page, format.PageTypeRangeLeaf, first.meta.TxnID, 0, 0,
 		format.SlottedHeaderSize, format.PageSize, uint32(format.AddressFamilyIPv4))
 	page[100] = 0xa5
-	if err := store.RestoreDirty(5, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		t.Fatal(err)
 	}
 	committed := first.Meta()

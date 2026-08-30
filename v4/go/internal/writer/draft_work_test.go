@@ -40,14 +40,14 @@ func TestDiscardPrivateWorkPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	page[100] = 0xa5
-	if err := store.RestoreDirty(5, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		t.Fatal(err)
 	}
 	work.Reset()
 	if err := store.DiscardPrivate(5); err != nil {
 		t.Fatal(err)
 	}
-	expectDraftCounters(t, work.Snapshot{BytesMoved: 16})
+	expectDraftCounters(t, work.Snapshot{BytesMoved: 16, PagesVisited: 1})
 }
 
 // TestClaimPageWorkPin pins the fresh-claim cost: the page head is zeroed,
@@ -63,6 +63,7 @@ func TestClaimPageWorkPin(t *testing.T) {
 	}
 	expectDraftCounters(t, work.Snapshot{
 		PagesCreated:   1,
+		PagesVisited:   1,
 		BytesZeroed:    32,
 		BytesMoved:     16,
 		MappingGrowths: 1,
@@ -95,10 +96,13 @@ func TestSealDataPageWorkPin(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Two dirty-chain visits (checkpoint per entry) and one data-page
-	// seal: 8 bytes moved per stamp (zero + checksum).
+	// seal: 8 bytes moved per stamp (zero + checksum). The chain walk
+	// inspects two pages and seals the data page, so the mapping-layer
+	// page-visit count is three.
 	expectDraftCounters(t, work.Snapshot{
-		PagesSealed: 1,
-		BytesMoved:  8,
+		PagesSealed:  1,
+		PagesVisited: 3,
+		BytesMoved:   8,
 	})
 }
 
@@ -116,7 +120,7 @@ func TestSealSkipsUninitializedClaims(t *testing.T) {
 	if err := store.sealPrivatePages(nil); err != nil {
 		t.Fatal(err)
 	}
-	expectDraftCounters(t, work.Snapshot{})
+	expectDraftCounters(t, work.Snapshot{PagesVisited: 1})
 	page, err := core.m.Page(5)
 	if err != nil {
 		t.Fatal(err)

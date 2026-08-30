@@ -98,7 +98,7 @@ func TestOutputPageWindowSpansTheMutation(t *testing.T) {
 	if rec.releases != 0 {
 		t.Fatalf("the page window released during the mutation: releases=%d", rec.releases)
 	}
-	if err := b.RestoreDirty(pageNumber, tag); err != nil {
+	if err := b.FinishEdit(page, tag); err != nil {
 		t.Fatalf("RestoreDirty: %v", err)
 	}
 	if rec.releases != 1 {
@@ -136,7 +136,7 @@ func TestOutputPageWindowCopyPageSpansTheCopy(t *testing.T) {
 	if rec.releases != 0 {
 		t.Fatalf("the page window released during the copy: releases=%d", rec.releases)
 	}
-	if err := b.RestoreDirty(destination, tag); err != nil {
+	if err := b.FinishEdit(dst, tag); err != nil {
 		t.Fatalf("RestoreDirty: %v", err)
 	}
 	if rec.releases != 1 {

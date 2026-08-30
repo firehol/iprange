@@ -301,7 +301,7 @@ func replaceBranchChild{{ .Suffix }}(store Store, pageNumber uint32, index int, 
 	if !ok {
 		return corrupt("B+tree child replacement no longer fits")
 	}
-	return store.RestoreDirty(pageNumber, tag)
+	return store.FinishEdit(page, tag)
 }
 
 // privateRangePath{{ .Suffix }} descends from the root, privatizing every
@@ -465,7 +465,7 @@ func applyReplacement{{ .Suffix }}(codec {{ .CodecType }}, store Store, pageNumb
 		if err := applyCells{{ .Suffix }}(page, header, edit.index, edit.cells); err != nil {
 			return branchSplit{}, false, err
 		}
-		return branchSplit{}, false, store.RestoreDirty(pageNumber, tag)
+		return branchSplit{}, false, store.FinishEdit(page, tag)
 	}
 	return splitReplacement{{ .Suffix }}(codec, store, pageNumber, header, edit)
 }
@@ -578,7 +578,7 @@ func keepLeftReplacement{{ .Suffix }}(store Store, pageNumber uint32, header *He
 		if err != nil {
 			return err
 		}
-		return store.RestoreDirty(pageNumber, tag)
+		return store.FinishEdit(page, tag)
 	}
 	if middle < edit.index+len(edit.cells) {
 		left, err := truncate{{ .Suffix }}(page, header, edit.index+1)
@@ -588,7 +588,7 @@ func keepLeftReplacement{{ .Suffix }}(store Store, pageNumber uint32, header *He
 		if err := applyCells{{ .Suffix }}(page, &left, edit.index, edit.cells[:middle-edit.index]); err != nil {
 			return err
 		}
-		return store.RestoreDirty(pageNumber, tag)
+		return store.FinishEdit(page, tag)
 	}
 	keep := middle - (len(edit.cells) - 1)
 	left, err := truncate{{ .Suffix }}(page, header, keep)
@@ -598,7 +598,7 @@ func keepLeftReplacement{{ .Suffix }}(store Store, pageNumber uint32, header *He
 	if err := applyCells{{ .Suffix }}(page, &left, edit.index, edit.cells); err != nil {
 		return err
 	}
-	return store.RestoreDirty(pageNumber, tag)
+	return store.FinishEdit(page, tag)
 }
 
 // firstKey{{ .Suffix }} reads the first key of one family page (the
@@ -641,7 +641,7 @@ func splitReplacement{{ .Suffix }}(codec {{ .CodecType }}, store Store, pageNumb
 	if err := buildReplacement{{ .Suffix }}(src, header, edit, middle, total, dst); err != nil {
 		return branchSplit{}, false, err
 	}
-	if err := store.RestoreDirty(rightPage, tag); err != nil {
+	if err := store.FinishEdit(dst, tag); err != nil {
 		return branchSplit{}, false, err
 	}
 	if err := keepLeftReplacement{{ .Suffix }}(store, pageNumber, header, edit, middle); err != nil {
@@ -1031,7 +1031,7 @@ func ReplaceLocalRun{{ .Suffix }}(codec {{ .CodecType }}, store Store, root *uin
 		header.Lower -= 2
 		header.Upper += uint16(len(cell))
 	}
-	if err := store.RestoreDirty(target.PageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return err
 	}
 	if start == 0 {

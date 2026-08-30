@@ -40,7 +40,7 @@ func (p *rangeBulkPackedPage[K]) start(store tree.Store, pageType format.PageTyp
 		return err
 	}
 	appender := format.NewSlottedAppender(page, pageType, bornTxn, level, aux)
-	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return err
 	}
 	p.appender = appender
@@ -67,7 +67,7 @@ func (p *rangeBulkPackedPage[K]) push(store tree.Store, first K, cell []byte) (b
 	if err != nil {
 		return false, err
 	}
-	if err := store.RestoreDirty(p.pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return false, err
 	}
 	if appended && !p.hasFirst {
@@ -93,7 +93,7 @@ func (p *rangeBulkPackedPage[K]) finish(store tree.Store) (rangeBulkNode[K], err
 	if err := appender.Finish(page); err != nil {
 		return rangeBulkNode[K]{}, err
 	}
-	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return rangeBulkNode[K]{}, err
 	}
 	if !p.hasFirst {

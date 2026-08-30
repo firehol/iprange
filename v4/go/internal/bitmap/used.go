@@ -10,6 +10,7 @@ package bitmap
 import (
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/tree"
+	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
 // usedFrame records one level of an edit descent (Rust EditPath::Frame).
@@ -402,7 +403,7 @@ func touchChild(store tree.Store, parent usedCursor, step branchStep, limit uint
 		if err := setPointer(page, parent.header, step.index, pageNumber); err != nil {
 			return usedCursor{}, err
 		}
-		if err := store.RestoreDirty(parent.pageNumber, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return usedCursor{}, err
 		}
 	}
@@ -430,7 +431,7 @@ func insertMissing(store tree.Store, cursor usedCursor, path *editPath, step bra
 	if err := setBranchChild(page, cursor.header, step.index, child, candidate); err != nil {
 		return err
 	}
-	if err := store.RestoreDirty(cursor.pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return err
 	}
 	if spec.candidateHint != nil {
@@ -463,7 +464,7 @@ func setLeaf(store tree.Store, cursor usedCursor, path *editPath, spec setSpec) 
 	}
 	stampLeaf(page, count)
 	wordCandidate := wordHasCandidate(next, wordIndex, cursor.base, spec.limit, spec.kind)
-	if err := store.RestoreDirty(cursor.pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return err
 	}
 	candidate := false
@@ -506,7 +507,7 @@ func clearLeaf(store tree.Store, cursor usedCursor, path *editPath, limit uint64
 	if next == 0 {
 		count--
 	}
-	if err := store.RestoreDirty(cursor.pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return false, err
 	}
 	if count == 0 {
@@ -520,7 +521,7 @@ func clearLeaf(store tree.Store, cursor usedCursor, path *editPath, limit uint64
 		return false, err
 	}
 	stampLeaf(page, count)
-	if err := store.RestoreDirty(cursor.pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return false, err
 	}
 	if err := propagateKnown(store, path.frames[:path.depth], cursor.pageNumber, cursor.base, limit, kind, true); err != nil {
@@ -532,6 +533,7 @@ func clearLeaf(store tree.Store, cursor usedCursor, path *editPath, limit uint64
 // stampLeaf writes the leaf word count into the header (Rust stamp_leaf).
 func stampLeaf(page []byte, count int) {
 	format.PutU16(page[format.HeaderCount:], uint16(count))
+	work.BytesMoved(2) // Rust used_bitmap stamp_leaf: page.put_u16
 }
 
 // childBaseAt is the used-bitmap child-base arithmetic, taking the child

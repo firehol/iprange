@@ -153,7 +153,7 @@ func (m *memoryStore) Update(pageNumber uint32) ([]byte, uint32, error) {
 
 // RestoreDirty re-arms the dirty tag after a mutation; the memory store
 // has no checksum slot, so the tag is a no-op.
-func (m *memoryStore) RestoreDirty(pageNumber uint32, tag uint32) error {
+func (m *memoryStore) FinishEdit(page []byte, tag uint32) error {
 	return nil
 }
 

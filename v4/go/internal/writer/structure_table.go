@@ -202,7 +202,7 @@ func structureTableInsert[C structurePayloadCodec](codec C, store tree.RetiringS
 			if err := structureSetBranchChild(page, header, index, child); err != nil {
 				return err
 			}
-			if err := store.RestoreDirty(pageNumber, tag); err != nil {
+			if err := store.FinishEdit(page, tag); err != nil {
 				return err
 			}
 			return store.RetirePages(retired)
@@ -219,7 +219,7 @@ func structureTableInsert[C structurePayloadCodec](codec C, store tree.RetiringS
 			if err := structureReplaceBranchChild(page, header, index, privateChild); err != nil {
 				return err
 			}
-			if err := store.RestoreDirty(pageNumber, tag); err != nil {
+			if err := store.FinishEdit(page, tag); err != nil {
 				return err
 			}
 		}
@@ -233,7 +233,7 @@ func structureTableInsert[C structurePayloadCodec](codec C, store tree.RetiringS
 	if err := structureInsertLeaf(codec, page, header, record); err != nil {
 		return err
 	}
-	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return err
 	}
 	return store.RetirePages(retired)
@@ -294,7 +294,7 @@ func structureTableChangeRefcount[C structurePayloadCodec](codec C, store tree.R
 			if err := structureReplaceBranchChild(page, header, index, privateChild); err != nil {
 				return structureRecord{}, false, err
 			}
-			if err := store.RestoreDirty(pageNumber, tag); err != nil {
+			if err := store.FinishEdit(page, tag); err != nil {
 				return structureRecord{}, false, err
 			}
 		}
@@ -322,7 +322,7 @@ func structureTableChangeRefcount[C structurePayloadCodec](codec C, store tree.R
 			return structureRecord{}, false, corrupt("structure table record is outside its page")
 		}
 		format.PutU64(page[at:], next)
-		if err := store.RestoreDirty(pageNumber, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return structureRecord{}, false, err
 		}
 		if err := store.RetirePages(retired); err != nil {
@@ -337,7 +337,7 @@ func structureTableChangeRefcount[C structurePayloadCodec](codec C, store tree.R
 	if err := structureDeleteLeaf(page, header, id); err != nil {
 		return structureRecord{}, false, err
 	}
-	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return structureRecord{}, false, err
 	}
 	if err := structureRemoveEmptyPath(store, root, pageNumber, header.itemCount-1, &path); err != nil {
@@ -528,7 +528,7 @@ func structureGrowRoot[C structurePayloadCodec](codec C, store tree.RetiringStor
 			return corrupt("structure table child is outside page bounds")
 		}
 		format.PutU32(page[at:], *root)
-		if err := store.RestoreDirty(next, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return err
 		}
 		*root = next
@@ -568,7 +568,7 @@ func structureNewSubtree[C structurePayloadCodec](codec C, store tree.RetiringSt
 			return 0, corrupt("structure table record is outside its page")
 		}
 		copy(page[at:], record)
-		if err := store.RestoreDirty(pageNumber, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return 0, err
 		}
 		return pageNumber, nil
@@ -591,7 +591,7 @@ func structureNewSubtree[C structurePayloadCodec](codec C, store tree.RetiringSt
 		return 0, corrupt("structure table child is outside page bounds")
 	}
 	format.PutU32(page[at:], child)
-	if err := store.RestoreDirty(pageNumber, tag); err != nil {
+	if err := store.FinishEdit(page, tag); err != nil {
 		return 0, err
 	}
 	return pageNumber, nil
@@ -704,7 +704,7 @@ func structureRemoveEmptyPath(store tree.Store, root *uint32, child uint32, chil
 		}
 		format.PutU32(page[at:], 0)
 		format.PutU16(page[format.HeaderCount:], frame.itemCount-1)
-		if err := store.RestoreDirty(frame.pageNumber, tag); err != nil {
+		if err := store.FinishEdit(page, tag); err != nil {
 			return err
 		}
 		child = frame.pageNumber
