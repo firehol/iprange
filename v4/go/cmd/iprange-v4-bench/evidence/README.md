@@ -234,3 +234,8 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   ratios fail the binding <=1.3x (1.322x-2.355x); two RSS ratios fail
   (1.351x, 1.402x). This CSV is the evidence package for the
   language-floor decision that returns to the user.
+- `rust-ratio-final-samples-20260830.csv`: the raw alternating
+  Go/Rust rows behind the final matrix (p50 ns and peak RSS per
+  sample, five per language per scenario); the validation rows show
+  why the single-sample phase runs and the five-sample median differ
+  (raw per-sample CPU ratios 1.16x-1.8x on a 12-16 ms operation).

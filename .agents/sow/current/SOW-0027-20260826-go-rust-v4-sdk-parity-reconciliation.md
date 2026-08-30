@@ -203,7 +203,8 @@ every artifact of the bounded continuation.
 Sub-state (2026-08-30, direction item 1 - final-identity matrix
 completed): IPv6 direct random-lookup scenarios were added to both
 benches and the complete same-session matrix was measured at the final
-identity (commit 39df5b0b + rust-ratio-final-20260830.csv). Go bench
+identity (commit 39df5b0b + rust-ratio-final-20260830.csv with the raw
+alternating rows in rust-ratio-final-samples-20260830.csv). Go bench
 (cmds in scenario_read.go, registered as *-direct-random-lookup-v6):
 readSeededDirectV6, randomPointsV6, countRandomPointsV6. Rust bench:
 scenarios/read.rs and scenarios.rs helpers plus direct.rs
@@ -257,10 +258,10 @@ scale and the walk is the entire measured cost. The historical 2.299x
 validation ratio (20260828g) is superseded at the final identity: the
 validation-phases rows are single-sample runs (1.66x / 1.62x / 1.67x at
 100k / 1M / 4M), while the acceptance matrix median for the 1M scenario
-is 1.322x (rust-ratio-final-20260830.csv, five-sample; the raw
-single-sample range is 1.16-1.8x on a 12-16 ms operation, which is why
-the medians differ); the five-sample matrix number is the acceptance
-evidence. The residual vs the binding <=1.3x is the walk itself, not
+is 1.322x (rust-ratio-final-20260830.csv, five-sample; the committed raw
+rows in rust-ratio-final-samples-20260830.csv show a per-sample CPU
+range of 1.16-1.8x on a 12-16 ms operation, which is why the medians
+differ); the five-sample matrix number is the acceptance evidence. The residual vs the binding <=1.3x is the walk itself, not
 containment overhead.
 
 Sub-state (2026-08-30, direction item 2 - necessary-work parity
