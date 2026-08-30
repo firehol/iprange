@@ -148,6 +148,30 @@ improve ~7-9% and writes are neutral, so the slice is retained. Both
 full suites (plain + v4work), vet both modes, gofmt, race on reader,
 and genfamilies idempotence pass.
 
+Sub-state (2026-08-30, direction item 4b - KeyU32 probe A/B): the
+second bounded safe-Go experiment removed the per-probe cellLen guard
+from the IPv4 fixed-search probe: format.FixedSearch.KeyU32 performs
+the persistent-offset extent check but no width guard, mirroring Rust
+lower_bound_fixed probing cell_at on every iteration while the loop
+hoists the width proof once. The reader greatestFixedV4 loop and the
+generated U32 tree probe (genprobe) switched to KeyU32. Interleaved
+same-session A/B vs pristine HEAD (5x1 each,
+evidence/probe-key-u32-ab-20260830.csv): live-direct-random-lookup
+1.010x, immutable-direct-random-lookup 0.994x, nested-overwrite
+1.003x, membership-import 0.980x. All four medians sit inside the
+run-to-run noise band (+/-2%); inlined assembly shows the saved width
+cmp/branch per probe is negligible. Per direction item 4's retain
+rule ("only if measurement and assembly show a real win"), the slice
+is reverted; the codebase keeps the single guarded U32 accessor. No
+allocations or RSS change in either build. Full plain and v4work
+suites, vet both modes, gofmt, and genfamilies/genprobe idempotence
+pass at the reverted tree. The remaining read-path cost structure is
+unchanged: per-page header decode and per-probe extent validation,
+not the width guard. (Note for the final-identity evidence: the 4a
+evidence CSV's two alloc columns were labeled alloc_calls/alloc_bytes
+but hold alloc_bytes/max_rss_peak_kib; the final-identity matrix below
+uses the report header's true columns.)
+
 Sub-state (2026-08-29, read-path probe slice): the per-width probe
 specialization (regression item 1, first half) is implemented and
 committed. internal/tree/genprobe emits four width-specialized
