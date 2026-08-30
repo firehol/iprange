@@ -163,3 +163,5 @@ mod mmap_runtime_tests;
 mod test_alloc;
 #[cfg(test)]
 mod test_support_tests;
+#[cfg(test)]
+mod necessary_work_tests;

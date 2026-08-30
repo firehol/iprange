@@ -2,14 +2,26 @@
 // FixedSearch, shared by the tree and reader fixed searches).
 package format
 
-import "github.com/firehol/iprange/v4/go/internal/work"
+import (
+	"encoding/binary"
+
+	"github.com/firehol/iprange/v4/go/internal/work"
+)
 
 // FixedSearch is one fixed-cell page whose shape was checked once; every
 // probe reads the persistent slot and validates the complete cell extent
 // (Rust FixedSearch). The consuming search bounds index below ItemCount,
 // exactly like the Rust lower_bound loops that call cell_at.
+//
+// The page is carried as a pointer to one fixed-size [PageSize]byte array
+// (not a mapping slice): the one explicit length check in NewFixedSearch
+// makes every later probe index against the constant 4096 instead of the
+// mapping slice length, and the typed accessors slice the array and read
+// through the inlined binary.LittleEndian word loaders without the
+// extra format.U16/U32 wrapper frames (the same class of loads Rust does
+// through its unsafe cell_at, without unsafe).
 type FixedSearch struct {
-	page    []byte
+	page    *[PageSize]byte
 	header  PageHeader
 	cellLen int
 	// maxStart is PageSize - cellLen, precomputed once by the shape
@@ -29,7 +41,7 @@ func NewFixedSearch(page []byte, header PageHeader, cellLen int) (FixedSearch, e
 		cellLen == 0 || cellLen > PageSize {
 		return FixedSearch{}, headerErr("fixed slotted-page search shape is invalid")
 	}
-	return FixedSearch{page: page, header: header, cellLen: cellLen, maxStart: PageSize - cellLen}, nil
+	return FixedSearch{page: (*[PageSize]byte)(page), header: header, cellLen: cellLen, maxStart: PageSize - cellLen}, nil
 }
 
 // errFixedCellOutside is the one persistent-offset failure of every
@@ -50,11 +62,12 @@ func FixedCellOutside() error { return errFixedCellOutside }
 func (f *FixedSearch) Cell(index int) ([]byte, error) {
 	work.CellProbe(1)
 	work.SlotRead(1)
-	start := int(U16(f.page[SlottedHeaderSize+index*2:]))
+	p := f.page
+	start := int(binary.LittleEndian.Uint16(p[SlottedHeaderSize+index*2:]))
 	if start < int(f.header.Upper) || start > f.maxStart {
 		return nil, errFixedCellOutside
 	}
-	return f.page[start : start+f.cellLen], nil
+	return p[start : start+f.cellLen], nil
 }
 
 // U32 reads the leading 4 bytes of one fixed cell as a little-endian
@@ -67,11 +80,12 @@ func (f *FixedSearch) U32(index int) (uint32, bool) {
 	}
 	work.CellProbe(1)
 	work.SlotRead(1)
-	start := int(U16(f.page[SlottedHeaderSize+index*2:]))
+	p := f.page
+	start := int(binary.LittleEndian.Uint16(p[SlottedHeaderSize+index*2:]))
 	if start < int(f.header.Upper) || start > f.maxStart {
 		return 0, false
 	}
-	return U32(f.page[start:]), true
+	return binary.LittleEndian.Uint32(p[start:]), true
 }
 
 // U64 reads the leading 8 bytes of one fixed cell as a little-endian
@@ -82,11 +96,12 @@ func (f *FixedSearch) U64(index int) (uint64, bool) {
 	}
 	work.CellProbe(1)
 	work.SlotRead(1)
-	start := int(U16(f.page[SlottedHeaderSize+index*2:]))
+	p := f.page
+	start := int(binary.LittleEndian.Uint16(p[SlottedHeaderSize+index*2:]))
 	if start < int(f.header.Upper) || start > f.maxStart {
 		return 0, false
 	}
-	return U64(f.page[start:]), true
+	return binary.LittleEndian.Uint64(p[start:]), true
 }
 
 // U64U32 reads the leading 12 bytes of one fixed cell as a little-endian
@@ -98,11 +113,12 @@ func (f *FixedSearch) U64U32(index int) (uint64, uint32, bool) {
 	}
 	work.CellProbe(1)
 	work.SlotRead(1)
-	start := int(U16(f.page[SlottedHeaderSize+index*2:]))
+	p := f.page
+	start := int(binary.LittleEndian.Uint16(p[SlottedHeaderSize+index*2:]))
 	if start < int(f.header.Upper) || start > f.maxStart {
 		return 0, 0, false
 	}
-	return U64(f.page[start:]), U32(f.page[start+8:]), true
+	return binary.LittleEndian.Uint64(p[start:]), binary.LittleEndian.Uint32(p[start+8:]), true
 }
 
 // U128 reads the leading 16 bytes of one fixed cell as the little-endian
@@ -111,11 +127,12 @@ func (f *FixedSearch) U64U32(index int) (uint64, uint32, bool) {
 func (f *FixedSearch) U128(index int) (uint64, uint64, bool) {
 	work.CellProbe(1)
 	work.SlotRead(1)
-	start := int(U16(f.page[SlottedHeaderSize+index*2:]))
+	p := f.page
+	start := int(binary.LittleEndian.Uint16(p[SlottedHeaderSize+index*2:]))
 	if start < int(f.header.Upper) || start > f.maxStart || f.cellLen < 16 {
 		return 0, 0, false
 	}
-	lo := U64(f.page[start:])
-	hi := U64(f.page[start+8:])
+	lo := binary.LittleEndian.Uint64(p[start:])
+	hi := binary.LittleEndian.Uint64(p[start+8:])
 	return hi, lo, true
 }

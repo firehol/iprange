@@ -376,9 +376,74 @@ reverted: the working tree is byte-identical to 726e205f (git diff
 clean after restoring the 18 slice files), nested-overwrite back to
 718.9 ms, both full suites + vet + gofmt green. Evidence:
 v4/go/cmd/iprange-v4-bench/evidence/dispatch-removal-ab-20260830.csv.
-Direction item 4 (concrete-store writer A/B) remains a separate
-write-side lead; direction items 5 (read-page-view A/B) and 6
-(Go/Rust necessary-work comparisons) are the next bounded steps.
+Direction item 5 delivered - fixed-size [4096]byte reader page view
+(2026-08-30): FixedSearch carried the mapped page as a []byte slice,
+so every probe built a slice header and re-checked against the
+mapping slice length, and the word loads went through
+encoding/binary.littleEndian call frames (profiled flat 140 ms,
+32%, in the exact-region direct-lookup profile). The view now carries
+page *[PageSize]byte after the one explicit len(page)==PageSize check
+in NewFixedSearch, and the typed accessors compose the little-endian
+words from adjacent array bytes (no slice headers, no
+littleEndian frames, constant-4096 bounds). The flattened byte
+compositions exceeded the inliner budget (U32 cost 101 > 80, causing
+a real call per probe); the kept form uses array-pointer slicing with
+binary.LittleEndian (all accessors inlineable at cost 51-71).
+Interleaved A/B vs pristine 726e205f (10+10 same-session runs):
+live-direct-random-lookup 365.3 -> 355.9 ms (-2.55%),
+immutable-direct-random-lookup 351.3 -> 347.1 ms (-1.21%),
+nested-overwrite neutral (+0.37%). Matched Go/Rust ratios at this
+identity (5+5): live-direct-random-lookup 1.66x, immutable
+1.63x (was 1.67/1.66 committed; Rust drifts 210-262 ms across
+sessions). Both full suites, vet, gofmt green; work counters
+unchanged at every call site. Evidence:
+v4/go/cmd/iprange-v4-bench/evidence/rust-ratio-reader-fixed-page-20260830.csv.
+
+Direction item 6 delivered - test-only Go/Rust necessary-work
+comparison (2026-08-30): deterministic workload harnesses dump the
+full counter snapshot for nested-overwrite (100k live-writer
+replacement) and live-direct-random-lookup (1M lookups over an
+identical seeded 100k map) -
+v4/go/cmd/iprange-v4-bench/necessary_work_v4work_test.go (go test
+-tags v4work -run TestDumpNecessaryWork -v) and
+v4/rust/iprange-livedb/src/necessary_work_tests.rs (cargo test
+--lib necessary_work_tests -- --nocapture). Both sides use the exact
+benchmark flows (same permutation, nested pattern, splitmix64 point
+shuffle, reader_work repetitions). Result (37 active counter rows):
+25 exact matches; 11 go-less (no Go counter exceeds Rust); 1
+go-more (reader leaf_validations 1M vs 0 - Go counts the selected
+leaf-record decode, Rust counts leaf_validation only on write-side
+decodes: definitional, byte-identical page state proven by the tree
+differential tests). Exact matches include tree_lookups, descents,
+page_parses, write key_probes, edit_fit_probes, pages_created,
+pages_copied, pages_split, first_fence_updates, leaf-locator hits,
+pages_sealed, ranges_consumed/emitted/split, mapping_growths/
+flushes, file_syncs, source passes, and every read topology counter
+(1M lookups: 1M lookups, 2M descents, 3M page visits/parses on both
+sides). go-less deltas are counter-coverage gaps in Go (writer
+mapping-layer page visits 0 vs 688,025; COW/cell page bytes 444,092
+vs 69,145,640 and zeroed 44,160 vs 8,487,946 - Go tree writes are
+not byte-counted, Rust mapped_bytes counts every byte) and
+counting-point differences (split-path probes -1,361, write-side
+leaf-validation sites -199,997, reader extra-probe class -1,656,640
+at identical topology); one genuine less-work win (mapping_remaps 1
+vs 3). Evidence:
+v4/go/cmd/iprange-v4-bench/evidence/necessary-work-compare-20260830.csv.
+Follow-up (tracked): complete the Go counters to full Rust parity -
+count mapping-layer page visits on writer paths and page bytes in
+the tree COW/cell paths (internal/tree + draft_store CopyPage) -
+updating the Go and Rust pins (draft_work_test.go, draft_store
+tests) in one bounded slice; the performed-mapped-bytes comparison
+is already negative on the Go side, so the counters will prove
+equality only after that slice.
+
+Direction item 4 (concrete-store writer A/B) remains the remaining
+write-side lead, deferred until the read-page and work-counter
+slices record their evidence. The write path stands at 2.31x
+(nested-overwrite, committed 726e205f evidence); read path at
+1.63-1.66x; validation and the mixed-language / parity-gate closure
+items remain open per the milestone-5 package.
+
 
 
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the

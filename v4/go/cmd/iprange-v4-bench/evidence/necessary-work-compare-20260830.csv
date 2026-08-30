@@ -1,0 +1,38 @@
+scenario,field,go_count,rust_count,delta,verdict,note
+# workloads: nested-overwrite 100k live-writer replacement; 1M live direct random lookups over an identical seeded 100k map
+nested-overwrite,tree_lookups,99999,99999,0,match
+nested-overwrite,tree_descents,171518,171518,0,match
+nested-overwrite,pages_visited,0,688025,-688025,go-less,Go writer does not count mapping-layer page visits (counter-coverage gap; Rust mapping.rs counts every page fetch)
+nested-overwrite,page_parses,477004,477004,0,match
+nested-overwrite,key_probes,1854249,1854249,0,match
+nested-overwrite,cell_probes,2830634,2831995,-1361,go-less,counting-point difference in the emitted split path
+nested-overwrite,leaf_validations,399998,599995,-199997,go-less,counting-point difference (Rust counts leaf validation in more write-side decode sites)
+nested-overwrite,slot_reads,3330751,3332112,-1361,go-less,counting-point difference in the emitted split path
+nested-overwrite,slot_scan_steps,398749,398749,0,match
+nested-overwrite,edit_fit_probes,101371,101371,0,match
+nested-overwrite,pages_created,1380,1380,0,match
+nested-overwrite,pages_copied,1373,1373,0,match
+nested-overwrite,pages_split,1373,1373,0,match
+nested-overwrite,first_fence_updates,1372,1372,0,match
+nested-overwrite,leaf_locator_misses,99998,99998,0,match
+nested-overwrite,leaf_locator_fallbacks,99999,99999,0,match
+nested-overwrite,pages_sealed,1376,1376,0,match
+nested-overwrite,ranges_consumed,299999,299999,0,match
+nested-overwrite,ranges_emitted,299998,299998,0,match
+nested-overwrite,ranges_split,99999,99999,0,match
+nested-overwrite,mapping_growths,1,1,0,match
+nested-overwrite,mapping_remaps,1,3,-2,go-less,Go grows the mapping in fewer remaps (less work)
+nested-overwrite,mapping_flushes,2,2,0,match
+nested-overwrite,file_syncs,2,2,0,match
+nested-overwrite,bytes_moved,444092,69145640,-68701548,go-less,Go tree COW copies are not byte-counted (counter-coverage gap; Rust counted_bytes counts every mapped byte)
+nested-overwrite,bytes_zeroed,44160,8487946,-8443786,go-less,Go tree page zeroing is not byte-counted (counter-coverage gap)
+nested-overwrite,source_passes,100,100,0,match
+nested-overwrite,input_source_passes,98,98,0,match
+live-direct-random-lookup,tree_lookups,1000000,1000000,0,match
+live-direct-random-lookup,tree_descents,2000000,2000000,0,match
+live-direct-random-lookup,pages_visited,3000000,3000000,0,match
+live-direct-random-lookup,page_parses,3000000,3000000,0,match
+live-direct-random-lookup,key_probes,17213410,18870050,-1656640,go-less,identical topology; Rust reader counts an extra probe class per point lookup
+live-direct-random-lookup,cell_probes,20213410,21870050,-1656640,go-less,identical topology; Rust reader counts an extra probe class per point lookup
+live-direct-random-lookup,leaf_validations,1000000,0,1000000,go-more,Go counts the selected leaf-record decode; Rust counts leaf_validation only on write-side decodes (definitional)
+live-direct-random-lookup,slot_reads,20213410,21870050,-1656640,go-less,identical topology; Rust reader counts an extra probe class per point lookup

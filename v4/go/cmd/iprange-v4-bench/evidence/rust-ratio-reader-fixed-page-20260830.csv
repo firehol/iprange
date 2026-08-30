@@ -1,0 +1,3 @@
+scenario,go_median_ns,rust_median_ns,ratio,go_samples,rust_samples,notes
+live-direct-random-lookup,381372021,229704896,1.66,5,5,same-session matched host interleaved; fixed-size [4096]byte page view slice
+immutable-direct-random-lookup,352770963,216795630,1.63,5,5,same-session matched host interleaved; fixed-size [4096]byte page view slice
