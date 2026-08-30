@@ -55,13 +55,18 @@ Therefore, binding for every gate in this SOW:
   and allocation traffic remain diagnostic only and are not a gate
   (Rust performs zero allocations in the lookup path while Go performs
   one 16-byte setup allocation, so a count gate is not comparable).
-- Current honest position against the binding criterion (matched host,
-  2026-08-29): nested-overwrite 3.44-3.74x, live/immutable direct lookups
-  1.74-1.91x, membership-import ~1.7x, update-ipsets-workflow ~2.2x,
-  live-validation ~1.2-1.4x. All scenarios except live-validation FAIL the
-  1.3x criterion; the work continues under user option A until each scenario
-  is inside the envelope or evidence-backed impossibility is brought to the
-  user for an explicit decision.
+- Current honest position against the binding criterion (final identity
+  matrix, matched host, 2026-08-30, rust-ratio-final-20260830.csv, five
+  alternating same-session release samples, medians): membership-import
+  1.529x, nested-overwrite 2.355x, update-ipsets-workflow 1.925x,
+  live-direct-random-lookup 1.525x, immutable-direct-random-lookup 1.582x,
+  live-direct-random-lookup-v6 1.326x, immutable-direct-random-lookup-v6
+  1.357x, live-validation 1.322x. ALL EIGHT scenarios fail the <=1.3x CPU
+  criterion; peak RSS passes six of eight (live v4 lookup 1.351x and
+  live-validation 1.402x fail). This matrix is the evidence package for the
+  language-floor decision that returns to the user at the closure decision
+  point; no scenario is inside the envelope, so the SOW stays in-progress
+  until that decision is recorded.
 
 ## Status
 
@@ -126,6 +131,57 @@ Return for a language-floor decision only after these items are
 complete; the upper-bound calculation must cover all remaining
 dominant Go-only costs, not only the estimated 2-3% store-dispatch
 class.
+
+Sub-state (2026-08-30, direction item 5 - tracking repair applied):
+the stale close records are corrected in this same commit. The Outcome
+section no longer claims completion or cites the voided write envelope; it
+now states the true position (implementation delivered, performance
+acceptance not met, language-floor decision pending the user). The
+"Current honest position" block above carries the final-identity numbers.
+The Followup section de-stales the completed v6-bench and counter-parity
+bullets (those are done inside this SOW; see the item-1 and item-2
+sub-states) and keeps only the items that genuinely remain. Pending
+SOW-0030-20260829-v4-read-and-validation-specialization.md is rewritten
+to the actual residuals under the binding <=1.3x CPU/RSS contract, its
+voided 1.2-1.6x envelope and its false SOW-0017 dependency are removed,
+and its scope now owns whatever the user does not accept at the
+language-floor decision point. The 4a A/B CSV columns that were labeled
+alloc_calls/alloc_bytes but held alloc_bytes/rss_peak_kib are re-labeled
+(tree-header-parser-ab-20260830.csv), and the bench evidence README lists
+every artifact of the bounded continuation.
+
+Sub-state (2026-08-30, direction item 1 - final-identity matrix
+completed): IPv6 direct random-lookup scenarios were added to both
+benches and the complete same-session matrix was measured at the final
+identity (commit 39df5b0b + rust-ratio-final-20260830.csv). Go bench
+(cmds in scenario_read.go, registered as *-direct-random-lookup-v6):
+readSeededDirectV6, randomPointsV6, countRandomPointsV6. Rust bench:
+scenarios/read.rs and scenarios.rs helpers plus direct.rs
+seeded_direct_v6. Matrix: eight scenarios x five alternating same-session
+release samples on the same host (1M records, medians):
+
+  scenario                         Go p50 ms   Rust p50 ms   CPU x   RSS x
+  membership-import                    70.4         46.0    1.529   1.162
+  nested-overwrite                    685.1        290.9    2.355   1.130
+  update-ipsets-workflow             2084.2       1082.6    1.925   1.090
+  live-direct-random-lookup           332.0        217.7    1.525   1.351
+  immutable-direct-random-lookup      311.8        197.0    1.582   1.294
+  live-direct-random-lookup-v6        509.2        384.1    1.326   1.140
+  immutable-direct-random-lookup-v6   448.0        330.1    1.357   1.082
+  live-validation                      16.2         12.3    1.322   1.402
+
+ALL EIGHT CPU ratios fail the binding <=1.3x; peak RSS fails two of eight
+(live v4 lookup, live-validation). This matrix supersedes every earlier
+acceptance table for the floor claim (the 20260828g historical matrix was
+an earlier identity and is archival only). No bounded safe-Go lead remains
+unmeasured: the direction-item-4 A/Bs (authoritative tree-header parser,
+KeyU32 probe) were measured at this same identity and only the parser was
+retained; the remaining Go-only costs are per-page header decode, probe
+extent validation, the Go runtime/GC share of the write machinery, and
+the validation walk - each quantified in the sub-states below and in the
+validation-phase and necessary-work evidence. The language-floor decision
+returns to the user after the five-reviewer delta round (direction
+item 6).
 
 Sub-state (2026-08-30, direction item 3 - validation profiling):
 the validation cost is now separated into parent orchestration, worker
@@ -199,8 +255,8 @@ walks, catalog name+index descents, membership-ID descent, cursor
 readPage/resume, and the tree parse[T]/generated parseRange4/6 all
 route through it, removing the general DecodePageHeader IsBranch
 classification plus the second exact-type re-check/switch per page.
-Escape verified: no new allocations on any path (identical alloc
-counts vs pristine). Interleaved same-session A/B vs pristine HEAD
+Escape verified from the A/B rows: allocated bytes and peak RSS
+identical within noise (0.03% / ~1%), no new per-page allocation. Interleaved same-session A/B vs pristine HEAD
 (5x1 each, evidence/tree-header-parser-ab-20260830.csv):
 live-direct-random-lookup 0.931x, immutable-direct-random-lookup
 0.911x, nested-overwrite 0.992x, membership-import 0.928x. Reads
@@ -227,10 +283,13 @@ allocations or RSS change in either build. Full plain and v4work
 suites, vet both modes, gofmt, and genfamilies/genprobe idempotence
 pass at the reverted tree. The remaining read-path cost structure is
 unchanged: per-page header decode and per-probe extent validation,
-not the width guard. (Note for the final-identity evidence: the 4a
-evidence CSV's two alloc columns were labeled alloc_calls/alloc_bytes
-but hold alloc_bytes/max_rss_peak_kib; the final-identity matrix below
-uses the report header's true columns.)
+not the width guard. (Note: the 4a
+evidence CSV's middle columns were initially labeled alloc_calls/
+alloc_bytes but held alloc_bytes/rss_peak_kib; the header was corrected
+2026-08-30 to slice_alloc_bytes/pristine_alloc_bytes/
+slice_rss_peak_kib/pristine_rss_peak_kib. The 4a rows carry no separate
+alloc-calls column; the 4b A/B at the same identity shows call counts
+equal within one call.)
 
 Sub-state (2026-08-29, read-path probe slice): the per-width probe
 specialization (regression item 1, first half) is implemented and
@@ -2985,11 +3044,37 @@ Tests or equivalent validation (all under `nice`, at the close identity):
 
 Real-use evidence:
 
+- Final-identity performance matrix (acceptance evidence for the
+  language-floor decision, 2026-08-30): eight scenarios - membership-
+  import, nested-overwrite, update-ipsets-workflow, IPv4 live and
+  immutable direct lookups, IPv6 live and immutable direct lookups,
+  live-validation - measured as five alternating same-session release
+  samples on the same host at commit 39df5b0b, medians and peak RSS in
+  v4/go/cmd/iprange-v4-bench/evidence/rust-ratio-final-20260830.csv.
+  All eight CPU ratios fail the <=1.3x binding (1.322x-2.355x); peak
+  RSS fails two of eight (live v4 lookup 1.351x, live-validation
+  1.402x). The historical 20260828g matrix is archival; it measured an
+  earlier identity (and its workflow number used the composed
+  benchmark substitute).
+- Necessary-work parity (direction item 2, commit 0abb7488): fresh Go
+  and Rust harness runs at the final identity
+  (necessary-work-compare-20260830b.csv) close the previously unknown
+  writer counters; pages_visited 685,291 vs 688,025 (Go less), 
+  bytes_moved 71,531,058 vs 69,145,640 (+3.4%, fully attributed per
+  authority, residual in slotted-insert slot shifts), bytes_zeroed
+  8,483,850 vs 8,487,946 (-4,096).
+- Validation cost split (direction item 3, commit 375d78ab): parent/
+  worker/mapping/walk phases at 100k/1M/4M
+  (validation-phases-20260830.csv); CPU 1.66/1.62/1.67x, RSS
+  1.87/1.40/1.16x, worker fixed cost ~1.2-1.5 ms size-independent,
+  worker pprof at 4M shows only graph-walk frames. The historical
+  2.299x validation ratio is superseded by 1.322x at the final
+  identity.
 - update-ipsets workload end to end: the benchmark now drives the real
   one-inode builder and the full SDK surface (scenario_sdk.go);
   apples-to-apples Go-vs-Rust matched 5-sample ratios at
   v4/go/cmd/iprange-v4-bench/evidence/rust-ratio-acceptance-
-  20260828g.csv (raw samples committed alongside).
+  20260828g.csv (raw samples committed alongside; archival).
 - 18-case CI regression gate at the close identity:
   ci-go-v4-local-20260828i.log, 18/18 within-limit, ratios 0.396-1.025,
   update-ipsets-workflow 2,468 ms (ratio 0.488 vs the accepted Go
@@ -3157,22 +3242,29 @@ Follow-up mapping:
 
 ## Outcome
 
-SOW-0027 is complete. The Go v4 SDK now matches the Rust surface and
-wire contract: the normative live-only writer with the full advanced
-workflow surface, one-inode immutable feed construction, exact
-commit-outcome resolution, bounded reclamation, metadata buffer APIs,
-zero-allocation streaming facades, the parity ledger over the complete
-Go function surface, worker containment on every worker-supported
-platform, and the shared 14-fixture conformance corpus that
-cross-opens in both implementations. The update-ipsets workflow runs
-the real one-inode builder and measures 2.189x Rust (Go 2,450 ms),
-inside the accepted write envelope; the read-path and validation
-residuals are profiled, bounded, and tracked. Milestone-4 acceptance
-(extension B included) is granted at this close: the universal-key
-elimination package delivered the recorded targets, and the remaining
-gaps are the tracked follow-up items above. No repository files were
-changed outside this SOW's scope; the close commit carries the SOW
-status, the artifact updates, and the move to done/.
+NOT COMPLETE - in-progress, reopened (regression record below). The
+implementation surface of this SOW is delivered: the Go v4 SDK matches
+the Rust surface and wire contract (normative live-only writer, one-inode
+immutable feed construction, exact commit-outcome resolution, bounded
+reclamation, metadata buffer APIs, zero-allocation streaming facades,
+the parity ledger, worker containment on every worker-supported platform,
+and the shared 14-fixture conformance corpus that cross-opens in both
+implementations). The earlier close record that claimed the update-ipsets
+workflow at 2.189x "inside the accepted write envelope" is VOID: that
+envelope was superseded 2026-08-29 by the user-confirmed binding <=1.3x
+CPU and peak-RSS acceptance (user decisions 1A/2A), and the final-identity
+matrix (rust-ratio-final-20260830.csv, five alternating same-session
+release samples) shows every one of the eight acceptance scenarios
+outside that binding: CPU 1.322x-2.355x, and peak RSS failing two of
+eight scenarios. All bounded safe-Go leads available under the no-unsafe
+constraint were measured at the final identity and are either retained
+(authoritative tree-header parser) or measured-and-rejected (KeyU32
+probe, dispatch removal, result transport); the remaining costs are
+profiled and quantified in the Status sub-states. The language-floor
+decision (accept the measured floor as-is, or pursue further work) is
+the user's, and this SOW stays in-progress until it is recorded; the
+five-reviewer delta round on the actual final commit (direction item 6)
+runs before that decision is presented.
 
 ## Lessons Extracted
 
@@ -3202,27 +3294,31 @@ status, the artifact updates, and the move to done/.
 
 ## Followup
 
-- Performance acceptance (binding 1A/2A, <=1.3x CPU per scenario and
-  peak RSS, no unsafe): reads 1.66/1.63x, nested-overwrite 2.31x,
-  live-validation 2.299x all FAIL the binding and are open. The
-  bounded safe-Go write leads are exhausted and measured-and-rejected
-  (direction items 1-6, recorded above); the language-floor decision
-  returns to the user at this SOW's closure decision point with the
-  exact-region profiles and the measured upper-bound calculation.
-- Read/validation specialization (tracked): pending
-  SOW-0030-20260829-v4-read-and-validation-specialization.md
-  (per-width fixedLowerBound probes; worker-spawn/containment split
-  profile for validation), startable after SOW-0017 unblocks.
-- A v6 read scenario for both benches (tracked): listed as follow-up
-  in the read-path probe slice status; add a v6 direct-lookup case to
-  cmd/iprange-v4-bench and the Rust bench and re-measure the read
-  ratio.
-- Go counters to full Rust parity (tracked): count mapping-layer page
-  visits on writer paths and page bytes in the tree COW/cell paths
-  (internal/tree + draft_store CopyPage), updating the Go and Rust
-  pins in one bounded slice (necessary-work-compare-20260830.csv
-  records the current 36-row compare: 25 match, 10 go-less, 1
-  go-more).
+- Language-floor decision (the only blocker, user's call): the
+  final-identity matrix (rust-ratio-final-20260830.csv) fails the
+  binding 1A/2A acceptance in all eight CPU scenarios (1.322x-2.355x)
+  and in two RSS scenarios (1.351x, 1.402x). Every bounded safe-Go
+  lead under the no-unsafe constraint was measured and either
+  retained (authoritative expected-tree-header parser, reads -7-9%)
+  or rejected (KeyU32 probe neutral; dispatch removal regression;
+  result transport measured and kept as the 2.31x state). The
+  dominant Go-only costs at the final identity are per-page header
+  decode, per-probe extent validation, the Go runtime/GC share of the
+  tree machinery, and the validation walk - all quantified in the
+  Status sub-states and in validation-phases-20260830.csv. The
+  language-floor decision (accept as-is, or pursue a specific further
+  lead) is presented to the user after the five-reviewer delta round;
+  this SOW stays in-progress until decided.
+- Residuals the user does not accept (tracked): pending
+  SOW-0030-20260829-v4-read-and-validation-specialization.md is
+  rewritten (2026-08-30) to own the actual residuals under the binding
+  <=1.3x CPU/RSS contract - the read-path residuals (v6 1.326/1.357x,
+  v4 1.525/1.582x), the write residual (nested-overwrite 2.355x),
+  the validation walk residual (1.322x), and the +3.4% bytes_moved
+  counter attribution - with the voided 1.2-1.6x envelope and the
+  false SOW-0017 dependency removed. It is startable only after this
+  SOW closes and only if the user chooses to continue; if the user
+  accepts the floor, the residuals close as accepted limitations.
 - Explicitly accepted divergences (recorded, not defects): Rust
   CancellationToken::from_poll is not portable to Go (nil token is
   the uncancellable form); the apple filesec creator-only machine and
@@ -3231,12 +3327,14 @@ status, the artifact updates, and the move to done/.
   inspection, and recovery fail-closed with ErrorOSUnsupported
   (v4/go/internal/routing/routing_other.go; no in-process fallback).
 - SOW-0017: snapshot signing remains dependent on accepted completion
-  of this unsigned SDK parity SOW; it unblocks after this close is
-  accepted.
-- No untracked deferred implementation item remains: the milestone-5
-  ledger is implemented and verified, and the three tracked items
-  above (SOW-0030, v6 read bench, Go counter parity) are real
-  pending work.
+  of this unsigned SDK parity SOW; it unblocks after the language-floor
+  decision closes this SOW.
+- No untracked deferred implementation item remains: the v6 bench
+  scenarios and the necessary-work counter parity (the two items this
+  SOW previously tracked as follow-up) were delivered inside this SOW
+  (commits 39df5b0b and 0abb7488); the only items that remain are the
+  language-floor decision above and the SOW-0030 residual ownership
+  below it.
 
 ## Regression Log
 

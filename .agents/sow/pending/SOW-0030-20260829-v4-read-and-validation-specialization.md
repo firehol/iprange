@@ -1,82 +1,104 @@
-# SOW-0030 - v4 Go read-path and validation specialization (performance residuals)
+# SOW-0030 - v4 Go performance residuals (language-floor continuation)
 
 ## Status
 
 Status: open
 
 Sub-state: pending; created 2026-08-29 to represent the measured
-Go-vs-Rust read-path and validation residuals of SOW-0027, which remains
-in-progress (reopened 2026-08-29; the performance acceptance is still
-open). SOW-0017 (snapshot signing) is the next active SOW after the
-current one; this pending SOW documents the tracked residuals so they
-stay represented per the Followup Discipline. It is not startable until
-SOW-0017 unblocks and the user schedules it.
+Go-vs-Rust performance residuals of SOW-0027, rewritten 2026-08-30 to
+the actual final-identity numbers. SOW-0027 is the sole active SOW and
+remains in-progress until its language-floor decision is recorded.
+This pending SOW starts only if the user chooses to continue
+optimization after that decision; if the user accepts the measured
+floor, the residuals recorded here close as accepted limitations and
+this SOW is rejected with this record as the evidence. It has no
+dependency on SOW-0017 (snapshot signing); the earlier text saying it
+was "not startable until SOW-0017 unblocks" was wrong and is void.
 
 ## Requirements
 
 ### Purpose
 
-Close the measured Go-vs-Rust read-path and validation performance gaps of
-the v4 SDK against the binding SOW-0027 performance acceptance
-(user 1A/2A, 2026-08-29): CPU <=1.3x Rust for every substantial
-acceptance scenario and peak RSS <=1.3x, no unsafe ever. Current
-committed evidence: live-direct-random-lookup 1.66x and
-immutable-direct-random-lookup 1.63x (rust-ratio-reader-fixed-page-
-20260830.csv), live-validation 2.299x (rust-ratio-acceptance-
-20260828g.csv, historical). The bounded safe-Go write leads are
-measured-and-rejected in SOW-0027; the write language-floor decision
-returns to the user at SOW-0027's closure decision point, and this SOW
-stays scoped to the read-path and validation specialization.
+Close, or explicitly accept, the measured Go-vs-Rust performance gaps
+of the v4 SDK against the binding performance acceptance (user
+decisions 1A/2A, 2026-08-29): CPU <=1.3x Rust for every substantial
+acceptance scenario and peak RSS <=1.3x, no unsafe ever.
+
+Final-identity evidence (rust-ratio-final-20260830.csv, five
+alternating same-session release samples per scenario, 1M records,
+medians): all eight acceptance scenarios fail the CPU binding
+(membership-import 1.529x, nested-overwrite 2.355x,
+update-ipsets-workflow 1.925x, live-direct-random-lookup 1.525x,
+immutable-direct-random-lookup 1.582x, live-direct-random-lookup-v6
+1.326x, immutable-direct-random-lookup-v6 1.357x, live-validation
+1.322x) and two of eight fail the RSS binding (live v4 lookup 1.351x,
+live-validation 1.402x). The bounded safe-Go leads of SOW-0027
+direction items 1-6 are exhausted: the authoritative expected-tree-
+header parser is retained (reads -7-9%), the KeyU32 probe A/B was
+neutral and reverted, the dispatch-removal A/B regressed, and the
+result-transport slice left nested-overwrite at 2.31x. The remaining
+Go-only costs are quantified: per-page header decode and per-probe
+extent validation on reads; the Go runtime/GC share of the tree
+machinery on writes; the validation graph walk (the worker containment
+cost is now separated and is small: ~1.2-1.5 ms fixed plus the walk,
+validation-phases-20260830.csv); and the +3.4% bytes_moved counter
+attribution (necessary-work-compare-20260830b.csv), which the
+SOW-0027 final review round attributes before this SOW starts.
 
 ### User Request
 
-No direct user request: this SOW exists to represent the SOW-0027
-follow-up commitments (per the Followup Discipline) with the recorded
-evidence, so the accepted closure of SOW-0027 leaves no untracked
-deferred implementation item.
+No direct user request: this SOW exists to represent the residuals
+that survive the SOW-0027 language-floor decision, per the Followup
+Discipline. The user's decisions 1A/2A (2026-08-29) and decision 2
+(2026-08-30, bounded continuation, then return the language-floor
+decision) govern.
 
 ### Assistant Understanding
 
 Facts:
 
-- The SOW-0027 final performance reviewer (Hooke, PASS for closure)
-  measured at the g identity (evidence/rust-ratio-acceptance-
-  20260828g.csv): live-direct-random-lookup 1.784x,
-  immutable-direct-random-lookup 1.792x, live-validation 2.299x,
-  nested-overwrite 4.200x.
-- The same reviewer identified the cheapest fix: per-width
-  specialization of the fixedLowerBound probe loops (expected lookups
-  ~1.4-1.5x, into/near the read envelope) and a parent/worker split
-  profile to quantify the designed containment share of validation.
-- The duplication/codegen option for nested-overwrite is measured and
-  rejected: the dispatch-removal A/B measured a regression
-  (dispatch-removal-ab-20260830.csv: +10.52% nested-overwrite) and the
-  result-transport slice left nested-overwrite at 2.31x
-  (rust-ratio-writer-transport-20260830.csv); no bounded safe-Go lead
-  remains that can close the <=1.3x binding, so the language-floor
-  decision returns to the user at SOW-0027's closure decision point.
-- SOW-0027 remains in-progress (reopened 2026-08-29); SOW-0017 is the
-  next active SOW only after SOW-0027 closes.
+- The user decision 2 (2026-08-30) bounded the continuation to
+  direction items 1-6 and required returning to the user for the
+  language-floor decision; that decision has NOT been recorded yet
+  (SOW-0027 stays in-progress).
+- Per-width probe specialization (the original cheapest-fix estimate
+  of the 2026-08-28 review) is implemented in SOW-0027 and measured
+  NEUTRAL on the read bench (the reader uses its own direct search
+  loops, not the tree probes); it no longer appears in this SOW's
+  plan.
+- The parent/worker validation split is measured in SOW-0027
+  (validation-phases-20260830.csv): the worker cost is ~1.2-1.5 ms
+  fixed plus the graph walk; the walk is the residual.
+- The write-path residual (nested-overwrite 2.355x) was reduced from
+  4.2x by the SOW-0027 slices; no bounded safe-Go lead that reaches
+  <=1.3x is known at this SOW's creation.
 
 Inferences:
 
-- The read-path win also shaves every write-path probe, so the lookup
-  specialization benefits the write scenarios too.
+- Any further Go optimization must be measured as an A/B at the final
+  identity before retention; the direction-item-4 retain rule applies
+  ("only if measurement and assembly show a real win").
 
 Unknowns:
 
-- Whether the read-path work alone brings the write ratios inside the
-  envelope; measured only after implementation.
+- Whether any still-unexplored safe-Go lead (for example, amortizing
+  per-page header decode on the read loops, or reducing the
+  validation walk's parsed-page authoring) can move any scenario
+  inside <=1.3x; measured only inside this SOW.
 
 ### Acceptance Criteria
 
-- Live-direct and immutable-direct lookup ratios land inside or near
-  the 1.2-1.6x envelope with the same matched 5-sample methodology as
-  SOW-0027, no regression in the 18-case CI gate, and no mmap-only
-  policy change.
-- live-validation reports the worker-spawn vs walker cost split; the
-  validation ratio improves or is explicitly accounted by the
-  containment cost.
+- The recorded residual at the language-floor decision is either
+  accepted with user sign-off (this SOW closes as rejected/not worth
+  doing with this record as evidence), or the lead the user selects
+  lands the scenario inside the binding <=1.3x CPU and <=1.3x peak
+  RSS contract with the same matched 5-sample same-session
+  methodology, no regression in the CI gate, and no mmap-only policy
+  change.
+- Any counter-parity residual (the +3.4% bytes_moved attribution) is
+  either attributed to a real Go/Rust behavioral difference with
+  Rust references, or closed by making the counting points
+  identical.
 - All SOW-0027 validation rules apply: nice-only runs, evidence CSV +
   README updates, five-reviewer level-1 final round, follow-up
   mapping.
@@ -85,26 +107,27 @@ Unknowns:
 
 Sources checked:
 
-- v4/go/cmd/iprange-v4-bench/evidence/rust-ratio-acceptance-
-  20260828g.csv (the accepted SOW-0027 close ratios).
-- v4/go/cmd/iprange-v4-bench/evidence/profiles-4c4d-summary.txt and
-  the SOW-0027 final review record (Hooke scope) for the probe-chain
-  cause and the per-width specialization estimate.
-- internal/tree/page.go fixedLowerBound and the generic gap/replace
-  machinery (the measured residual causes).
+- rust-ratio-final-20260830.csv (the final-identity matrix, commit
+  39df5b0b; the only acceptance evidence).
+- validation-phases-20260830.csv and necessary-work-compare-
+  20260830b.csv (the SOW-0027 item 2/3 evidence).
+- The SOW-0027 Status sub-states for direction items 1-6 (the
+  exhausted-lead records and profiles).
 
 Current state:
 
-- The Go tree probes dispatch per probe through a non-inlined call
-  chain (fixedLowerBound, comparePrefixKey, CompareRawKey), the same
-  chain on reads and writes; lookups are allocation-free.
+- All eight scenarios fail the <=1.3x CPU binding; the floor decision
+  is pending with the user.
+- The retained tree-header parser improved reads ~7-9%; reads remain
+  1.33x-1.58x.
 
 Risks:
 
-- Per-width specialization duplicates probe code; the SOW-0027 earlier
-  attempt at a monomorphized width-switch regressed 1-3% and was
-  reverted - the specialization must be measured before acceptance.
-- 32-bit metadata addressability: the supported matrix stays 64-bit.
+- Further micro-optimization without a measured A/B is wasted compute;
+  the resource budget rules of AGENTS.md apply (no repeated
+  whole-program analysis, unit-scale A/Bs, every heavy step named
+  with its expected cost before it runs).
+- No unsafe code is authorized under any option.
 
 ## Pre-Implementation Gate
 
@@ -112,65 +135,73 @@ Status: ready
 
 Problem / root-cause model:
 
-- Go's generic tree probe chain cannot be fully inlined under the
-  one-authoritative-core rule; Rust's monomorphized per-key probes
-  inline. Measured: lookups 1.79x, validation 2.30x Rust.
+- Go's per-page header decode, per-probe extent validation, runtime/
+  GC share on writes, and the validation walk are the quantified
+  residual costs; the write machinery residual is partly a counting
+  attribution question (bytes_moved +3.4%).
 
 Evidence reviewed:
 
-- SOW-0027 close records (Validation, Followup), the g-identity ratio
-  CSV, ci-go-v4-local-20260828i.log, profiles-4c4d-summary.txt.
+- rust-ratio-final-20260830.csv, validation-phases-20260830.csv,
+  necessary-work-compare-20260830b.csv,
+  tree-header-parser-ab-20260830.csv, probe-key-u32-ab-20260830.csv,
+  rust-ratio-writer-transport-20260830.csv,
+  dispatch-removal-ab-20260830.csv.
 
 Affected contracts and surfaces:
 
-- internal/tree probe internals only; no wire format, no public API,
-  no conformance change.
+- bench scenarios and v4/go internal reader/validation hot paths
+  only; no wire format, no public API, no conformance change.
 
 Existing patterns to reuse:
 
-- The 4c/4d slice pattern (measure, pin, commit evidence in the same
-  commit), the SOW-0027 review-gate rules, the bench harness.
+- The SOW-0027 A/B discipline (interleaved same-session 5x1,
+  retain-only-if-win, evidence CSV in the same commit), the bench
+  harness, the review-gate rules.
 
 Risk and blast radius:
 
-- Read/write hot paths; the earlier width-switch attempt regressed
-  1-3% and was reverted, so every step is measured at the CI gate.
+- Read/write/validation hot paths; every step measured at the CI gate
+  and the matched Rust-ratio matrix before retention.
 
 Sensitive data handling plan:
 
 - No sensitive data; benchmark artifacts only.
 
-Implementation plan:
+Implementation plan (starts only after the user selects a lead):
 
-- 1. Profile the parent/worker validation split and pin the lookup
-  probe cost (evidence CSV).
-- 2. Implement per-width probe specialization under the single tree
-  core; measure against the 18-case gate and the matched Rust-ratio
-  matrix.
-- 3. Re-evaluate nested-overwrite only if the specialization wins
-  leave it as the cheapest remaining gap.
-- 4. Five-reviewer level-1 round, evidence refresh, close.
+- 1. If the user accepts the floor: close this SOW as rejected with
+  the residual record as evidence; no code changes.
+- 2. If the user selects a lead: implement it unit-scale with an
+  interleaved A/B, retain only on a measured win, then re-run the
+  full final-identity matrix.
+- 3. Attribute the bytes_moved +3.4% residual against the Rust
+  reference before any write-path work.
+- 4. Five-reviewer level-1 round, evidence refresh, close or return.
 
 Validation plan:
 
 - Same as SOW-0027: nice-only, plain + v4work + race + vet + gofmt,
-  the 18-case CI gate, matched 5-sample Rust-ratio CSV, conformance
-  battery, full-codebase mmap/file-I/O gate at close.
+  the CI gate, matched 5-sample Rust-ratio CSV, conformance battery,
+  full-codebase mmap/file-I/O gate at close.
 
 Artifact impact plan:
 
-- v4/go/internal/tree and evidence files; SOW lifecycle per the
+- v4/go hot-path internals and evidence files; SOW lifecycle per the
   project rules.
 
 Open decisions:
 
-- None; start sequencing is the user's call after SOW-0017.
+- The language-floor decision (SOW-0027 closure decision point):
+  accept the measured floor, or select one of the residual leads.
+  This SOW does not start until that decision is recorded.
 
 ## Validation
 
 Acceptance criteria evidence:
 
-- Pending (SOW not started).
+- Pending (SOW not started; the final-identity matrix that defines
+  the floor lives in SOW-0027).
 
 Tests or equivalent validation:
 
@@ -182,7 +213,8 @@ Real-use evidence:
 
 Reviewer findings:
 
-- Pending.
+- Pending; the SOW-0027 five-reviewer delta round (direction item 6)
+  also attributes the +3.4% bytes_moved residual.
 
 Same-failure scan:
 
@@ -221,8 +253,10 @@ Lessons:
 
 Follow-up mapping:
 
-- The nested-overwrite duplication/codegen option stays rejected with
-  evidence unless future measurements re-open it inside this SOW.
+- The residuals in the Requirements/Purpose sections are this SOW's
+  owned scope; anything the user accepts at the language-floor
+  decision closes here with the decision record; anything rejected
+  with evidence is recorded here as not worth doing.
 
 ## Outcome
 

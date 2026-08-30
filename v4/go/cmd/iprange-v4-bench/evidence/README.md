@@ -199,3 +199,35 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   leaf-validation, one genuine Go less-work win mapping_remaps 1 vs 3);
   the Go counters still under-count mapping-layer page visits and tree
   COW/cell bytes (tracked follow-up).
+- `necessary-work-compare-20260830b.csv`: the SOW-0027 direction-item-2
+  comparison at the mapped-page authority level (fresh Go and Rust
+  harness runs at the final identity; supersedes the 20260830.csv
+  under-count rows above): pages_visited 685,291 vs 688,025 (Go less;
+  the previous row was 0 vs 688,025 "go-less unknown"), bytes_moved
+  71,531,058 vs 69,145,640 (+3.4%, fully attributed per authority, to
+  attribute at final review), bytes_zeroed 8,483,850 vs 8,487,946
+  (-4,096), mapping_remaps 1 vs 3.
+- `validation-phases-20260830.csv`: live-validation at 100k/1M/4M with
+  the parent/worker/mapping/walk split (IPRANGE_WORKER_PHASES bench
+  hook): CPU 1.66x/1.62x/1.67x, peak RSS 1.87x/1.40x/1.16x; the worker
+  fixed cost is ~1.2-1.5 ms size-independent; worker pprof at 4M shows
+  graph-walk frames only.
+- `tree-header-parser-ab-20260830.csv`: interleaved same-session A/B
+  of the authoritative expected-tree-header parser (slice retained):
+  live/immutable lookups 0.931/0.911, nested-overwrite 0.992,
+  membership-import 0.928. Column pairs are pristine/slice p50 ns,
+  then slice/pristine allocated bytes, then slice/pristine peak RSS
+  KiB (the middle labels were corrected 2026-08-30).
+- `probe-key-u32-ab-20260830.csv`: interleaved same-session A/B of the
+  width-guard-free fixed-search probe (slice reverted, neutral):
+  live 1.010, immutable 0.994, nested-overwrite 1.003,
+  membership-import 0.980; alloc calls equal within one call.
+- `rust-ratio-final-20260830.csv`: the final-identity performance
+  matrix of SOW-0027 direction item 1 - eight scenarios (membership-
+  import, nested-overwrite, update-ipsets-workflow, IPv4 live and
+  immutable direct lookups, IPv6 live and immutable direct lookups,
+  live-validation), five alternating same-session release samples per
+  scenario at commit 39df5b0b, medians and peak RSS. All eight CPU
+  ratios fail the binding <=1.3x (1.322x-2.355x); two RSS ratios fail
+  (1.351x, 1.402x). This CSV is the evidence package for the
+  language-floor decision that returns to the user.

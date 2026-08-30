@@ -1,0 +1,9 @@
+scenario,size,aux,go_p50_ns,rust_p50_ns,cpu_ratio,go_rss_peak_kib,rust_rss_peak_kib,rss_ratio,go_samples,rust_samples,note
+membership-import,1000000,421,70413768,46044683,1.529,53868,46360,1.162,5,5,interleaved same-session release builds at HEAD 39df5b0b
+nested-overwrite,1000000,0,685092333,290868604,2.355,67504,59712,1.130,5,5,interleaved same-session release builds at HEAD 39df5b0b
+update-ipsets-workflow,1000000,7,2084194969,1082581962,1.925,118652,108864,1.090,5,5,interleaved same-session release builds at HEAD 39df5b0b
+live-direct-random-lookup,1000000,0,332016383,217662255,1.525,34704,25684,1.351,5,5,interleaved same-session release builds at HEAD 39df5b0b
+immutable-direct-random-lookup,1000000,0,311825121,197046217,1.582,46160,35660,1.294,5,5,interleaved same-session release builds at HEAD 39df5b0b
+live-direct-random-lookup-v6,1000000,0,509199481,384149410,1.326,96020,84256,1.140,5,5,interleaved same-session release builds at HEAD 39df5b0b
+immutable-direct-random-lookup-v6,1000000,0,447991970,330117113,1.357,114816,106100,1.082,5,5,interleaved same-session release builds at HEAD 39df5b0b
+live-validation,1000000,0,16215900,12267867,1.322,30108,21476,1.402,5,5,interleaved same-session release builds at HEAD 39df5b0b
