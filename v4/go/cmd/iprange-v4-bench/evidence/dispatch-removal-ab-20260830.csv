@@ -1,0 +1,4 @@
+scenario,base_median_ns,slice_median_ns,delta_pct,go_samples_each,notes
+nested-overwrite,703032401,777025421,10.52,5,interleaved A/B v4bench-head(726e205f) vs F-threaded worktree; same-session matched host
+membership-import,75920292,80522092,6.06,5,interleaved A/B v4bench-head(726e205f) vs F-threaded worktree; same-session matched host
+update-ipsets-workflow,2191886398,2174707922,-0.78,5,interleaved A/B v4bench-head(726e205f) vs F-threaded worktree; same-session matched host

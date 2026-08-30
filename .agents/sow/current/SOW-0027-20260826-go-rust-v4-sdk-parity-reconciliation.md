@@ -356,6 +356,31 @@ within session noise of the 1.44-1.73x band) and update-ipsets-workflow
 (remove the per-operation writer family dispatch) is the next
 measured step.
 
+Direction item 3 measured and REJECTED - per-operation family dispatch
+removal via codec type parameter (2026-08-30): the slice F-threaded
+the whole writer range chain ([K any, F tree.RangeGapOps[K]] through
+range_specialize/range_edit/range_locator/range_coverage and the six
+emitted RangeGapOps methods on RangeCodec4/6), replacing every
+switch any(ctx.family).(type) seam with compile-time-resolved direct
+calls. Interleaved A/B at the same identity (5+5 matched runs per
+scenario; pristine HEAD 726e205f binary built from git archive vs the
+F-threaded worktree binary): nested-overwrite 703.0 ms (base) vs
+777.0 ms (slice) = +10.5%; membership-import 75.9 ms vs 80.5 ms =
++6.1%; update-ipsets-workflow 2,191.9 ms vs 2,174.7 ms = -0.8%
+(noise). Profiles of both binaries show the monomorphized chain
+increases flat time in the emitted entries (InsertIfLocalGap4 flat
+120 ms vs 70 ms) and loses the old binary's inlining of parseRange/
+privateRangePath; the single type switch per seam cost less than the
+code-bloat and inlining loss of full monomorphization. The slice was
+reverted: the working tree is byte-identical to 726e205f (git diff
+clean after restoring the 18 slice files), nested-overwrite back to
+718.9 ms, both full suites + vet + gofmt green. Evidence:
+v4/go/cmd/iprange-v4-bench/evidence/dispatch-removal-ab-20260830.csv.
+Direction item 4 (concrete-store writer A/B) remains a separate
+write-side lead; direction items 5 (read-page-view A/B) and 6
+(Go/Rust necessary-work comparisons) are the next bounded steps.
+
+
 SOW-0027 delivers the Go/Rust v4 SDK parity reconciliation: the
 normative live-only writer surface (off-contract Writer removed; advanced
 direct, membership, and structured transactions; feed lifecycle; exact
