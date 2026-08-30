@@ -19,9 +19,11 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"runtime/pprof"
 	"strconv"
+	"time"
 
 	"github.com/firehol/iprange/v4/go/internal/worker"
 )
@@ -78,7 +80,29 @@ func main() {
 // or Failed after write_worker_error). Protocol-class failures exit 65;
 // a transmitted mode failure still exits 0 because the protocol
 // completed (Rust parity).
+// workerPhases reports the worker-side phase timings of one
+// validation/recovery run (bench-only tooling; SOW-0027 direction item
+// 3). Set IPRANGE_WORKER_PHASES to a file path to append
+// "<name> <nanoseconds-since-process-start>" rows for the control
+// handshake (verify, ready, running), the fault-handler install, and
+// the mode dispatch while the worker runs. The parent spawns the worker
+// with null stdio, so the rows go to the file, never stdout/stderr.
+var workerPhasePath = os.Getenv("IPRANGE_WORKER_PHASES")
+
+func phaseMark(name string, start time.Time) {
+	if workerPhasePath == "" {
+		return
+	}
+	file, err := os.OpenFile(workerPhasePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintf(file, "%s %d\n", name, time.Since(start).Nanoseconds())
+	_ = file.Close()
+}
+
 func run(args []string) int {
+	started := time.Now()
 	if len(args) != 2 || args[0] != "--control" {
 		return exitUsage
 	}
@@ -93,16 +117,20 @@ func run(args []string) int {
 	if err := control.VerifyRequest(); err != nil {
 		return exitProtocol
 	}
+	phaseMark("verify", started)
 	control.SetWorkerPID(uint32(os.Getpid()))
 	control.SetState(worker.StateWorkerReady)
+	phaseMark("ready", started)
 	if err := control.WaitFor(worker.StateRunning); err != nil {
 		return exitProtocol
 	}
+	phaseMark("running", started)
 	handler, err := installFaultHandler(control)
 	if err != nil {
 		return exitProtocol
 	}
 	defer handler.Close()
+	phaseMark("handler", started)
 	// Rust worker.rs Context::enter (worker.rs:155-183): the worker
 	// session is active for the mode run. EnterSession publishes the
 	// control's ProbeRegion as the mapping session probe hook, so
@@ -119,7 +147,9 @@ func run(args []string) int {
 	if !ok {
 		return exitProtocol
 	}
+	phaseMark("dispatch", started)
 	guard, err := runMode(control, opcode)
+	phaseMark("mode", started)
 	if err != nil {
 		if writeErr := worker.WriteWorkerError(control, err); writeErr != nil {
 			return exitProtocol
@@ -134,5 +164,6 @@ func run(args []string) int {
 			return exitProtocol
 		}
 	}
+	phaseMark("total", started)
 	return 0
 }

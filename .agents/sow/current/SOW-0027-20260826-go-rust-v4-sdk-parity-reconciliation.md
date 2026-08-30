@@ -127,6 +127,31 @@ complete; the upper-bound calculation must cover all remaining
 dominant Go-only costs, not only the estimated 2-3% store-dispatch
 class.
 
+Sub-state (2026-08-30, direction item 3 - validation profiling):
+the validation cost is now separated into parent orchestration, worker
+startup/handshake, mapping, and graph walk at three sizes, with CPU and
+peak RSS recomputed at the current identity. Bench tooling:
+IPRANGE_WORKER_PHASES=<path> makes the spawned iprange-v4-worker append
+phase rows (verify, ready, running, handler, dispatch, mode) for the
+control handshake, fault-handler install, and the measured operation
+(cmd/iprange-v4-worker/main.go; bench-only, no SDK change). Matched
+same-session runs (validation-phases-20260830.csv) at 100k / 1M / 4M:
+Go p50 6.47 / 16.55 / 53.76 ms vs Rust 3.91 / 10.23 / 32.27 ms (CPU
+1.66x / 1.62x / 1.67x) and peak RSS 12.9 / 29.6 / 81.9 MiB vs 6.9 /
+21.2 / 70.7 MiB (1.87x / 1.40x / 1.16x; the small-size RSS gap is the
+Go runtime floor of the worker process and converges toward the 1.3x
+envelope at scale). Worker phases are size-independent (~1.2-1.5 ms
+fixed: verify ~40 us, ready ~75 us, running ~1.15 ms, handler ~60 us,
+dispatch ~20 us) and the mode phase (mapping + walk) scales with the
+graph: ~2.8 ms / 100k, ~15 ms / 1M, ~51 ms / 4M. Worker CPU profiles at
+4M show only graph-walk frames (validation.Validate -> mapping.Probe ->
+InspectLayout -> walkRangeLeaf4/inspectFixedExtents/markExtent); no
+mmap, syscall, or handshake frames, so the mapping open is microsecond-
+scale and the walk is the entire measured cost. The historical 2.299x
+validation ratio (20260828g) is superseded by ~1.62-1.67x at the final
+identity; the residual vs the binding <=1.3x is the walk itself, not
+containment overhead.
+
 Sub-state (2026-08-30, direction item 2 - necessary-work parity
 completed): the counter-coverage gaps are closed at the mapped-page
 authority level, mirroring the Rust counting points (mapping.rs
