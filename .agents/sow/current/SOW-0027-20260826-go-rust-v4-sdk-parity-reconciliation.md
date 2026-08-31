@@ -2514,8 +2514,12 @@ All five scopes PASS at b1a3a92d:
   the validation-phases CSV unquoted note fields, and a one-line
   worker-observability note added to the item-3 sub-state.
 
-The five-scope review is therefore complete on the exact final commit
-b1a3a92d, and the closure package matches the repository rules.
+NOTE on anchoring: the round above was anchored to b1a3a92d. Per the
+project-final-review policy, any later commit invalidates the anchored
+verdicts (what changed after b1a3a92d is record-only or bench-tooling,
+but the policy is strict). The verdicts therefore do NOT constitute an
+exact-final-commit review; a fresh five-scope round at the actual
+final HEAD is recorded in the amendment below.
 
 ### The measured structural plateaus (evidence)
 
@@ -2614,21 +2618,157 @@ profile (those are literal CPU usage).
       heap today; stack-resident state via explicit fields).
       Expected <=1%.
 
-### Recommendation for the user decision
+### Amendment 2026-08-31 (sol decision 3A - analysis and measurement only)
 
-Keep the <=1.3x gate (sol decision). Of the design options above,
-only 4a (parallel validation walk) has a credible path across the
-gate, and it is safe, bounded, and measurable; 1a and 2a are cheap
-micro-items to fold into any implementation slice; 1b requires unsafe
-and stays rejected; 3 requires the phase measurement before any
-workflow-specific design. The honest expectation is that 4a lands
-validation (1.322x) at or near the gate, while reads and writes stay
-at their plateaus unless a structural idea beyond the listed ones
-emerges during the design review - so the <=1.3x binding may not be
-fully reachable even after 4a, and the user may still need to accept
-a documented residual for reads/writes at that point. This record
-does not authorize implementation; it is the input to the user's
-design decision.
+sol rejected the parallel-validation proposal as implementation-ready
+(validation is an ordered graph traversal with shared ownership,
+refcount, neighbor, finding, restart, and sink state, not a
+page-independent physical scan), rejected the micro-items 1a/2a, and
+required: stabilize the validation measurement, phase-split the
+workflow, and replace the proposal with a feasibility design covering
+nine listed contracts. No implementation is authorized.
+
+Stabilized validation measurement (31 alternating Go/Rust pairs per
+size, single samples, same host, same binaries as the final matrix;
+evidence/validation-stabilization-20260831.csv, ~7 wall-minutes under
+nice; record cost: 31 pairs x 3 sizes):
+
+  size      Go median (range)        Rust median (range)      paired ratio median (95% CI)
+  100k      6.52 ms (5.00-7.55)      4.05 ms (3.83-5.07)      1.555 (CI 1.406-1.607)
+  1M        17.20 ms (15.71-27.02)   10.42 ms (10.18-14.47)   1.651 (CI 1.569-1.790)
+  4M        55.15 ms (52.42-71.25)   32.30 ms (31.23-38.58)   1.717 (CI 1.690-1.792)
+
+  RSS medians: 1.295x / 1.357x / 1.149x. Conclusions: (a) the
+  final-matrix 1.322x median was a noise-LOW draw on five pairs; the
+  stabilized estimate is 1.51-1.79x and every 95% CI excludes 1.300x,
+  so the gate is missed by ~0.25-0.49x, not 0.022x - the "0.27 ms
+  gap" framing is void (the real gap is ~6.8 ms at 1M vs the 0.27 ms
+  implied by 1.322x -> 1.300x); (b) the benchmark cannot distinguish
+  1.322x from 1.51x with five pairs, which is exactly why the matrix
+  median misled; the 31-pair CI is the reliable evidence.
+
+Workflow phase split (update-ipsets-workflow 1M, 5 samples, bench-only
+phase recorder added to scenario_sdk.go under IPRANGE_WORKFLOW_PHASES;
+evidence/workflow-phase-split-20260831.csv + raw log; measured wall
+p50 2125 ms):
+
+  create-current (one-inode feed build)  698 ms  33.9%
+  publish (algebra output feed build)    314 ms  15.3%
+  history (windows projection)           215 ms  10.5%
+  base-feed                              191 ms   9.3%
+  last-seen                              181 ms   8.8%
+  first-seen                             173 ms   8.4%
+  join-direct                            130 ms   6.3%
+  join-membership                        121 ms   5.9%
+  aggregate                               32 ms   1.6%
+  tail (opens/checks/closes)             ~69 ms   3.4%
+
+  The 1.925x workflow residual is dominated by the two one-inode
+  feed builds (49% combined), not by the gap/replace machinery
+  (history is 10.5%) and not by the joins (12%). Any workflow-targeted
+  design must therefore attack the feed-build phases first; the
+  membership-import and nested-overwrite scenario ratios bound those
+  phases (1.529x and 2.355x respectively), so the workflow ratio is
+  consistent with its phase composition.
+
+Parallel-validation FEASIBILITY design (replacing the page-independent
+scan proposal; assessment only - no implementation):
+
+  Model: the sequential validator is an ordered DFS over the tree
+  graph (selected-root order and first-encounter page/key order,
+  binary-format-v4.md section 19; validation/validation.go:227
+  serial root order; range.go cross-leaf neighbor state). The only
+  parallelism that preserves the observable order is SUBTREE
+  PARTITIONING WITH ORDERED REDUCTION: each goroutine validates a
+  disjoint subtree and produces a summary; a cheap sequential reduce
+  consumes the summaries in DFS carry-chain order. All nine
+  contracts sol listed are covered as follows:
+
+  1. DFS encounter-order preservation: carry-in (the previous
+     subtree's last record, order state, value-kind counts) is
+     threaded through the reduce in DFS order; findings are emitted
+     only from the reduce, in encounter order, so the sink sees the
+     exact sequential order.
+  2. Subtree summaries and deterministic reduction: each subtree
+     summary is {first key, last key, range count, order-valid bit,
+     bounded findings vector, value-kind counts, refcount deltas};
+     the summary function is pure in (subtree pages, carry-in), so
+     the reduce is deterministic and reproducible.
+  3. Global page claims, aliases, refcounts, cross-leaf neighbors:
+     page claims use a concurrent visited set keyed by page number
+     (the sequential walk visits each page once; aliasing across
+     roots is detected identically); refcount and neighbor checks
+     that cross subtree boundaries run only in the reduce, where the
+     boundary records of adjacent subtrees are available.
+  4. Bounded result buffering charged to MaxHeapBytes: each worker
+     goroutine owns a fixed-size findings buffer (constant, e.g. 256
+     entries); the total is charged to the validation heap budget;
+     healthy walks emit no findings, so the common path allocates
+     only the summary structs.
+  5. Synchronous sink Stop/Error behavior: the reduce delivers
+     findings to the sink synchronously in order and honors Stop;
+     on Stop or Error, all worker goroutines are cancelled and join,
+     then the reduce returns - identical observable behavior to the
+     sequential validator.
+  6. Cancellation and fault-restart prefix reproduction: cancellation
+     is per-page checked in every goroutine; a restart reproduces the
+     same findings prefix because summaries are pure functions of
+     (pages, carry-in) and the reduce is deterministic. The design
+     must explicitly accept that speculative subtrees beyond the
+     first finding are validated but their findings are discarded -
+     the observable prefix is preserved, the internal work is a
+     superset (documented, bounded by the pool size).
+  7. Fixed/bounded concurrency: a fixed worker pool (default
+     GOMAXPROCS, capped by an explicit maximum, env-tunable), never
+     uncontrolled spawning; one goroutine per subtree.
+  8. Cross-platform fault containment: the whole scan runs inside
+     one outer source-mapping probe (validation.go:261); the
+     SIGBUS handler is process-wide (sigaction) with a naked asm
+     claim of the armed mapping region; a fault in any worker
+     goroutine is therefore indistinguishable from a sequential
+     fault (owned fault record, worker exit 197) - the same
+     fail-stop semantics. This must be PROVEN by the cross-platform
+     fault-injection tests on the 8-target matrix (linux/darwin/
+     freebsd/windows x amd64/arm64), including faults raised from
+     non-coordinator goroutines; the one-armed-region rule of the
+     spec is preserved because all goroutines read the same
+     source mapping inside the same outer probe.
+  9. Expected break-even size and coordination overhead: the
+     sequential walk is ~96% of the Go validation time at every
+     size; the stabilize measurement shows the gate needs only a
+     1.3-1.4x walk speedup at all three sizes (1M: 15.9 ms walk to
+     ~12.2 ms; 4M: 52 ms to ~38 ms). Coordination cost is per-
+     subtree (channel handoff + reduce, ~microseconds); the carry
+     chain reduce is per-subtree constant work. Break-even is below
+     100k records. Expected: a memory-bound walk over 4-8 cores
+     plausibly reaches 1.4-2x, which would move validation from
+     1.65x to ~1.0-1.2x (estimate, not evidence). Even in the best
+     case, seven elapsed-time scenarios remain outside the gate, so
+     this design CANNOT close SOW-0027's performance acceptance; it
+     only removes one of eight failures.
+
+  Verification plan (if the user ever authorizes implementation):
+  unit-scale A/B at 100k/1M/4M with the 31-pair methodology, the
+  deterministic-reduction differential test (parallel vs sequential
+  summaries byte-identical over the conformance corpus and the
+  mutation set), the cross-platform fault-injection matrix, and
+  MaxHeapBytes accounting. The micro-items 1a and 2a (greatestFixed
+  loop inlining, any() seam removal) are explicitly NOT authorized
+  per sol direction 3A: their estimated gains cannot close their
+  gaps.
+
+### Recommendation (amended)
+
+Keep the <=1.3x gate. Authorize NO implementation now. The next step,
+if the user wants to keep the gate, is the parallel-validation
+FEASIBILITY design above (this record) - reviewed, not implemented -
+plus optionally the workflow feed-build phase analysis (create-current
+698 ms / publish 314 ms) as a design-only investigation. The honest
+expectation: even a fully successful parallel validation leaves seven
+scenarios failing, so the user should decide now whether the gate is
+waived for those seven (option 2 in the user decision), or whether the
+analysis continues (option 3) with the understanding that no known
+safe-Go design closes reads or writes.
 
 ## Requirements
 

@@ -36,6 +36,8 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"time"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 )
@@ -688,6 +690,38 @@ type sdkWorkflowReport struct {
 	emitted uint64
 }
 
+// workflowPhases records the measured-region phase split of the
+// update-ipsets workflow (bench tooling only; SOW-0027 design record
+// 2026-08-31). When IPRANGE_WORKFLOW_PHASES is set, each workflow run
+// appends "phase <nanoseconds-since-phase-start>" rows to that file;
+// unset, the recorder costs two clock reads per run.
+type workflowPhases struct {
+	started time.Time
+	last    time.Time
+	path    string
+}
+
+func newWorkflowPhases() *workflowPhases {
+	started := time.Now()
+	return &workflowPhases{started: started, last: started, path: os.Getenv("IPRANGE_WORKFLOW_PHASES")}
+}
+
+func (p *workflowPhases) mark(name string) {
+	now := time.Now()
+	if p.path == "" {
+		p.last = now
+		return
+	}
+	file, err := os.OpenFile(p.path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		p.last = now
+		return
+	}
+	_, _ = fmt.Fprintf(file, "%s %d %d\n", name, now.Sub(p.started), now.Sub(p.last))
+	_ = file.Close()
+	p.last = now
+}
+
 func sdkUpdateIpsetsWorkflow(size int, windows int) (*scenarioResult, error) {
 	windows = max(windows, 1)
 	workspace, err := newTestDatabase("update-ipsets-workflow")
@@ -780,6 +814,7 @@ func sdkWorkflowExecute(
 	size int,
 	cancellation *iprangedb.CancellationToken,
 ) (sdkWorkflowReport, error) {
+	phases := newWorkflowPhases() // bench-only phase split (IPRANGE_WORKFLOW_PHASES)
 	zero := sdkWorkflowReport{}
 	downloadedTag, err := sdkTag([]byte("downloaded"))
 	if err != nil {
@@ -796,6 +831,7 @@ func sdkWorkflowExecute(
 	if err := sdkRequirePublished(current.Publication); err != nil {
 		return zero, err
 	}
+	phases.mark("phase-create-current")
 	currentReader, err := iprangedb.OpenImmutable(files.current)
 	if err != nil {
 		return zero, err
@@ -805,14 +841,17 @@ func sdkWorkflowExecute(
 	if err != nil {
 		return zero, err
 	}
+	phases.mark("phase-first-seen")
 	last, err := sdkRefreshLastSeen(files.lastSeen, currentReader, size, 200, 0, cancellation)
 	if err != nil {
 		return zero, err
 	}
+	phases.mark("phase-last-seen")
 	base, err := sdkApplyBaseFeed(files.central, currentReader, size, true, cancellation)
 	if err != nil {
 		return zero, err
 	}
+	phases.mark("phase-base-feed")
 
 	lastReader, err := iprangedb.OpenLiveReader(files.lastSeen, cancellation)
 	if err != nil {
@@ -822,6 +861,7 @@ func sdkWorkflowExecute(
 	if err != nil {
 		return zero, err
 	}
+	phases.mark("phase-history")
 
 	centralReader, err := iprangedb.OpenLiveReader(files.central, cancellation)
 	if err != nil {
@@ -854,6 +894,7 @@ func sdkWorkflowExecute(
 	if err != nil {
 		return zero, err
 	}
+	phases.mark("phase-aggregate")
 
 	resultLimit := (uint64(len(windows)) + 1) * 252
 	directSink := &sdkDirectCounter{}
@@ -866,12 +907,14 @@ func sdkWorkflowExecute(
 	if err != nil {
 		return zero, err
 	}
+	phases.mark("phase-join-direct")
 
 	membershipSink := &sdkMembershipCounter{}
 	membership, err := centralScope.JoinMembership(providerScope, membershipSink.membershipCrossCells, membershipSink.uncoveredFeeds, cancellation)
 	if err != nil {
 		return zero, err
 	}
+	phases.mark("phase-join-membership")
 
 	algebra, err := iprangedb.NewMembershipAlgebra([]*iprangedb.MembershipScope{centralScope, providerScope}, sdkAlgebraBudget(), cancellation)
 	if err != nil {
@@ -897,6 +940,7 @@ func sdkWorkflowExecute(
 	if err := sdkRequirePublished(algebraOutput.Publication); err != nil {
 		return zero, err
 	}
+	phases.mark("phase-publish")
 
 	outputReader, err := iprangedb.OpenImmutable(files.output)
 	if err != nil {
@@ -955,6 +999,8 @@ func sdkWorkflowExecute(
 	if sumErr != nil {
 		return zero, fmt.Errorf("complete-workflow counter overflow")
 	}
+	phases.mark("phase-total")
+	phases.mark("phase-total")
 	return sdkWorkflowReport{scanned: scanned, emitted: emitted}, nil
 }
 
