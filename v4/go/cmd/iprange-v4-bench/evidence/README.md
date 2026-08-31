@@ -249,7 +249,7 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
 - `workflow-phase-split-20260831.csv` (and the raw
   `workflow-phases-raw-20260831.log`): the update-ipsets workflow
   measured region split by phase (IPRANGE_WORKFLOW_PHASES bench hook;
-  6 runs = 5 samples + 1 warmup): create-current 33.9%, publish 15.3%,
-  history 10.5%, base-feed 9.3%, last-seen 8.8%, first-seen 8.4%,
+  6 runs = 5 samples + 1 warmup): create-current 34.3%, publish 15.2%,
+  history 10.6%, base-feed 9.0%, first-seen 8.7%, last-seen 8.5%,
   join-direct 6.3%, join-membership 5.9%, aggregate 1.6%,
   post-publish tail 2.2% (log run-total median 2117.2 ms).

@@ -2693,21 +2693,21 @@ scenario_sdk.go under IPRANGE_WORKFLOW_PHASES;
 evidence/workflow-phase-split-20260831.csv + raw log; the log's
 run-total median is 2117.2 ms, the bench-sample row p50 2125 ms):
 
-  create-current (one-inode feed build)  698 ms  33.9%
-  publish (algebra output feed build)    314 ms  15.3%
-  history (windows projection)           215 ms  10.5%
-  base-feed                              191 ms   9.3%
-  last-seen                              181 ms   8.8%
-  first-seen                             173 ms   8.4%
+  create-current (one-inode feed build)  709 ms  34.3%
+  publish (algebra output feed build)    313 ms  15.2%
+  history (windows projection)           219 ms  10.6%
+  base-feed                              186 ms   9.0%
+  last-seen                              175 ms   8.5%
+  first-seen                             180 ms   8.7%
   join-direct                            130 ms   6.3%
   join-membership                        121 ms   5.9%
-  aggregate                               32 ms   1.6%
+  aggregate                               33 ms   1.6%
   post-publish tail (~44.8 ms recorded
   median; reads, closes, checksums)                2.2%
 
   The 1.925x workflow residual is dominated by the two one-inode
-  feed builds (49% combined), not by the gap/replace machinery
-  (history is 10.5%) and not by the joins (12%). Any workflow-targeted
+  feed builds (49.5% combined), not by the gap/replace machinery
+  (history is 10.6%) and not by the joins (12.2%). Any workflow-targeted
   design must therefore attack the feed-build phases first; the
   membership-import and nested-overwrite scenario ratios bound those
   phases (1.529x and 2.355x respectively), so the workflow ratio is
@@ -2806,7 +2806,7 @@ Keep the <=1.3x gate. Authorize NO implementation now. The next step,
 if the user wants to keep the gate, is the parallel-validation
 FEASIBILITY design above (this record) - reviewed, not implemented -
 plus optionally the workflow feed-build phase analysis (create-current
-698 ms / publish 314 ms) as a design-only investigation. The honest
+709 ms / publish 313 ms) as a design-only investigation. The honest
 expectation: even a fully successful parallel validation leaves seven
 scenarios failing, so the user should decide now whether the gate is
 waived for those seven (option 2 in the user decision), or whether the
