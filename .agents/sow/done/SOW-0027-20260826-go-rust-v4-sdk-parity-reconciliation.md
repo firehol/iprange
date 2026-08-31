@@ -78,7 +78,20 @@ Therefore, binding for every gate in this SOW:
 
 ## Status
 
-Status: in-progress
+Status: closed
+
+Closure (2026-09-01, user decision; sol 2026-08-31 option-2 direction):
+
+- Closed as `closed`, NOT `completed`: functional parity passed, but
+  the binding <=1.3x elapsed/RSS performance requirement (user
+  decisions 1A/2A, 2026-08-29) failed in all eight elapsed-time
+  scenarios and two RSS scenarios at the final identity, and was NOT
+  waived.
+- No further SDK optimization work is authorized in this lifecycle:
+  the measured residuals stay owned by pending SOW-0030.
+- SOW-0017 remains paused; snapshot signing does not start.
+- SOW-0028 becomes the sole current SOW; SOW-0029 remains pending
+  (WebSocket/daemon transport is outside this lifecycle's scope).
 
 Sub-state (2026-08-29): reopened by the regression review recorded in
 the appended "Regression - 2026-08-29" section. The close was accepted
@@ -3846,8 +3859,10 @@ Follow-up mapping:
 
 ## Outcome
 
-NOT COMPLETE - in-progress, reopened (regression record below). The
-implementation surface of this SOW is delivered: the Go v4 SDK matches
+CLOSED - not completed (2026-09-01; the 2026-08-29 regression record
+below reopened an earlier completed close, and the close decision is
+now final as `closed`). The implementation surface of this SOW is
+delivered: the Go v4 SDK matches
 the Rust surface and wire contract (normative live-only writer, one-inode
 immutable feed construction, exact commit-outcome resolution, bounded
 reclamation, metadata buffer APIs, zero-allocation streaming facades,
@@ -3874,7 +3889,9 @@ until it is recorded. The evidence and record corrections demanded by
 the 2026-08-31 external review (workflow shares, validation
 statistics, stale 1.322x claims, research-only demotion of parallel
 validation) are implemented and pushed; the measured-performance
-decision is presented to the user (2026-08-31).
+decision was returned to the user (2026-08-31) and recorded
+(2026-09-01): functional parity accepted, performance acceptance
+denied, residuals owned by pending SOW-0030.
 
 ## Lessons Extracted
 
@@ -3918,9 +3935,10 @@ decision is presented to the user (2026-08-31).
   decode, per-probe extent validation, the Go runtime/GC share of the
   tree machinery, and the validation walk - all quantified in the
   Status sub-states and in validation-phases-20260830.csv. The
-  measured-performance decision (accept as-is, or pursue a specific further
-  lead) is presented to the user (2026-08-31) after the external review's
-  record corrections landed; this SOW stays in-progress until decided.
+  measured-performance decision was recorded 2026-09-01: close as
+  `closed`, functional parity accepted, performance acceptance denied,
+  residuals owned by pending SOW-0030, no further optimization work
+  authorized in this lifecycle.
 - Residuals the user does not accept (tracked): pending
   SOW-0030-20260829-v4-read-and-validation-specialization.md is
   rewritten (2026-08-30) to own the actual residuals under the binding
@@ -3929,9 +3947,9 @@ decision is presented to the user (2026-08-31).
   the validation walk residual (stabilized paired-ratio median
   1.555/1.651/1.717x at 100k/1M/4M; matrix five-sample draw 1.322x is
   superseded), and the out-of-window structure_table.go counter gap - with the voided 1.2-1.6x envelope
-  and the false SOW-0017 dependency removed. It is startable only after this
-  SOW closes and only if the user chooses to continue; if the user
-  accepts the measured result, the residuals close as accepted limitations.
+  and the false SOW-0017 dependency removed. It is startable only if the user later chooses
+  to continue performance work; the 2026-09-01 decision authorizes no
+  such work now.
 - Explicitly accepted divergences (recorded, not defects): Rust
   CancellationToken::from_poll is not portable to Go (nil token is
   the uncancellable form); the apple filesec creator-only machine and
@@ -3939,9 +3957,8 @@ decision is presented to the user (2026-08-31).
   ledger; platforms without a worker build refuse validation,
   inspection, and recovery fail-closed with ErrorOSUnsupported
   (v4/go/internal/routing/routing_other.go; no in-process fallback).
-- SOW-0017: snapshot signing remains dependent on accepted completion
-  of this unsigned SDK parity SOW; it unblocks after the measured-performance
-  decision closes this SOW.
+- SOW-0017: stays paused (2026-09-01). Snapshot signing does not
+  start; SOW-0028 is the sole current SOW.
 - No untracked deferred implementation item remains: the v6 bench
   scenarios and the necessary-work counter parity (the two items this
   SOW previously tracked as follow-up) were delivered inside this SOW
