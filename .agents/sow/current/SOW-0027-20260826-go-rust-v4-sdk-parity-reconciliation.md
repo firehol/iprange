@@ -2813,6 +2813,29 @@ waived for those seven (option 2 in the user decision), or whether the
 analysis continues (option 3) with the understanding that no known
 safe-Go design closes reads or writes.
 
+
+### Five-scope re-review at the evidence HEAD (b3653820)
+
+The P2-1 stale phase-share finding from the 29c6f1ec round was fixed
+in commit b3653820: the SOW-0027 phase table, the feed-build/join
+prose, the recommendation line, and the evidence README were aligned
+to evidence/workflow-phase-split-20260831.csv (create-current 709 ms
+34.3%, publish 313 ms 15.2%, history 219 ms 10.6%, base-feed 186 ms
+9.0%, first-seen 180 ms 8.7%, last-seen 175 ms 8.5%, join-direct
+130 ms 6.3%, join-membership 121 ms 5.9%, aggregate 33 ms 1.6%,
+post-publish tail 44.8 ms 2.2%; feed builds 49.5%, joins 12.2%).
+No other file changed. All five scopes re-verified that delta at
+HEAD b3653820:
+
+- Boole (Rust parity): PASS.
+- Sagan (Go idioms): PASS.
+- Hegel (performance): PASS.
+- Herschel (wire format and integrity): PASS.
+- Turing (APIs, docs, records): PASS - P2-1 resolved, no new findings.
+
+The five-scope round closes all-PASS at b3653820 for this
+analysis-only record. It remains the deliverable of the
+measured-performance decision loop; no implementation is authorized.
 ## Requirements
 
 ### Purpose
@@ -3742,8 +3765,10 @@ probe, dispatch removal, result transport); the remaining costs are
 profiled and quantified in the Status sub-states. The measured-performance
 decision (accept the measured result as-is, or pursue further work) is
 the user's, and this SOW stays in-progress until it is recorded; the
-five-reviewer delta round on the actual final commit (direction item 6)
-runs before that decision is presented.
+five-scope delta round on the actual final commit (direction item 6)
+ran at HEAD b3653820 and closed all-PASS; the measured-performance
+decision is presented to the user (2026-08-31) and this SOW stays
+in-progress until it is recorded.
 
 ## Lessons Extracted
 
@@ -3786,8 +3811,9 @@ runs before that decision is presented.
   tree machinery, and the validation walk - all quantified in the
   Status sub-states and in validation-phases-20260830.csv. The
   measured-performance decision (accept as-is, or pursue a specific further
-  lead) is presented to the user after the five-reviewer delta round;
-  this SOW stays in-progress until decided.
+  lead) is presented to the user (2026-08-31) after the five-scope delta
+  round closed all-PASS at HEAD b3653820; this SOW stays in-progress
+  until decided.
 - Residuals the user does not accept (tracked): pending
   SOW-0030-20260829-v4-read-and-validation-specialization.md is
   rewritten (2026-08-30) to own the actual residuals under the binding
