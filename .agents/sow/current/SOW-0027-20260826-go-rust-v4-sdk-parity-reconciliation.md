@@ -67,7 +67,9 @@ Therefore, binding for every gate in this SOW:
   1.529x, nested-overwrite 2.355x, update-ipsets-workflow 1.925x,
   live-direct-random-lookup 1.525x, immutable-direct-random-lookup 1.582x,
   live-direct-random-lookup-v6 1.326x, immutable-direct-random-lookup-v6
-  1.357x, live-validation 1.322x. ALL EIGHT scenarios fail the <=1.3x
+  1.357x, live-validation 1.322x as the matrix's five-sample draw;
+  the stabilized 31-pair validation estimate is 1.555/1.651/1.717x
+  (all 95% intervals above 1.300x). ALL EIGHT scenarios fail the <=1.3x
   elapsed-time criterion; peak RSS passes six of eight (live v4 lookup 1.351x and
   live-validation 1.402x fail). This matrix is the evidence package for the
   measured-performance decision that returns to the user at the closure decision
@@ -888,7 +890,9 @@ binding is the final-identity matrix (rust-ratio-final-20260830.csv,
 five alternating same-session release samples at HEAD 39df5b0b):
 membership-import 1.529x, nested-overwrite 2.355x,
 update-ipsets-workflow 1.925x, live/immutable direct lookups
-1.525x/1.582x (v4) and 1.326x/1.357x (v6), live-validation 1.322x;
+1.525x/1.582x (v4) and 1.326x/1.357x (v6), live-validation 1.322x
+as the five-sample draw (stabilized 31-pair estimate 1.555/1.651/
+1.717x, all 95% intervals above 1.300x);
 peak RSS fails two of eight (live v4 1.351x, live-validation 1.402x).
 EVERY scenario FAILS the binding and is recorded as such; earlier
 tables (reader-fixed-page 1.66/1.63x, writer-transport 2.31x,
@@ -2738,8 +2742,9 @@ Shares are phase median / sum of all phase medians, so they sum to
   residuals are medians over the 6 sampled runs, so the column sums
   to ~99.6%, not 100%. Feed builds (create-current + publish) are
   48.3% of Go elapsed time and 46.3% of the Go-Rust absolute
-  residual; create-current alone is 35.8% of the residual. Every phase except aggregate and
-  the joins is above the 1.3x gate, so the workflow residual is a
+  residual; create-current alone is 35.8% of the residual. Every phase
+  - including aggregate (1.716x) and both joins (1.694x and 1.491x) -
+  is above the 1.3x gate, so the workflow residual is a
   broad per-phase inefficiency, not one mechanism; the largest
   absolute residual is the one-inode feed build.
 
@@ -3632,8 +3637,10 @@ Real-use evidence:
   (validation-phases-20260830.csv); elapsed 1.66/1.62/1.67x, RSS
   1.87/1.40/1.16x, worker fixed cost ~1.2-1.5 ms size-independent,
   worker pprof at 4M shows only graph-walk frames. The historical
-  2.299x validation ratio is superseded by 1.322x at the final
-  identity.
+  2.299x validation ratio is superseded at the final identity by the
+  matrix's 1.322x five-sample draw, which is itself superseded by
+  the stabilized 31-pair estimate (1M median 1.651x; 95% intervals
+  1.569-1.790x on the mean and 1.508-1.810x on the median).
 - update-ipsets workload end to end: the benchmark now drives the real
   one-inode builder and the full SDK surface (scenario_sdk.go);
   apples-to-apples Go-vs-Rust matched 5-sample ratios at
@@ -3867,7 +3874,9 @@ decision is presented to the user (2026-08-31).
 - Measured-performance decision (the only blocker, user's call): the
   final-identity matrix (rust-ratio-final-20260830.csv) fails the
   binding 1A/2A acceptance in all eight elapsed-time scenarios
-  (1.322x-2.355x) and in two RSS scenarios (1.351x, 1.402x). Every bounded safe-Go
+  (1.322x-2.355x at the matrix's five-sample medians; the validation
+  row is stabilized at 1.651x median) and in two RSS scenarios
+  (1.351x, 1.402x). Every bounded safe-Go
   lead under the no-unsafe constraint was measured and either
   retained (authoritative expected-tree-header parser, reads -7-9%)
   or rejected (KeyU32 probe neutral; dispatch removal regression;
