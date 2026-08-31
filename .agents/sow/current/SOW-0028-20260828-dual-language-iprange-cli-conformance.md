@@ -775,6 +775,34 @@ Open decisions:
 
 ## Execution Log
 
+### 2026-09-01
+
+- SOW-0027 closed as `closed` (functional parity passed, performance
+  acceptance denied); SOW-0028 activated as the sole current SOW.
+- Implementation start, fixed delivery order step 1: build the
+  `v4/cli/` external qualification area (strict schemas, golden
+  messages, declarative cases, runner, fake-server sensitivity gate)
+  before any product code.
+- `v4/cli/` foundation built and verified (runs in ~0.2s, no test
+  behavior in any production binary):
+  - strict schema package `v4/cli/schema/`: declarative engine,
+    shared types, JSON-RPC frame/envelope validation, 53-method params
+    registry, 52 result schemas (`iprange.v1.cancel` is a notification
+    and intentionally has no result), declarative case schema;
+  - external runner `v4/cli/run.py`: case fixtures, `$WORK/`/`$CAPTURE`
+    substitution, strict JSON-RPC stdio client (unknown response
+    members and malformed error objects rejected), result method-echo
+    enforcement, lookup match order, cursor lifecycle and
+    range/feed ordering checks;
+  - fake server `v4/cli/fake_server.py` (importable; `serve()` under
+    `__main__` guard) and sensitivity gate `v4/cli/sensitivity_gate.py`:
+    13 modes = 3 positive controls + 10 deliberate-brokenness cases,
+    all green;
+  - fixed during bring-up: runner never created its JSON-RPC service
+    (`AttributeError` on any rpc step); CRLF terminator handling in
+    `schema/frame.py`; `--matrix` crashed with `KeyError` when a
+    consumer binary was absent.
+
 ### 2026-08-28
 
 - Replaced the test-oriented NDJSON design with the approved production model:
