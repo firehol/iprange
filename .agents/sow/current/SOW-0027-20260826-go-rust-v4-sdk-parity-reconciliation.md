@@ -2473,7 +2473,7 @@ structural analysis before authorizing more implementation). No
 implementation is authorized by this record; the user decides which
 designs to pursue.
 
-### Exact-final-commit five-scope review (b1a3a92d)
+### Anchored five-scope review (b1a3a92d; superseded by the 29c6f1ec round below)
 
 The review sol required on one exact final commit was issued after the
 record/observability repairs (worker hooks moved to v4work-tagged
@@ -2520,6 +2520,44 @@ verdicts (what changed after b1a3a92d is record-only or bench-tooling,
 but the policy is strict). The verdicts therefore do NOT constitute an
 exact-final-commit review; a fresh five-scope round at the actual
 final HEAD is recorded in the amendment below.
+
+Round at HEAD 29c6f1ec (recorded 2026-08-31; the fixes from this round
+land in the commit that follows this record):
+- Boole (Rust parity): PASS. The ordered-reduction model's claims were
+  verified against the Go validator and the Rust reference (serial
+  root order, DFS encounter order, cross-leaf carry, shared context,
+  one outer probe); one P3 precision note fixed in this amendment
+  (the walk-share wording at 100k).
+- Sagan (Go idioms): FAIL - P2-1: the bench phase recorder emitted a
+  duplicated phase-total row (scenario_sdk.go), making the summary
+  CSV's total row the median of six real tails plus six near-zero
+  rows (1.1% instead of 2.2%) and the raw log self-contradictory;
+  P3-1: the recorder doc understated the unset cost (one clock read
+  per mark, not two per run). Both fixed in this commit: the
+  duplicate mark is removed, the doc corrected, the measurement
+  re-run (6 runs, tail median 44.8 ms = 2.2%), and the summary CSV
+  re-derived.
+- Hegel (performance): PASS. All stabilization medians/CIs/RSS
+  recomputed from the committed 31-pair CSV and match exactly; the
+  workflow phase arithmetic checks (49.2% feed builds); the recorder
+  cannot distort the p50 (env-set overhead ~0.02% of the run, unset
+  cost is clock reads only). P3 record notes fixed in this amendment
+  (the wall median is the log run-total median 2117.2 ms; the log has
+  6 runs = 5 samples + 1 warmup).
+- Herschel (wire/integrity): PASS. The delta touches only bench
+  tooling, records, and one worker comment; no SDK, format, wire, or
+  corpus byte changed.
+- Turing (APIs/records): FAIL - P2-1: the amendment's tail row, the
+  CSV total row, and the sample count contradicted the raw log (69 ms
+  vs the recorded per-sample tails ~44.9 ms; the CSV total was the
+  duplicated-marker median 22.4 ms; "5 samples" vs 6 logged runs).
+  P3-1: the stabilization CI estimator was undocumented (now named:
+  t-CI on the paired ratios). P3-2: the stale exact-final heading
+  (now "Anchored five-scope review"). All fixed in this commit and
+  amendment.
+
+The fixes above land together with this record; verdicts for the
+resulting commit are appended when issued.
 
 ### The measured structural plateaus (evidence)
 
@@ -2638,7 +2676,9 @@ nice; record cost: 31 pairs x 3 sizes):
   1M        17.20 ms (15.71-27.02)   10.42 ms (10.18-14.47)   1.651 (CI 1.569-1.790)
   4M        55.15 ms (52.42-71.25)   32.30 ms (31.23-38.58)   1.717 (CI 1.690-1.792)
 
-  RSS medians: 1.295x / 1.357x / 1.149x. Conclusions: (a) the
+  RSS medians: 1.295x / 1.357x / 1.149x. The 95% CIs are
+  two-sided Student-t intervals on the 31 paired ratios (mean +/-
+  t(30) x standard error; t(30) = 2.042). Conclusions: (a) the
   final-matrix 1.322x median was a noise-LOW draw on five pairs; the
   stabilized estimate is 1.51-1.79x and every 95% CI excludes 1.300x,
   so the gate is missed by ~0.25-0.49x, not 0.022x - the "0.27 ms
@@ -2647,10 +2687,11 @@ nice; record cost: 31 pairs x 3 sizes):
   1.322x from 1.51x with five pairs, which is exactly why the matrix
   median misled; the 31-pair CI is the reliable evidence.
 
-Workflow phase split (update-ipsets-workflow 1M, 5 samples, bench-only
-phase recorder added to scenario_sdk.go under IPRANGE_WORKFLOW_PHASES;
-evidence/workflow-phase-split-20260831.csv + raw log; measured wall
-p50 2125 ms):
+Workflow phase split (update-ipsets-workflow 1M: 5 requested samples
+plus one warmup run, 6 runs logged; bench-only phase recorder in
+scenario_sdk.go under IPRANGE_WORKFLOW_PHASES;
+evidence/workflow-phase-split-20260831.csv + raw log; the log's
+run-total median is 2117.2 ms, the bench-sample row p50 2125 ms):
 
   create-current (one-inode feed build)  698 ms  33.9%
   publish (algebra output feed build)    314 ms  15.3%
@@ -2661,7 +2702,8 @@ p50 2125 ms):
   join-direct                            130 ms   6.3%
   join-membership                        121 ms   5.9%
   aggregate                               32 ms   1.6%
-  tail (opens/checks/closes)             ~69 ms   3.4%
+  post-publish tail (~44.8 ms recorded
+  median; reads, closes, checksums)                2.2%
 
   The 1.925x workflow residual is dominated by the two one-inode
   feed builds (49% combined), not by the gap/replace machinery
@@ -2734,8 +2776,9 @@ scan proposal; assessment only - no implementation):
      spec is preserved because all goroutines read the same
      source mapping inside the same outer probe.
   9. Expected break-even size and coordination overhead: the
-     sequential walk is ~96% of the Go validation time at every
-     size; the stabilize measurement shows the gate needs only a
+     sequential walk is ~96% of the Go validation time at 1M/4M
+     (mode phase; at 100k the fixed worker cost dominates and the
+     walk share is ~65%); the stabilize measurement shows the gate needs only a
      1.3-1.4x walk speedup at all three sizes (1M: 15.9 ms walk to
      ~12.2 ms; 4M: 52 ms to ~38 ms). Coordination cost is per-
      subtree (channel handoff + reduce, ~microseconds); the carry

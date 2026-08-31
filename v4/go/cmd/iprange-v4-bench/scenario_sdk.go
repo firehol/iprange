@@ -693,8 +693,9 @@ type sdkWorkflowReport struct {
 // workflowPhases records the measured-region phase split of the
 // update-ipsets workflow (bench tooling only; SOW-0027 design record
 // 2026-08-31). When IPRANGE_WORKFLOW_PHASES is set, each workflow run
-// appends "phase <nanoseconds-since-phase-start>" rows to that file;
-// unset, the recorder costs two clock reads per run.
+// appends "phase <nanoseconds-since-phase-start> <phase-delta>" rows
+// to that file; unset, the recorder costs one clock read at
+// construction plus one per mark (clock reads only, no file I/O).
 type workflowPhases struct {
 	started time.Time
 	last    time.Time
@@ -999,7 +1000,6 @@ func sdkWorkflowExecute(
 	if sumErr != nil {
 		return zero, fmt.Errorf("complete-workflow counter overflow")
 	}
-	phases.mark("phase-total")
 	phases.mark("phase-total")
 	return sdkWorkflowReport{scanned: scanned, emitted: emitted}, nil
 }
