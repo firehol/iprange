@@ -40,7 +40,7 @@ nested-overwrite,pages_reclaimed,0,0,0,match,
 nested-overwrite,pages_retired,0,0,0,match,
 nested-overwrite,pages_sealed,1376,1376,0,match,
 nested-overwrite,pages_split,1373,1373,0,match,
-nested-overwrite,pages_visited,685291,688025,-2734,go-less,mapping-layer definition identical on both sides; the -2,734 (0.4%) is growth-step sequencing (mapping_growths 1 vs 3) remap-time page views, not per-edit fetch semantics (both languages fetch exactly once per edit)
+nested-overwrite,pages_visited,685291,688025,-2734,go-less,mapping-layer definition identical on both sides; the -2,734 (0.4%) is growth-step sequencing (mapping_remaps 1 vs 3) remap-time page views, not per-edit fetch semantics (both languages fetch exactly once per edit)
 nested-overwrite,ranges_coalesced,0,0,0,match,
 nested-overwrite,ranges_consumed,299999,299999,0,match,
 nested-overwrite,ranges_emitted,299998,299998,0,match,

@@ -67,8 +67,8 @@ Therefore, binding for every gate in this SOW:
   1.529x, nested-overwrite 2.355x, update-ipsets-workflow 1.925x,
   live-direct-random-lookup 1.525x, immutable-direct-random-lookup 1.582x,
   live-direct-random-lookup-v6 1.326x, immutable-direct-random-lookup-v6
-  1.357x, live-validation 1.322x. ALL EIGHT scenarios fail the <=1.3x CPU
-  criterion; peak RSS passes six of eight (live v4 lookup 1.351x and
+  1.357x, live-validation 1.322x. ALL EIGHT scenarios fail the <=1.3x
+  elapsed-time criterion; peak RSS passes six of eight (live v4 lookup 1.351x and
   live-validation 1.402x fail). This matrix is the evidence package for the
   measured-performance decision that returns to the user at the closure decision
   point; no scenario is inside the envelope, so the SOW stays in-progress
@@ -243,8 +243,8 @@ The Followup section de-stales the completed v6-bench and counter-parity
 bullets (those are done inside this SOW; see the item-1 and item-2
 sub-states) and keeps only the items that genuinely remain. Pending
 SOW-0030-20260829-v4-read-and-validation-specialization.md is rewritten
-to the actual residuals under the binding <=1.3x CPU/RSS contract, its
-voided 1.2-1.6x envelope and its false SOW-0017 dependency are removed,
+to the actual residuals under the binding <=1.3x elapsed/RSS contract,
+its voided 1.2-1.6x envelope and its false SOW-0017 dependency are removed,
 and its scope now owns whatever the user does not accept at the
 measured-performance decision point. The 4a A/B CSV columns that were labeled
 alloc_calls/alloc_bytes but held alloc_bytes/rss_peak_kib are re-labeled
@@ -287,12 +287,18 @@ item 6).
 
 Sub-state (2026-08-30, direction item 3 - validation profiling):
 the validation cost is now separated into parent orchestration, worker
-startup/handshake, mapping, and graph walk at three sizes, with CPU and
-peak RSS recomputed at the current identity. Bench tooling:
+startup/handshake, mapping, and graph walk at three sizes, with elapsed
+and peak RSS recomputed at the current identity. Bench tooling:
 IPRANGE_WORKER_PHASES=<path> makes the spawned iprange-v4-worker append
 phase rows (verify, ready, running, handler, dispatch, mode) for the
 control handshake, fault-handler install, and the measured operation
-(cmd/iprange-v4-worker/main.go; bench-only, no SDK change). Matched
+(cmd/iprange-v4-worker; bench-only, no SDK change). The hooks lived in
+main.go during the measurement and moved to v4work-tagged files
+(phases.go no-ops / phases_v4work.go) in the 2026-08-31 record repair,
+so the production worker binary carries no profiling or phase
+machinery (verified by strings on the built binary); the bench builds
+the worker with -tags v4work so the evidence methodology is
+unchanged. Matched
 same-session runs (validation-phases-20260830.csv) at 100k / 1M / 4M:
 Go p50 6.47 / 16.55 / 53.76 ms vs Rust 3.91 / 10.23 / 32.27 ms (elapsed
 1.66x / 1.62x / 1.67x) and peak RSS 12.9 / 29.6 / 81.9 MiB vs 6.9 /
@@ -310,8 +316,8 @@ validation ratio (20260828g) is superseded at the final identity: the
 validation-phases rows are single-sample runs (1.66x / 1.62x / 1.67x at
 100k / 1M / 4M), while the acceptance matrix median for the 1M scenario
 is 1.322x (rust-ratio-final-20260830.csv, five-sample; the committed raw
-rows in rust-ratio-final-samples-20260830.csv show a per-sample CPU
-range of 1.16-1.8x on a 12-16 ms operation, which is why the medians
+rows in rust-ratio-final-samples-20260830.csv show a per-sample
+elapsed range of 1.16-1.8x on a 12-16 ms operation, which is why the medians
 differ); the five-sample matrix number is the acceptance evidence. The residual vs the binding <=1.3x is the walk itself, not
 containment overhead.
 
@@ -338,7 +344,7 @@ copy_page closures that fetch the page exactly once per edit. Result
 and Rust harness runs): pages_visited 685,291 vs 688,025 (-2,734,
 0.4%; the mapping-layer visit definition is identical on both sides and
 both languages fetch exactly once per edit - the small delta is
-growth-step sequencing, mapping_growths 1 vs 3, remap-time page views;
+growth-step sequencing, mapping_remaps 1 vs 3, remap-time page views;
 the earlier "one fewer page per edit" wording was corrected at final
 review); bytes_moved 69,145,640 vs 69,145,640 (EXACT MATCH) and
 bytes_zeroed 8,487,946 vs 8,487,946 (EXACT MATCH) after two
@@ -873,8 +879,9 @@ cross-opening in both implementations). Binding user decisions:
 activation sequencing vs SOW-0017 (Open Decision 1, 2026-08-26),
 milestone-4 extension B (universal-key elimination, 2026-08-28;
 recorded verbatim under Historical milestone records), and the
-performance acceptance (1A/2A, 2026-08-29): CPU <=1.3x Rust for every
-substantial acceptance scenario, peak RSS <=1.3x, no unsafe ever.
+performance acceptance (1A/2A, 2026-08-29): elapsed time <=1.3x Rust
+for every substantial acceptance scenario, peak RSS <=1.3x, no unsafe
+ever.
 The 2-3.5x write envelope of the superseded -g acceptance is VOIDED
 by that binding. Current committed evidence against the <=1.3x
 binding is the final-identity matrix (rust-ratio-final-20260830.csv,
@@ -2457,6 +2464,172 @@ run noise of the pre-review state (the remaining ratio class is the
 structural universal-key design). All tests, v4work, race, vet, and
 gofmt pass at fc9df1ea.
 
+## Design Record - 2026-08-31 (structural performance analysis)
+
+Status: analysis-only deliverable of the measured-performance decision
+loop (sol direction 2026-08-31: keep the <=1.3x gate, reject the
+validation-only attempt, repair the closure package, then design-only
+structural analysis before authorizing more implementation). No
+implementation is authorized by this record; the user decides which
+designs to pursue.
+
+### Exact-final-commit five-scope review (b1a3a92d)
+
+The review sol required on one exact final commit was issued after the
+record/observability repairs (worker hooks moved to v4work-tagged
+files, metric renamed to elapsed time, stale +3.4% claims removed).
+All five scopes PASS at b1a3a92d:
+
+- Boole (Rust parity): PASS. Counter parity exact (bytes_moved
+  69,145,640 = Rust, bytes_zeroed 8,487,946 = Rust); the seal recount
+  (bdf642b2) counts exactly once per sealed page on both paths; the
+  observability move leaves the worker protocol/control surface
+  byte-identical; no stale current claims remain.
+- Sagan (Go idioms): PASS. The phases.go (prod no-op) /
+  phases_v4work.go (real hooks) split matches the work-package build
+  tag convention and leaks no observability imports into the
+  production binary; meta/seal counters follow the single-authority
+  pattern with no double counting; vet/gofmt clean. Two P3s fixed in
+  this record commit: the pages_visited attribution named
+  mapping_growths where the CSV row is mapping_remaps (1 vs 3), and
+  a stale workerPhases identifier in the run() doc.
+- Hegel (performance): PASS. The final matrix data rows are
+  byte-identical to the 33b3a8dd verification (header-only rename to
+  elapsed_ratio); every median recomputed from the committed raw
+  samples; all counter instrumentation compiles to no-ops in
+  production so no measured hot path changed; the evidence-backed
+  read/write/validation plateaus stand. His P3-1 (bytes_moved
+  attribution) is closed by the counter fixes; P3-2 (dual validation
+  numbers) is reconciled in the records.
+- Herschel (wire/integrity): PASS. Diff 33b3a8dd..b1a3a92d over
+  format and worker shows counters, comments, and records only - no
+  constant, offset, layout, opcode, or state value changed; the seal
+  counter move writes the same bytes; conformance re-run green in
+  both directions (14 fixtures + invalid mutations, Go and Rust).
+- Turing (APIs/records): PASS. The +3.4% sweep leaves only the dated
+  historical narrative; every current-claim position uses elapsed
+  time and exact counter parity; verdicts are anchored per commit;
+  audit shows only the pre-existing done/SOW-0025 mismatch. P3s
+  fixed in this record commit: six leftover "CPU" label positions,
+  the validation-phases CSV unquoted note fields, and a one-line
+  worker-observability note added to the item-3 sub-state.
+
+The five-scope review is therefore complete on the exact final commit
+b1a3a92d, and the closure package matches the repository rules.
+
+### The measured structural plateaus (evidence)
+
+Every figure below is elapsed time unless marked as a pprof CPU
+profile (those are literal CPU usage).
+
+1. Reads (IPv4 1.525x / 1.582x, IPv6 1.326x / 1.357x).
+   Cost structure at the final identity (p50 medians, 1M lookups):
+   - Per-page: one authoritative ParseTreeHeader pass (18-22% of the
+     page costs per profiles), plus the greatestFixed loop call (the
+     loops are not inlineable: cost 126-152 vs the 80 budget; ~3M
+     page visits per 1M lookups => the call overhead alone is ~1%).
+   - Per-probe: slot U16 load + persistent-offset extent check + key
+     load, each under safe-slice bounds checks (FixedSearch.U32 21%
+     flat, U128 36% flat).
+   Already measured in the bounded continuation: single-pass
+   header parser retained (reads -7-9%); width-guard removal neutral
+   and reverted; PGO ~1% rejected; U128 accessor now inlines at HEAD
+   (verified by -m dump).
+   Remaining design options:
+   a. Inline the greatestFixed loops by splitting the probe loop into
+      a skeleton with an already-inlineable probe call. Expected:
+      <=1-2% on reads; low certainty (the loop body, not the call,
+      dominates).
+   b. Whole-page "checked window" access (one bounds proof per page,
+      then pointer-free arithmetic). Requires unsafe in Go; the 4b
+      A/B showed the extent check itself is near-free, so even with
+      unsafe the win would be small. NOT authorized; recorded for
+      completeness.
+   c. Accept the read plateau: the residual is byte-for-byte Rust
+      work plus Go's per-access safety checks; no safe structural
+      change with a credible >=5% win is known.
+
+2. Writes (nested-overwrite 2.355x; membership-import 1.529x).
+   Cost structure (pprof at the final identity): InsertIfLocalGap4
+   13.2% flat / 47.1% cumulative; predecessor-replacement chain 30.9%
+   cumulative; GC is NOT dominant.
+   Already measured: per-family generated gap/replace layer retained;
+   result-transport slice kept (2.31x at that identity); per-op
+   family-dispatch removal measured as a +10.52% regression and
+   rejected; concrete-store A/B rejected by the same measurement
+   class.
+   Remaining design options:
+   a. Remove the per-operation any() type-assertion seams at the
+      writer boundary (range_specialize.go:28-59 converts ctx.family,
+      r, reject through any() once per operation, not per record).
+      Expected: <1% (per-op cost), low risk; cheap to do as part of
+      any writer slice.
+   b. Stack-resident edit state in the emitted layer: audit escape
+      analysis of range_gap_v4/v6 (profiles show no dominant GC, so
+      expected <=1-2%).
+   c. Accept the write plateau with the machinery-bound gap
+      documented (interface hops ~2-3%, struct copies, algorithm
+      work; the per-record WORK is at Rust parity by the counters).
+
+3. update-ipsets workflow (1.925x; Go 2084 ms vs Rust 1083 ms).
+   The measured region (scenario_sdk.go sdkWorkflowExecute) composes
+   prior-round seeding (out of measurement), direct-provider join,
+   membership application, history windows, a 10% shift replacement
+   (the nested-overwrite-shaped work), commit, and output.
+   Design prerequisite (no code yet): phase-attributed measurement of
+   the measured region - import vs replacement vs windows vs commit
+   vs output - using the same bench harness that produced
+   validation-phases-20260830.csv. The workflow ratio is bounded
+   below by its slowest phase; the phase split decides whether the
+   write-plateau work (2a/2b) transfers to the workflow or a
+   distinct phase (e.g., membership import at 1.529x, join, window
+   aggregation) needs its own design.
+
+4. Validation walk (1.322x; Go 16.2 ms vs Rust 12.3 ms at 1M).
+   Cost structure: worker fixed cost ~1.2-1.5 ms (Go worker startup
+   is heavier than Rust's; both SDKs route validation through a
+   version-matched worker, but the bench comparison is the public
+   API on both sides); the walk is ~14.8 ms of the Go total and is
+   the entire worker profile (Validate -> Probe -> InspectLayout ->
+   walkRangeLeaf4 / inspectFixedExtents / markExtent). The walk is
+   family-specialized and allocation-free per cell.
+   Remaining design options:
+   a. Parallel graph walk inside the worker (multi-goroutine page
+      scan over disjunct page ranges, findings merged in page order
+      to preserve sink ordering). This is the only option with a
+      plausible >5% win; validation is a batch scan with
+      page-independent per-page findings, so the parallelism is
+      natural. Prerequisites: verify the mapping session-probe
+      arming semantics under concurrency (session_probe.go) and
+      define the deterministic merge contract. Cross-check whether
+      the spec/worker control wire imposes single-threaded
+      semantics (control.rs state machine is per-wire-mode, not
+      per-goroutine). Risk: the finding-order contract of the
+      ValidationSink; worker memory with GOMAXPROCS; measured A/B
+      against the 1.3x line.
+   b. Per-record decode fusion in the walk (DecodeRangeFieldsV4
+      inlined into the cell iterator; the walk's inner loop is
+      decode + order/neighbor checks). Expected <=2%.
+   c. Reduce per-page state passing (the walk context escapes to the
+      heap today; stack-resident state via explicit fields).
+      Expected <=1%.
+
+### Recommendation for the user decision
+
+Keep the <=1.3x gate (sol decision). Of the design options above,
+only 4a (parallel validation walk) has a credible path across the
+gate, and it is safe, bounded, and measurable; 1a and 2a are cheap
+micro-items to fold into any implementation slice; 1b requires unsafe
+and stays rejected; 3 requires the phase measurement before any
+workflow-specific design. The honest expectation is that 4a lands
+validation (1.322x) at or near the gate, while reads and writes stay
+at their plateaus unless a structural idea beyond the listed ones
+emerges during the design review - so the <=1.3x binding may not be
+fully reachable even after 4a, and the user may still need to accept
+a documented residual for reads/writes at that point. This record
+does not authorize implementation; it is the input to the user's
+design decision.
+
 ## Requirements
 
 ### Purpose
@@ -3185,7 +3358,7 @@ Real-use evidence:
   after the final review fixed the same-size replace phantom term,
   the uninstrumented meta encode, and the output seal authority;
   pages_visited 685,291 vs 688,025 (Go less, growth-step sequencing,
-  mapping_growths 1 vs 3).
+  mapping_remaps 1 vs 3).
 - Validation cost split (direction item 3, commit 375d78ab): parent/
   worker/mapping/walk phases at 100k/1M/4M
   (validation-phases-20260830.csv); elapsed 1.66/1.62/1.67x, RSS
@@ -3375,11 +3548,11 @@ and the shared 14-fixture conformance corpus that cross-opens in both
 implementations). The earlier close record that claimed the update-ipsets
 workflow at 2.189x "inside the accepted write envelope" is VOID: that
 envelope was superseded 2026-08-29 by the user-confirmed binding <=1.3x
-CPU and peak-RSS acceptance (user decisions 1A/2A), and the final-identity
-matrix (rust-ratio-final-20260830.csv, five alternating same-session
+elapsed-time and peak-RSS acceptance (user decisions 1A/2A), and the
+final-identity matrix (rust-ratio-final-20260830.csv, five alternating same-session
 release samples) shows every one of the eight acceptance scenarios
-outside that binding: CPU 1.322x-2.355x, and peak RSS failing two of
-eight scenarios. All bounded safe-Go leads available under the no-unsafe
+outside that binding: elapsed 1.322x-2.355x, and peak RSS failing two
+of eight scenarios. All bounded safe-Go leads available under the no-unsafe
 constraint were measured at the final identity and are either retained
 (authoritative tree-header parser) or measured-and-rejected (KeyU32
 probe, dispatch removal, result transport); the remaining costs are
@@ -3419,8 +3592,8 @@ runs before that decision is presented.
 
 - Measured-performance decision (the only blocker, user's call): the
   final-identity matrix (rust-ratio-final-20260830.csv) fails the
-  binding 1A/2A acceptance in all eight CPU scenarios (1.322x-2.355x)
-  and in two RSS scenarios (1.351x, 1.402x). Every bounded safe-Go
+  binding 1A/2A acceptance in all eight elapsed-time scenarios
+  (1.322x-2.355x) and in two RSS scenarios (1.351x, 1.402x). Every bounded safe-Go
   lead under the no-unsafe constraint was measured and either
   retained (authoritative expected-tree-header parser, reads -7-9%)
   or rejected (KeyU32 probe neutral; dispatch removal regression;
@@ -3435,7 +3608,7 @@ runs before that decision is presented.
 - Residuals the user does not accept (tracked): pending
   SOW-0030-20260829-v4-read-and-validation-specialization.md is
   rewritten (2026-08-30) to own the actual residuals under the binding
-  <=1.3x CPU/RSS contract - the read-path residuals (v6 1.326/1.357x,
+  <=1.3x elapsed/RSS contract - the read-path residuals (v6 1.326/1.357x,
   v4 1.525/1.582x), the write residual (nested-overwrite 2.355x),
   the validation walk residual (1.322x), and the out-of-window
   structure_table.go counter gap - with the voided 1.2-1.6x envelope

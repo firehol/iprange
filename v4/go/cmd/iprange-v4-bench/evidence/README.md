@@ -204,7 +204,7 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   harness runs at the final identity; supersedes the 20260830.csv
   under-count rows above): pages_visited 685,291 vs 688,025 (Go less;
   the previous row was 0 vs 688,025 "go-less unknown"; the delta is
-  growth-step sequencing, mapping_growths 1 vs 3, not per-edit fetch
+  growth-step sequencing, mapping_remaps 1 vs 3, not per-edit fetch
   semantics), bytes_moved 69,145,640 vs 69,145,640 (EXACT MATCH) and
   bytes_zeroed 8,487,946 vs 8,487,946 (EXACT MATCH) after the final
   review fixed the same-size slotted replace phantom term (put.go) and

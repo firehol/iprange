@@ -66,7 +66,7 @@ func main() {
 // or Failed after write_worker_error). Protocol-class failures exit 65;
 // a transmitted mode failure still exits 0 because the protocol
 // completed (Rust parity).
-// workerPhases reports the worker-side phase timings of one
+// The phaseMarker hooks report the worker-side phase timings of one
 // validation/recovery run (bench-only tooling; SOW-0027 direction item
 // 3). Set IPRANGE_WORKER_PHASES to a file path to append
 // "<name> <nanoseconds-since-process-start>" rows for the control
