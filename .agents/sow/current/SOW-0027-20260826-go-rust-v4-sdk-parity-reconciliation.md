@@ -2903,6 +2903,39 @@ parallel-validation design is demoted to RESEARCH-ONLY with four
 unresolved contracts. The verdicts of the five scopes for THIS
 correction round are recorded at the final HEAD of the round, after
 the SOW-wide corrections commit.
+### Five-scope verification of the 2026-08-31 correction round
+
+The record/evidence corrections demanded by the 2026-08-31 external
+review (workflow shares, validation statistics, stale 1.322x claims,
+research-only demotion of parallel validation, matched Go/Rust phase
+measurement, phase-gate triage sentence) were reviewed against the
+final evidence state at HEAD 682b3f4d:
+
+- Boole (Rust parity): PASS. The Rust phase recorder is bench-only,
+  env-gated, mirrors the Go mark names and order exactly, and touches
+  no library, wire, counter, or production code.
+- Sagan (Go idioms): PASS. No Go code changed in the round; shares
+  sum to 100.00% with the denominator documented; phase tables match
+  both raw logs and both CSVs byte-for-byte; validation intervals
+  relabeled correctly.
+- Hegel (performance): PASS. Shares, residual percentages (denominator
+  1007.9 ms, documented ~99.6% column sum), run-total medians
+  (Go 2103.6 ms, Rust 1095.7 ms, 1.920x), and both validation
+  interval families all reproduce from the committed artifacts; every
+  interval excludes 1.300x; recorder overhead is nil when unset.
+- Herschel (wire format and integrity): PASS. No wire codec, corpus,
+  spec, or conformance file changed in the round; the records make no
+  format-byte claims.
+- Turing (APIs, docs, records): PASS. P2-1 (inverted phase-gate
+  triage sentence) and P3-1 (unqualified 1.322x positions) found at
+  dad0d427 were fixed at 682b3f4d exactly as specified; no
+  unqualified current-claim 1.322x remains; residual grep audit
+  clean.
+
+The five-scope round closes all-PASS at the final evidence HEAD
+682b3f4d. This record commit contains only this record; the evidence
+state it documents is unchanged.
+
 ## Requirements
 
 ### Purpose
