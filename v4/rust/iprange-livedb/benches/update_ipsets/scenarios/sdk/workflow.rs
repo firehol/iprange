@@ -91,6 +91,45 @@ pub(super) fn run(size: usize, windows: usize) -> Result<ScenarioResult, String>
 }
 
 #[allow(clippy::too_many_arguments)]
+struct WorkflowPhases {
+    started: std::time::Instant,
+    last: std::time::Instant,
+    path: Option<std::path::PathBuf>,
+}
+
+impl WorkflowPhases {
+    fn new() -> Self {
+        let started = std::time::Instant::now();
+        WorkflowPhases {
+            started,
+            last: started,
+            path: std::env::var_os("IPRANGE_WORKFLOW_PHASES").map(std::path::PathBuf::from),
+        }
+    }
+
+    // Bench-only phase split mirroring the Go IPRANGE_WORKFLOW_PHASES hook
+    // (v4/go/cmd/iprange-v4-bench/scenario_sdk.go): when the environment
+    // variable is set, each workflow run appends "name <ns-since-run-start>
+    // <ns-since-last-mark>" rows to that file; unset, the recorder costs one
+    // clock read per mark (no file I/O).
+    fn mark(&mut self, name: &str) {
+        let now = std::time::Instant::now();
+        if let Some(path) = &self.path {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let since_start = now.duration_since(self.started).as_nanos();
+                let delta = now.duration_since(self.last).as_nanos();
+                let _ = writeln!(file, "phase-{name} {since_start} {delta}");
+            }
+        }
+        self.last = now;
+    }
+}
+
 fn execute(
     files: &Files,
     direct_provider: &TestDatabase,
@@ -100,6 +139,7 @@ fn execute(
     size: usize,
     cancellation: &CancellationToken,
 ) -> Result<Report, String> {
+    let mut phases = WorkflowPhases::new();
     let current = create_immutable_feed_v4(
         &files.current,
         tag(b"downloaded")?,
@@ -112,9 +152,11 @@ fn execute(
     )
     .map_err(|failure| format!("{failure:?}"))?;
     require_published(current.publication.publication)?;
+    phases.mark("create-current");
     let current_reader = ImmutableReader::open(&files.current).map_err(display)?;
 
     let first = refresh_first_seen(&files.first_seen, &current_reader, size, 200, cancellation)?;
+    phases.mark("first-seen");
     let last = refresh_last_seen(
         &files.last_seen,
         &current_reader,
@@ -123,10 +165,13 @@ fn execute(
         0,
         cancellation,
     )?;
+    phases.mark("last-seen");
     let base = apply_base_feed(&files.central, &current_reader, size, true, cancellation)?;
+    phases.mark("base-feed");
 
     let mut last_reader = LiveReader::open(&files.last_seen, cancellation).map_err(display)?;
     let history = project_history(&files.central, &last_reader, windows, size, cancellation)?;
+    phases.mark("history");
 
     let mut central_reader = LiveReader::open(&files.central, cancellation).map_err(display)?;
     let mut direct_reader =
@@ -144,6 +189,7 @@ fn execute(
             cancellation,
         )
         .map_err(display)?;
+    phases.mark("aggregate");
 
     let result_limit = (windows.len() as u64)
         .checked_add(1)
@@ -160,11 +206,13 @@ fn execute(
             cancellation,
         )
         .map_err(display)?;
+    phases.mark("join-direct");
 
     let mut membership_sink = MembershipCounter::default();
     let membership = central_scope
         .join_membership(&provider_scope, &mut membership_sink, cancellation)
         .map_err(display)?;
+    phases.mark("join-membership");
 
     let scopes = [&central_scope, &provider_scope];
     let algebra =
@@ -182,6 +230,7 @@ fn execute(
         )
         .map_err(|failure| format!("{failure:?}"))?;
     require_published(algebra_output.publication.publication)?;
+    phases.mark("publish");
 
     let output_reader = ImmutableReader::open(&files.output).map_err(display)?;
     let final_ranges = {
@@ -239,6 +288,7 @@ fn execute(
         membership.uncovered_result_count,
         algebra_output.report.output_range_count,
     ])?;
+    phases.mark("total");
     Ok(Report { scanned, emitted })
 }
 

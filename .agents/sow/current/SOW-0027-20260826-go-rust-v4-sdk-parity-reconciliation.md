@@ -2627,7 +2627,10 @@ profile (those are literal CPU usage).
    distinct phase (e.g., membership import at 1.529x, join, window
    aggregation) needs its own design.
 
-4. Validation walk (1.322x; Go 16.2 ms vs Rust 12.3 ms at 1M).
+4. Validation walk (matrix five-sample draw 1.322x; Go 16.2 ms vs
+   Rust 12.3 ms at 1M; the stabilized 31-pair estimate is 1.651x at
+   1M with a 95% interval 1.508-1.810x on the median, so the true
+   gap is ~5-8 ms, not the 0.022x implied by the draw).
    Cost structure: worker fixed cost ~1.2-1.5 ms (Go worker startup
    is heavier than Rust's; both SDKs route validation through a
    version-matched worker, but the bench comparison is the public
@@ -2671,50 +2674,80 @@ size, single samples, same host, same binaries as the final matrix;
 evidence/validation-stabilization-20260831.csv, ~7 wall-minutes under
 nice; record cost: 31 pairs x 3 sizes):
 
-  size      Go median (range)        Rust median (range)      paired ratio median (95% CI)
-  100k      6.52 ms (5.00-7.55)      4.05 ms (3.83-5.07)      1.555 (CI 1.406-1.607)
-  1M        17.20 ms (15.71-27.02)   10.42 ms (10.18-14.47)   1.651 (CI 1.569-1.790)
-  4M        55.15 ms (52.42-71.25)   32.30 ms (31.23-38.58)   1.717 (CI 1.690-1.792)
+  size      Go median (range)        Rust median (range)      median | mean 95% CI | median 95% CI
+  100k      6.52 ms (5.00-7.55)      4.05 ms (3.83-5.07)      1.555 | 1.406-1.607 | 1.326-1.732
+  1M        17.20 ms (15.71-27.02)   10.42 ms (10.18-14.47)   1.651 | 1.569-1.790 | 1.508-1.810
+  4M        55.15 ms (52.42-71.25)   32.30 ms (31.23-38.58)   1.717 | 1.690-1.791 | 1.701-1.763
 
-  RSS medians: 1.295x / 1.357x / 1.149x. The 95% CIs are
-  two-sided Student-t intervals on the 31 paired ratios (mean +/-
-  t(30) x standard error; t(30) = 2.042). Conclusions: (a) the
-  final-matrix 1.322x median was a noise-LOW draw on five pairs; the
-  stabilized estimate is 1.51-1.79x and every 95% CI excludes 1.300x,
-  so the gate is missed by ~0.25-0.49x, not 0.022x - the "0.27 ms
-  gap" framing is void (the real gap is ~6.8 ms at 1M vs the 0.27 ms
-  implied by 1.322x -> 1.300x); (b) the benchmark cannot distinguish
-  1.322x from 1.51x with five pairs, which is exactly why the matrix
-  median misled; the 31-pair CI is the reliable evidence.
+  RSS medians: 1.295x / 1.357x / 1.149x. The first interval column
+  is the paired-ratio median; the second is a two-sided Student-t
+  95% interval on the arithmetic mean of the paired ratios (mean +/-
+  t(30) x SE; t(30) = 2.042) - a MEAN interval, corrected after the
+  first edition labeled it as a median interval; the third is a
+  distribution-free (order-statistic) 95% interval on the paired-
+  ratio median. The authoritative acceptance estimator is the
+  paired-ratio median; every mean and median interval at every size
+  excludes 1.300x. Conclusions: (a) the final-matrix 1.322x median
+  was a noise-LOW draw on five pairs; the stabilized estimate is
+  1.51-1.79x and every 95% interval excludes 1.300x, so the gate is
+  missed by ~0.25-0.49x, not 0.022x - the "0.27 ms gap" framing is
+  void (the real gap is ~6.8 ms at 1M vs the 0.27 ms implied by
+  1.322x -> 1.300x); (b) the benchmark cannot distinguish 1.322x
+  from 1.51x with five pairs, which is exactly why the matrix median
+  misled; the 31-pair intervals are the reliable evidence.
 
-Workflow phase split (update-ipsets-workflow 1M: 5 requested samples
-plus one warmup run, 6 runs logged; bench-only phase recorder in
-scenario_sdk.go under IPRANGE_WORKFLOW_PHASES;
-evidence/workflow-phase-split-20260831.csv + raw log; the log's
-run-total median is 2117.2 ms, the bench-sample row p50 2125 ms):
+Workflow phase split (update-ipsets-workflow 1M: 6 sampled runs after
+1 warmup, matched same-session Go and Rust; bench-only phase recorder
+in scenario_sdk.go and workflow.rs under IPRANGE_WORKFLOW_PHASES;
+evidence/workflow-phase-split-20260831.csv with the raw
+workflow-phases-go-20260831.log, and the matched comparison
+workflow-phase-comparison-20260831.csv with the raw
+workflow-phases-rust-20260831.log; Go run-total median 2103.6 ms).
+Shares are phase median / sum of all phase medians, so they sum to
+100%:
 
-  create-current (one-inode feed build)  709 ms  34.3%
-  publish (algebra output feed build)    313 ms  15.2%
-  history (windows projection)           219 ms  10.6%
-  base-feed                              186 ms   9.0%
-  last-seen                              175 ms   8.5%
-  first-seen                             180 ms   8.7%
-  join-direct                            130 ms   6.3%
-  join-membership                        121 ms   5.9%
-  aggregate                               33 ms   1.6%
-  post-publish tail (~44.8 ms recorded
+  create-current (one-inode feed build)  695 ms  33.2%
+  publish (algebra output feed build)    315 ms  15.1%
+  history (windows projection)           219 ms  10.4%
+  base-feed                              184 ms   8.8%
+  last-seen                              176 ms   8.4%
+  first-seen                             176 ms   8.4%
+  join-direct                            130 ms   6.2%
+  join-membership                        121 ms   5.8%
+  aggregate                               32 ms   1.6%
+  post-publish tail (~45.0 ms recorded
   median; reads, closes, checksums)                2.2%
 
-  The 1.925x workflow residual is dominated by the two one-inode
-  feed builds (49.5% combined), not by the gap/replace machinery
-  (history is 10.6%) and not by the joins (12.2%). Any workflow-targeted
-  design must therefore attack the feed-build phases first; the
-  membership-import and nested-overwrite scenario ratios bound those
-  phases (1.529x and 2.355x respectively), so the workflow ratio is
-  consistent with its phase composition.
+  Matched same-session Go/Rust phase medians (Go 2103.6 ms, Rust
+  1095.7 ms run totals; overall ratio 1.920x):
+
+    phase          Go ms    Rust ms    Go/Rust    Go-Rust ms  % of residual
+    create-current  695.1     334.1     2.081      361.0       35.8%
+    publish         315.2     209.4     1.505      105.8       10.5%
+    history         218.7     103.5     2.114      115.2       11.4%
+    base-feed       183.8      85.7     2.146       98.1        9.7%
+    first-seen      176.3      84.7     2.081       91.5        9.1%
+    last-seen       176.5      84.8     2.082       91.7        9.1%
+    join-direct     129.6      76.5     1.694       53.1        5.3%
+    join-membership 120.5      80.9     1.491       39.7        3.9%
+    aggregate        32.4      18.9     1.716       13.5        1.3%
+    tail             45.0       9.7     4.626       35.2        3.5%
+
+  The percentage column divides each phase's residual by the
+  run-total residual (2103.6 - 1095.7 = 1007.9 ms); per-phase
+  residuals are medians over the 6 sampled runs, so the column sums
+  to ~99.6%, not 100%. Feed builds (create-current + publish) are
+  48.3% of Go elapsed time and 46.3% of the Go-Rust absolute
+  residual; create-current alone is 35.8% of the residual. Every phase except aggregate and
+  the joins is above the 1.3x gate, so the workflow residual is a
+  broad per-phase inefficiency, not one mechanism; the largest
+  absolute residual is the one-inode feed build.
 
 Parallel-validation FEASIBILITY design (replacing the page-independent
-scan proposal; assessment only - no implementation):
+scan proposal; STATUS: RESEARCH-ONLY - assessment only, no
+implementation is authorized, and the unresolved contracts below must
+have concrete solutions and cross-platform fault-containment proof
+before any implementation could be proposed):
 
   Model: the sequential validator is an ordered DFS over the tree
   graph (selected-root order and first-encounter page/key order,
@@ -2790,6 +2823,36 @@ scan proposal; assessment only - no implementation):
      this design CANNOT close SOW-0027's performance acceptance; it
      only removes one of eight failures.
 
+  UNRESOLVED contracts (2026-08-31 external review; each one
+  invalidates the corresponding numbered claim above until solved):
+
+  1. A concurrent visited set cannot reproduce the sequential
+     walk's alias-ownership outcome when two goroutines race to
+     claim the same corrupt page: the sequential walk's first-
+     encounter assignment is total and deterministic, a concurrent
+     claim is a race. Claiming per-subtree and reconciling in the
+     reduce only detects cross-subtree aliases after both subtrees
+     have already validated the same physical pages - the observable
+     finding order and the fault prefix are not guaranteed.
+  2. A fixed bounded findings buffer (constant, e.g. 256 entries)
+     cannot represent a subtree whose corruption produces more
+     findings than the buffer: blocking, spilling, or losing
+     findings all change observable behavior versus the sequential
+     validator (which can emit unbounded findings).
+  3. A subtree summary cannot simultaneously be computed in
+     parallel and depend on the preceding subtree's carry-in: the
+     carry chain (previous subtree's last record, order state,
+     value-kind counts) is sequential by definition, so either the
+     summary function is not pure in (pages, carry-in) or the
+     subtrees are not validated in parallel.
+  4. An environment-tunable concurrency bound is an unapproved
+     operational control: any env-tunable knob changes observable
+     resource behavior across deployments and needs a product
+     decision, not a default.
+
+  These four contracts are the reasons the design is research-only.
+  The remaining analysis stands as an estimate, not evidence.
+
   Verification plan (if the user ever authorizes implementation):
   unit-scale A/B at 100k/1M/4M with the 31-pair methodology, the
   deterministic-reduction differential test (parallel vs sequential
@@ -2806,7 +2869,8 @@ Keep the <=1.3x gate. Authorize NO implementation now. The next step,
 if the user wants to keep the gate, is the parallel-validation
 FEASIBILITY design above (this record) - reviewed, not implemented -
 plus optionally the workflow feed-build phase analysis (create-current
-709 ms / publish 313 ms) as a design-only investigation. The honest
+695 ms Go vs 334 ms Rust; the largest absolute residual) as a
+design-only investigation. The honest
 expectation: even a fully successful parallel validation leaves seven
 scenarios failing, so the user should decide now whether the gate is
 waived for those seven (option 2 in the user decision), or whether the
@@ -2814,28 +2878,26 @@ analysis continues (option 3) with the understanding that no known
 safe-Go design closes reads or writes.
 
 
-### Five-scope re-review at the evidence HEAD (b3653820)
+### Five-scope re-review (b3653820 round; superseded 2026-08-31)
 
-The P2-1 stale phase-share finding from the 29c6f1ec round was fixed
-in commit b3653820: the SOW-0027 phase table, the feed-build/join
-prose, the recommendation line, and the evidence README were aligned
-to evidence/workflow-phase-split-20260831.csv (create-current 709 ms
-34.3%, publish 313 ms 15.2%, history 219 ms 10.6%, base-feed 186 ms
-9.0%, first-seen 180 ms 8.7%, last-seen 175 ms 8.5%, join-direct
-130 ms 6.3%, join-membership 121 ms 5.9%, aggregate 33 ms 1.6%,
-post-publish tail 44.8 ms 2.2%; feed builds 49.5%, joins 12.2%).
-No other file changed. All five scopes re-verified that delta at
-HEAD b3653820:
-
-- Boole (Rust parity): PASS.
-- Sagan (Go idioms): PASS.
-- Hegel (performance): PASS.
-- Herschel (wire format and integrity): PASS.
-- Turing (APIs, docs, records): PASS - P2-1 resolved, no new findings.
-
-The five-scope round closes all-PASS at b3653820 for this
-analysis-only record. It remains the deliverable of the
-measured-performance decision loop; no implementation is authorized.
+The first evidence-edit round at b3653820 aligned the phase table to
+the then-current workflow-phase-split CSV (feed builds 49.5%). All
+five scopes PASSed at b3653820 (Boole: Rust parity; Sagan: Go idioms;
+Hegel: performance; Herschel: wire format and integrity; Turing:
+APIs, docs, records). The 2026-08-31 external review then proved the
+CSV shares themselves were wrong (summed to 102.3%: nine phases were
+normalized to 100% and the tail added again), the validation CI was
+a mean interval mislabeled as a median interval, Outcome/Followup and
+SOW-0030 still cited the stale matrix 1.322x validation draw, and the
+exact-final review claim could not be true while HEAD moved after the
+verdicts. The corrections are recorded above and in the Outcome and
+Followup sections; the re-derived shares (create-current 33.2%,
+publish 15.1%, feed builds 48.3% of Go elapsed time) come from the
+matched same-session Go/Rust phase run and sum to 100.0%. The
+parallel-validation design is demoted to RESEARCH-ONLY with four
+unresolved contracts. The verdicts of the five scopes for THIS
+correction round are recorded at the final HEAD of the round, after
+the SOW-wide corrections commit.
 ## Requirements
 
 ### Purpose
@@ -3757,18 +3819,22 @@ envelope was superseded 2026-08-29 by the user-confirmed binding <=1.3x
 elapsed-time and peak-RSS acceptance (user decisions 1A/2A), and the
 final-identity matrix (rust-ratio-final-20260830.csv, five alternating same-session
 release samples) shows every one of the eight acceptance scenarios
-outside that binding: elapsed 1.322x-2.355x, and peak RSS failing two
-of eight scenarios. All bounded safe-Go leads available under the no-unsafe
-constraint were measured at the final identity and are either retained
-(authoritative tree-header parser) or measured-and-rejected (KeyU32
-probe, dispatch removal, result transport); the remaining costs are
-profiled and quantified in the Status sub-states. The measured-performance
-decision (accept the measured result as-is, or pursue further work) is
-the user's, and this SOW stays in-progress until it is recorded; the
-five-scope delta round on the actual final commit (direction item 6)
-ran at HEAD b3653820 and closed all-PASS; the measured-performance
-decision is presented to the user (2026-08-31) and this SOW stays
-in-progress until it is recorded.
+outside that binding: elapsed 1.322x-2.355x per the matrix's
+five-sample row medians (the stabilized 31-pair validation estimate is
+1.555/1.651/1.717x, every mean and median 95% interval above 1.300x),
+and peak RSS failing two of eight scenarios. All bounded safe-Go leads
+available under the no-unsafe constraint were measured at the final
+identity and are either retained (authoritative tree-header parser) or
+measured-and-rejected (KeyU32 probe, dispatch removal, result
+transport); the remaining costs are profiled and quantified in the
+Status sub-states during the 2026-08-31 analysis round. The
+measured-performance decision (accept the measured result as-is, or
+pursue further work) is the user's, and this SOW stays in-progress
+until it is recorded. The evidence and record corrections demanded by
+the 2026-08-31 external review (workflow shares, validation
+statistics, stale 1.322x claims, research-only demotion of parallel
+validation) are implemented and pushed; the measured-performance
+decision is presented to the user (2026-08-31).
 
 ## Lessons Extracted
 
@@ -3811,16 +3877,16 @@ in-progress until it is recorded.
   tree machinery, and the validation walk - all quantified in the
   Status sub-states and in validation-phases-20260830.csv. The
   measured-performance decision (accept as-is, or pursue a specific further
-  lead) is presented to the user (2026-08-31) after the five-scope delta
-  round closed all-PASS at HEAD b3653820; this SOW stays in-progress
-  until decided.
+  lead) is presented to the user (2026-08-31) after the external review's
+  record corrections landed; this SOW stays in-progress until decided.
 - Residuals the user does not accept (tracked): pending
   SOW-0030-20260829-v4-read-and-validation-specialization.md is
   rewritten (2026-08-30) to own the actual residuals under the binding
   <=1.3x elapsed/RSS contract - the read-path residuals (v6 1.326/1.357x,
   v4 1.525/1.582x), the write residual (nested-overwrite 2.355x),
-  the validation walk residual (1.322x), and the out-of-window
-  structure_table.go counter gap - with the voided 1.2-1.6x envelope
+  the validation walk residual (stabilized paired-ratio median
+  1.555/1.651/1.717x at 100k/1M/4M; matrix five-sample draw 1.322x is
+  superseded), and the out-of-window structure_table.go counter gap - with the voided 1.2-1.6x envelope
   and the false SOW-0017 dependency removed. It is startable only after this
   SOW closes and only if the user chooses to continue; if the user
   accepts the measured result, the residuals close as accepted limitations.

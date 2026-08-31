@@ -31,7 +31,10 @@ medians): all eight acceptance scenarios fail the elapsed-time binding
 update-ipsets-workflow 1.925x, live-direct-random-lookup 1.525x,
 immutable-direct-random-lookup 1.582x, live-direct-random-lookup-v6
 1.326x, immutable-direct-random-lookup-v6 1.357x, live-validation
-1.322x) and two of eight fail the RSS binding (live v4 lookup 1.351x,
+1.322x at the matrix's five-sample draw; the stabilized 31-pair
+estimate is 1.555/1.651/1.717x at 100k/1M/4M with every mean and
+median 95% interval above 1.300x) and two of eight fail the RSS
+binding (live v4 lookup 1.351x,
 live-validation 1.402x). The bounded safe-Go leads of SOW-0027
 direction items 1-6 are exhausted: the authoritative expected-tree-
 header parser is retained (reads -7-9%), the KeyU32 probe A/B was
@@ -94,9 +97,10 @@ Unknowns:
   accepted with user sign-off (this SOW closes as rejected/not worth
   doing with this record as evidence), or the lead the user selects
   lands the scenario inside the binding <=1.3x elapsed and <=1.3x peak
-  RSS contract with the same matched 5-sample same-session
-  methodology, no regression in the CI gate, and no mmap-only policy
-  change.
+  RSS contract with the matched same-session methodology (31 paired
+  samples for validation, per the stabilized measurement; five
+  alternating samples for the other scenarios), no regression in the
+  CI gate, and no mmap-only policy change.
 - Counter parity is exact at the final identity (bytes_moved
   69,145,640 and bytes_zeroed 8,487,946, both matching Rust); the
   out-of-window structure_table.go authority is added with
@@ -111,7 +115,10 @@ Unknowns:
 Sources checked:
 
 - rust-ratio-final-20260830.csv (the final-identity matrix, commit
-  39df5b0b; the only acceptance evidence).
+  39df5b0b; the acceptance evidence).
+- validation-stabilization-20260831.csv (31 paired same-session
+  samples; the stabilized validation estimate that supersedes the
+  matrix's 1.322x draw).
 - validation-phases-20260830.csv and necessary-work-compare-
   20260830b.csv (the SOW-0027 item 2/3 evidence).
 - The SOW-0027 Status sub-states for direction items 1-6 (the

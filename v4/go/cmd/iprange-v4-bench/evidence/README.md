@@ -242,14 +242,35 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   why the single-sample phase runs and the five-sample median differ
   (raw per-sample CPU ratios 1.16x-1.8x on a 12-16 ms operation).
 - `validation-stabilization-20260831.csv`: 31 alternating same-session
-  Go/Rust single samples of live-validation at 100k/1M/4M (paired
-  ratios: median 1.555/1.651/1.717; 95% CI excludes 1.300 at every
-  size). Supersedes the five-pair matrix draw for the validation
-  ratio, whose 1.322x median was noise-low.
-- `workflow-phase-split-20260831.csv` (and the raw
-  `workflow-phases-raw-20260831.log`): the update-ipsets workflow
-  measured region split by phase (IPRANGE_WORKFLOW_PHASES bench hook;
-  6 runs = 5 samples + 1 warmup): create-current 34.3%, publish 15.2%,
-  history 10.6%, base-feed 9.0%, first-seen 8.7%, last-seen 8.5%,
-  join-direct 6.3%, join-membership 5.9%, aggregate 1.6%,
-  post-publish tail 2.2% (log run-total median 2117.2 ms).
+  Go/Rust single samples of live-validation at 100k/1M/4M. The record
+  column is a 95% t-interval on the arithmetic mean of the paired
+  ratios (mean +/- t(30) x SE; 1.406-1.607 / 1.569-1.790 / 1.690-1.791),
+  NOT a median interval; the paired-ratio medians are 1.555/1.651/1.717
+  and a distribution-free (order-statistic) 95% interval for the median
+  (1.326-1.732 / 1.508-1.810 / 1.701-1.763) also excludes 1.300 at every
+  size. Supersedes the five-pair matrix draw for the validation ratio,
+  whose 1.322x median was noise-low.
+- `workflow-phase-split-20260831.csv` (with the raw
+  `workflow-phases-go-20260831.log`): the update-ipsets workflow
+  measured region split by phase (IPRANGE_WORKFLOW_PHASES bench hook,
+  Go; 6 sampled runs after 1 warmup). Shares are phase median /
+  sum of all phase medians and therefore sum to 100%: create-current
+  33.2%, publish 15.1%, history 10.4%, base-feed 8.8%, first-seen 8.4%,
+  last-seen 8.4%, join-direct 6.2%, join-membership 5.8%, aggregate 1.6%,
+  post-publish tail 2.2% (log run-total median 2103.6 ms). The first
+  edition of this CSV normalized nine phases to 100% and then added the
+  tail again (shares summed to 102.3%); it was superseded same-day by
+  this edition and the old raw log was replaced by the matched Go run.
+- `workflow-phase-comparison-20260831.csv` (with the raw
+  `workflow-phases-go-20260831.log` / `workflow-phases-rust-20260831.log`):
+  matched same-session phase medians, Go and Rust, for the same
+  update-ipsets workflow (6 sampled runs each after 1 warmup, alternating
+  Go/Rust invocations on one host): per-phase Go median, Rust median,
+  Go/Rust ratio, absolute residual (Go - Rust, ms), and each phase's
+  share of the total wall residual (run-total medians Go 2103.6 ms,
+  Rust 1095.7 ms; ratio 1.920x). Feed builds (create-current + publish)
+  are 48.3% of Go elapsed time and 46.3% of the Go-Rust wall residual
+  (denominator: run-total medians 2103.6 - 1095.7 = 1007.9 ms;
+  per-phase residuals are medians over the same 6 sampled runs, so the
+  percentage column sums to ~99.6%, not 100%); create-current alone
+  is 35.8% of the residual.
