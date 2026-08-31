@@ -1,4 +1,4 @@
-scenario,size,go_p50_ns,rust_p50_ns,cpu_ratio,go_rss_peak_kib,rust_rss_peak_kib,rss_ratio,worker_verify_ns,worker_ready_ns,worker_running_ns,worker_handler_ns,worker_dispatch_ns,worker_mode_ns,note
+scenario,size,go_p50_ns,rust_p50_ns,elapsed_ratio,go_rss_peak_kib,rust_rss_peak_kib,rss_ratio,worker_verify_ns,worker_ready_ns,worker_running_ns,worker_handler_ns,worker_dispatch_ns,worker_mode_ns,note
 live-validation,100000,6468286,3906666,1.656,12948,6936,1.867,~40000,~75000,~1150000,~1220000,~1240000,~4190000,interleaved same-session single samples; worker phases from IPRANGE_WORKER_PHASES; mode = mapping+graph walk (worker pprof shows walk only, no mmap/handshake frames)
 live-validation,1000000,16554829,10231721,1.618,29640,21168,1.400,~40000,~75000,~1150000,~1220000,~1240000,~16000000,interleaved same-session single samples
 live-validation,4000000,53759034,32271894,1.666,81860,70660,1.159,~40000,~75000,~1150000,~1220000,~1240000,~51000000,interleaved same-session single samples

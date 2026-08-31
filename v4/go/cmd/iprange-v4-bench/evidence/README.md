@@ -213,7 +213,8 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   contract.rs), mapping_remaps 1 vs 3.
 - `validation-phases-20260830.csv`: live-validation at 100k/1M/4M with
   the parent/worker/mapping/walk split (IPRANGE_WORKER_PHASES bench
-  hook): CPU 1.66x/1.62x/1.67x, peak RSS 1.87x/1.40x/1.16x; the worker
+  hook, v4work-only worker builds): elapsed 1.66x/1.62x/1.67x, peak RSS
+  1.87x/1.40x/1.16x; the worker
   fixed cost is ~1.2-1.5 ms size-independent; worker pprof at 4M shows
   graph-walk frames only.
 - `tree-header-parser-ab-20260830.csv`: interleaved same-session A/B
@@ -234,7 +235,7 @@ at the recorded commit; Rust binary: iprange-livedb bench harness.
   scenario at commit 39df5b0b, medians and peak RSS. All eight CPU
   ratios fail the binding <=1.3x (1.322x-2.355x); two RSS ratios fail
   (1.351x, 1.402x). This CSV is the evidence package for the
-  language-floor decision that returns to the user.
+  measured-performance decision that returns to the user.
 - `rust-ratio-final-samples-20260830.csv`: the raw alternating
   Go/Rust rows behind the final matrix (p50 ns and peak RSS per
   sample, five per language per scenario); the validation rows show

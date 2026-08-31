@@ -1,4 +1,4 @@
-scenario,size,aux,go_p50_ns,rust_p50_ns,cpu_ratio,go_rss_peak_kib,rust_rss_peak_kib,rss_ratio,go_samples,rust_samples,note
+scenario,size,aux,go_p50_ns,rust_p50_ns,elapsed_ratio,go_rss_peak_kib,rust_rss_peak_kib,rss_ratio,go_samples,rust_samples,note
 membership-import,1000000,421,70413768,46044683,1.529,53868,46360,1.162,5,5,interleaved same-session release builds at HEAD 39df5b0b
 nested-overwrite,1000000,0,685092333,290868604,2.355,67504,59712,1.130,5,5,interleaved same-session release builds at HEAD 39df5b0b
 update-ipsets-workflow,1000000,7,2084194969,1082581962,1.925,118652,108864,1.090,5,5,interleaved same-session release builds at HEAD 39df5b0b
