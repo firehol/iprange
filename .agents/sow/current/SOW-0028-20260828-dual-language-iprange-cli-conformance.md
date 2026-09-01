@@ -867,6 +867,47 @@ Open decisions:
   suites green; runner 9 cases / 13 oracle checks; golden + sensitivity
   PASS.
 
+### 2026-09-01 (continued) — round-7 close-out: oracle cases, budget codes, publisher dedup
+
+- Per-family oracle cases delivered (round-7 mandatory correction): 15 new
+  declarative cases under v4/cli/cases/ (join.direct with real wire value 0
+  and null-last ordering, join.membership, query.cardinalities/overlaps/
+  matching_feeds, algebra.count/compare/publish, feeds.lifecycle asserting
+  delete/rename carry NO report member, live.lifecycle, direct.retention,
+  maintenance, validate.recover, publication.json, history.project). The
+  runner now executes 24 cases with 13 oracle-backed checks; authoring the
+  cases exposed three real SDK/handler defects fixed at 39a236e3.
+- commit.resolve result flattened (result IS CommitResolutionResult per
+  spec; schema results.py + snapshot_validation.json golden updated); the
+  runner exempts snapshot_to from the fabricated source_close requirement
+  (the SDK result has no close facts).
+- Budget-refusal wire codes (round-7 P2, Herschel) settled: SDK-domain
+  budget refusals always use the canonical SDK code
+  (`insufficient_resource_budget` / `work_limit_too_small` via
+  reader::sdk_code); `output_limit` is used only where the spec names it
+  (response-frame, inline metadata delivery, matching-feeds refusal, cursor
+  rows, lookup) and for adapter-side guards on adapter-owned outputs
+  (export expansion refusal, removals result budget, validation/recovery
+  JSONL output mapping, which round-trips BudgetExceeded <-> output_limit
+  through the same adapter).
+- Duplicate publisher machinery (round-7 P3) removed: the algebra and feeds
+  handler families each carried byte-identical copies of the prepared-draft
+  finalization path (CommitDraft trait + PreparedWorkflow impl,
+  publish_changed, publish_no_change, finish_publisher, workflow_failure,
+  finish_writer_error, close_writer) plus duplicate fact converters
+  (workflow_report, durability_outcome, logical_change, workflow_kind in up
+  to five handler files). The single authority now lives in
+  v4/rust/iprange-cli/src/rpc/handlers/workflow.rs; families keep only
+  their own CommitDraft impls (PreparedFeedChange, PreparedHistoryProjection)
+  and live.rs/maintenance.rs/algebra.rs/feeds.rs import the shared
+  converters. durability_outcome moved next to the other commit-fact
+  converters in lifecycle.rs. Net -246 lines; -D warnings clean; 50 Rust
+  suites; runner 24 cases / 13 oracle checks; golden + sensitivity PASS.
+- Validation at 0646eba5: full gate set green (Rust workspace 50 suites,
+  -D warnings build, golden 53 exchanges, sensitivity 13 modes, runner
+  24 cases / 13 oracle checks, Go suite incl. the D1-B uncovered-last
+  order test).
+
 ### 2026-09-01 (continued) — complete handler registry
 
 - All 32 remaining v1 methods implemented by three parallel workers and

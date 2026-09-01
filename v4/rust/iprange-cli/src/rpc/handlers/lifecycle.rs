@@ -463,7 +463,7 @@ fn commit_durability(value: CommitDurability) -> &'static str {
     }
 }
 
-fn durability_outcome(value: CommitDurability) -> &'static str {
+pub(crate) fn durability_outcome(value: CommitDurability) -> &'static str {
     commit_durability(value)
 }
 

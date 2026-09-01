@@ -36,6 +36,7 @@ use serde_json::{json, Map, Value};
 use super::super::dispatch::HandlerError;
 use super::super::session::SessionState;
 use super::{convert, lifecycle, output, publication_evidence, publish, reader};
+use super::lifecycle::durability_outcome;
 use crate::io::export_writer::{ExportBudget, ExportFacts, ExportWriter};
 
 // ---------------------------------------------------------------------------
@@ -165,13 +166,6 @@ fn reclamation_value(value: &Reclamation) -> Result<Value, HandlerError> {
     })
 }
 
-fn durability_outcome(value: CommitDurability) -> &'static str {
-    match value {
-        CommitDurability::NotCommitted => "not_committed",
-        CommitDurability::Committed => "committed",
-        CommitDurability::OutcomeUnknown => "outcome_unknown",
-    }
-}
 
 // ---------------------------------------------------------------------------
 // iprange.v1.publication.inspect / .resolve / .residue.remove

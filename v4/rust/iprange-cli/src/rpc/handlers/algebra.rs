@@ -15,13 +15,13 @@ use iprange_livedb::publication::{
     CleanupArtifacts, CleanupState, PrivateOutputAttempt, PublicationStatus,
 };
 use iprange_livedb::{
-    CancellationToken, CommitDurability, CommitResult, Error, FinishedHistoryProjection,
+    CancellationToken, CommitResult, Error, FinishedHistoryProjection,
     FeedCardinality, FeedName, FeedOverlap, FeedPair, FeedSelection, HistoryProjectionReport,
     HistoryProjectionSource, HistoryWindow, HistoryWindowReport, ImmutableReader, LiveReader,
-    LiveWriter, LogicalChange, MembershipAggregateSink, MembershipAggregationMode,
+    LiveWriter, MembershipAggregateSink, MembershipAggregationMode,
     MembershipAggregationReport, MembershipAlgebra, MembershipAlgebraBudget, MembershipCrossCell,
     MembershipJoinReport, MembershipJoinSink, MembershipQueryBudget, MembershipScope,
-    PreparedHistoryProjection, PreparedWorkflow, UncoveredFeed, UncoveredSide,
+    PreparedHistoryProjection, UncoveredFeed, UncoveredSide,
     AlgebraComparisonReport, AlgebraCountReport, AlgebraOutputBudget, AlgebraOutputMode,
     AlgebraPreparationFailure, AlgebraSetOperation, AlgebraSetReport, DirectJoinBudget,
     DirectJoinCell, DirectJoinReport, DirectJoinSink, DirectJoinSource,
@@ -37,6 +37,7 @@ use super::convert;
 use super::lifecycle;
 use super::reader;
 use super::snapshot;
+use super::workflow::{close_writer, finish_publisher, finish_writer_error, logical_change, publish_changed, publish_no_change, workflow_failure, CommitDraft};
 use crate::io::export_writer::{
     push_json_string, write_csv_field, ExportBudget, ExportFacts, ExportWriter,
 };
@@ -924,7 +925,7 @@ fn finish_projection_facts(
                 Ok((metadata_logical_change, commit)) => finish_publisher(
                     writer,
                     "iprange.v1.history.project",
-                    &report,
+                    Some(&report),
                     metadata_logical_change,
                     commit,
                 ),
@@ -938,7 +939,7 @@ fn finish_projection_facts(
         } => finish_publisher(
             writer,
             "iprange.v1.history.project",
-            &report,
+            Some(&report),
             metadata_logical_change,
             commit,
         ),
@@ -959,24 +960,6 @@ fn finish_projection_facts(
 
 
 
-trait CommitDraft {
-    fn set_metadata(&mut self, input: &[u8]) -> iprange_livedb::Result<bool>;
-    fn clear_metadata(&mut self) -> iprange_livedb::Result<bool>;
-    fn commit(self) -> iprange_livedb::Result<CommitResult>;
-}
-
-impl CommitDraft for PreparedWorkflow<'_> {
-    fn set_metadata(&mut self, input: &[u8]) -> iprange_livedb::Result<bool> {
-        self.set_metadata_json(input)
-    }
-    fn clear_metadata(&mut self) -> iprange_livedb::Result<bool> {
-        self.clear_metadata_json()
-    }
-    fn commit(self) -> iprange_livedb::Result<CommitResult> {
-        self.commit()
-    }
-}
-
 impl CommitDraft for PreparedHistoryProjection<'_> {
     fn set_metadata(&mut self, input: &[u8]) -> iprange_livedb::Result<bool> {
         self.set_metadata_json(input)
@@ -986,183 +969,6 @@ impl CommitDraft for PreparedHistoryProjection<'_> {
     }
     fn commit(self) -> iprange_livedb::Result<CommitResult> {
         self.commit()
-    }
-}
-
-fn publish_changed<D: CommitDraft>(
-    mut draft: D,
-    metadata: &lifecycle::MetadataValue,
-) -> Result<
-    (
-        &'static str,
-        Option<std::result::Result<CommitResult, Error>>,
-    ),
-    HandlerError,
-> {
-    let metadata_logical_change = match metadata {
-        lifecycle::MetadataValue::Keep => "unchanged",
-        lifecycle::MetadataValue::Clear => match draft.clear_metadata() {
-            Ok(true) => "changed",
-            Ok(false) => "unchanged",
-            Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
-        },
-        lifecycle::MetadataValue::Replace(bytes) => {
-            match draft.set_metadata(bytes) {
-                Ok(_) => "changed",
-                Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
-            }
-        }
-    };
-    Ok((metadata_logical_change, Some(draft.commit())))
-}
-
-fn publish_no_change(
-    writer: &mut LiveWriter,
-    metadata: &lifecycle::MetadataValue,
-    token: &CancellationToken,
-) -> Result<
-    (
-        &'static str,
-        Option<std::result::Result<CommitResult, Error>>,
-    ),
-    HandlerError,
-> {
-    match metadata {
-        lifecycle::MetadataValue::Keep => Ok(("unchanged", None)),
-        lifecycle::MetadataValue::Clear => {
-            let mut transaction = match writer.begin_membership_transaction(token) {
-                Ok(transaction) => transaction,
-                Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
-            };
-            match transaction.clear_metadata_json() {
-                Ok(true) => Ok(("changed", Some(transaction.commit()))),
-                Ok(false) => {
-                    drop(transaction);
-                    Ok(("unchanged", None))
-                }
-                Err(error) => {
-                    let _ = transaction.abort();
-                    Err(lifecycle::sdk_error(&error, "not_started"))
-                }
-            }
-        }
-        lifecycle::MetadataValue::Replace(bytes) => {
-            let mut transaction = match writer.begin_membership_transaction(token) {
-                Ok(transaction) => transaction,
-                Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
-            };
-            if let Err(error) = transaction.set_metadata_json(bytes) {
-                let _ = transaction.abort();
-                return Err(lifecycle::sdk_error(&error, "not_started"));
-            }
-            Ok(("changed", Some(transaction.commit())))
-        }
-    }
-}
-
-fn finish_publisher(
-    writer: &mut LiveWriter,
-    method: &str,
-    report: &Value,
-    metadata_logical_change: &'static str,
-    commit: Option<std::result::Result<CommitResult, Error>>,
-) -> Result<Value, HandlerError> {
-    if let Some(Err(error)) = &commit {
-        let close = close_writer(writer)?;
-        let failure = lifecycle::sdk_error(error, "not_started");
-        return Err(HandlerError {
-            details: Some(json!({
-                "report": report,
-                "metadata_logical_change": metadata_logical_change,
-                "writer_close": close,
-                "failure": {"code": failure.code, "message": failure.message},
-            })),
-            ..failure
-        });
-    }
-    if let Some(Ok(result)) = &commit {
-        if result.durability != CommitDurability::Committed || result.cause.is_some() {
-            let close = close_writer(writer)?;
-            let cause = result.cause.as_ref();
-            let code = cause.map_or("io", |error| reader::sdk_code(error.code()));
-            let message = cause.map_or_else(
-                || "publisher commit did not complete".to_owned(),
-                |error| error.to_string(),
-            );
-            return Err(HandlerError {
-                code,
-                outcome: durability_outcome(result.durability),
-                message,
-                details: Some(json!({
-                    "report": report,
-                    "metadata_logical_change": metadata_logical_change,
-                    "commit": lifecycle::commit_result(result)?,
-                    "writer_close": close,
-                })),
-            });
-        }
-    }
-    let mut result = json!({
-        "method": method,
-        "report": report,
-        "metadata_logical_change": metadata_logical_change,
-        "writer_close": close_writer(writer)?,
-    });
-    if let Some(Ok(commit)) = &commit {
-        result["commit"] = lifecycle::commit_result(commit)?;
-    }
-    if result["writer_close"]["outcome"].as_str() == Some("close_incomplete") {
-        return Err(HandlerError {
-            code: "io",
-            outcome: if commit.is_some() {
-                "committed"
-            } else {
-                "not_started"
-            },
-            message: "live writer close is incomplete".into(),
-            details: Some(result),
-        });
-    }
-    reader::bounded_result(result)
-}
-
-fn durability_outcome(value: CommitDurability) -> &'static str {
-    match value {
-        CommitDurability::NotCommitted => "not_committed",
-        CommitDurability::Committed => "committed",
-        CommitDurability::OutcomeUnknown => "outcome_unknown",
-    }
-}
-
-fn workflow_failure(writer: &mut LiveWriter, error: HandlerError) -> HandlerError {
-    let _ = writer.abort();
-    let close = close_writer(writer).ok();
-    let mut details = json!({});
-    if let Some(close) = close {
-        details["writer_close"] = close;
-    }
-    HandlerError {
-        details: Some(details),
-        ..error
-    }
-}
-
-fn finish_writer_error(writer: &mut LiveWriter, error: HandlerError, report: &Value) -> HandlerError {
-    let close = close_writer(writer).ok();
-    let mut details = json!({"report": report});
-    if let Some(close) = close {
-        details["writer_close"] = close;
-    }
-    HandlerError {
-        details: Some(details),
-        ..error
-    }
-}
-
-fn close_writer(writer: &mut LiveWriter) -> Result<Value, HandlerError> {
-    match writer.close() {
-        Ok(result) => lifecycle::close_result(&result),
-        Err(error) => Err(lifecycle::sdk_error(&error, "not_started")),
     }
 }
 
@@ -1277,12 +1083,6 @@ fn history_window_report(report: &HistoryWindowReport) -> Value {
     })
 }
 
-fn logical_change(value: LogicalChange) -> &'static str {
-    match value {
-        LogicalChange::Changed => "changed",
-        LogicalChange::NoChange => "unchanged",
-    }
-}
 
 fn output_facts(facts: &ExportFacts) -> Value {
     json!({

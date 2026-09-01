@@ -31,8 +31,7 @@ use iprange_livedb::{
     FinishedWorkflow, FirstSeenRemoval, FirstSeenRemovalSink, ImmutableReader, Ipv4Key, Ipv6Key,
     LiveCoordinationLocation, LiveReader, LiveResidueKind, LiveResidueResult, LiveResidueStatus,
     LiveResetPolicy, LiveTransitionOperation, LiveTransitionResolutionMode, LiveTransitionResult,
-    LiveTransitionStatus, LiveWriter, LocalFileRelation, LogicalChange, RangeSource, WorkflowKind,
-    WorkflowReport,
+    LiveTransitionStatus, LiveWriter, LocalFileRelation, RangeSource,
 };
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -42,6 +41,8 @@ use super::super::session::SessionState;
 use super::super::state::ReaderValue;
 use super::convert;
 use super::lifecycle;
+use super::lifecycle::durability_outcome;
+use super::workflow::workflow_report;
 use super::lifecycle_live;
 use super::reader;
 
@@ -1052,14 +1053,6 @@ fn close_writer_facts(writer: &mut LiveWriter, mut error: HandlerError) -> Handl
     error
 }
 
-fn durability_outcome(value: CommitDurability) -> &'static str {
-    match value {
-        CommitDurability::NotCommitted => "not_committed",
-        CommitDurability::Committed => "committed",
-        CommitDurability::OutcomeUnknown => "outcome_unknown",
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Result conversions
 // ---------------------------------------------------------------------------
@@ -1147,29 +1140,6 @@ fn commit_resolution_result(result: &CommitResolutionResult) -> Value {
     })
 }
 
-fn workflow_report(report: &WorkflowReport) -> Value {
-    json!({
-        "workflow": workflow_kind(report.workflow),
-        "logical_change": logical_change(report.logical_change),
-        "input_record_count": report.input_record_count.to_string(),
-        "input_normalized_interval_count": report.input_normalized_interval_count.to_string(),
-        "before_range_record_count": report.before_range_record_count.to_string(),
-        "after_range_record_count": report.after_range_record_count.to_string(),
-        "input_addresses": report.input_addresses.to_string(),
-        "before_addresses": report.before_addresses.to_string(),
-        "after_addresses": report.after_addresses.to_string(),
-        "unchanged_value_addresses": report.unchanged_value_addresses.to_string(),
-        "changed_value_addresses": report.changed_value_addresses.to_string(),
-        "added_addresses": report.added_addresses.to_string(),
-        "removed_addresses": report.removed_addresses.to_string(),
-        "source_feed_count": report.source_feed_count.to_string(),
-        "matched_feed_count": report.matched_feed_count.to_string(),
-        "created_feed_count": report.created_feed_count.to_string(),
-        "source_distinct_membership_count": report.source_distinct_membership_count.to_string(),
-        "translated_membership_count": report.translated_membership_count.to_string(),
-    })
-}
-
 fn file_identity_fact(identity: &iprange_livedb::validation::LocalFileIdentity) -> Value {
     lifecycle::file_identity(identity).unwrap_or_else(|error| json!({"error": error.message}))
 }
@@ -1235,24 +1205,6 @@ fn commit_resolution(value: CommitResolution) -> &'static str {
         CommitResolution::NotCommitted => "not_committed",
         CommitResolution::SupersededUnknown => "superseded_unknown",
         CommitResolution::Unresolvable => "unresolvable",
-    }
-}
-
-fn workflow_kind(value: WorkflowKind) -> &'static str {
-    match value {
-        WorkflowKind::CreateFeed => "create_feed",
-        WorkflowKind::ReplaceFeed => "replace_feed",
-        WorkflowKind::DirectReplacement => "direct_replacement",
-        WorkflowKind::FirstSeenRefresh => "first_seen_refresh",
-        WorkflowKind::LastSeenRefresh => "last_seen_refresh",
-        WorkflowKind::MembershipImport => "membership_import",
-    }
-}
-
-fn logical_change(value: LogicalChange) -> &'static str {
-    match value {
-        LogicalChange::Changed => "changed",
-        LogicalChange::NoChange => "unchanged",
     }
 }
 
