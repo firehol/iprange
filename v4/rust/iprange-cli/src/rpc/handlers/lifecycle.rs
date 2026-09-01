@@ -339,22 +339,23 @@ pub(crate) fn metadata_value(value: &Value) -> Result<MetadataValue, HandlerErro
 /// Read a metadata source with a hard cap, so a file that grows
 /// between the size check and the read cannot drive an unbounded heap
 /// allocation in the RPC process. Files at or below the cap read
-/// exactly; longer files are refused like the pre-check would.
-fn read_bounded(path: &str) -> std::io::Result<Vec<u8>> {
+/// exactly; longer files are refused like the pre-check would. The
+/// capacity reserves only the stat-observed length (bounded by the
+/// cap), never the full cap, so small metadata files do not reserve
+/// 20 MiB.
+fn read_bounded(path: &str, observed_len: u64) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
     let mut file = std::fs::File::open(path)?;
-    let mut bytes = Vec::with_capacity(
-        usize::try_from(iprange_livedb::MAX_METADATA_UNCOMPRESSED)
-            .unwrap_or(usize::MAX),
-    );
+    let cap = usize::try_from(iprange_livedb::MAX_METADATA_UNCOMPRESSED)
+        .unwrap_or(usize::MAX);
+    let observed = usize::try_from(observed_len).unwrap_or(cap).min(cap);
+    let mut bytes = Vec::with_capacity(observed);
     let mut chunk = [0u8; 64 * 1024];
     loop {
         let read = file.read(&mut chunk)?;
         if read == 0 {
             return Ok(bytes);
         }
-        let cap = usize::try_from(iprange_livedb::MAX_METADATA_UNCOMPRESSED)
-            .unwrap_or(usize::MAX);
         if bytes.len().saturating_add(read) > cap {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -366,7 +367,7 @@ fn read_bounded(path: &str) -> std::io::Result<Vec<u8>> {
 }
 
 fn read_file_exact(path: &str) -> Result<Vec<u8>, HandlerError> {
-    match std::fs::metadata(path) {
+    let observed_len = match std::fs::metadata(path) {
         Ok(value) if !value.is_file() => {
             return Err(HandlerError::new(
                 "invalid_path",
@@ -395,9 +396,10 @@ fn read_file_exact(path: &str) -> Result<Vec<u8>, HandlerError> {
                 format!("inspect metadata source {path}: {error}"),
             ));
         }
-        Ok(_) => {}
-    }
-    read_bounded(path).map_err(|error| {
+        Ok(value) => value.len(),
+    };
+    let read = read_bounded(path, observed_len);
+    read.map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             HandlerError::new(
                 "invalid_path",

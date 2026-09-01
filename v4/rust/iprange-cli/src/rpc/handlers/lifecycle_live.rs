@@ -134,8 +134,13 @@ pub(crate) fn optional_file_identity(
     field: &str,
 ) -> Result<Option<LocalFileIdentity>, String> {
     match value {
-        Some(identity) if !identity.is_null() => decode_file_identity(identity, field).map(Some),
-        _ => Ok(None),
+        Some(identity) if identity.is_null() => {
+            return Err(format!(
+                "{field} must not be null; absent is the only absent form"
+            ));
+        }
+        Some(identity) => decode_file_identity(identity, field).map(Some),
+        None => Ok(None),
     }
 }
 
@@ -440,8 +445,14 @@ fn decode_commit_cleanup_artifact(value: &Value) -> Result<CommitCleanupArtifact
         target_commit_nonce: hex16(&artifact["target_commit_nonce"], "target_commit_nonce")?,
         committed_target_length: decimal_u64(&artifact["committed_target_length"], "committed_target_length")?,
         observed_tail_end_exclusive: match artifact.get("observed_tail_end_exclusive") {
-            Some(value) if !value.is_null() => Some(decimal_u64(value, "observed_tail_end_exclusive")?),
-            _ => None,
+            Some(value) if value.is_null() => {
+                return Err(
+                    "observed_tail_end_exclusive must not be null; absent is the only absent form"
+                        .into(),
+                );
+            }
+            Some(value) => Some(decimal_u64(value, "observed_tail_end_exclusive")?),
+            None => None,
         },
         cleanup_error: error_code_from_wire(string(&artifact["cleanup_error"], "cleanup_error")?)
             .ok_or_else(|| "cleanup_error is not a canonical SDK error name".to_string())?,
@@ -644,7 +655,10 @@ pub(crate) fn live_transition_result_from_wire(
         "live_transition_result",
     )?;
     let reset_policy = match transition.get("reset_policy") {
-        Some(value) if !value.is_null() => Some(match string(value, "reset_policy")? {
+        Some(value) if value.is_null() => {
+            return Err("reset_policy must not be null; absent is the only absent form".into());
+        }
+        Some(value) => Some(match string(value, "reset_policy")? {
             "rollback_safe" => LiveResetPolicy::RollbackSafe,
             "discard_previous" => LiveResetPolicy::DiscardPrevious,
             _ => return Err("reset_policy must be rollback_safe or discard_previous".into()),

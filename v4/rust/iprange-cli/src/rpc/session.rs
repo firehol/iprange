@@ -1,18 +1,23 @@
-//! Connection session: bounded read loop, bounded request queue,
-//! cancellation, and EOF shutdown.
+//! Connection session: reader thread, main event loop, bounded request
+//! queue, cancellation, EOF shutdown, and fatal transport failures.
 //!
-//! Model: one worker thread executes one decoded frame (a single
-//! request or a batch) at a time; additional frames wait in a channel
-//! behind a 16-request admission counter so the read loop never
-//! blocks. Per-request semantics (iprange-jsonrpc-v1.md):
+//! Model: a reader thread forwards one physical input frame at a time
+//! to the main loop as `SessionEvent::Line`; the main loop applies
+//! cancellation and queue admission; one worker thread executes one
+//! decoded frame (a single request or a batch) at a time; additional
+//! frames wait in a channel behind a 16-request admission counter so
+//! the transport never blocks. Per-request semantics
+//! (iprange-jsonrpc-v1.md):
 //! - one active request set plus at most 16 queued requests; a
 //!   request exceeding the bound fails with -32002 server_busy;
-//! - the read loop stays active while work executes so cancellation
+//! - the reader stays active while work executes so cancellation
 //!   and EOF are observed;
 //! - cancel notifications apply immediately after frame validation:
-//!   unknown or already terminal ids are ignored; queued matches are
-//!   skipped without a response; the active request set is signalled
-//!   only when it contains the cancelled id;
+//!   only ids admitted but not yet terminal (`pending`) are valid
+//!   cancellation targets, so cancelling an id never poisons a later
+//!   request that reuses it; queued matches are skipped without a
+//!   response; the active request set is signalled only when it
+//!   contains the cancelled id;
 //! - a whole frame decodes strictly before anything in it executes;
 //!   envelope failures produce one id-null error and the service
 //!   keeps serving;
@@ -22,13 +27,18 @@
 //!   oversized frame; a busy-rejected batch element stays inside its
 //!   batch response array at its original position;
 //! - stdin EOF stops acceptance, cancels queued requests, signals the
-//!   active work, waits for its factual terminal outcome, and exits 0
-//!   unless transport shutdown itself failed;
+//!   active work, waits for its factual terminal outcome, closes all
+//!   cursors and readers, and exits 0 unless transport shutdown
+//!   itself failed;
 //! - a frame over the input ceiling produces -32001 with id null and
-//!   the process closes without parsing any later bytes.
+//!   the process closes without parsing any later bytes;
+//! - broken stdout and termination signals are fatal transport
+//!   failures: the worker reports the first write error, the main
+//!   loop runs the same cancellation/handle-cleanup path as EOF, and
+//!   the process exits non-zero.
 
 use std::collections::HashSet;
-use std::io::{self, Write};
+use std::io::{self, BufRead, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -47,8 +57,20 @@ use super::state::ConnectionState;
 pub struct SessionState {
     /// Shared reader/cursor resources and their connection limits.
     pub resources: ConnectionState,
-    /// Request ids cancelled by the transport.
+    /// Request ids cancelled by the transport. Always a subset of
+    /// `pending`: ids are removed when their unit reaches its terminal
+    /// state so a reused id starts with a clean slate.
     pub cancelled: HashSet<String>,
+    /// Request ids admitted but not yet terminal; only these ids are
+    /// valid cancellation targets.
+    pending: HashSet<String>,
+    /// Set by EOF/fatal shutdown; the worker skips every unit drained
+    /// after this flag is set (queued requests are cancelled).
+    shutting_down: bool,
+    /// First worker write failure (kind + message; io::Error is not
+    /// Clone); makes the shutdown path exit non-zero when stdout broke
+    /// while draining queued units.
+    fatal_error: Option<(io::ErrorKind, String)>,
     /// Cancellation signal for the active work unit.
     pub token: Arc<CancellationToken>,
     /// Ids of the request set currently executing.
@@ -88,6 +110,25 @@ struct WorkUnit {
     batch: bool,
 }
 
+/// Events the transport threads report to the main session loop.
+#[derive(Debug)]
+enum SessionEvent {
+    /// One physical input frame (`Ok(Some)`), EOF (`Ok(None)`), or the
+    /// frame-over-input-ceiling failure (`Err(FrameTooLarge)`).
+    Line(Result<Option<Vec<u8>>, super::framing::FrameTooLarge>),
+    /// Unrecoverable transport failure: broken stdout, a termination
+    /// signal (Unix), or a signal-watcher spawn failure.
+    Fatal(io::Error),
+}
+
+/// What the main loop should do after handling one input frame.
+enum FrameAction {
+    /// Keep reading input.
+    Continue,
+    /// The frame is a transport failure: run the shutdown path.
+    Shutdown,
+}
+
 pub struct Session {
     state: Arc<Mutex<SessionState>>,
     /// Requests admitted to the channel but not yet executed.
@@ -113,6 +154,9 @@ impl Session {
             token: Arc::new(CancellationToken::new()),
             active_keys: HashSet::default(),
             cancelled: HashSet::default(),
+            pending: HashSet::default(),
+            shutting_down: false,
+            fatal_error: None,
             active_request_id: None,
         }));
         Session {
@@ -125,25 +169,56 @@ impl Session {
     }
 
     /// Run the service until EOF or a fatal transport failure.
-    pub fn run<R: std::io::BufRead, W: Write + Send + 'static>(
+    ///
+    /// One reader thread forwards input frames and one worker thread
+    /// executes them; this thread runs the event loop. Termination
+    /// signals (Unix) are installed before the threads spawn.
+    pub fn run<R: BufRead + Send + 'static, W: Write + Send + 'static>(
         mut self,
-        reader: &mut LineReader<R>,
+        reader: R,
         writer: W,
     ) -> io::Result<()> {
+        let (events_tx, events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+
+        // Block SIGINT/SIGTERM in this (main) thread before the
+        // transport threads spawn so every thread inherits the mask;
+        // the watcher reports their delivery as a fatal failure.
+        signals::watch(events_tx.clone());
+
         let writer = Arc::new(Mutex::new(FrameWriter::new(writer)));
         let worker_state = Arc::clone(&self.state);
         let worker_writer = Arc::clone(&writer);
         let worker_in_flight = Arc::clone(&self.in_flight);
+        let worker_events = events_tx.clone();
         let work_rx = self.work_rx.take().expect("run once");
         let worker = std::thread::Builder::new()
             .name("iprange-jsonrpc".into())
-            .spawn(move || worker_loop(worker_state, worker_writer, worker_in_flight, work_rx))
+            .spawn(move || {
+                worker_loop(worker_state, worker_writer, worker_in_flight, work_rx, worker_events)
+            })
             .expect("spawn jsonrpc worker");
         self.worker = Some(worker);
 
+        // Never joined: it ends by itself at EOF / frame-too-large and
+        // is killed with the process on a fatal transport failure.
+        let reader_events = events_tx.clone();
+        std::thread::Builder::new()
+            .name("iprange-stdin".into())
+            .spawn(move || reader_loop(LineReader::new(reader), reader_events))
+            .expect("spawn stdin reader");
+
         loop {
-            match reader.read_line() {
+            match events_rx.recv() {
                 Err(_) => {
+                    // Unreachable while the signal watcher (Unix) or
+                    // worker holds a sender; defensive fatal.
+                    return self.fatal(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "stdin reader terminated",
+                    ));
+                }
+                Ok(SessionEvent::Fatal(err)) => return self.fatal(err),
+                Ok(SessionEvent::Line(Err(_))) => {
                     let payload = SchemaError::response(
                         None,
                         SchemaError {
@@ -151,97 +226,20 @@ impl Session {
                             message: "frame over input limit".into(),
                         },
                     );
-                    {
-                        let text = schema::encode_response_frame(&payload)
-                            .expect("constant transport error within limits");
-                        let mut w = writer.lock().unwrap();
-                        let _ = w.write_line(&text);
+                    let text = schema::encode_response_frame(&payload)
+                        .expect("constant transport error within limits");
+                    let mut w = writer.lock().unwrap();
+                    if let Err(err) = w.write_line(&text) {
+                        return self.fatal(err);
                     }
                     return self.shutdown();
                 }
-                Ok(None) => return self.shutdown(),
-                Ok(Some(line)) => {
-                    let requests = match schema::decode_frame(&line) {
-                        Ok(requests) => requests,
-                        Err(err) => {
-                            let payload = SchemaError::response(None, err);
-                            let text = schema::encode_response_frame(&payload)
-                                .expect("constant schema error within limits");
-                            let mut w = writer.lock().unwrap();
-                            w.write_line(&text)?;
-                            continue;
-                        }
-                    };
-                    let mut ordinary = Vec::new();
-                    let mut batch = false;
-                    for request in requests {
-                        if request.method == schema::CANCEL_METHOD {
-                            self.apply_cancel(&request);
-                            continue;
-                        }
-                        batch |= request.batch_index.is_some();
-                        ordinary.push(request);
-                    }
-                    if ordinary.is_empty() {
-                        continue;
-                    }
-                    if ordinary
-                        .iter()
-                        .any(|request| preflight_unanswerable_id(request))
-                    {
-                        let payload = SchemaError::response(
-                            None,
-                            SchemaError {
-                                code: schema::TRANSPORT_FRAME_TOO_LARGE,
-                                message:
-                                    "request id cannot be echoed within the response object limit"
-                                        .into(),
-                            },
-                        );
-                        let text = schema::encode_response_frame(&payload)
-                            .expect("constant transport error within limits");
-                        let mut w = writer.lock().unwrap();
-                        let _ = w.write_line(&text);
-                        return self.shutdown();
-                    }
-                    let entries = admit_frame(ordinary, &self.in_flight);
-                    if batch {
-                        // Every element answers inside one array in the
-                        // frame's order, including busy rejections.
-                        let admitted = entries.iter().filter(|e| e.occupies_queue()).count();
-                        self.work_tx
-                            .as_ref()
-                            .unwrap()
-                            .send(WorkUnit {
-                                entries,
-                                admitted,
-                                batch,
-                            })
-                            .expect("worker alive");
-                    } else {
-                        // A single request keeps the standalone frame;
-                        // a busy rejection is answered immediately and
-                        // never occupies queue capacity.
-                        match entries.first() {
-                            Some(WorkEntry::Busy(request)) => {
-                                let payload = bounded_response(busy_response(request), request);
-                                let text = schema::encode_response_frame(&payload)
-                                    .expect("bounded response within frame limit");
-                                let mut w = writer.lock().unwrap();
-                                w.write_line(&text)?;
-                            }
-                            _ => {
-                                self.work_tx
-                                    .as_ref()
-                                    .unwrap()
-                                    .send(WorkUnit {
-                                        entries,
-                                        admitted: 1,
-                                        batch,
-                                    })
-                                    .expect("worker alive");
-                            }
-                        }
+                Ok(SessionEvent::Line(Ok(None))) => return self.shutdown(),
+                Ok(SessionEvent::Line(Ok(Some(line)))) => {
+                    match handle_frame(&mut self, line, &writer) {
+                        Ok(FrameAction::Continue) => {}
+                        Ok(FrameAction::Shutdown) => return self.shutdown(),
+                        Err(err) => return self.fatal(err),
                     }
                 }
             }
@@ -249,6 +247,12 @@ impl Session {
     }
 
     /// Cancel one request id immediately after frame validation.
+    ///
+    /// Only ids that were admitted and have not reached their terminal
+    /// state (`pending`) can be cancelled: unknown and already
+    /// terminal ids are ignored, so cancelling an id never poisons a
+    /// later request that reuses it. An id in the currently executing
+    /// request set also cancels the unit's cancellation token.
     fn apply_cancel(&mut self, request: &Request) {
         let cancel_id = match request.params.get("request_id") {
             Some(Value::String(s)) => Some(format!("s:{s}")),
@@ -257,27 +261,85 @@ impl Session {
         };
         let Some(cancel_id) = cancel_id else { return };
         let mut state = self.state.lock().unwrap();
+        if !state.pending.contains(&cancel_id) {
+            return;
+        }
         state.cancelled.insert(cancel_id.clone());
         if state.active_keys.contains(&cancel_id) {
             state.token.cancel();
         }
     }
 
-    /// EOF or frame-too-large shutdown.
-    ///
-    /// Units admitted before EOF are already active/queued in the
-    /// channel; the worker drains them (each request observes its
-    /// cancellation state) so a client that sends a request and
-    /// closes stdin still receives the factual response. The token
-    /// requests cancellation of long-running SDK work.
-    fn shutdown(&mut self) -> io::Result<()> {
-        self.state.lock().unwrap().token.cancel();
-        // Close the channel so the worker exits after draining it.
+    /// Shared EOF/fatal cleanup: mark the session shutting down,
+    /// cancel the current token (the active unit's token once the
+    /// worker installed it), and close the work channel so the worker
+    /// exits after draining queued units.
+    fn begin_shutdown(&mut self) {
+        {
+            let mut s = self.state.lock().unwrap();
+            s.shutting_down = true;
+            s.token.cancel();
+        }
         self.work_tx.take();
+    }
+
+    /// EOF shutdown: stop acceptance, cancel queued units, request
+    /// cancellation of the active unit, and wait for its factual
+    /// terminal outcome.
+    ///
+    /// Exits zero unless the transport itself failed: a worker write
+    /// failure observed while draining queued units is a fatal
+    /// transport failure (broken stdout exits non-zero).
+    fn shutdown(&mut self) -> io::Result<()> {
+        self.begin_shutdown();
+        let worker_failed = if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+            self.state.lock().unwrap().fatal_error.take().map(|(kind, message)| {
+                io::Error::new(kind, message)
+            })
+        } else {
+            None
+        };
+        match worker_failed {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
+    }
+
+    /// Fatal transport failure: same cancellation and handle cleanup
+    /// as EOF, then report the failure (non-zero exit).
+    fn fatal(&mut self, err: io::Error) -> io::Result<()> {
+        self.begin_shutdown();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
-        Ok(())
+        Err(err)
+    }
+}
+
+/// Forward every physical input frame from the reader to the main loop.
+///
+/// Returns after EOF or the frame-over-ceiling failure. On a fatal
+/// transport failure it stays blocked on the input; the main loop
+/// deliberately never joins this thread and the process exits when
+/// the main function returns.
+fn reader_loop<R: BufRead>(mut reader: LineReader<R>, events: Sender<SessionEvent>) {
+    loop {
+        match reader.read_line() {
+            Ok(Some(line)) => {
+                if events.send(SessionEvent::Line(Ok(Some(line)))).is_err() {
+                    return;
+                }
+            }
+            Ok(None) => {
+                let _ = events.send(SessionEvent::Line(Ok(None)));
+                return;
+            }
+            Err(err) => {
+                let _ = events.send(SessionEvent::Line(Err(err)));
+                return;
+            }
+        }
     }
 }
 
@@ -286,6 +348,7 @@ fn worker_loop<W: Write + Send + 'static>(
     writer: Arc<Mutex<FrameWriter<W>>>,
     in_flight: Arc<AtomicUsize>,
     rx: Receiver<WorkUnit>,
+    events: Sender<SessionEvent>,
 ) {
     while let Ok(unit) = rx.recv() {
         in_flight.fetch_sub(unit.admitted, Ordering::Relaxed);
@@ -295,10 +358,28 @@ fn worker_loop<W: Write + Send + 'static>(
             .filter(|entry| matches!(entry, WorkEntry::Execute(_)))
             .filter_map(|entry| request_key(entry.request()))
             .collect();
-        {
+        // Check-and-install in one lock scope: if shutdown lands
+        // between the check and the token install, the fresh token
+        // would escape cancellation. With one scope, either the unit
+        // observes shutting_down (queued, skipped) or the shutdown
+        // cancels the token this scope installed (active, factual).
+        let shutting_down = {
             let mut s = state.lock().unwrap();
             s.token = Arc::new(CancellationToken::new());
-            s.active_keys = keys;
+            s.active_keys = keys.clone();
+            s.shutting_down
+        };
+        if shutting_down {
+            // EOF or fatal: queued units are cancelled and produce no
+            // response; queue capacity was released above and the
+            // channel close ends the loop.
+            let mut s = state.lock().unwrap();
+            for key in &keys {
+                s.cancelled.remove(key);
+                s.pending.remove(key);
+            }
+            s.active_keys.clear();
+            continue;
         }
         let mut responses: Vec<Value> = unit
             .entries
@@ -306,7 +387,14 @@ fn worker_loop<W: Write + Send + 'static>(
             .filter_map(|entry| entry_response(&state, entry))
             .collect();
         {
+            // Terminal state: the unit's request ids are no longer
+            // cancellation targets, so a later request reusing an id
+            // starts with a clean slate.
             let mut s = state.lock().unwrap();
+            for key in &keys {
+                s.cancelled.remove(key);
+                s.pending.remove(key);
+            }
             s.active_keys.clear();
         }
         if responses.is_empty() {
@@ -322,8 +410,125 @@ fn worker_loop<W: Write + Send + 'static>(
         // frame ceiling (iprange-jsonrpc-v1.md, Framing).
         let text = schema::encode_response_frame(&payload).expect("response frame within ceiling");
         let mut w = writer.lock().unwrap();
-        w.write_line(&text).ok();
+        if let Err(err) = w.write_line(&text) {
+            // Broken stdout is a fatal transport failure: record it,
+            // report it to the main loop, and stop executing.
+            state.lock().unwrap().fatal_error = Some((err.kind(), err.to_string()));
+            let _ = events.send(SessionEvent::Fatal(err));
+            return;
+        }
     }
+}
+
+/// Decode one input frame, apply cancellation, admit requests, and
+/// queue or directly answer the resulting work unit.
+fn handle_frame<W: Write>(
+    session: &mut Session,
+    line: Vec<u8>,
+    writer: &Arc<Mutex<FrameWriter<W>>>,
+) -> io::Result<FrameAction> {
+    let requests = match schema::decode_frame(&line) {
+        Ok(requests) => requests,
+        Err(err) => {
+            let payload = SchemaError::response(None, err);
+            let text = schema::encode_response_frame(&payload)
+                .expect("constant schema error within limits");
+            let mut w = writer.lock().unwrap();
+            w.write_line(&text)?;
+            return Ok(FrameAction::Continue);
+        }
+    };
+    let mut ordinary = Vec::new();
+    let mut batch = false;
+    for request in requests {
+        if request.method == schema::CANCEL_METHOD {
+            session.apply_cancel(&request);
+            continue;
+        }
+        batch |= request.batch_index.is_some();
+        ordinary.push(request);
+    }
+    if ordinary.is_empty() {
+        return Ok(FrameAction::Continue);
+    }
+    if ordinary
+        .iter()
+        .any(|request| preflight_unanswerable_id(request))
+    {
+        let payload = SchemaError::response(
+            None,
+            SchemaError {
+                code: schema::TRANSPORT_FRAME_TOO_LARGE,
+                message: "request id cannot be echoed within the response object limit".into(),
+            },
+        );
+        let text = schema::encode_response_frame(&payload)
+            .expect("constant transport error within limits");
+        let mut w = writer.lock().unwrap();
+        w.write_line(&text)?;
+        return Ok(FrameAction::Shutdown);
+    }
+    let entries = admit_frame(ordinary, &session.in_flight);
+    mark_pending(&session.state, &entries);
+    if batch {
+        // Every element answers inside one array in the
+        // frame's order, including busy rejections.
+        let admitted = entries.iter().filter(|e| e.occupies_queue()).count();
+        session
+            .work_tx
+            .as_ref()
+            .unwrap()
+            .send(WorkUnit {
+                entries,
+                admitted,
+                batch,
+            })
+            .map_err(worker_gone)?;
+    } else {
+        // A single request keeps the standalone frame;
+        // a busy rejection is answered immediately and
+        // never occupies queue capacity.
+        match entries.first() {
+            Some(WorkEntry::Busy(request)) => {
+                let payload = bounded_response(busy_response(request), request);
+                let text = schema::encode_response_frame(&payload)
+                    .expect("bounded response within frame limit");
+                let mut w = writer.lock().unwrap();
+                w.write_line(&text)?;
+            }
+            _ => {
+                session
+                    .work_tx
+                    .as_ref()
+                    .unwrap()
+                    .send(WorkUnit {
+                        entries,
+                        admitted: 1,
+                        batch,
+                    })
+                    .map_err(worker_gone)?;
+            }
+        }
+    }
+    Ok(FrameAction::Continue)
+}
+
+/// Record every admitted Execute key as a valid cancellation target.
+fn mark_pending(state: &Arc<Mutex<SessionState>>, entries: &[WorkEntry]) {
+    let mut s = state.lock().unwrap();
+    for entry in entries {
+        if matches!(entry, WorkEntry::Execute(_)) {
+            if let Some(key) = request_key(entry.request()) {
+                s.pending.insert(key);
+            }
+        }
+    }
+}
+
+/// The worker thread ended (fatal write failure already reported);
+/// the transport cannot continue.
+fn worker_gone(_: std::sync::mpsc::SendError<WorkUnit>) -> io::Error {
+    io::Error::new(io::ErrorKind::BrokenPipe, "jsonrpc worker terminated")
 }
 
 /// Admit ordinary frame elements against the queue bound.
@@ -437,7 +642,8 @@ fn bounded_response(response: Value, request: &Request) -> Value {
         None,
         SchemaError {
             code: super::schema::TRANSPORT_FRAME_TOO_LARGE,
-            message: "response object exceeds the 65000-byte limit; request id cannot be echoed".into(),
+            message: "response object exceeds the 65000-byte limit; request id cannot be echoed"
+                .into(),
         },
     )
 }
@@ -487,6 +693,68 @@ fn execute(state: &Arc<Mutex<SessionState>>, request: &Request) -> Value {
     }
 }
 
+/// Termination-signal handling (Unix): SIGINT/SIGTERM are blocked in
+/// this thread before the transport threads spawn (threads inherit
+/// the mask); a watcher thread reports their delivery as a fatal
+/// transport failure so the process exits non-zero after the same
+/// cancellation/cleanup path as broken stdout.
+#[cfg(unix)]
+mod signals {
+    use super::SessionEvent;
+    use std::io::{self, ErrorKind};
+    use std::sync::mpsc::Sender;
+
+    /// Block SIGINT/SIGTERM and spawn the watcher. The watcher never
+    /// exits; the process terminates when the main function returns.
+    pub fn watch(events: Sender<SessionEvent>) {
+        let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
+        unsafe {
+            libc::sigemptyset(&mut set);
+            libc::sigaddset(&mut set, libc::SIGINT);
+            libc::sigaddset(&mut set, libc::SIGTERM);
+            // Blocking in the main thread before the transport threads
+            // spawn makes every thread inherit the mask.
+            libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+        }
+        let watcher_events = events.clone();
+        let watcher = std::thread::Builder::new()
+            .name("iprange-signals".into())
+            .spawn(move || loop {
+                let mut signal: libc::c_int = 0;
+                // sigwait atomically consumes the pending signal; the
+                // mask keeps it undeliverable to other threads.
+                if unsafe { libc::sigwait(&set, &mut signal) } == 0 {
+                    let _ = watcher_events.send(SessionEvent::Fatal(io::Error::new(
+                        ErrorKind::Interrupted,
+                        format!("terminated by signal {signal}"),
+                    )));
+                } else {
+                    // sigwait cannot fail for a valid blocked set on
+                    // the process's own signal mask; avoid a spin on
+                    // the impossible error path.
+                    std::thread::yield_now();
+                }
+            });
+        // A failed spawn must not silently disable signal handling.
+        if let Err(error) = watcher {
+            let _ = events.send(SessionEvent::Fatal(io::Error::new(
+                ErrorKind::Other,
+                format!("signal watcher spawn failed: {error}"),
+            )));
+        }
+    }
+}
+
+/// No termination-signal watcher on non-Unix platforms.
+#[cfg(not(unix))]
+mod signals {
+    use super::SessionEvent;
+    use std::sync::mpsc::Sender;
+
+    /// No-op: termination handling is Unix-only.
+    pub fn watch(_events: Sender<SessionEvent>) {}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -498,6 +766,15 @@ mod tests {
             method: "iprange.v1.system.describe".to_owned(),
             params: json!({}),
             batch_index: index,
+        }
+    }
+
+    fn cancel_request(id: &str) -> Request {
+        Request {
+            id: None,
+            method: schema::CANCEL_METHOD.into(),
+            params: json!({"request_id": id}),
+            batch_index: None,
         }
     }
 
@@ -522,6 +799,114 @@ mod tests {
             .collect()
     }
 
+    /// Writer that appends to a shared buffer (thread-safe capture).
+    #[derive(Clone)]
+    struct SharedVec(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for SharedVec {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Writer whose every write fails like stdout on a broken pipe.
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "broken pipe"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// Reader that yields one frame and then blocks forever,
+    /// simulating a client that keeps stdin open without sending more.
+    struct StdinOpenReader {
+        remaining: &'static [u8],
+    }
+
+    impl std::io::Read for StdinOpenReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.remaining.is_empty() {
+                std::thread::park();
+                return Ok(0);
+            }
+            let n = self.remaining.len().min(buf.len());
+            buf[..n].copy_from_slice(&self.remaining[..n]);
+            Ok(n)
+        }
+    }
+
+    impl std::io::BufRead for StdinOpenReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if self.remaining.is_empty() {
+                std::thread::park();
+            }
+            Ok(self.remaining)
+        }
+        fn consume(&mut self, amt: usize) {
+            self.remaining = &self.remaining[amt..];
+        }
+    }
+
+    /// Reader that delivers one frame, then waits until the worker's
+    /// response appears on the shared output before reporting EOF.
+    /// Makes the EOF shutdown deterministic: the unit is complete
+    /// before shutdown starts, so the worker is between units when
+    /// EOF lands and the response is always written.
+    struct ResponseAwareReader {
+        input: &'static [u8],
+        delivered: bool,
+        output: Arc<Mutex<Vec<u8>>>,
+        marker: &'static [u8],
+    }
+
+    impl std::io::Read for ResponseAwareReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            // LineReader only uses fill_buf/consume; implement Read for
+            // the BufRead supertrait as a passthrough.
+            let data = self.fill_buf()?.to_vec();
+            let n = data.len().min(buf.len());
+            buf[..n].copy_from_slice(&data[..n]);
+            self.consume(n);
+            Ok(n)
+        }
+    }
+
+    impl std::io::BufRead for ResponseAwareReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if !self.delivered {
+                self.delivered = true;
+                return Ok(self.input);
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let seen = {
+                    let output = self.output.lock().unwrap();
+                    output
+                        .windows(self.marker.len())
+                        .any(|window| window == self.marker)
+                };
+                if seen {
+                    return Ok(&[]);
+                }
+                if std::time::Instant::now() > deadline {
+                    panic!("test reader: worker response never appeared");
+                }
+                std::thread::yield_now();
+            }
+        }
+        fn consume(&mut self, amt: usize) {
+            self.input = &self.input[amt..];
+        }
+    }
+
     #[test]
     fn arbitrary_precision_numeric_ids_cancel_like_any_other_id() {
         // request_id may be any integral JSON number; the cancel key must
@@ -530,7 +915,10 @@ mod tests {
         // 2**100 as a JSON number literal: serde_json arbitrary_precision
         // preserves the exact text.
         let big = json!(1267650600228229401496703205376u128);
+        let key = format!("n:{big}");
         let mut session = Session::new();
+        // A cancel is only valid for an admitted (pending) id.
+        session.state.lock().unwrap().pending.insert(key.clone());
         let cancel = Request {
             id: Some(RequestId::String("c".into())),
             method: schema::CANCEL_METHOD.into(),
@@ -539,9 +927,51 @@ mod tests {
         };
         session.apply_cancel(&cancel);
         let state = session.state.lock().unwrap();
-        assert_eq!(state.cancelled.len(), 1);
-        let key = format!("n:{big}");
         assert!(state.cancelled.contains(&key), "missing cancel key {key:?}");
+    }
+
+    #[test]
+    fn unknown_cancel_id_does_not_poison_a_later_request() {
+        // A cancel for an id that was never admitted is ignored; a
+        // later request reusing the id still executes and responds.
+        let mut session = Session::new();
+        session.apply_cancel(&cancel_request("a"));
+        assert!(session.state.lock().unwrap().cancelled.is_empty());
+
+        let state = session.state.clone();
+        let response = entry_response(&state, &WorkEntry::Execute(request("a", None)));
+        assert!(
+            response.is_some(),
+            "later request with the same id was poisoned by an ignored cancel"
+        );
+    }
+
+    #[test]
+    fn admitted_cancel_id_omits_the_queued_response() {
+        // Read loop admitted the request (pending) and a cancel arrived
+        // before the worker picked it up: the response is omitted.
+        let mut session = Session::new();
+        session.state.lock().unwrap().pending.insert("s:a".to_owned());
+        session.apply_cancel(&cancel_request("a"));
+        let response = entry_response(&session.state, &WorkEntry::Execute(request("a", None)));
+        assert!(response.is_none());
+    }
+
+    #[test]
+    fn cancel_after_terminal_state_is_ignored() {
+        // The worker prunes both sets when a unit reaches its terminal
+        // state; a cancel for the same id afterwards is ignored, so a
+        // freshly admitted reuse of the id cannot be dropped.
+        let mut session = Session::new();
+        session.state.lock().unwrap().pending.insert("s:a".to_owned());
+        session.apply_cancel(&cancel_request("a"));
+        {
+            let mut s = session.state.lock().unwrap();
+            s.pending.remove("s:a");
+            s.cancelled.remove("s:a");
+        }
+        session.apply_cancel(&cancel_request("a"));
+        assert!(session.state.lock().unwrap().cancelled.is_empty());
     }
 
     #[test]
@@ -644,7 +1074,11 @@ mod tests {
     #[test]
     fn cancelled_batch_member_is_omitted_from_the_array() {
         let state = Arc::new(Mutex::new(SessionState::default()));
-        state.lock().unwrap().cancelled.insert("s:a".to_owned());
+        {
+            let mut s = state.lock().unwrap();
+            s.pending.insert("s:a".to_owned());
+            s.cancelled.insert("s:a".to_owned());
+        }
         let work = unit(
             vec![
                 WorkEntry::Execute(request("a", Some(0))),
@@ -733,5 +1167,95 @@ mod tests {
         assert_eq!(bounded["error"]["data"]["outcome"], json!("not_started"));
         assert!(bounded["error"]["data"].get("details").is_none());
         assert!(schema::encode_response_object(&bounded).is_ok());
+    }
+
+    #[test]
+    fn eof_shutdown_skips_queued_units() {
+        let (work_tx, work_rx) = std::sync::mpsc::channel::<WorkUnit>();
+        let state = Arc::new(Mutex::new(SessionState {
+            shutting_down: true,
+            ..SessionState::default()
+        }));
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
+        let in_flight = Arc::new(AtomicUsize::new(3));
+        let (events_tx, _events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+
+        for id in ["a", "b", "c"] {
+            work_tx
+                .send(unit(vec![WorkEntry::Execute(request(id, None))], false))
+                .unwrap();
+        }
+        drop(work_tx);
+
+        worker_loop(state, writer, in_flight.clone(), work_rx, events_tx);
+
+        assert!(
+            output.lock().unwrap().is_empty(),
+            "queued units must not respond after EOF"
+        );
+        assert_eq!(
+            in_flight.load(Ordering::Relaxed),
+            0,
+            "queue capacity must be released for skipped units"
+        );
+    }
+
+    #[test]
+    fn worker_write_failure_sends_fatal_and_stops() {
+        let (work_tx, work_rx) = std::sync::mpsc::channel::<WorkUnit>();
+        let state = Arc::new(Mutex::new(SessionState::default()));
+        let writer = Arc::new(Mutex::new(FrameWriter::new(FailingWriter)));
+        let in_flight = Arc::new(AtomicUsize::new(2));
+        let (events_tx, events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+
+        work_tx
+            .send(unit(vec![WorkEntry::Execute(request("a", None))], false))
+            .unwrap();
+        work_tx
+            .send(unit(vec![WorkEntry::Execute(request("b", None))], false))
+            .unwrap();
+        drop(work_tx);
+
+        worker_loop(state, writer, in_flight.clone(), work_rx, events_tx);
+
+        match events_rx.recv().unwrap() {
+            SessionEvent::Fatal(err) => assert_eq!(err.kind(), io::ErrorKind::BrokenPipe),
+            other => panic!("expected Fatal, got {other:?}"),
+        }
+        assert_eq!(
+            in_flight.load(Ordering::Relaxed),
+            1,
+            "the unit after the write failure must not be drained"
+        );
+    }
+
+    #[test]
+    fn broken_stdout_exits_nonzero_through_the_fatal_path() {
+        // The client keeps stdin open; the worker's first write fails
+        // and the main loop turns it into a fatal exit.
+        let reader = StdinOpenReader {
+            remaining:
+                b"{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n",
+        };
+        let session = Session::new();
+        let err = session.run(reader, FailingWriter).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn eof_after_one_request_answers_it_and_exits_zero() {
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = ResponseAwareReader {
+            input:
+                b"{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n",
+            delivered: false,
+            output: output.clone(),
+            marker: b"\"id\":\"1\"",
+        };
+        let session = Session::new();
+        session.run(reader, SharedVec(output.clone())).unwrap();
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(text.contains("\"id\":\"1\""), "unexpected output: {text}");
     }
 }

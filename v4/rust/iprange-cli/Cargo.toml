@@ -14,6 +14,10 @@ serde_json = { version = "=1.0.151", features = ["arbitrary_precision"] }
 getrandom = { version = "=0.3.4", features = ["std"] }
 sha2 = "=0.10.9"
 
+[target.'cfg(unix)'.dependencies]
+# Signals for the JSON-RPC transport (SIGINT/SIGTERM fatal path).
+libc = "0.2.186"
+
 [[bin]]
 name = "iprange"
 path = "src/main.rs"

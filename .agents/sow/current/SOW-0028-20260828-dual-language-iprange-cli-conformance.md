@@ -990,6 +990,77 @@ Open decisions:
   (671 tests, incl. two new workflow merge tests); runner 30 cases /
   15 oracle checks; golden 53; sensitivity 13 modes; Go suite green.
 
+### 2026-09-02 — round 9: glm-5.3-responses whole-milestone review (FAIL) and fix wave
+
+- The mandated glm-5.3-responses final review of SOW-0028 milestone 1 at
+  3dc1b754 returned FAIL. All recorded gates were verified genuine; the
+  review found defect classes the five own-model scopes had missed.
+  Every finding below is fixed in this round; gates re-run green on the
+  converged tree (workspace 683 tests / 0 failures, -D warnings clean,
+  runner 30/15, golden 53, sensitivity 13, Go green, source graph 491).
+- P1 transport (session.rs, one event-loop rework):
+  1. Cancel with an unknown id permanently poisoned that request id for
+     later requests; cancellation now tracks only admitted pending ids
+     and prunes them at the terminal state.
+  2. stdin EOF did not cancel queued requests (a fresh token replaced
+     the cancelled one per unit); a shutting_down state now skips
+     queued units while the active one completes factually.
+  3. Broken stdout was ignored (writes discarded); write failures now
+     raise a Fatal transport event that runs the EOF-equivalent
+     cancellation/cleanup path and exits non-zero.
+  4. No termination-signal handling existed; SIGINT/SIGTERM now feed the
+     same Fatal path via a libc sigwait watcher (cfg(unix), libc dep
+     added target-gated).
+- P1 history.project wire contradiction (spec permits 4096 windows; a
+  complete inline report cannot fit the 65,000-byte response object; a
+  valid request committed then was misreported as
+  output_limit/read_only_failure dropping commit facts). Fixed with the
+  swarm-adjudicated option A: a pre-mutation worst-case preflight
+  (algebra.rs preflight_response/preflight_history_result, real feed
+  names, longest encodings, echoed request id) refuses with
+  output_limit/not_started before any writer is opened; the spec now
+  states the general refusal rule for mutating methods and names
+  history.project and algebra.publish (same class: its result scales
+  with the live-source count after the destination is published) as
+  current instances; read-only methods keep the legal post-hoc bound.
+  The projection-report file/cursor option is tracked in pending
+  SOW-0031 instead of being implemented now.
+- P1 full-IPv6 export cardinality: export address accumulation used a
+  saturating u128, reporting 2^128-1 for ::/0; it now accumulates
+  Cardinality129 exactly (ranges/netset serialize the exact decimal;
+  legacy-binary refuses full-IPv6 up front because the released v6
+  header stores unique-ips in u128) with a regression test.
+- P2 wire strictness: optional evidence members accepted as JSON null
+  across publication/lifecycle/resolution decoders; present-but-null is
+  now rejected everywhere (absence is the only absent form), pinned by
+  unit tests. The Python result schemas accepted invalid vocabulary
+  and opaque shapes (e.g. publication "banana"); results.py now
+  enumerates every normative enum (publication, destination_content,
+  later_canonical, access policies, live lineage, durability, close and
+  abort outcomes, workflow kinds, meta selection, artifact kinds,
+  housekeeping states/roles/presence) and recursively types cleanup,
+  coordination_cleanup, housekeeping, and commit artifacts; the
+  commit.resolve param schema is the strict COMMIT_RESULT (golden and
+  live.lifecycle case corrected to the complete commit_result the
+  decoder already required).
+- P2 arg parsing: `--jsonrpc` mixed with other arguments fell back to
+  the legacy stub; it now fails startup with exit 1 before legacy
+  dispatch.
+- P2 factual-close gaps: first-seen removal-collector creation failure
+  after writer open now closes the writer and reports writer_close;
+  export double fault (export and source-close failures together) now
+  merges the close fact into the export error details.
+- P2 performance: export selection uniqueness is HashSet-based;
+  per-row/per-segment export allocations eliminated (ExportValue::Feeds
+  is Arc<[String]>; structured-CSV quoting reuses one caller-owned
+  scratch buffer); reader.lookup uses the SDK point membership query
+  instead of one catalog scan per address; read_bounded reserves only
+  the observed file length (cap retained).
+- P3: fail_if_exists export publishes remove the private temporary
+  before the directory sync; the io domain sweep found no further
+  request-scaled mutating inline results (recover writes its report to
+  a file; read-only methods keep the post-hoc bound legally).
+
 ### 2026-09-01 (continued) — complete handler registry
 
 - All 32 remaining v1 methods implemented by three parallel workers and

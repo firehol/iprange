@@ -244,7 +244,12 @@
         "commit_result": {
           "attempted_database_id": "$CAPTURE/commit.attempted_database_id",
           "attempted_transaction_id": "$CAPTURE/commit.attempted_transaction_id",
-          "attempted_commit_nonce": "$CAPTURE/commit.attempted_commit_nonce"
+          "attempted_commit_nonce": "$CAPTURE/commit.attempted_commit_nonce",
+          "directory_identity": "$CAPTURE/commit.directory_identity",
+          "main_identity": "$CAPTURE/commit.main_identity",
+          "durability": "$CAPTURE/commit.durability",
+          "cleanup": "$CAPTURE/commit.cleanup",
+          "coordination_cleanup": "$CAPTURE/commit.coordination_cleanup"
         }
       },
       "expect_error": {

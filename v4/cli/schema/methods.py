@@ -635,7 +635,7 @@ _register("iprange.v1.commit.resolve", {
     "type": "object",
     "properties": {
         "path": C.PATH,
-        "commit_result": {"type": "object"},
+        "commit_result": results.COMMIT_RESULT,
         "mode": {"type": "string", "enum": ["live", "immutable"]},
     },
     "required": ["path", "commit_result", "mode"],

@@ -6,15 +6,16 @@
 //! writer enforces the caller's row/byte budgets before each row, so
 //! prefix or per-address expansion refuses instead of exploding.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::Path;
+use std::sync::Arc;
 
 use iprange_livedb::publication::PublicationPolicy;
 use iprange_livedb::recovery::{inspect_recovery_candidates, RecoveryInspectionMode};
 use iprange_livedb::validation::{LocalFileIdentity, ValidationBudget};
 use iprange_livedb::{
-    AddressFamily, CancellationToken, FeedEntry, FeedName, ImmutableReader, LiveReader,
-    RangeDirection,
+    AddressFamily, CancellationToken, Cardinality129, FeedEntry, FeedName, ImmutableReader,
+    LiveReader, RangeDirection,
 };
 use serde_json::{json, Value};
 
@@ -26,7 +27,7 @@ use super::reader::{
     read_error, sdk, u64_string, validate_path,
 };
 use crate::io::export_writer::{
-    emit_ipset, emit_netset, legacy_binary_header,
+    emit_ipset, emit_netset, inclusive_span as span_of, legacy_binary_header,
     legacy_binary_min_header_bytes, legacy_binary_record_v4, legacy_binary_record_v6, push_address,
     push_json_string, push_ranges_line, write_json_value, ExportBudget, ExportFacts, ExportWriter,
     PrefixFilter, LEGACY_ENDIANNESS_MARKER,
@@ -47,11 +48,15 @@ enum ExportView {
 }
 
 /// Semantic row value carried through the row format encoders.
+///
+/// Feed sets are shared with `Arc` so each emitted segment clones only
+/// a reference-count bump instead of allocating the feed-name array;
+/// `PartialEq` compares contents, keeping equal-value merging identical.
 #[derive(Clone, Debug, PartialEq)]
 enum ExportValue {
     Direct(u32),
     Structured(Value),
-    Feeds(Vec<String>),
+    Feeds(Arc<[String]>),
 }
 
 type SegmentSink<'a> = dyn FnMut(u128, u128, ExportValue) -> Result<(), HandlerError> + 'a;
@@ -178,7 +183,31 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
     // export failure; a completed export below must also survive a
     // close failure with both facts preserved.
     let close_result = close_ephemeral_source(&mut reader);
-    let completed = export_result?;
+    let completed = match export_result {
+        Ok(completed) => completed,
+        Err(mut export_error) => {
+            // The export and the source close both failed: keep the
+            // export error primary and merge the close failure's
+            // factual source_close into its details (double-fault
+            // pattern, algebra.rs collect_projection_facts).
+            if let Err(close_error) = close_result {
+                if let Some(mut close_details) = close_error.details {
+                    if let Some(close_fact) = close_details
+                        .as_object_mut()
+                        .and_then(|members| members.remove("source_close"))
+                    {
+                        let mut details =
+                            export_error.details.take().unwrap_or_else(|| json!({}));
+                        if let Some(members) = details.as_object_mut() {
+                            members.insert("source_close".into(), close_fact);
+                        }
+                        export_error.details = Some(details);
+                    }
+                }
+            }
+            return Err(export_error);
+        }
+    };
     let mut result = json!({
         "method": "iprange.v1.export",
         "path": completed.facts.path,
@@ -305,7 +334,7 @@ fn export_with_reader(
                 &mut |writer, from, to| {
                     emit_ipset(from, to, host_prefix, &mut line, &mut |text| {
                         check_cancelled(&cancellation)?;
-                        writer.write_line(text, 1)
+                        writer.write_line(text, Cardinality129::from_u64(1))
                     })
                 },
             )?
@@ -378,13 +407,17 @@ fn write_rows(
     let mut writer = ExportWriter::create(destination, policy, budget)?;
     let result = (|| -> Result<(), HandlerError> {
         if !jsonl {
-            writer.write_chunk(b"from,to,value\n", 0, 0)?;
+            writer.write_chunk(b"from,to,value\n", 0, Cardinality129::ZERO)?;
         }
         // Buffer one row so adjacent equal-value segments become one
         // canonical row without retaining the stream. One line buffer
         // is reused for every row so large exports allocate no per-row
         // strings.
         let mut line = String::new();
+        // One reusable scratch for RFC-4180 quoting of structured
+        // CSV fields: a quoted row reuses this buffer instead of
+        // allocating a fresh string per row.
+        let mut quote = String::new();
         // The stream constructs one owned semantic value per segment
         // and moves it here, so merging adjacent equal-value segments
         // does not allocate: equal values drop the incoming segment,
@@ -406,6 +439,7 @@ fn write_rows(
                             pending_to,
                             &pending_value,
                             &mut line,
+                            &mut quote,
                         )?;
                         pending = Some((from, to, value));
                     }
@@ -414,7 +448,16 @@ fn write_rows(
             Ok(())
         })?;
         if let Some((from, to, value)) = pending {
-            write_row(&mut writer, host_prefix, jsonl, from, to, &value, &mut line)?;
+            write_row(
+                &mut writer,
+                host_prefix,
+                jsonl,
+                from,
+                to,
+                &value,
+                &mut line,
+                &mut quote,
+            )?;
         }
         Ok(())
     })();
@@ -429,6 +472,7 @@ fn write_row(
     to: u128,
     value: &ExportValue,
     line: &mut String,
+    quote: &mut String,
 ) -> Result<(), HandlerError> {
     let span = span_of(from, to);
     line.clear();
@@ -449,7 +493,7 @@ fn write_row(
             ExportValue::Feeds(feeds) => {
                 line.push('[');
                 let mut first = true;
-                for feed in feeds {
+                for feed in feeds.iter() {
                     if !first {
                         line.push(',');
                     }
@@ -474,7 +518,7 @@ fn write_row(
             // semicolon-joined field never needs RFC-4180 quoting.
             ExportValue::Feeds(feeds) => {
                 let mut first = true;
-                for feed in feeds {
+                for feed in feeds.iter() {
                     if !first {
                         line.push(';');
                     }
@@ -492,17 +536,17 @@ fn write_row(
                     .bytes()
                     .any(|byte| byte == b',' || byte == b'"' || byte == b'\r' || byte == b'\n');
                 if needs_quotes {
-                    let mut quoted = String::with_capacity(encoded.len() + 2);
-                    quoted.push('"');
+                    quote.clear();
+                    quote.push('"');
                     for character in encoded.chars() {
                         if character == '"' {
-                            quoted.push('"');
+                            quote.push('"');
                         }
-                        quoted.push(character);
+                        quote.push(character);
                     }
-                    quoted.push('"');
+                    quote.push('"');
                     line.truncate(start);
-                    line.push_str(&quoted);
+                    line.push_str(quote);
                 }
             }
         }
@@ -529,7 +573,7 @@ fn write_legacy_binary(
     let record_size: u64 = if ipv6 { 32 } else { 8 };
     let minimum_header = legacy_binary_min_header_bytes(ipv6);
     let mut records = 0u64;
-    let mut addresses = 0u128;
+    let mut addresses = Cardinality129::ZERO;
     stream_coverage(reader, view, &mut |from, to| {
         check_cancelled(cancellation)?;
         records = records
@@ -556,7 +600,13 @@ fn write_legacy_binary(
                 ),
             ));
         }
-        addresses = addresses.saturating_add(span_of(from, to));
+        addresses = addresses.checked_add(span_of(from, to)).map_err(|_| {
+            HandlerError::new(
+                "output_limit",
+                "not_started",
+                "export address cardinality exceeded the exact 129-bit counter",
+            )
+        })?;
         Ok(())
     })?;
     if records == 0 {
@@ -564,7 +614,19 @@ fn write_legacy_binary(
         // destination is still atomically published as an empty file.
         return ExportWriter::create(destination, policy, budget)?.finish();
     }
-    let header = legacy_binary_header(ipv6, records, addresses);
+    // The released header parses `unique ips` into a uint128 for IPv6
+    // (src/ipset6_binary.c), so the 2^128 addresses of a full IPv6
+    // space cannot be represented exactly; refuse before writing any
+    // output instead of emitting a wrong count. IPv4's uint64 field
+    // always fits (an IPv4 export holds at most 2^32 addresses).
+    let unique_ips = u128::try_from(addresses).map_err(|_| {
+        HandlerError::new(
+            "output_limit",
+            "not_started",
+            "legacy_binary header stores unique ips as uint128; the exported full IPv6 space (340282366920938463463374607431768211456 addresses) cannot be represented exactly",
+        )
+    })?;
+    let header = legacy_binary_header(ipv6, records, unique_ips);
     let exact_bytes = header.len() as u64 + 4 + record_size * records;
     if exact_bytes > budget.max_output_bytes {
         return Err(HandlerError::new(
@@ -578,8 +640,9 @@ fn write_legacy_binary(
     }
     let mut writer = ExportWriter::create(destination, policy, budget)?;
     let result = (|| -> Result<(), HandlerError> {
-        writer.write_chunk(header.as_bytes(), 0, 0)?;
-        writer.write_chunk(&LEGACY_ENDIANNESS_MARKER, 0, 0)?;
+        writer.write_chunk(header.as_bytes(), 0, Cardinality129::ZERO)?;
+        writer
+            .write_chunk(&LEGACY_ENDIANNESS_MARKER, 0, Cardinality129::ZERO)?;
         stream_coverage(reader, view, &mut |from, to| {
             check_cancelled(cancellation)?;
             let span = span_of(from, to);
@@ -642,12 +705,6 @@ fn stream_segments(
     }
 }
 
-fn span_of(from: u128, to: u128) -> u128 {
-    // The complete IPv6 space alone exceeds the u128 counter; the
-    // frozen wire result schema models a u64 counter, so saturate.
-    to.saturating_sub(from).saturating_add(1)
-}
-
 fn check_cancelled(token: &CancellationToken) -> Result<(), HandlerError> {
     if token.is_cancelled() {
         return Err(HandlerError::new(
@@ -707,7 +764,7 @@ fn stream_segments_v4(
             require_feed(reader, name)?;
             let mut cursor =
                 view_cursor(reader.feed_range_cursor_v4(name, RangeDirection::Forward))?;
-            let value = ExportValue::Feeds(vec![name.clone()]);
+            let value = ExportValue::Feeds(Arc::from(vec![name.clone()]));
             while let Some(range) = sdk(cursor.next_range()).map_err(view_error)? {
                 sink(u128::from(range.from.0), u128::from(range.to.0), value.clone())?;
             }
@@ -737,7 +794,9 @@ fn stream_segments_v4(
                         .map_err(view_error)?
                         .map(|range| (u128::from(range.from.0), u128::from(range.to.0))))
                 },
-                &mut |from, to, names| sink(from, to, ExportValue::Feeds(names.to_vec())),
+                &mut |from, to, names| {
+                    sink(from, to, ExportValue::Feeds(Arc::from(names.to_vec())))
+                },
             )
         }
     }
@@ -775,7 +834,7 @@ fn stream_segments_v6(
             require_feed(reader, name)?;
             let mut cursor =
                 view_cursor(reader.feed_range_cursor_v6(name, RangeDirection::Forward))?;
-            let value = ExportValue::Feeds(vec![name.clone()]);
+            let value = ExportValue::Feeds(Arc::from(vec![name.clone()]));
             while let Some(range) = sdk(cursor.next_range()).map_err(view_error)? {
                 sink(range.from.to_u128(), range.to.to_u128(), value.clone())?;
             }
@@ -803,7 +862,9 @@ fn stream_segments_v6(
                         .map_err(view_error)?
                         .map(|range| (range.from.to_u128(), range.to.to_u128())))
                 },
-                &mut |from, to, names| sink(from, to, ExportValue::Feeds(names.to_vec())),
+                &mut |from, to, names| {
+                    sink(from, to, ExportValue::Feeds(Arc::from(names.to_vec())))
+                },
             )
         }
     }
@@ -1037,16 +1098,15 @@ fn validate_view(value: &Value) -> Result<(), String> {
                     if feeds.is_empty() {
                         return Err("selection.feeds must contain at least one name".into());
                     }
-                    let mut seen: Vec<&str> = Vec::new();
+                    let mut seen: HashSet<&str> = HashSet::new();
                     for feed in feeds {
                         let name = feed
                             .as_str()
                             .ok_or("each selection feed must be a string")?;
                         FeedName::new(name).map_err(|error| error.to_string())?;
-                        if seen.contains(&name) {
+                        if !seen.insert(name) {
                             return Err("selection.feeds must be unique".into());
                         }
-                        seen.push(name);
                     }
                     Ok(())
                 }
@@ -1360,7 +1420,7 @@ mod live_source_tests {
     use iprange_livedb::snapshot::{SnapshotBudget, SnapshotPublicationPolicy, SnapshotSourceMode};
     use iprange_livedb::snapshot_to;
     use iprange_livedb::{
-        create_live, AddressFamily, CancellationToken, FeedName, Ipv4Key, LiveWriter,
+        create_live, AddressFamily, CancellationToken, FeedName, Ipv4Key, Ipv6Key, LiveWriter,
         MembershipOperation, StructureKind, TransactionBudget, ValueKind, ValueTag,
     };
     use std::fs;
@@ -1417,6 +1477,48 @@ mod live_source_tests {
         let mut name = main.file_name().unwrap().to_os_string();
         name.push(".readers");
         main.with_file_name(name)
+    }
+
+    /// One live direct IPv6 database covering the complete address
+    /// space with a single range record.
+    fn live_direct_v6_full(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let main = std::env::temp_dir().join(format!(
+            "iprange-export-live-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        let token = CancellationToken::new();
+        create_live(
+            &main,
+            AddressFamily::Ipv6,
+            ValueKind::Direct,
+            StructureKind::None,
+            ValueTag::new(b"export-live").unwrap(),
+            2,
+            &token,
+        )
+        .unwrap();
+        let budget = TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 10_000,
+            max_file_growth_pages: 10_000,
+            max_open_files: 2,
+        };
+        let mut writer = LiveWriter::open(&main, budget, &token).unwrap();
+        let mut transaction = writer.begin_direct_transaction(&token).unwrap();
+        transaction
+            .assign_v6(
+                Ipv6Key::from_u128(0),
+                Ipv6Key::from_u128(u128::MAX),
+                7,
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        writer.close().unwrap();
+        main
     }
 
     #[test]
@@ -1549,5 +1651,46 @@ mod live_source_tests {
             json!({"volume": "1", "file": "2"})
         );
         assert_eq!(details["report"]["sha256"], "aa".repeat(32));
+    }
+
+    #[test]
+    fn full_ipv6_ranges_export_reports_exact_129_bit_cardinality() {
+        // A `::/0` ranges export covers 2^128 addresses, which exceeds
+        // u128; the result must carry the exact decimal, never a
+        // saturated count (binary-format-v4.md section 17).
+        let main = live_direct_v6_full("full-v6");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let destination =
+            std::env::temp_dir().join(format!("iprange-export-live-out-{unique}.ranges"));
+        let mut state = SessionState::default();
+        let result = export(
+            &mut state,
+            json!({
+                "source": {"path": main.display().to_string(), "mode": "live"},
+                "view": {"kind": "direct"},
+                "format": "ranges",
+                "destination": destination.display().to_string(),
+                "publication_policy": "fail_if_exists",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "2000",
+                    "max_open_files": 2
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["rows"], "1");
+        assert_eq!(
+            result["addresses"],
+            "340282366920938463463374607431768211456"
+        );
+        let exported = fs::read_to_string(&destination).unwrap();
+        assert_eq!(exported, "::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff\n");
+        fs::remove_file(&destination).unwrap();
+        fs::remove_file(&main).unwrap();
+        fs::remove_file(sidecar(&main)).unwrap();
     }
 }

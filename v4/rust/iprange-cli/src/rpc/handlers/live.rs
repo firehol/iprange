@@ -637,7 +637,13 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
     let mut collector = match removals {
-        Some(settings) => Some(RemovalCollector::new(settings, refresh_value)?),
+        // Collector creation is fallible and happens after the writer
+        // is open; a failure must still close the writer and report
+        // the factual close result with the error.
+        Some(settings) => match RemovalCollector::new(settings, refresh_value) {
+            Ok(collector) => Some(collector),
+            Err(error) => return Err(close_writer_facts(&mut writer, error)),
+        },
         None => None,
     };
     let outcome = match family {

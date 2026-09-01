@@ -5,8 +5,8 @@
 //!   termination, batch bounds, queue bound;
 //! - `schema`: strict envelope and response encoding, error payloads;
 //! - `dispatch`: the fixed method registry and handler resolution;
-//! - `session`: read loop, one active request plus bounded queue,
-//!   cancellation, connection-owned readers/cursors, shutdown;
+//! - `session`: reader thread, main event loop, one active request
+//!   plus bounded queue, cancellation, EOF/fatal shutdown;
 //! - `handlers`: small method-family adapters over public
 //!   `iprange-livedb` APIs.
 
@@ -25,9 +25,10 @@ use self::dispatch::HandlerError;
 pub fn run() -> i32 {
     let stdin = io::stdin();
     let stdout = io::stdout();
-    let mut reader = framing::LineReader::new(stdin.lock());
     let session = session::Session::new();
-    match session.run(&mut reader, stdout) {
+    // Stdin is Read-only; BufReader supplies the BufRead transport
+    // and is Send, so the session can move it into its reader thread.
+    match session.run(io::BufReader::new(stdin), stdout) {
         Ok(()) => 0,
         Err(err) => {
             // Startup/framing failure and unrecoverable stdout failure

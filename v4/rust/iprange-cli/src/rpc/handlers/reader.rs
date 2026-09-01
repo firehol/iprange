@@ -203,6 +203,7 @@ pub fn lookup(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
     let object = params
         .as_object()
         .ok_or_else(|| invalid("params must be an object"))?;
+    let cancellation = state.token.clone();
     let reader = reader(state, object["reader"].as_str().unwrap_or(""))?;
     let addresses = object["addresses"].as_array().cloned().unwrap_or_default();
     let info = sdk(reader.info())?;
@@ -227,16 +228,36 @@ pub fn lookup(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
                 }
             }
             ValueKind::Membership => {
-                let feeds = match point {
-                    CursorPoint::V4(value) => membership_names(
-                        reader,
-                        sdk(reader.lookup_membership_v4(Ipv4Key(value)))?.as_ref(),
-                    )?,
-                    CursorPoint::V6(value) => membership_names(
-                        reader,
-                        sdk(reader.lookup_membership_v6(Ipv6Key::from_u128(value)))?.as_ref(),
-                    )?,
-                };
+                // Point query: emit this address's matching feed names
+                // from the membership words without scanning the whole
+                // catalog for every requested address
+                // (binary-format-v4.md reader.lookup). The sink emits
+                // names in ascending catalog-index order, byte-identical
+                // to the former catalog scan.
+                let query = sdk(reader.membership_query())?;
+                let mut feeds = Vec::new();
+                match point {
+                    CursorPoint::V4(value) => {
+                        sdk(query.matching_feeds_v4(
+                            Ipv4Key(value),
+                            &mut |feed: FeedName| {
+                                feeds.push(feed.as_str().to_owned());
+                                Ok(())
+                            },
+                            &cancellation,
+                        ))?;
+                    }
+                    CursorPoint::V6(value) => {
+                        sdk(query.matching_feeds_v6(
+                            Ipv6Key::from_u128(value),
+                            &mut |feed: FeedName| {
+                                feeds.push(feed.as_str().to_owned());
+                                Ok(())
+                            },
+                            &cancellation,
+                        ))?;
+                    }
+                }
                 if !feeds.is_empty() {
                     match_value["present"] = json!(true);
                     match_value["feeds"] = json!(feeds);
@@ -252,6 +273,11 @@ pub fn lookup(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
                     }
                 };
                 if let Some(view) = view {
+                    // The SDK point query (MembershipQuery::matching_feeds_*)
+                    // opens only membership-kind databases, so an
+                    // enrichment view's threat membership cannot be
+                    // enumerated without the catalog scan; keep it (no
+                    // new public SDK API was added for this).
                     let feeds = threat_feed_names(reader, &view)?;
                     match_value["present"] = json!(true);
                     match_value.merge_enrichment(&convert::enrichment_view(&view, &feeds));
@@ -561,23 +587,6 @@ fn metadata_result(
             "delivery.mode must be inline or file",
         )),
     }
-}
-
-pub(crate) fn membership_names(
-    reader: &ReaderValue,
-    membership: Option<&iprange_livedb::MembershipView<'_>>,
-) -> Result<Vec<String>, HandlerError> {
-    let Some(membership) = membership else {
-        return Ok(Vec::new());
-    };
-    let mut feeds = Vec::new();
-    let mut cursor = sdk(reader.feed_cursor())?;
-    while let Some(entry) = sdk(cursor.next_feed())? {
-        if sdk(membership.contains_index(entry.index))? {
-            feeds.push(entry.name.as_str().to_owned());
-        }
-    }
-    Ok(feeds)
 }
 
 pub(crate) fn threat_feed_names(

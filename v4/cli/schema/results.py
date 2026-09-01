@@ -48,6 +48,89 @@ SIGNED32 = {"type": "integer", "min": -2147483648, "max": 2147483647}
 STRING = {"type": "string"}
 BOOL = {"type": "boolean"}
 
+# ---- Normative factual vocabulary (enumerated from the Rust emitters;
+# the engine rejects any other string). ----
+EMPTY_OBJECT = {"type": "object", "properties": {}, "required": [], "additional": False}
+PUBLICATION_STATUS = {"type": "string", "enum": ["not_published", "published", "outcome_unknown"]}
+DESTINATION_CONTENT = {"type": "string", "enum": ["desired", "previous", "absent", "other", "unclassified"]}
+LATER_CANONICAL = {"type": "string", "enum": ["none", "reservation_or_transition", "ready_live_sidecar"]}
+ACCESS_POLICY = {"type": "string", "enum": ["creator_only", "changed_or_unproven", "unclassified", "absent"]}
+LIVE_LINEAGE = {
+    "type": "object",
+    "properties": {"kind": {"type": "string", "enum": [
+        "same_generation_exact_bytes",
+        "same_generation_physical_bytes_changed",
+        "advanced_generation",
+    ]}},
+    "required": ["kind"],
+    "additional": False,
+}
+COMMIT_DURABILITY = {"type": "string", "enum": ["not_committed", "committed", "outcome_unknown"]}
+CLOSE_OUTCOME = {"type": "string", "enum": ["closed", "close_incomplete"]}
+ABORT_OUTCOME = {"type": "string", "enum": ["aborted", "abort_incomplete"]}
+WORKFLOW_KIND = {"type": "string", "enum": [
+    "create_feed", "replace_feed", "direct_replacement",
+    "first_seen_refresh", "last_seen_refresh", "membership_import",
+]}
+META_SELECTION = {"type": "string", "enum": ["proven_current", "sole_meta_0", "sole_meta_1"]}
+ARTIFACT_KIND = {"type": "string", "enum": [
+    "private_output", "private_reservation", "owned_coordination",
+    "authorized_scratch", "owned_main", "unpublished_main_tail",
+]}
+HOUSEKEEPING_STATE = {"type": "string", "enum": ["move_pending", "move_ambiguous", "inert", "conflict"]}
+DIRECTORY_ROLE = {"type": "string", "enum": ["destination", "scratch_directory", "main_file"]}
+ARTIFACT_PRESENCE = {"type": "string", "enum": ["absent", "present", "unclassified"]}
+COORDINATION_CLEANUP = {
+    "type": "one_of",
+    "options": [
+        EMPTY_OBJECT,
+        {"type": "object", "properties": {"kind": {"type": "string", "enum": [
+            "cleanup_guard", "retained_reader_close_required", "retained_writer_close_required",
+        ]}}, "required": ["kind"], "additional": False},
+    ],
+}
+PUBLICATION_PROBLEM = {
+    "type": "object",
+    "properties": {"code": STRING, "detail": STRING, "os_code": SIGNED32},
+    "required": ["code", "detail"],
+    "additional": False,
+}
+# A failed identity conversion degrades to {"error": message} on the wire.
+FILE_IDENTITY_OR_ERROR = {
+    "type": "one_of",
+    "options": [
+        FILE_IDENTITY,
+        {"type": "object", "properties": {"error": STRING}, "required": ["error"], "additional": False},
+    ],
+}
+# CommitCleanupArtifacts / CleanupArtifacts: empty or {artifacts: [...]}.
+COMMIT_CLEANUP_ARTIFACT = {
+    "type": "object",
+    "properties": {
+        "directory_identity": FILE_IDENTITY_OR_ERROR,
+        "main_basename": STRING,
+        "main_identity": FILE_IDENTITY_OR_ERROR,
+        "expected_database_id": HEX16,
+        "target_transaction_id": C.U64,
+        "target_commit_nonce": HEX16,
+        "committed_target_length": C.U64,
+        "observed_tail_end_exclusive": C.U64,
+        "cleanup_error": STRING,
+    },
+    "required": ["directory_identity", "main_basename", "main_identity",
+                 "expected_database_id", "target_transaction_id", "target_commit_nonce",
+                 "committed_target_length", "cleanup_error"],
+    "additional": False,
+}
+COMMIT_CLEANUP = {
+    "type": "one_of",
+    "options": [
+        EMPTY_OBJECT,
+        {"type": "object", "properties": {"artifacts": {"type": "array", "items": COMMIT_CLEANUP_ARTIFACT}},
+         "required": ["artifacts"], "additional": False},
+    ],
+}
+
 NETWORK_ENRICHMENT_VALUE = {
     "type": "object",
     "properties": {
@@ -204,7 +287,7 @@ DATABASE_INFO = {
         "page_count": C.U64,
         "range_record_count": C.U64,
         "active_feed_count": C.U64,
-        "meta_selection": STRING,
+        "meta_selection": META_SELECTION,
     },
     "required": ["address_family", "value_kind", "structure_kind", "value_tag",
                  "database_id", "transaction_id", "commit_nonce", "page_count",
@@ -220,9 +303,9 @@ COMMIT_RESULT = {
         "main_identity": FILE_IDENTITY,
         "attempted_transaction_id": C.U64,
         "attempted_commit_nonce": HEX16,
-        "durability": STRING,
-        "cleanup": OPAQUE,
-        "coordination_cleanup": OPAQUE,
+        "durability": COMMIT_DURABILITY,
+        "cleanup": COMMIT_CLEANUP,
+        "coordination_cleanup": COORDINATION_CLEANUP,
     },
     "required": ["attempted_database_id", "directory_identity", "main_identity",
                  "attempted_transaction_id", "attempted_commit_nonce", "durability",
@@ -233,10 +316,10 @@ COMMIT_RESULT = {
 CLOSE_RESULT = {
     "type": "object",
     "properties": {
-        "outcome": STRING,
-        "abort_outcome": STRING,
-        "cleanup": OPAQUE,
-        "coordination_cleanup": OPAQUE,
+        "outcome": CLOSE_OUTCOME,
+        "abort_outcome": ABORT_OUTCOME,
+        "cleanup": COMMIT_CLEANUP,
+        "coordination_cleanup": COORDINATION_CLEANUP,
     },
     "required": ["outcome", "cleanup", "coordination_cleanup"],
     "additional": False,
@@ -260,6 +343,81 @@ PREVIOUS_DESTINATION = {
     "type": "object",
     "properties": {"identity": FILE_IDENTITY, "byte_length": C.U64, "sha512": HEX64},
     "required": ["identity", "byte_length", "sha512"],
+    "additional": False,
+}
+# PublicationResult nested facts (publication_evidence.rs emitters).
+CLEANUP_ARTIFACT = {
+    "type": "object",
+    "properties": {
+        "kind": ARTIFACT_KIND,
+        "directory_role": DIRECTORY_ROLE,
+        "directory_identity": FILE_IDENTITY_OR_ERROR,
+        "basename_encoding": U16,
+        "basename": STRING,
+        "identity": FILE_IDENTITY_OR_ERROR,
+        "error": PUBLICATION_PROBLEM,
+        "creation_security": CREATION_SECURITY,
+        "unpublished_tail": {
+            "type": "object",
+            "properties": {
+                "expected_database_id": HEX16,
+                "committed_target_transaction_id": C.U64,
+                "committed_target_nonce": HEX16,
+                "committed_target_length": C.U64,
+                "observed_tail_end_exclusive": C.U64,
+            },
+            "required": ["expected_database_id", "committed_target_transaction_id",
+                         "committed_target_nonce", "committed_target_length",
+                         "observed_tail_end_exclusive"],
+            "additional": False,
+        },
+    },
+    "required": ["kind", "directory_role", "directory_identity", "basename_encoding",
+                 "basename", "error"],
+    "additional": False,
+}
+CLEANUP = {
+    "type": "one_of",
+    "options": [
+        EMPTY_OBJECT,
+        {"type": "object", "properties": {"artifacts": {"type": "array", "items": CLEANUP_ARTIFACT}},
+         "required": ["artifacts"], "additional": False},
+    ],
+}
+HOUSEKEEPING_ARTIFACT = {
+    "type": "object",
+    "properties": {
+        "state": HOUSEKEEPING_STATE,
+        "directory_role": DIRECTORY_ROLE,
+        "directory_identity": FILE_IDENTITY_OR_ERROR,
+        "basename_encoding": U16,
+        "attempt_id": HEX16,
+        "ordinal": C.U64,
+        "envelope_basename": STRING,
+        "envelope_identity": FILE_IDENTITY_OR_ERROR,
+        "source_basename": STRING,
+        "inert_basename": STRING,
+        "source_presence": ARTIFACT_PRESENCE,
+        "source_identity": FILE_IDENTITY_OR_ERROR,
+        "inert_presence": ARTIFACT_PRESENCE,
+        "inert_identity": FILE_IDENTITY_OR_ERROR,
+        "kind": ARTIFACT_KIND,
+        "creation_security": CREATION_SECURITY,
+        "selected_envelope_sequence": C.U64,
+    },
+    "required": ["state", "directory_role", "directory_identity", "basename_encoding",
+                 "attempt_id", "ordinal", "envelope_basename", "envelope_identity",
+                 "source_basename", "inert_basename", "source_presence", "inert_presence",
+                 "kind", "creation_security", "selected_envelope_sequence"],
+    "additional": False,
+}
+HOUSEKEEPING = {
+    "type": "object",
+    "properties": {
+        "state": HOUSEKEEPING_STATE,
+        "artifacts": {"type": "array", "items": HOUSEKEEPING_ARTIFACT},
+    },
+    "required": ["artifacts"],
     "additional": False,
 }
 PUBLICATION_ATTEMPT = {
@@ -294,19 +452,19 @@ PUBLICATION_RESULT = {
     "properties": {
         "attempt": PUBLICATION_ATTEMPT,
         "main_namespace_may_have_been_attempted": BOOL,
-        "publication": STRING,
-        "destination_content": STRING,
-        "later_canonical": STRING,
-        "live_lineage": OPAQUE,
+        "publication": PUBLICATION_STATUS,
+        "destination_content": DESTINATION_CONTENT,
+        "later_canonical": LATER_CANONICAL,
+        "live_lineage": LIVE_LINEAGE,
         "later_attempt_or_sidecar_id": HEX16,
         "later_selected_transaction_id": C.U64,
         "later_selected_commit_nonce": HEX16,
-        "main_access_policy": STRING,
-        "coordination_access_policy": STRING,
-        "cleanup": OPAQUE,
-        "coordination_cleanup": OPAQUE,
-        "housekeeping": OPAQUE,
-        "visible_housekeeping": OPAQUE_LIST,
+        "main_access_policy": ACCESS_POLICY,
+        "coordination_access_policy": ACCESS_POLICY,
+        "cleanup": CLEANUP,
+        "coordination_cleanup": COORDINATION_CLEANUP,
+        "housekeeping": HOUSEKEEPING,
+        "visible_housekeeping": {"type": "array", "items": HOUSEKEEPING_ARTIFACT},
     },
     "required": ["attempt", "main_namespace_may_have_been_attempted", "publication",
                  "destination_content", "later_canonical", "main_access_policy",
@@ -318,7 +476,7 @@ PUBLICATION_RESULT = {
 WORKFLOW_REPORT = {
     "type": "object",
     "properties": {
-        "workflow": STRING,
+        "workflow": WORKFLOW_KIND,
         "logical_change": C.LOGICAL_CHANGE,
         "input_record_count": C.U64,
         "input_normalized_interval_count": C.U64,

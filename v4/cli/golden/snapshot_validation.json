@@ -1,453 +1,464 @@
 {
-  "schema": "iprange-golden-v1",
-  "family": "snapshot_validation",
-  "note": "Snapshot, validation, recovery, and outcome-resolution methods.",
-  "exchanges": [
-    {
-      "request": {
-        "jsonrpc": "2.0",
-        "id": "g-snapshot",
-        "method": "iprange.v1.snapshot",
-        "params": {
-          "source": {
-            "path": "/example/feeds.iprange",
-            "mode": "immutable"
-          },
-          "destination": "/example/snap.iprange",
-          "publication_policy": "fail_if_exists",
-          "snapshot_budget": {
-            "max_heap_bytes": "16777216",
-            "max_output_pages": "512",
-            "max_open_files": 32
-          }
-        }
-      },
-      "response": {
-        "jsonrpc": "2.0",
-        "id": "g-snapshot",
-        "result": {
-          "method": "iprange.v1.snapshot",
-          "publication": {
-            "attempt": {
-              "database_id": "b0000000000000000000000000000001",
-              "transaction_id": "7",
-              "commit_nonce": "b0000000000000000000000000000003",
-              "publication_attempt_id": "b0000000000000000000000000000004",
-              "directory_identity": {
-                "volume": "1",
-                "file": "42"
-              },
-              "destination_basename_encoding": 1,
-              "destination_basename": "c25hcC5pcHJhbmdl",
-              "output_identity": {
-                "volume": "1",
-                "file": "43"
-              },
-              "output_byte_length": "512",
-              "output_sha512": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
-              "publication_policy": "fail_if_exists",
-              "reservation_identity": {
-                "volume": "1",
-                "file": "44"
-              },
-              "creation_security": {
-                "kind": 1,
-                "commitment": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
-              }
-            },
-            "main_namespace_may_have_been_attempted": true,
-            "publication": "published",
-            "destination_content": "desired",
-            "later_canonical": "none",
-            "main_access_policy": "creator_only",
-            "coordination_access_policy": "creator_only",
-            "cleanup": {},
-            "coordination_cleanup": {},
-            "housekeeping": {
-              "artifacts": []
-            },
-            "visible_housekeeping": []
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "jsonrpc": "2.0",
-        "id": "g-validate",
-        "method": "iprange.v1.validate",
-        "params": {
-          "path": "/example/db.iprange",
-          "mode": {
-            "kind": "immutable_current"
-          },
-          "validation_budget": {
-            "max_heap_bytes": "16777216",
-            "max_open_files": 32,
-            "max_scratch_bytes": "0",
-            "max_scratch_files": 0
-          },
-          "findings_output": {
-            "path": "/example/findings.jsonl",
-            "format": "jsonl",
-            "publication_policy": "replace_existing",
-            "result_budget": {
-              "max_rows": "4096",
-              "max_output_bytes": "1048576",
-              "max_open_files": 3
-            }
-          }
-        }
-      },
-      "response": {
-        "jsonrpc": "2.0",
-        "id": "g-validate",
-        "result": {
-          "method": "iprange.v1.validate",
-          "result": {
-            "valid": true,
-            "file_identity": {
-              "volume": "1",
-              "file": "42"
-            }
-          },
-          "findings": {
-            "path": "/example/findings.jsonl",
-            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-            "bytes": "1024",
-            "rows": "16"
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "jsonrpc": "2.0",
-        "id": "g-recovery.inspect",
-        "method": "iprange.v1.recovery.inspect",
-        "params": {
-          "path": "/example/db.iprange",
-          "mode": "immutable",
-          "validation_budget": {
-            "max_heap_bytes": "16777216",
-            "max_open_files": 32,
-            "max_scratch_bytes": "0",
-            "max_scratch_files": 0
-          }
-        }
-      },
-      "response": {
-        "jsonrpc": "2.0",
-        "id": "g-recovery.inspect",
-        "result": {
-          "method": "iprange.v1.recovery.inspect",
-          "source_identity": {
-            "volume": "1",
-            "file": "42"
-          },
-          "progress": {
-            "checked_unique_pages": "128",
-            "finding_count": "0",
-            "untraversable_subgraphs": "0",
-            "bounded_possible_span_addresses": "0",
-            "has_unbounded_unknown": false
-          },
-          "candidates": []
-        }
-      }
-    },
-    {
-      "request": {
-        "jsonrpc": "2.0",
-        "id": "g-recover",
-        "method": "iprange.v1.recover",
-        "params": {
-          "source_path": "/example/db.iprange",
-          "source_mode": "immutable",
-          "candidate": {
-            "label": "immutable_current"
-          },
-          "destination": "/example/recovered.iprange",
-          "recovery_budget": {
-            "max_heap_bytes": "16777216",
-            "max_output_pages": "512",
-            "max_open_files": 32,
-            "max_scratch_bytes": "0",
-            "max_scratch_files": 0
-          },
-          "report_output": {
-            "path": "/example/recovery.jsonl",
-            "format": "jsonl",
-            "publication_policy": "fail_if_exists",
-            "result_budget": {
-              "max_rows": "4096",
-              "max_output_bytes": "1048576",
-              "max_open_files": 3
-            }
-          }
-        }
-      },
-      "response": {
-        "jsonrpc": "2.0",
-        "id": "g-recover",
-        "result": {
-          "method": "iprange.v1.recover",
-          "report": {
-            "pages": {},
-            "ranges": {},
-            "catalog_entries": {},
-            "membership_entries": {},
-            "structure_entries": {},
-            "metadata_chunks": {},
-            "retirement_records": {},
-            "verified_addresses": "65536",
-            "rejected_addresses": "0",
-            "bounded_possible_span_addresses": "0",
-            "has_unbounded_unknown": false,
-            "unknown_envelopes": "0"
-          },
-          "publication": {
-            "attempt": {
-              "database_id": "b0000000000000000000000000000001",
-              "transaction_id": "7",
-              "commit_nonce": "b0000000000000000000000000000003",
-              "publication_attempt_id": "b0000000000000000000000000000005",
-              "directory_identity": {
-                "volume": "1",
-                "file": "42"
-              },
-              "destination_basename_encoding": 1,
-              "destination_basename": "cmVjb3ZlcmVkLmlwcmFuZ2U=",
-              "output_identity": {
-                "volume": "1",
-                "file": "43"
-              },
-              "output_byte_length": "640",
-              "output_sha512": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
-              "publication_policy": "fail_if_exists",
-              "reservation_identity": {
-                "volume": "1",
-                "file": "44"
-              },
-              "creation_security": {
-                "kind": 1,
-                "commitment": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
-              }
-            },
-            "main_namespace_may_have_been_attempted": true,
-            "publication": "published",
-            "destination_content": "desired",
-            "later_canonical": "none",
-            "main_access_policy": "creator_only",
-            "coordination_access_policy": "creator_only",
-            "cleanup": {},
-            "coordination_cleanup": {},
-            "housekeeping": {
-              "artifacts": []
-            },
-            "visible_housekeeping": []
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "jsonrpc": "2.0",
-        "id": "g-commit.resolve",
-        "method": "iprange.v1.commit.resolve",
-        "params": {
-          "path": "/example/db.iprange",
-          "commit_result": {
-            "attempted_database_id": "b0000000000000000000000000000001",
-            "attempted_transaction_id": "7",
-            "attempted_commit_nonce": "b0000000000000000000000000000003"
-          },
-          "mode": "live"
-        }
-      },
-      "response": {
-        "jsonrpc": "2.0",
-        "id": "g-commit.resolve",
-        "result": {
-          "method": "iprange.v1.commit.resolve",
-          "attempted_database_id": "b0000000000000000000000000000001",
-          "attempted_transaction_id": "7",
-          "attempted_commit_nonce": "b0000000000000000000000000000003",
-          "actual_directory_identity": {
-            "volume": "1",
-            "file": "42"
-          },
-          "actual_main_identity": {
-            "volume": "1",
-            "file": "42"
-          },
-          "local_file_relation": "same",
-          "resolution": "committed",
-          "cleanup": {},
-          "coordination_cleanup": {}
-        }
-      }
-    },
-    {
-      "request": {
-        "jsonrpc": "2.0",
-        "id": "g-publication.inspect",
-        "method": "iprange.v1.publication.inspect",
-        "params": {
-          "path": "/example/current.iprange"
-        }
-      },
-      "response": {
-        "jsonrpc": "2.0",
-        "id": "g-publication.inspect",
-        "result": {
-          "method": "iprange.v1.publication.inspect",
-          "inspection": {
-            "directory_identity": {
-              "volume": "1",
-              "file": "42"
-            },
-            "coordination": "absent"
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "jsonrpc": "2.0",
-        "id": "g-publication.resolve",
-        "method": "iprange.v1.publication.resolve",
-        "params": {
-          "path": "/example/current.iprange",
-          "resolution_mode": "complete",
-          "publication_result": {
-            "attempt": {
-              "database_id": "b0000000000000000000000000000001",
-              "transaction_id": "7",
-              "commit_nonce": "b0000000000000000000000000000003",
-              "publication_attempt_id": "b0000000000000000000000000000004",
-              "directory_identity": {
-                "volume": "1",
-                "file": "42"
-              },
-              "destination_basename_encoding": 1,
-              "destination_basename": "Y3VycmVudC5pcHJhbmdl",
-              "output_identity": {
-                "volume": "1",
-                "file": "43"
-              },
-              "output_byte_length": "496",
-              "output_sha512": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
-              "publication_policy": "fail_if_exists",
-              "reservation_identity": {
-                "volume": "1",
-                "file": "44"
-              },
-              "creation_security": {
-                "kind": 1,
-                "commitment": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
-              }
-            },
-            "main_namespace_may_have_been_attempted": true,
-            "publication": "published",
-            "destination_content": "desired",
-            "later_canonical": "none",
-            "main_access_policy": "creator_only",
-            "coordination_access_policy": "creator_only",
-            "cleanup": {},
-            "coordination_cleanup": {},
-            "housekeeping": {
-              "artifacts": []
-            },
-            "visible_housekeeping": []
-          }
-        }
-      },
-      "response": {
-        "jsonrpc": "2.0",
-        "id": "g-publication.resolve",
-        "result": {
-          "method": "iprange.v1.publication.resolve",
-          "publication": {
-            "attempt": {
-              "database_id": "b0000000000000000000000000000001",
-              "transaction_id": "7",
-              "commit_nonce": "b0000000000000000000000000000003",
-              "publication_attempt_id": "b0000000000000000000000000000004",
-              "directory_identity": {
-                "volume": "1",
-                "file": "42"
-              },
-              "destination_basename_encoding": 1,
-              "destination_basename": "Y3VycmVudC5pcHJhbmdl",
-              "output_identity": {
-                "volume": "1",
-                "file": "43"
-              },
-              "output_byte_length": "496",
-              "output_sha512": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
-              "publication_policy": "fail_if_exists",
-              "reservation_identity": {
-                "volume": "1",
-                "file": "44"
-              },
-              "creation_security": {
-                "kind": 1,
-                "commitment": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
-              }
-            },
-            "main_namespace_may_have_been_attempted": true,
-            "publication": "published",
-            "destination_content": "desired",
-            "later_canonical": "none",
-            "main_access_policy": "creator_only",
-            "coordination_access_policy": "creator_only",
-            "cleanup": {},
-            "coordination_cleanup": {},
-            "housekeeping": {
-              "artifacts": []
-            },
-            "visible_housekeeping": []
-          }
-        }
-      }
-    },
-    {
-      "request": {
-        "jsonrpc": "2.0",
-        "id": "g-publication.residue.remove",
-        "method": "iprange.v1.publication.residue.remove",
-        "params": {
-          "handle": {
-            "opaque": "handle"
-          }
-        }
-      },
-      "response": {
-        "jsonrpc": "2.0",
-        "id": "g-publication.residue.remove",
-        "result": {
-          "method": "iprange.v1.publication.residue.remove",
-          "removal": {
-            "directory_identity": {
-              "volume": "1",
-              "file": "42"
-            },
-            "coordination_identity": {
-              "volume": "1",
-              "file": "42"
-            },
-            "later_coordination": {},
-            "coordination_access_policy": "creator_only",
-            "cleanup": {},
-            "coordination_cleanup": {},
-            "housekeeping": {
-              "artifacts": []
-            },
-            "visible_housekeeping": []
-          }
-        }
-      }
+ "schema": "iprange-golden-v1",
+ "family": "snapshot_validation",
+ "note": "Snapshot, validation, recovery, and outcome-resolution methods.",
+ "exchanges": [
+  {
+   "request": {
+    "jsonrpc": "2.0",
+    "id": "g-snapshot",
+    "method": "iprange.v1.snapshot",
+    "params": {
+     "source": {
+      "path": "/example/feeds.iprange",
+      "mode": "immutable"
+     },
+     "destination": "/example/snap.iprange",
+     "publication_policy": "fail_if_exists",
+     "snapshot_budget": {
+      "max_heap_bytes": "16777216",
+      "max_output_pages": "512",
+      "max_open_files": 32
+     }
     }
-  ]
+   },
+   "response": {
+    "jsonrpc": "2.0",
+    "id": "g-snapshot",
+    "result": {
+     "method": "iprange.v1.snapshot",
+     "publication": {
+      "attempt": {
+       "database_id": "b0000000000000000000000000000001",
+       "transaction_id": "7",
+       "commit_nonce": "b0000000000000000000000000000003",
+       "publication_attempt_id": "b0000000000000000000000000000004",
+       "directory_identity": {
+        "volume": "1",
+        "file": "42"
+       },
+       "destination_basename_encoding": 1,
+       "destination_basename": "c25hcC5pcHJhbmdl",
+       "output_identity": {
+        "volume": "1",
+        "file": "43"
+       },
+       "output_byte_length": "512",
+       "output_sha512": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+       "publication_policy": "fail_if_exists",
+       "reservation_identity": {
+        "volume": "1",
+        "file": "44"
+       },
+       "creation_security": {
+        "kind": 1,
+        "commitment": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+       }
+      },
+      "main_namespace_may_have_been_attempted": true,
+      "publication": "published",
+      "destination_content": "desired",
+      "later_canonical": "none",
+      "main_access_policy": "creator_only",
+      "coordination_access_policy": "creator_only",
+      "cleanup": {},
+      "coordination_cleanup": {},
+      "housekeeping": {
+       "artifacts": []
+      },
+      "visible_housekeeping": []
+     }
+    }
+   }
+  },
+  {
+   "request": {
+    "jsonrpc": "2.0",
+    "id": "g-validate",
+    "method": "iprange.v1.validate",
+    "params": {
+     "path": "/example/db.iprange",
+     "mode": {
+      "kind": "immutable_current"
+     },
+     "validation_budget": {
+      "max_heap_bytes": "16777216",
+      "max_open_files": 32,
+      "max_scratch_bytes": "0",
+      "max_scratch_files": 0
+     },
+     "findings_output": {
+      "path": "/example/findings.jsonl",
+      "format": "jsonl",
+      "publication_policy": "replace_existing",
+      "result_budget": {
+       "max_rows": "4096",
+       "max_output_bytes": "1048576",
+       "max_open_files": 3
+      }
+     }
+    }
+   },
+   "response": {
+    "jsonrpc": "2.0",
+    "id": "g-validate",
+    "result": {
+     "method": "iprange.v1.validate",
+     "result": {
+      "valid": true,
+      "file_identity": {
+       "volume": "1",
+       "file": "42"
+      }
+     },
+     "findings": {
+      "path": "/example/findings.jsonl",
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "bytes": "1024",
+      "rows": "16"
+     }
+    }
+   }
+  },
+  {
+   "request": {
+    "jsonrpc": "2.0",
+    "id": "g-recovery.inspect",
+    "method": "iprange.v1.recovery.inspect",
+    "params": {
+     "path": "/example/db.iprange",
+     "mode": "immutable",
+     "validation_budget": {
+      "max_heap_bytes": "16777216",
+      "max_open_files": 32,
+      "max_scratch_bytes": "0",
+      "max_scratch_files": 0
+     }
+    }
+   },
+   "response": {
+    "jsonrpc": "2.0",
+    "id": "g-recovery.inspect",
+    "result": {
+     "method": "iprange.v1.recovery.inspect",
+     "source_identity": {
+      "volume": "1",
+      "file": "42"
+     },
+     "progress": {
+      "checked_unique_pages": "128",
+      "finding_count": "0",
+      "untraversable_subgraphs": "0",
+      "bounded_possible_span_addresses": "0",
+      "has_unbounded_unknown": false
+     },
+     "candidates": []
+    }
+   }
+  },
+  {
+   "request": {
+    "jsonrpc": "2.0",
+    "id": "g-recover",
+    "method": "iprange.v1.recover",
+    "params": {
+     "source_path": "/example/db.iprange",
+     "source_mode": "immutable",
+     "candidate": {
+      "label": "immutable_current"
+     },
+     "destination": "/example/recovered.iprange",
+     "recovery_budget": {
+      "max_heap_bytes": "16777216",
+      "max_output_pages": "512",
+      "max_open_files": 32,
+      "max_scratch_bytes": "0",
+      "max_scratch_files": 0
+     },
+     "report_output": {
+      "path": "/example/recovery.jsonl",
+      "format": "jsonl",
+      "publication_policy": "fail_if_exists",
+      "result_budget": {
+       "max_rows": "4096",
+       "max_output_bytes": "1048576",
+       "max_open_files": 3
+      }
+     }
+    }
+   },
+   "response": {
+    "jsonrpc": "2.0",
+    "id": "g-recover",
+    "result": {
+     "method": "iprange.v1.recover",
+     "report": {
+      "pages": {},
+      "ranges": {},
+      "catalog_entries": {},
+      "membership_entries": {},
+      "structure_entries": {},
+      "metadata_chunks": {},
+      "retirement_records": {},
+      "verified_addresses": "65536",
+      "rejected_addresses": "0",
+      "bounded_possible_span_addresses": "0",
+      "has_unbounded_unknown": false,
+      "unknown_envelopes": "0"
+     },
+     "publication": {
+      "attempt": {
+       "database_id": "b0000000000000000000000000000001",
+       "transaction_id": "7",
+       "commit_nonce": "b0000000000000000000000000000003",
+       "publication_attempt_id": "b0000000000000000000000000000005",
+       "directory_identity": {
+        "volume": "1",
+        "file": "42"
+       },
+       "destination_basename_encoding": 1,
+       "destination_basename": "cmVjb3ZlcmVkLmlwcmFuZ2U=",
+       "output_identity": {
+        "volume": "1",
+        "file": "43"
+       },
+       "output_byte_length": "640",
+       "output_sha512": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+       "publication_policy": "fail_if_exists",
+       "reservation_identity": {
+        "volume": "1",
+        "file": "44"
+       },
+       "creation_security": {
+        "kind": 1,
+        "commitment": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+       }
+      },
+      "main_namespace_may_have_been_attempted": true,
+      "publication": "published",
+      "destination_content": "desired",
+      "later_canonical": "none",
+      "main_access_policy": "creator_only",
+      "coordination_access_policy": "creator_only",
+      "cleanup": {},
+      "coordination_cleanup": {},
+      "housekeeping": {
+       "artifacts": []
+      },
+      "visible_housekeeping": []
+     }
+    }
+   }
+  },
+  {
+   "request": {
+    "jsonrpc": "2.0",
+    "id": "g-commit.resolve",
+    "method": "iprange.v1.commit.resolve",
+    "params": {
+     "path": "/example/db.iprange",
+     "commit_result": {
+      "attempted_database_id": "b0000000000000000000000000000001",
+      "attempted_transaction_id": "7",
+      "attempted_commit_nonce": "b0000000000000000000000000000003",
+      "directory_identity": {
+       "volume": "1",
+       "file": "2"
+      },
+      "main_identity": {
+       "volume": "1",
+       "file": "3"
+      },
+      "durability": "committed",
+      "cleanup": {},
+      "coordination_cleanup": {}
+     },
+     "mode": "live"
+    }
+   },
+   "response": {
+    "jsonrpc": "2.0",
+    "id": "g-commit.resolve",
+    "result": {
+     "method": "iprange.v1.commit.resolve",
+     "attempted_database_id": "b0000000000000000000000000000001",
+     "attempted_transaction_id": "7",
+     "attempted_commit_nonce": "b0000000000000000000000000000003",
+     "actual_directory_identity": {
+      "volume": "1",
+      "file": "42"
+     },
+     "actual_main_identity": {
+      "volume": "1",
+      "file": "42"
+     },
+     "local_file_relation": "same",
+     "resolution": "committed",
+     "cleanup": {},
+     "coordination_cleanup": {}
+    }
+   }
+  },
+  {
+   "request": {
+    "jsonrpc": "2.0",
+    "id": "g-publication.inspect",
+    "method": "iprange.v1.publication.inspect",
+    "params": {
+     "path": "/example/current.iprange"
+    }
+   },
+   "response": {
+    "jsonrpc": "2.0",
+    "id": "g-publication.inspect",
+    "result": {
+     "method": "iprange.v1.publication.inspect",
+     "inspection": {
+      "directory_identity": {
+       "volume": "1",
+       "file": "42"
+      },
+      "coordination": "absent"
+     }
+    }
+   }
+  },
+  {
+   "request": {
+    "jsonrpc": "2.0",
+    "id": "g-publication.resolve",
+    "method": "iprange.v1.publication.resolve",
+    "params": {
+     "path": "/example/current.iprange",
+     "resolution_mode": "complete",
+     "publication_result": {
+      "attempt": {
+       "database_id": "b0000000000000000000000000000001",
+       "transaction_id": "7",
+       "commit_nonce": "b0000000000000000000000000000003",
+       "publication_attempt_id": "b0000000000000000000000000000004",
+       "directory_identity": {
+        "volume": "1",
+        "file": "42"
+       },
+       "destination_basename_encoding": 1,
+       "destination_basename": "Y3VycmVudC5pcHJhbmdl",
+       "output_identity": {
+        "volume": "1",
+        "file": "43"
+       },
+       "output_byte_length": "496",
+       "output_sha512": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+       "publication_policy": "fail_if_exists",
+       "reservation_identity": {
+        "volume": "1",
+        "file": "44"
+       },
+       "creation_security": {
+        "kind": 1,
+        "commitment": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+       }
+      },
+      "main_namespace_may_have_been_attempted": true,
+      "publication": "published",
+      "destination_content": "desired",
+      "later_canonical": "none",
+      "main_access_policy": "creator_only",
+      "coordination_access_policy": "creator_only",
+      "cleanup": {},
+      "coordination_cleanup": {},
+      "housekeeping": {
+       "artifacts": []
+      },
+      "visible_housekeeping": []
+     }
+    }
+   },
+   "response": {
+    "jsonrpc": "2.0",
+    "id": "g-publication.resolve",
+    "result": {
+     "method": "iprange.v1.publication.resolve",
+     "publication": {
+      "attempt": {
+       "database_id": "b0000000000000000000000000000001",
+       "transaction_id": "7",
+       "commit_nonce": "b0000000000000000000000000000003",
+       "publication_attempt_id": "b0000000000000000000000000000004",
+       "directory_identity": {
+        "volume": "1",
+        "file": "42"
+       },
+       "destination_basename_encoding": 1,
+       "destination_basename": "Y3VycmVudC5pcHJhbmdl",
+       "output_identity": {
+        "volume": "1",
+        "file": "43"
+       },
+       "output_byte_length": "496",
+       "output_sha512": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+       "publication_policy": "fail_if_exists",
+       "reservation_identity": {
+        "volume": "1",
+        "file": "44"
+       },
+       "creation_security": {
+        "kind": 1,
+        "commitment": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+       }
+      },
+      "main_namespace_may_have_been_attempted": true,
+      "publication": "published",
+      "destination_content": "desired",
+      "later_canonical": "none",
+      "main_access_policy": "creator_only",
+      "coordination_access_policy": "creator_only",
+      "cleanup": {},
+      "coordination_cleanup": {},
+      "housekeeping": {
+       "artifacts": []
+      },
+      "visible_housekeeping": []
+     }
+    }
+   }
+  },
+  {
+   "request": {
+    "jsonrpc": "2.0",
+    "id": "g-publication.residue.remove",
+    "method": "iprange.v1.publication.residue.remove",
+    "params": {
+     "handle": {
+      "opaque": "handle"
+     }
+    }
+   },
+   "response": {
+    "jsonrpc": "2.0",
+    "id": "g-publication.residue.remove",
+    "result": {
+     "method": "iprange.v1.publication.residue.remove",
+     "removal": {
+      "directory_identity": {
+       "volume": "1",
+       "file": "42"
+      },
+      "coordination_identity": {
+       "volume": "1",
+       "file": "42"
+      },
+      "later_coordination": {},
+      "coordination_access_policy": "creator_only",
+      "cleanup": {},
+      "coordination_cleanup": {},
+      "housekeeping": {
+       "artifacts": []
+      },
+      "visible_housekeeping": []
+     }
+    }
+   }
+  }
+ ]
 }

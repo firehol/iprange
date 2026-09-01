@@ -948,11 +948,11 @@ fn reservation_remove_fields(
     let artifact_identity = identity_from_value(&entry["artifact_identity"])?;
     let attempt_id = hex16_from_value(&entry["publication_attempt_id"])?;
     if entry["evidence"].is_null() {
-        return Ok((directory, directory_identity, artifact_identity, attempt_id));
+        return Err("entry.evidence must not be null; absent is the only absent form".into());
     }
     let evidence = entry["evidence"]
         .as_object()
-        .ok_or("entry.evidence must be an object or null")?;
+        .ok_or("entry.evidence must be an object")?;
     exact_fields(evidence, &["policy", "phase", "output", "previous"])?;
     for field in ["policy", "phase"] {
         if !evidence[field].is_string() {
@@ -967,11 +967,11 @@ fn reservation_remove_fields(
     tuple_from_value(&output["tuple"])?;
     digest_from_value(&output["digest"])?;
     if evidence["previous"].is_null() {
-        return Ok((directory, directory_identity, artifact_identity, attempt_id));
+        return Err("entry.evidence.previous must not be null; absent is the only absent form".into());
     }
     let previous = evidence["previous"]
         .as_object()
-        .ok_or("entry.evidence.previous must be an object or null")?;
+        .ok_or("entry.evidence.previous must be an object")?;
     exact_fields(previous, &["identity", "digest"])?;
     identity_from_value(&previous["identity"])?;
     digest_from_value(&previous["digest"])?;
@@ -1069,9 +1069,9 @@ fn remove_directory(entry: &Map<String, Value>) -> Result<String, String> {
 
 fn tuple_from_value(value: &Value) -> Result<Option<PublicationTuple>, String> {
     if value.is_null() {
-        return Ok(None);
+        return Err("tuple must not be null; absent is the only absent form".into());
     }
-    let object = value.as_object().ok_or("tuple must be an object or null")?;
+    let object = value.as_object().ok_or("tuple must be an object")?;
     exact_fields(object, &["database_id", "transaction_id", "commit_nonce"])?;
     let database_id = hex16_from_value(&object["database_id"])?;
     let transaction_id = decimal_u64_value(&object["transaction_id"])?;
@@ -1085,9 +1085,9 @@ fn tuple_from_value(value: &Value) -> Result<Option<PublicationTuple>, String> {
 
 fn digest_from_value(value: &Value) -> Result<Option<PublicationDigest>, String> {
     if value.is_null() {
-        return Ok(None);
+        return Err("digest must not be null; absent is the only absent form".into());
     }
-    let object = value.as_object().ok_or("digest must be an object or null")?;
+    let object = value.as_object().ok_or("digest must be an object")?;
     exact_fields(object, &["byte_length", "sha512"])?;
     let byte_length = decimal_u64_value(&object["byte_length"])?;
     let sha512 = hex64_from_value(&object["sha512"])?;

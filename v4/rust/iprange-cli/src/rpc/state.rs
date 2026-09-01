@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use iprange_livedb::error::Result;
 use iprange_livedb::{
     DatabaseInfo, DirectCursorV4, DirectCursorV6, FeedCursor, FeedRangeCursorV4, FeedRangeCursorV6,
-    ImmutableReader, Ipv4Key, Ipv6Key, LiveReader, MembershipQuery, MembershipView,
+    ImmutableReader, Ipv4Key, Ipv6Key, LiveReader, MembershipQuery,
     NetworkEnrichmentV1CursorV4, NetworkEnrichmentV1CursorV6, NetworkEnrichmentV1View,
     RangeDirection, ReaderCloseResult,
 };
@@ -85,19 +85,6 @@ impl ReaderValue {
         }
     }
 
-    pub fn lookup_membership_v4(&self, address: Ipv4Key) -> Result<Option<MembershipView<'_>>> {
-        match self {
-            Self::Immutable(reader) => reader.lookup_membership_v4(address),
-            Self::Live(reader) => reader.lookup_membership_v4(address),
-        }
-    }
-
-    pub fn lookup_membership_v6(&self, address: Ipv6Key) -> Result<Option<MembershipView<'_>>> {
-        match self {
-            Self::Immutable(reader) => reader.lookup_membership_v6(address),
-            Self::Live(reader) => reader.lookup_membership_v6(address),
-        }
-    }
 
     pub fn lookup_network_enrichment_v1_v4(
         &self,

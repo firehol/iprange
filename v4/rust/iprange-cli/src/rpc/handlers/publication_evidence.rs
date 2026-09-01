@@ -194,25 +194,43 @@ pub(crate) fn decode_publication_result(value: &Value) -> Result<PublicationResu
         later_canonical: decode_later_canonical(&result["later_canonical"])?,
         live_lineage: decode_live_lineage(result.get("live_lineage"))?,
         later_attempt_or_sidecar_id: match result.get("later_attempt_or_sidecar_id") {
-            Some(value) if !value.is_null() => Some(lifecycle_live::hex16(
+            Some(value) if value.is_null() => {
+                return Err(
+                    "later_attempt_or_sidecar_id must not be null; absent is the only absent form"
+                        .into(),
+                );
+            }
+            Some(value) => Some(lifecycle_live::hex16(
                 value,
                 "later_attempt_or_sidecar_id",
             )?),
-            _ => None,
+            None => None,
         },
         later_selected_transaction_id: match result.get("later_selected_transaction_id") {
-            Some(value) if !value.is_null() => Some(lifecycle_live::decimal_u64(
+            Some(value) if value.is_null() => {
+                return Err(
+                    "later_selected_transaction_id must not be null; absent is the only absent form"
+                        .into(),
+                );
+            }
+            Some(value) => Some(lifecycle_live::decimal_u64(
                 value,
                 "later_selected_transaction_id",
             )?),
-            _ => None,
+            None => None,
         },
         later_selected_commit_nonce: match result.get("later_selected_commit_nonce") {
-            Some(value) if !value.is_null() => Some(lifecycle_live::hex16(
+            Some(value) if value.is_null() => {
+                return Err(
+                    "later_selected_commit_nonce must not be null; absent is the only absent form"
+                        .into(),
+                );
+            }
+            Some(value) => Some(lifecycle_live::hex16(
                 value,
                 "later_selected_commit_nonce",
             )?),
-            _ => None,
+            None => None,
         },
         main_access_policy: decode_access_policy(&result["main_access_policy"])?,
         coordination_access_policy: decode_access_policy(&result["coordination_access_policy"])?,
@@ -323,7 +341,10 @@ fn decode_previous_destination(
     value: Option<&Value>,
 ) -> Result<Option<PreviousDestination>, String> {
     match value {
-        Some(value) if !value.is_null() => {
+        Some(value) if value.is_null() => {
+            return Err("previous_destination must not be null; absent is the only absent form".into());
+        }
+        Some(value) => {
             let previous = lifecycle_live::object(value, "previous_destination")?;
             lifecycle_live::exact_members(
                 previous,
@@ -381,7 +402,10 @@ fn decode_later_canonical(value: &Value) -> Result<LaterCanonical, String> {
 
 fn decode_live_lineage(value: Option<&Value>) -> Result<Option<LiveLineage>, String> {
     match value {
-        Some(value) if !value.is_null() => {
+        Some(value) if value.is_null() => {
+            return Err("live_lineage must not be null; absent is the only absent form".into());
+        }
+        Some(value) => {
             let lineage = lifecycle_live::object(value, "live_lineage")?;
             lifecycle_live::exact_members(lineage, &["kind"], &[], "live_lineage")?;
             let kind = match lifecycle_live::string(&lineage["kind"], "live_lineage.kind")? {
@@ -474,7 +498,10 @@ fn decode_cleanup_artifact(value: &Value) -> Result<CleanupArtifact, String> {
 
 fn decode_unpublished_tail(value: Option<&Value>) -> Result<Option<UnpublishedTailFacts>, String> {
     match value {
-        Some(value) if !value.is_null() => {
+        Some(value) if value.is_null() => {
+            return Err("unpublished_tail must not be null; absent is the only absent form".into());
+        }
+        Some(value) => {
             let tail = lifecycle_live::object(value, "unpublished_tail")?;
             lifecycle_live::exact_members(
                 tail,
@@ -545,13 +572,16 @@ fn decode_publication_problem(value: &Value) -> Result<PublicationProblem, Strin
     )?)
     .ok_or_else(|| "error.code is not a canonical SDK error name".to_string())?;
     let os_code = match problem.get("os_code") {
-        Some(value) if !value.is_null() => Some(
+        Some(value) if value.is_null() => {
+            return Err("error.os_code must not be null; absent is the only absent form".into());
+        }
+        Some(value) => Some(
             value
                 .as_i64()
                 .and_then(|parsed| i32::try_from(parsed).ok())
                 .ok_or_else(|| "error.os_code must be a signed 32-bit integer".to_string())?,
         ),
-        _ => None,
+        None => None,
     };
     Ok(PublicationProblem::owned(
         code,
@@ -677,5 +707,40 @@ mod tests {
             decoded.live_lineage,
             Some(LiveLineage::AdvancedGeneration)
         ));
+    }
+
+    #[test]
+    fn decode_rejects_null_optionals() {
+        // Optional evidence members are absent, never null
+        // (iprange-jsonrpc-v1.md, optional fields rule).
+        let attempt = sample_attempt();
+        let result = json!({
+            "attempt": publication_attempt(&attempt).unwrap(),
+            "main_namespace_may_have_been_attempted": true,
+            "publication": "published",
+            "destination_content": "desired",
+            "later_canonical": "none",
+            "main_access_policy": "creator_only",
+            "coordination_access_policy": "absent",
+            "cleanup": {},
+            "coordination_cleanup": {},
+            "housekeeping": {"artifacts": []},
+            "visible_housekeeping": [],
+        });
+        let mut null_lineage = result.clone();
+        null_lineage["live_lineage"] = serde_json::Value::Null;
+        assert!(decode_publication_result(&null_lineage).is_err());
+
+        let mut null_later = result.clone();
+        null_later["later_attempt_or_sidecar_id"] = serde_json::Value::Null;
+        assert!(decode_publication_result(&null_later).is_err());
+
+        let mut null_transaction = result.clone();
+        null_transaction["later_selected_transaction_id"] = serde_json::Value::Null;
+        assert!(decode_publication_result(&null_transaction).is_err());
+
+        let mut null_nonce = result.clone();
+        null_nonce["later_selected_commit_nonce"] = serde_json::Value::Null;
+        assert!(decode_publication_result(&null_nonce).is_err());
     }
 }

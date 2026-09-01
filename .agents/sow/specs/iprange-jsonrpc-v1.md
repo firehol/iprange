@@ -47,6 +47,16 @@ bitmap words, allocator state, or file-backed mapping addresses.
   exceed the frame ceiling. A handler refuses an inline result with
   `output_limit` before stdout receives any part of that frame. Potentially
   larger results use bounded cursors or caller-selected output files.
+- A mutating request whose worst-case complete inline response object
+  (validated params, longest encodings of every counter and identity, real
+  request-derived counts such as window or source counts, echoed request id)
+  cannot fit the 65,000-byte object ceiling is refused with `output_limit` and
+  outcome `not_started` BEFORE any writer is opened, destination published, or
+  other mutation occurs. A committed workflow is never relabeled as a
+  read-only failure by the post-hoc response bound. Current instances:
+  `history.project` (window count) and `algebra.publish` (live-source count);
+  read-only methods may keep the post-hoc conversion because no durable fact
+  is at risk.
 - A frame over the limit produces error `-32001` with `id: null` when stdout is
   writable, then the process closes. Bytes after the limit are discarded only
   as part of process shutdown; they are never parsed as another frame.
@@ -712,7 +722,12 @@ Params:
 
 Windows contain 1 through 4096 unique names and retain addresses whose
 last-seen value is greater than the window cutoff, following the SDK contract.
-Result is complete `HistoryProjectionReport` and commit/close facts.
+Result is complete `HistoryProjectionReport` and commit/close facts. The window
+count is additionally bounded by the response-object ceiling: a request whose
+worst-case complete inline report cannot fit a 65,000-byte response object is
+refused with `output_limit` and `not_started` before any writer is opened or
+mutation occurs (the worst-case report uses the longest encodings of every
+counter and the request's real feed names).
 
 ## Query, join, and algebra methods
 

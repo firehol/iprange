@@ -380,16 +380,15 @@ fn validate_windows(value: &Value) -> Result<(), String> {
     if windows.is_empty() || windows.len() > 4096 {
         return Err("windows must contain 1 through 4096 values".into());
     }
-    let mut seen: Vec<&str> = Vec::new();
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for (index, window) in windows.iter().enumerate() {
         let object = reader::exact_object(window, &["feed", "cutoff"])
             .map_err(|error| format!("windows[{index}]: {error}"))?;
         validate_feed_name(object["feed"].as_str())?;
         let feed = object["feed"].as_str().expect("validated feed");
-        if seen.contains(&feed) {
+        if !seen.insert(feed) {
             return Err("window feed names must be unique".into());
         }
-        seen.push(feed);
         if object["cutoff"]
             .as_u64()
             .and_then(|value| u32::try_from(value).ok())
@@ -735,6 +734,14 @@ pub fn algebra_publish(state: &mut SessionState, params: Value) -> Result<Value,
         .as_object()
         .ok_or_else(|| HandlerError::invalid_params("params must be an object"))?;
     let budget = decode_algebra_budget(&object["algebra_budget"])?;
+    // The complete result carries one live-close fact per opened live
+    // source; refuse an unrepresentable request before any source is
+    // opened or the destination is published.
+    let source_count = object["sources"]
+        .as_array()
+        .map(|sources| sources.len())
+        .ok_or_else(|| HandlerError::invalid_params("sources must be an array"))?;
+    preflight_algebra_publish(state, source_count)?;
     let readers = open_sources(&object["sources"], state)?;
     let scopes = resolve_algebra_scopes(&readers, &object["sources"], state)?;
     let refs: Vec<&MembershipScope<'_>> = scopes.iter().collect();
@@ -817,6 +824,11 @@ pub fn history_project(state: &mut SessionState, params: Value) -> Result<Value,
         .map_err(HandlerError::invalid_params)?;
     let (source_path, source_mode) = source_parts(object, "last_seen")?;
     let windows = decode_windows(&object["windows"])?;
+    // The complete report grows linearly with the window count; refuse
+    // a request whose worst-case inline result cannot fit the response
+    // object ceiling BEFORE any writer is opened or mutation runs, so
+    // a committed workflow is never relabeled as a read-only failure.
+    preflight_history_result(state, &windows)?;
     let mut writer = match LiveWriter::open(path, budget, &state.token) {
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
@@ -1149,6 +1161,167 @@ fn history_projection_report(report: &HistoryProjectionReport) -> Value {
             .map(history_window_report)
             .collect::<Vec<_>>(),
     })
+}
+
+/// Bound the complete response object of a mutating method before any
+/// mutation runs. Every report scalar is either a fixed-width hex
+/// identity, a u64 decimal, or a Cardinality129 decimal; the template
+/// uses the longest encodings, the actual request-derived counts (real
+/// feed names, real source counts), full-size identities, complete
+/// cleanup/close shapes, and the echoed request id, so a response
+/// whose real report passes this template always fits the
+/// response-object ceiling. A request that cannot fit is refused with
+/// `output_limit` before any writer is opened or file is published: a
+/// committed workflow is never relabeled as a read-only failure by the
+/// defensive post-hoc bound (iprange-jsonrpc-v1.md, response ceiling).
+fn preflight_response(state: &SessionState, worst: Value) -> Result<(), HandlerError> {
+    let mut envelope = json!({"jsonrpc": "2.0", "result": worst});
+    if let Some(id) = &state.active_request_id {
+        envelope["id"] = id.as_json();
+    }
+    if super::super::schema::encode_response_object(&envelope).is_err() {
+        return Err(HandlerError::new(
+            "output_limit",
+            "not_started",
+            "request refused: the complete inline result cannot fit the 65000-byte response object",
+        ));
+    }
+    Ok(())
+}
+
+const WIDEST_U64: &str = "18446744073709551615";
+const WIDEST_129: &str = "680564733841876926926749214863536422911";
+
+fn widest_identity() -> Value {
+    json!({"volume": WIDEST_U64, "file": WIDEST_U64})
+}
+
+fn widest_close_fact() -> Value {
+    json!({
+        "outcome": "close_incomplete",
+        "cleanup": {},
+        "coordination_cleanup": {"kind": "retained_writer_close_required"},
+    })
+}
+
+fn preflight_history_result(state: &SessionState, windows: &[HistoryWindow]) -> Result<(), HandlerError> {
+    let widest_windows = windows
+        .iter()
+        .map(|window| {
+            json!({
+                "feed_name": window.feed_name.as_str(),
+                "cutoff": u32::MAX,
+                "created": true,
+                "before_interval_count": WIDEST_U64,
+                "after_interval_count": WIDEST_U64,
+                "before_addresses": WIDEST_129,
+                "after_addresses": WIDEST_129,
+                "unchanged_addresses": WIDEST_129,
+                "added_addresses": WIDEST_129,
+                "removed_addresses": WIDEST_129,
+            })
+        })
+        .collect::<Vec<_>>();
+    let identity = widest_identity();
+    let artifact = json!({
+        "directory_identity": identity,
+        "main_basename": "ffffffffffffffffffffffffffffffffffffffff",
+        "main_identity": identity,
+        "expected_database_id": convert::hex_id(&[0xff; 16]),
+        "target_transaction_id": WIDEST_U64,
+        "target_commit_nonce": convert::hex_id(&[0xff; 16]),
+        "committed_target_length": WIDEST_U64,
+        "observed_tail_end_exclusive": WIDEST_U64,
+        "cleanup_error": "io",
+        "error": {"code": "io", "detail": "x"},
+    });
+    let worst = json!({
+        "method": "iprange.v1.history.project",
+        "metadata_logical_change": "changed",
+        "writer_close": {
+            "outcome": "close_incomplete",
+            "cleanup": {"artifacts": [artifact]},
+            "coordination_cleanup": {"kind": "unlinked"},
+        },
+        "source_closes": [widest_close_fact()],
+        "commit": {
+            "attempted_database_id": convert::hex_id(&[0xff; 16]),
+            "directory_identity": identity,
+            "main_identity": identity,
+            "attempted_transaction_id": WIDEST_U64,
+            "attempted_commit_nonce": convert::hex_id(&[0xff; 16]),
+            "durability": "committed",
+            "cleanup": {"artifacts": [artifact]},
+            "coordination_cleanup": {"kind": "unlinked"},
+        },
+        "report": {
+            "logical_change": "changed",
+            "source_range_count": WIDEST_U64,
+            "source_addresses": WIDEST_129,
+            "created_feed_count": WIDEST_U64,
+            "before_interval_count": WIDEST_U64,
+            "after_interval_count": WIDEST_U64,
+            "before_addresses": WIDEST_129,
+            "after_addresses": WIDEST_129,
+            "unchanged_addresses": WIDEST_129,
+            "added_addresses": WIDEST_129,
+            "removed_addresses": WIDEST_129,
+            "windows": widest_windows,
+        },
+    });
+    preflight_response(state, worst)
+}
+
+/// `algebra.publish` commits a destination file and then reports one
+/// live-close fact per opened live source; the source count is a legal
+/// request parameter, so the complete result scales with it. Refuse an
+/// unrepresentable request before the destination is published.
+fn preflight_algebra_publish(state: &SessionState, sources: usize) -> Result<(), HandlerError> {
+    let worst = json!({
+        "method": "iprange.v1.algebra.publish",
+        "report": {
+            "source_count": WIDEST_U64,
+            "source_range_count": WIDEST_U64,
+            "joined_segment_count": WIDEST_U64,
+            "output_feed_count": WIDEST_U64,
+            "output_range_count": WIDEST_U64,
+            "output_addresses": WIDEST_129,
+        },
+        "publication": {
+            "attempt": {
+                "database_id": convert::hex_id(&[0xff; 16]),
+                "transaction_id": WIDEST_U64,
+                "commit_nonce": convert::hex_id(&[0xff; 16]),
+                "publication_attempt_id": convert::hex_id(&[0xff; 16]),
+                "directory_identity": widest_identity(),
+                "destination_basename_encoding": 65535,
+                "destination_basename": "Z2ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZg==",
+                "output_identity": widest_identity(),
+                "output_byte_length": WIDEST_U64,
+                "output_sha512": "f".repeat(128),
+                "publication_policy": "fail_if_exists",
+                "previous_destination": {
+                    "identity": widest_identity(),
+                    "byte_length": WIDEST_U64,
+                    "sha512": "e".repeat(128),
+                },
+                "reservation_identity": widest_identity(),
+                "creation_security": {"kind": 65535, "commitment": "d".repeat(64)},
+            },
+            "main_namespace_may_have_been_attempted": true,
+            "publication": "outcome_unknown",
+            "destination_content": "unclassified",
+            "later_canonical": "ready_live_sidecar",
+            "main_access_policy": "changed_or_unproven",
+            "coordination_access_policy": "unclassified",
+            "cleanup": {},
+            "coordination_cleanup": {"kind": "retained_reader_close_required"},
+            "housekeeping": {"state": "visible", "artifacts": []},
+            "visible_housekeeping": [],
+        },
+        "source_closes": vec![widest_close_fact(); sources],
+    });
+    preflight_response(state, worst)
 }
 
 fn history_window_report(report: &HistoryWindowReport) -> Value {
@@ -1898,4 +2071,55 @@ fn private_output_attempt(value: &PrivateOutputAttempt) -> Value {
 
 fn sdk<T>(result: iprange_livedb::Result<T>) -> Result<T, HandlerError> {
     result.map_err(reader::read_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn window(feed: &str, cutoff: u32) -> HistoryWindow {
+        HistoryWindow {
+            feed_name: FeedName::new(feed).expect("valid test feed"),
+            cutoff,
+        }
+    }
+
+    fn session() -> SessionState {
+        SessionState::default()
+    }
+
+    #[test]
+    fn history_preflight_accepts_small_reports() {
+        let windows = vec![window("alpha", 7), window("beta", 9)];
+        assert!(preflight_history_result(&mut session(), &windows).is_ok());
+    }
+
+    #[test]
+    fn history_preflight_refuses_unrepresentable_reports_before_mutation() {
+        // Worst-case window reports are far larger than the real ones;
+        // a request whose complete report cannot fit the response
+        // object ceiling must be refused before any writer is opened.
+        let windows = (0..2000)
+            .map(|index| window(&format!("f{index:04}"), 1))
+            .collect::<Vec<_>>();
+        match preflight_history_result(&mut session(), &windows) {
+            Err(error) => {
+                assert_eq!(error.code, "output_limit");
+                assert_eq!(error.outcome, "not_started");
+            }
+            Ok(()) => panic!("oversized history report must be refused pre-mutation"),
+        }
+    }
+
+    #[test]
+    fn algebra_publish_preflight_scales_with_source_count() {
+        assert!(preflight_algebra_publish(&session(), 1).is_ok());
+        match preflight_algebra_publish(&session(), 100_000) {
+            Err(error) => {
+                assert_eq!(error.code, "output_limit");
+                assert_eq!(error.outcome, "not_started");
+            }
+            Ok(()) => panic!("oversized publish result must be refused pre-mutation"),
+        }
+    }
 }

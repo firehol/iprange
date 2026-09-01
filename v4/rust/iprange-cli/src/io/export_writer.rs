@@ -17,6 +17,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use iprange_livedb::publication::PublicationPolicy;
+use iprange_livedb::Cardinality129;
 use sha2::{Digest, Sha256};
 
 use crate::rpc::dispatch::HandlerError;
@@ -36,7 +37,8 @@ pub(crate) struct ExportFacts {
     pub path: String,
     pub sha256: String,
     pub rows: u64,
-    pub addresses: u128,
+    /// Exact 129-bit address cardinality (binary-format-v4.md section 17).
+    pub addresses: Cardinality129,
     pub bytes: u64,
 }
 
@@ -52,8 +54,27 @@ pub(crate) struct ExportWriter {
     budget: ExportBudget,
     rows: u64,
     bytes: u64,
-    addresses: u128,
+    addresses: Cardinality129,
     digest: Sha256,
+}
+
+/// Address-count argument accepted by the export writer rows: a
+/// plain `u128` count (existing row-dump callers) or an exact
+/// `Cardinality129` (a full IPv6 space is 2^128 and needs bit 128).
+pub(crate) trait IntoAddressCount {
+    fn into_count(self) -> Cardinality129;
+}
+
+impl IntoAddressCount for u128 {
+    fn into_count(self) -> Cardinality129 {
+        Cardinality129::from_u128(self)
+    }
+}
+
+impl IntoAddressCount for Cardinality129 {
+    fn into_count(self) -> Cardinality129 {
+        self
+    }
 }
 
 impl ExportWriter {
@@ -89,17 +110,23 @@ impl ExportWriter {
             budget: *budget,
             rows: 0,
             bytes: 0,
-            addresses: 0,
+            addresses: Cardinality129::ZERO,
             digest: Sha256::new(),
         })
     }
 
     /// Append one LF-terminated row. The address delta is the exact
-    /// number of addresses the row represents, not its text length.
-    pub(crate) fn write_line(&mut self, line: &str, addresses: u128) -> Result<(), HandlerError> {
+    /// number of addresses the row represents, not its text length; it
+    /// may be a plain `u128` count (row-dump writers) or an exact
+    /// `Cardinality129` count (export spans reach 2^128 for ::/0).
+    pub(crate) fn write_line(
+        &mut self,
+        line: &str,
+        addresses: impl IntoAddressCount,
+    ) -> Result<(), HandlerError> {
         self.reserve(1, line.len() + 1)?;
-        self.emit(line.as_bytes(), 1, addresses)?;
-        self.emit(b"\n", 0, 0)?;
+        self.emit(line.as_bytes(), 1, addresses.into_count())?;
+        self.emit(b"\n", 0, Cardinality129::ZERO)?;
         Ok(())
     }
 
@@ -109,10 +136,10 @@ impl ExportWriter {
         &mut self,
         bytes: &[u8],
         rows: u64,
-        addresses: u128,
+        addresses: impl IntoAddressCount,
     ) -> Result<(), HandlerError> {
         self.reserve(rows, bytes.len())?;
-        self.emit(bytes, rows, addresses)?;
+        self.emit(bytes, rows, addresses.into_count())?;
         Ok(())
     }
 
@@ -150,10 +177,22 @@ impl ExportWriter {
         Ok(())
     }
 
-    fn emit(&mut self, bytes: &[u8], _rows: u64, addresses: u128) -> Result<(), HandlerError> {
-        // The full IPv6 space alone can exceed the u128 counter; the
-        // frozen wire schema models a u64 counter, so saturate there.
-        self.addresses = self.addresses.saturating_add(addresses);
+    fn emit(
+        &mut self,
+        bytes: &[u8],
+        _rows: u64,
+        addresses: Cardinality129,
+    ) -> Result<(), HandlerError> {
+        // Exact 129-bit accumulation: one single-family export never
+        // exceeds 2^128 (the full IPv6 space), so overflow is a
+        // counter invariant violation, never a legitimate output.
+        self.addresses = self.addresses.checked_add(addresses).map_err(|_| {
+            HandlerError::new(
+                "output_limit",
+                "not_started",
+                "export address cardinality exceeded the exact 129-bit counter",
+            )
+        })?;
         self.digest.update(bytes);
         self.file
             .write_all(bytes)
@@ -172,8 +211,13 @@ impl ExportWriter {
             PublicationPolicy::FailIfExists => {
                 // Hard-link publication is the portable no-replacement
                 // atom: the destination name appears only when complete.
+                // Remove the private temporary before the directory sync
+                // so a crash cannot leave the temporary name durable
+                // (same order as the metadata/removals publication path).
                 fs::hard_link(&self.temporary, &self.destination)
                     .map_err(|error| file_error(error, "publish export output"))?;
+                fs::remove_file(&self.temporary)
+                    .map_err(|error| file_error(error, "remove export temporary"))?;
             }
             PublicationPolicy::ReplaceExisting | PublicationPolicy::ReplaceExistingNoRollback => {
                 // rename(2) and MoveFileExW(REPLACE_EXISTING) replace
@@ -369,6 +413,19 @@ impl PrefixFilter {
     }
 }
 
+/// Exact inclusive size of one canonical `[from, to]` span.
+///
+/// The full IPv6 space is 2^128, which exceeds u128, so the span is
+/// returned as an exact 129-bit cardinality (binary-format-v4.md
+/// section 17).
+pub(crate) fn inclusive_span(from: u128, to: u128) -> Cardinality129 {
+    if from == 0 && to == u128::MAX {
+        Cardinality129::FULL_IPV6_SPACE
+    } else {
+        Cardinality129::from_u128(to.saturating_sub(from).saturating_add(1))
+    }
+}
+
 /// Write one `from-to` line; a singleton is emitted as its single
 /// address (iprange-jsonrpc-v1.md, Export: `ranges`). Reuses the
 /// caller's line buffer.
@@ -393,7 +450,7 @@ pub(crate) fn emit_netset(
     to: u128,
     filter: &PrefixFilter,
     line: &mut String,
-    emit: &mut dyn FnMut(&str, u128) -> Result<(), HandlerError>,
+    emit: &mut dyn FnMut(&str, Cardinality129) -> Result<(), HandlerError>,
 ) -> Result<(), HandlerError> {
     split_netset(0, 0, from, to, filter, line, emit)
 }
@@ -406,7 +463,7 @@ fn split_netset(
     to: u128,
     filter: &PrefixFilter,
     line: &mut String,
-    emit: &mut dyn FnMut(&str, u128) -> Result<(), HandlerError>,
+    emit: &mut dyn FnMut(&str, Cardinality129) -> Result<(), HandlerError>,
 ) -> Result<(), HandlerError> {
     let host = filter.host_prefix();
     let bits = host - prefix;
@@ -423,8 +480,7 @@ fn split_netset(
             use std::fmt::Write as _;
             let _ = write!(line, "{prefix}");
         }
-        // The full family space alone can exceed the u128 counter.
-        let span = network_end.saturating_sub(base).saturating_add(1);
+        let span = inclusive_span(base, network_end);
         return emit(line, span);
     }
     let half = base | (1u128 << (host - prefix - 1));
@@ -456,7 +512,13 @@ pub(crate) fn emit_ipset(
 
 /// The released legacy binary header. `records` are the canonical
 /// optimized records that follow; `unique_ips` is the exact address
-/// count (`uint128` decimal for IPv6).
+/// count.
+///
+/// The released header widths bound the representable cardinality:
+/// IPv4 parses `unique ips` into a uint64 (src/ipset_binary.c) and
+/// IPv6 into a uint128 (src/ipset6_binary.c). Callers must refuse
+/// values beyond those widths before building the header; the full
+/// IPv6 space (2^128) cannot be represented at all.
 pub(crate) fn legacy_binary_header(ipv6: bool, records: u64, unique_ips: u128) -> String {
     let record_size: u64 = if ipv6 { 32 } else { 8 };
     let bytes = u64::from(record_size) * records + 4;
@@ -512,7 +574,7 @@ pub(crate) fn legacy_binary_min_header_bytes(ipv6: bool) -> u64 {
 mod tests {
     use super::*;
 
-    fn lines(from: u128, to: u128, filter: &PrefixFilter) -> (Vec<String>, Vec<u128>) {
+    fn lines(from: u128, to: u128, filter: &PrefixFilter) -> (Vec<String>, Vec<Cardinality129>) {
         let mut output = Vec::new();
         let mut spans = Vec::new();
         let mut line = String::new();
@@ -530,13 +592,13 @@ mod tests {
         let filter = PrefixFilter::all(32);
         let (output, spans) = lines(0xC000_0200, 0xC000_02FF, &filter);
         assert_eq!(output, ["192.0.2.0/24"]);
-        assert_eq!(spans, [256]);
+        assert_eq!(spans, [Cardinality129::from_u64(256)]);
         let (crossing, spans) = lines(0xC000_0204, 0xC000_0207, &filter);
         assert_eq!(crossing, ["192.0.2.4/30"]);
-        assert_eq!(spans, [4]);
+        assert_eq!(spans, [Cardinality129::from_u64(4)]);
         let (single, spans) = lines(0xC000_020A, 0xC000_020A, &filter);
         assert_eq!(single, ["192.0.2.10"]);
-        assert_eq!(spans, [1]);
+        assert_eq!(spans, [Cardinality129::from_u64(1)]);
     }
 
     #[test]
@@ -544,7 +606,10 @@ mod tests {
         let minimum = PrefixFilter::min_prefix(32, 25);
         let (output, spans) = lines(0xC000_0200, 0xC000_02FF, &minimum);
         assert_eq!(output, ["192.0.2.0/25", "192.0.2.128/25"]);
-        assert_eq!(spans, [128, 128]);
+        assert_eq!(
+            spans,
+            [Cardinality129::from_u64(128), Cardinality129::from_u64(128)]
+        );
         let listed = PrefixFilter::listed(32, &[24, 32]);
         let (output, _) = lines(0xC000_0200, 0xC000_02FF, &listed);
         assert_eq!(output, ["192.0.2.0/24"]);
@@ -579,7 +644,11 @@ mod tests {
             &v6,
         );
         assert_eq!(output, ["2001:db8::/120"]);
-        assert_eq!(spans, [256]);
+        assert_eq!(spans, [Cardinality129::from_u64(256)]);
+        // The full IPv6 space is 2^128 addresses, exact 129-bit value.
+        let (full, full_spans) = lines(0, u128::MAX, &v6);
+        assert_eq!(full, ["::/0"]);
+        assert_eq!(full_spans, [Cardinality129::FULL_IPV6_SPACE]);
     }
 
     #[test]
@@ -660,18 +729,30 @@ mod tests {
         };
         let mut writer =
             ExportWriter::create(&destination, PublicationPolicy::FailIfExists, &budget).unwrap();
-        writer.write_line("192.0.2.0/24", 256).unwrap();
-        writer.write_line("192.0.2.1", 1).unwrap();
-        let row_error = writer.write_line("192.0.2.2", 1).unwrap_err();
+        writer
+            .write_line("192.0.2.0/24", Cardinality129::from_u64(256))
+            .unwrap();
+        writer
+            .write_line("192.0.2.1", Cardinality129::from_u64(1))
+            .unwrap();
+        let row_error = writer
+            .write_line("192.0.2.2", Cardinality129::from_u64(1))
+            .unwrap_err();
         assert_eq!(
             (row_error.code, row_error.outcome),
             ("output_limit", "not_started")
         );
         let mut writer =
             ExportWriter::create(&destination, PublicationPolicy::FailIfExists, &budget).unwrap();
-        writer.write_line("192.0.2.0/24", 256).unwrap();
-        writer.write_line("198.51.100.0/24", 256).unwrap();
-        let byte_error = writer.write_line(&"x".repeat(90), 1).unwrap_err();
+        writer
+            .write_line("192.0.2.0/24", Cardinality129::from_u64(256))
+            .unwrap();
+        writer
+            .write_line("198.51.100.0/24", Cardinality129::from_u64(256))
+            .unwrap();
+        let byte_error = writer
+            .write_line(&"x".repeat(90), Cardinality129::from_u64(1))
+            .unwrap_err();
         assert_eq!(
             (byte_error.code, byte_error.outcome),
             ("output_limit", "not_started")
@@ -697,14 +778,18 @@ mod tests {
         };
         let mut writer =
             ExportWriter::create(&destination, PublicationPolicy::FailIfExists, &budget).unwrap();
-        writer.write_line("192.0.2.10", 1).unwrap();
-        writer.write_line("192.0.2.11", 1).unwrap();
+        writer
+            .write_line("192.0.2.10", Cardinality129::from_u64(1))
+            .unwrap();
+        writer
+            .write_line("192.0.2.11", Cardinality129::from_u64(1))
+            .unwrap();
         let facts = writer.finish().unwrap();
         let expected = b"192.0.2.10\n192.0.2.11\n";
         assert_eq!(fs::read(&destination).unwrap(), expected);
         assert_eq!(facts.bytes as usize, expected.len());
         assert_eq!(facts.rows, 2);
-        assert_eq!(facts.addresses, 2);
+        assert_eq!(facts.addresses, Cardinality129::from_u64(2));
         assert_eq!(facts.sha256, hex_digest(&Sha256::digest(expected)));
         assert!(!directory.join(format!(".{}.export.tmp", "")).exists());
         fs::remove_dir_all(&directory).unwrap();
