@@ -846,6 +846,27 @@ Open decisions:
   (P1: unbounded metadata read, fabricated feed-delete report,
   unusable publication.resolve evidence path, join.direct order).
 
+### 2026-09-01 (continued) — D3 evidence, hot paths, and case-driven bug fixes
+
+- D3-A delivered at 6d9b6066: complete reversible publication evidence
+  (publication_evidence.rs encoder/decoder with unit tests, publish and
+  snapshot producers, publication.resolve supplied path, PUBLICATION_ATTEMPT
+  result/param schemas, goldens). The adapter-owned removals publication
+  carries only publication + destination_content (no fabricated SDK
+  attempt; schema, spec, goldens updated). Hot row writers reuse one line
+  buffer per sink instead of allocating per row (aggregation, joins,
+  matching feeds, removals, direct CSV).
+- Oracle-case authoring (round-7 P2-1: zero coverage for the 32 new
+  methods) immediately found three real defects, fixed at 39a236e3:
+  join.membership panicked on dense-scope lookup of an out-of-scope feed
+  (0-based position underflow); algebra.count/compare/publish passed the
+  outer source entry instead of the inner source member (missing-path
+  panic); commit/create resolution decoded an empty cleanup ledger as
+  requiring cleanup.artifacts while producers emit {}.
+- Validation at 6d9b6066/39a236e3: -D warnings build clean; workspace 50
+  suites green; runner 9 cases / 13 oracle checks; golden + sensitivity
+  PASS.
+
 ### 2026-09-01 (continued) — complete handler registry
 
 - All 32 remaining v1 methods implemented by three parallel workers and
