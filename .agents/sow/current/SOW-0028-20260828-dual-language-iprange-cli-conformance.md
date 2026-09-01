@@ -805,6 +805,34 @@ Open decisions:
 
 ## Execution Log
 
+### 2026-09-01 (continued) — complete handler registry
+
+- All 32 remaining v1 methods implemented by three parallel workers and
+  integrated at commit 137032ed: live workflow family
+  (live.rs + lifecycle_live.rs), recovery/maintenance family
+  (maintenance.rs + recovery.rs), and algebra/query/join/history/feeds
+  family (algebra.rs + feeds.rs). dispatch.rs REGISTRY now has all 52
+  callable methods; system.describe advertises them.
+- SDK visibility widenings (pub(crate)->pub, signature-preserving):
+  RecoveryCandidate fields (recovery.rs:88-93), LiveWriter::address_family
+  (live_writer.rs:110), LocalBasename::from_path and
+  CommitCleanupArtifacts::{clean,tail} (live_writer/result.rs:23,96,100).
+- Validation at 137032ed: -D warnings build clean; Rust workspace tests
+  50 suites 0 failures; golden corpus PASS; sensitivity gate 13 modes
+  PASS; external runner 9 cases / 13 oracle checks PASS.
+- Open findings carried into review round 7 (adjudication pending):
+  (1) join.direct row order — spec text says uncovered cell last
+  (spec:764), SDK iterates uncovered first; (2) feeds.delete/rename
+  synthesize a zero-counter WorkflowReport because the SDK exposes no
+  report; (3) publication.resolve rejects supplied publication_result
+  (reservation-authority path only) because the result schema cannot
+  reconstruct the SDK attempt object; (4) first-seen retention refresh
+  publishes an adapter-owned same-directory JSONL after commit;
+  (5) validate/recovery.inspect/recover require iprange-v4-worker beside
+  the iprange binary (worker adjacency).
+
+## Execution Log
+
 ### 2026-09-01
 
 - SOW-0027 closed as `closed` (functional parity passed, performance
