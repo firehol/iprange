@@ -624,24 +624,38 @@ func TestJoinDirectV4(t *testing.T) {
 	}
 
 	// Every cell matches the model; the emission order is ascending feed
-	// then direct value (unmapped first, direct values ascending).
+	// then covered cells by ascending direct value, with the uncovered
+	// (null) cell last in each feed (spec: rows per feed ascending direct
+	// value, nulls last).
 	entries := scope.Feeds()
 	index := map[string]int{}
 	for i, e := range entries {
 		index[e.Name] = i
 	}
 	byCell := map[[2]int]format.Cardinality129{}
-	prevFeed, prevValue := -1, -1
+	prevFeed, prevKey := -1, int64(-1)
 	for _, c := range cells {
+		fi := index[c.Feed]
+		key := int64(0)
+		if c.DirectValue != nil {
+			// Covered cells sort by their direct value; +1 keeps the
+			// real wire value 0 ahead of the uncovered null cell.
+			key = int64(*c.DirectValue) + 1
+		} else {
+			key = 1 << 40 // uncovered cell sorts last within the feed
+		}
+		if fi < prevFeed || (fi == prevFeed && key <= prevKey) {
+			value := uint32(0)
+			if c.DirectValue != nil {
+				value = *c.DirectValue
+			}
+			t.Fatalf("cells out of order: (%s,%d)", c.Feed, value)
+		}
+		prevFeed, prevKey = fi, key
 		value := uint32(0)
 		if c.DirectValue != nil {
 			value = *c.DirectValue
 		}
-		fi := index[c.Feed]
-		if fi < prevFeed || (fi == prevFeed && int(value) <= prevValue) {
-			t.Fatalf("cells out of order: (%s,%d)", c.Feed, value)
-		}
-		prevFeed, prevValue = fi, int(value)
 		byCell[[2]int{fi, int(value)}] = c.Addresses
 	}
 	for _, f := range entries {
