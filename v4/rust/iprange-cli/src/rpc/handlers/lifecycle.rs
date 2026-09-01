@@ -557,7 +557,7 @@ pub(crate) fn housekeeping(state: Housekeeping, artifacts: &[HousekeepingArtifac
 }
 
 pub(crate) fn housekeeping_artifact(value: &HousekeepingArtifact) -> Value {
-    json!({
+    let mut result = json!({
         "state": housekeeping_state(value.state),
         "directory_role": directory_role(value.directory_role),
         "directory_identity": file_identity_ok(&value.directory_identity),
@@ -569,13 +569,21 @@ pub(crate) fn housekeeping_artifact(value: &HousekeepingArtifact) -> Value {
         "source_basename": basename(&value.source_basename),
         "inert_basename": basename(&value.inert_basename),
         "source_presence": artifact_presence(value.source_presence),
-        "source_identity": value.source_identity.as_ref().map(file_identity_ok),
         "inert_presence": artifact_presence(value.inert_presence),
-        "inert_identity": value.inert_identity.as_ref().map(file_identity_ok),
         "kind": artifact_kind(value.kind),
         "creation_security": creation_security(&value.creation_security),
         "selected_envelope_sequence": convert::decimal_u64(value.selected_envelope_sequence),
-    })
+    });
+    // Optional SDK fields are absent, never null (wire rule): omit the
+    // unknown identities instead of emitting null so the evidence can
+    // round-trip through the strict decoders.
+    if let Some(identity) = &value.source_identity {
+        result["source_identity"] = file_identity_ok(identity);
+    }
+    if let Some(identity) = &value.inert_identity {
+        result["inert_identity"] = file_identity_ok(identity);
+    }
+    result
 }
 
 fn housekeeping_state(value: HousekeepingState) -> &'static str {
@@ -635,7 +643,7 @@ pub(crate) fn commit_cleanup(value: &iprange_livedb::CommitCleanupArtifacts) -> 
 }
 
 fn commit_cleanup_artifact(value: &iprange_livedb::CommitCleanupArtifact) -> Value {
-    json!({
+    let mut result = json!({
         "directory_identity": file_identity_ok(&value.directory_identity),
         "main_basename": basename(value.main_basename.as_bytes()),
         "main_identity": file_identity_ok(&value.main_identity),
@@ -643,10 +651,12 @@ fn commit_cleanup_artifact(value: &iprange_livedb::CommitCleanupArtifact) -> Val
         "target_transaction_id": convert::decimal_u64(value.target_transaction_id),
         "target_commit_nonce": convert::hex_id(&value.target_commit_nonce),
         "committed_target_length": convert::decimal_u64(value.committed_target_length),
-        "observed_tail_end_exclusive": value.observed_tail_end_exclusive
-            .map(convert::decimal_u64),
         "cleanup_error": reader::sdk_code(value.cleanup_error),
-    })
+    });
+    if let Some(tail) = value.observed_tail_end_exclusive {
+        result["observed_tail_end_exclusive"] = json!(convert::decimal_u64(tail));
+    }
+    result
 }
 
 pub(crate) fn cleanup_artifact(value: &CleanupArtifact) -> Value {
@@ -656,9 +666,11 @@ pub(crate) fn cleanup_artifact(value: &CleanupArtifact) -> Value {
         "directory_identity": file_identity_ok(&value.directory_identity),
         "basename_encoding": value.basename_encoding,
         "basename": convert::hex_bytes(&value.basename),
-        "identity": value.identity.as_ref().map(file_identity_ok),
         "error": publication_problem(&value.error),
     });
+    if let Some(identity) = &value.identity {
+        result["identity"] = file_identity_ok(identity);
+    }
     if let Some(security) = &value.creation_security {
         result["creation_security"] = creation_security(security);
     }
@@ -933,6 +945,65 @@ pub(crate) fn decode_base64(value: &str) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn artifact_identity(volume: u64, file: u64) -> iprange_livedb::validation::LocalFileIdentity {
+        let mut bytes = [0u8; 32];
+        bytes[0..8].copy_from_slice(&volume.to_le_bytes());
+        bytes[8..16].copy_from_slice(&file.to_le_bytes());
+        iprange_livedb::validation::LocalFileIdentity { kind: 1, bytes }
+    }
+
+    #[test]
+    fn artifact_encoders_omit_absent_optional_identities() {
+        // Optional SDK fields are absent, never null: an artifact whose
+        // identity observations are unknown must round-trip through the
+        // strict decoders, so the emitters must omit the members.
+        let problem = iprange_livedb::publication::PublicationProblem {
+            code: iprange_livedb::ErrorCode::Io,
+            detail: "x".into(),
+            os_code: None,
+        };
+        let cleanup = super::cleanup_artifact(&iprange_livedb::publication::CleanupArtifact {
+            kind: iprange_livedb::publication::ArtifactKind::PrivateOutput,
+            directory_role: iprange_livedb::publication::DirectoryRole::Destination,
+            directory_identity: artifact_identity(1, 2),
+            basename_encoding: 1,
+            basename: b"current.iprange".to_vec().into_boxed_slice(),
+            identity: None,
+            creation_security: None,
+            unpublished_tail: None,
+            error: problem,
+        });
+        assert!(cleanup.get("identity").is_none(), "absent identity must be omitted");
+        assert!(super::super::publication_evidence::decode_cleanup_artifact(&cleanup).is_ok());
+
+        let housekeeping = super::housekeeping_artifact(&iprange_livedb::publication::HousekeepingArtifact {
+            state: iprange_livedb::publication::HousekeepingState::Inert,
+            directory_role: iprange_livedb::publication::DirectoryRole::MainFile,
+            directory_identity: artifact_identity(1, 3),
+            basename_encoding: 1,
+            attempt_id: [7; 16],
+            ordinal: 4,
+            envelope_basename: b"e".to_vec().into_boxed_slice(),
+            envelope_identity: artifact_identity(1, 4),
+            source_basename: b"s".to_vec().into_boxed_slice(),
+            inert_basename: b"i".to_vec().into_boxed_slice(),
+            source_presence: iprange_livedb::publication::ArtifactPresence::Unclassified,
+            source_identity: None,
+            inert_presence: iprange_livedb::publication::ArtifactPresence::Unclassified,
+            inert_identity: None,
+            kind: iprange_livedb::publication::ArtifactKind::OwnedMain,
+            creation_security: iprange_livedb::publication::CreationSecurity {
+                kind: 1,
+                commitment: [9; 32],
+            },
+            selected_envelope_sequence: 11,
+        });
+        assert!(housekeeping.get("source_identity").is_none());
+        assert!(housekeeping.get("inert_identity").is_none());
+        let artifacts = serde_json::json!([housekeeping]);
+        assert!(super::super::lifecycle_live::decode_housekeeping_artifacts(&artifacts).is_ok());
+    }
 
     #[test]
     fn metadata_forms_reject_unknown_members_and_keep_when_required() {

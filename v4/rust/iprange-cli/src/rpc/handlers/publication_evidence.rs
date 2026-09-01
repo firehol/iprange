@@ -458,7 +458,7 @@ fn decode_publication_cleanup(value: &Value) -> Result<CleanupArtifacts, String>
         .ok_or_else(|| "cleanup.artifacts exceeds the fixed ledger capacity".to_string())
 }
 
-fn decode_cleanup_artifact(value: &Value) -> Result<CleanupArtifact, String> {
+pub(crate) fn decode_cleanup_artifact(value: &Value) -> Result<CleanupArtifact, String> {
     let artifact = lifecycle_live::object(value, "cleanup artifact")?;
     lifecycle_live::exact_members(
         artifact,

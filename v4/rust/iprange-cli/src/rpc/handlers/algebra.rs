@@ -1179,18 +1179,32 @@ fn preflight_response(state: &SessionState, worst: Value) -> Result<(), HandlerE
     if let Some(id) = &state.active_request_id {
         envelope["id"] = id.as_json();
     }
-    if super::super::schema::encode_response_object(&envelope).is_err() {
-        return Err(HandlerError::new(
+    // A conservative byte margin covers any constant the template does
+    // not model (longest SDK code names, ledger counts in crash states);
+    // refusing slightly early is the honest direction to err.
+    const PREFLIGHT_MARGIN: usize = 2048;
+    match super::super::schema::encode_response_object(&envelope) {
+        Ok(text) if text.len() <= super::super::framing::RESPONSE_OBJECT_LIMIT - PREFLIGHT_MARGIN => {
+            Ok(())
+        }
+        _ => Err(HandlerError::new(
             "output_limit",
             "not_started",
             "request refused: the complete inline result cannot fit the 65000-byte response object",
-        ));
+        )),
     }
-    Ok(())
 }
 
 const WIDEST_U64: &str = "18446744073709551615";
 const WIDEST_129: &str = "680564733841876926926749214863536422911";
+/// Longest portably representable basename: the SDK clamps basenames to
+/// 512 bytes (live_writer LocalBasename), and lossy UTF-8 conversion of
+/// a Windows UTF-16 basename can widen to at most twice that in
+/// characters; 1024 characters bounds every platform.
+const WIDEST_BASENAME: usize = 1024;
+/// Longest SDK error-code name used on the wire (e.g.
+/// insufficient_resource_budget); 32 characters bounds every code.
+const WIDEST_CODE: usize = 32;
 
 fn widest_identity() -> Value {
     json!({"volume": WIDEST_U64, "file": WIDEST_U64})
@@ -1201,6 +1215,72 @@ fn widest_close_fact() -> Value {
         "outcome": "close_incomplete",
         "cleanup": {},
         "coordination_cleanup": {"kind": "retained_writer_close_required"},
+    })
+}
+
+/// Largest observable artifact: full-size identities, the platform-max
+/// basename, and worst-case housekeeping states; a maximal ledger of
+/// four artifacts covers crash-state observations.
+fn widest_housekeeping_artifact() -> Value {
+    json!({
+        "state": "move_ambiguous",
+        "directory_role": "scratch_directory",
+        "directory_identity": widest_identity(),
+        "basename_encoding": 65535,
+        "attempt_id": convert::hex_id(&[0xff; 16]),
+        "ordinal": u32::MAX,
+        "envelope_basename": "e".repeat(WIDEST_BASENAME),
+        "envelope_identity": widest_identity(),
+        "source_basename": "s".repeat(WIDEST_BASENAME),
+        "inert_basename": "i".repeat(WIDEST_BASENAME),
+        "source_presence": "unclassified",
+        "source_identity": widest_identity(),
+        "inert_presence": "unclassified",
+        "inert_identity": widest_identity(),
+        "kind": "unpublished_main_tail",
+        "creation_security": {"kind": 65535, "commitment": "c".repeat(64)},
+        "selected_envelope_sequence": WIDEST_U64,
+    })
+}
+
+fn widest_housekeeping() -> Value {
+    json!({
+        "state": "visible",
+        "artifacts": (0..4).map(|_| widest_housekeeping_artifact()).collect::<Vec<_>>(),
+    })
+}
+
+fn widest_cleanup_artifact() -> Value {
+    json!({
+        "kind": "unpublished_main_tail",
+        "directory_role": "main_file",
+        "directory_identity": widest_identity(),
+        "basename_encoding": 65535,
+        "basename": "b".repeat(WIDEST_BASENAME),
+        "identity": widest_identity(),
+        "error": {"code": "io", "detail": "d".repeat(64)},
+        "creation_security": {"kind": 65535, "commitment": "c".repeat(64)},
+        "unpublished_tail": {
+            "expected_database_id": convert::hex_id(&[0xff; 16]),
+            "committed_target_transaction_id": WIDEST_U64,
+            "committed_target_nonce": convert::hex_id(&[0xff; 16]),
+            "committed_target_length": WIDEST_U64,
+            "observed_tail_end_exclusive": WIDEST_U64,
+        },
+    })
+}
+
+fn widest_commit_cleanup_artifact() -> Value {
+    json!({
+        "directory_identity": widest_identity(),
+        "main_basename": "m".repeat(WIDEST_BASENAME),
+        "main_identity": widest_identity(),
+        "expected_database_id": convert::hex_id(&[0xff; 16]),
+        "target_transaction_id": WIDEST_U64,
+        "target_commit_nonce": convert::hex_id(&[0xff; 16]),
+        "committed_target_length": WIDEST_U64,
+        "observed_tail_end_exclusive": WIDEST_U64,
+        "cleanup_error": "i".repeat(WIDEST_CODE),
     })
 }
 
@@ -1223,25 +1303,14 @@ fn preflight_history_result(state: &SessionState, windows: &[HistoryWindow]) -> 
         })
         .collect::<Vec<_>>();
     let identity = widest_identity();
-    let artifact = json!({
-        "directory_identity": identity,
-        "main_basename": "ffffffffffffffffffffffffffffffffffffffff",
-        "main_identity": identity,
-        "expected_database_id": convert::hex_id(&[0xff; 16]),
-        "target_transaction_id": WIDEST_U64,
-        "target_commit_nonce": convert::hex_id(&[0xff; 16]),
-        "committed_target_length": WIDEST_U64,
-        "observed_tail_end_exclusive": WIDEST_U64,
-        "cleanup_error": "io",
-        "error": {"code": "io", "detail": "x"},
-    });
+    let artifact = widest_commit_cleanup_artifact();
     let worst = json!({
         "method": "iprange.v1.history.project",
-        "metadata_logical_change": "changed",
+        "metadata_logical_change": "unchanged",
         "writer_close": {
             "outcome": "close_incomplete",
             "cleanup": {"artifacts": [artifact]},
-            "coordination_cleanup": {"kind": "unlinked"},
+            "coordination_cleanup": {"kind": "retained_writer_close_required"},
         },
         "source_closes": [widest_close_fact()],
         "commit": {
@@ -1252,7 +1321,7 @@ fn preflight_history_result(state: &SessionState, windows: &[HistoryWindow]) -> 
             "attempted_commit_nonce": convert::hex_id(&[0xff; 16]),
             "durability": "committed",
             "cleanup": {"artifacts": [artifact]},
-            "coordination_cleanup": {"kind": "unlinked"},
+            "coordination_cleanup": {"kind": "retained_reader_close_required"},
         },
         "report": {
             "logical_change": "changed",
@@ -1277,6 +1346,8 @@ fn preflight_history_result(state: &SessionState, windows: &[HistoryWindow]) -> 
 /// request parameter, so the complete result scales with it. Refuse an
 /// unrepresentable request before the destination is published.
 fn preflight_algebra_publish(state: &SessionState, sources: usize) -> Result<(), HandlerError> {
+    // The 512-byte LocalBasename bound base64-encodes to 684 characters.
+    let widest_basename_b64 = "Z".repeat(684);
     let worst = json!({
         "method": "iprange.v1.algebra.publish",
         "report": {
@@ -1295,7 +1366,7 @@ fn preflight_algebra_publish(state: &SessionState, sources: usize) -> Result<(),
                 "publication_attempt_id": convert::hex_id(&[0xff; 16]),
                 "directory_identity": widest_identity(),
                 "destination_basename_encoding": 65535,
-                "destination_basename": "Z2ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZg==",
+                "destination_basename": widest_basename_b64,
                 "output_identity": widest_identity(),
                 "output_byte_length": WIDEST_U64,
                 "output_sha512": "f".repeat(128),
@@ -1314,10 +1385,10 @@ fn preflight_algebra_publish(state: &SessionState, sources: usize) -> Result<(),
             "later_canonical": "ready_live_sidecar",
             "main_access_policy": "changed_or_unproven",
             "coordination_access_policy": "unclassified",
-            "cleanup": {},
+            "cleanup": {"artifacts": [widest_cleanup_artifact()]},
             "coordination_cleanup": {"kind": "retained_reader_close_required"},
-            "housekeeping": {"state": "visible", "artifacts": []},
-            "visible_housekeeping": [],
+            "housekeeping": widest_housekeeping(),
+            "visible_housekeeping": vec![widest_housekeeping_artifact(); 4],
         },
         "source_closes": vec![widest_close_fact(); sources],
     });
