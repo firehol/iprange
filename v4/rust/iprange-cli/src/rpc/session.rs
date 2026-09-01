@@ -389,7 +389,6 @@ fn bounded_response(response: Value, request: &Request) -> Value {
         Some(serde_json::json!({
             "code": "output_limit",
             "outcome": "read_only_failure",
-            "details": {"method": request.method},
         })),
     );
     if schema::encode_response_object(&replacement).is_ok() {
@@ -595,7 +594,6 @@ mod tests {
             json!({
                 "code": "output_limit",
                 "outcome": "read_only_failure",
-                "details": {"method": "iprange.v1.system.describe"},
             })
         );
         // The replacement must satisfy both ceilings: the complete
