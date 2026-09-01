@@ -1243,13 +1243,6 @@ fn widest_housekeeping_artifact() -> Value {
     })
 }
 
-fn widest_housekeeping() -> Value {
-    json!({
-        "state": "visible",
-        "artifacts": (0..4).map(|_| widest_housekeeping_artifact()).collect::<Vec<_>>(),
-    })
-}
-
 fn widest_cleanup_artifact() -> Value {
     json!({
         "kind": "unpublished_main_tail",
@@ -1348,6 +1341,11 @@ fn preflight_history_result(state: &SessionState, windows: &[HistoryWindow]) -> 
 fn preflight_algebra_publish(state: &SessionState, sources: usize) -> Result<(), HandlerError> {
     // The 512-byte LocalBasename bound base64-encodes to 684 characters.
     let widest_basename_b64 = "Z".repeat(684);
+    // The SDK cleanup ledger capacity is four artifacts
+    // (publication/types.rs CLEANUP_CAPACITY). Housekeeping observations
+    // fire once per retired authority (main_file.rs retire_steps ->
+    // gc::retire_observed -> one observer call); two maximal artifacts
+    // over-model every real ledger.
     let worst = json!({
         "method": "iprange.v1.algebra.publish",
         "report": {
@@ -1385,10 +1383,13 @@ fn preflight_algebra_publish(state: &SessionState, sources: usize) -> Result<(),
             "later_canonical": "ready_live_sidecar",
             "main_access_policy": "changed_or_unproven",
             "coordination_access_policy": "unclassified",
-            "cleanup": {"artifacts": [widest_cleanup_artifact()]},
+            "cleanup": {"artifacts": (0..4).map(|_| widest_cleanup_artifact()).collect::<Vec<_>>()},
             "coordination_cleanup": {"kind": "retained_reader_close_required"},
-            "housekeeping": widest_housekeeping(),
-            "visible_housekeeping": vec![widest_housekeeping_artifact(); 4],
+            "housekeeping": {
+                "state": "visible",
+                "artifacts": (0..2).map(|_| widest_housekeeping_artifact()).collect::<Vec<_>>(),
+            },
+            "visible_housekeeping": (0..2).map(|_| widest_housekeeping_artifact()).collect::<Vec<_>>(),
         },
         "source_closes": vec![widest_close_fact(); sources],
     });
