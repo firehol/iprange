@@ -1061,6 +1061,59 @@ Open decisions:
   request-scaled mutating inline results (recover writes its report to
   a file; read-only methods keep the post-hoc bound legally).
 
+### 2026-09-02 (continued) — round-9 delta: error-path close sweep (335fac6c..6b1837f4)
+
+- The own-model delta reviewer (Linnaeus) returned two fresh P2s after
+  the round-9 wave at 3aedb22a; both are error-path evidence gaps in
+  the same class as the round-9 close-fact finding:
+  - P2-1 writer opened before the fallible source open: feeds.import,
+    feeds.create/replace, and history.project returned the source-open
+    error without closing the already-open live writer. Fixed: the
+    source-open error now returns close_writer_facts(&mut writer,
+    error), merging the factual writer_close into the error details.
+  - P2-2 query/join/algebra error paths dropped factual live-reader
+    closes: query.cardinalities/overlaps/matching_feeds, join.direct,
+    join.membership, algebra.count/compare/publish, and open_sources
+    returned product errors with the opened readers dropped unclosed
+    (no source close fact, stale sidecar slot until the next
+    claim/scan). Fixed with one shared error-path owner:
+    reader::close_on_error closes every opened reader and merges the
+    factual close results as `source_closes` into the error details;
+    a failed close keeps its source_close fact with the primary error
+    (double-fault merge, same pattern as export). Every handler wraps
+    its post-open body in an immediately-invoked closure; success
+    tails (close_reader/close_readers) are unchanged.
+- Same-class instances found and fixed in the same sweep:
+  - database.info / database.metadata.get error paths close the
+    ephemeral reader (reader.rs).
+  - retention first_seen/last_seen refresh: writer-open failure,
+    reader.info() failure, removal-collector creation failure, and
+    refresh begin/drain failures now close the source reader (and the
+    writer where open) via close_refresh_facts, merging both facts.
+  - reader.open: info() or handle-allocation failures after the open
+    close the reader before responding.
+  - feeds workflow family: collect_workflow_facts now closes the
+    source reader on every outcome (mirrors collect_projection_facts),
+    the factual close rides Failed/NoChange/Changed facts and is
+    merged into publish-stage and workflow error details (source_close)
+    alongside writer_close; the ReaderCloseFailed variant is now
+    reachable; double-fault preserves the close result.
+  - export: the product error now keeps the factual source_close
+    whether the source close succeeded or failed.
+- Feeds success results keep the frozen _PUBLISHER_COMMON shape (no
+  source_close member; recorded results.py decision), so the feeds
+  close fact appears only in error details.
+- Pinned by tests (af728001): close_on_error merges factual live
+  closes and omits facts for immutable readers; an end-to-end handler
+  test proves query.cardinalities on a direct live database carries
+  source_closes in its wrong_value_kind error.
+- Five own-model delta reviewers re-verified the final HEAD
+  6b1837f4: coverage, SDK-ownership, wire, and performance scopes PASS;
+  no P0-P2 findings remain open.
+- Validation at 6b1837f4: -D warnings clean; Rust workspace 50 suites
+  (687 tests); runner 30 cases / 15 oracle checks; golden 53;
+  sensitivity 13 modes; Go suite green; source graph 491.
+
 ### 2026-09-01 (continued) — complete handler registry
 
 - All 32 remaining v1 methods implemented by three parallel workers and
