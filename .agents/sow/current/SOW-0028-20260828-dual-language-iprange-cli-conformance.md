@@ -805,6 +805,47 @@ Open decisions:
 
 ## Execution Log
 
+### 2026-09-01 (continued) — round-7 review, decisions, and fix batches
+
+- Review round 7 at HEAD 137032ed: five own-model adversarial reviewers
+  (wire contract, SDK ownership, correctness/stop conditions,
+  performance/bounds, registry/records). Verdict FAIL: 4 P1 + 8 P2 +
+  2 P3 findings, reproduced in the SOW open-findings list below.
+- User decisions (recorded 2026-09-01):
+  - D1 = B: join.direct rows per feed ascending direct value with the
+    uncovered cell LAST; Rust and Go SDKs both changed (spec:764 is the
+    contract; the SDK sort key became (feed, direct==0, direct));
+    covered cells with real wire value 0 are distinct from the null
+    uncovered cell, pinned by new tests in Rust provider_joins.rs and
+    Go join_direct_emit_test.go.
+  - D2 = B: feeds.delete and feeds.rename return NO WorkflowReport
+    (the SDK deliberately exposes none; WorkflowReport is limited to the
+    six finish-input workflows). Results carry commit, metadata, and
+    writer-close facts only; schema, goldens, and the spec now say so.
+  - D3 = A: publication.resolve accepts a complete caller-supplied
+    publication_result; the wire schema carries the complete mechanical
+    PublicationAttempt (nested identities, previous-destination
+    evidence, basename bytes, policy, creation-security evidence) so the
+    SDK resolver can consume it as authority. Implemented by parallel
+    worker (commit after 0bb7adc8).
+  - Mandatory corrections accepted: value_tag.hex stays lowercase and
+    the validator now accepts exactly 0-9a-f (the accepted defect was
+    g-z, not uppercase); removal-output temporary cleanup is explicit on
+    every terminal path and its failure is reported (no destructor
+    guarantees); goldens are illustrative - oracle-driven declarative
+    cases for every method family are required before the next review.
+- Fix batch A committed at 3c3aab8d (SDK: join order + tests, worker
+  availability probe, publication constructors; CLI: close facts,
+  bounded metadata file reads, hex validator, housekeeping state,
+  RemovalCollector explicit discard, fault_worker probe) and 0bb7adc8
+  (wire base64 encoder). Validation: -D warnings build clean; Rust
+  workspace 50 suites green (two consecutive runs); Go internal/reader
+  58 tests green; golden + sensitivity gates pass.
+- Review-round severity correction: the initial round-7 summary said
+  "1 P1 + 8 P2 + 2 P3"; the verified counts are 4 P1 + 8 P2 + 2 P3
+  (P1: unbounded metadata read, fabricated feed-delete report,
+  unusable publication.resolve evidence path, join.direct order).
+
 ### 2026-09-01 (continued) — complete handler registry
 
 - All 32 remaining v1 methods implemented by three parallel workers and
@@ -830,8 +871,6 @@ Open decisions:
   publishes an adapter-owned same-directory JSONL after commit;
   (5) validate/recovery.inspect/recover require iprange-v4-worker beside
   the iprange binary (worker adjacency).
-
-## Execution Log
 
 ### 2026-09-01
 
