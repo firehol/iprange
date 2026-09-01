@@ -1,0 +1,28 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "query.cardinalities",
+  "requires": "iprange.v1.query.cardinalities",
+  "fixtures": [
+    {"path": "membership.iprange", "source": {"generator": "v4_fixture", "seed": 1}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.query.cardinalities",
+     "params": {
+       "source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
+       "selection": {"mode": "all"},
+       "membership_query_budget": {"max_heap_bytes": "1048576"},
+       "output": {"path": "$WORK/cardinalities.csv", "format": "csv",
+                  "publication_policy": "fail_if_exists",
+                  "result_budget": {"max_rows": "64", "max_output_bytes": "65536",
+                                    "max_open_files": 3}}},
+     "expect_result": {
+       "output": {"path": {"$ignore": true}, "bytes": "32", "rows": "2",
+                  "sha256": "09baecd9c0fd650f3389efba7240b9bbd74b3d2f5f14d4c4aa0dbaca0e550c7e"},
+       "report": {"scanned_range_count": "4", "scanned_addresses": "41",
+                  "feed_result_count": "2", "pair_result_count": "0"}
+     },
+     "assert_files": [
+       {"path": "cardinalities.csv", "sha256": "09baecd9c0fd650f3389efba7240b9bbd74b3d2f5f14d4c4aa0dbaca0e550c7e"}
+     ]}
+  ]
+}

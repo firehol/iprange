@@ -1,0 +1,57 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "maintenance",
+  "requires": "iprange.v1.maintenance.list",
+  "fixtures": [
+    {"path": "keeps/marker.txt", "source": {"text": "maintenance directory\n"}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.maintenance.list",
+     "params": {"directory": "$WORK/keeps",
+                "kinds": ["scratch", "reservation", "publication_temp"],
+                "max_entries": 64,
+                "output": {"path": "$WORK/entries.jsonl", "format": "jsonl",
+                           "publication_policy": "fail_if_exists",
+                           "result_budget": {"max_rows": "64", "max_output_bytes": "65536",
+                                             "max_open_files": 3}}},
+     "expect_result": {
+       "output": {"path": {"$ignore": true}, "bytes": "0", "rows": "0",
+                  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+       "reports": [
+         {"kind": "scratch", "entries": "0"},
+         {"kind": "reservation", "entries": "0"},
+         {"kind": "publication_temp", "entries": "0"}
+       ]
+     },
+     "assert_files": [
+       {"path": "entries.jsonl", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+     ]},
+    {"kind": "rpc", "method": "iprange.v1.maintenance.remove",
+     "params": {"entry": {"kind": "scratch", "basename": "foreign",
+                          "identity": {"handle": "00112233445566778899aabbccddeeff"}}},
+     "expect_error": {"code": "invalid_argument", "outcome": "not_started"}},
+    {"kind": "rpc", "method": "iprange.v1.database.create",
+     "params": {"path": "$WORK/reclaim.iprange", "family": "ipv4", "value_kind": "direct",
+                "structure_kind": "none", "value_tag": {"text": "first_seen"},
+                "reader_capacity": 8},
+     "expect_result": {
+       "address_family": "ipv4", "value_kind": "direct", "structure_kind": "none",
+       "value_tag": {"hex": "66697273745f7365656e"},
+       "database_id": {"$ignore": true}, "commit_nonce": {"$ignore": true},
+       "sidecar_id": {"$ignore": true}, "main_basename": "reclaim.iprange",
+       "reader_capacity": 8, "state": "created", "residue_possible": false,
+       "housekeeping": {"artifacts": []}, "visible_housekeeping": [],
+       "directory_identity": {"$ignore": true}, "main_identity": {"$ignore": true},
+       "sidecar_identity": {"$ignore": true}
+     }},
+    {"kind": "rpc", "method": "iprange.v1.database.reclaim",
+     "params": {"path": "$WORK/reclaim.iprange", "max_transactions": "64",
+                "max_pages": "64",
+                "writer_budget": {"max_heap_bytes": "16777216", "max_private_pages": "20000",
+                                  "max_growth_pages": "20000", "max_open_files": 4}},
+     "expect_result": {
+       "reclamation": {"kind": "no_change"},
+       "writer_close": {"cleanup": {}, "coordination_cleanup": {}, "outcome": "closed"}
+     }}
+  ]
+}

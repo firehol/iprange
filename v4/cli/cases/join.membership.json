@@ -1,0 +1,37 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "join.membership",
+  "requires": "iprange.v1.join.membership",
+  "fixtures": [
+    {"path": "membership.iprange", "source": {"generator": "v4_fixture", "seed": 1}},
+    {"path": "membership2.iprange", "source": {"generator": "v4_fixture", "seed": 1}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.join.membership",
+     "params": {
+       "left": {"source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
+                "selection": {"mode": "all"},
+                "membership_query_budget": {"max_heap_bytes": "1048576"}},
+       "right": {"source": {"path": "$WORK/membership2.iprange", "mode": "immutable"},
+                 "selection": {"mode": "named", "feeds": ["beta"]},
+                 "membership_query_budget": {"max_heap_bytes": "1048576"}},
+       "output": {"path": "$WORK/join.jsonl", "format": "jsonl",
+                  "publication_policy": "fail_if_exists",
+                  "result_budget": {"max_rows": "64", "max_output_bytes": "65536",
+                                    "max_open_files": 3}}},
+     "expect_result": {
+       "output": {"path": {"$ignore": true}, "bytes": "325", "rows": "5",
+                  "sha256": "99f3c362224134b43426119a97a66aa8948607704a8578df75a86d5d352fe41b"},
+       "report": {
+         "left_range_count": "4", "right_range_count": "4",
+         "joined_segment_count": "4", "left_addresses": "41", "right_addresses": "21",
+         "overlap_addresses": "21", "left_uncovered_addresses": "20",
+         "right_uncovered_addresses": "0", "cross_result_count": "2",
+         "uncovered_result_count": "3"
+       }
+     },
+     "assert_files": [
+       {"path": "join.jsonl", "sha256": "99f3c362224134b43426119a97a66aa8948607704a8578df75a86d5d352fe41b"}
+     ]}
+  ]
+}

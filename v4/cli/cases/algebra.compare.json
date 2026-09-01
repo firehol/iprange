@@ -1,0 +1,27 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "algebra.compare",
+  "requires": "iprange.v1.algebra.compare",
+  "fixtures": [
+    {"path": "membership.iprange", "source": {"generator": "v4_fixture", "seed": 1}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.algebra.compare",
+     "params": {
+       "sources": [
+         {"source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
+          "scope": {"mode": "all"},
+          "membership_query_budget": {"max_heap_bytes": "1048576"}}
+       ],
+       "left": {"mode": "all"},
+       "right": {"mode": "named", "feeds": ["beta"]},
+       "algebra_budget": {"max_heap_bytes": "1048576", "max_sources": 1}},
+     "expect_result": {
+       "report": {"source_count": "1", "source_range_count": "4",
+                  "joined_segment_count": "4", "left_addresses": "41",
+                  "right_addresses": "21", "overlap_addresses": "21",
+                  "left_only_addresses": "20", "right_only_addresses": "0",
+                  "union_addresses": "41", "equal": false}
+     }}
+  ]
+}

@@ -270,23 +270,21 @@
         "id": "g-commit.resolve",
         "result": {
           "method": "iprange.v1.commit.resolve",
-          "resolution": {
-            "attempted_database_id": "b0000000000000000000000000000001",
-            "attempted_transaction_id": "7",
-            "attempted_commit_nonce": "b0000000000000000000000000000003",
-            "actual_directory_identity": {
-              "volume": "1",
-              "file": "42"
-            },
-            "actual_main_identity": {
-              "volume": "1",
-              "file": "42"
-            },
-            "local_file_relation": "same",
-            "resolution": "committed",
-            "cleanup": {},
-            "coordination_cleanup": {}
-          }
+          "attempted_database_id": "b0000000000000000000000000000001",
+          "attempted_transaction_id": "7",
+          "attempted_commit_nonce": "b0000000000000000000000000000003",
+          "actual_directory_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "actual_main_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "local_file_relation": "same",
+          "resolution": "committed",
+          "cleanup": {},
+          "coordination_cleanup": {}
         }
       }
     },

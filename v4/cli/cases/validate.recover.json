@@ -1,0 +1,79 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "validate.recover",
+  "requires": "iprange.v1.validate",
+  "fixtures": [
+    {"path": "membership.iprange", "source": {"generator": "v4_fixture", "seed": 1}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.validate",
+     "params": {"path": "$WORK/membership.iprange",
+                "mode": {"kind": "immutable_current"},
+                "validation_budget": {"max_heap_bytes": "16777216", "max_open_files": 4,
+                                      "max_scratch_bytes": "0", "max_scratch_files": 0},
+                "findings_output": {"path": "$WORK/findings.jsonl", "format": "jsonl",
+                                    "publication_policy": "fail_if_exists",
+                                    "result_budget": {"max_rows": "64",
+                                                      "max_output_bytes": "65536",
+                                                      "max_open_files": 3}}},
+     "expect_result": {
+       "result": {
+         "file_identity": {"$ignore": true},
+         "generation": {
+           "address_family": "ipv4", "commit_nonce": {"$ignore": true},
+           "database_id": {"$ignore": true}, "page_count": "10",
+           "structure_kind": "none", "transaction_id": "3",
+           "value_kind": "membership",
+           "value_tag": {"hex": "6d656d62657273686970"}
+         },
+         "progress": {
+           "bounded_possible_span_addresses": "0", "checked_unique_pages": "8",
+           "finding_count": "0", "has_unbounded_unknown": false,
+           "untraversable_subgraphs": "0"
+         },
+         "valid": true
+       },
+       "findings": {"path": {"$ignore": true}, "bytes": "0", "rows": "0",
+                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+     },
+     "assert_files": [
+       {"path": "findings.jsonl", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
+     ]},
+    {"kind": "rpc", "method": "iprange.v1.recovery.inspect",
+     "params": {"path": "$WORK/membership.iprange", "mode": "immutable",
+                "validation_budget": {"max_heap_bytes": "16777216", "max_open_files": 4,
+                                      "max_scratch_bytes": "0", "max_scratch_files": 0}},
+     "expect_result": {
+       "source_identity": {"$ignore": true},
+       "progress": {
+         "bounded_possible_span_addresses": "0", "checked_unique_pages": "0",
+         "finding_count": "0", "has_unbounded_unknown": false,
+         "untraversable_subgraphs": "0"
+       },
+       "candidates": [
+         {"label": "newest", "meta_page": 1, "transaction_id": "3",
+          "database_id": {"$ignore": true}, "commit_nonce": {"$ignore": true},
+          "source_identity": {"$ignore": true}}
+       ]
+     }},
+    {"kind": "rpc", "method": "iprange.v1.recover",
+     "params": {"source_path": "$WORK/membership.iprange", "source_mode": "immutable",
+                "candidate": {
+                  "label": "newest", "meta_page": 1,
+                  "database_id": "00000000000000000000000000000000",
+                  "commit_nonce": "00000000000000000000000000000000",
+                  "transaction_id": "3",
+                  "source_identity": {"volume": "1", "file": "1"}
+                },
+                "destination": "$WORK/recovered.iprange",
+                "recovery_budget": {"max_heap_bytes": "16777216", "max_output_pages": "20000",
+                                    "max_open_files": 4, "max_scratch_bytes": "0",
+                                    "max_scratch_files": 0},
+                "report_output": {"path": "$WORK/recovery.jsonl", "format": "jsonl",
+                                  "publication_policy": "fail_if_exists",
+                                  "result_budget": {"max_rows": "64",
+                                                    "max_output_bytes": "65536",
+                                                    "max_open_files": 3}}},
+     "expect_error": {"code": "recovery_candidate_changed", "outcome": "not_published"}}
+  ]
+}

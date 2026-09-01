@@ -1,0 +1,77 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "join.direct",
+  "requires": "iprange.v1.join.direct",
+  "fixtures": [
+    {"path": "direct.iprange", "source": {"generator": "v4_fixture", "seed": 0}},
+    {"path": "membership.iprange", "source": {"generator": "v4_fixture", "seed": 1}},
+    {"path": "zerodb.csv",
+     "source": {"text": "from,to,value\n192.0.2.0,192.0.2.4,0\n198.51.100.25,198.51.100.29,7\n198.51.100.35,198.51.100.39,0\n"}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.database.create",
+     "params": {"path": "$WORK/zerodb.iprange", "family": "ipv4", "value_kind": "direct",
+                "structure_kind": "none", "value_tag": {"text": "zerotag"}, "reader_capacity": 8},
+     "expect_result": {
+       "address_family": "ipv4", "value_kind": "direct", "structure_kind": "none",
+       "value_tag": {"hex": "7a65726f746167"}, "database_id": {"$ignore": true},
+       "commit_nonce": {"$ignore": true}, "sidecar_id": {"$ignore": true},
+       "main_basename": "zerodb.iprange", "reader_capacity": 8, "state": "created",
+       "residue_possible": false,
+       "housekeeping": {"artifacts": []}, "visible_housekeeping": [],
+       "directory_identity": {"$ignore": true}, "main_identity": {"$ignore": true},
+       "sidecar_identity": {"$ignore": true}
+     }},
+    {"kind": "rpc", "method": "iprange.v1.direct.replace",
+     "params": {"path": "$WORK/zerodb.iprange",
+                "input": {"path": "$WORK/zerodb.csv", "max_line_bytes": 1024},
+                "metadata": {"mode": "keep"},
+                "writer_budget": {"max_heap_bytes": "16777216", "max_private_pages": "20000",
+                                  "max_growth_pages": "20000", "max_open_files": 4}},
+     "expect_result": {
+       "report": {
+         "workflow": "direct_replacement", "logical_change": "changed",
+         "input_record_count": "3", "input_normalized_interval_count": "3",
+         "before_range_record_count": "0", "after_range_record_count": "3",
+         "input_addresses": "15", "before_addresses": "0", "after_addresses": "15",
+         "unchanged_value_addresses": "0", "changed_value_addresses": "0",
+         "added_addresses": "15", "removed_addresses": "0",
+         "source_feed_count": "0", "matched_feed_count": "0", "created_feed_count": "0",
+         "source_distinct_membership_count": "0", "translated_membership_count": "0"
+       },
+       "metadata_logical_change": "unchanged",
+       "commit": {"attempted_database_id": {"$ignore": true},
+                  "directory_identity": {"$ignore": true},
+                  "main_identity": {"$ignore": true},
+                  "attempted_transaction_id": "2",
+                  "attempted_commit_nonce": {"$ignore": true},
+                  "durability": "committed", "cleanup": {}, "coordination_cleanup": {}},
+       "writer_close": {"cleanup": {}, "coordination_cleanup": {}, "outcome": "closed"}
+     }},
+    {"kind": "rpc", "method": "iprange.v1.join.direct",
+     "params": {
+       "membership": {"source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
+                      "selection": {"mode": "all"},
+                      "membership_query_budget": {"max_heap_bytes": "1048576"}},
+       "direct": {"path": "$WORK/zerodb.iprange", "mode": "live"},
+       "output": {"path": "$WORK/join.jsonl", "format": "jsonl",
+                  "publication_policy": "fail_if_exists",
+                  "result_budget": {"max_rows": "64", "max_output_bytes": "65536",
+                                    "max_open_files": 3}},
+       "max_result_cells": "64"},
+     "expect_result": {
+       "output": {"path": {"$ignore": true}, "bytes": "158", "rows": "3",
+                  "sha256": "7972a171f20d93fa1781c5fb290117e6b5eb2248355ee8a0be453f1783927864"},
+       "report": {
+         "membership_range_count": "4", "direct_ranges_visited": "3",
+         "joined_segment_count": "6", "selected_addresses": "41",
+         "mapped_addresses": "10", "unmapped_addresses": "31",
+         "result_cell_count": "3"
+       },
+       "source_closes": [{"cleanup": {}, "coordination_cleanup": {}, "outcome": "closed"}]
+     },
+     "assert_files": [
+       {"path": "join.jsonl", "sha256": "7972a171f20d93fa1781c5fb290117e6b5eb2248355ee8a0be453f1783927864"}
+     ]}
+  ]
+}

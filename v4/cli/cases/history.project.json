@@ -1,0 +1,333 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "history.project",
+  "requires": "iprange.v1.history.project",
+  "fixtures": [
+    {
+      "path": "membership.iprange",
+      "source": {
+        "generator": "v4_fixture",
+        "seed": 1
+      }
+    },
+    {
+      "path": "last_seen.csv",
+      "source": {
+        "text": "from,to,value\n192.0.2.0,192.0.2.19,1000\n198.51.100.0,198.51.100.9,10\n"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/histdb.iprange",
+        "family": "ipv4",
+        "value_kind": "membership",
+        "structure_kind": "none",
+        "value_tag": {
+          "text": "membership"
+        },
+        "reader_capacity": 8
+      },
+      "expect_result": {
+        "address_family": "ipv4",
+        "value_kind": "membership",
+        "structure_kind": "none",
+        "value_tag": {
+          "hex": "6d656d62657273686970"
+        },
+        "database_id": {
+          "$ignore": true
+        },
+        "commit_nonce": {
+          "$ignore": true
+        },
+        "sidecar_id": {
+          "$ignore": true
+        },
+        "main_basename": "histdb.iprange",
+        "reader_capacity": 8,
+        "state": "created",
+        "residue_possible": false,
+        "housekeeping": {
+          "artifacts": []
+        },
+        "visible_housekeeping": [],
+        "directory_identity": {
+          "$ignore": true
+        },
+        "main_identity": {
+          "$ignore": true
+        },
+        "sidecar_identity": {
+          "$ignore": true
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.feeds.create",
+      "params": {
+        "path": "$WORK/histdb.iprange",
+        "feed": "gamma",
+        "current": {
+          "source": {
+            "path": "$WORK/membership.iprange",
+            "mode": "immutable"
+          },
+          "feed": "alpha"
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "expect_result": {
+        "report": {
+          "workflow": "create_feed",
+          "logical_change": "changed",
+          "input_record_count": "2",
+          "input_normalized_interval_count": "2",
+          "before_range_record_count": "0",
+          "after_range_record_count": "2",
+          "input_addresses": "31",
+          "before_addresses": "0",
+          "after_addresses": "31",
+          "unchanged_value_addresses": "0",
+          "changed_value_addresses": "0",
+          "added_addresses": "31",
+          "removed_addresses": "0",
+          "source_feed_count": "0",
+          "matched_feed_count": "0",
+          "created_feed_count": "0",
+          "source_distinct_membership_count": "0",
+          "translated_membership_count": "0"
+        },
+        "metadata_logical_change": "unchanged",
+        "commit": {
+          "attempted_database_id": {
+            "$ignore": true
+          },
+          "directory_identity": {
+            "$ignore": true
+          },
+          "main_identity": {
+            "$ignore": true
+          },
+          "attempted_transaction_id": "2",
+          "attempted_commit_nonce": {
+            "$ignore": true
+          },
+          "durability": "committed",
+          "cleanup": {},
+          "coordination_cleanup": {}
+        },
+        "writer_close": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "outcome": "closed"
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/last_seen.iprange",
+        "family": "ipv4",
+        "value_kind": "direct",
+        "structure_kind": "none",
+        "value_tag": {
+          "text": "last_seen"
+        },
+        "reader_capacity": 8
+      },
+      "expect_result": {
+        "address_family": "ipv4",
+        "value_kind": "direct",
+        "structure_kind": "none",
+        "value_tag": {
+          "hex": "6c6173745f7365656e"
+        },
+        "database_id": {
+          "$ignore": true
+        },
+        "commit_nonce": {
+          "$ignore": true
+        },
+        "sidecar_id": {
+          "$ignore": true
+        },
+        "main_basename": "last_seen.iprange",
+        "reader_capacity": 8,
+        "state": "created",
+        "residue_possible": false,
+        "housekeeping": {
+          "artifacts": []
+        },
+        "visible_housekeeping": [],
+        "directory_identity": {
+          "$ignore": true
+        },
+        "main_identity": {
+          "$ignore": true
+        },
+        "sidecar_identity": {
+          "$ignore": true
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.direct.replace",
+      "params": {
+        "path": "$WORK/last_seen.iprange",
+        "input": {
+          "path": "$WORK/last_seen.csv",
+          "max_line_bytes": 1024
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "expect_result": {
+        "report": {
+          "workflow": "direct_replacement",
+          "logical_change": "changed",
+          "input_record_count": "2",
+          "input_normalized_interval_count": "2",
+          "before_range_record_count": "0",
+          "after_range_record_count": "2",
+          "input_addresses": "30",
+          "before_addresses": "0",
+          "after_addresses": "30",
+          "unchanged_value_addresses": "0",
+          "changed_value_addresses": "0",
+          "added_addresses": "30",
+          "removed_addresses": "0",
+          "source_feed_count": "0",
+          "matched_feed_count": "0",
+          "created_feed_count": "0",
+          "source_distinct_membership_count": "0",
+          "translated_membership_count": "0"
+        },
+        "metadata_logical_change": "unchanged",
+        "commit": {
+          "attempted_database_id": {
+            "$ignore": true
+          },
+          "directory_identity": {
+            "$ignore": true
+          },
+          "main_identity": {
+            "$ignore": true
+          },
+          "attempted_transaction_id": "2",
+          "attempted_commit_nonce": {
+            "$ignore": true
+          },
+          "durability": "committed",
+          "cleanup": {},
+          "coordination_cleanup": {}
+        },
+        "writer_close": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "outcome": "closed"
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.history.project",
+      "params": {
+        "path": "$WORK/histdb.iprange",
+        "last_seen": {
+          "path": "$WORK/last_seen.iprange",
+          "mode": "live"
+        },
+        "windows": [
+          {
+            "feed": "gamma",
+            "cutoff": 50
+          }
+        ],
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "expect_result": {
+        "report": {
+          "logical_change": "changed",
+          "source_range_count": "2",
+          "source_addresses": "30",
+          "created_feed_count": "0",
+          "before_interval_count": "2",
+          "after_interval_count": "1",
+          "before_addresses": "31",
+          "after_addresses": "20",
+          "unchanged_addresses": "20",
+          "added_addresses": "0",
+          "removed_addresses": "11",
+          "windows": [
+            {
+              "feed_name": "gamma",
+              "cutoff": 50,
+              "created": false,
+              "before_interval_count": "2",
+              "after_interval_count": "1",
+              "before_addresses": "31",
+              "after_addresses": "20",
+              "unchanged_addresses": "20",
+              "added_addresses": "0",
+              "removed_addresses": "11"
+            }
+          ]
+        },
+        "metadata_logical_change": "unchanged",
+        "commit": {
+          "attempted_database_id": {
+            "$ignore": true
+          },
+          "directory_identity": {
+            "$ignore": true
+          },
+          "main_identity": {
+            "$ignore": true
+          },
+          "attempted_transaction_id": "3",
+          "attempted_commit_nonce": {
+            "$ignore": true
+          },
+          "durability": "committed",
+          "cleanup": {},
+          "coordination_cleanup": {}
+        },
+        "writer_close": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "outcome": "closed"
+        }
+      }
+    }
+  ]
+}

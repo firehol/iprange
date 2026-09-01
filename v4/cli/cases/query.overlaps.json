@@ -1,0 +1,29 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "query.overlaps",
+  "requires": "iprange.v1.query.overlaps",
+  "fixtures": [
+    {"path": "membership.iprange", "source": {"generator": "v4_fixture", "seed": 1}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.query.overlaps",
+     "params": {
+       "source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
+       "selection": {"mode": "all"},
+       "membership_query_budget": {"max_heap_bytes": "1048576"},
+       "mode": {"kind": "all_pairs"},
+       "output": {"path": "$WORK/overlaps.csv", "format": "csv",
+                  "publication_policy": "fail_if_exists",
+                  "result_budget": {"max_rows": "64", "max_output_bytes": "65536",
+                                    "max_open_files": 3}}},
+     "expect_result": {
+       "output": {"path": {"$ignore": true}, "bytes": "35", "rows": "1",
+                  "sha256": "b682b77ee2080e3de8b9cb54f26cb965b025c45090a61f1a3ae4bcff615c6168"},
+       "report": {"scanned_range_count": "4", "scanned_addresses": "41",
+                  "feed_result_count": "2", "pair_result_count": "1"}
+     },
+     "assert_files": [
+       {"path": "overlaps.csv", "sha256": "b682b77ee2080e3de8b9cb54f26cb965b025c45090a61f1a3ae4bcff615c6168"}
+     ]}
+  ]
+}

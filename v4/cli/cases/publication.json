@@ -1,0 +1,68 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "publication",
+  "requires": "iprange.v1.current.publish",
+  "fixtures": [
+    {"path": "input.txt", "source": {"text": "192.0.2.0-192.0.2.4\n198.51.100.10/31\n"}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.current.publish",
+     "params": {
+       "input": {"paths": ["$WORK/input.txt"], "family": "ipv4", "fix_network": true,
+                 "default_prefix": 32, "dns": {"threads": 1, "silent": true},
+                 "expand_at_paths": false, "max_line_bytes": 1024, "max_expanded_paths": 4},
+       "feed": "pubfeed", "value_tag": {"text": "pubtag"},
+       "metadata": {"mode": "replace_utf8", "text": "published"},
+       "destination": "$WORK/published.iprange",
+       "publication_policy": "fail_if_exists",
+       "immutable_feed_budget": {"max_heap_bytes": "16777216", "max_output_pages": "20000",
+                                 "max_workspace_pages": "20000", "max_open_files": 3}},
+     "expect_result": {
+       "report": {"input_record_count": "2", "normalized_interval_count": "2",
+                  "addresses": "7"},
+       "publication": {
+         "attempt": {
+           "commit_nonce": {"$ignore": true},
+           "creation_security": {
+             "commitment": "c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8",
+             "kind": 1
+           },
+           "database_id": {"$ignore": true},
+           "destination_basename": "cHVibGlzaGVkLmlwcmFuZ2U=",
+           "destination_basename_encoding": 1,
+           "directory_identity": {"$ignore": true},
+           "output_byte_length": "40960",
+           "output_identity": {"$ignore": true},
+           "output_sha512": {"$ignore": true},
+           "publication_attempt_id": {"$ignore": true},
+           "publication_policy": "fail_if_exists",
+           "reservation_identity": {"$ignore": true},
+           "transaction_id": "1"
+         },
+         "main_namespace_may_have_been_attempted": true,
+         "publication": "published",
+         "destination_content": "created",
+         "later_canonical": "absent",
+         "main_access_policy": "creator_only",
+         "coordination_access_policy": "absent",
+         "cleanup": {},
+         "coordination_cleanup": {},
+         "housekeeping": {"artifacts": []},
+         "visible_housekeeping": []
+       }
+     }},
+    {"kind": "rpc", "method": "iprange.v1.publication.inspect",
+     "params": {"path": "$WORK/published.iprange"},
+     "expect_result": {"inspection": {
+       "directory_identity": {"$ignore": true},
+       "coordination": "absent"
+     }}},
+    {"kind": "rpc", "method": "iprange.v1.publication.resolve",
+     "params": {"path": "$WORK/published.iprange", "resolution_mode": "complete"},
+     "expect_error": {"code": "unresolvable", "outcome": "not_started"}},
+    {"kind": "rpc", "method": "iprange.v1.publication.residue.remove",
+     "params": {"handle": {"kind": "publication_residue",
+                           "handle": "00112233445566778899aabbccddeeff"}},
+     "expect_error": {"code": "handle_not_found", "outcome": "not_started"}}
+  ]
+}

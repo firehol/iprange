@@ -1,0 +1,28 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "algebra.count",
+  "requires": "iprange.v1.algebra.count",
+  "fixtures": [
+    {"path": "membership.iprange", "source": {"generator": "v4_fixture", "seed": 1}},
+    {"path": "membership2.iprange", "source": {"generator": "v4_fixture", "seed": 1}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.algebra.count",
+     "params": {
+       "sources": [
+         {"source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
+          "scope": {"mode": "all"},
+          "membership_query_budget": {"max_heap_bytes": "1048576"}},
+         {"source": {"path": "$WORK/membership2.iprange", "mode": "immutable"},
+          "scope": {"mode": "all"},
+          "membership_query_budget": {"max_heap_bytes": "1048576"}}
+       ],
+       "selection": {"mode": "all"},
+       "algebra_budget": {"max_heap_bytes": "1048576", "max_sources": 2}},
+     "expect_result": {
+       "report": {"source_count": "2", "source_range_count": "8",
+                  "joined_segment_count": "4", "addresses": "41"},
+       "cardinality": "41"
+     }}
+  ]
+}

@@ -1,0 +1,330 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "live.lifecycle",
+  "requires": "iprange.v1.database.initialize_live",
+  "fixtures": [
+    {
+      "path": "membership.iprange",
+      "source": {
+        "generator": "v4_fixture",
+        "seed": 1
+      }
+    }
+  ],
+  "steps": [
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/credb.iprange",
+        "family": "ipv4",
+        "value_kind": "membership",
+        "structure_kind": "none",
+        "value_tag": {
+          "text": "membership"
+        },
+        "reader_capacity": 8
+      },
+      "expect_result": {
+        "address_family": "ipv4",
+        "value_kind": "membership",
+        "structure_kind": "none",
+        "value_tag": {
+          "hex": "6d656d62657273686970"
+        },
+        "database_id": {
+          "$ignore": true
+        },
+        "commit_nonce": {
+          "$ignore": true
+        },
+        "sidecar_id": {
+          "$ignore": true
+        },
+        "main_basename": "credb.iprange",
+        "reader_capacity": 8,
+        "state": "created",
+        "residue_possible": false,
+        "housekeeping": {
+          "artifacts": []
+        },
+        "visible_housekeeping": [],
+        "directory_identity": {
+          "$ignore": true
+        },
+        "main_identity": {
+          "$ignore": true
+        },
+        "sidecar_identity": {
+          "$ignore": true
+        }
+      },
+      "capture": [
+        "address_family",
+        "value_kind",
+        "structure_kind",
+        "value_tag",
+        "database_id",
+        "commit_nonce",
+        "sidecar_id",
+        "main_basename",
+        "reader_capacity",
+        "state",
+        "residue_possible",
+        "housekeeping",
+        "visible_housekeeping",
+        "directory_identity",
+        "main_identity",
+        "sidecar_identity"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.database.initialize_live",
+      "params": {
+        "path": "$WORK/membership.iprange",
+        "reader_capacity": 8
+      },
+      "expect_result": {
+        "operation": "initialize",
+        "status": "initialized",
+        "database_id": {
+          "$ignore": true
+        },
+        "transaction_id": "3",
+        "commit_nonce": {
+          "$ignore": true
+        },
+        "directory_identity": {
+          "$ignore": true
+        },
+        "main_identity": {
+          "$ignore": true
+        },
+        "main_basename": "membership.iprange",
+        "reader_capacity": 8,
+        "sidecar_id": {
+          "$ignore": true
+        },
+        "new_sidecar_identity": {
+          "$ignore": true
+        },
+        "new_sidecar_location": "canonical",
+        "residue_possible": false,
+        "housekeeping": {
+          "artifacts": []
+        },
+        "visible_housekeeping": []
+      }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.database.info",
+      "params": {
+        "source": {
+          "path": "$WORK/membership.iprange",
+          "mode": "live"
+        }
+      },
+      "expect_result": {
+        "info": {
+          "address_family": "ipv4",
+          "value_kind": "membership",
+          "structure_kind": "none",
+          "value_tag": {
+            "hex": "6d656d62657273686970"
+          },
+          "database_id": {
+            "$ignore": true
+          },
+          "transaction_id": "3",
+          "commit_nonce": {
+            "$ignore": true
+          },
+          "page_count": {
+            "$ignore": true
+          },
+          "range_record_count": "4",
+          "active_feed_count": "2",
+          "meta_selection": "proven_current"
+        },
+        "source_close": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "outcome": "closed"
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.feeds.create",
+      "params": {
+        "path": "$WORK/credb.iprange",
+        "feed": "gamma",
+        "current": {
+          "source": {
+            "path": "$WORK/membership.iprange",
+            "mode": "live"
+          },
+          "feed": "alpha"
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "expect_result": {
+        "report": {
+          "workflow": "create_feed",
+          "logical_change": "changed",
+          "input_record_count": "2",
+          "input_normalized_interval_count": "2",
+          "before_range_record_count": "0",
+          "after_range_record_count": "2",
+          "input_addresses": "31",
+          "before_addresses": "0",
+          "after_addresses": "31",
+          "unchanged_value_addresses": "0",
+          "changed_value_addresses": "0",
+          "added_addresses": "31",
+          "removed_addresses": "0",
+          "source_feed_count": "0",
+          "matched_feed_count": "0",
+          "created_feed_count": "0",
+          "source_distinct_membership_count": "0",
+          "translated_membership_count": "0"
+        },
+        "metadata_logical_change": "unchanged",
+        "commit": {
+          "attempted_database_id": {
+            "$ignore": true
+          },
+          "directory_identity": {
+            "$ignore": true
+          },
+          "main_identity": {
+            "$ignore": true
+          },
+          "attempted_transaction_id": "2",
+          "attempted_commit_nonce": {
+            "$ignore": true
+          },
+          "durability": "committed",
+          "cleanup": {},
+          "coordination_cleanup": {}
+        },
+        "writer_close": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "outcome": "closed"
+        }
+      },
+      "capture": [
+        "commit.attempted_database_id",
+        "commit.directory_identity",
+        "commit.main_identity",
+        "commit.attempted_transaction_id",
+        "commit.attempted_commit_nonce",
+        "commit.durability",
+        "commit.cleanup",
+        "commit.coordination_cleanup"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.commit.resolve",
+      "params": {
+        "path": "$WORK/credb.iprange",
+        "mode": "live",
+        "commit_result": {
+          "attempted_database_id": "$CAPTURE/commit.attempted_database_id",
+          "attempted_transaction_id": "$CAPTURE/commit.attempted_transaction_id",
+          "attempted_commit_nonce": "$CAPTURE/commit.attempted_commit_nonce"
+        }
+      },
+      "expect_error": {
+        "code": "invalid_argument",
+        "outcome": "not_started"
+      }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.database.create.resolve",
+      "params": {
+        "path": "$WORK/credb.iprange",
+        "resolution_mode": "complete",
+        "create_result": {
+          "address_family": "$CAPTURE/address_family",
+          "value_kind": "$CAPTURE/value_kind",
+          "structure_kind": "$CAPTURE/structure_kind",
+          "value_tag": "$CAPTURE/value_tag",
+          "database_id": "$CAPTURE/database_id",
+          "commit_nonce": "$CAPTURE/commit_nonce",
+          "sidecar_id": "$CAPTURE/sidecar_id",
+          "main_basename": "$CAPTURE/main_basename",
+          "reader_capacity": "$CAPTURE/reader_capacity",
+          "state": "$CAPTURE/state",
+          "residue_possible": "$CAPTURE/residue_possible",
+          "housekeeping": "$CAPTURE/housekeeping",
+          "visible_housekeeping": "$CAPTURE/visible_housekeeping",
+          "directory_identity": "$CAPTURE/directory_identity",
+          "main_identity": "$CAPTURE/main_identity",
+          "sidecar_identity": "$CAPTURE/sidecar_identity"
+        }
+      },
+      "expect_error": {
+        "code": "conflict",
+        "outcome": "outcome_unknown"
+      }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.database.reset_live",
+      "params": {
+        "path": "$WORK/credb.iprange",
+        "reader_capacity": 8,
+        "policy": "rollback_safe"
+      },
+      "expect_result": {
+        "operation": "reset",
+        "reset_policy": "rollback_safe",
+        "status": "initialized",
+        "database_id": {
+          "$ignore": true
+        },
+        "transaction_id": "2",
+        "commit_nonce": {
+          "$ignore": true
+        },
+        "directory_identity": {
+          "$ignore": true
+        },
+        "main_identity": {
+          "$ignore": true
+        },
+        "main_basename": "credb.iprange",
+        "reader_capacity": 8,
+        "sidecar_id": {
+          "$ignore": true
+        },
+        "previous_sidecar_identity": {
+          "$ignore": true
+        },
+        "new_sidecar_identity": {
+          "$ignore": true
+        },
+        "new_sidecar_location": "canonical",
+        "residue_possible": false,
+        "housekeeping": {
+          "artifacts": []
+        },
+        "visible_housekeeping": []
+      }
+    }
+  ]
+}

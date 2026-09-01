@@ -1,0 +1,60 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "algebra.publish",
+  "requires": "iprange.v1.algebra.publish",
+  "fixtures": [
+    {"path": "membership.iprange", "source": {"generator": "v4_fixture", "seed": 1}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.algebra.publish",
+     "params": {
+       "sources": [
+         {"source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
+          "scope": {"mode": "all"},
+          "membership_query_budget": {"max_heap_bytes": "1048576"}}
+       ],
+       "operation": {"kind": "union", "selection": {"mode": "all"}},
+       "output_mode": {"kind": "flat", "feed": "merged"},
+       "value_tag": {"text": "algebra"},
+       "metadata": {"mode": "replace_utf8", "text": "algebra-publish"},
+       "destination": "$WORK/algebra-out.iprange",
+       "publication_policy": "fail_if_exists",
+       "algebra_budget": {"max_heap_bytes": "1048576", "max_sources": 1},
+       "algebra_output_budget": {"max_output_pages": "20000", "max_open_files": 3}},
+     "expect_result": {
+       "report": {"source_count": "1", "source_range_count": "4",
+                  "joined_segment_count": "4", "output_feed_count": "1",
+                  "output_range_count": "3", "output_addresses": "41"},
+       "publication": {
+         "attempt": {
+           "commit_nonce": {"$ignore": true},
+           "creation_security": {
+             "commitment": "c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8",
+             "kind": 1
+           },
+           "database_id": {"$ignore": true},
+           "destination_basename": "YWxnZWJyYS1vdXQuaXByYW5nZQ==",
+           "destination_basename_encoding": 1,
+           "directory_identity": {"$ignore": true},
+           "output_byte_length": "40960",
+           "output_identity": {"$ignore": true},
+           "output_sha512": {"$ignore": true},
+           "publication_attempt_id": {"$ignore": true},
+           "publication_policy": "fail_if_exists",
+           "reservation_identity": {"$ignore": true},
+           "transaction_id": "1"
+         },
+         "main_namespace_may_have_been_attempted": true,
+         "publication": "published",
+         "destination_content": "desired",
+         "later_canonical": "none",
+         "main_access_policy": "creator_only",
+         "coordination_access_policy": "absent",
+         "cleanup": {},
+         "coordination_cleanup": {},
+         "housekeeping": {"artifacts": []},
+         "visible_housekeeping": []
+       }
+     }}
+  ]
+}

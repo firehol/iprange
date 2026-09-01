@@ -281,6 +281,11 @@ class CaseRunner:
         """Live sources must close internally and report source_close;
         immutable sources must not fabricate one (spec factual-close rules)."""
 
+        # snapshot_to opens and closes internally and its result is a
+        # complete SnapshotResult without close facts; the public SDK
+        # supplies no close result for it.
+        if method == "iprange.v1.snapshot":
+            return
         source = params.get("source") if isinstance(params.get("source"), dict) else None
         mode = source.get("mode") if source else None
         if mode not in ("live", "immutable"):

@@ -1083,9 +1083,12 @@ _register("iprange.v1.recover", _result(required_extra=("report", "publication")
 }))
 
 # resolution attempts
-_register("iprange.v1.commit.resolve", _result(required_extra=("resolution",), body={
-    "type": "object", "properties": {"resolution": COMMIT_RESOLUTION_RESULT},
-    "required": ["resolution"],
+_register("iprange.v1.commit.resolve", _result(required_extra=(), body={
+    # Flat like the other resolution-attempt results: the result IS the
+    # complete CommitResolutionResult (spec: result is CommitResolutionResult).
+    "type": "object",
+    "properties": COMMIT_RESOLUTION_RESULT["properties"],
+    "required": COMMIT_RESOLUTION_RESULT["required"],
 }))
 _register("iprange.v1.publication.inspect", _result(required_extra=("inspection",), body={
     "type": "object", "properties": {"inspection": PUBLICATION_RESIDUE_INSPECTION},

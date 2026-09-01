@@ -1,0 +1,26 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "query.matching_feeds",
+  "requires": "iprange.v1.query.matching_feeds",
+  "fixtures": [
+    {"path": "membership.iprange", "source": {"generator": "v4_fixture", "seed": 1}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.query.matching_feeds",
+     "params": {
+       "source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
+       "addresses": ["192.0.2.15", "198.51.100.15", "198.51.100.35", "203.0.113.1"],
+       "output": {"path": "$WORK/matching.csv", "format": "csv",
+                  "publication_policy": "fail_if_exists",
+                  "result_budget": {"max_rows": "64", "max_output_bytes": "65536",
+                                    "max_open_files": 3}}},
+     "expect_result": {
+       "output": {"path": {"$ignore": true}, "bytes": "88", "rows": "4",
+                  "sha256": "cae24335fefd2b28f621168e1fa300eec1599114b8c9c22b79d591e75f904877"},
+       "matching_feed_count": "4"
+     },
+     "assert_files": [
+       {"path": "matching.csv", "sha256": "cae24335fefd2b28f621168e1fa300eec1599114b8c9c22b79d591e75f904877"}
+     ]}
+  ]
+}
