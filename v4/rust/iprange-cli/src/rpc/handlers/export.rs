@@ -28,8 +28,8 @@ use super::reader::{
 use crate::io::export_writer::{
     emit_ipset, emit_netset, legacy_binary_header,
     legacy_binary_min_header_bytes, legacy_binary_record_v4, legacy_binary_record_v6, push_address,
-    push_ranges_line, write_json_value,
-    ExportBudget, ExportFacts, ExportWriter, PrefixFilter, LEGACY_ENDIANNESS_MARKER,
+    push_json_string, push_ranges_line, write_json_value, ExportBudget, ExportFacts, ExportWriter,
+    PrefixFilter, LEGACY_ENDIANNESS_MARKER,
 };
 
 /// View selector decoded from the strict wire schema.
@@ -54,7 +54,7 @@ enum ExportValue {
     Feeds(Vec<String>),
 }
 
-type SegmentSink<'a> = dyn FnMut(u128, u128, &ExportValue) -> Result<(), HandlerError> + 'a;
+type SegmentSink<'a> = dyn FnMut(u128, u128, ExportValue) -> Result<(), HandlerError> + 'a;
 type CoverageSink<'a> = dyn FnMut(u128, u128) -> Result<(), HandlerError> + 'a;
 
 pub fn validate_export(params: &Value) -> Result<(), String> {
@@ -385,14 +385,17 @@ fn write_rows(
         // is reused for every row so large exports allocate no per-row
         // strings.
         let mut line = String::new();
-        let mut pending: Option<(u128, u128, Value)> = None;
+        // The stream constructs one owned semantic value per segment
+        // and moves it here, so merging adjacent equal-value segments
+        // does not allocate: equal values drop the incoming segment,
+        // different values move it into the pending slot.
+        let mut pending: Option<(u128, u128, ExportValue)> = None;
         stream_segments(reader, view, &mut |from, to, value| {
             check_cancelled(cancellation)?;
-            let semantic = value_json(value);
             match pending.take() {
-                None => pending = Some((from, to, semantic)),
+                None => pending = Some((from, to, value)),
                 Some((pending_from, pending_to, pending_value)) => {
-                    if from == pending_to.saturating_add(1) && pending_value == semantic {
+                    if from == pending_to.saturating_add(1) && pending_value == value {
                         pending = Some((pending_from, to, pending_value));
                     } else {
                         write_row(
@@ -404,7 +407,7 @@ fn write_rows(
                             &pending_value,
                             &mut line,
                         )?;
-                        pending = Some((from, to, semantic));
+                        pending = Some((from, to, value));
                     }
                 }
             }
@@ -424,7 +427,7 @@ fn write_row(
     jsonl: bool,
     from: u128,
     to: u128,
-    value: &Value,
+    value: &ExportValue,
     line: &mut String,
 ) -> Result<(), HandlerError> {
     let span = span_of(from, to);
@@ -435,7 +438,27 @@ fn write_row(
         line.push_str(",\"to\":");
         push_address(line, to, host_prefix);
         line.push_str(",\"value\":");
-        write_json_value(line, value)?;
+        match value {
+            ExportValue::Direct(direct) => {
+                use std::fmt::Write as _;
+                let _ = write!(line, "{direct}");
+            }
+            ExportValue::Structured(structured) => write_json_value(line, structured)?,
+            // Feed names are [a-z0-9_.-] (SDK FeedName grammar), so the
+            // array literal is written straight into the line buffer.
+            ExportValue::Feeds(feeds) => {
+                line.push('[');
+                let mut first = true;
+                for feed in feeds {
+                    if !first {
+                        line.push(',');
+                    }
+                    first = false;
+                    push_json_string(line, feed);
+                }
+                line.push(']');
+            }
+        }
         line.push('}');
     } else {
         push_address(line, from, host_prefix);
@@ -443,27 +466,27 @@ fn write_row(
         push_address(line, to, host_prefix);
         line.push(',');
         match value {
-            Value::Number(number) => {
+            ExportValue::Direct(direct) => {
                 use std::fmt::Write as _;
-                let _ = write!(line, "{number}");
+                let _ = write!(line, "{direct}");
             }
             // Feed names are [a-z0-9_.-] (SDK FeedName grammar), so the
             // semicolon-joined field never needs RFC-4180 quoting.
-            Value::Array(names) => {
+            ExportValue::Feeds(feeds) => {
                 let mut first = true;
-                for name in names.iter().filter_map(Value::as_str) {
+                for feed in feeds {
                     if !first {
                         line.push(';');
                     }
                     first = false;
-                    line.push_str(name);
+                    line.push_str(feed);
                 }
             }
             // Structured values are canonical compact JSON; quote the
             // field when it contains RFC-4180 specials.
-            other => {
+            ExportValue::Structured(structured) => {
                 let start = line.len();
-                write_json_value(line, other)?;
+                write_json_value(line, structured)?;
                 let encoded = &line[start..];
                 let needs_quotes = encoded
                     .bytes()
@@ -619,14 +642,6 @@ fn stream_segments(
     }
 }
 
-fn value_json(value: &ExportValue) -> Value {
-    match value {
-        ExportValue::Direct(direct) => json!(direct),
-        ExportValue::Structured(structured) => structured.clone(),
-        ExportValue::Feeds(feeds) => json!(feeds),
-    }
-}
-
 fn span_of(from: u128, to: u128) -> u128 {
     // The complete IPv6 space alone exceeds the u128 counter; the
     // frozen wire result schema models a u64 counter, so saturate.
@@ -672,7 +687,7 @@ fn stream_segments_v4(
                 sink(
                     u128::from(range.from.0),
                     u128::from(range.to.0),
-                    &ExportValue::Direct(range.value),
+                    ExportValue::Direct(range.value),
                 )?;
             }
             Ok(())
@@ -684,7 +699,7 @@ fn stream_segments_v4(
                 let feeds = super::reader::threat_feed_names(reader, &range.value)?;
                 let value =
                     ExportValue::Structured(super::convert::enrichment_view(&range.value, &feeds));
-                sink(u128::from(range.from.0), u128::from(range.to.0), &value)?;
+                sink(u128::from(range.from.0), u128::from(range.to.0), value)?;
             }
             Ok(())
         }
@@ -692,9 +707,9 @@ fn stream_segments_v4(
             require_feed(reader, name)?;
             let mut cursor =
                 view_cursor(reader.feed_range_cursor_v4(name, RangeDirection::Forward))?;
+            let value = ExportValue::Feeds(vec![name.clone()]);
             while let Some(range) = sdk(cursor.next_range()).map_err(view_error)? {
-                let value = ExportValue::Feeds(vec![name.clone()]);
-                sink(u128::from(range.from.0), u128::from(range.to.0), &value)?;
+                sink(u128::from(range.from.0), u128::from(range.to.0), value.clone())?;
             }
             Ok(())
         }
@@ -722,7 +737,7 @@ fn stream_segments_v4(
                         .map_err(view_error)?
                         .map(|range| (u128::from(range.from.0), u128::from(range.to.0))))
                 },
-                &mut |from, to, names| sink(from, to, &ExportValue::Feeds(names.to_vec())),
+                &mut |from, to, names| sink(from, to, ExportValue::Feeds(names.to_vec())),
             )
         }
     }
@@ -740,7 +755,7 @@ fn stream_segments_v6(
                 sink(
                     range.from.to_u128(),
                     range.to.to_u128(),
-                    &ExportValue::Direct(range.value),
+                    ExportValue::Direct(range.value),
                 )?;
             }
             Ok(())
@@ -752,7 +767,7 @@ fn stream_segments_v6(
                 let feeds = super::reader::threat_feed_names(reader, &range.value)?;
                 let value =
                     ExportValue::Structured(super::convert::enrichment_view(&range.value, &feeds));
-                sink(range.from.to_u128(), range.to.to_u128(), &value)?;
+                sink(range.from.to_u128(), range.to.to_u128(), value)?;
             }
             Ok(())
         }
@@ -760,9 +775,9 @@ fn stream_segments_v6(
             require_feed(reader, name)?;
             let mut cursor =
                 view_cursor(reader.feed_range_cursor_v6(name, RangeDirection::Forward))?;
+            let value = ExportValue::Feeds(vec![name.clone()]);
             while let Some(range) = sdk(cursor.next_range()).map_err(view_error)? {
-                let value = ExportValue::Feeds(vec![name.clone()]);
-                sink(range.from.to_u128(), range.to.to_u128(), &value)?;
+                sink(range.from.to_u128(), range.to.to_u128(), value.clone())?;
             }
             Ok(())
         }
@@ -788,7 +803,7 @@ fn stream_segments_v6(
                         .map_err(view_error)?
                         .map(|range| (range.from.to_u128(), range.to.to_u128())))
                 },
-                &mut |from, to, names| sink(from, to, &ExportValue::Feeds(names.to_vec())),
+                &mut |from, to, names| sink(from, to, ExportValue::Feeds(names.to_vec())),
             )
         }
     }

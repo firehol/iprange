@@ -252,7 +252,7 @@
           "removals": {
             "publication": {
               "publication": "published",
-              "destination_content": "desired"
+              "destination_content": "created"
             },
             "output": {
               "path": "/example/out.jsonl",

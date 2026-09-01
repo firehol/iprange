@@ -920,7 +920,31 @@ fn collect_projection_facts(
                 drop(projection);
                 return ProjectionFacts::ReaderCloseFailed { report, close_error };
             }
-            None
+            // The projection and the reader close both failed: keep the
+            // projection error primary and merge the factual close
+            // result it carried into the error details, so no close
+            // failure evidence is dropped on the double-fault path.
+            let mut error = match outcome {
+                Err(error) => error,
+                Ok(_) => unreachable!("handled above"),
+            };
+            if let Some(mut close_details) = close_error.details {
+                if let Some(close_fact) = close_details
+                    .as_object_mut()
+                    .and_then(|members| members.remove("source_close"))
+                {
+                    let mut details = error.details.take().unwrap_or_else(|| json!({}));
+                    if let Some(members) = details.as_object_mut() {
+                        members.insert("source_close".into(), close_fact);
+                    }
+                    error.details = Some(details);
+                }
+            }
+            return ProjectionFacts::Failed {
+                report: None,
+                error,
+                source_close: None,
+            };
         }
     };
     match outcome {
