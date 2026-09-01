@@ -958,6 +958,38 @@ Open decisions:
   suites (664 tests); runner 30 cases / 15 oracle checks; golden PASS;
   sensitivity 13 modes; Go suite green.
 
+### 2026-09-01 (continued) — round-8 delta re-review (all five PASS)
+
+- The five own-model reviewers re-audited the round-8 fixes at
+  d324518c. Coverage, SDK-ownership, and registry/records scopes PASSed
+  immediately; performance and wire scopes returned two residuals,
+  both fixed and re-verified PASS:
+  - P2 (performance, Turing scope): export structured/feed views still
+    converted every segment to an owned serde_json Value (value_json)
+    and deep-cloned it into the merge slot. Fixed at ec7b6f7f: the
+    segment sink now moves one owned ExportValue per segment into a
+    move-based pending slot (no conversion, no retention deep clone);
+    write_row formats Direct/Structured/Feeds straight into the reused
+    line buffer (push_json_string mirrors serde_json escaping, output
+    byte-identical; runner export.netset and golden confirm).
+  - P2 (wire, McClintock scope): history.project still dropped the
+    live-reader close result when the projection error and the reader
+    close failure coincided: workflow_failure replaced the error's
+    existing details (struct-update), discarding the merged source_close
+    one hop after the d324518c fix. Fixed at 54b099dc: workflow_failure
+    and finish_writer_error now merge writer_close (and the completed
+    report) into the existing details via merge_writer_facts, with two
+    unit tests pinning that pre-existing source_close facts survive.
+  - P3 (SDK-ownership scope): golden publisher.json pinned the
+    adapter-owned removals destination_content as "desired"; the
+    emitter and the oracle case produce "created". Fixed at ec7b6f7f:
+    golden corrected to "created".
+- Delta verdicts at ec7b6f7f/54b099dc: five of five reviewers PASS; no
+  P0-P2 findings remain open.
+- Validation at 54b099dc: -D warnings clean; Rust workspace 50 suites
+  (671 tests, incl. two new workflow merge tests); runner 30 cases /
+  15 oracle checks; golden 53; sensitivity 13 modes; Go suite green.
+
 ### 2026-09-01 (continued) — complete handler registry
 
 - All 32 remaining v1 methods implemented by three parallel workers and
