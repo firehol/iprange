@@ -254,22 +254,29 @@ fn coordination_cleanup(value: &Value, field: &str) -> Result<CoordinationCleanu
     }
 }
 
-/// The wire conversion serialized only the artifact list, not the
-/// `Housekeeping` enum state; empty maps to `None`, non-empty to `Visible`.
+/// Reads the preserved `Housekeeping` state: absent `state` with no
+/// artifacts is `None`; the emitted states round-trip exactly.
 pub(crate) fn decode_housekeeping(value: &Value, field: &str) -> Result<Housekeeping, String> {
     let housekeeping = object(value, field)?;
-    exact_members(housekeeping, &["artifacts"], &[], field)?;
+    exact_members(housekeeping, &["state", "artifacts"], &[], field)?;
     let artifacts = housekeeping["artifacts"]
         .as_array()
         .ok_or_else(|| format!("{field}.artifacts must be an array"))?;
     if artifacts.iter().any(|artifact| !artifact.is_object()) {
         return Err(format!("{field}.artifacts entries must be objects"));
     }
-    Ok(if artifacts.is_empty() {
-        Housekeeping::None
-    } else {
-        Housekeeping::Visible
-    })
+    match housekeeping.get("state").map(Value::as_str) {
+        None => {
+            if artifacts.is_empty() {
+                Ok(Housekeeping::None)
+            } else {
+                Ok(Housekeeping::Visible)
+            }
+        }
+        Some(Some("crash_reappearance_possible")) => Ok(Housekeeping::CrashReappearancePossible),
+        Some(Some("visible")) => Ok(Housekeeping::Visible),
+        _ => Err(format!("{field}.state is invalid")),
+    }
 }
 
 fn decode_housekeeping_artifacts(value: &Value) -> Result<Box<[HousekeepingArtifact]>, String> {

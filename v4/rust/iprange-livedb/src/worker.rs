@@ -25,6 +25,25 @@ use control::{CallbackCheckpoint, Control, Opcode, State};
 
 pub(crate) use client::WorkerCleanup;
 
+/// Worker control-protocol version (control.rs PROTOCOL) reported by
+/// `validation::worker_availability`.
+pub(crate) const WORKER_PROTOCOL: &str = "1";
+
+/// Existence probe for the version-matched fault worker: the worker is
+/// available when at least one candidate executable name exists beside
+/// the running binary. This deliberately does not spawn the worker; the
+/// full handshake happens only when validation or recovery runs.
+pub(crate) fn availability() -> crate::validation::WorkerAvailability {
+    let available = client::worker_candidates()
+        .map(|candidates| candidates.iter().any(|path| path.is_file()))
+        .unwrap_or(false);
+    crate::validation::WorkerAvailability {
+        available,
+        protocol: WORKER_PROTOCOL,
+    }
+}
+
+
 const EXIT_USAGE: i32 = 64;
 const EXIT_PROTOCOL: i32 = 65;
 

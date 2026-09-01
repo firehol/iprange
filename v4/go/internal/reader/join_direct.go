@@ -423,12 +423,23 @@ func (t *joinDirectTable) emit(scope *ScopeData, check checkpoint, emit func([]D
 	if len(t.cells) == 0 {
 		return nil
 	}
+	// Sort by feed, then ascending direct value with the uncovered cell
+	// (direct == 0) last: cell.direct encodes direct_value + 1 for covered
+	// cells, so a real wire direct_value 0 is encoded as 1 and must stay
+	// ahead of the null cell (spec: rows per feed ascending, nulls last).
 	slices.SortFunc(t.cells, func(a, b joinDirectCell) int {
 		if a.feed != b.feed {
 			if a.feed < b.feed {
 				return -1
 			}
 			return 1
+		}
+		aUncovered, bUncovered := a.direct == 0, b.direct == 0
+		if aUncovered != bUncovered {
+			if aUncovered {
+				return 1
+			}
+			return -1
 		}
 		if a.direct < b.direct {
 			return -1

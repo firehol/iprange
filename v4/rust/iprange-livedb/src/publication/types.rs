@@ -142,6 +142,16 @@ impl PublicationProblem {
         }
     }
 
+    /// Constructs a problem with an owned message from wire-preserved
+    /// facts (public round-trip constructor).
+    pub fn owned(code: ErrorCode, os_code: Option<i32>, detail: String) -> Self {
+        Self {
+            code,
+            os_code,
+            detail: Cow::Owned(detail),
+        }
+    }
+
     pub(crate) fn with_owned_detail(code: ErrorCode, os_code: Option<i32>, detail: String) -> Self {
         Self {
             code,
@@ -211,6 +221,22 @@ pub struct CleanupArtifacts {
 }
 
 impl CleanupArtifacts {
+    /// Rebuilds a cleanup ledger from wire-preserved artifacts, keeping
+    /// order; returns None when the ledger exceeds its fixed capacity.
+    pub fn from_entries(entries: Vec<CleanupArtifact>) -> Option<Self> {
+        if entries.len() > CLEANUP_CAPACITY {
+            return None;
+        }
+        let mut ledger = [None, None, None, None];
+        for (index, artifact) in entries.into_iter().enumerate() {
+            ledger[index] = Some(artifact);
+        }
+        Some(Self {
+            len: ledger.iter().flatten().count(),
+            entries: ledger,
+        })
+    }
+
     pub(crate) const fn new() -> Self {
         Self {
             entries: [None, None, None, None],

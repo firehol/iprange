@@ -1784,27 +1784,52 @@ fn open_temporary(path: &str, mode: &str, state: &SessionState) -> Result<Reader
     }
 }
 
-/// Close every ephemeral reader; success drops the live close fact
-/// (the frozen result schemas list no `source_close` member), while a
-/// close failure preserves the completed report in the error details.
+/// Close every ephemeral reader; success carries every factual live
+/// close result as `source_closes` in reader order (absent for
+/// immutable readers), while a close failure preserves the completed
+/// report in the error details.
 fn close_readers(readers: Vec<ReaderValue>, report: Value) -> Result<Value, HandlerError> {
+    let mut closes = Vec::new();
     let mut first_error: Option<HandlerError> = None;
     for mut reader in readers {
-        if let Err(error) = reader::close_ephemeral_reader(&mut reader) {
-            if first_error.is_none() {
-                first_error = Some(error);
+        match reader::close_ephemeral_reader(&mut reader) {
+            Ok(Some(close)) => closes.push(close),
+            Ok(None) => {}
+            Err(error) => {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
             }
         }
     }
     match first_error {
         Some(error) => Err(reader::preserve_completed_report(error, report)),
-        None => reader::bounded_result(report),
+        None => {
+            let mut result = report;
+            if !closes.is_empty() {
+                result
+                    .as_object_mut()
+                    .expect("method results are objects")
+                    .insert("source_closes".into(), Value::Array(closes));
+            }
+            reader::bounded_result(result)
+        }
     }
 }
 
+/// Close one ephemeral reader; success carries the factual live close
+/// result as `source_close` (absent for immutable readers).
 fn close_reader(reader: &mut ReaderValue, report: Value) -> Result<Value, HandlerError> {
     match reader::close_ephemeral_reader(reader) {
-        Ok(_) => reader::bounded_result(report),
+        Ok(Some(source_close)) => {
+            let mut result = report;
+            result
+                .as_object_mut()
+                .expect("method results are objects")
+                .insert("source_close".into(), source_close);
+            reader::bounded_result(result)
+        }
+        Ok(None) => reader::bounded_result(report),
         Err(error) => Err(reader::preserve_completed_report(error, report)),
     }
 }

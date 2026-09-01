@@ -502,26 +502,6 @@
         "id": "g-feeds.delete",
         "result": {
           "method": "iprange.v1.feeds.delete",
-          "report": {
-            "workflow": "create_feed",
-            "logical_change": "changed",
-            "input_record_count": "3",
-            "input_normalized_interval_count": "2",
-            "before_range_record_count": "4",
-            "after_range_record_count": "5",
-            "input_addresses": "156",
-            "before_addresses": "65536",
-            "after_addresses": "65538",
-            "unchanged_value_addresses": "65530",
-            "changed_value_addresses": "8",
-            "added_addresses": "2",
-            "removed_addresses": "0",
-            "source_feed_count": "0",
-            "matched_feed_count": "0",
-            "created_feed_count": "0",
-            "source_distinct_membership_count": "0",
-            "translated_membership_count": "0"
-          },
           "metadata_logical_change": "unchanged",
           "commit": {
             "attempted_database_id": "b0000000000000000000000000000001",
@@ -572,26 +552,6 @@
         "id": "g-feeds.rename",
         "result": {
           "method": "iprange.v1.feeds.rename",
-          "report": {
-            "workflow": "create_feed",
-            "logical_change": "changed",
-            "input_record_count": "3",
-            "input_normalized_interval_count": "2",
-            "before_range_record_count": "4",
-            "after_range_record_count": "5",
-            "input_addresses": "156",
-            "before_addresses": "65536",
-            "after_addresses": "65538",
-            "unchanged_value_addresses": "65530",
-            "changed_value_addresses": "8",
-            "added_addresses": "2",
-            "removed_addresses": "0",
-            "source_feed_count": "0",
-            "matched_feed_count": "0",
-            "created_feed_count": "0",
-            "source_distinct_membership_count": "0",
-            "translated_membership_count": "0"
-          },
           "metadata_logical_change": "unchanged",
           "commit": {
             "attempted_database_id": "b0000000000000000000000000000001",

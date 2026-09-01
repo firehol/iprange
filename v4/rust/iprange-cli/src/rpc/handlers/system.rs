@@ -38,7 +38,10 @@ pub fn describe(_state: &mut SessionState, _params: Value) -> Result<Value, Hand
             "lookup_addresses": 4096,
             "cursor_records": 4096
         },
-        "fault_worker": {"available": false, "protocol": ""},
+        "fault_worker": {
+            "available": iprange_livedb::validation::worker_availability().available,
+            "protocol": iprange_livedb::validation::worker_availability().protocol,
+        },
         "platform_result_fields": []
     }))
 }

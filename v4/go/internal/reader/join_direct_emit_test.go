@@ -57,3 +57,50 @@ func TestJoinDirectEmitAllocatesNothingPerCell(t *testing.T) {
 		t.Fatalf("emitted direct values look corrupted: sum %d", values)
 	}
 }
+
+// TestJoinDirectEmitOrdersRowsPerSpec pins the normative
+// iprange.v1.join.direct row order: each feed ascending by direct value
+// with the uncovered (null) cell last. A covered cell whose wire
+// direct_value is 0 is encoded as cell.direct 1, so it must emit before
+// the uncovered cell (cell.direct == 0).
+
+func TestJoinDirectEmitOrdersRowsPerSpec(t *testing.T) {
+	scope := &ScopeData{entries: []FeedEntry{
+		{Name: []byte("feed-a")},
+		{Name: []byte("feed-b")},
+	}}
+	// Direct encoding: cell.direct = wire direct_value + 1 for covered
+	// cells; cell.direct == 0 is the uncovered cell. Cells are added in
+	// scrambled order so the assertion proves emit sorts, not insertion.
+	table := &joinDirectTable{}
+	table.cells = append(table.cells,
+		joinDirectCell{feed: 0, direct: 3}, // covered, wire 2
+		joinDirectCell{feed: 1, direct: 1}, // covered, wire 0
+		joinDirectCell{feed: 0, direct: 0}, // uncovered
+		joinDirectCell{feed: 0, direct: 1}, // covered, wire 0
+		joinDirectCell{feed: 1, direct: 0}, // uncovered
+	)
+
+	var got []string
+	if err := table.emit(scope, nil, func(batch []DirectJoinCell) error {
+		for _, cell := range batch {
+			if cell.DirectValue == nil {
+				got = append(got, string(cell.Feed)+":null")
+			} else {
+				got = append(got, fmt.Sprintf("%s:%d", cell.Feed, *cell.DirectValue))
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal("emit:", err)
+	}
+	want := []string{"feed-a:0", "feed-a:2", "feed-a:null", "feed-b:0", "feed-b:null"}
+	if len(got) != len(want) {
+		t.Fatalf("emit delivered %d rows, want %d\ngot:  %v\nwant: %v", len(got), len(want), got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("row %d = %q, want %q\ngot:  %v\nwant: %v", i, got[i], want[i], got, want)
+		}
+	}
+}

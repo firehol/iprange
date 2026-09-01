@@ -341,9 +341,10 @@ names may differ internally but must serialize identically.
 A method that internally opens a live reader or writer must close it before
 responding. Where the public SDK supplies a factual close result, success
 contains it as `source_close`, `writer_close`, or the method-specific close
-field. A close failure is a product error whose `details` preserve both the
-completed logical report and the close result; it is never silently converted
-to success.
+field. A method that opens several readers reports every live close result,
+in reader close order, as `source_closes`. A close failure is a product
+error whose `details` preserve both the completed logical report and the
+close result; it is never silently converted to success.
 
 ### Error envelope
 
@@ -685,7 +686,10 @@ complete workflow and commit/close facts.
 - `iprange.v1.feeds.import`: params `path`, `source` database source,
   `metadata`, and `writer_budget`.
 
-Each returns the complete corresponding `WorkflowReport` and commit/close
+Each of create, replace, and import returns the complete corresponding
+`WorkflowReport` and commit/close facts. Delete and rename return the
+commit, metadata, and writer-close facts only: the SDK exposes no workflow
+report for them, and the catalog-changing outcome is carried by the commit
 facts. Create preserves an empty feed. Replace requires an existing feed.
 Import copies the complete source catalog/memberships by name and translates
 all internal IDs.

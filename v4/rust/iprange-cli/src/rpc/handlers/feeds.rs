@@ -230,38 +230,22 @@ fn feed_change_workflow(
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
-    // The SDK exposes no WorkflowReport for delete/rename; the frozen
-    // result schema requires one, so the factual workflow name and
-    // logical change are reported with zero counters.
-    let report = feed_change_report(workflow);
     let facts = match run_feed_change(&mut writer, object, workflow, old, &state.token) {
         Ok(prepared) => match publish_changed(prepared, &metadata) {
             Ok((metadata_logical_change, commit)) => FeedChangeFacts::Changed {
-                report,
                 metadata_logical_change,
                 commit,
             },
-            Err(error) => FeedChangeFacts::Failed {
-                report: Some(report),
-                error,
-            },
+            Err(error) => FeedChangeFacts::Failed { error },
         },
-        Err(error) => FeedChangeFacts::Failed { report: None, error },
+        Err(error) => FeedChangeFacts::Failed { error },
     };
     match facts {
         FeedChangeFacts::Changed {
-            report,
             metadata_logical_change,
             commit,
-        } => finish_publisher(&mut writer, method, &report, metadata_logical_change, commit),
-        FeedChangeFacts::Failed {
-            report: Some(report),
-            error,
-        } => Err(finish_writer_error(&mut writer, error, &report)),
-        FeedChangeFacts::Failed {
-            report: None,
-            error,
-        } => {
+        } => finish_publisher(&mut writer, method, None, metadata_logical_change, commit),
+        FeedChangeFacts::Failed { error } => {
             let close = close_writer(&mut writer);
             let details = match close {
                 Ok(close) => json!({"writer_close": close}),
@@ -303,14 +287,15 @@ enum FeedWorkflowFacts {
 }
 
 /// Borrow-free outcome of one prepared feed change (delete or rename).
+/// The SDK exposes no WorkflowReport for these mutations (product
+/// decision D2): the fact-carrying outcome is the commit result plus
+/// the metadata and writer-close facts.
 enum FeedChangeFacts {
     Changed {
-        report: Value,
         metadata_logical_change: &'static str,
         commit: Option<std::result::Result<CommitResult, Error>>,
     },
     Failed {
-        report: Option<Value>,
         error: HandlerError,
     },
 }
@@ -366,7 +351,7 @@ fn finish_workflow_facts(
         FeedWorkflowFacts::NoChange { report } => {
             match publish_no_change(writer, metadata, token) {
                 Ok((metadata_logical_change, commit)) => {
-                    finish_publisher(writer, method, &report, metadata_logical_change, commit)
+                    finish_publisher(writer, method, Some(&report), metadata_logical_change, commit)
                 }
                 Err(error) => Err(finish_writer_error(writer, error, &report)),
             }
@@ -375,7 +360,7 @@ fn finish_workflow_facts(
             report,
             metadata_logical_change,
             commit,
-        } => finish_publisher(writer, method, &report, metadata_logical_change, commit),
+        } => finish_publisher(writer, method, Some(&report), metadata_logical_change, commit),
         FeedWorkflowFacts::Failed { report, error } => match report {
             Some(report) => Err(finish_writer_error(writer, error, &report)),
             None => Err(workflow_failure(writer, error)),
@@ -476,20 +461,23 @@ fn publish_no_change(
 fn finish_publisher(
     writer: &mut LiveWriter,
     method: &str,
-    report: &Value,
+    report: Option<&Value>,
     metadata_logical_change: &'static str,
     commit: Option<std::result::Result<CommitResult, Error>>,
 ) -> Result<Value, HandlerError> {
     if let Some(Err(error)) = &commit {
         let close = close_writer(writer)?;
         let failure = lifecycle::sdk_error(error, "not_started");
+        let mut details = json!({
+            "metadata_logical_change": metadata_logical_change,
+            "writer_close": close,
+            "failure": {"code": failure.code, "message": failure.message},
+        });
+        if let Some(report) = report {
+            details["report"] = report.clone();
+        }
         return Err(HandlerError {
-            details: Some(json!({
-                "report": report,
-                "metadata_logical_change": metadata_logical_change,
-                "writer_close": close,
-                "failure": {"code": failure.code, "message": failure.message},
-            })),
+            details: Some(details),
             ..failure
         });
     }
@@ -502,25 +490,30 @@ fn finish_publisher(
                 || "publisher commit did not complete".to_owned(),
                 |error| error.to_string(),
             );
+            let mut details = json!({
+                "metadata_logical_change": metadata_logical_change,
+                "commit": lifecycle::commit_result(result)?,
+                "writer_close": close,
+            });
+            if let Some(report) = report {
+                details["report"] = report.clone();
+            }
             return Err(HandlerError {
                 code,
                 outcome: durability_outcome(result.durability),
                 message,
-                details: Some(json!({
-                    "report": report,
-                    "metadata_logical_change": metadata_logical_change,
-                    "commit": lifecycle::commit_result(result)?,
-                    "writer_close": close,
-                })),
+                details: Some(details),
             });
         }
     }
     let mut result = json!({
         "method": method,
-        "report": report,
         "metadata_logical_change": metadata_logical_change,
         "writer_close": close_writer(writer)?,
     });
+    if let Some(report) = report {
+        result["report"] = report.clone();
+    }
     if let Some(Ok(commit)) = &commit {
         result["commit"] = lifecycle::commit_result(commit)?;
     }
@@ -606,32 +599,6 @@ fn workflow_report(report: &WorkflowReport) -> Value {
         "created_feed_count": report.created_feed_count.to_string(),
         "source_distinct_membership_count": report.source_distinct_membership_count.to_string(),
         "translated_membership_count": report.translated_membership_count.to_string(),
-    })
-}
-
-/// Delete/rename have no SDK WorkflowReport; the wire schema requires the
-/// member, so only the workflow name and the always-changed logical change
-/// are factual and every counter is zero.
-fn feed_change_report(workflow: &str) -> Value {
-    json!({
-        "workflow": workflow,
-        "logical_change": "changed",
-        "input_record_count": "0",
-        "input_normalized_interval_count": "0",
-        "before_range_record_count": "0",
-        "after_range_record_count": "0",
-        "input_addresses": "0",
-        "before_addresses": "0",
-        "after_addresses": "0",
-        "unchanged_value_addresses": "0",
-        "changed_value_addresses": "0",
-        "added_addresses": "0",
-        "removed_addresses": "0",
-        "source_feed_count": "0",
-        "matched_feed_count": "0",
-        "created_feed_count": "0",
-        "source_distinct_membership_count": "0",
-        "translated_membership_count": "0",
     })
 }
 

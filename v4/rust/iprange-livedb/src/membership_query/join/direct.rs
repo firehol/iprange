@@ -376,8 +376,10 @@ impl Table {
         if self.cells.is_empty() {
             return Ok(());
         }
+        // Spec order: feed catalog order, then ascending direct value, with
+        // the uncovered cell (encoded direct == 0) LAST within each feed.
         self.cells
-            .sort_unstable_by_key(|cell| (cell.feed, cell.direct));
+            .sort_unstable_by_key(|cell| (cell.feed, cell.direct == 0, cell.direct));
         let first = self.cells[0];
         let empty = output_cell(scope, first);
         let mut batch = [empty; RESULT_BATCH];

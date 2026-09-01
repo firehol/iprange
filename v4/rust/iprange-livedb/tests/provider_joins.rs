@@ -799,3 +799,82 @@ fn direct_ranges(values: &[Option<u32>]) -> Vec<DirectRange<Ipv4Key>> {
     }
     ranges
 }
+
+#[test]
+fn provider_joins_direct_order_covered_then_uncovered_with_real_zero() {
+    // The wire contract puts the uncovered cell (direct_value null) LAST
+    // within each feed, after covered cells in ascending direct value; a
+    // real provider value 0 must remain a covered cell (wire 0), not the
+    // uncovered sentinel.
+    let mut files = Files::new();
+    let left_path = files.path("order-left");
+    let direct_path = files.path("order-direct");
+    let cancellation = CancellationToken::new();
+
+    create(
+        &left_path,
+        AddressFamily::Ipv4,
+        ValueKind::Membership,
+        ValueTag::new(b"feeds").unwrap(),
+    );
+    create(
+        &direct_path,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        ValueTag::new(b"direct").unwrap(),
+    );
+
+    let mut left_writer =
+        LiveWriter::open(&left_path, transaction_budget(), &cancellation).unwrap();
+    add_feed_v4(&mut left_writer, "a", &[(0, 9), (20, 29)]);
+    left_writer.close().unwrap();
+
+    let mut direct_writer =
+        LiveWriter::open(&direct_path, transaction_budget(), &cancellation).unwrap();
+    let mut replacement = direct_writer
+        .begin_direct_replacement(&cancellation)
+        .unwrap();
+    replacement
+        .add_ranges_v4_slice(&[DirectRange {
+            from: Ipv4Key(0),
+            to: Ipv4Key(9),
+            value: 0,
+        }])
+        .unwrap();
+    commit(replacement.finish_input().unwrap());
+    direct_writer.close().unwrap();
+
+    let mut left_reader = LiveReader::open(&left_path, &cancellation).unwrap();
+    let mut direct_reader = LiveReader::open(&direct_path, &cancellation).unwrap();
+    let left = left_reader
+        .membership_query()
+        .unwrap()
+        .named_feeds(
+            &[FeedName::new("a").unwrap()],
+            query_budget(),
+            &cancellation,
+        )
+        .unwrap();
+
+    let mut direct = DirectOutput::default();
+    let report = left
+        .join_direct(
+            DirectJoinSource::Live(&direct_reader),
+            DirectJoinBudget {
+                max_result_cells: 2,
+            },
+            &mut direct,
+            &cancellation,
+        )
+        .unwrap();
+    assert_eq!(report.result_cell_count, 2);
+    assert_eq!(direct.0.len(), 2);
+    assert_eq!(direct.0[0].direct_value, Some(0), "covered cell (wire 0) first");
+    assert_eq!(direct.0[0].addresses, Cardinality129::from_u64(10));
+    assert_eq!(direct.0[1].direct_value, None, "uncovered cell last");
+    assert_eq!(direct.0[1].addresses, Cardinality129::from_u64(10));
+
+    drop(left);
+    direct_reader.close().unwrap();
+    left_reader.close().unwrap();
+}

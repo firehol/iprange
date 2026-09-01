@@ -345,6 +345,13 @@ fn read_file_exact(path: &str) -> Result<Vec<u8>, HandlerError> {
                 format!("metadata source is not a regular file: {path}"),
             ));
         }
+        Ok(value) if value.len() > iprange_livedb::MAX_METADATA_UNCOMPRESSED => {
+            return Err(HandlerError::new(
+                "invalid_argument",
+                "not_started",
+                "metadata exceeds 20 MiB",
+            ));
+        }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
             return Err(HandlerError::new(
                 "invalid_path",
@@ -507,8 +514,15 @@ pub(crate) fn file_identity(identity: &LocalFileIdentity) -> Result<Value, Handl
     }))
 }
 
-pub(crate) fn housekeeping(_state: Housekeeping, artifacts: &[HousekeepingArtifact]) -> Value {
-    json!({"artifacts": artifacts.iter().map(housekeeping_artifact).collect::<Vec<_>>()})
+pub(crate) fn housekeeping(state: Housekeeping, artifacts: &[HousekeepingArtifact]) -> Value {
+    let listed = artifacts.iter().map(housekeeping_artifact).collect::<Vec<_>>();
+    match state {
+        Housekeeping::None => json!({"artifacts": []}),
+        Housekeeping::CrashReappearancePossible => {
+            json!({"state": "crash_reappearance_possible", "artifacts": listed})
+        }
+        Housekeeping::Visible => json!({"state": "visible", "artifacts": listed}),
+    }
 }
 
 pub(crate) fn housekeeping_artifact(value: &HousekeepingArtifact) -> Value {
@@ -723,9 +737,9 @@ pub(crate) fn validate_value_tag(value: &Value) -> Result<(), String> {
             .ok_or("value_tag.hex must be a string")?;
         let valid = tag.len() <= 30
             && tag.len() % 2 == 0
-            && tag
-                .bytes()
-                .all(|byte| byte.is_ascii_digit() || byte.is_ascii_lowercase());
+            && tag.bytes().all(|byte| {
+                matches!(byte, b'0'..=b'9' | b'a'..=b'f')
+            });
         let contains_nul = tag.as_bytes().chunks_exact(2).any(|pair| pair == b"00");
         if contains_nul {
             return Err("value_tag.hex must not encode a NUL byte".into());

@@ -383,7 +383,7 @@ impl std::fmt::Debug for WorkerCleanup {
 #[path = "client_tests.rs"]
 mod tests;
 
-fn worker_candidates() -> Result<Vec<PathBuf>> {
+pub(crate) fn worker_candidates() -> Result<Vec<PathBuf>> {
     let name = format!("iprange-v4-worker{}", std::env::consts::EXE_SUFFIX);
     let current = std::env::current_exe()?;
     let mut candidates = Vec::with_capacity(2);

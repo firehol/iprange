@@ -236,6 +236,12 @@ CLOSE_RESULT = {
     "required": ["outcome", "cleanup", "coordination_cleanup"],
     "additional": False,
 }
+# Multi-reader methods report every live close in reader order.
+CLOSE_RESULT_LIST = {
+    "type": "array",
+    "items": CLOSE_RESULT,
+}
+
 # PublicationResult (publication/types.rs) mechanical conversion.
 PUBLICATION_RESULT = {
     "type": "object",
@@ -815,10 +821,23 @@ _register("iprange.v1.current.publish", _result(
         "required": ["report", "publication"],
     }))
 _register("iprange.v1.direct.replace", _result(required_extra=(), body=_PUBLISHER_COMMON))
+_FEED_CHANGE_COMMON = {
+    "type": "object",
+    "properties": {
+        # Delete and rename have no SDK WorkflowReport (product decision
+        # D2); the catalog-changing outcome is carried by the commit
+        # facts and the always-factual metadata/close facts.
+        "metadata_logical_change": C.LOGICAL_CHANGE,
+        "commit": COMMIT_RESULT,
+        "writer_close": CLOSE_RESULT,
+    },
+    "required": ["metadata_logical_change", "writer_close"],
+}
 for _m in ("iprange.v1.feeds.create", "iprange.v1.feeds.replace",
-           "iprange.v1.feeds.delete", "iprange.v1.feeds.rename",
            "iprange.v1.feeds.import"):
     _register(_m, _result(required_extra=(), body=_PUBLISHER_COMMON))
+for _m in ("iprange.v1.feeds.delete", "iprange.v1.feeds.rename"):
+    _register(_m, _result(required_extra=(), body=_FEED_CHANGE_COMMON))
 _register("iprange.v1.retention.first_seen.refresh", _result(required_extra=(), body={
     "type": "object",
     "properties": dict(_PUBLISHER_COMMON["properties"], **{
@@ -839,6 +858,7 @@ _register("iprange.v1.history.project", _result(required_extra=(), body={
     "type": "object",
     "properties": dict(_PUBLISHER_COMMON["properties"], **{
         "report": HISTORY_PROJECTION_REPORT,
+        "source_closes": CLOSE_RESULT_LIST,
     }),
     "required": _PUBLISHER_COMMON["required"],
 }))
@@ -846,30 +866,37 @@ _register("iprange.v1.history.project", _result(required_extra=(), body={
 # query family
 _register("iprange.v1.query.cardinalities", _result(required_extra=("output", "report"), body={
     "type": "object",
-    "properties": {"output": OUTPUT_FACTS, "report": MEMBERSHIP_AGGREGATION_REPORT},
+    "properties": {"output": OUTPUT_FACTS, "report": MEMBERSHIP_AGGREGATION_REPORT,
+                   # Live sources only: complete live close result conversion.
+                   "source_close": CLOSE_RESULT},
     "required": ["output", "report"],
 }))
 _register("iprange.v1.query.overlaps", _result(required_extra=("output", "report"), body={
     "type": "object",
-    "properties": {"output": OUTPUT_FACTS, "report": MEMBERSHIP_AGGREGATION_REPORT},
+    "properties": {"output": OUTPUT_FACTS, "report": MEMBERSHIP_AGGREGATION_REPORT,
+                   "source_close": CLOSE_RESULT},
     "required": ["output", "report"],
 }))
 _register("iprange.v1.query.matching_feeds", _result(
     required_extra=("output", "matching_feed_count"), body={
         "type": "object",
-        "properties": {"output": OUTPUT_FACTS, "matching_feed_count": C.U64},
+        "properties": {"output": OUTPUT_FACTS, "matching_feed_count": C.U64,
+                       "source_close": CLOSE_RESULT},
         "required": ["output", "matching_feed_count"],
     }))
 
 # joins
 _register("iprange.v1.join.direct", _result(required_extra=("output", "report"), body={
     "type": "object",
-    "properties": {"output": OUTPUT_FACTS, "report": DIRECT_JOIN_REPORT},
+    "properties": {"output": OUTPUT_FACTS, "report": DIRECT_JOIN_REPORT,
+                   # Live sources only: every live close in reader order.
+                   "source_closes": CLOSE_RESULT_LIST},
     "required": ["output", "report"],
 }))
 _register("iprange.v1.join.membership", _result(required_extra=("output", "report"), body={
     "type": "object",
-    "properties": {"output": OUTPUT_FACTS, "report": MEMBERSHIP_JOIN_REPORT},
+    "properties": {"output": OUTPUT_FACTS, "report": MEMBERSHIP_JOIN_REPORT,
+                   "source_closes": CLOSE_RESULT_LIST},
     "required": ["output", "report"],
 }))
 
@@ -877,6 +904,7 @@ _register("iprange.v1.join.membership", _result(required_extra=("output", "repor
 _register("iprange.v1.algebra.count", _result(required_extra=("report", "cardinality"), body={
     "type": "object",
     "properties": {
+        "source_closes": CLOSE_RESULT_LIST,
         "report": {
             "type": "object",
             "properties": {
@@ -895,6 +923,7 @@ _register("iprange.v1.algebra.count", _result(required_extra=("report", "cardina
 _register("iprange.v1.algebra.compare", _result(required_extra=("report",), body={
     "type": "object",
     "properties": {
+        "source_closes": CLOSE_RESULT_LIST,
         "report": {
             "type": "object",
             "properties": {
@@ -921,6 +950,7 @@ _register("iprange.v1.algebra.compare", _result(required_extra=("report",), body
 _register("iprange.v1.algebra.publish", _result(required_extra=("report", "publication"), body={
     "type": "object",
     "properties": {
+        "source_closes": CLOSE_RESULT_LIST,
         "report": {
             "type": "object",
             "properties": {

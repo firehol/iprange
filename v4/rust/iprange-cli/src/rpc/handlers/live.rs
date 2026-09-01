@@ -631,7 +631,7 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
-    let facts = match family {
+    let outcome = match family {
         AddressFamily::Ipv4 => run_first_seen_v4(
             &mut writer,
             &mut reader,
@@ -640,7 +640,17 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
             collector.as_mut(),
             &metadata,
             &state.token,
-        )?,
+        )
+        .and_then(|facts| {
+            publisher_value(
+                facts,
+                &mut writer,
+                &metadata,
+                "iprange.v1.retention.first_seen.refresh",
+                collector.as_ref(),
+                &state.token,
+            )
+        }),
         AddressFamily::Ipv6 => run_first_seen_v6(
             &mut writer,
             &mut reader,
@@ -649,16 +659,38 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
             collector.as_mut(),
             &metadata,
             &state.token,
-        )?,
+        )
+        .and_then(|facts| {
+            publisher_value(
+                facts,
+                &mut writer,
+                &metadata,
+                "iprange.v1.retention.first_seen.refresh",
+                collector.as_ref(),
+                &state.token,
+            )
+        }),
     };
-    let mut result = publisher_value(
-        facts,
-        &mut writer,
-        &metadata,
-        "iprange.v1.retention.first_seen.refresh",
-        collector.as_ref(),
-        &state.token,
-    )?;
+    let mut result = match outcome {
+        Ok(result) => result,
+        Err(mut error) => {
+            // The private removal output is discarded explicitly on every
+            // failure path; a failed removal is reported with the error.
+            if let Some(collector) = collector {
+                if let Err(discard) = collector.discard() {
+                    let mut details = error.details.take().unwrap_or_else(|| json!({}));
+                    if let Some(members) = details.as_object_mut() {
+                        members.insert(
+                            "cleanup_failure".to_owned(),
+                            json!({"code": discard.code, "message": discard.message}),
+                        );
+                    }
+                    error.details = Some(details);
+                }
+            }
+            return Err(error);
+        }
+    };
     if let Some(collector) = collector {
         match result
             .get("commit")
@@ -681,9 +713,16 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
                     });
                 }
             },
-            // No commit or a non-committed commit: the collector Drop
-            // already discarded the private removal file.
-            _ => {}
+            // No commit or a non-committed commit: discard the private
+            // removal file explicitly; a failed removal is reported.
+            _ => {
+                collector.discard().map_err(|discard| HandlerError {
+                    code: discard.code,
+                    outcome: "not_started",
+                    message: discard.message,
+                    details: Some(json!({"result": result})),
+                })?;
+            }
         }
     }
     bounded(result)
@@ -1575,10 +1614,47 @@ impl RemovalCollector {
         json!({"publication": removal_publication_facts("not_published", "absent")})
     }
 
+    /// Explicit best-effort removal of the private temporary. Every
+    /// terminal path that does not publish must call this; removal
+    /// failures are reported, never absorbed by an automatic destructor.
+    fn discard(self) -> Result<(), HandlerError> {
+        match std::fs::remove_file(&self.temporary) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(file_error(error, "remove removal output temporary")),
+        }
+    }
+
     /// Flush, sync, atomically publish, and sync the directory. The caller
     /// invokes this only after the commit is factually known to have
     /// committed; the outcome is reported with the commit's outcome.
     fn publish(mut self) -> Result<Value, HandlerError> {
+        match self.publish_inner() {
+            Ok(value) => Ok(value),
+            Err(mut error) => {
+                // The private temporary is removed explicitly on publication
+                // failure; a failed removal is reported with the error.
+                if let Err(remove_error) = std::fs::remove_file(&self.temporary) {
+                    if remove_error.kind() != std::io::ErrorKind::NotFound {
+                        let mut details = error.details.take().unwrap_or_else(|| json!({}));
+                        if let Some(members) = details.as_object_mut() {
+                            members.insert(
+                                "cleanup_failure".to_owned(),
+                                json!({
+                                    "error": remove_error.to_string(),
+                                    "path": self.temporary.to_string_lossy(),
+                                }),
+                            );
+                        }
+                        error.details = Some(details);
+                    }
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn publish_inner(&mut self) -> Result<Value, HandlerError> {
         self.file
             .flush()
             .map_err(|error| file_error(error, "sync removal output"))?;

@@ -39,6 +39,22 @@ pub use types::{
 };
 
 /// Validate one explicitly selected source mode without changing the source.
+/// Factual availability facts for the version-matched fault worker
+/// used by validation and recovery (spec `system.describe.fault_worker`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WorkerAvailability {
+    /// True when a candidate worker executable exists beside the binary.
+    pub available: bool,
+    /// Worker control-protocol version understood by this build.
+    pub protocol: &'static str,
+}
+
+/// Reports fault-worker availability for this installation without
+/// spawning the worker.
+pub fn worker_availability() -> WorkerAvailability {
+    crate::worker::availability()
+}
+
 pub fn validate<S: ValidationSink>(
     path: impl AsRef<Path>,
     mode: ValidationMode,
