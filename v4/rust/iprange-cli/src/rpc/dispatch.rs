@@ -191,6 +191,31 @@ const REGISTRY: &[(&str, ParamsValidator, Handler)] = &[
         super::handlers::reader::validate_database_metadata,
         super::handlers::reader::database_metadata,
     ),
+    (
+        "iprange.v1.current.publish",
+        super::handlers::publish::validate_current_publish,
+        super::handlers::publish::current_publish,
+    ),
+    (
+        "iprange.v1.database.create",
+        super::handlers::lifecycle::validate_database_create,
+        super::handlers::lifecycle::database_create,
+    ),
+    (
+        "iprange.v1.database.metadata.replace",
+        super::handlers::lifecycle::validate_database_metadata_replace,
+        super::handlers::lifecycle::database_metadata_replace,
+    ),
+    (
+        "iprange.v1.export",
+        super::handlers::export::validate_export,
+        super::handlers::export::export,
+    ),
+    (
+        "iprange.v1.snapshot",
+        super::handlers::snapshot::validate_snapshot,
+        super::handlers::snapshot::snapshot,
+    ),
 ];
 
 pub fn resolve(method: &str) -> Option<(ParamsValidator, Handler)> {

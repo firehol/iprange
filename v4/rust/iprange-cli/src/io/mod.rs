@@ -5,3 +5,8 @@
 //! database bytes; it serves the released legacy surface and the
 //! caller-selected text/JSONL/CSV/netset/ipset/ranges outputs.
 
+// Legacy-compatible streaming input adapters shared by CLI surfaces.
+pub mod input;
+
+// Atomic, durable, budget-bounded export writers shared by export handlers.
+pub(crate) mod export_writer;
