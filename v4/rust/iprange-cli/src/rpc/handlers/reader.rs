@@ -361,14 +361,20 @@ pub fn matching_feeds(state: &mut SessionState, params: Value) -> Result<Value, 
 pub fn database_info(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
     let (path, mode) = source_params(&params).map_err(HandlerError::invalid_params)?;
     let mut reader = open_reader(&path, &mode, &state.token)?;
-    let info = sdk(reader.info())?;
-    finish_ephemeral_reader(
-        &mut reader,
-        json!({
+    let result = (|| -> Result<Value, HandlerError> {
+        let info = sdk(reader.info())?;
+        Ok(json!({
             "method": "iprange.v1.database.info",
             "info": convert::database_info(&info),
-        }),
-    )
+        }))
+    })();
+    match result {
+        Ok(report) => finish_ephemeral_reader(&mut reader, report),
+        Err(error) => Err(close_on_error(
+            std::slice::from_mut(&mut reader),
+            error,
+        )),
+    }
 }
 
 pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
@@ -377,12 +383,16 @@ pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Valu
         .ok_or_else(|| invalid("params must be an object"))?;
     let (path, mode) = source_value(&object["source"]).map_err(HandlerError::invalid_params)?;
     let mut reader = open_reader(&path, &mode, &state.token)?;
-    let result = metadata_result(
-        "iprange.v1.database.metadata.get",
-        &reader,
-        &object["delivery"],
-    )?;
-    finish_ephemeral_reader(&mut reader, result)
+    let result = (|| -> Result<Value, HandlerError> {
+        metadata_result("iprange.v1.database.metadata.get", &reader, &object["delivery"])
+    })();
+    match result {
+        Ok(report) => finish_ephemeral_reader(&mut reader, report),
+        Err(error) => Err(close_on_error(
+            std::slice::from_mut(&mut reader),
+            error,
+        )),
+    }
 }
 
 pub(crate) fn reader<'a>(
@@ -490,6 +500,40 @@ pub(crate) fn finish_ephemeral_reader(
         Ok(None) => bounded_result(report),
         Err(error) => Err(preserve_completed_report(error, report)),
     }
+}
+
+/// Close every ephemeral reader on an error path and merge the
+/// factual live-close results into the error details (`source_closes`
+/// in reader order). Immutable readers produce no close fact. This is
+/// the error-path counterpart of the success-path close tail: a product
+/// error must preserve the close result of every reader it opened
+/// (iprange-jsonrpc-v1.md, factual close results rule).
+pub(crate) fn close_on_error(readers: &mut [ReaderValue], mut error: HandlerError) -> HandlerError {
+    let mut closes = Vec::new();
+    for reader in readers.iter_mut() {
+        match close_ephemeral_reader(reader) {
+            Ok(Some(close)) => closes.push(close),
+            Ok(None) => {}
+            Err(close_error) => {
+                // A failed close is still an SDK fact (double-fault):
+                // keep its source_close result with the primary error
+                // instead of dropping it.
+                if let Some(details) = close_error.details {
+                    if let Some(fact) = details.get("source_close").cloned() {
+                        closes.push(fact);
+                    }
+                }
+            }
+        }
+    }
+    if !closes.is_empty() {
+        let mut details = error.details.take().unwrap_or_else(|| json!({}));
+        if let Some(members) = details.as_object_mut() {
+            members.insert("source_closes".into(), Value::Array(closes));
+        }
+        error.details = Some(details);
+    }
+    error
 }
 
 /// Keep the completed logical report of a failed post-report step in

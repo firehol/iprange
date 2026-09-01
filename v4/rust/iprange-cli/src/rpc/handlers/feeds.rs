@@ -18,6 +18,7 @@ use super::super::dispatch::HandlerError;
 use super::super::session::SessionState;
 use super::super::state::ReaderValue;
 use super::lifecycle;
+use super::live::close_writer_facts;
 use super::reader;
 use super::workflow::{close_writer, finish_publisher, finish_writer_error, publish_changed, publish_no_change, workflow_failure, workflow_report, CommitDraft};
 
@@ -135,7 +136,10 @@ pub fn feeds_import(state: &mut SessionState, params: Value) -> Result<Value, Ha
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
-    let mut reader = open_temporary(&source_path, &source_mode, state)?;
+    let mut reader = match open_temporary(&source_path, &source_mode, state) {
+        Ok(reader) => reader,
+        Err(error) => return Err(close_writer_facts(&mut writer, error)),
+    };
     // The SDK workflow owns the writer borrow, so the result is consumed
     // inside a collector that touches only the reader; the writer is
     // re-borrowed after the collector returns.
@@ -188,7 +192,10 @@ fn publisher_feed_workflow(
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
-    let mut reader = open_temporary(&source_path, &source_mode, state)?;
+    let mut reader = match open_temporary(&source_path, &source_mode, state) {
+        Ok(reader) => reader,
+        Err(error) => return Err(close_writer_facts(&mut writer, error)),
+    };
     let outcome = run_feed_workflow(
         &mut writer,
         &reader,

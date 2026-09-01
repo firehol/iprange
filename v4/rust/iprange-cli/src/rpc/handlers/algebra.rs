@@ -35,6 +35,7 @@ use super::super::session::SessionState;
 use super::super::state::{CursorPoint, ReaderValue};
 use super::convert;
 use super::lifecycle;
+use super::live::close_writer_facts;
 use super::reader;
 use super::snapshot;
 use super::workflow::{close_writer, finish_publisher, finish_writer_error, logical_change, publish_changed, publish_no_change, workflow_failure, CommitDraft};
@@ -413,37 +414,45 @@ pub fn query_cardinalities(state: &mut SessionState, params: Value) -> Result<Va
     let budget = decode_membership_budget(&object["membership_query_budget"])?;
     let spec = decode_output(&object["output"])?;
     let mut reader = open_temporary(&path, &mode, state)?;
-    let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
-    if !spec.jsonl {
-        writer.write_chunk(b"feed,addresses\n", 0, 0)?;
-    }
-    let scope = resolve_scope(&reader, &selection, budget, state)?;
-    let mut captured = None;
-    let outcome = {
-        let mut sink = CardinalitySink {
-            writer: &mut writer,
-            jsonl: spec.jsonl,
-            slot: &mut captured,
-            line: String::new(),
+    let result = (|| -> Result<Value, HandlerError> {
+        let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
+        if !spec.jsonl {
+            writer.write_chunk(b"feed,addresses\n", 0, 0)?;
+        }
+        let scope = resolve_scope(&reader, &selection, budget, state)?;
+        let mut captured = None;
+        let outcome = {
+            let mut sink = CardinalitySink {
+                writer: &mut writer,
+                jsonl: spec.jsonl,
+                slot: &mut captured,
+                line: String::new(),
+            };
+            sdk(scope.aggregate(
+                MembershipAggregationMode::Cardinalities,
+                &mut sink,
+                &state.token,
+            ))
         };
-        sdk(scope.aggregate(
-            MembershipAggregationMode::Cardinalities,
-            &mut sink,
-            &state.token,
-        ))
-    };
-    if let Some(error) = captured.take() {
-        return Err(error);
+        if let Some(error) = captured.take() {
+            return Err(error);
+        }
+        let report = outcome?;
+        drop(scope);
+        let facts = writer.finish()?;
+        Ok(json!({
+            "method": "iprange.v1.query.cardinalities",
+            "output": output_facts(&facts),
+            "report": aggregation_report(&report),
+        }))
+    })();
+    match result {
+        Ok(report) => close_reader(&mut reader, report),
+        Err(error) => Err(reader::close_on_error(
+            std::slice::from_mut(&mut reader),
+            error,
+        )),
     }
-    let report = outcome?;
-    drop(scope);
-    let facts = writer.finish()?;
-    let result = json!({
-        "method": "iprange.v1.query.cardinalities",
-        "output": output_facts(&facts),
-        "report": aggregation_report(&report),
-    });
-    close_reader(&mut reader, result)
 }
 
 pub fn query_overlaps(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
@@ -455,41 +464,49 @@ pub fn query_overlaps(state: &mut SessionState, params: Value) -> Result<Value, 
     let budget = decode_membership_budget(&object["membership_query_budget"])?;
     let spec = decode_output(&object["output"])?;
     let mut reader = open_temporary(&path, &mode, state)?;
-    let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
-    if !spec.jsonl {
-        writer.write_chunk(b"left,right,addresses\n", 0, 0)?;
-    }
-    let scope = resolve_scope(&reader, &selection, budget, state)?;
-    let mode = decode_overlap_mode(&object["mode"])?;
-    let mut captured = None;
-    let outcome = {
-        let mut sink = OverlapSink {
-            writer: &mut writer,
-            jsonl: spec.jsonl,
-            slot: &mut captured,
-            line: String::new(),
+    let result = (|| -> Result<Value, HandlerError> {
+        let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
+        if !spec.jsonl {
+            writer.write_chunk(b"left,right,addresses\n", 0, 0)?;
+        }
+        let scope = resolve_scope(&reader, &selection, budget, state)?;
+        let mode = decode_overlap_mode(&object["mode"])?;
+        let mut captured = None;
+        let outcome = {
+            let mut sink = OverlapSink {
+                writer: &mut writer,
+                jsonl: spec.jsonl,
+                slot: &mut captured,
+                line: String::new(),
+            };
+            let aggregation = match &mode {
+                OverlapMode::AllPairs => MembershipAggregationMode::AllPairs,
+                OverlapMode::Target(feed) => MembershipAggregationMode::TargetAgainstScope(*feed),
+                OverlapMode::SelectedPairs(pairs) => {
+                    MembershipAggregationMode::SelectedPairs(pairs)
+                }
+            };
+            sdk(scope.aggregate(aggregation, &mut sink, &state.token))
         };
-        let aggregation = match &mode {
-            OverlapMode::AllPairs => MembershipAggregationMode::AllPairs,
-            OverlapMode::Target(feed) => MembershipAggregationMode::TargetAgainstScope(*feed),
-            OverlapMode::SelectedPairs(pairs) => {
-                MembershipAggregationMode::SelectedPairs(pairs)
-            }
-        };
-        sdk(scope.aggregate(aggregation, &mut sink, &state.token))
-    };
-    if let Some(error) = captured.take() {
-        return Err(error);
+        if let Some(error) = captured.take() {
+            return Err(error);
+        }
+        let report = outcome?;
+        drop(scope);
+        let facts = writer.finish()?;
+        Ok(json!({
+            "method": "iprange.v1.query.overlaps",
+            "output": output_facts(&facts),
+            "report": aggregation_report(&report),
+        }))
+    })();
+    match result {
+        Ok(report) => close_reader(&mut reader, report),
+        Err(error) => Err(reader::close_on_error(
+            std::slice::from_mut(&mut reader),
+            error,
+        )),
     }
-    let report = outcome?;
-    drop(scope);
-    let facts = writer.finish()?;
-    let result = json!({
-        "method": "iprange.v1.query.overlaps",
-        "output": output_facts(&facts),
-        "report": aggregation_report(&report),
-    });
-    close_reader(&mut reader, result)
 }
 
 pub fn query_matching_feeds(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
@@ -499,81 +516,89 @@ pub fn query_matching_feeds(state: &mut SessionState, params: Value) -> Result<V
     let (path, mode) = source_parts(object, "source")?;
     let spec = decode_output(&object["output"])?;
     let mut reader = open_temporary(&path, &mode, state)?;
-    let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
-    if !spec.jsonl {
-        writer.write_chunk(b"address,feeds\n", 0, 0)?;
-    }
-    let query = sdk(reader.membership_query())?;
-    let addresses = object["addresses"]
-        .as_array()
-        .expect("validator checked addresses");
-    let mut captured = None;
-    let mut matching_feed_count = 0u64;
-    let mut names: Vec<String> = Vec::new();
-    let mut line = String::with_capacity(160);
-    for address in addresses {
-        let text = address
-            .as_str()
-            .expect("validator checked address canonicality");
-        let point = reader::parse_address(text).map_err(HandlerError::invalid_params)?;
-        names.clear();
-        let report = match point {
-            CursorPoint::V4(value) => sdk(query.matching_feeds_v4(
-                V4Key(value),
-                &mut |feed: FeedName| {
-                    names.push(feed.as_str().to_owned());
-                    Ok(())
-                },
-                &state.token,
-            ))?,
-            CursorPoint::V6(value) => sdk(query.matching_feeds_v6(
-                V6Key::from_u128(value),
-                &mut |feed: FeedName| {
-                    names.push(feed.as_str().to_owned());
-                    Ok(())
-                },
-                &state.token,
-            ))?,
-        };
-        line.clear();
-        if spec.jsonl {
-            line.push_str("{\"address\":");
-            push_json_string(&mut line, text);
-            line.push_str(",\"feeds\":[");
-            for (index, name) in names.iter().enumerate() {
-                if index != 0 {
-                    line.push(',');
-                }
-                push_json_string(&mut line, name);
-            }
-            line.push_str("]}");
-        } else {
-            write_csv_field(&mut line, text);
-            line.push(',');
-            for (index, name) in names.iter().enumerate() {
-                if index != 0 {
-                    line.push(';');
-                }
-                line.push_str(name);
-            }
+    let result = (|| -> Result<Value, HandlerError> {
+        let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
+        if !spec.jsonl {
+            writer.write_chunk(b"address,feeds\n", 0, 0)?;
         }
-        if let Err(error) = writer.write_line(&line, 1) {
-            captured = Some(error);
-            break;
+        let query = sdk(reader.membership_query())?;
+        let addresses = object["addresses"]
+            .as_array()
+            .expect("validator checked addresses");
+        let mut captured = None;
+        let mut matching_feed_count = 0u64;
+        let mut names: Vec<String> = Vec::new();
+        let mut line = String::with_capacity(160);
+        for address in addresses {
+            let text = address
+                .as_str()
+                .expect("validator checked address canonicality");
+            let point = reader::parse_address(text).map_err(HandlerError::invalid_params)?;
+            names.clear();
+            let report = match point {
+                CursorPoint::V4(value) => sdk(query.matching_feeds_v4(
+                    V4Key(value),
+                    &mut |feed: FeedName| {
+                        names.push(feed.as_str().to_owned());
+                        Ok(())
+                    },
+                    &state.token,
+                ))?,
+                CursorPoint::V6(value) => sdk(query.matching_feeds_v6(
+                    V6Key::from_u128(value),
+                    &mut |feed: FeedName| {
+                        names.push(feed.as_str().to_owned());
+                        Ok(())
+                    },
+                    &state.token,
+                ))?,
+            };
+            line.clear();
+            if spec.jsonl {
+                line.push_str("{\"address\":");
+                push_json_string(&mut line, text);
+                line.push_str(",\"feeds\":[");
+                for (index, name) in names.iter().enumerate() {
+                    if index != 0 {
+                        line.push(',');
+                    }
+                    push_json_string(&mut line, name);
+                }
+                line.push_str("]}");
+            } else {
+                write_csv_field(&mut line, text);
+                line.push(',');
+                for (index, name) in names.iter().enumerate() {
+                    if index != 0 {
+                        line.push(';');
+                    }
+                    line.push_str(name);
+                }
+            }
+            if let Err(error) = writer.write_line(&line, 1) {
+                captured = Some(error);
+                break;
+            }
+            matching_feed_count = matching_feed_count.saturating_add(report.matching_feed_count);
         }
-        matching_feed_count = matching_feed_count.saturating_add(report.matching_feed_count);
+        let _ = query;
+        if let Some(error) = captured.take() {
+            return Err(error);
+        }
+        let facts = writer.finish()?;
+        Ok(json!({
+            "method": "iprange.v1.query.matching_feeds",
+            "output": output_facts(&facts),
+            "matching_feed_count": matching_feed_count.to_string(),
+        }))
+    })();
+    match result {
+        Ok(report) => close_reader(&mut reader, report),
+        Err(error) => Err(reader::close_on_error(
+            std::slice::from_mut(&mut reader),
+            error,
+        )),
     }
-    let _ = query;
-    if let Some(error) = captured.take() {
-        return Err(error);
-    }
-    let facts = writer.finish()?;
-    let result = json!({
-        "method": "iprange.v1.query.matching_feeds",
-        "output": output_facts(&facts),
-        "matching_feed_count": matching_feed_count.to_string(),
-    });
-    close_reader(&mut reader, result)
 }
 
 pub fn join_direct(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
@@ -589,44 +614,60 @@ pub fn join_direct(state: &mut SessionState, params: Value) -> Result<Value, Han
     let max_result_cells = reader::u64_string(object["max_result_cells"].as_str())
         .map_err(HandlerError::invalid_params)?;
     let spec = decode_output(&object["output"])?;
-    let membership_reader = open_temporary(&membership_path, &membership_mode, state)?;
-    let direct_reader = open_temporary(&direct_path, &direct_mode, state)?;
-    let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
-    if !spec.jsonl {
-        writer.write_chunk(b"feed,direct_value,addresses\n", 0, 0)?;
-    }
-    let scope = resolve_scope(&membership_reader, &selection, budget, state)?;
-    let mut captured = None;
-    let outcome = {
-        let mut sink = DirectJoinSinkImpl {
-            writer: &mut writer,
-            jsonl: spec.jsonl,
-            slot: &mut captured,
-            line: String::new(),
-        };
-        let source = match &direct_reader {
-            ReaderValue::Immutable(reader) => DirectJoinSource::Immutable(reader),
-            ReaderValue::Live(reader) => DirectJoinSource::Live(reader),
-        };
-        sdk(scope.join_direct(
-            source,
-            DirectJoinBudget { max_result_cells },
-            &mut sink,
-            &state.token,
-        ))
+    let mut membership_reader = open_temporary(&membership_path, &membership_mode, state)?;
+    let direct_reader = match open_temporary(&direct_path, &direct_mode, state) {
+        Ok(reader) => reader,
+        Err(error) => {
+            return Err(reader::close_on_error(
+                std::slice::from_mut(&mut membership_reader),
+                error,
+            ))
+        }
     };
-    if let Some(error) = captured.take() {
-        return Err(error);
+    let result = (|| -> Result<Value, HandlerError> {
+        let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
+        if !spec.jsonl {
+            writer.write_chunk(b"feed,direct_value,addresses\n", 0, 0)?;
+        }
+        let scope = resolve_scope(&membership_reader, &selection, budget, state)?;
+        let mut captured = None;
+        let outcome = {
+            let mut sink = DirectJoinSinkImpl {
+                writer: &mut writer,
+                jsonl: spec.jsonl,
+                slot: &mut captured,
+                line: String::new(),
+            };
+            let source = match &direct_reader {
+                ReaderValue::Immutable(reader) => DirectJoinSource::Immutable(reader),
+                ReaderValue::Live(reader) => DirectJoinSource::Live(reader),
+            };
+            sdk(scope.join_direct(
+                source,
+                DirectJoinBudget { max_result_cells },
+                &mut sink,
+                &state.token,
+            ))
+        };
+        if let Some(error) = captured.take() {
+            return Err(error);
+        }
+        let report = outcome?;
+        drop(scope);
+        let facts = writer.finish()?;
+        Ok(json!({
+            "method": "iprange.v1.join.direct",
+            "output": output_facts(&facts),
+            "report": direct_join_report(&report),
+        }))
+    })();
+    match result {
+        Ok(report) => close_readers(vec![membership_reader, direct_reader], report),
+        Err(error) => Err(reader::close_on_error(
+            &mut [membership_reader, direct_reader],
+            error,
+        )),
     }
-    let report = outcome?;
-    drop(scope);
-    let facts = writer.finish()?;
-    let result = json!({
-        "method": "iprange.v1.join.direct",
-        "output": output_facts(&facts),
-        "report": direct_join_report(&report),
-    });
-    close_readers(vec![membership_reader, direct_reader], result)
 }
 
 pub fn join_membership(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
@@ -644,37 +685,53 @@ pub fn join_membership(state: &mut SessionState, params: Value) -> Result<Value,
     let (left_path, left_mode) = source_parts(left, "source")?;
     let (right_path, right_mode) = source_parts(right, "source")?;
     let spec = decode_output(&object["output"])?;
-    let left_reader = open_temporary(&left_path, &left_mode, state)?;
-    let right_reader = open_temporary(&right_path, &right_mode, state)?;
-    let left_scope = resolve_scope(&left_reader, &left_selection, left_budget, state)?;
-    let right_scope = resolve_scope(&right_reader, &right_selection, right_budget, state)?;
-    let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
-    if !spec.jsonl {
-        writer.write_chunk(b"kind,left,right,side,feed,addresses\n", 0, 0)?;
-    }
-    let mut captured = None;
-    let outcome = {
-        let mut sink = MembershipJoinSinkImpl {
-            writer: &mut writer,
-            jsonl: spec.jsonl,
-            slot: &mut captured,
-            line: String::new(),
-        };
-        sdk(left_scope.join_membership(&right_scope, &mut sink, &state.token))
+    let mut left_reader = open_temporary(&left_path, &left_mode, state)?;
+    let right_reader = match open_temporary(&right_path, &right_mode, state) {
+        Ok(reader) => reader,
+        Err(error) => {
+            return Err(reader::close_on_error(
+                std::slice::from_mut(&mut left_reader),
+                error,
+            ))
+        }
     };
-    if let Some(error) = captured.take() {
-        return Err(error);
+    let result = (|| -> Result<Value, HandlerError> {
+        let left_scope = resolve_scope(&left_reader, &left_selection, left_budget, state)?;
+        let right_scope = resolve_scope(&right_reader, &right_selection, right_budget, state)?;
+        let mut writer = ExportWriter::create(&spec.path, spec.policy, &spec.budget)?;
+        if !spec.jsonl {
+            writer.write_chunk(b"kind,left,right,side,feed,addresses\n", 0, 0)?;
+        }
+        let mut captured = None;
+        let outcome = {
+            let mut sink = MembershipJoinSinkImpl {
+                writer: &mut writer,
+                jsonl: spec.jsonl,
+                slot: &mut captured,
+                line: String::new(),
+            };
+            sdk(left_scope.join_membership(&right_scope, &mut sink, &state.token))
+        };
+        if let Some(error) = captured.take() {
+            return Err(error);
+        }
+        let report = outcome?;
+        drop(left_scope);
+        drop(right_scope);
+        let facts = writer.finish()?;
+        Ok(json!({
+            "method": "iprange.v1.join.membership",
+            "output": output_facts(&facts),
+            "report": membership_join_report(&report),
+        }))
+    })();
+    match result {
+        Ok(report) => close_readers(vec![left_reader, right_reader], report),
+        Err(error) => Err(reader::close_on_error(
+            &mut [left_reader, right_reader],
+            error,
+        )),
     }
-    let report = outcome?;
-    drop(left_scope);
-    drop(right_scope);
-    let facts = writer.finish()?;
-    let result = json!({
-        "method": "iprange.v1.join.membership",
-        "output": output_facts(&facts),
-        "report": membership_join_report(&report),
-    });
-    close_readers(vec![left_reader, right_reader], result)
 }
 
 // ---------------------------------------------------------------------------
@@ -687,20 +744,22 @@ pub fn algebra_count(state: &mut SessionState, params: Value) -> Result<Value, H
         .ok_or_else(|| HandlerError::invalid_params("params must be an object"))?;
     let selection = decode_selection(&object["selection"])?;
     let budget = decode_algebra_budget(&object["algebra_budget"])?;
-    let readers = open_sources(&object["sources"], state)?;
-    let scopes = resolve_algebra_scopes(&readers, &object["sources"], state)?;
-    let refs: Vec<&MembershipScope<'_>> = scopes.iter().collect();
-    let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token))?;
-    let report = sdk(algebra.count(feed_selection(&selection), &state.token))?;
-    let result = json!({
-        "method": "iprange.v1.algebra.count",
-        "report": count_report(&report),
-        "cardinality": report.addresses.to_string(),
-    });
-    drop(algebra);
-    drop(refs);
-    drop(scopes);
-    close_readers(readers, result)
+    let mut readers = open_sources(&object["sources"], state)?;
+    let result = (|| -> Result<Value, HandlerError> {
+        let scopes = resolve_algebra_scopes(&readers, &object["sources"], state)?;
+        let refs: Vec<&MembershipScope<'_>> = scopes.iter().collect();
+        let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token))?;
+        let report = sdk(algebra.count(feed_selection(&selection), &state.token))?;
+        Ok(json!({
+            "method": "iprange.v1.algebra.count",
+            "report": count_report(&report),
+            "cardinality": report.addresses.to_string(),
+        }))
+    })();
+    match result {
+        Ok(report) => close_readers(readers, report),
+        Err(error) => Err(reader::close_on_error(&mut readers, error)),
+    }
 }
 
 pub fn algebra_compare(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
@@ -710,23 +769,25 @@ pub fn algebra_compare(state: &mut SessionState, params: Value) -> Result<Value,
     let left = decode_selection(&object["left"])?;
     let right = decode_selection(&object["right"])?;
     let budget = decode_algebra_budget(&object["algebra_budget"])?;
-    let readers = open_sources(&object["sources"], state)?;
-    let scopes = resolve_algebra_scopes(&readers, &object["sources"], state)?;
-    let refs: Vec<&MembershipScope<'_>> = scopes.iter().collect();
-    let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token))?;
-    let report = sdk(algebra.compare(
-        feed_selection(&left),
-        feed_selection(&right),
-        &state.token,
-    ))?;
-    let result = json!({
-        "method": "iprange.v1.algebra.compare",
-        "report": comparison_report(&report),
-    });
-    drop(algebra);
-    drop(refs);
-    drop(scopes);
-    close_readers(readers, result)
+    let mut readers = open_sources(&object["sources"], state)?;
+    let result = (|| -> Result<Value, HandlerError> {
+        let scopes = resolve_algebra_scopes(&readers, &object["sources"], state)?;
+        let refs: Vec<&MembershipScope<'_>> = scopes.iter().collect();
+        let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token))?;
+        let report = sdk(algebra.compare(
+            feed_selection(&left),
+            feed_selection(&right),
+            &state.token,
+        ))?;
+        Ok(json!({
+            "method": "iprange.v1.algebra.compare",
+            "report": comparison_report(&report),
+        }))
+    })();
+    match result {
+        Ok(report) => close_readers(readers, report),
+        Err(error) => Err(reader::close_on_error(&mut readers, error)),
+    }
 }
 
 pub fn algebra_publish(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
@@ -742,69 +803,71 @@ pub fn algebra_publish(state: &mut SessionState, params: Value) -> Result<Value,
         .map(|sources| sources.len())
         .ok_or_else(|| HandlerError::invalid_params("sources must be an array"))?;
     preflight_algebra_publish(state, source_count)?;
-    let readers = open_sources(&object["sources"], state)?;
-    let scopes = resolve_algebra_scopes(&readers, &object["sources"], state)?;
-    let refs: Vec<&MembershipScope<'_>> = scopes.iter().collect();
-    let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token))?;
-    let destination = object["destination"]
-        .as_str()
-        .ok_or_else(|| HandlerError::invalid_params("destination must be a string"))?;
-    require_publication_parent(Path::new(destination))?;
-    let value_tag = lifecycle::value_tag(&object["value_tag"])
-        .map_err(HandlerError::invalid_params)?;
-    let metadata = match lifecycle::metadata_value(&object["metadata"])? {
-        lifecycle::MetadataValue::Keep => None,
-        lifecycle::MetadataValue::Clear => None,
-        lifecycle::MetadataValue::Replace(bytes) => Some(bytes),
-    };
-    let operation = decode_operation(&object["operation"])?;
-    let output_mode = decode_output_mode(&object["output_mode"])?;
-    let policy = reader::publication_policy(object["publication_policy"].as_str())
-        .map_err(|_| HandlerError::invalid_params("publication_policy is invalid"))?;
-    let output_budget = decode_algebra_output_budget(&object["algebra_output_budget"])?;
-    let outcome = algebra.publish_set(
-        destination,
-        value_tag,
-        algebra_operation(&operation),
-        algebra_output_mode(output_mode),
-        metadata.as_deref(),
-        policy,
-        output_budget,
-        &state.token,
-    );
-    let result = match outcome {
-        Ok(result) => result,
-        Err(failure) => return Err(algebra_preparation_error(&failure)),
-    };
-    let publication = snapshot::publication_result(&result.publication);
-    if result.publication.publication != PublicationStatus::Published
-        || result.publication.cause.is_some()
-    {
-        let cause = result.publication.cause.as_ref();
-        let code = cause.map_or("io", |error| publication_code(error.code));
-        let message = cause.map_or_else(
-            || "algebra publication did not complete".to_owned(),
-            |error| error.detail.to_string(),
+    let mut readers = open_sources(&object["sources"], state)?;
+    let result = (|| -> Result<Value, HandlerError> {
+        let scopes = resolve_algebra_scopes(&readers, &object["sources"], state)?;
+        let refs: Vec<&MembershipScope<'_>> = scopes.iter().collect();
+        let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token))?;
+        let destination = object["destination"]
+            .as_str()
+            .ok_or_else(|| HandlerError::invalid_params("destination must be a string"))?;
+        require_publication_parent(Path::new(destination))?;
+        let value_tag = lifecycle::value_tag(&object["value_tag"])
+            .map_err(HandlerError::invalid_params)?;
+        let metadata = match lifecycle::metadata_value(&object["metadata"])? {
+            lifecycle::MetadataValue::Keep => None,
+            lifecycle::MetadataValue::Clear => None,
+            lifecycle::MetadataValue::Replace(bytes) => Some(bytes),
+        };
+        let operation = decode_operation(&object["operation"])?;
+        let output_mode = decode_output_mode(&object["output_mode"])?;
+        let policy = reader::publication_policy(object["publication_policy"].as_str())
+            .map_err(|_| HandlerError::invalid_params("publication_policy is invalid"))?;
+        let output_budget = decode_algebra_output_budget(&object["algebra_output_budget"])?;
+        let outcome = algebra.publish_set(
+            destination,
+            value_tag,
+            algebra_operation(&operation),
+            algebra_output_mode(output_mode),
+            metadata.as_deref(),
+            policy,
+            output_budget,
+            &state.token,
         );
-        return Err(HandlerError {
-            code,
-            outcome: publication_outcome(result.publication.publication),
-            message,
-            details: Some(json!({
-                "report": set_report(&result.report),
-                "publication": publication,
-            })),
-        });
+        let result = match outcome {
+            Ok(result) => result,
+            Err(failure) => return Err(algebra_preparation_error(&failure)),
+        };
+        let publication = snapshot::publication_result(&result.publication);
+        if result.publication.publication != PublicationStatus::Published
+            || result.publication.cause.is_some()
+        {
+            let cause = result.publication.cause.as_ref();
+            let code = cause.map_or("io", |error| publication_code(error.code));
+            let message = cause.map_or_else(
+                || "algebra publication did not complete".to_owned(),
+                |error| error.detail.to_string(),
+            );
+            return Err(HandlerError {
+                code,
+                outcome: publication_outcome(result.publication.publication),
+                message,
+                details: Some(json!({
+                    "report": set_report(&result.report),
+                    "publication": publication,
+                })),
+            });
+        }
+        Ok(json!({
+            "method": "iprange.v1.algebra.publish",
+            "report": set_report(&result.report),
+            "publication": publication,
+        }))
+    })();
+    match result {
+        Ok(report) => close_readers(readers, report),
+        Err(error) => Err(reader::close_on_error(&mut readers, error)),
     }
-    let result = json!({
-        "method": "iprange.v1.algebra.publish",
-        "report": set_report(&result.report),
-        "publication": publication,
-    });
-    drop(algebra);
-    drop(refs);
-    drop(scopes);
-    close_readers(readers, result)
 }
 
 // ---------------------------------------------------------------------------
@@ -833,7 +896,10 @@ pub fn history_project(state: &mut SessionState, params: Value) -> Result<Value,
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
-    let mut reader = open_temporary(&source_path, &source_mode, state)?;
+    let mut reader = match open_temporary(&source_path, &source_mode, state) {
+        Ok(reader) => reader,
+        Err(error) => return Err(close_writer_facts(&mut writer, error)),
+    };
     // SDK projections own the writer borrow, so the result is consumed
     // inside a collector that touches only the reader; the writer is
     // re-borrowed by the finisher after the projection borrow has ended.
@@ -1899,11 +1965,19 @@ fn open_sources(sources: &Value, state: &SessionState) -> Result<Vec<ReaderValue
     let sources = sources.as_array().expect("validator checked sources");
     let mut readers = Vec::with_capacity(sources.len());
     for source in sources {
-        let object = source.as_object().expect("validator checked algebra source");
-        let source_member = reader::member_object(object, "source")
-            .map_err(HandlerError::invalid_params)?;
-        let (path, mode) = source_parts_object(source_member, "source")?;
-        readers.push(open_temporary(&path, &mode, state)?);
+        let opened = (|| -> Result<ReaderValue, HandlerError> {
+            let object = source.as_object().expect("validator checked algebra source");
+            let source_member = reader::member_object(object, "source")
+                .map_err(HandlerError::invalid_params)?;
+            let (path, mode) = source_parts_object(source_member, "source")?;
+            open_temporary(&path, &mode, state)
+        })();
+        match opened {
+            Ok(reader) => readers.push(reader),
+            Err(error) => {
+                return Err(reader::close_on_error(&mut readers, error));
+            }
+        }
     }
     Ok(readers)
 }

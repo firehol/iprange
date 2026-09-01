@@ -634,7 +634,13 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
         .address_family;
     let mut writer = match LiveWriter::open(path, budget, &state.token) {
         Ok(writer) => writer,
-        Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
+        Err(error) => {
+            let error = lifecycle::sdk_error(&error, "not_started");
+            return Err(reader::close_on_error(
+                std::slice::from_mut(&mut reader),
+                error,
+            ))
+        }
     };
     let mut collector = match removals {
         // Collector creation is fallible and happens after the writer
@@ -763,7 +769,13 @@ pub fn last_seen_refresh(state: &mut SessionState, params: Value) -> Result<Valu
         .address_family;
     let mut writer = match LiveWriter::open(path, budget, &state.token) {
         Ok(writer) => writer,
-        Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
+        Err(error) => {
+            let error = lifecycle::sdk_error(&error, "not_started");
+            return Err(reader::close_on_error(
+                std::slice::from_mut(&mut reader),
+                error,
+            ))
+        }
     };
     let facts = match family {
         AddressFamily::Ipv4 => run_last_seen_v4(
@@ -813,10 +825,8 @@ fn run_first_seen_v4(
     let mut refresh = match writer.begin_first_seen_refresh(refresh_value, token) {
         Ok(refresh) => refresh,
         Err(error) => {
-            return Err(close_writer_facts(
-                writer,
-                lifecycle::sdk_error(&error, "not_started"),
-            ))
+            let error = lifecycle::sdk_error(&error, "not_started");
+            return Err(close_refresh_facts(reader, writer, error));
         }
     };
     let drain = (|| -> Result<(), Error> {
@@ -825,10 +835,8 @@ fn run_first_seen_v4(
     })();
     if let Err(error) = drain {
         drop(refresh);
-        return Err(close_writer_facts(
-            writer,
-            lifecycle::sdk_error(&error, "not_started"),
-        ));
+        let error = lifecycle::sdk_error(&error, "not_started");
+        return Err(close_refresh_facts(reader, writer, error));
     }
     if let Err(error) = close_current_reader(reader) {
         drop(refresh);
@@ -868,10 +876,8 @@ fn run_first_seen_v6(
     let mut refresh = match writer.begin_first_seen_refresh(refresh_value, token) {
         Ok(refresh) => refresh,
         Err(error) => {
-            return Err(close_writer_facts(
-                writer,
-                lifecycle::sdk_error(&error, "not_started"),
-            ))
+            let error = lifecycle::sdk_error(&error, "not_started");
+            return Err(close_refresh_facts(reader, writer, error));
         }
     };
     let drain = (|| -> Result<(), Error> {
@@ -880,10 +886,8 @@ fn run_first_seen_v6(
     })();
     if let Err(error) = drain {
         drop(refresh);
-        return Err(close_writer_facts(
-            writer,
-            lifecycle::sdk_error(&error, "not_started"),
-        ));
+        let error = lifecycle::sdk_error(&error, "not_started");
+        return Err(close_refresh_facts(reader, writer, error));
     }
     if let Err(error) = close_current_reader(reader) {
         drop(refresh);
@@ -923,10 +927,8 @@ fn run_last_seen_v4(
     let mut refresh = match writer.begin_last_seen_refresh(refresh_value, cutoff, token) {
         Ok(refresh) => refresh,
         Err(error) => {
-            return Err(close_writer_facts(
-                writer,
-                lifecycle::sdk_error(&error, "not_started"),
-            ))
+            let error = lifecycle::sdk_error(&error, "not_started");
+            return Err(close_refresh_facts(reader, writer, error));
         }
     };
     let drain = (|| -> Result<(), Error> {
@@ -935,10 +937,8 @@ fn run_last_seen_v4(
     })();
     if let Err(error) = drain {
         drop(refresh);
-        return Err(close_writer_facts(
-            writer,
-            lifecycle::sdk_error(&error, "not_started"),
-        ));
+        let error = lifecycle::sdk_error(&error, "not_started");
+        return Err(close_refresh_facts(reader, writer, error));
     }
     if let Err(error) = close_current_reader(reader) {
         drop(refresh);
@@ -964,10 +964,8 @@ fn run_last_seen_v6(
     let mut refresh = match writer.begin_last_seen_refresh(refresh_value, cutoff, token) {
         Ok(refresh) => refresh,
         Err(error) => {
-            return Err(close_writer_facts(
-                writer,
-                lifecycle::sdk_error(&error, "not_started"),
-            ))
+            let error = lifecycle::sdk_error(&error, "not_started");
+            return Err(close_refresh_facts(reader, writer, error));
         }
     };
     let drain = (|| -> Result<(), Error> {
@@ -976,10 +974,8 @@ fn run_last_seen_v6(
     })();
     if let Err(error) = drain {
         drop(refresh);
-        return Err(close_writer_facts(
-            writer,
-            lifecycle::sdk_error(&error, "not_started"),
-        ));
+        let error = lifecycle::sdk_error(&error, "not_started");
+        return Err(close_refresh_facts(reader, writer, error));
     }
     if let Err(error) = close_current_reader(reader) {
         drop(refresh);
@@ -1051,9 +1047,20 @@ fn close_current_reader(reader: &mut ReaderValue) -> Result<(), HandlerError> {
     reader::close_ephemeral_reader(reader).map(|_| ())
 }
 
+/// Close the refresh source reader and writer on an error path,
+/// merging the factual close results into the error details.
+fn close_refresh_facts(
+    reader: &mut ReaderValue,
+    writer: &mut LiveWriter,
+    error: HandlerError,
+) -> HandlerError {
+    let error = reader::close_on_error(std::slice::from_mut(reader), error);
+    close_writer_facts(writer, error)
+}
+
 /// Close a live writer on an error path, merging the factual close result
 /// into the error details. `LiveWriter::close` aborts any unpublished draft.
-fn close_writer_facts(writer: &mut LiveWriter, mut error: HandlerError) -> HandlerError {
+pub(crate) fn close_writer_facts(writer: &mut LiveWriter, mut error: HandlerError) -> HandlerError {
     if let Ok(close) = writer.close() {
         if let Ok(close) = lifecycle::close_result(&close) {
             let mut details = error.details.take().unwrap_or_else(|| json!({}));
