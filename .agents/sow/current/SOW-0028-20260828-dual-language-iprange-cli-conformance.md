@@ -1055,6 +1055,6 @@ regression. Never prepend regression content above the original narrative.
 4. **Batch busy errors — one ordered response array.** A batch whose frame
    exceeds the queue admits some members and rejects the rest with
    `server_busy`; the spec requires a single response array per batch, in the
-   same order, omitting notifications «et excluding standalone busy frames. The
+   same order, omitting notifications and excluding standalone busy frames. The
    session defers busy errors into the batch response even when the frame must
    be dropped per-request.
