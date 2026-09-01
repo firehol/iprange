@@ -37,6 +37,11 @@ RESULT_VALUE_TAG = {
     "additional": False,
 }
 HEX16 = {"type": "string", "hex": 32}
+# [u8; 64] digest: 128 lowercase hex characters.
+HEX64 = {"type": "string", "hex": 128}
+# RFC 4648 standard-alphabet byte slices with required padding.
+BASE64 = {"type": "string", "base64": True}
+U16 = {"type": "integer", "min": 0, "max": 65535}
 OPAQUE = {"type": "object"}
 OPAQUE_LIST = {"type": "array", "items": OPAQUE}
 SIGNED32 = {"type": "integer", "min": -2147483648, "max": 2147483647}
@@ -242,11 +247,52 @@ CLOSE_RESULT_LIST = {
     "items": CLOSE_RESULT,
 }
 
+# PublicationAttempt (publication/types.rs) mechanical conversion:
+# hex identities, decimal counters, base64 basenames, and the policy /
+# creation-security facts the SDK resolver binds to the destination.
+CREATION_SECURITY = {
+    "type": "object",
+    "properties": {"kind": U16, "commitment": {"type": "string", "hex": 64}},
+    "required": ["kind", "commitment"],
+    "additional": False,
+}
+PREVIOUS_DESTINATION = {
+    "type": "object",
+    "properties": {"identity": FILE_IDENTITY, "byte_length": C.U64, "sha512": HEX64},
+    "required": ["identity", "byte_length", "sha512"],
+    "additional": False,
+}
+PUBLICATION_ATTEMPT = {
+    "type": "object",
+    "properties": {
+        "database_id": HEX16,
+        "transaction_id": C.U64,
+        "commit_nonce": HEX16,
+        "publication_attempt_id": HEX16,
+        "directory_identity": FILE_IDENTITY,
+        "destination_basename_encoding": U16,
+        "destination_basename": BASE64,
+        "output_identity": FILE_IDENTITY,
+        "output_byte_length": C.U64,
+        "output_sha512": HEX64,
+        "publication_policy": C.PUBLICATION_POLICY,
+        "previous_destination": PREVIOUS_DESTINATION,
+        "reservation_identity": FILE_IDENTITY,
+        "creation_security": CREATION_SECURITY,
+    },
+    "required": ["database_id", "transaction_id", "commit_nonce",
+                 "publication_attempt_id", "directory_identity",
+                 "destination_basename_encoding", "destination_basename",
+                 "output_identity", "output_byte_length", "output_sha512",
+                 "publication_policy", "reservation_identity", "creation_security"],
+    "additional": False,
+}
+
 # PublicationResult (publication/types.rs) mechanical conversion.
 PUBLICATION_RESULT = {
     "type": "object",
     "properties": {
-        "attempt": STRING,
+        "attempt": PUBLICATION_ATTEMPT,
         "main_namespace_may_have_been_attempted": BOOL,
         "publication": STRING,
         "destination_content": STRING,
@@ -844,7 +890,17 @@ _register("iprange.v1.retention.first_seen.refresh", _result(required_extra=(), 
         "removals": {
             "type": "object",
             "properties": {
-                "publication": PUBLICATION_RESULT,
+                # Adapter-owned artifact publication: the SDK supplies no
+                # PublicationResult for it, so no attempt appears.
+                "publication": {
+                    "type": "object",
+                    "properties": {
+                        "publication": STRING,
+                        "destination_content": STRING,
+                    },
+                    "required": ["publication", "destination_content"],
+                    "additional": False,
+                },
                 "output": OUTPUT_FACTS,
             },
             "required": [],

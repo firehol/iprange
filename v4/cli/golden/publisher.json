@@ -52,11 +52,37 @@
             "addresses": "256"
           },
           "publication": {
-            "attempt": "attempted",
+            "attempt": {
+              "database_id": "b0000000000000000000000000000001",
+              "transaction_id": "7",
+              "commit_nonce": "b0000000000000000000000000000003",
+              "publication_attempt_id": "b0000000000000000000000000000004",
+              "directory_identity": {
+                "volume": "1",
+                "file": "42"
+              },
+              "destination_basename_encoding": 1,
+              "destination_basename": "Y3VycmVudC5pcHJhbmdl",
+              "output_identity": {
+                "volume": "1",
+                "file": "43"
+              },
+              "output_byte_length": "496",
+              "output_sha512": "b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0",
+              "publication_policy": "fail_if_exists",
+              "reservation_identity": {
+                "volume": "1",
+                "file": "44"
+              },
+              "creation_security": {
+                "kind": 1,
+                "commitment": "c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0c0"
+              }
+            },
             "main_namespace_may_have_been_attempted": true,
             "publication": "published",
-            "destination_content": "created",
-            "later_canonical": "absent",
+            "destination_content": "desired",
+            "later_canonical": "none",
             "main_access_policy": "creator_only",
             "coordination_access_policy": "creator_only",
             "cleanup": {},
@@ -225,19 +251,8 @@
           },
           "removals": {
             "publication": {
-              "attempt": "attempted",
-              "main_namespace_may_have_been_attempted": true,
               "publication": "published",
-              "destination_content": "created",
-              "later_canonical": "absent",
-              "main_access_policy": "creator_only",
-              "coordination_access_policy": "creator_only",
-              "cleanup": {},
-              "coordination_cleanup": {},
-              "housekeeping": {
-                "artifacts": []
-              },
-              "visible_housekeeping": []
+              "destination_content": "desired"
             },
             "output": {
               "path": "/example/out.jsonl",

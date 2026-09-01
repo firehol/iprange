@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use super::super::dispatch::HandlerError;
 use super::super::session::SessionState;
 use super::lifecycle;
+use super::publication_evidence;
 use super::reader;
 use crate::io::input::{AddressFamilyInput, TextInputOptions, TextInputSource};
 
@@ -202,7 +203,7 @@ pub(crate) fn immutable_feed_report(report: &ImmutableFeedReport) -> Value {
 
 pub(crate) fn publication_result(result: &PublicationResult) -> Result<Value, HandlerError> {
     let mut value = json!({
-        "attempt": "attempted",
+        "attempt": publication_evidence::publication_attempt(&result.attempt)?,
         "main_namespace_may_have_been_attempted": result.main_namespace_may_have_been_attempted,
         "publication": publication_status(result.publication),
         "destination_content": destination_content(result.destination_content),

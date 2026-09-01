@@ -35,7 +35,7 @@ use serde_json::{json, Map, Value};
 
 use super::super::dispatch::HandlerError;
 use super::super::session::SessionState;
-use super::{convert, lifecycle, output, publish, reader};
+use super::{convert, lifecycle, output, publication_evidence, publish, reader};
 use crate::io::export_writer::{ExportBudget, ExportFacts, ExportWriter};
 
 // ---------------------------------------------------------------------------
@@ -237,9 +237,7 @@ pub fn validate_publication_resolve(params: &Value) -> Result<(), String> {
         _ => return Err("resolution_mode must be complete or remove".into()),
     }
     if let Some(supplied) = object.get("publication_result") {
-        if !supplied.is_object() {
-            return Err("publication_result must be an object".into());
-        }
+        publication_evidence::decode_publication_result(supplied)?;
     }
     Ok(())
 }
@@ -254,22 +252,14 @@ pub fn publication_resolve(state: &mut SessionState, params: Value) -> Result<Va
         "complete" => PublicationResolutionMode::Complete,
         _ => PublicationResolutionMode::Remove,
     };
-    if object.get("publication_result").is_some() {
-        // The frozen v1 wire schema models `PublicationResult.attempt` as
-        // the presence string (v4/cli/schema/results.py PUBLICATION_RESULT),
-        // while the SDK resolver reconstructs the exact attempt header from
-        // the complete `PublicationAttempt` (publication/types.rs and
-        // result.rs::header_for). The wire value therefore cannot be
-        // verified against the destination, so resolving with it would be a
-        // destructive guess; the retained reservation is the sole accepted
-        // authority (iprange-jsonrpc-v1.md resolution attempts).
-        return Err(HandlerError::new(
-            "invalid_argument",
-            "not_started",
-            "supplied publication_result evidence cannot be bound: the v1 wire result does not carry the SDK attempt evidence the resolver requires",
-        ));
-    }
-    let result = resolve_publication(path, None, mode, &state.token)
+    let supplied = match object.get("publication_result") {
+        Some(value) => Some(
+            publication_evidence::decode_publication_result(value)
+                .map_err(HandlerError::invalid_params)?,
+        ),
+        None => None,
+    };
+    let result = resolve_publication(path, supplied.as_ref(), mode, &state.token)
         .map_err(|problem| publication_error(problem, "not_started"))?;
     if let Some(cause) = result.cause.as_ref() {
         let outcome = match result.publication {

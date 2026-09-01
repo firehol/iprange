@@ -1,6 +1,7 @@
 """Fixed method registry and per-method params schemas (iprange-jsonrpc-v1.md)."""
 
 from . import common as C
+from . import results
 from .engine import ValidationError
 from .frame import CANCEL_METHOD
 
@@ -647,7 +648,7 @@ _register("iprange.v1.publication.resolve", {
     "type": "object",
     "properties": {
         "path": C.PATH,
-        "publication_result": {"type": "object"},
+        "publication_result": results.PUBLICATION_RESULT,
         "resolution_mode": C.PUBLICATION_RESOLUTION_MODE,
     },
     "required": ["path", "resolution_mode"],

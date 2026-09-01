@@ -15,6 +15,7 @@ use serde_json::{json, Map, Value};
 
 use super::super::dispatch::HandlerError;
 use super::super::session::SessionState;
+use super::publication_evidence;
 use super::reader::{
     bounded_result, member_object, positive_u32, positive_u64_string, publication_policy, sdk_code,
     u64_string, validate_path,
@@ -172,12 +173,15 @@ fn preparation_details(failure: &SnapshotPreparationFailure) -> Value {
 }
 
 /// Mechanical `PublicationResult` conversion for the frozen wire
-/// schema (v4/cli/schema/results.py). `attempt` is modelled by the
-/// schema as the presence string `"attempted"` rather than the nested
-/// SDK attempt struct, matching the golden corpus.
+/// schema (v4/cli/schema/results.py). `attempt` carries the complete
+/// SDK attempt object (publication_evidence::publication_attempt).
 pub(crate) fn publication_result(result: &PublicationResult) -> Value {
     let mut converted = Map::new();
-    converted.insert("attempt".into(), json!("attempted"));
+    converted.insert(
+        "attempt".into(),
+        publication_evidence::publication_attempt(&result.attempt)
+            .unwrap_or_else(|error| json!({"error": error.message})),
+    );
     converted.insert(
         "main_namespace_may_have_been_attempted".into(),
         json!(result.main_namespace_may_have_been_attempted),
@@ -500,6 +504,7 @@ fn publication_code(code: ErrorCode) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::super::lifecycle;
     use iprange_livedb::SnapshotOutcome;
     use iprange_livedb::{
         create_live, AddressFamily, CancellationToken, Ipv4Key, LiveWriter, SnapshotBudget,
@@ -602,21 +607,41 @@ mod tests {
         let result = snapshot_result(&source, &destination)
             .map_err(|failure| failure.cause.detail.to_string())
             .unwrap();
+        let converted = publication_result(&result.publication);
+        assert_eq!(converted["main_namespace_may_have_been_attempted"], json!(true));
+        assert_eq!(converted["publication"], json!("published"));
+        assert_eq!(converted["destination_content"], json!("desired"));
+        assert_eq!(converted["later_canonical"], json!("none"));
+        assert_eq!(converted["main_access_policy"], json!("creator_only"));
+        assert_eq!(converted["coordination_access_policy"], json!("absent"));
+        assert_eq!(converted["cleanup"], json!({}));
+        assert_eq!(converted["coordination_cleanup"], json!({}));
+        assert_eq!(converted["housekeeping"], json!({"artifacts": []}));
+        assert_eq!(converted["visible_housekeeping"], json!([]));
+        let attempt = converted["attempt"]
+            .as_object()
+            .expect("attempt is the complete SDK attempt object");
+        assert_eq!(attempt.len(), 13);
+        assert!(attempt.get("previous_destination").is_none());
         assert_eq!(
-            publication_result(&result.publication),
-            json!({
-                "attempt": "attempted",
-                "main_namespace_may_have_been_attempted": true,
-                "publication": "published",
-                "destination_content": "desired",
-                "later_canonical": "none",
-                "main_access_policy": "creator_only",
-                "coordination_access_policy": "absent",
-                "cleanup": {},
-                "coordination_cleanup": {},
-                "housekeeping": {"artifacts": []},
-                "visible_housekeeping": []
-            })
+            attempt["database_id"],
+            json!(hex16(&result.publication.attempt.database_id))
+        );
+        assert_eq!(
+            attempt["transaction_id"],
+            json!(result.publication.attempt.transaction_id.to_string())
+        );
+        assert_eq!(
+            attempt["output_sha512"].as_str().unwrap().len(),
+            128
+        );
+        assert_eq!(
+            attempt["publication_policy"],
+            json!("fail_if_exists")
+        );
+        assert_eq!(
+            attempt["destination_basename"],
+            json!(lifecycle::encode_base64(&result.publication.attempt.destination_basename))
         );
     }
 

@@ -16,6 +16,7 @@ pub mod lifecycle_live;
 pub mod live;
 pub mod maintenance;
 pub mod output;
+pub mod publication_evidence;
 pub mod recovery;
 pub mod publish;
 pub mod reader;

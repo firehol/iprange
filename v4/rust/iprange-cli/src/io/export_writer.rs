@@ -251,7 +251,50 @@ pub(crate) fn format_address(value: u128, host_prefix: u32) -> String {
 }
 
 /// RFC-4180 CSV field: quote only when the field requires it and
-/// double embedded quotes.
+/// double embedded quotes (reusable-buffer form).
+pub(crate) fn write_csv_field(output: &mut String, value: &str) {
+    let needs_quotes = value
+        .bytes()
+        .any(|byte| byte == b',' || byte == b'"' || byte == b'\r' || byte == b'\n');
+    if !needs_quotes {
+        output.push_str(value);
+        return;
+    }
+    output.push('"');
+    for character in value.chars() {
+        if character == '"' {
+            output.push('"');
+        }
+        output.push(character);
+    }
+    output.push('"');
+}
+
+/// JSON string literal with standard escaping, written straight into a
+/// reusable line buffer (mirrors serde_json string output).
+pub(crate) fn push_json_string(output: &mut String, value: &str) {
+    use std::fmt::Write as _;
+    output.push('"');
+    for byte in value.bytes() {
+        match byte {
+            b'"' => output.push_str("\\\""),
+            b'\\' => output.push_str("\\\\"),
+            0x08 => output.push_str("\\b"),
+            0x0c => output.push_str("\\f"),
+            b'\n' => output.push_str("\\n"),
+            b'\r' => output.push_str("\\r"),
+            b'\t' => output.push_str("\\t"),
+            0x00..=0x1f => {
+                let _ = write!(output, "\\u{byte:04x}");
+            }
+            _ => output.push(char::from(byte)),
+        }
+    }
+    output.push('"');
+}
+
+/// RFC-4180 CSV field: quote only when the field requires it and
+/// double embedded quotes (allocating convenience form).
 pub(crate) fn csv_field(value: &str) -> String {
     let needs_quotes = value
         .bytes()

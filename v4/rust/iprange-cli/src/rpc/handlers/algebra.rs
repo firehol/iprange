@@ -26,6 +26,8 @@ use iprange_livedb::{
     AlgebraPreparationFailure, AlgebraSetOperation, AlgebraSetReport, DirectJoinBudget,
     DirectJoinCell, DirectJoinReport, DirectJoinSink, DirectJoinSource,
 };
+use std::fmt::Write as _;
+
 use serde_json::{json, Value};
 
 use super::super::dispatch::HandlerError;
@@ -35,7 +37,9 @@ use super::convert;
 use super::lifecycle;
 use super::reader;
 use super::snapshot;
-use crate::io::export_writer::{csv_field, ExportBudget, ExportFacts, ExportWriter};
+use crate::io::export_writer::{
+    push_json_string, write_csv_field, ExportBudget, ExportFacts, ExportWriter,
+};
 use iprange_livedb::Ipv4Key as V4Key;
 use iprange_livedb::Ipv6Key as V6Key;
 
@@ -425,6 +429,7 @@ pub fn query_cardinalities(state: &mut SessionState, params: Value) -> Result<Va
             writer: &mut writer,
             jsonl: spec.jsonl,
             slot: &mut captured,
+            line: String::new(),
         };
         sdk(scope.aggregate(
             MembershipAggregationMode::Cardinalities,
@@ -467,6 +472,7 @@ pub fn query_overlaps(state: &mut SessionState, params: Value) -> Result<Value, 
             writer: &mut writer,
             jsonl: spec.jsonl,
             slot: &mut captured,
+            line: String::new(),
         };
         let aggregation = match &mode {
             OverlapMode::AllPairs => MembershipAggregationMode::AllPairs,
@@ -508,12 +514,14 @@ pub fn query_matching_feeds(state: &mut SessionState, params: Value) -> Result<V
         .expect("validator checked addresses");
     let mut captured = None;
     let mut matching_feed_count = 0u64;
+    let mut names: Vec<String> = Vec::new();
+    let mut line = String::with_capacity(160);
     for address in addresses {
         let text = address
             .as_str()
             .expect("validator checked address canonicality");
         let point = reader::parse_address(text).map_err(HandlerError::invalid_params)?;
-        let mut names: Vec<String> = Vec::new();
+        names.clear();
         let report = match point {
             CursorPoint::V4(value) => sdk(query.matching_feeds_v4(
                 V4Key(value),
@@ -532,11 +540,28 @@ pub fn query_matching_feeds(state: &mut SessionState, params: Value) -> Result<V
                 &state.token,
             ))?,
         };
-        let line = if spec.jsonl {
-            json!({"address": text, "feeds": names}).to_string()
+        line.clear();
+        if spec.jsonl {
+            line.push_str("{\"address\":");
+            push_json_string(&mut line, text);
+            line.push_str(",\"feeds\":[");
+            for (index, name) in names.iter().enumerate() {
+                if index != 0 {
+                    line.push(',');
+                }
+                push_json_string(&mut line, name);
+            }
+            line.push_str("]}");
         } else {
-            format!("{},{}", csv_field(text), names.join(";"))
-        };
+            write_csv_field(&mut line, text);
+            line.push(',');
+            for (index, name) in names.iter().enumerate() {
+                if index != 0 {
+                    line.push(';');
+                }
+                line.push_str(name);
+            }
+        }
         if let Err(error) = writer.write_line(&line, 1) {
             captured = Some(error);
             break;
@@ -582,6 +607,7 @@ pub fn join_direct(state: &mut SessionState, params: Value) -> Result<Value, Han
             writer: &mut writer,
             jsonl: spec.jsonl,
             slot: &mut captured,
+            line: String::new(),
         };
         let source = match &direct_reader {
             ReaderValue::Immutable(reader) => DirectJoinSource::Immutable(reader),
@@ -637,6 +663,7 @@ pub fn join_membership(state: &mut SessionState, params: Value) -> Result<Value,
             writer: &mut writer,
             jsonl: spec.jsonl,
             slot: &mut captured,
+            line: String::new(),
         };
         sdk(left_scope.join_membership(&right_scope, &mut sink, &state.token))
     };
@@ -1289,23 +1316,30 @@ struct CardinalitySink<'a> {
     writer: &'a mut ExportWriter,
     jsonl: bool,
     slot: &'a mut Option<HandlerError>,
+    line: String,
 }
 
 impl MembershipAggregateSink for CardinalitySink<'_> {
     fn feed_cardinalities(&mut self, batch: &[FeedCardinality]) -> iprange_livedb::Result<()> {
+        self.line.clear();
         for cell in batch {
-            let line = if self.jsonl {
-                json!({"feed": cell.feed.as_str(), "addresses": cell.addresses.to_string()})
-                    .to_string()
+            if self.jsonl {
+                self.line.push_str("{\"feed\":");
+                push_json_string(&mut self.line, cell.feed.as_str());
+                self.line.push_str(",\"addresses\":\"");
+                let _ = write!(self.line, "{}\"}}", cell.addresses);
             } else {
-                format!("{},{}", csv_field(cell.feed.as_str()), cell.addresses.to_string())
-            };
+                write_csv_field(&mut self.line, cell.feed.as_str());
+                self.line.push(',');
+                let _ = write!(self.line, "{}", cell.addresses);
+            }
             if let Err(error) = self
                 .writer
-                .write_line(&line, cardinality_u128(cell.addresses))
+                .write_line(&self.line, cardinality_u128(cell.addresses))
             {
                 return fail(self.slot, error);
             }
+            self.line.clear();
         }
         Ok(())
     }
@@ -1318,6 +1352,7 @@ struct OverlapSink<'a> {
     writer: &'a mut ExportWriter,
     jsonl: bool,
     slot: &'a mut Option<HandlerError>,
+    line: String,
 }
 
 impl MembershipAggregateSink for OverlapSink<'_> {
@@ -1325,28 +1360,29 @@ impl MembershipAggregateSink for OverlapSink<'_> {
         Ok(())
     }
     fn feed_overlaps(&mut self, batch: &[FeedOverlap]) -> iprange_livedb::Result<()> {
+        self.line.clear();
         for cell in batch {
-            let line = if self.jsonl {
-                json!({
-                    "left": cell.left.as_str(),
-                    "right": cell.right.as_str(),
-                    "addresses": cell.addresses.to_string(),
-                })
-                .to_string()
+            if self.jsonl {
+                self.line.push_str("{\"left\":");
+                push_json_string(&mut self.line, cell.left.as_str());
+                self.line.push_str(",\"right\":");
+                push_json_string(&mut self.line, cell.right.as_str());
+                self.line.push_str(",\"addresses\":\"");
+                let _ = write!(self.line, "{}\"}}", cell.addresses);
             } else {
-                format!(
-                    "{},{},{}",
-                    csv_field(cell.left.as_str()),
-                    csv_field(cell.right.as_str()),
-                    cell.addresses.to_string()
-                )
-            };
+                write_csv_field(&mut self.line, cell.left.as_str());
+                self.line.push(',');
+                write_csv_field(&mut self.line, cell.right.as_str());
+                self.line.push(',');
+                let _ = write!(self.line, "{}", cell.addresses);
+            }
             if let Err(error) = self
                 .writer
-                .write_line(&line, cardinality_u128(cell.addresses))
+                .write_line(&self.line, cardinality_u128(cell.addresses))
             {
                 return fail(self.slot, error);
             }
+            self.line.clear();
         }
         Ok(())
     }
@@ -1356,37 +1392,46 @@ struct DirectJoinSinkImpl<'a> {
     writer: &'a mut ExportWriter,
     jsonl: bool,
     slot: &'a mut Option<HandlerError>,
+    line: String,
 }
 
 impl DirectJoinSink for DirectJoinSinkImpl<'_> {
     fn direct_join_cells(&mut self, batch: &[DirectJoinCell]) -> iprange_livedb::Result<()> {
+        self.line.clear();
         for cell in batch {
-            let line = if self.jsonl {
-                json!({
-                    "feed": cell.feed.as_str(),
-                    "direct_value": cell.direct_value,
-                    "addresses": cell.addresses.to_string(),
-                })
-                .to_string()
+            if self.jsonl {
+                self.line.push_str("{\"feed\":");
+                push_json_string(&mut self.line, cell.feed.as_str());
+                self.line.push_str(",\"direct_value\":");
+                match cell.direct_value {
+                    Some(value) => {
+                        let _ = write!(self.line, "{value}");
+                    }
+                    None => self.line.push_str("null"),
+                }
+                self.line.push_str(",\"addresses\":\"");
+                let _ = write!(self.line, "{}\"}}", cell.addresses);
             } else {
                 // CSV has no null vocabulary; the semantic null of an
                 // uncovered cell serializes as the literal "null".
-                let direct = cell
-                    .direct_value
-                    .map_or_else(|| "null".to_owned(), |value| value.to_string());
-                format!(
-                    "{},{},{}",
-                    csv_field(cell.feed.as_str()),
-                    direct,
-                    cell.addresses.to_string()
-                )
-            };
+                write_csv_field(&mut self.line, cell.feed.as_str());
+                self.line.push(',');
+                match cell.direct_value {
+                    Some(value) => {
+                        let _ = write!(self.line, "{value}");
+                    }
+                    None => self.line.push_str("null"),
+                }
+                self.line.push(',');
+                let _ = write!(self.line, "{}", cell.addresses);
+            }
             if let Err(error) = self
                 .writer
-                .write_line(&line, cardinality_u128(cell.addresses))
+                .write_line(&self.line, cardinality_u128(cell.addresses))
             {
                 return fail(self.slot, error);
             }
+            self.line.clear();
         }
         Ok(())
     }
@@ -1396,64 +1441,65 @@ struct MembershipJoinSinkImpl<'a> {
     writer: &'a mut ExportWriter,
     jsonl: bool,
     slot: &'a mut Option<HandlerError>,
+    line: String,
 }
 
 impl MembershipJoinSink for MembershipJoinSinkImpl<'_> {
     fn membership_cross_cells(&mut self, batch: &[MembershipCrossCell]) -> iprange_livedb::Result<()> {
+        self.line.clear();
         for cell in batch {
-            let line = if self.jsonl {
-                json!({
-                    "kind": "cross",
-                    "left": cell.left.as_str(),
-                    "right": cell.right.as_str(),
-                    "addresses": cell.addresses.to_string(),
-                })
-                .to_string()
+            if self.jsonl {
+                self.line.push_str("{\"kind\":\"cross\",\"left\":");
+                push_json_string(&mut self.line, cell.left.as_str());
+                self.line.push_str(",\"right\":");
+                push_json_string(&mut self.line, cell.right.as_str());
+                self.line.push_str(",\"addresses\":\"");
+                let _ = write!(self.line, "{}\"}}", cell.addresses);
             } else {
-                format!(
-                    "cross,{},{},,,{}",
-                    csv_field(cell.left.as_str()),
-                    csv_field(cell.right.as_str()),
-                    cell.addresses.to_string()
-                )
-            };
+                let _ = write!(self.line, "cross,");
+                write_csv_field(&mut self.line, cell.left.as_str());
+                self.line.push_str(",,,");
+                write_csv_field(&mut self.line, cell.right.as_str());
+                self.line.push(',');
+                let _ = write!(self.line, "{}", cell.addresses);
+            }
             if let Err(error) = self
                 .writer
-                .write_line(&line, cardinality_u128(cell.addresses))
+                .write_line(&self.line, cardinality_u128(cell.addresses))
             {
                 return fail(self.slot, error);
             }
+            self.line.clear();
         }
         Ok(())
     }
     fn uncovered_feeds(&mut self, batch: &[UncoveredFeed]) -> iprange_livedb::Result<()> {
+        self.line.clear();
         for cell in batch {
             let side = match cell.side {
                 UncoveredSide::Left => "left",
                 UncoveredSide::Right => "right",
             };
-            let line = if self.jsonl {
-                json!({
-                    "kind": "uncovered",
-                    "side": side,
-                    "feed": cell.feed.as_str(),
-                    "addresses": cell.addresses.to_string(),
-                })
-                .to_string()
+            if self.jsonl {
+                self.line.push_str("{\"kind\":\"uncovered\",\"side\":\"");
+                self.line.push_str(side);
+                self.line.push_str("\",\"feed\":");
+                push_json_string(&mut self.line, cell.feed.as_str());
+                self.line.push_str(",\"addresses\":\"");
+                let _ = write!(self.line, "{}\"}}", cell.addresses);
             } else {
-                format!(
-                    "uncovered,,,{},{},{}",
-                    side,
-                    csv_field(cell.feed.as_str()),
-                    cell.addresses.to_string()
-                )
-            };
+                let _ = write!(self.line, "uncovered,,,{side},");
+                write_csv_field(&mut self.line, cell.feed.as_str());
+                self.line.push(',');
+                let _ = write!(self.line, "{}", cell.addresses);
+            }
             if let Err(error) = self
                 .writer
-                .write_line(&line, cardinality_u128(cell.addresses))
+                .write_line(&self.line, cardinality_u128(cell.addresses))
             {
                 return fail(self.slot, error);
             }
+            self.line.clear();
         }
         Ok(())
     }

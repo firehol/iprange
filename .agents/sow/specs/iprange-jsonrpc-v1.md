@@ -666,7 +666,9 @@ after the commit is factually known to have committed. It is discarded when
 the commit is known not to have committed; an outcome-unknown commit never
 publishes it and reports its exact cleanup state. Result contains the complete
 workflow/commit facts and removal publication outcome, path, digest, rows, and
-address count when requested.
+address count when requested. The removals publication facts carry
+`publication` and `destination_content` only: the artifact is adapter-owned,
+so no SDK publication attempt exists for it.
 
 ### `iprange.v1.retention.last_seen.refresh`
 

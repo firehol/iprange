@@ -17,6 +17,7 @@
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, BufRead, BufReader, BufWriter, Write};
+use std::fmt::Write as _;
 use std::net::{Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
@@ -1300,6 +1301,7 @@ struct DirectCsvSource<K> {
     max_line_bytes: usize,
     parse_address: fn(&str) -> Result<K, String>,
     batch: Vec<DirectRange<K>>,
+    line: Vec<u8>,
     failure: Option<CsvFailure>,
     finished: bool,
 }
@@ -1338,6 +1340,7 @@ where
             max_line_bytes,
             parse_address,
             batch: Vec::with_capacity(CSV_BATCH_CAPACITY),
+            line: Vec::with_capacity(256),
             failure: None,
             finished: false,
         };
@@ -1356,7 +1359,7 @@ where
     }
 
     fn read_line(&mut self) -> Result<Option<String>, CsvFailure> {
-        let mut line = Vec::new();
+        self.line.clear();
         loop {
             let available = match self.reader.fill_buf() {
                 Ok(available) => available,
@@ -1365,48 +1368,49 @@ where
                 }
             };
             if available.is_empty() {
-                if line.is_empty() {
+                if self.line.is_empty() {
                     return Ok(None);
                 }
                 break;
             }
             let newline = available.iter().position(|byte| *byte == b'\n');
             let take = newline.map_or(available.len(), |at| at + 1);
-            if line.len() + take > self.max_line_bytes + 1 {
+            if self.line.len() + take > self.max_line_bytes + 1 {
                 return Err(CsvFailure::format(format!(
                     "direct CSV line exceeds max_line_bytes {}",
                     self.max_line_bytes
                 )));
             }
-            line.extend_from_slice(&available[..take]);
+            self.line.extend_from_slice(&available[..take]);
             self.reader.consume(take);
             if newline.is_some() {
                 break;
             }
         }
-        if line.last() == Some(&b'\r') {
-            line.pop();
+        if self.line.last() == Some(&b'\r') {
+            self.line.pop();
         }
-        match String::from_utf8(line) {
+        match String::from_utf8(std::mem::take(&mut self.line)) {
             Ok(text) => Ok(Some(text)),
             Err(_) => Err(CsvFailure::format("direct CSV input is not valid UTF-8")),
         }
     }
 
     fn parse_record(&self, line: &str) -> Result<DirectRange<K>, CsvFailure> {
-        let fields: Vec<&str> = line.split(',').collect();
-        if fields.len() != 3 {
-            return Err(CsvFailure::format(
-                "direct CSV row must have exactly 3 columns: from,to,value",
-            ));
+        let mut columns = line.split(',').map(str::trim);
+        let expected = || CsvFailure::format("direct CSV row must have exactly 3 columns: from,to,value");
+        let from_text = columns.next().ok_or_else(expected)?;
+        let to_text = columns.next().ok_or_else(expected)?;
+        let value_text = columns.next().ok_or_else(expected)?;
+        if columns.next().is_some() {
+            return Err(expected());
         }
-        let from = (self.parse_address)(fields[0].trim()).map_err(CsvFailure::format)?;
-        let to = (self.parse_address)(fields[1].trim()).map_err(CsvFailure::format)?;
+        let from = (self.parse_address)(from_text).map_err(CsvFailure::format)?;
+        let to = (self.parse_address)(to_text).map_err(CsvFailure::format)?;
         if from > to {
             return Err(CsvFailure::format("range start exceeds range end"));
         }
-        let value = fields[2]
-            .trim()
+        let value = value_text
             .parse::<u32>()
             .map_err(|_| CsvFailure::format("value must be unsigned decimal 0 through 4294967295"))?;
         Ok(DirectRange { from, to, value })
@@ -1508,6 +1512,7 @@ struct RemovalCollector {
     rows: u64,
     bytes: u64,
     digest: Sha256,
+    line: String,
     violation: Option<String>,
 }
 
@@ -1567,6 +1572,7 @@ impl RemovalCollector {
             rows: 0,
             bytes: 0,
             digest: Sha256::new(),
+        line: String::with_capacity(160),
             violation: None,
         })
     }
@@ -1703,32 +1709,32 @@ impl RemovalCollector {
 /// The removal artifact is an adapter-owned text file, not a v4 access
 /// controlled artifact, so the access-policy members report `absent`.
 fn removal_publication_facts(publication: &str, destination_content: &str) -> Value {
+    // Adapter-owned artifact publication: no SDK PublicationResult exists
+    // for the removals file, so the facts carry only the outcome.
     json!({
-        "attempt": "attempted",
-        "main_namespace_may_have_been_attempted": true,
         "publication": publication,
         "destination_content": destination_content,
-        "later_canonical": "absent",
-        "main_access_policy": "absent",
-        "coordination_access_policy": "absent",
-        "cleanup": {},
-        "coordination_cleanup": {},
-        "housekeeping": {"artifacts": []},
-        "visible_housekeeping": [],
     })
 }
 
 impl FirstSeenRemovalSink<Ipv4Key> for RemovalCollector {
     fn removals(&mut self, batch: &[FirstSeenRemoval<Ipv4Key>]) -> Result<(), Error> {
         for removal in batch {
-            let record = json!({
-                "from": Ipv4Addr::from(removal.from.0).to_string(),
-                "to": Ipv4Addr::from(removal.to.0).to_string(),
-                "first_seen": removal.first_seen,
-                "removed_at": self.refresh_value,
-                "addresses": removal.addresses.to_string(),
-            });
-            self.write_line(&record.to_string())?;
+            self.line.clear();
+            self.line.push_str("{\"from\":\"");
+            let _ = write!(self.line, "{}\"", Ipv4Addr::from(removal.from.0));
+            self.line.push_str(",\"to\":\"");
+            let _ = write!(self.line, "{}\"", Ipv4Addr::from(removal.to.0));
+            self.line.push_str(",\"first_seen\":");
+            let _ = write!(self.line, "{}", removal.first_seen);
+            self.line.push_str(",\"removed_at\":");
+            let _ = write!(self.line, "{}", self.refresh_value);
+            self.line.push_str(",\"addresses\":\"");
+            let _ = write!(self.line, "{}\"}}", removal.addresses);
+            let line = std::mem::take(&mut self.line);
+            let outcome = self.write_line(&line);
+            self.line = line;
+            outcome?;
         }
         Ok(())
     }
@@ -1737,14 +1743,21 @@ impl FirstSeenRemovalSink<Ipv4Key> for RemovalCollector {
 impl FirstSeenRemovalSink<Ipv6Key> for RemovalCollector {
     fn removals(&mut self, batch: &[FirstSeenRemoval<Ipv6Key>]) -> Result<(), Error> {
         for removal in batch {
-            let record = json!({
-                "from": Ipv6Addr::from(removal.from.to_u128().to_be_bytes()).to_string(),
-                "to": Ipv6Addr::from(removal.to.to_u128().to_be_bytes()).to_string(),
-                "first_seen": removal.first_seen,
-                "removed_at": self.refresh_value,
-                "addresses": removal.addresses.to_string(),
-            });
-            self.write_line(&record.to_string())?;
+            self.line.clear();
+            self.line.push_str("{\"from\":\"");
+            let _ = write!(self.line, "{}\"", Ipv6Addr::from(removal.from.to_u128().to_be_bytes()));
+            self.line.push_str(",\"to\":\"");
+            let _ = write!(self.line, "{}\"", Ipv6Addr::from(removal.to.to_u128().to_be_bytes()));
+            self.line.push_str(",\"first_seen\":");
+            let _ = write!(self.line, "{}", removal.first_seen);
+            self.line.push_str(",\"removed_at\":");
+            let _ = write!(self.line, "{}", self.refresh_value);
+            self.line.push_str(",\"addresses\":\"");
+            let _ = write!(self.line, "{}\"}}", removal.addresses);
+            let line = std::mem::take(&mut self.line);
+            let outcome = self.write_line(&line);
+            self.line = line;
+            outcome?;
         }
         Ok(())
     }

@@ -35,7 +35,7 @@ use serde_json::Value;
 // Primitive wire decoders (result-schema encodings).
 // ---------------------------------------------------------------------------
 
-fn hex16(value: &Value, field: &str) -> Result<[u8; 16], String> {
+pub(crate) fn hex16(value: &Value, field: &str) -> Result<[u8; 16], String> {
     let text = value.as_str().ok_or_else(|| format!("{field} must be a string"))?;
     let bytes = decode_hex(text, 16).ok_or_else(|| {
         format!("{field} must be 32 lowercase hexadecimal characters")
@@ -45,7 +45,7 @@ fn hex16(value: &Value, field: &str) -> Result<[u8; 16], String> {
         .map_err(|_| format!("{field} must be 32 lowercase hexadecimal characters"))
 }
 
-fn hex32(value: &Value, field: &str) -> Result<[u8; 32], String> {
+pub(crate) fn hex32(value: &Value, field: &str) -> Result<[u8; 32], String> {
     let text = value.as_str().ok_or_else(|| format!("{field} must be a string"))?;
     let bytes = decode_hex(text, 32).ok_or_else(|| {
         format!("{field} must be 64 lowercase hexadecimal characters")
@@ -55,7 +55,7 @@ fn hex32(value: &Value, field: &str) -> Result<[u8; 32], String> {
         .map_err(|_| format!("{field} must be 64 lowercase hexadecimal characters"))
 }
 
-fn decode_hex(text: &str, length: usize) -> Option<Vec<u8>> {
+pub(crate) fn decode_hex(text: &str, length: usize) -> Option<Vec<u8>> {
     if text.len() != length * 2 || !text.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
         return None;
     }
@@ -68,7 +68,7 @@ fn decode_hex(text: &str, length: usize) -> Option<Vec<u8>> {
     Some(bytes)
 }
 
-fn decimal_u64(value: &Value, field: &str) -> Result<u64, String> {
+pub(crate) fn decimal_u64(value: &Value, field: &str) -> Result<u64, String> {
     let text = value.as_str().ok_or_else(|| format!("{field} must be a string"))?;
     if text == "0" {
         return Ok(0);
@@ -79,26 +79,26 @@ fn decimal_u64(value: &Value, field: &str) -> Result<u64, String> {
     text.parse().map_err(|_| format!("{field} must be a canonical unsigned decimal string"))
 }
 
-fn u32_integer(value: &Value, field: &str) -> Result<u32, String> {
+pub(crate) fn u32_integer(value: &Value, field: &str) -> Result<u32, String> {
     value
         .as_u64()
         .and_then(|parsed| u32::try_from(parsed).ok())
         .ok_or_else(|| format!("{field} must be a u32 integer"))
 }
 
-fn boolean(value: &Value, field: &str) -> Result<bool, String> {
+pub(crate) fn boolean(value: &Value, field: &str) -> Result<bool, String> {
     value.as_bool().ok_or_else(|| format!("{field} must be a boolean"))
 }
 
-fn string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
+pub(crate) fn string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
     value.as_str().ok_or_else(|| format!("{field} must be a string"))
 }
 
-fn object<'a>(value: &'a Value, field: &str) -> Result<&'a serde_json::Map<String, Value>, String> {
+pub(crate) fn object<'a>(value: &'a Value, field: &str) -> Result<&'a serde_json::Map<String, Value>, String> {
     value.as_object().ok_or_else(|| format!("{field} must be an object"))
 }
 
-fn exact_members(
+pub(crate) fn exact_members(
     object: &serde_json::Map<String, Value>,
     required: &[&str],
     optional: &[&str],
@@ -129,7 +129,7 @@ pub(crate) fn decode_file_identity(value: &Value, field: &str) -> Result<LocalFi
     Ok(LocalFileIdentity { kind: 1, bytes })
 }
 
-fn optional_file_identity(
+pub(crate) fn optional_file_identity(
     value: Option<&Value>,
     field: &str,
 ) -> Result<Option<LocalFileIdentity>, String> {
@@ -233,7 +233,7 @@ fn commit_durability(value: &Value) -> Result<CommitDurability, String> {
     }
 }
 
-fn coordination_cleanup(value: &Value, field: &str) -> Result<CoordinationCleanup, String> {
+pub(crate) fn coordination_cleanup(value: &Value, field: &str) -> Result<CoordinationCleanup, String> {
     let cleanup = object(value, field)?;
     match cleanup.get("kind").and_then(Value::as_str) {
         None => {
@@ -258,7 +258,7 @@ fn coordination_cleanup(value: &Value, field: &str) -> Result<CoordinationCleanu
 /// artifacts is `None`; the emitted states round-trip exactly.
 pub(crate) fn decode_housekeeping(value: &Value, field: &str) -> Result<Housekeeping, String> {
     let housekeeping = object(value, field)?;
-    exact_members(housekeeping, &["state", "artifacts"], &[], field)?;
+    exact_members(housekeeping, &["artifacts"], &["state"], field)?;
     let artifacts = housekeeping["artifacts"]
         .as_array()
         .ok_or_else(|| format!("{field}.artifacts must be an array"))?;
@@ -279,7 +279,7 @@ pub(crate) fn decode_housekeeping(value: &Value, field: &str) -> Result<Housekee
     }
 }
 
-fn decode_housekeeping_artifacts(value: &Value) -> Result<Box<[HousekeepingArtifact]>, String> {
+pub(crate) fn decode_housekeeping_artifacts(value: &Value) -> Result<Box<[HousekeepingArtifact]>, String> {
     let artifacts = value
         .as_array()
         .ok_or("visible_housekeeping must be an array")?;
@@ -338,7 +338,7 @@ fn decode_housekeeping_artifact(value: &Value) -> Result<HousekeepingArtifact, S
     })
 }
 
-fn u16_encoding(value: &Value) -> Result<u16, String> {
+pub(crate) fn u16_encoding(value: &Value) -> Result<u16, String> {
     value
         .as_u64()
         .and_then(|parsed| u16::try_from(parsed).ok())
@@ -355,7 +355,7 @@ fn housekeeping_state(value: &Value) -> Result<HousekeepingState, String> {
     }
 }
 
-fn directory_role(value: &Value) -> Result<DirectoryRole, String> {
+pub(crate) fn directory_role(value: &Value) -> Result<DirectoryRole, String> {
     match string(value, "directory_role")? {
         "destination" => Ok(DirectoryRole::Destination),
         "scratch_directory" => Ok(DirectoryRole::ScratchDirectory),
@@ -373,7 +373,7 @@ fn artifact_presence(value: &Value) -> Result<ArtifactPresence, String> {
     }
 }
 
-fn artifact_kind(value: &Value) -> Result<ArtifactKind, String> {
+pub(crate) fn artifact_kind(value: &Value) -> Result<ArtifactKind, String> {
     match string(value, "kind")? {
         "private_output" => Ok(ArtifactKind::PrivateOutput),
         "private_reservation" => Ok(ArtifactKind::PrivateReservation),
@@ -385,7 +385,7 @@ fn artifact_kind(value: &Value) -> Result<ArtifactKind, String> {
     }
 }
 
-fn decode_creation_security(value: &Value) -> Result<CreationSecurity, String> {
+pub(crate) fn decode_creation_security(value: &Value) -> Result<CreationSecurity, String> {
     let security = object(value, "creation_security")?;
     exact_members(security, &["kind", "commitment"], &[], "creation_security")?;
     Ok(CreationSecurity {
@@ -446,7 +446,7 @@ fn decode_commit_cleanup_artifact(value: &Value) -> Result<CommitCleanupArtifact
 /// Reverse of the stable `sdk_code` names in `handlers/reader.rs`.
 macro_rules! error_code_table {
     ($($snake:literal => $variant:ident),* $(,)?) => {
-        fn error_code_from_wire(value: &str) -> Option<ErrorCode> {
+        pub(crate) fn error_code_from_wire(value: &str) -> Option<ErrorCode> {
             Some(match value {
                 $($snake => ErrorCode::$variant,)*
                 _ => return None,
