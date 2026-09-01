@@ -186,24 +186,26 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
     let completed = match export_result {
         Ok(completed) => completed,
         Err(mut export_error) => {
-            // The export and the source close both failed: keep the
-            // export error primary and merge the close failure's
-            // factual source_close into its details (double-fault
-            // pattern, algebra.rs collect_projection_facts).
-            if let Err(close_error) = close_result {
-                if let Some(mut close_details) = close_error.details {
-                    if let Some(close_fact) = close_details
+            // A product error preserves the close result of the reader
+            // it opened whether the close succeeded or failed: keep the
+            // export error primary and merge the factual source_close
+            // into its details (double-fault pattern, algebra.rs
+            // collect_projection_facts, when the close also failed).
+            let close_fact = match close_result {
+                Ok(Some(close)) => Some(close),
+                Ok(None) => None,
+                Err(close_error) => close_error.details.and_then(|mut close_details| {
+                    close_details
                         .as_object_mut()
                         .and_then(|members| members.remove("source_close"))
-                    {
-                        let mut details =
-                            export_error.details.take().unwrap_or_else(|| json!({}));
-                        if let Some(members) = details.as_object_mut() {
-                            members.insert("source_close".into(), close_fact);
-                        }
-                        export_error.details = Some(details);
-                    }
+                }),
+            };
+            if let Some(close_fact) = close_fact {
+                let mut details = export_error.details.take().unwrap_or_else(|| json!({}));
+                if let Some(members) = details.as_object_mut() {
+                    members.insert("source_close".into(), close_fact);
                 }
+                export_error.details = Some(details);
             }
             return Err(export_error);
         }

@@ -286,6 +286,7 @@ enum FeedWorkflowFacts {
     Failed {
         report: Option<Value>,
         error: HandlerError,
+        source_close: Option<Value>,
     },
     ReaderCloseFailed {
         report: Value,
@@ -316,13 +317,43 @@ fn collect_workflow_facts(
     outcome: std::result::Result<FinishedWorkflow<'_>, HandlerError>,
     metadata: &lifecycle::MetadataValue,
 ) -> FeedWorkflowFacts {
-    match outcome {
-        Ok(workflow) => {
-            if let Err(close_error) = reader::close_ephemeral_reader(reader) {
+    let source_close = match reader::close_ephemeral_reader(reader) {
+        Ok(close) => close,
+        Err(close_error) => {
+            if let Ok(workflow) = outcome {
                 let report = workflow_report(workflow.report());
                 drop(workflow);
                 return FeedWorkflowFacts::ReaderCloseFailed { report, close_error };
             }
+            // The workflow and the reader close both failed: keep the
+            // workflow error primary and merge the factual close
+            // result it carried into the error details, so no close
+            // failure evidence is dropped on the double-fault path.
+            let mut error = match outcome {
+                Err(error) => error,
+                Ok(_) => unreachable!("handled above"),
+            };
+            if let Some(mut close_details) = close_error.details {
+                if let Some(close_fact) = close_details
+                    .as_object_mut()
+                    .and_then(|members| members.remove("source_close"))
+                {
+                    let mut details = error.details.take().unwrap_or_else(|| json!({}));
+                    if let Some(members) = details.as_object_mut() {
+                        members.insert("source_close".into(), close_fact);
+                    }
+                    error.details = Some(details);
+                }
+            }
+            return FeedWorkflowFacts::Failed {
+                report: None,
+                error,
+                source_close: None,
+            };
+        }
+    };
+    match outcome {
+        Ok(workflow) => {
             let report = workflow_report(workflow.report());
             match workflow {
                 FinishedWorkflow::NoChange(_) => FeedWorkflowFacts::NoChange { report },
@@ -336,12 +367,17 @@ fn collect_workflow_facts(
                         Err(error) => FeedWorkflowFacts::Failed {
                             report: Some(report),
                             error,
+                            source_close,
                         },
                     }
                 }
             }
         }
-        Err(error) => FeedWorkflowFacts::Failed { report: None, error },
+        Err(error) => FeedWorkflowFacts::Failed {
+            report: None,
+            error,
+            source_close,
+        },
     }
 }
 
@@ -368,10 +404,27 @@ fn finish_workflow_facts(
             metadata_logical_change,
             commit,
         } => finish_publisher(writer, method, Some(&report), metadata_logical_change, commit),
-        FeedWorkflowFacts::Failed { report, error } => match report {
-            Some(report) => Err(finish_writer_error(writer, error, &report)),
-            None => Err(workflow_failure(writer, error)),
-        },
+        FeedWorkflowFacts::Failed {
+            report,
+            mut error,
+            source_close,
+        } => {
+            let error = match source_close {
+                Some(close) => {
+                    let mut details = error.details.take().unwrap_or_else(|| json!({}));
+                    if let Some(members) = details.as_object_mut() {
+                        members.insert("source_close".into(), close);
+                    }
+                    error.details = Some(details);
+                    error
+                }
+                None => error,
+            };
+            match report {
+                Some(report) => Err(finish_writer_error(writer, error, &report)),
+                None => Err(workflow_failure(writer, error)),
+            }
+        }
         FeedWorkflowFacts::ReaderCloseFailed { report, close_error } => {
             let close = close_writer(writer).ok();
             let mut details = json!({"report": report});
