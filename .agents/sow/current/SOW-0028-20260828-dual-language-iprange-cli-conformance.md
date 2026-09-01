@@ -1125,3 +1125,34 @@ Suite findings (Copernicus @ af9ac206):
 5. P2 Algebra oracle exists but is not wired into any runner assertion.
 6. P2 Python decode_frame rejects a legal max-size frame when given an
    LF/CRLF-terminated line (length checked before stripping terminator).
+
+## Review round 3 (2026-09-01) — FAIL, fix batch 3
+
+Wire (McClintock @ aec5d155):
+1. P1 Cursor paging measures the partial result object, not the complete
+   envelope; a valid large cursor at its requested batch size returns
+   output_limit instead of a reduced page (cursors.rs fits_next_item /
+   array_response_base vs session fallback). Fix: size pages against the
+   full envelope budget (jsonrpc + id + method) and reduce before refusing.
+2. P1 `export` advertises and accepts `source.mode:"live"` but rejects
+   live sources at runtime (export.rs:132-143). Live readers are now
+   implemented; export must route live sources through the facade.
+3. P2 Integral ids beyond i64/u64 (2**100) rejected; the spec and Python
+   authority accept any JSON integer. serde_json loses exactness beyond
+   u64 without arbitrary_precision; make id echo exact for any integral
+   JSON number.
+4. P2 Zero budget values are still accepted by writer/snapshot/feed/result
+   budget validators (lifecycle.rs, publish.rs, snapshot.rs, export.rs);
+   the frozen schema requires positive values. Zero must be -32602.
+
+Suite (Copernicus @ aec5d155):
+1. P1 Algebra compare oracle computes left_addresses/right_addresses as
+   side-only counts; the SDK defines total per-side addresses (oracle.py
+   131-146 + run.py 433-443 + self-tests).
+2. P2 frame.decode_frame accepts UTF-16/UTF-32 bytes (json.loads byte
+   auto-detect); transport is UTF-8 only. Decode strictly UTF-8 first.
+3. P2 A payload terminated by bare CR is accepted as CRLF in BOTH Python
+   frame.py and Rust schema.rs/framing.rs; only LF and CRLF terminate.
+4. P2 Lookup/start addresses are canonical but not bound to the opened
+   reader's address family; runner must track address_family and reject
+   cross-family addresses.
