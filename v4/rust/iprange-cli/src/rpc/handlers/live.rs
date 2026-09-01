@@ -616,8 +616,11 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
     require_existing_database(Path::new(path))?;
     let (source_path, source_mode, feed) = decode_current_source(&object["current"])?;
     let refresh_value = u32_value(&object["refresh_value"]).map_err(HandlerError::invalid_params)?;
-    let mut collector = match object.get("removals_output") {
-        Some(output) => Some(RemovalCollector::new(removals_settings(output)?, refresh_value)?),
+    // Validate the removal-output settings now, but create the private
+    // temporary only after every fallible pre-work (source open/info,
+    // writer open) has succeeded, so no early return can leak it.
+    let removals = match object.get("removals_output") {
+        Some(output) => Some(removals_settings(output)?),
         None => None,
     };
     let metadata = lifecycle::metadata_value(&object["metadata"])?;
@@ -632,6 +635,10 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
     let mut writer = match LiveWriter::open(path, budget, &state.token) {
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
+    };
+    let mut collector = match removals {
+        Some(settings) => Some(RemovalCollector::new(settings, refresh_value)?),
+        None => None,
     };
     let outcome = match family {
         AddressFamily::Ipv4 => run_first_seen_v4(

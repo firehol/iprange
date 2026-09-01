@@ -15,6 +15,7 @@ pub fn validate_describe_params(params: &Value) -> Result<(), String> {
 
 /// Capability discovery.
 pub fn describe(_state: &mut SessionState, _params: Value) -> Result<Value, HandlerError> {
+    let worker = iprange_livedb::validation::worker_availability();
     Ok(json!({
         "method": "iprange.v1.system.describe",
         "product": "iprange",
@@ -39,8 +40,8 @@ pub fn describe(_state: &mut SessionState, _params: Value) -> Result<Value, Hand
             "cursor_records": 4096
         },
         "fault_worker": {
-            "available": iprange_livedb::validation::worker_availability().available,
-            "protocol": iprange_livedb::validation::worker_availability().protocol,
+            "available": worker.available,
+            "protocol": worker.protocol,
         },
         "platform_result_fields": []
     }))

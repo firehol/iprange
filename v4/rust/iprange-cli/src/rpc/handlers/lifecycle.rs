@@ -336,6 +336,35 @@ pub(crate) fn metadata_value(value: &Value) -> Result<MetadataValue, HandlerErro
     }
 }
 
+/// Read a metadata source with a hard cap, so a file that grows
+/// between the size check and the read cannot drive an unbounded heap
+/// allocation in the RPC process. Files at or below the cap read
+/// exactly; longer files are refused like the pre-check would.
+fn read_bounded(path: &str) -> std::io::Result<Vec<u8>> {
+    use std::io::Read as _;
+    let mut file = std::fs::File::open(path)?;
+    let mut bytes = Vec::with_capacity(
+        usize::try_from(iprange_livedb::MAX_METADATA_UNCOMPRESSED)
+            .unwrap_or(usize::MAX),
+    );
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(bytes);
+        }
+        let cap = usize::try_from(iprange_livedb::MAX_METADATA_UNCOMPRESSED)
+            .unwrap_or(usize::MAX);
+        if bytes.len().saturating_add(read) > cap {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "metadata source exceeds 20 MiB",
+            ));
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
+}
+
 fn read_file_exact(path: &str) -> Result<Vec<u8>, HandlerError> {
     match std::fs::metadata(path) {
         Ok(value) if !value.is_file() => {
@@ -368,7 +397,7 @@ fn read_file_exact(path: &str) -> Result<Vec<u8>, HandlerError> {
         }
         Ok(_) => {}
     }
-    std::fs::read(path).map_err(|error| {
+    read_bounded(path).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             HandlerError::new(
                 "invalid_path",
@@ -624,6 +653,7 @@ pub(crate) fn cleanup_artifact(value: &CleanupArtifact) -> Value {
         "directory_role": directory_role(value.directory_role),
         "directory_identity": file_identity_ok(&value.directory_identity),
         "basename_encoding": value.basename_encoding,
+        "basename": convert::hex_bytes(&value.basename),
         "identity": value.identity.as_ref().map(file_identity_ok),
         "error": publication_problem(&value.error),
     });

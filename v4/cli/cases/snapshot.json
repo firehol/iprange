@@ -47,7 +47,40 @@
     {
      "path": "snap.iprange"
     }
+   ],
+   "capture": [
+    "publication"
    ]
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.publication.resolve",
+   "params": {
+    "path": "$WORK/snap.iprange",
+    "resolution_mode": "complete",
+    "publication_result": "$CAPTURE/publication"
+   },
+   "expect_result": {
+    "publication": {
+     "publication": "published",
+     "destination_content": "desired",
+     "later_canonical": "none",
+     "attempt": {
+      "publication_attempt_id": {
+       "$ignore": true
+      },
+      "database_id": {
+       "$ignore": true
+      }
+     },
+     "cleanup": {
+      "$ignore": true
+     },
+     "coordination_cleanup": {
+      "$ignore": true
+     }
+    }
+   }
   },
   {
    "kind": "rpc",

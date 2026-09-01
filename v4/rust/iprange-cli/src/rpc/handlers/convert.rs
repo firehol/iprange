@@ -12,6 +12,10 @@ pub fn decimal_u64(value: u64) -> String {
     value.to_string()
 }
 
+pub(crate) fn hex_bytes(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
 pub fn hex_id(bytes: &[u8; 16]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }

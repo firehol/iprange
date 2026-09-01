@@ -2,8 +2,8 @@
 
 use iprange_livedb::error::ErrorCode;
 use iprange_livedb::publication::{
-    AccessPolicy, CleanupArtifact, CleanupArtifacts, CoordinationCleanup, DestinationContent,
-    Housekeeping, HousekeepingArtifact, LaterCanonical, LiveLineage, PublicationPolicy,
+    CleanupArtifact, CleanupArtifacts, CoordinationCleanup, Housekeeping, HousekeepingArtifact,
+    PublicationPolicy,
     PublicationResult, PublicationStatus,
 };
 use iprange_livedb::snapshot::{
@@ -176,112 +176,14 @@ fn preparation_details(failure: &SnapshotPreparationFailure) -> Value {
 /// schema (v4/cli/schema/results.py). `attempt` carries the complete
 /// SDK attempt object (publication_evidence::publication_attempt).
 pub(crate) fn publication_result(result: &PublicationResult) -> Value {
-    let mut converted = Map::new();
-    converted.insert(
-        "attempt".into(),
-        publication_evidence::publication_attempt(&result.attempt)
-            .unwrap_or_else(|error| json!({"error": error.message})),
-    );
-    converted.insert(
-        "main_namespace_may_have_been_attempted".into(),
-        json!(result.main_namespace_may_have_been_attempted),
-    );
-    converted.insert(
-        "publication".into(),
-        json!(publication_status(result.publication)),
-    );
-    converted.insert(
-        "destination_content".into(),
-        json!(destination_content(result.destination_content)),
-    );
-    converted.insert(
-        "later_canonical".into(),
-        json!(later_canonical(result.later_canonical)),
-    );
-    if let Some(lineage) = result.live_lineage {
-        converted.insert(
-            "live_lineage".into(),
-            json!({"kind": live_lineage(lineage)}),
-        );
-    }
-    if let Some(id) = result.later_attempt_or_sidecar_id {
-        converted.insert("later_attempt_or_sidecar_id".into(), json!(hex16(&id)));
-    }
-    if let Some(transaction) = result.later_selected_transaction_id {
-        converted.insert(
-            "later_selected_transaction_id".into(),
-            json!(transaction.to_string()),
-        );
-    }
-    if let Some(nonce) = result.later_selected_commit_nonce {
-        converted.insert("later_selected_commit_nonce".into(), json!(hex16(&nonce)));
-    }
-    converted.insert(
-        "main_access_policy".into(),
-        json!(access_policy(result.main_access_policy)),
-    );
-    converted.insert(
-        "coordination_access_policy".into(),
-        json!(access_policy(result.coordination_access_policy)),
-    );
-    converted.insert("cleanup".into(), cleanup_artifacts(&result.cleanup));
-    converted.insert(
-        "coordination_cleanup".into(),
-        coordination_cleanup(result.coordination_cleanup),
-    );
-    converted.insert(
-        "housekeeping".into(),
-        housekeeping(&result.housekeeping, &result.visible_housekeeping),
-    );
-    converted.insert(
-        "visible_housekeeping".into(),
-        visible_housekeeping(&result.visible_housekeeping),
-    );
-    Value::Object(converted)
+    publication_evidence::publication_result(result)
+        .unwrap_or_else(|error| json!({"error": error.message}))
 }
 
-fn publication_status(value: PublicationStatus) -> &'static str {
-    match value {
-        PublicationStatus::NotPublished => "not_published",
-        PublicationStatus::Published => "published",
-        PublicationStatus::OutcomeUnknown => "outcome_unknown",
-    }
-}
 
-fn destination_content(value: DestinationContent) -> &'static str {
-    match value {
-        DestinationContent::Desired => "desired",
-        DestinationContent::Previous => "previous",
-        DestinationContent::Absent => "absent",
-        DestinationContent::Other => "other",
-        DestinationContent::Unclassified => "unclassified",
-    }
-}
 
-fn later_canonical(value: LaterCanonical) -> &'static str {
-    match value {
-        LaterCanonical::None => "none",
-        LaterCanonical::ReservationOrTransition => "reservation_or_transition",
-        LaterCanonical::ReadyLiveSidecar => "ready_live_sidecar",
-    }
-}
 
-fn live_lineage(value: LiveLineage) -> &'static str {
-    match value {
-        LiveLineage::SameGenerationExactBytes => "same_generation_exact_bytes",
-        LiveLineage::SameGenerationPhysicalBytesChanged => "same_generation_physical_bytes_changed",
-        LiveLineage::AdvancedGeneration => "advanced_generation",
-    }
-}
 
-fn access_policy(value: AccessPolicy) -> &'static str {
-    match value {
-        AccessPolicy::Absent => "absent",
-        AccessPolicy::CreatorOnly => "creator_only",
-        AccessPolicy::ChangedOrUnproven => "changed_or_unproven",
-        AccessPolicy::Unclassified => "unclassified",
-    }
-}
 
 /// Empty cleanup converts to the golden-corpus empty object; entries
 /// are listed under `artifacts` with their complete public facts.
@@ -505,6 +407,7 @@ fn publication_code(code: ErrorCode) -> &'static str {
 mod tests {
     use super::*;
     use super::super::lifecycle;
+    use iprange_livedb::publication::LiveLineage;
     use iprange_livedb::SnapshotOutcome;
     use iprange_livedb::{
         create_live, AddressFamily, CancellationToken, Ipv4Key, LiveWriter, SnapshotBudget,

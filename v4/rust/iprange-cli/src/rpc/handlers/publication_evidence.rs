@@ -1,14 +1,17 @@
 //! Complete publication evidence in the v1 wire (SOW-0028 decision D3-A).
 //!
-//! `publication_attempt` converts the SDK `PublicationAttempt` into the
-//! complete wire object (hex identities, decimal lengths, base64
-//! basenames, policy/security facts). `decode_publication_result` is its
-//! strict inverse for the caller-preserved `publication_result` param of
-//! `publication.resolve`: exact member sets, canonical decimal/hex/base64
-//! encodings, and the same lowercase snake_case enum names the encoders
-//! emit. `cause` is never present on the wire (results carry it as an
-//! error, not a success field), so the decoder always reconstructs it as
-//! `None`.
+//! This module is the single authority for the complete `PublicationResult`
+//! wire object: `publication_result` encodes it and
+//! `decode_publication_result` is its strict inverse for the
+//! caller-preserved `publication_result` param of `publication.resolve`.
+//! Every handler family (current.publish, snapshot, algebra.publish,
+//! recover, inspect) emits through this one encoder, so enum vocabulary
+//! (`destination_content` "desired|previous|absent|other|unclassified",
+//! `later_canonical` "none|reservation_or_transition|ready_live_sidecar"),
+//! coordination cleanup (`{"kind": ...}` / `{}`), and artifact basenames
+//! (hex) are identical everywhere. `cause` is never present on the wire
+//! (results carry it as an error, not a success field), so the decoder
+//! always reconstructs it as `None`.
 
 use iprange_livedb::publication::{
     AccessPolicy, CleanupArtifact, CleanupArtifacts, DestinationContent, LaterCanonical,
@@ -58,6 +61,100 @@ pub(crate) fn publication_policy_name(value: PublicationPolicy) -> &'static str 
 
 fn hex128(bytes: &[u8; 64]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+pub(crate) fn publication_status_name(value: PublicationStatus) -> &'static str {
+    match value {
+        PublicationStatus::NotPublished => "not_published",
+        PublicationStatus::Published => "published",
+        PublicationStatus::OutcomeUnknown => "outcome_unknown",
+    }
+}
+
+pub(crate) fn destination_content_name(value: DestinationContent) -> &'static str {
+    match value {
+        DestinationContent::Desired => "desired",
+        DestinationContent::Previous => "previous",
+        DestinationContent::Absent => "absent",
+        DestinationContent::Other => "other",
+        DestinationContent::Unclassified => "unclassified",
+    }
+}
+
+pub(crate) fn later_canonical_name(value: LaterCanonical) -> &'static str {
+    match value {
+        LaterCanonical::None => "none",
+        LaterCanonical::ReservationOrTransition => "reservation_or_transition",
+        LaterCanonical::ReadyLiveSidecar => "ready_live_sidecar",
+    }
+}
+
+pub(crate) fn access_policy_name(value: AccessPolicy) -> &'static str {
+    match value {
+        AccessPolicy::CreatorOnly => "creator_only",
+        AccessPolicy::ChangedOrUnproven => "changed_or_unproven",
+        AccessPolicy::Unclassified => "unclassified",
+        AccessPolicy::Absent => "absent",
+    }
+}
+
+fn live_lineage_name(value: LiveLineage) -> &'static str {
+    match value {
+        LiveLineage::SameGenerationExactBytes => "same_generation_exact_bytes",
+        LiveLineage::SameGenerationPhysicalBytesChanged => {
+            "same_generation_physical_bytes_changed"
+        }
+        LiveLineage::AdvancedGeneration => "advanced_generation",
+    }
+}
+
+fn publication_cleanup(value: &CleanupArtifacts) -> Value {
+    if value.is_empty() {
+        return json!({});
+    }
+    json!({
+        "artifacts": value.iter().map(lifecycle::cleanup_artifact).collect::<Vec<_>>(),
+    })
+}
+
+/// Complete mechanical `PublicationResult` conversion: the single
+/// encoder for every publication-producing handler family.
+pub(crate) fn publication_result(result: &PublicationResult) -> Result<Value, HandlerError> {
+    let mut value = json!({
+        "attempt": publication_attempt(&result.attempt)?,
+        "main_namespace_may_have_been_attempted": result.main_namespace_may_have_been_attempted,
+        "publication": publication_status_name(result.publication),
+        "destination_content": destination_content_name(result.destination_content),
+        "later_canonical": later_canonical_name(result.later_canonical),
+        "main_access_policy": access_policy_name(result.main_access_policy),
+        "coordination_access_policy": access_policy_name(result.coordination_access_policy),
+        "cleanup": publication_cleanup(&result.cleanup),
+        "coordination_cleanup": lifecycle::coordination_cleanup(result.coordination_cleanup),
+        "housekeeping": lifecycle::housekeeping(
+            result.housekeeping,
+            &result.visible_housekeeping,
+        ),
+        "visible_housekeeping": Value::Array(
+            result
+                .visible_housekeeping
+                .iter()
+                .map(lifecycle::housekeeping_artifact)
+                .collect(),
+        ),
+    });
+    if let Some(lineage) = result.live_lineage {
+        value["live_lineage"] = json!({"kind": live_lineage_name(lineage)});
+    }
+    if let Some(id) = result.later_attempt_or_sidecar_id {
+        value["later_attempt_or_sidecar_id"] = json!(convert::hex_id(&id));
+    }
+    if let Some(transaction) = result.later_selected_transaction_id {
+        value["later_selected_transaction_id"] = json!(convert::decimal_u64(transaction));
+    }
+    if let Some(nonce) = result.later_selected_commit_nonce {
+        value["later_selected_commit_nonce"] = json!(convert::hex_id(&nonce));
+    }
+    Ok(value)
 }
 
 /// Strict inverse of `publication_result` for a preserved wire result.
@@ -261,13 +358,13 @@ fn decode_publication_status(value: &Value) -> Result<PublicationStatus, String>
 
 fn decode_destination_content(value: &Value) -> Result<DestinationContent, String> {
     match lifecycle_live::string(value, "destination_content")? {
-        "created" => Ok(DestinationContent::Desired),
+        "desired" => Ok(DestinationContent::Desired),
         "previous" => Ok(DestinationContent::Previous),
         "absent" => Ok(DestinationContent::Absent),
         "other" => Ok(DestinationContent::Other),
         "unclassified" => Ok(DestinationContent::Unclassified),
         _ => Err(
-            "destination_content must be created, previous, absent, other, or unclassified"
+            "destination_content must be desired, previous, absent, other, or unclassified"
                 .into(),
         ),
     }
@@ -275,10 +372,10 @@ fn decode_destination_content(value: &Value) -> Result<DestinationContent, Strin
 
 fn decode_later_canonical(value: &Value) -> Result<LaterCanonical, String> {
     match lifecycle_live::string(value, "later_canonical")? {
-        "absent" => Ok(LaterCanonical::None),
+        "none" => Ok(LaterCanonical::None),
         "reservation_or_transition" => Ok(LaterCanonical::ReservationOrTransition),
         "ready_live_sidecar" => Ok(LaterCanonical::ReadyLiveSidecar),
-        _ => Err("later_canonical must be absent, reservation_or_transition, or ready_live_sidecar".into()),
+        _ => Err("later_canonical must be none, reservation_or_transition, or ready_live_sidecar".into()),
     }
 }
 
@@ -348,7 +445,7 @@ fn decode_cleanup_artifact(value: &Value) -> Result<CleanupArtifact, String> {
             "basename_encoding",
             "error",
         ],
-        &["identity", "creation_security", "unpublished_tail"],
+        &["identity", "creation_security", "unpublished_tail", "basename"],
         "cleanup artifact",
     )?;
     Ok(CleanupArtifact {
@@ -359,9 +456,12 @@ fn decode_cleanup_artifact(value: &Value) -> Result<CleanupArtifact, String> {
             "directory_identity",
         )?,
         basename_encoding: lifecycle_live::u16_encoding(&artifact["basename_encoding"])?,
-        // The encoder does not carry the cleanup basename (resolvers do
-        // not consume it); the reconstructed ledger keeps it empty.
-        basename: Box::new([]),
+        // The encoder carries the cleanup basename as lowercase hex; the
+        // reconstructed ledger keeps the exact bytes.
+        basename: match artifact.get("basename") {
+            Some(value) => decode_hex_bytes(value, "basename")?,
+            None => Box::new([]),
+        },
         identity: lifecycle_live::optional_file_identity(artifact.get("identity"), "identity")?,
         creation_security: match artifact.get("creation_security") {
             Some(security) => Some(lifecycle_live::decode_creation_security(security)?),
@@ -413,6 +513,27 @@ fn decode_unpublished_tail(value: Option<&Value>) -> Result<Option<UnpublishedTa
         }
         _ => Ok(None),
     }
+}
+
+fn decode_hex_bytes(value: &Value, field: &str) -> Result<Box<[u8]>, String> {
+    let text = lifecycle_live::string(value, field)?;
+    let valid = text.len() % 2 == 0
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase());
+    if !valid {
+        return Err(format!("{field} must be even lowercase hex"));
+    }
+    let bytes = text
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            let high = (pair[0] as char).to_digit(16).expect("validated hex");
+            let low = (pair[1] as char).to_digit(16).expect("validated hex");
+            (high * 16 + low) as u8
+        })
+        .collect::<Vec<_>>();
+    Ok(bytes.into_boxed_slice())
 }
 
 fn decode_publication_problem(value: &Value) -> Result<PublicationProblem, String> {
@@ -526,8 +647,8 @@ mod tests {
             "attempt": publication_attempt(&attempt).unwrap(),
             "main_namespace_may_have_been_attempted": true,
             "publication": "published",
-            "destination_content": "created",
-            "later_canonical": "absent",
+            "destination_content": "desired",
+            "later_canonical": "none",
             "main_access_policy": "creator_only",
             "coordination_access_policy": "absent",
             "cleanup": {},

@@ -841,6 +841,38 @@ pub fn history_project(state: &mut SessionState, params: Value) -> Result<Value,
     finish_projection_facts(&mut writer, facts, &metadata, &state.token)
 }
 
+/// Carry the factual live source close into a publisher outcome: the
+/// success result gets `source_closes` (schema CLOSE_RESULT_LIST); a
+/// product error preserves it in `details`.
+fn with_source_close(
+    outcome: Result<Value, HandlerError>,
+    source_close: Option<&Value>,
+) -> Result<Value, HandlerError> {
+    let Some(close) = source_close else {
+        return outcome;
+    };
+    match outcome {
+        Ok(mut value) => {
+            value
+                .as_object_mut()
+                .expect("method results are objects")
+                .insert("source_closes".into(), Value::Array(vec![close.clone()]));
+            Ok(value)
+        }
+        Err(mut error) => {
+            let mut details = error.details.take().unwrap_or_else(|| json!({}));
+            if let Some(members) = details.as_object_mut() {
+                members.insert(
+                    "source_closes".into(),
+                    Value::Array(vec![close.clone()]),
+                );
+            }
+            error.details = Some(details);
+            Err(error)
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Publisher result machinery (live writer mutations).
 // ---------------------------------------------------------------------------
@@ -852,15 +884,18 @@ pub fn history_project(state: &mut SessionState, params: Value) -> Result<Value,
 enum ProjectionFacts {
     NoChange {
         report: Value,
+        source_close: Option<Value>,
     },
     Changed {
         report: Value,
         metadata_logical_change: &'static str,
         commit: Option<std::result::Result<CommitResult, Error>>,
+        source_close: Option<Value>,
     },
     Failed {
         report: Option<Value>,
         error: HandlerError,
+        source_close: Option<Value>,
     },
     ReaderCloseFailed {
         report: Value,
@@ -877,32 +912,46 @@ fn collect_projection_facts(
     outcome: std::result::Result<FinishedHistoryProjection<'_>, HandlerError>,
     metadata: &lifecycle::MetadataValue,
 ) -> ProjectionFacts {
-    match outcome {
-        Ok(projection) => {
-            if let Err(close_error) = reader::close_ephemeral_reader(reader) {
+    let source_close = match reader::close_ephemeral_reader(reader) {
+        Ok(close) => close,
+        Err(close_error) => {
+            if let Ok(projection) = outcome {
                 let report = history_projection_report(projection.report());
                 drop(projection);
                 return ProjectionFacts::ReaderCloseFailed { report, close_error };
             }
+            None
+        }
+    };
+    match outcome {
+        Ok(projection) => {
             let report = history_projection_report(projection.report());
             match projection {
-                FinishedHistoryProjection::NoChange(_) => ProjectionFacts::NoChange { report },
+                FinishedHistoryProjection::NoChange(_) => {
+                    ProjectionFacts::NoChange { report, source_close }
+                }
                 FinishedHistoryProjection::Changed(prepared) => {
                     match publish_changed(prepared, metadata) {
                         Ok((metadata_logical_change, commit)) => ProjectionFacts::Changed {
                             report,
                             metadata_logical_change,
                             commit,
+                            source_close,
                         },
                         Err(error) => ProjectionFacts::Failed {
                             report: Some(report),
                             error,
+                            source_close,
                         },
                     }
                 }
             }
         }
-        Err(error) => ProjectionFacts::Failed { report: None, error },
+        Err(error) => ProjectionFacts::Failed {
+            report: None,
+            error,
+            source_close,
+        },
     }
 }
 
@@ -915,8 +964,11 @@ fn finish_projection_facts(
     token: &CancellationToken,
 ) -> Result<Value, HandlerError> {
     match facts {
-        ProjectionFacts::NoChange { report } => {
-            match publish_no_change(writer, metadata, token) {
+        ProjectionFacts::NoChange {
+            report,
+            source_close,
+        } => {
+            let outcome = match publish_no_change(writer, metadata, token) {
                 Ok((metadata_logical_change, commit)) => finish_publisher(
                     writer,
                     "iprange.v1.history.project",
@@ -925,23 +977,35 @@ fn finish_projection_facts(
                     commit,
                 ),
                 Err(error) => Err(finish_writer_error(writer, error, &report)),
-            }
+            };
+            with_source_close(outcome, source_close.as_ref())
         }
         ProjectionFacts::Changed {
             report,
             metadata_logical_change,
             commit,
-        } => finish_publisher(
-            writer,
-            "iprange.v1.history.project",
-            Some(&report),
-            metadata_logical_change,
-            commit,
+            source_close,
+        } => with_source_close(
+            finish_publisher(
+                writer,
+                "iprange.v1.history.project",
+                Some(&report),
+                metadata_logical_change,
+                commit,
+            ),
+            source_close.as_ref(),
         ),
-        ProjectionFacts::Failed { report, error } => match report {
-            Some(report) => Err(finish_writer_error(writer, error, &report)),
-            None => Err(workflow_failure(writer, error)),
-        },
+        ProjectionFacts::Failed {
+            report,
+            error,
+            source_close,
+        } => {
+            let outcome = match report {
+                Some(report) => Err(finish_writer_error(writer, error, &report)),
+                None => Err(workflow_failure(writer, error)),
+            };
+            with_source_close(outcome, source_close.as_ref())
+        }
         ProjectionFacts::ReaderCloseFailed { report, close_error } => {
             let close = close_writer(writer).ok();
             let mut details = json!({"report": report});

@@ -901,12 +901,62 @@ Open decisions:
   their own CommitDraft impls (PreparedFeedChange, PreparedHistoryProjection)
   and live.rs/maintenance.rs/algebra.rs/feeds.rs import the shared
   converters. durability_outcome moved next to the other commit-fact
-  converters in lifecycle.rs. Net -246 lines; -D warnings clean; 50 Rust
+  converters in lifecycle.rs. Net -197 lines; -D warnings clean; 50 Rust
   suites; runner 24 cases / 13 oracle checks; golden + sensitivity PASS.
 - Validation at 0646eba5: full gate set green (Rust workspace 50 suites,
   -D warnings build, golden 53 exchanges, sensitivity 13 modes, runner
   24 cases / 13 oracle checks, Go suite incl. the D1-B uncovered-last
   order test).
+
+### 2026-09-01 (continued) — round-8 re-review and fix wave
+
+- Round-8 re-review at HEAD 91e3e57b (five own-model reviewers: wire
+  contract, SDK ownership, performance/bounds, registry/records,
+  coverage/oracles). Verdict FAIL with verified findings, all fixed:
+  - P2 (performance): export row writers allocated per row; selection/
+    pairs validators were O(n^2) Vec::contains. Fixed at 89715d23:
+    one caller-owned line buffer per export format (push_address,
+    push_ranges_line, write_json_value), HashSet uniqueness.
+  - P2 x2 (coverage): the independent interval oracle fired only for
+    reader lookups (13/13; algebra count/compare never against a real
+    binary), and five methods plus the metadata.replace success path
+    had no live case. Fixed at 061ded50: v4-fixture direct-csv /
+    membership-csv build text-defined databases, the runner registers
+    their intervals and runs the oracle self-test, and six new cases
+    (reader.info, export.netset, snapshot, live.transition,
+    database.metadata, algebra.oracle) execute every remaining method.
+    Runner corpus is now 30 cases / 15 oracle checks.
+  - P1 (wire/SDK): three independent PublicationResult encoders used two
+    vocabularies (`destination_content` created|desired, `later_canonical`
+    absent|none); publication.resolve rejected preserved snapshot and
+    algebra.publish evidence, and cleanup/coordination shapes diverged.
+    Fixed at the current HEAD: publication_evidence.rs is the single
+    encoder/decoder authority with the spec-named vocabulary
+    (desired/previous/absent/other/unclassified; none/...), matching
+    coordination cleanup {"kind"|{}} and hex artifact basenames;
+    goldens already documented the canonical vocabulary; oracle cases
+    pinned and extended (snapshot.json now resolves its own preserved
+    evidence through publication.resolve).
+  - P1 (SDK ownership): RemovalCollector created its private temporary
+    before fallible pre-work, leaking it on reader-open/info and
+    writer-open failures. Fixed: the temporary is created after all
+    fallible pre-work; the existing outcome discard covers every later
+    path.
+  - P2 (wire): history.project dropped the factual live reader close.
+    Fixed: the close result threads through every projection outcome
+    (source_closes on success; details on product errors).
+  - P2 (SDK ownership): metadata replace_file stat-then-read TOCTOU
+    window allowed unbounded reads. Fixed: read_bounded caps the read.
+  - P2 (records): the round-7 findings list was promised but absent;
+    the "Net -246 lines" claim was not reproducible. Fixed: "## Review
+    round 7" section above reconstructs all 14 items with fix-commit
+    mappings and provenance; the net claim corrected to -197.
+  - P3: golden system.json fault_worker.protocol corrected to the
+    control-protocol constant "1"; system.describe probes the worker
+    once.
+- Validation at current HEAD: -D warnings clean; Rust workspace 50
+  suites (664 tests); runner 30 cases / 15 oracle checks; golden PASS;
+  sensitivity 13 modes; Go suite green.
 
 ### 2026-09-01 (continued) — complete handler registry
 
@@ -1308,3 +1358,91 @@ with 13 oracle checks. Read-only, publish/lifecycle, export/snapshot,
 and transport are complete; next per the fixed delivery order: live
 workflows, destructive recovery/maintenance, then algebra/query/join/
 history families.
+
+## Review round 7 (2026-09-01) — FAIL, adjudicated findings
+
+Round 7 reviewed HEAD 137032ed in five adversarial scopes (wire contract,
+SDK ownership, correctness, performance/bounds, registry/records). The raw
+reviewer transcripts were delivered as session messages and were not
+preserved in the repository; the items below are reconstructed from this
+SOW's execution log, the recorded user decisions, and the fix commits that
+implement them. Every item maps to a committed fix; the round-8 delta
+re-review (below) re-audited each area at the fixed HEAD.
+
+P1 findings (4):
+
+1. `join.direct` row order: spec requires covered rows per feed ascending
+   by direct value with the uncovered (null) cell LAST (spec:764); both
+   SDKs iterated the uncovered cell first. Fixed by decision D1-B at
+   3c3aab8d: Rust sort key `(feed, direct == 0, direct)`, Go equivalent,
+   real wire value 0 pinned as a covered cell (provider_joins.rs,
+   join_direct_emit_test.go, cases/join.direct.json).
+2. `feeds.delete`/`feeds.rename` synthesized a zero-counter WorkflowReport
+   the SDK deliberately does not expose, inventing untruthful statistics.
+   Fixed by decision D2-B at 3c3aab8d: results carry commit, metadata, and
+   writer-close facts only; `_FEED_CHANGE_COMMON` schema, spec 688-694, and
+   cases/feeds.lifecycle.json (no report member) pin it.
+3. `publication.resolve` rejected the caller-supplied publication_result:
+   the wire schema could not reconstruct the SDK PublicationAttempt, so the
+   D3 authority path was unusable. Fixed by decision D3-A at 6d9b6066
+   (complete reversible evidence, publication_evidence.rs) and completed
+   this round: one canonical PublicationResult encoder for every producer
+   (current.publish, snapshot, algebra.publish, recover, inspect),
+   single vocabulary, and an oracle case resolving a preserved snapshot
+   result end to end.
+4. Metadata `replace_file` read a caller file into heap without a bound
+   (unbounded heap read above the 20 MiB SDK cap). Fixed at 3c3aab8d
+   (stat pre-check) and hardened this round against the TOCTOU window:
+   the read itself is capped (lifecycle.rs read_bounded).
+
+P2 findings (8):
+
+1. Zero runner coverage for the 32 new method families (golden-only
+   evidence). Fixed at 4dfcc382 and 061ded50: 30 declarative cases cover
+   every callable family; 15 independent oracle checks fire per run.
+2. Budget-refusal wire codes were inconsistent (`output_limit` vs the
+   canonical SDK snake_case names). Adjudicated at 91e3e57b records:
+   SDK-domain refusals use canonical codes; `output_limit` only where the
+   spec names it or for adapter-side output guards.
+3. `value_tag.hex` validator accepted the wrong character range (g-z) and
+   diverged from the lowercase-hex spec. Fixed at 3c3aab8d: exactly
+   0-9a-f, NUL byte rejected (lifecycle.rs 730-752).
+4. Removal-output temporary cleanup relied on destructors; explicit
+   discard on every terminal path with reported failures is required.
+   Fixed at 3c3aab8d and completed this round: the private temporary is
+   created only after every fallible pre-work, so no early return can
+   leak it (live.rs first_seen_refresh).
+5. File-level query/algebra handlers dropped the factual live source
+   close result. Fixed at 3c3aab8d for query/join/algebra
+   (source_close/source_closes); the `history.project` residual is fixed
+   this round (its success and error outcomes now carry source_closes).
+6. The round summary miscounted severities ("1 P1 + 8 P2 + 2 P3" vs the
+   verified 4 P1 + 8 P2 + 2 P3). Corrected in the round-7 execution log.
+7. Goldens are illustrative, not independent correctness evidence; the
+   mandatory correction required oracle-driven cases for every method
+   family before the next review. Delivered at 4dfcc382/061ded50: text-
+   defined fixture databases feed the scalar interval oracle, and the
+   oracle self-test runs on every runner invocation.
+8. Housekeeping state was guessed on the wire instead of carried and
+   decoded exactly. Fixed at 3c3aab8d (carried Housekeeping state,
+   exact decode in lifecycle_live.rs).
+
+P3 findings (2):
+
+1. The algebra and feeds handler families duplicated the publisher
+   finalization machinery (CommitDraft adapters, publish_changed/
+   publish_no_change/finish_publisher/workflow_failure/
+   finish_writer_error/close_writer and the fact converters in up to five
+   files). Fixed at 91e3e57b: handlers/workflow.rs is the single
+   authority; families keep only their own CommitDraft impls.
+2. The retirement first-seen removal artifact is adapter-owned; its
+   publication facts shape was ambiguous. Adjudicated (decision recorded
+   2026-09-01): facts carry publication + destination_content only; no
+   fabricated SDK publication attempt (spec 670-673, 6d9b6066).
+
+Round-7 close-out validation (HEAD 91e3e57b): -D warnings build clean;
+Rust workspace 50 suites; Go suite incl. the D1-B order test; golden 53
+exchanges; sensitivity 13 modes; runner 24 cases / 13 oracle checks.
+The round-8 re-review (below) added the performance, coverage, wire,
+SDK-ownership, and records findings listed there and re-verified the
+round-7 fixes at the new HEAD.

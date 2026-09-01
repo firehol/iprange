@@ -1,7 +1,7 @@
 //! Immutable current-feed publication handler.
 
 use iprange_livedb::publication::{
-    AccessPolicy, CleanupArtifacts, DestinationContent, LaterCanonical, PublicationResult,
+    CleanupArtifacts, PublicationResult,
     PublicationStatus,
 };
 use iprange_livedb::{
@@ -177,7 +177,7 @@ fn publication_success(result: ImmutableFeedResult) -> Result<Value, HandlerErro
         );
         return Err(HandlerError {
             code,
-            outcome: publication_status(result.publication.publication),
+            outcome: publication_evidence::publication_status_name(result.publication.publication),
             message,
             details: Some(json!({
                 "report": immutable_feed_report(&result.report),
@@ -202,41 +202,7 @@ pub(crate) fn immutable_feed_report(report: &ImmutableFeedReport) -> Value {
 }
 
 pub(crate) fn publication_result(result: &PublicationResult) -> Result<Value, HandlerError> {
-    let mut value = json!({
-        "attempt": publication_evidence::publication_attempt(&result.attempt)?,
-        "main_namespace_may_have_been_attempted": result.main_namespace_may_have_been_attempted,
-        "publication": publication_status(result.publication),
-        "destination_content": destination_content(result.destination_content),
-        "later_canonical": later_canonical(result.later_canonical),
-        "main_access_policy": access_policy(result.main_access_policy),
-        "coordination_access_policy": access_policy(result.coordination_access_policy),
-        "cleanup": publication_cleanup(&result.cleanup),
-        "coordination_cleanup": lifecycle::coordination_cleanup(result.coordination_cleanup),
-        "housekeeping": lifecycle::housekeeping(
-            result.housekeeping,
-            &result.visible_housekeeping,
-        ),
-        "visible_housekeeping": Value::Array(
-            result
-                .visible_housekeeping
-                .iter()
-                .map(lifecycle::housekeeping_artifact)
-                .collect(),
-        ),
-    });
-    if let Some(lineage) = result.live_lineage {
-        value["live_lineage"] = json!({"kind": live_lineage(lineage)});
-    }
-    if let Some(id) = result.later_attempt_or_sidecar_id {
-        value["later_attempt_or_sidecar_id"] = json!(super::convert::hex_id(&id));
-    }
-    if let Some(transaction) = result.later_selected_transaction_id {
-        value["later_selected_transaction_id"] = json!(super::convert::decimal_u64(transaction));
-    }
-    if let Some(nonce) = result.later_selected_commit_nonce {
-        value["later_selected_commit_nonce"] = json!(super::convert::hex_id(&nonce));
-    }
-    Ok(value)
+    publication_evidence::publication_result(result)
 }
 
 fn preparation_error(
@@ -300,52 +266,10 @@ fn publication_cleanup(value: &CleanupArtifacts) -> Value {
     })
 }
 
-fn publication_status(value: PublicationStatus) -> &'static str {
-    match value {
-        PublicationStatus::NotPublished => "not_published",
-        PublicationStatus::Published => "published",
-        PublicationStatus::OutcomeUnknown => "outcome_unknown",
-    }
-}
 
-fn destination_content(value: DestinationContent) -> &'static str {
-    match value {
-        DestinationContent::Desired => "created",
-        DestinationContent::Previous => "previous",
-        DestinationContent::Absent => "absent",
-        DestinationContent::Other => "other",
-        DestinationContent::Unclassified => "unclassified",
-    }
-}
 
-fn later_canonical(value: LaterCanonical) -> &'static str {
-    match value {
-        LaterCanonical::None => "absent",
-        LaterCanonical::ReservationOrTransition => "reservation_or_transition",
-        LaterCanonical::ReadyLiveSidecar => "ready_live_sidecar",
-    }
-}
 
-fn live_lineage(value: iprange_livedb::publication::LiveLineage) -> &'static str {
-    match value {
-        iprange_livedb::publication::LiveLineage::SameGenerationExactBytes => {
-            "same_generation_exact_bytes"
-        }
-        iprange_livedb::publication::LiveLineage::SameGenerationPhysicalBytesChanged => {
-            "same_generation_physical_bytes_changed"
-        }
-        iprange_livedb::publication::LiveLineage::AdvancedGeneration => "advanced_generation",
-    }
-}
 
-fn access_policy(value: AccessPolicy) -> &'static str {
-    match value {
-        AccessPolicy::Absent => "absent",
-        AccessPolicy::CreatorOnly => "creator_only",
-        AccessPolicy::ChangedOrUnproven => "changed_or_unproven",
-        AccessPolicy::Unclassified => "unclassified",
-    }
-}
 
 struct ParsedTextInput {
     paths: Vec<String>,
