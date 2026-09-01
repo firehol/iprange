@@ -40,13 +40,26 @@ DESCRIBE_STEP = {
     "expect_result": {"method": "iprange.v1.system.describe"},
 }
 
+# The runner now requires successful responses to reference a reader this
+# connection actually opened, so every reader-using mode opens one through
+# the fake server first and reuses the captured handle.
+def _open_step():
+    return {
+        "kind": "rpc",
+        "method": "iprange.v1.reader.open",
+        "params": {"source": {"path": "/fake/db.iprange", "mode": "immutable"}},
+        "expect_result": {"reader": {"$ignore": True},
+                          "info": {"$ignore": True}},
+        "capture": ["reader"],
+    }
+
 # mode -> (steps, expected outcome, marker the FAIL reason must contain).
 MODES = [
     # Positive controls: a well-behaved server must PASS.
     ("describe_ok", [DESCRIBE_STEP], "PASS", ""),
-    ("rows_ok", [
+    ("rows_ok", [_open_step(), 
         {"kind": "rpc", "method": "iprange.v1.reader.ranges.open",
-         "params": {"reader": READER, "view": {"kind": "feed", "feed": "feed-a"},
+         "params": {"reader": "$CAPTURE/reader", "view": {"kind": "feed", "feed": "feed-a"},
                     "direction": "forward", "batch_size": 4096},
          "expect_result": {"method": "iprange.v1.reader.ranges.open",
                            "cursor": {"$ignore": True}},
@@ -56,9 +69,9 @@ MODES = [
          "expect_result": {"method": "iprange.v1.reader.ranges.next",
                            "records": {"$ignore": True}, "done": {"$ignore": True}}},
     ], "PASS", ""),
-    ("lookup_ok", [
+    ("lookup_ok", [_open_step(), 
         {"kind": "rpc", "method": "iprange.v1.reader.lookup",
-         "params": {"reader": READER, "addresses": ["10.0.0.1", "10.0.0.2"]},
+         "params": {"reader": "$CAPTURE/reader", "addresses": ["10.0.0.1", "10.0.0.2"]},
          "expect_result": {"method": "iprange.v1.reader.lookup",
                            "matches": {"$ignore": True}}},
     ], "PASS", ""),
@@ -73,9 +86,9 @@ MODES = [
     ("describe_unknown_member", [DESCRIBE_STEP], "FAIL", "unknown member"),
     ("describe_false_outcome", [DESCRIBE_STEP], "FAIL", "does not match requested method"),
     # Protocol semantics corruption.
-    ("rows_bad_order", [
+    ("rows_bad_order", [_open_step(), 
         {"kind": "rpc", "method": "iprange.v1.reader.ranges.open",
-         "params": {"reader": READER, "view": {"kind": "feed", "feed": "feed-a"},
+         "params": {"reader": "$CAPTURE/reader", "view": {"kind": "feed", "feed": "feed-a"},
                     "direction": "forward", "batch_size": 4096},
          "expect_result": {"method": "iprange.v1.reader.ranges.open",
                            "cursor": {"$ignore": True}},
@@ -85,9 +98,9 @@ MODES = [
          "expect_result": {"method": "iprange.v1.reader.ranges.next",
                            "records": {"$ignore": True}, "done": {"$ignore": True}}},
     ], "FAIL", "out of"),
-    ("rows_wrong_value", [
+    ("rows_wrong_value", [_open_step(), 
         {"kind": "rpc", "method": "iprange.v1.reader.lookup",
-         "params": {"reader": READER, "addresses": ["10.0.0.1"]},
+         "params": {"reader": "$CAPTURE/reader", "addresses": ["10.0.0.1"]},
          "expect_result": {"method": "iprange.v1.reader.lookup",
                            "matches": {"$ignore": True}}},
     ], "FAIL", "outside 0..4294967295"),

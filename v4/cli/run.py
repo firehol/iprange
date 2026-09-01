@@ -206,6 +206,7 @@ class CaseRunner:
                 f"case {self.case['name']!r}: invalid result for {method}: {exc}") from exc
         self.check_protocol(method, params, result)
         self.check_output_result(method, params, result)
+        self.check_source_close(method, params, result)
         if "expect_result" in step:
             expected = step["expect_result"]
             for key, exp in expected.items():
@@ -276,6 +277,23 @@ class CaseRunner:
         if method == "iprange.v1.export":
             self.verify_output_facts(result, request_path)
 
+    def check_source_close(self, method, params, result):
+        """Live sources must close internally and report source_close;
+        immutable sources must not fabricate one (spec factual-close rules)."""
+
+        source = params.get("source") if isinstance(params.get("source"), dict) else None
+        mode = source.get("mode") if source else None
+        if mode not in ("live", "immutable"):
+            return
+        if mode == "live" and "source_close" not in result:
+            raise AssertionError(
+                f"case {self.case['name']!r}: {method} opened a live source but "
+                f"returned no source_close")
+        if mode == "immutable" and "source_close" in result:
+            raise AssertionError(
+                f"case {self.case['name']!r}: {method} fabricated source_close for "
+                f"an immutable source")
+
     def verify_output_facts(self, facts, request_path):
         if request_path is not None and facts.get("path") != request_path:
             raise AssertionError(
@@ -322,8 +340,8 @@ class CaseRunner:
                 raise AssertionError(
                     f"case {self.case['name']!r}: lookup returned {len(matches)} matches "
                     f"for {len(addresses)} addresses")
-            reader_kind = self.readers.get(params["reader"])
-            reader_family = self.reader_families.get(params["reader"])
+            reader_kind, reader_family = self.require_reader(
+                params["reader"], "lookup")
             for index, (want, got) in enumerate(zip(addresses, matches)):
                 self.check_address_family(reader_family, want, "lookup match", index)
                 if got.get("address") != want:
@@ -338,16 +356,18 @@ class CaseRunner:
                 raise AssertionError(
                     f"case {self.case['name']!r}: matching_feeds address "
                     f"{result.get('address')!r} != requested {wanted!r}")
+            _, reader_family = self.require_reader(params["reader"], "matching_feeds")
             self.check_address_family(
-                self.reader_families.get(params["reader"]),
+                reader_family,
                 wanted,
                 "matching_feeds address",
                 None,
             )
         elif method == "iprange.v1.reader.ranges.open":
             if "start" in params:
+                _, reader_family = self.require_reader(params["reader"], "ranges.open")
                 self.check_address_family(
-                    self.reader_families.get(params["reader"]),
+                    reader_family,
                     params["start"],
                     "ranges.open start",
                     None,
@@ -365,7 +385,7 @@ class CaseRunner:
         elif method == "iprange.v1.reader.ranges.next":
             cursor = self.require_cursor(params["cursor"], "ranges.next")
             forward = cursor["direction"] == "forward"
-            reader_family = self.reader_families.get(cursor["reader"])
+            _, reader_family = self.require_reader(cursor["reader"], "ranges.next")
             for record in result.get("records", []):
                 self.check_range_record_shape(cursor["view"], record)
                 for side in ("from", "to"):
@@ -408,6 +428,17 @@ class CaseRunner:
             cursor = self.cursors.get(params["cursor"])
             if cursor is not None:
                 cursor["closed"] = True
+
+    def require_reader(self, handle, operation):
+        """A successful response must reference a reader this connection owns."""
+
+        kind = self.readers.get(handle)
+        family = self.reader_families.get(handle)
+        if kind is None or family is None:
+            raise AssertionError(
+                f"case {self.case['name']!r}: {operation} succeeded on unknown "
+                f"reader handle {handle!r}")
+        return kind, family
 
     @staticmethod
     def check_address_family(expected, address, operation, index):

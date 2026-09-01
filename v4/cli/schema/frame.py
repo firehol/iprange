@@ -52,6 +52,14 @@ class FrameError(Exception):
         self.request_id = request_id
 
 
+# The transport accepts integral JSON numbers of any length; CPython
+# caps int conversion at 4300 digits by default, so lift the limit.
+import sys as _sys
+
+if hasattr(_sys, "set_int_max_str_digits"):
+    _sys.set_int_max_str_digits(0)
+
+
 def decode_frame(line):
     """Decode one physical line into a request object or batch list.
 
@@ -93,6 +101,11 @@ def decode_frame(line):
         # transport is strict JSON (JSON-RPC 2.0), so reject them.
         value = json.loads(text, parse_constant=_reject_nonfinite)
     except json.JSONDecodeError as exc:
+        raise FrameError(STD_PARSE_ERROR, f"parse error: {exc}") from exc
+    except ValueError as exc:
+        # json.JSONDecodeError subclasses ValueError; other ValueErrors
+        # (for example CPython's 4300-digit int conversion limit) are
+        # still frame parse failures.
         raise FrameError(STD_PARSE_ERROR, f"parse error: {exc}") from exc
 
     if isinstance(value, list):

@@ -111,6 +111,28 @@ def handle(line):
         result = dict(DESCRIBE_OK["result"])
         result["method"] = "iprange.v1.database.metadata.replace"
         emit({"jsonrpc": "2.0", "id": request_id, "result": result})
+    elif method == "iprange.v1.reader.open":
+        # Modes which exercise reader-bound protocol checks open a fake
+        # reader first; the runner needs a schema-valid info response.
+        value_kind = "direct" if MODE in ("lookup_ok", "rows_wrong_value") else "membership"
+        emit({"jsonrpc": "2.0", "id": request_id, "result": {
+            "method": "iprange.v1.reader.open",
+            "reader": "a" * 32,
+            "info": {
+                "address_family": "ipv4",
+                "value_kind": value_kind,
+                "structure_kind": "none",
+                "value_tag": {"hex": "66616b65"},
+                "database_id": "b0000000000000000000000000000001",
+                "transaction_id": "1",
+                "commit_nonce": "c0000000000000000000000000000001",
+                "page_count": "1",
+                "range_record_count": "2",
+                "active_feed_count": "1",
+                "meta_selection": "proven_current",
+            },
+        }})
+        return keep
     elif MODE == "rows_bad_order":
         if method == "iprange.v1.reader.ranges.open":
             emit({"jsonrpc": "2.0", "id": request_id, "result": {
