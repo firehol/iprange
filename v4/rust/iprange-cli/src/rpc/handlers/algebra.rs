@@ -1772,7 +1772,9 @@ fn open_sources(sources: &Value, state: &SessionState) -> Result<Vec<ReaderValue
     let mut readers = Vec::with_capacity(sources.len());
     for source in sources {
         let object = source.as_object().expect("validator checked algebra source");
-        let (path, mode) = source_parts_object(object, "source")?;
+        let source_member = reader::member_object(object, "source")
+            .map_err(HandlerError::invalid_params)?;
+        let (path, mode) = source_parts_object(source_member, "source")?;
         readers.push(open_temporary(&path, &mode, state)?);
     }
     Ok(readers)

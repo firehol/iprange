@@ -230,9 +230,14 @@ impl IndexMap {
     }
 
     fn get(&self, index: u32) -> Option<usize> {
-        let value = match self {
-            Self::Empty => return None,
-            Self::Dense(positions) => *positions.get(index as usize)?,
+        match self {
+            Self::Empty => None,
+            // The dense table is zero-filled; an unset position means the
+            // index is not part of the scopeicket (positions are 1-based).
+            Self::Dense(positions) => match *positions.get(index as usize)? {
+                0 => None,
+                value => usize::try_from(value - 1).ok(),
+            },
             Self::Sparse { slots, mask } => {
                 let mut slot = hash(index) & mask;
                 loop {
@@ -241,13 +246,12 @@ impl IndexMap {
                         return None;
                     }
                     if entry.key == index {
-                        break entry.value;
+                        return usize::try_from(entry.value - 1).ok();
                     }
                     slot = (slot + 1) & mask;
                 }
             }
-        };
-        usize::try_from(value - 1).ok()
+        }
     }
 }
 

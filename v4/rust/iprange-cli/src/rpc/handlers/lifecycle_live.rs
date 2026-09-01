@@ -396,6 +396,11 @@ pub(crate) fn decode_creation_security(value: &Value) -> Result<CreationSecurity
 
 fn decode_commit_cleanup(value: &Value) -> Result<CommitCleanupArtifacts, String> {
     let cleanup = object(value, "cleanup")?;
+    // An empty cleanup is emitted as {}; a non-empty one carries
+    // {"artifacts": [...]}.
+    if cleanup.is_empty() {
+        return Ok(CommitCleanupArtifacts::clean());
+    }
     exact_members(cleanup, &["artifacts"], &[], "cleanup")?;
     let artifacts = cleanup["artifacts"]
         .as_array()
