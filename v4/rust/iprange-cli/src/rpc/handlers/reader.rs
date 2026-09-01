@@ -1167,6 +1167,93 @@ mod tests {
         std::fs::remove_file(&immutable_path).unwrap();
         fixture.remove();
     }
+
+    #[test]
+    fn close_on_error_merges_factual_live_close() {
+        let fixture = test_support::create_direct_v6("close-on-error");
+        let mut reader = open_reader(
+            &fixture.path.display().to_string(),
+            "live",
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let error = HandlerError::new("invalid_argument", "not_started", "boom");
+        let merged = close_on_error(std::slice::from_mut(&mut reader), error);
+        let details = merged.details.expect("close facts must be merged");
+        let closes = details["source_closes"]
+            .as_array()
+            .expect("source_closes list");
+        assert_eq!(closes.len(), 1);
+        assert_eq!(closes[0]["outcome"], "closed");
+        assert_eq!(merged.code, "invalid_argument");
+        assert_eq!(merged.outcome, "not_started");
+        assert_eq!(merged.message, "boom");
+        fixture.remove();
+    }
+
+    #[test]
+    fn close_on_error_omits_facts_for_immutable_readers() {
+        let fixture = test_support::create_direct_v6("close-on-error-imm");
+        let immutable_path = immutable_snapshot(&fixture.path);
+        let mut reader = ReaderValue::Immutable(
+            ImmutableReader::open(&immutable_path).expect("immutable snapshot opens"),
+        );
+        let error = HandlerError::new("invalid_argument", "not_started", "boom");
+        let merged = close_on_error(std::slice::from_mut(&mut reader), error);
+        assert!(
+            merged.details.is_none(),
+            "no close fact exists for an immutable reader"
+        );
+        assert_eq!(merged.code, "invalid_argument");
+        std::fs::remove_file(&immutable_path).unwrap();
+        fixture.remove();
+    }
+
+    #[test]
+    fn query_cardinalities_error_after_open_closes_live_reader() {
+        use crate::rpc::handlers::algebra;
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let fixture = test_support::create_direct_v6("query-err-close");
+        let mut state = SessionState::default();
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let output = std::env::temp_dir().join(format!(
+            "iprange-query-err-{}-{unique}.csv",
+            std::process::id()
+        ));
+        let error = algebra::query_cardinalities(
+            &mut state,
+            serde_json::json!({
+                "source": {"path": fixture.path.display().to_string(), "mode": "live"},
+                "selection": {"mode": "all"},
+                "membership_query_budget": {"max_heap_bytes": "1048576"},
+                "output": {
+                    "path": output.display().to_string(),
+                    "format": "csv",
+                    "publication_policy": "fail_if_exists",
+                    "result_budget": {
+                        "max_rows": "1000",
+                        "max_output_bytes": "1048576",
+                        "max_open_files": 2,
+                    },
+                },
+            }),
+        )
+        .unwrap_err();
+        // A direct database fails scope resolution AFTER the live reader
+        // is opened; the product error must carry the factual close.
+        assert_eq!(error.code, "wrong_value_kind");
+        let details = error.details.expect("close facts on error");
+        let closes = details["source_closes"]
+            .as_array()
+            .expect("source_closes list");
+        assert_eq!(closes.len(), 1);
+        assert_eq!(closes[0]["outcome"], "closed");
+        let _ = std::fs::remove_file(&output);
+        fixture.remove();
+    }
 }
 
 #[cfg(test)]
