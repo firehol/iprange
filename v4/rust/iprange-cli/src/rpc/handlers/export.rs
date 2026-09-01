@@ -173,10 +173,12 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
         &budget,
         &reader,
     );
+    // Close the source even when the export failed, then report the
+    // export failure; a completed export below must also survive a
+    // close failure with both facts preserved.
     let close_result = close_ephemeral_source(&mut reader);
     let completed = export_result?;
-    close_result?;
-    bounded_result(json!({
+    let mut result = json!({
         "method": "iprange.v1.export",
         "path": completed.facts.path,
         "format": format,
@@ -185,7 +187,17 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
         "addresses": completed.facts.addresses.to_string(),
         "bytes": completed.facts.bytes.to_string(),
         "identity": completed.identity,
-    }))
+    });
+    match close_result {
+        Ok(Some(source_close)) => {
+            result["source_close"] = source_close;
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return Err(super::reader::preserve_completed_report(error, result));
+        }
+    }
+    bounded_result(result)
 }
 
 fn open_source(
@@ -203,33 +215,10 @@ fn open_source(
     }
 }
 
-fn close_ephemeral_source(reader: &mut ReaderValue) -> Result<(), HandlerError> {
-    let Some(result) = reader.close_live().map_err(read_error)? else {
-        return Ok(());
-    };
-    if result.outcome != iprange_livedb::CloseOutcome::Closed || result.cause.is_some() {
-        let code = result
-            .cause
-            .as_ref()
-            .map(|error| super::reader::sdk_code(error.code()))
-            .unwrap_or("io");
-        return Err(HandlerError {
-            code,
-            outcome: "read_only_failure",
-            message: result.cause.as_ref().map_or_else(
-                || "live export reader close is incomplete".to_owned(),
-                ToString::to_string,
-            ),
-            details: Some(json!({"source_close": {
-                "outcome": "close_incomplete",
-                "cleanup": {},
-                "coordination_cleanup": super::lifecycle::coordination_cleanup(
-                    result.coordination_cleanup
-                ),
-            }})),
-        });
-    }
-    Ok(())
+/// Close the export source through the shared ephemeral-reader owner
+/// so every internally opened reader reports the same close facts.
+fn close_ephemeral_source(reader: &mut ReaderValue) -> Result<Option<Value>, HandlerError> {
+    super::reader::close_ephemeral_reader(reader)
 }
 
 /// One completed export plus the retained identity used in its wire result.
@@ -1304,6 +1293,8 @@ mod tests {
 #[cfg(test)]
 mod live_source_tests {
     use super::*;
+    use iprange_livedb::snapshot::{SnapshotBudget, SnapshotPublicationPolicy, SnapshotSourceMode};
+    use iprange_livedb::snapshot_to;
     use iprange_livedb::{
         create_live, AddressFamily, CancellationToken, FeedName, Ipv4Key, LiveWriter,
         MembershipOperation, StructureKind, TransactionBudget, ValueKind, ValueTag,
@@ -1394,6 +1385,9 @@ mod live_source_tests {
         assert_eq!(result["format"], "csv");
         assert_eq!(result["rows"], "1");
         assert_eq!(result["addresses"], "10");
+        // A live source internally opened a reader: its factual close
+        // result is part of the success (iprange-jsonrpc-v1.md).
+        assert_eq!(result["source_close"]["outcome"], "closed");
         assert_eq!(
             fs::read_to_string(&destination).unwrap(),
             "from,to,value\n192.0.2.1,192.0.2.10,feed-a\n"
@@ -1401,5 +1395,95 @@ mod live_source_tests {
         fs::remove_file(&destination).unwrap();
         fs::remove_file(&main).unwrap();
         fs::remove_file(sidecar(&main)).unwrap();
+    }
+
+    #[test]
+    fn immutable_membership_export_has_no_source_close() {
+        // One compact immutable snapshot of the live fixture: immutable
+        // readers have no close fact, so the result omits source_close.
+        let main = live_membership("immutable");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let immutable =
+            std::env::temp_dir().join(format!("iprange-export-immutable-{unique}.iprange"));
+        snapshot_to(
+            &main,
+            SnapshotSourceMode::Live,
+            &immutable,
+            SnapshotPublicationPolicy::FailIfExists,
+            &SnapshotBudget::new(2 * 1024 * 1024, 10_000, 3),
+            &CancellationToken::new(),
+        )
+        .map_err(|failure| failure.cause.detail.to_string())
+        .unwrap();
+        let destination =
+            std::env::temp_dir().join(format!("iprange-export-immutable-out-{unique}.csv"));
+        let mut state = SessionState::default();
+        let result = export(
+            &mut state,
+            json!({
+                "source": {"path": immutable.display().to_string(), "mode": "immutable"},
+                "view": {"kind": "feed", "feed": "feed-a"},
+                "format": "csv",
+                "destination": destination.display().to_string(),
+                "publication_policy": "fail_if_exists",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "1000",
+                    "max_open_files": 2
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["rows"], "1");
+        assert!(result.get("source_close").is_none());
+        fs::remove_file(&destination).unwrap();
+        fs::remove_file(&immutable).unwrap();
+        fs::remove_file(&main).unwrap();
+        fs::remove_file(sidecar(&main)).unwrap();
+    }
+
+    #[test]
+    fn close_failure_preserves_the_completed_export_report() {
+        // A completed export must survive a failing source close with
+        // both the report facts and the close result in `details`.
+        let close_error = HandlerError {
+            code: "io",
+            outcome: "read_only_failure",
+            message: "live reader close is incomplete".to_owned(),
+            details: Some(json!({
+                "source_close": {
+                    "outcome": "close_incomplete",
+                    "cleanup": {},
+                    "coordination_cleanup": {},
+                }
+            })),
+        };
+        let report = json!({
+            "method": "iprange.v1.export",
+            "path": "/tmp/out.csv",
+            "format": "csv",
+            "sha256": "aa".repeat(32),
+            "rows": "2",
+            "addresses": "12",
+            "bytes": "40",
+            "identity": {"volume": "1", "file": "2"},
+        });
+        let error = super::super::reader::preserve_completed_report(close_error, report);
+        assert_eq!((error.code, error.outcome), ("io", "read_only_failure"));
+        let details = error.details.unwrap();
+        assert_eq!(details["source_close"]["outcome"], "close_incomplete");
+        assert_eq!(details["report"]["path"], "/tmp/out.csv");
+        assert_eq!(details["report"]["format"], "csv");
+        assert_eq!(details["report"]["rows"], "2");
+        assert_eq!(details["report"]["addresses"], "12");
+        assert_eq!(details["report"]["bytes"], "40");
+        assert_eq!(
+            details["report"]["identity"],
+            json!({"volume": "1", "file": "2"})
+        );
+        assert_eq!(details["report"]["sha256"], "aa".repeat(32));
     }
 }

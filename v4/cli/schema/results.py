@@ -762,7 +762,13 @@ _register("iprange.v1.database.reclaim", _result(
         "required": ["reclamation", "writer_close"],
     }))
 _register("iprange.v1.database.info", _result(required_extra=("info",), body={
-    "type": "object", "properties": {"info": DATABASE_INFO}, "required": ["info"],
+    "type": "object",
+    "properties": {
+        "info": DATABASE_INFO,
+        # Live sources only: complete live close result conversion.
+        "source_close": CLOSE_RESULT,
+    },
+    "required": ["info"],
 }))
 _register("iprange.v1.database.metadata.get", _result(required_extra=("present",), body={
     "type": "object",
@@ -770,6 +776,8 @@ _register("iprange.v1.database.metadata.get", _result(required_extra=("present",
         "present": BOOL,
         "base64": {"type": "string", "base64": True},
         "output": OUTPUT_FACTS,
+        # Live sources only: complete live close result conversion.
+        "source_close": CLOSE_RESULT,
     },
     "required": ["present"],
 }))
@@ -945,6 +953,8 @@ _register("iprange.v1.export", _result(
             "addresses": C.U64,
             "bytes": C.U64,
             "identity": FILE_IDENTITY,
+            # Live sources only: complete live close result conversion.
+            "source_close": CLOSE_RESULT,
         },
         "required": ["path", "format", "sha256", "rows", "addresses", "bytes", "identity"],
     }))

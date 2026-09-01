@@ -333,10 +333,17 @@ class CaseRunner:
                 self.check_lookup_payload_kind(reader_kind, got, index)
                 self.pending_lookup.append((params["reader"], reader_kind, got))
         elif method == "iprange.v1.reader.matching_feeds":
-            if result.get("address") != params.get("address"):
+            wanted = params.get("address")
+            if result.get("address") != wanted:
                 raise AssertionError(
                     f"case {self.case['name']!r}: matching_feeds address "
-                    f"{result.get('address')!r} != requested {params.get('address')!r}")
+                    f"{result.get('address')!r} != requested {wanted!r}")
+            self.check_address_family(
+                self.reader_families.get(params["reader"]),
+                wanted,
+                "matching_feeds address",
+                None,
+            )
         elif method == "iprange.v1.reader.ranges.open":
             if "start" in params:
                 self.check_address_family(
@@ -358,8 +365,12 @@ class CaseRunner:
         elif method == "iprange.v1.reader.ranges.next":
             cursor = self.require_cursor(params["cursor"], "ranges.next")
             forward = cursor["direction"] == "forward"
+            reader_family = self.reader_families.get(cursor["reader"])
             for record in result.get("records", []):
                 self.check_range_record_shape(cursor["view"], record)
+                for side in ("from", "to"):
+                    self.check_address_family(
+                        reader_family, record.get(side), "range record", side)
                 key = (ip_int(record["from"]), ip_int(record["to"]))
                 if cursor["last"] is not None:
                     prev, now = (cursor["last"], key) if forward else (key, cursor["last"])

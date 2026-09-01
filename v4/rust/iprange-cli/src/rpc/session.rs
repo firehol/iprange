@@ -252,9 +252,7 @@ impl Session {
     fn apply_cancel(&mut self, request: &Request) {
         let cancel_id = match request.params.get("request_id") {
             Some(Value::String(s)) => Some(format!("s:{s}")),
-            Some(Value::Number(n)) if n.is_i64() || n.is_u64() => {
-                Some(format!("n:{n}"))
-            }
+            Some(n @ Value::Number(_)) => schema::number_cancel_key(n),
             _ => None,
         };
         let Some(cancel_id) = cancel_id else { return };
@@ -522,6 +520,28 @@ mod tests {
             .iter()
             .map(|response| response["id"].as_str().unwrap_or_default().to_owned())
             .collect()
+    }
+
+    #[test]
+    fn arbitrary_precision_numeric_ids_cancel_like_any_other_id() {
+        // request_id may be any integral JSON number; the cancel key must
+        // match the request key for out-of-range (arbitrary precision)
+        // numbers too (spec cancel contract).
+        // 2**100 as a JSON number literal: serde_json arbitrary_precision
+        // preserves the exact text.
+        let big = json!(1267650600228229401496703205376u128);
+        let mut session = Session::new();
+        let cancel = Request {
+            id: Some(RequestId::String("c".into())),
+            method: schema::CANCEL_METHOD.into(),
+            params: json!({"request_id": big}),
+            batch_index: None,
+        };
+        session.apply_cancel(&cancel);
+        let state = session.state.lock().unwrap();
+        assert_eq!(state.cancelled.len(), 1);
+        let key = format!("n:{big}");
+        assert!(state.cancelled.contains(&key), "missing cancel key {key:?}");
     }
 
     #[test]

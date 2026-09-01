@@ -103,9 +103,21 @@ impl SchemaError {
 
 /// True when the preserved number text is an integral literal
 /// (arbitrary_precision stores the exact lexical token).
-fn integral_text(n: &serde_json::Number) -> bool {
+pub(crate) fn integral_text(n: &serde_json::Number) -> bool {
     let text = n.to_string();
     !text.contains('.') && !text.contains('e') && !text.contains('E')
+}
+
+/// The cancellation/queue key of a `cancel.request_id` number: the same
+/// canonical correlation key a request id of the same numeric text would
+/// produce, so arbitrary-precision ids cancel correctly.
+pub(crate) fn number_cancel_key(n: &Value) -> Option<String> {
+    let number = n.as_number()?;
+    if number.is_i64() || number.is_u64() || integral_text(number) {
+        Some(format!("n:{number}"))
+    } else {
+        None
+    }
 }
 
 fn valid_id(v: &Value) -> Option<RequestId> {

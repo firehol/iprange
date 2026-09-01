@@ -334,13 +334,15 @@ pub fn matching_feeds(state: &mut SessionState, params: Value) -> Result<Value, 
 
 pub fn database_info(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
     let (path, mode) = source_params(&params).map_err(HandlerError::invalid_params)?;
-    let reader = open_reader(&path, &mode, &state.token)?;
+    let mut reader = open_reader(&path, &mode, &state.token)?;
     let info = sdk(reader.info())?;
-    close_ephemeral_reader(reader)?;
-    bounded_result(json!({
-        "method": "iprange.v1.database.info",
-        "info": convert::database_info(&info),
-    }))
+    finish_ephemeral_reader(
+        &mut reader,
+        json!({
+            "method": "iprange.v1.database.info",
+            "info": convert::database_info(&info),
+        }),
+    )
 }
 
 pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
@@ -348,14 +350,13 @@ pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Valu
         .as_object()
         .ok_or_else(|| invalid("params must be an object"))?;
     let (path, mode) = source_value(&object["source"]).map_err(HandlerError::invalid_params)?;
-    let reader = open_reader(&path, &mode, &state.token)?;
+    let mut reader = open_reader(&path, &mode, &state.token)?;
     let result = metadata_result(
         "iprange.v1.database.metadata.get",
         &reader,
         &object["delivery"],
-    );
-    close_ephemeral_reader(reader)?;
-    bounded_result(result?)
+    )?;
+    finish_ephemeral_reader(&mut reader, result)
 }
 
 pub(crate) fn reader<'a>(
@@ -413,26 +414,67 @@ fn open_reader(
     }
 }
 
-fn close_ephemeral_reader(mut reader: ReaderValue) -> Result<(), HandlerError> {
-    if let Some(result) = reader.close_live().map_err(read_error)? {
-        if result.outcome != CloseOutcome::Closed || result.cause.is_some() {
-            let code = result
-                .cause
-                .as_ref()
-                .map(|error| sdk_code(error.code()))
-                .unwrap_or("io");
-            return Err(HandlerError {
-                code,
-                outcome: "read_only_failure",
-                message: result.cause.as_ref().map_or_else(
-                    || "live reader close is incomplete".to_owned(),
-                    ToString::to_string,
-                ),
-                details: Some(json!({"source_close": reader_close_result(&result)})),
-            });
-        }
+/// Close one internally opened reader and return its factual live
+/// close conversion. Immutable readers produce no close fact (`None`).
+pub(crate) fn close_ephemeral_reader(
+    reader: &mut ReaderValue,
+) -> Result<Option<Value>, HandlerError> {
+    let Some(result) = reader.close_live().map_err(read_error)? else {
+        return Ok(None);
+    };
+    let close = reader_close_result(&result);
+    if result.outcome != CloseOutcome::Closed || result.cause.is_some() {
+        let code = result
+            .cause
+            .as_ref()
+            .map(|error| sdk_code(error.code()))
+            .unwrap_or("io");
+        return Err(HandlerError {
+            code,
+            outcome: "read_only_failure",
+            message: result.cause.as_ref().map_or_else(
+                || "live reader close is incomplete".to_owned(),
+                ToString::to_string,
+            ),
+            details: Some(json!({"source_close": close})),
+        });
     }
-    Ok(())
+    Ok(Some(close))
+}
+
+/// Finish a read-only method that opened one ephemeral reader.
+///
+/// Success carries the factual live close result as `source_close`
+/// when one exists (absent for immutable readers). A close failure is
+/// a product error whose details preserve BOTH the completed logical
+/// report and the close result (iprange-jsonrpc-v1.md).
+pub(crate) fn finish_ephemeral_reader(
+    reader: &mut ReaderValue,
+    report: Value,
+) -> Result<Value, HandlerError> {
+    match close_ephemeral_reader(reader) {
+        Ok(Some(source_close)) => {
+            let mut result = report;
+            result
+                .as_object_mut()
+                .expect("method results are objects")
+                .insert("source_close".into(), source_close);
+            bounded_result(result)
+        }
+        Ok(None) => bounded_result(report),
+        Err(error) => Err(preserve_completed_report(error, report)),
+    }
+}
+
+/// Keep the completed logical report of a failed post-report step in
+/// the error details so the factual work is never dropped.
+pub(crate) fn preserve_completed_report(mut error: HandlerError, report: Value) -> HandlerError {
+    let mut details = error.details.take().unwrap_or_else(|| json!({}));
+    if let Some(target) = details.as_object_mut() {
+        target.insert("report".into(), report);
+    }
+    error.details = Some(details);
+    error
 }
 
 fn reader_close_result(result: &iprange_livedb::ReaderCloseResult) -> Value {
@@ -968,6 +1010,26 @@ pub(crate) mod test_support {
 mod tests {
     use super::*;
     use crate::rpc::handlers::cursors;
+    use iprange_livedb::snapshot::{SnapshotBudget, SnapshotPublicationPolicy, SnapshotSourceMode};
+    use iprange_livedb::snapshot_to;
+    use iprange_livedb::CancellationToken;
+    use std::path::PathBuf;
+
+    /// One compact immutable snapshot of a live fixture.
+    fn immutable_snapshot(live: &Path) -> PathBuf {
+        let immutable = live.with_extension("immutable.iprange");
+        snapshot_to(
+            live,
+            SnapshotSourceMode::Live,
+            &immutable,
+            SnapshotPublicationPolicy::FailIfExists,
+            &SnapshotBudget::new(2 * 1024 * 1024, 10_000, 3),
+            &CancellationToken::new(),
+        )
+        .map_err(|failure| failure.cause.detail.to_string())
+        .unwrap();
+        immutable
+    }
 
     #[test]
     fn ranges_open_accepts_optional_start() {
@@ -1024,6 +1086,32 @@ mod tests {
             (unknown.code, unknown.outcome),
             ("handle_not_found", "not_started")
         );
+        fixture.remove();
+    }
+
+    #[test]
+    fn ephemeral_database_info_reports_live_close_and_omits_it_for_immutable() {
+        let fixture = test_support::create_direct_v6("ephemeral-info");
+        let mut state = SessionState::default();
+        let live = database_info(&mut state, test_support::live_source(&fixture.path)).unwrap();
+        assert_eq!(live["method"], "iprange.v1.database.info");
+        assert_eq!(live["info"]["address_family"], "ipv6");
+        assert_eq!(live["source_close"]["outcome"], "closed");
+
+        let immutable_path = immutable_snapshot(&fixture.path);
+        let immutable = database_info(
+            &mut state,
+            serde_json::json!({
+                "source": {
+                    "path": immutable_path.display().to_string(),
+                    "mode": "immutable"
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(immutable["info"]["address_family"], "ipv6");
+        assert!(immutable.get("source_close").is_none());
+        std::fs::remove_file(&immutable_path).unwrap();
         fixture.remove();
     }
 }

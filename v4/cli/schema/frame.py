@@ -89,7 +89,9 @@ def decode_frame(line):
     if "\n" in text or "\r" in text:
         raise FrameError(STD_PARSE_ERROR, "unescaped line break inside frame")
     try:
-        value = json.loads(text)
+        # Python's json decoder accepts NaN/Infinity by default; the
+        # transport is strict JSON (JSON-RPC 2.0), so reject them.
+        value = json.loads(text, parse_constant=_reject_nonfinite)
     except json.JSONDecodeError as exc:
         raise FrameError(STD_PARSE_ERROR, f"parse error: {exc}") from exc
 
@@ -136,6 +138,10 @@ def _validate_envelope(item, *, index):
 
 
 _MISSING = object()
+
+
+def _reject_nonfinite(token):
+    raise json.JSONDecodeError(f"non-standard JSON constant {token}", "", 0)
 
 
 def _validate_id(value):
@@ -212,7 +218,9 @@ def decode_response(text):
     if len(text.encode("utf-8")) > OUTPUT_FRAME_LIMIT:
         raise FrameError(TRANSPORT_FRAME_TOO_LARGE, "response frame over output limit")
     try:
-        value = json.loads(text)
+        # Python's json decoder accepts NaN/Infinity by default; the
+        # transport is strict JSON (JSON-RPC 2.0), so reject them.
+        value = json.loads(text, parse_constant=_reject_nonfinite)
     except json.JSONDecodeError as exc:
         raise FrameError(STD_PARSE_ERROR, f"parse error: {exc}") from exc
     if not isinstance(value, dict):
