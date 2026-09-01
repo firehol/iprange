@@ -26,7 +26,23 @@ optimization work of SOW-0027. Avoidable overhead introduced by the
 new CLI/JSON-RPC adapters is a SOW-0028 defect and must be fixed under
 this SOW. Existing engine-level performance residuals (reads, writes,
 validation) remain owned by pending SOW-0030; this SOW neither inherits
-nor is blocked by them. No implementation has started under this SOW.
+nor is blocked by them.
+
+Implementation status (2026-09-01):
+
+- Milestone 1 (Rust JSON-RPC transport + read-only family) committed:
+  transport at d5d0560b, wire-result schemas and golden corpus at
+  b1f808fc, read-only handlers at a99329d8.
+- Milestone 2 (publish/lifecycle/export/snapshot families) implemented by
+  parallel workers and wired into the dispatch registry (commit after
+  502cf032); 638 Rust tests and the 53-exchange golden corpus pass.
+- Adversarial reviews of the delivered families returned FAIL with P1
+  wire-contract findings (cursor start/family/IPv6 preflight, 65 KB
+  response envelope, batch busy framing, live reader mode, strict Python
+  schemas, runner/golden integrity). The recorded decisions above and the
+  parallel fix batches implement them. Remaining: re-review, then Rust
+  legacy CLI surface vs the C oracle, then the pure-Go implementation in
+  the fixed delivery order.
 
 ## Requirements
 
