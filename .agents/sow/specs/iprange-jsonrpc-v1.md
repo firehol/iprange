@@ -992,6 +992,9 @@ Result contains:
 Methods and platform fields are bytewise sorted. Production binaries never
 advertise test-only fields or methods. Factual platform fields, version, and
 fault-worker availability may differ by build target or installation.
+`fault_worker.protocol` is the SDK worker control-protocol version of this
+build; `available` is true only when a candidate worker executable exists
+beside the running binary.
 
 ## Legacy coexistence
 
