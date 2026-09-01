@@ -1031,3 +1031,30 @@ None yet.
 
 Append regression entries here only after completion/closure and a later
 regression. Never prepend regression content above the original narrative.
+
+## Recorded implementation decisions (2026-09-01)
+
+1. **Live reader mode — implement now.** `reader.open` advertises and accepts
+   `source.mode:"live"` per `iprange-jsonrpc-v1.md`; the SDK exports
+   `LiveReader` with the same operations as `ImmutableReader`
+   (`v4/rust/iprange-livedb/src/live_reader.rs`). Removing live from the
+   contract would shrink the shipped API below the spec; the live lifecycle
+   handlers already land in this milestone.Entry: register live readers in the
+   connection state and route info/lookup/metadata/cursors/close through the
+   same handler code paths as immutable readers.
+2. **Export worker adjacency — accepted.** Export source identity comes from
+   public `inspect_recovery_candidates`, which requires `iprange-v4-worker`
+   beside the `iprange` binary. A stat-based identity would duplicate SDK
+   internals and is inexact on Windows. The shipped executable documents the
+   adjacency requirement; the external benchmarks run with the worker present.
+3. **65 KB response envelope — enforce on the complete response object.** The
+   frozen Python authority validates the full JSON-RPC envelope (`jsonrpc`,
+   `id`, `result`) against `RESPONSE_OBJECT_LIMIT`, so the Rust session must
+   apply the ceiling after building the final envelope, including the request
+   id, and translate oversized successes into `output_limit` product errors.
+4. **Batch busy errors — one ordered response array.** A batch whose frame
+   exceeds the queue admits some members and rejects the rest with
+   `server_busy`; the spec requires a single response array per batch, in the
+   same order, omitting notifications «et excluding standalone busy frames. The
+   session defers busy errors into the batch response even when the frame must
+   be dropped per-request.
