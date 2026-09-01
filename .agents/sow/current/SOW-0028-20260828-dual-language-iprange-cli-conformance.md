@@ -1079,3 +1079,49 @@ regression. Never prepend regression content above the original narrative.
    same order, omitting notifications and excluding standalone busy frames. The
    session defers busy errors into the batch response even when the frame must
    be dropped per-request.
+
+## Review round 2 (2026-09-01) — delta re-review FAIL, fix batch 2
+
+Wire findings (McClintock @ af9ac206):
+1. P1 `reader.close` on already-closed returns `handle_closed`; spec
+   requires `handle_not_found` for closed or unknown (spec ~404-410).
+2. P1 Complete-envelope fallback reports a successful durable mutation as
+   `read_only_failure` and drops the factual result (`database.create`
+   commits then returns output_limit/read_only_failure with a huge id).
+   Fix: refuse unanswerable ids BEFORE handler execution (`not_started`),
+   never relabel durable facts as read-only.
+3. P2 Huge-id fallback uses `-32001/id:null` without the transport
+   condition; spec ties -32001/id:null to frame-over-limit followed by
+   process shutdown (spec 44-52). Fix: emit -32001/id:null and shut down
+   the process, matching the input-side frame-over-limit behavior.
+4. P2 Metadata file delivery accepts zero budgets (max_open_files=0,
+   max_output_bytes="0") that the frozen schema rejects; server must give
+   -32602, not -32010/output_limit.
+5. P2 Metadata read/file-delivery failures still use `not_started` after
+   the read began; must be `read_only_failure` (output.rs:38-53,139-145).
+6. P2 Integral request ids outside signed 64 are rejected; spec allows any
+   integral JSON number (Python authority accepts u64 max). Fix: request
+   id holds serde_json::Number; accept i64/u64, echo exactly.
+7. P2 Entropy failure emits undocumented product code `internal`;
+   adapter codes are a closed list ending in `io`. Fix: use `io`.
+8. P2 Runner enforces lexicographic feed order instead of feed-catalog
+   order (run.py:349-363); catalog order is insertion order.
+9. P2 Path-length units mismatch: Python authority counts code points,
+   Rust counts UTF-8 bytes; a 40k-char Greek path is schema-valid but
+   server-rejected. Fix: Rust path validator counts chars.
+
+Suite findings (Copernicus @ af9ac206):
+1. P1 Python VALUE_TAG accepts hex "00" (NUL) in requests and results,
+   and rejects every control char in `text` while spec/Rust forbid only
+   NUL (spec 151-155).
+2. P1 Python missing cross-field constraints: value_kind/structure_kind
+   compatibility, `start` with feed view, family-dependent prefix and
+   DNS-thread bounds, validation/recovery scratch enable rules, algebra
+   max_sources bound, canonical IP text validation.
+3. P2 system.describe fixed facts (format, families, export formats,
+   limits) are structurally typed but not semantically constrained.
+4. P2 Lookup result payload variant is not bound to the reader value
+   kind; a membership reader can return a direct value and pass.
+5. P2 Algebra oracle exists but is not wired into any runner assertion.
+6. P2 Python decode_frame rejects a legal max-size frame when given an
+   LF/CRLF-terminated line (length checked before stripping terminator).
