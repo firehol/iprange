@@ -829,6 +829,31 @@ pub(crate) fn writer_budget(value: &Value) -> Result<TransactionBudget, String> 
     })
 }
 
+/// RFC 4648 standard alphabet with required padding (wire inverse of
+/// [`decode_base64`]).
+pub(crate) fn encode_base64(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut output = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let word = u32::from(chunk[0]) << 16
+            | u32::from(*chunk.get(1).unwrap_or(&0)) << 8
+            | u32::from(*chunk.get(2).unwrap_or(&0));
+        output.push(ALPHABET[(word >> 18) as usize & 63] as char);
+        output.push(ALPHABET[(word >> 12) as usize & 63] as char);
+        output.push(if chunk.len() > 1 {
+            ALPHABET[(word >> 6) as usize & 63] as char
+        } else {
+            '='
+        });
+        output.push(if chunk.len() > 2 {
+            ALPHABET[word as usize & 63] as char
+        } else {
+            '='
+        });
+    }
+    output
+}
+
 pub(crate) fn decode_base64(value: &str) -> Result<Vec<u8>, String> {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     if value.len() % 4 != 0 {
