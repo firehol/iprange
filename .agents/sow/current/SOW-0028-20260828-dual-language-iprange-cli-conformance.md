@@ -1068,6 +1068,11 @@ regression. Never prepend regression content above the original narrative.
    `id`, `result`) against `RESPONSE_OBJECT_LIMIT`, so the Rust session must
    apply the ceiling after building the final envelope, including the request
    id, and translate oversized successes into `output_limit` product errors.
+5. **Mixed-language producer/consumer matrix — executes when the Go
+   binary exists.** The runner owns a producer step that invokes the
+   fixture/export producer binary and feeds its output to the consumer
+   binary under test; a missing Go binary records SKIP (reported, not
+   silently dropped) instead of failing the Rust-only rounds.
 4. **Batch busy errors — one ordered response array.** A batch whose frame
    exceeds the queue admits some members and rejects the rest with
    `server_busy`; the spec requires a single response array per batch, in the
