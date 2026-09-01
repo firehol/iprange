@@ -85,12 +85,12 @@ pub enum RecoveryCandidateLabel {
 /// Opaque exact recovery-candidate token returned by candidate inspection.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RecoveryCandidate {
-    pub(crate) label: RecoveryCandidateLabel,
-    pub(crate) meta_page: u8,
-    pub(crate) source_identity: LocalFileIdentity,
-    pub(crate) database_id: [u8; 16],
-    pub(crate) transaction_id: u64,
-    pub(crate) commit_nonce: [u8; 16],
+    pub label: RecoveryCandidateLabel,
+    pub meta_page: u8,
+    pub source_identity: LocalFileIdentity,
+    pub database_id: [u8; 16],
+    pub transaction_id: u64,
+    pub commit_nonce: [u8; 16],
 }
 
 impl RecoveryCandidate {

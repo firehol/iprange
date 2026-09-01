@@ -107,7 +107,7 @@ struct OpenedMain {
 }
 
 impl LiveWriter {
-    pub(crate) fn address_family(&self) -> AddressFamily {
+    pub fn address_family(&self) -> AddressFamily {
         self.core.base_info().address_family
     }
 

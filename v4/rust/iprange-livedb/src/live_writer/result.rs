@@ -20,7 +20,7 @@ pub struct LocalBasename {
 }
 
 impl LocalBasename {
-    pub(crate) fn from_path(path: &Path) -> Result<Self> {
+    pub fn from_path(path: &Path) -> Result<Self> {
         let name = path
             .file_name()
             .ok_or(Error::InvalidArgument("database path has no file name"))?;
@@ -93,11 +93,11 @@ pub struct CommitCleanupArtifacts {
 }
 
 impl CommitCleanupArtifacts {
-    pub(crate) const fn clean() -> Self {
+    pub const fn clean() -> Self {
         Self { entry: None }
     }
 
-    pub(crate) const fn tail(entry: CommitCleanupArtifact) -> Self {
+    pub const fn tail(entry: CommitCleanupArtifact) -> Self {
         Self { entry: Some(entry) }
     }
 
