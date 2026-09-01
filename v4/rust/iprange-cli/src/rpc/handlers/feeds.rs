@@ -277,11 +277,13 @@ fn feed_change_workflow(
 enum FeedWorkflowFacts {
     NoChange {
         report: Value,
+        source_close: Option<Value>,
     },
     Changed {
         report: Value,
         metadata_logical_change: &'static str,
         commit: Option<std::result::Result<CommitResult, Error>>,
+        source_close: Option<Value>,
     },
     Failed {
         report: Option<Value>,
@@ -306,6 +308,28 @@ enum FeedChangeFacts {
     Failed {
         error: HandlerError,
     },
+}
+
+/// Merge the already-factual source close into a later publish-stage
+/// error; feeds success results keep the frozen `_PUBLISHER_COMMON`
+/// shape with no `source_close` member, so only errors carry it.
+fn with_source_close_on_error(
+    outcome: Result<Value, HandlerError>,
+    source_close: Option<Value>,
+) -> Result<Value, HandlerError> {
+    match outcome {
+        Ok(value) => Ok(value),
+        Err(mut error) => {
+            if let Some(close) = source_close {
+                let mut details = error.details.take().unwrap_or_else(|| json!({}));
+                if let Some(members) = details.as_object_mut() {
+                    members.insert("source_close".into(), close);
+                }
+                error.details = Some(details);
+            }
+            Err(error)
+        }
+    }
 }
 
 /// Consume a completed workflow: close the ephemeral source reader, apply
@@ -356,13 +380,17 @@ fn collect_workflow_facts(
         Ok(workflow) => {
             let report = workflow_report(workflow.report());
             match workflow {
-                FinishedWorkflow::NoChange(_) => FeedWorkflowFacts::NoChange { report },
+                FinishedWorkflow::NoChange(_) => FeedWorkflowFacts::NoChange {
+                    report,
+                    source_close,
+                },
                 FinishedWorkflow::Changed(prepared) => {
                     match publish_changed(prepared, metadata) {
                         Ok((metadata_logical_change, commit)) => FeedWorkflowFacts::Changed {
                             report,
                             metadata_logical_change,
                             commit,
+                            source_close,
                         },
                         Err(error) => FeedWorkflowFacts::Failed {
                             report: Some(report),
@@ -391,19 +419,28 @@ fn finish_workflow_facts(
     method: &'static str,
 ) -> Result<Value, HandlerError> {
     match facts {
-        FeedWorkflowFacts::NoChange { report } => {
-            match publish_no_change(writer, metadata, token) {
+        FeedWorkflowFacts::NoChange {
+            report,
+            source_close,
+        } => {
+            let outcome = match publish_no_change(writer, metadata, token) {
                 Ok((metadata_logical_change, commit)) => {
                     finish_publisher(writer, method, Some(&report), metadata_logical_change, commit)
                 }
                 Err(error) => Err(finish_writer_error(writer, error, &report)),
-            }
+            };
+            with_source_close_on_error(outcome, source_close)
         }
         FeedWorkflowFacts::Changed {
             report,
             metadata_logical_change,
             commit,
-        } => finish_publisher(writer, method, Some(&report), metadata_logical_change, commit),
+            source_close,
+        } => {
+            let outcome =
+                finish_publisher(writer, method, Some(&report), metadata_logical_change, commit);
+            with_source_close_on_error(outcome, source_close)
+        }
         FeedWorkflowFacts::Failed {
             report,
             mut error,
