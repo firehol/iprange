@@ -2,7 +2,6 @@
 
 import base64 as _base64
 import re as _re
-import unicodedata as _unicode
 
 
 class ValidationError(Exception):
@@ -57,6 +56,7 @@ def validate(value, schema, path="$"):
       {"type": "string", "hex": N}          N lowercase hex digits
       {"type": "string", "base64": true}    canonical RFC 4648 with padding
       {"type": "string", "max_bytes": N}  UTF-8 byte-length bound
+      {"type": "string", "reject_nul": true}    reject an embedded NUL byte
       {"type": "integer", "min": N, "max": N}  JSON integer (no fraction/exponent)
       {"type": "u32"}                       alias for integer 0..4294967295
       {"type": "boolean"}
@@ -126,10 +126,8 @@ def validate(value, schema, path="$"):
         if schema.get("hex_even"):
             if len(value) % 2 or not _lower_hex(value):
                 _key_error(path, f"value {value!r} is not even-length lowercase hex")
-        if schema.get("no_control") and any(
-            _unicode.category(char) == "Cc" for char in value
-        ):
-            _key_error(path, "value contains a control character")
+        if schema.get("reject_nul") and "\0" in value:
+            _key_error(path, "value contains a NUL byte")
         if schema.get("base64"):
             _check_base64(value, path)
         if "min_len" in schema and len(value) < schema["min_len"]:
@@ -248,8 +246,9 @@ def _self_test():
     assert validate({"text": ""}, VALUE_TAG) == {"text": ""}
     assert validate({"hex": ""}, VALUE_TAG) == {"hex": ""}
     assert rejects(VALUE_TAG, {"text": "a\0b"})
-    assert rejects(VALUE_TAG, {"text": "a\nb"})
+    assert validate({"text": "a\tb"}, VALUE_TAG) == {"text": "a\tb"}
     assert rejects(VALUE_TAG, {"hex": "0g"})
+    assert rejects(VALUE_TAG, {"hex": "6100"})
 
     reader = "iprange.v1.reader.ranges.open"
     assert rejects(

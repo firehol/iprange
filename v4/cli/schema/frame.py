@@ -59,19 +59,34 @@ def decode_frame(line):
     violation. Returns (elements, is_batch) where elements is a list of
     normalized request/notification dicts in array order.
     """
-    if len(line.encode("utf-8")) > INPUT_FRAME_LIMIT:
+    # The byte ceiling applies to JSON payload bytes, not the LF/CRLF physical
+    # terminator. Accept the byte form used by a transport reader as well as
+    # the string form used by the golden validator.
+    if isinstance(line, (bytes, bytearray)):
+        payload = bytes(line)
+        if payload.endswith(b"\n"):
+            payload = payload[:-1]
+        if payload.endswith(b"\r"):
+            payload = payload[:-1]
+    elif isinstance(line, str):
+        payload = line
+        if payload.endswith("\n"):
+            payload = payload[:-1]
+        if payload.endswith("\r"):
+            payload = payload[:-1]
+        try:
+            payload = payload.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise FrameError(STD_PARSE_ERROR, "frame is not UTF-8") from exc
+    else:
+        raise FrameError(STD_INVALID_REQUEST, "frame must be text or bytes")
+    if len(payload) > INPUT_FRAME_LIMIT:
         raise FrameError(TRANSPORT_FRAME_TOO_LARGE, "frame over input limit")
-    # Strip one LF, then one CR (CRLF terminator). Any remaining line
-    # break is embedded and unescaped, which JSON forbids.
-    if line.endswith("\n"):
-        line = line[:-1]
-    if line.endswith("\r"):
-        line = line[:-1]
-    if "\n" in line or "\r" in line:
+    if b"\n" in payload or b"\r" in payload:
         raise FrameError(STD_PARSE_ERROR, "unescaped line break inside frame")
     try:
-        value = json.loads(line)
-    except json.JSONDecodeError as exc:
+        value = json.loads(payload)
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise FrameError(STD_PARSE_ERROR, f"parse error: {exc}") from exc
 
     if isinstance(value, list):
@@ -127,6 +142,41 @@ def _validate_id(value):
     if isinstance(value, bool) or not isinstance(value, int):
         raise FrameError(STD_INVALID_REQUEST, "id must be a string or integral number")
     return str(value)
+
+
+def _self_test():
+    import json as json_module
+
+    def request(identifier_length):
+        identifier = "x" * identifier_length
+        return json_module.dumps({
+            "jsonrpc": "2.0",
+            "id": identifier,
+            "method": "iprange.v1.system.describe",
+            "params": {},
+        }, separators=(",", ":"))
+
+    base_length = len(request(0).encode("utf-8"))
+    exact = request(INPUT_FRAME_LIMIT - base_length)
+    assert len(exact.encode("utf-8")) == INPUT_FRAME_LIMIT
+    for terminator in ("\n", "\r\n"):
+        elements, batch = decode_frame(exact + terminator)
+        assert not batch and elements[0]["method"] == "iprange.v1.system.describe"
+
+    over = request(INPUT_FRAME_LIMIT - base_length + 1) + "\n"
+    try:
+        decode_frame(over)
+    except FrameError as exc:
+        assert exc.code == TRANSPORT_FRAME_TOO_LARGE
+    else:
+        raise AssertionError("over-limit payload was accepted")
+
+    try:
+        decode_frame(b'\xff\n')
+    except FrameError as exc:
+        assert exc.code == STD_PARSE_ERROR
+    else:
+        raise AssertionError("non-UTF-8 payload was accepted")
 
 
 def decode_response(text):
@@ -209,3 +259,7 @@ def product_error_response(request_id, domain_code, message, outcome, details=No
     if details is not None:
         data["details"] = details
     return error_response(request_id, PRODUCT_ERROR, message, data)
+
+
+if __name__ == "__main__":
+    _self_test()

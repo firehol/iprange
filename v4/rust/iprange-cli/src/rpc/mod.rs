@@ -45,7 +45,9 @@ pub fn run() -> i32 {
 pub fn new_handle() -> Result<String, HandlerError> {
     let mut bytes = [0u8; 16];
     getrandom::fill(&mut bytes).map_err(|error| HandlerError {
-        code: "internal",
+        // Adapter product codes are a closed list (spec): `io` is the
+        // documented adapter code for an OS-level resource failure.
+        code: "io",
         outcome: "not_started",
         message: "secure handle generation failed".into(),
         details: Some(serde_json::json!({"cause": error.to_string()})),

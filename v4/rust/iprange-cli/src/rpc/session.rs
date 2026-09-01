@@ -95,10 +95,7 @@ pub struct Session {
 }
 
 fn key(id: &RequestId) -> String {
-    match id {
-        RequestId::String(s) => format!("s:{s}"),
-        RequestId::Number(n) => format!("n:{n}"),
-    }
+    id.key()
 }
 
 fn request_key(request: &Request) -> Option<String> {
@@ -184,6 +181,25 @@ impl Session {
                     if ordinary.is_empty() {
                         continue;
                     }
+                    if ordinary
+                        .iter()
+                        .any(|request| preflight_unanswerable_id(request))
+                    {
+                        let payload = SchemaError::response(
+                            None,
+                            SchemaError {
+                                code: schema::TRANSPORT_FRAME_TOO_LARGE,
+                                message:
+                                    "request id cannot be echoed within the response object limit"
+                                        .into(),
+                            },
+                        );
+                        let text = schema::encode_response_frame(&payload)
+                            .expect("constant transport error within limits");
+                        let mut w = writer.lock().unwrap();
+                        let _ = w.write_line(&text);
+                        return self.shutdown();
+                    }
                     let entries = admit_frame(ordinary, &self.in_flight);
                     if batch {
                         // Every element answers inside one array in the
@@ -232,7 +248,9 @@ impl Session {
     fn apply_cancel(&mut self, request: &Request) {
         let cancel_id = match request.params.get("request_id") {
             Some(Value::String(s)) => Some(format!("s:{s}")),
-            Some(Value::Number(n)) => n.as_i64().map(|i| format!("n:{i}")),
+            Some(Value::Number(n)) if n.is_i64() || n.is_u64() => {
+                Some(format!("n:{n}"))
+            }
             _ => None,
         };
         let Some(cancel_id) = cancel_id else { return };
@@ -362,6 +380,25 @@ fn entry_response(state: &Arc<Mutex<SessionState>>, entry: &WorkEntry) -> Option
 /// oversized, the id cannot be echoed; JSON-RPC 2.0's convention for
 /// an unusable id is one `id: null` invalid-request error, which is
 /// the only remaining response that always satisfies the ceiling.
+/// Preflight: a request id that alone makes even the smallest faithful
+/// response (an error of the documented shape) exceed RESPONSE_OBJECT_LIMIT
+/// can never be answered. When it appears in an admitted frame, the whole
+/// frame is a transport failure: -32001 with id null, then the process
+/// closes, exactly like the input-frame-over-limit path.
+fn preflight_unanswerable_id(request: &Request) -> bool {
+    let id = request.id.as_ref().expect("ordinary requests carry ids");
+    let probe = schema::error_response(
+        id,
+        schema::PRODUCT_ERROR,
+        "response object exceeds the 65000-byte limit",
+        Some(serde_json::json!({
+            "code": "output_limit",
+            "outcome": "read_only_failure",
+        })),
+    );
+    schema::encode_response_object(&probe).is_err()
+}
+
 fn bounded_response(response: Value, request: &Request) -> Value {
     if schema::encode_response_object(&response).is_ok() {
         return response;
@@ -478,6 +515,30 @@ mod tests {
             .iter()
             .map(|response| response["id"].as_str().unwrap_or_default().to_owned())
             .collect()
+    }
+
+    #[test]
+    fn unanswerable_request_id_is_a_transport_failure() {
+        // An id that alone makes every faithful response exceed the
+        // response-object ceiling can never be answered; the spec ties
+        // -32001 with id null to the frame-over-limit transport path.
+        let huge = "I".repeat(super::super::framing::RESPONSE_OBJECT_LIMIT + 100);
+        let huge_request = request(&huge, None);
+        assert!(preflight_unanswerable_id(&huge_request));
+        let normal = request("a", None);
+        assert!(!preflight_unanswerable_id(&normal));
+        // The bounded fallback still returns the transport shape for
+        // direct callers; production admission never reaches it.
+        let response = schema::success_response(
+            &RequestId::String(huge),
+            json!({"method": "iprange.v1.system.describe"}),
+        );
+        let bounded = bounded_response(response, &huge_request);
+        assert_eq!(bounded["id"], Value::Null);
+        assert_eq!(
+            bounded["error"]["code"],
+            json!(schema::TRANSPORT_FRAME_TOO_LARGE)
+        );
     }
 
     #[test]
@@ -606,12 +667,12 @@ mod tests {
     #[test]
     fn unencodable_request_id_answers_with_one_id_null_transport_error() {
         let huge = "I".repeat(super::super::framing::RESPONSE_OBJECT_LIMIT);
-        let request = request(&huge, None);
+        let huge_request = request(&huge, None);
         let response = schema::success_response(
             &RequestId::String(huge),
             json!({"method": "iprange.v1.system.describe"}),
         );
-        let bounded = bounded_response(response, &request);
+        let bounded = bounded_response(response, &huge_request);
         assert_eq!(bounded["id"], Value::Null);
         assert_eq!(
             bounded["error"]["code"],

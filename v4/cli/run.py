@@ -99,7 +99,7 @@ class CaseRunner:
         self.service_argv = [binary, "--jsonrpc"]
         self.cursors = {}
         self.readers = {}
-        self.oracle_ranges = {}
+        self.fixture_intervals = {}
         self.pending_lookup = []
         self.oracle_checks = 0
 
@@ -111,10 +111,19 @@ class CaseRunner:
             source = fixture["source"]
             if "text" in source:
                 write_text(path, source["text"])
+                intervals = parse_interval_text(source["text"])
+                if intervals is not None:
+                    self.fixture_intervals[os.path.realpath(path)] = intervals
             elif "base64" in source:
                 import base64
-                write_bytes(path, base64.b64decode(source["base64"], validate=True))
+                data = base64.b64decode(source["base64"], validate=True)
+                write_bytes(path, data)
+                intervals = parse_interval_text(data.decode("utf-8", "strict"))
+                if intervals is not None:
+                    self.fixture_intervals[os.path.realpath(path)] = intervals
             elif "generator" in source:
+                # Generated v4 files intentionally have no independent text
+                # representation here; oracle checks are skipped for them.
                 generate_fixture(path, source, self.fixture_tool)
             else:  # case validation makes this unreachable
                 raise ValueError(f"fixture {fixture['path']!r}: no source")
@@ -290,7 +299,15 @@ class CaseRunner:
     def check_protocol(self, method, params, result):
         """Check cross-request contracts not expressible by one result schema."""
 
-        if method == "iprange.v1.reader.open":
+        if method == "iprange.v1.system.describe":
+            # validate_result checks the full schema; this explicit call keeps
+            # capability semantics observable at the runner layer as well.
+            results.validate_system_describe(result)
+        elif method == "iprange.v1.algebra.count":
+            self.check_algebra_oracle(method, params, result)
+        elif method == "iprange.v1.algebra.compare":
+            self.check_algebra_oracle(method, params, result)
+        elif method == "iprange.v1.reader.open":
             handle = result["reader"]
             self.readers[handle] = result["info"]["value_kind"]
         elif method == "iprange.v1.reader.close":
@@ -302,12 +319,14 @@ class CaseRunner:
                 raise AssertionError(
                     f"case {self.case['name']!r}: lookup returned {len(matches)} matches "
                     f"for {len(addresses)} addresses")
+            reader_kind = self.readers.get(params["reader"])
             for index, (want, got) in enumerate(zip(addresses, matches)):
                 if got.get("address") != want:
                     raise AssertionError(
                         f"case {self.case['name']!r}: lookup match[{index}] address "
                         f"{got.get('address')!r} != requested {want!r}")
-                self.pending_lookup.append((params["reader"], self.readers.get(params["reader"]), got))
+                self.check_lookup_payload_kind(reader_kind, got, index)
+                self.pending_lookup.append((params["reader"], reader_kind, got))
         elif method == "iprange.v1.reader.matching_feeds":
             if result.get("address") != params.get("address"):
                 raise AssertionError(
@@ -351,20 +370,77 @@ class CaseRunner:
                 "kind": "feeds", "last": None, "closed": False,
             }
         elif method == "iprange.v1.reader.feeds.next":
+            # Feed rows follow feed-catalog order (insertion order), which
+            # is not a lexical order. The case's strict expect_result rows
+            # are the authoritative order assertion; no extra ordering
+            # proxy exists here.
             cursor = self.require_cursor(params["cursor"], "feeds.next")
             for row in result.get("feeds", []):
-                name = row["name"]
-                if cursor["last"] is not None and name < cursor["last"]:
+                if not isinstance(row, dict) or not isinstance(row.get("name"), str):
                     raise AssertionError(
-                        f"case {self.case['name']!r}: feeds rows out of catalog order: "
-                        f"{name!r} after {cursor['last']!r}")
-                cursor["last"] = name
+                        f"case {self.case['name']!r}: feeds rows must be {{name}} objects")
             if result.get("done"):
                 cursor["closed"] = True
         elif method == "iprange.v1.reader.feeds.close":
             cursor = self.cursors.get(params["cursor"])
             if cursor is not None:
                 cursor["closed"] = True
+
+    @staticmethod
+    def check_lookup_payload_kind(reader_kind, fact, index):
+        """Bind a present lookup payload to the opened reader's value kind."""
+
+        if reader_kind is None or fact.get("present") is not True:
+            return
+        keys = set(fact) - {"address", "present"}
+        payloads = {
+            "direct": [{"value"}],
+            "membership": [{"feeds"}],
+            "structured": [{"asn", "country_id", "state_id", "city_id",
+                             "location", "threat_feeds"}],
+        }
+        if keys not in payloads[reader_kind]:
+            raise AssertionError(
+                f"case lookup match[{index}]: reader kind {reader_kind!r} "
+                f"returned payload keys {sorted(keys)!r}")
+
+    def check_algebra_oracle(self, method, params, result):
+        """Check algebra against text fixtures with scalar interval models."""
+
+        sources = []
+        for source in params.get("sources", []):
+            path = source.get("source", {}).get("path")
+            intervals = self.fixture_intervals.get(
+                os.path.realpath(path) if isinstance(path, str) else path)
+            if intervals is None:
+                return
+            sources.append(intervals)
+        if not sources:
+            return
+
+        if method == "iprange.v1.algebra.count":
+            if params.get("selection") != {"mode": "all"}:
+                return
+            _, expected = oracle.algebra_count("union", sources)
+            actual = result.get("cardinality")
+            if actual != str(expected):
+                raise AssertionError(
+                    f"case {self.case['name']!r}: algebra.count oracle expected "
+                    f"{expected}, got {actual!r}")
+            self.oracle_checks += 1
+            return
+
+        if params.get("left") != {"mode": "all"} or params.get("right") != {"mode": "all"}:
+            return
+        expected = oracle.compare(union_all(sources), union_all(sources))
+        report = result.get("report", {})
+        for key, value in expected.items():
+            actual = report.get(key)
+            if actual != (str(value) if type(value) is int else value):
+                raise AssertionError(
+                    f"case {self.case['name']!r}: algebra.compare oracle "
+                    f"{key} expected {value!r}, got {actual!r}")
+        self.oracle_checks += 1
 
     def require_cursor(self, handle, operation):
         cursor = self.cursors.get(handle)
@@ -608,6 +684,43 @@ class JsonRpcService:
             self.proc.wait(timeout=5)
 
 
+def parse_interval_text(text):
+    """Parse a plain range/CIDR/single-IP fixture, or return None.
+
+    Unsupported legacy text features are not errors here; the oracle simply
+    remains silent for fixtures this independent scalar model cannot express.
+    """
+
+    import ipaddress
+
+    intervals = []
+    try:
+        for raw_line in text.splitlines():
+            line = raw_line.split("#", 1)[0].split(";", 1)[0].strip()
+            if not line:
+                continue
+            if "-" in line:
+                left, right = line.split("-", 1)
+                start = int(ipaddress.ip_address(left.strip()))
+                end = int(ipaddress.ip_address(right.strip()))
+            elif "/" in line:
+                network = ipaddress.ip_network(line, strict=False)
+                start, end = int(network.network_address), int(network.broadcast_address)
+            else:
+                start = end = int(ipaddress.ip_address(line))
+            if start > end:
+                return None
+            intervals.append((start, end))
+    except (ValueError, UnicodeError):
+        return None
+    return intervals
+
+
+def union_all(interval_lists):
+    combined = [interval for intervals in interval_lists for interval in intervals]
+    return oracle.union([combined])
+
+
 def ip_int(address):
     """Numeric value of an IPv4/IPv6 address for order comparisons."""
 
@@ -672,6 +785,65 @@ def generate_fixture(path, source, fixture_tool):
     if proc.returncode != 0:
         detail = proc.stderr.decode("utf-8", "replace").strip()
         raise ValueError(f"v4_fixture failed with exit {proc.returncode}: {detail}")
+
+
+def _self_test():
+    """Exercise runner-side protocol helpers without spawning a service."""
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as work:
+        runner = CaseRunner(None, {
+            "schema": "iprange-cli-case-v1",
+            "name": "self-test",
+            "fixtures": [],
+            "steps": [],
+        }, work, "test")
+        runner.readers["r"] = "membership"
+        runner.check_lookup_payload_kind("membership", {
+            "address": "192.0.2.1", "present": False,
+        }, 0)
+        runner.check_lookup_payload_kind("membership", {
+            "address": "192.0.2.1", "present": True, "feeds": ["feed-a"],
+        }, 1)
+        try:
+            runner.check_lookup_payload_kind("membership", {
+                "address": "192.0.2.1", "present": True, "value": 10,
+            }, 2)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("membership reader accepted a direct payload")
+
+        fixture = os.path.join(work, "ranges.txt")
+        write_text(fixture, "192.0.2.0-192.0.2.9\n198.51.100.0/30\n")
+        intervals = parse_interval_text(open(fixture, encoding="utf-8").read())
+        runner.fixture_intervals[os.path.realpath(fixture)] = intervals
+        source = {"source": {"path": fixture, "mode": "immutable"},
+                  "scope": {"mode": "all"},
+                  "membership_query_budget": {"max_heap_bytes": "1"}}
+        params = {"sources": [source], "selection": {"mode": "all"},
+                  "algebra_budget": {"max_heap_bytes": "1", "max_sources": 1}}
+        runner.check_algebra_oracle("iprange.v1.algebra.count", params, {
+            "method": "iprange.v1.algebra.count", "cardinality": "14",
+        })
+        assert runner.oracle_checks == 1
+        compare_params = {
+            "sources": [source],
+            "left": {"mode": "all"},
+            "right": {"mode": "all"},
+            "algebra_budget": {"max_heap_bytes": "1", "max_sources": 1},
+        }
+        runner.check_algebra_oracle("iprange.v1.algebra.compare", compare_params, {
+            "method": "iprange.v1.algebra.compare",
+            "report": {
+                "left_addresses": "0", "right_addresses": "0",
+                "overlap_addresses": "14", "left_only_addresses": "0",
+                "right_only_addresses": "0", "union_addresses": "14",
+                "equal": True,
+            },
+        })
+        assert runner.oracle_checks == 2
 
 
 CAPABILITIES_CACHE = {}

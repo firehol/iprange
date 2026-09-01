@@ -32,6 +32,27 @@ def _require_unique_unordered_pairs(pairs, path):
         _invalid(path, "unordered pairs must be unique")
 
 
+def _require_database_create(value, path):
+    structured = value["value_kind"] == "structured"
+    enrichment = value["structure_kind"] == "network_enrichment_v1"
+    if structured != enrichment:
+        _invalid(f"{path}.structure_kind", "structure_kind is incompatible with value_kind")
+
+
+def _require_ranges_open(value, path):
+    if value["view"]["kind"] == "feed" and "start" in value:
+        _invalid(f"{path}.start", "start is not valid for a feed view")
+
+
+def _require_algebra_source_count(value, path):
+    maximum = value["algebra_budget"]["max_sources"]
+    if not 1 <= len(value["sources"]) <= maximum:
+        _invalid(
+            f"{path}.sources",
+            f"source count {len(value['sources'])} outside 1..{maximum}",
+        )
+
+
 def _require_valid_export(value, path):
     minimum = value.get("min_prefix")
     prefixes = value.get("prefixes")
@@ -111,6 +132,7 @@ _register("iprange.v1.reader.ranges.open", {
     },
     "required": ["reader", "view", "direction", "batch_size"],
     "additional": False,
+    "validator": _require_ranges_open,
 })
 _register("iprange.v1.reader.ranges.next", _cursor_param)
 _register("iprange.v1.reader.ranges.close", _cursor_param)
@@ -128,6 +150,7 @@ _register("iprange.v1.database.create", {
     },
     "required": ["path", "family", "value_kind", "structure_kind", "value_tag", "reader_capacity"],
     "additional": False,
+    "validator": _require_database_create,
 })
 _register("iprange.v1.database.initialize_live", {
     "type": "object",
@@ -450,6 +473,7 @@ _register("iprange.v1.algebra.count", {
         "algebra_budget": C.ALGEBRA_BUDGET,
     },
     "required": ["sources", "selection", "algebra_budget"],
+    "validator": _require_algebra_source_count,
     "additional": False,
 })
 _register("iprange.v1.algebra.compare", {
@@ -461,6 +485,7 @@ _register("iprange.v1.algebra.compare", {
         "algebra_budget": C.ALGEBRA_BUDGET,
     },
     "required": ["sources", "left", "right", "algebra_budget"],
+    "validator": _require_algebra_source_count,
     "additional": False,
 })
 _ALGEBRA_OPERATION = {
@@ -493,6 +518,7 @@ _register("iprange.v1.algebra.publish", {
     },
     "required": ["sources", "operation", "output_mode", "value_tag", "metadata",
                  "destination", "publication_policy", "algebra_budget", "algebra_output_budget"],
+    "validator": _require_algebra_source_count,
     "additional": False,
 })
 
@@ -706,6 +732,36 @@ def _self_test():
     ):
         bad = dict(reader, view=view)
         assert rejects("iprange.v1.reader.ranges.open", bad)
+
+    assert rejects("iprange.v1.reader.ranges.open", dict(reader, start="192.0.2.1"))
+
+    database = {
+        "path": "/tmp/db",
+        "family": "ipv4",
+        "value_kind": "direct",
+        "structure_kind": "none",
+        "value_tag": {"hex": "01"},
+        "reader_capacity": 1,
+    }
+    assert validate_params("iprange.v1.database.create", database)
+    assert rejects("iprange.v1.database.create", dict(
+        database, value_kind="structured", structure_kind="none"))
+    assert rejects("iprange.v1.database.create", dict(
+        database, structure_kind="network_enrichment_v1"))
+
+    algebra_source = {
+        "source": {"path": "/tmp/db", "mode": "immutable"},
+        "scope": {"mode": "all"},
+        "membership_query_budget": {"max_heap_bytes": "1"},
+    }
+    algebra = {
+        "sources": [algebra_source],
+        "selection": {"mode": "all"},
+        "algebra_budget": {"max_heap_bytes": "1", "max_sources": 1},
+    }
+    assert validate_params("iprange.v1.algebra.count", algebra)
+    assert rejects("iprange.v1.algebra.count", dict(
+        algebra, sources=[algebra_source, algebra_source]))
 
     export = {
         "source": {"path": "/tmp/db", "mode": "immutable"},

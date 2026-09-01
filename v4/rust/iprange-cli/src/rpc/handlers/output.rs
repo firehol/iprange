@@ -42,21 +42,23 @@ pub fn metadata_output(
     max_output_bytes: u64,
     max_open_files: u32,
 ) -> Result<Value, HandlerError> {
-    if bytes.len() as u64 > max_output_bytes {
-        return Err(HandlerError::new(
-            "output_limit",
-            "not_started",
-            format!(
-                "metadata output is {} bytes, limit is {max_output_bytes}",
-                bytes.len()
-            ),
-        ));
-    }
     if max_open_files < 1 {
         return Err(HandlerError::new(
             "invalid_argument",
             "not_started",
             "metadata file delivery requires at least one open file",
+        ));
+    }
+    if bytes.len() as u64 > max_output_bytes {
+        // The metadata has already been read; the refusal is an
+        // output-limit failure of a read-only operation.
+        return Err(HandlerError::new(
+            "output_limit",
+            "read_only_failure",
+            format!(
+                "metadata output is {} bytes, limit is {max_output_bytes}",
+                bytes.len()
+            ),
         ));
     }
     let sha256 = Sha256::digest(bytes);
@@ -138,10 +140,13 @@ fn sync_directory(parent: &Path) -> Result<(), HandlerError> {
 
 fn file_error(error: std::io::Error, operation: &str) -> HandlerError {
     let message = format!("{operation}: {error}");
+    // Metadata delivery is a read-only operation: every file-I/O failure
+    // after the metadata read began reports read_only_failure (the spec
+    // reserves not_started for refusals before an SDK attempt).
     if error.kind() == std::io::ErrorKind::AlreadyExists {
-        HandlerError::new("name_exists", "not_started", message)
+        HandlerError::new("name_exists", "read_only_failure", message)
     } else {
-        HandlerError::new("io", "not_started", message)
+        HandlerError::new("io", "read_only_failure", message)
     }
 }
 

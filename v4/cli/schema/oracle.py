@@ -188,3 +188,31 @@ def algebra_count(operation: str, sources: Sequence[IntervalLike], **_ignored) -
     else:
         raise ValueError(f"unknown interval operation {operation!r}")
     return result, address_count(result)
+
+
+def _self_test():
+    """Focused hand-computed algebra oracle checks."""
+
+    _, count = algebra_count("union", [[(0, 9)], [(5, 14)]])
+    assert count == 15
+    _, count = algebra_count("union", [[(0, 4)], [(10, 14)]])
+    assert count == 10
+    _, count = algebra_count("intersection", [[(0, 9)], [(5, 14)]])
+    assert count == 5
+    _, count = algebra_count("exclusion", [[(0, 9)], [(5, 14)]])
+    assert count == 5
+
+    facts = compare([(0, 9)], [(5, 14)])
+    assert facts == {
+        "left_addresses": 5,
+        "right_addresses": 5,
+        "overlap_addresses": 5,
+        "left_only_addresses": 5,
+        "right_only_addresses": 5,
+        "union_addresses": 15,
+        "equal": False,
+    }
+
+
+if __name__ == "__main__":
+    _self_test()

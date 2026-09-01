@@ -26,17 +26,30 @@ pub const PRODUCT_ERROR: i64 = -32010;
 pub const METHOD_PREFIX: &str = "iprange.v1.";
 pub const CANCEL_METHOD: &str = "iprange.v1.cancel";
 
+/// A request id: an exact JSON string or an integral JSON number.
+///
+/// serde_json preserves i64 and u64 exactly, which covers every integral
+/// JSON number the v1 contract accepts (the Python authority parses any
+/// Python int; JSON text cannot express values beyond u64 with exact
+/// integral semantics here).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RequestId {
     String(String),
-    Number(i64),
+    Number(serde_json::Number),
 }
 
 impl RequestId {
     pub fn as_json(&self) -> Value {
         match self {
             RequestId::String(s) => Value::String(s.clone()),
-            RequestId::Number(n) => json!(*n),
+            RequestId::Number(n) => Value::Number(n.clone()),
+        }
+    }
+    /// Canonical correlation key used for cancellation and busy tracking.
+    pub fn key(&self) -> String {
+        match self {
+            RequestId::String(s) => format!("s:{s}"),
+            RequestId::Number(n) => format!("n:{n}"),
         }
     }
 }
@@ -83,7 +96,12 @@ impl SchemaError {
 fn valid_id(v: &Value) -> Option<RequestId> {
     match v {
         Value::String(s) => Some(RequestId::String(s.clone())),
-        Value::Number(n) => n.as_i64().map(RequestId::Number),
+        // Accept any integral JSON number that serde_json preserves
+        // exactly: i64, u64, and non-negative u64 fits. Floats are never
+        // integral ids under the v1 contract.
+        Value::Number(n) if n.is_i64() || n.is_u64() => {
+            Some(RequestId::Number(n.clone()))
+        }
         _ => None,
     }
 }

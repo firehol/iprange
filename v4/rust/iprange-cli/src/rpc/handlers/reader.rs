@@ -108,20 +108,19 @@ pub fn open(state: &mut SessionState, params: Value) -> Result<Value, HandlerErr
 
 pub fn close(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
     let handle = handle_param(&params, "reader").map_err(HandlerError::invalid_params)?;
-    if state.resources.closed_readers.contains_key(&handle) {
-        return Err(HandlerError::new(
-            "handle_closed",
-            "not_started",
-            "reader handle is already closed",
-        ));
-    }
-    let Some(mut reader) = state.resources.readers.remove(&handle) else {
+    // The spec treats closing an already-closed handle exactly like an
+    // unknown handle: `handle_not_found` (spec reader.close). Other
+    // operations on a closed handle still report `handle_closed`.
+    if state.resources.closed_readers.contains_key(&handle)
+        || !state.resources.readers.contains_key(&handle)
+    {
         return Err(HandlerError::new(
             "handle_not_found",
             "not_started",
-            "reader handle is unknown",
+            "reader handle is unknown or already closed",
         ));
-    };
+    }
+    let mut reader = state.resources.readers.remove(&handle).unwrap();
     let dependent: Vec<String> = state
         .resources
         .cursors
@@ -728,8 +727,10 @@ pub(crate) fn member_object<'a>(
 
 pub(crate) fn validate_path(path: Option<&str>) -> Result<(), String> {
     let path = path.ok_or("path must be a string")?;
-    if path.is_empty() || path.len() > 65_536 || path.contains('\0') || path == "-" {
-        return Err("path is empty, '-', over 65536 bytes, or contains NUL".into());
+    // The frozen schema measures path length in Unicode code points
+    // (common.PATH.max_len), so count chars, not UTF-8 bytes.
+    if path.is_empty() || path.chars().count() > 65_536 || path.contains('\0') || path == "-" {
+        return Err("path is empty, '-', over 65536 characters, or contains NUL".into());
     }
     Ok(())
 }
@@ -780,14 +781,18 @@ pub(crate) fn validate_delivery(value: &Value) -> Result<(), String> {
             validate_path(delivery["path"].as_str())?;
             publication_policy(delivery["publication_policy"].as_str())
                 .map_err(|_| "delivery.publication_policy is invalid".to_string())?;
-            u64_string(delivery["max_output_bytes"].as_str())?;
+            let bytes_limit = u64_string(delivery["max_output_bytes"].as_str())?;
+            if bytes_limit == 0 {
+                return Err("delivery.max_output_bytes must be positive".into());
+            }
             let files = delivery["max_open_files"]
                 .as_u64()
                 .and_then(|value| u32::try_from(value).ok());
-            if files.is_none() {
-                return Err("delivery.max_open_files must be u32".into());
+            match files {
+                Some(0) => Err("delivery.max_open_files must be positive".into()),
+                Some(_) => Ok(()),
+                None => Err("delivery.max_open_files must be u32".into()),
             }
-            Ok(())
         }
         _ => Err("delivery.mode must be inline or file".into()),
     }
@@ -1004,10 +1009,12 @@ mod tests {
             (reused.code, reused.outcome),
             ("handle_closed", "not_started")
         );
+        // Closing an already-closed handle reports handle_not_found
+        // per the spec (reader.close), unlike use operations.
         let twice = close(&mut state, serde_json::json!({"reader": handle})).unwrap_err();
         assert_eq!(
             (twice.code, twice.outcome),
-            ("handle_closed", "not_started")
+            ("handle_not_found", "not_started")
         );
         let unknown = info(
             &mut state,

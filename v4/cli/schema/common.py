@@ -1,8 +1,9 @@
 """Common v1 types shared by every method params/results schema."""
 
+import ipaddress as _ipaddress
 import re as _re
 
-from .engine import validate
+from .engine import ValidationError, validate
 
 FAMILY = {"type": "string", "enum": ["ipv4", "ipv6"]}
 SOURCE_MODE = {"type": "string", "enum": ["immutable", "live"]}
@@ -36,7 +37,21 @@ POSITIVE_U64 = {
 }
 U32 = {"type": "u32"}
 POSITIVE_U32 = {"type": "integer", "min": 1, "max": 4294967295}
-IP_ADDRESS = {"type": "string", "min_len": 1, "max_len": 64}
+def _canonical_ip_address(value, path):
+    try:
+        parsed = _ipaddress.ip_address(value)
+    except ValueError as exc:
+        raise ValidationError(path, "value is not canonical IPv4 or IPv6 text") from exc
+    if str(parsed) != value:
+        raise ValidationError(path, "value is not canonical IPv4 or IPv6 text")
+
+
+IP_ADDRESS = {
+    "type": "string",
+    "validator": _canonical_ip_address,
+    "min_len": 1,
+    "max_len": 64,
+}
 
 FEED_NAME = {
     "type": "string",
@@ -45,14 +60,28 @@ FEED_NAME = {
     "max_len": 255,
 }
 
+def _value_tag_hex(value, path):
+    # Shape checks prove even lowercase hex and at most 15 bytes; decoding is
+    # needed to reject a NUL byte anywhere in the represented tag.
+    if 0 in bytes.fromhex(value):
+        raise ValidationError(path, "value-tag hex must not encode a NUL byte")
+
+
+VALUE_TAG_HEX = {
+    "type": "string",
+    "hex_even": True,
+    "max_len": 30,
+    "validator": _value_tag_hex,
+}
 VALUE_TAG = {
     "type": "one_of",
     "options": [
         {"type": "object",
-         "properties": {"text": {"type": "string", "no_control": True, "max_len": 15, "max_bytes": 15}},
+         "properties": {"text": {"type": "string", "reject_nul": True,
+                                  "max_len": 15, "max_bytes": 15}},
          "required": ["text"], "additional": False},
         {"type": "object",
-         "properties": {"hex": {"type": "string", "hex_even": True, "max_len": 30}},
+         "properties": {"hex": VALUE_TAG_HEX},
          "required": ["hex"], "additional": False},
     ],
 }
@@ -111,6 +140,19 @@ SNAPSHOT_BUDGET = {
     "required": ["max_heap_bytes", "max_output_pages", "max_open_files"],
     "additional": False,
 }
+def _require_scratch_policy(value, path):
+    disabled = value["max_scratch_bytes"] == "0" and value["max_scratch_files"] == 0
+    directory_present = "scratch_directory" in value
+    enabled = (
+        value["max_scratch_bytes"] != "0"
+        and value["max_scratch_files"] != 0
+        and directory_present
+    )
+    if (disabled and not directory_present) or enabled:
+        return
+    raise ValidationError(path, "scratch must be fully disabled or fully enabled")
+
+
 def scratch_fields(*, recovery):
     names = ["max_scratch_bytes", "max_scratch_files", "scratch_directory"]
     props = {
@@ -130,6 +172,7 @@ def scratch_fields(*, recovery):
         "properties": props,
         "required": list(base) + ["max_scratch_bytes", "max_scratch_files"],
         "additional": False,
+        "validator": _require_scratch_policy,
     }
 
 
@@ -205,16 +248,27 @@ CURRENT_COVERAGE_SOURCE = {
     "additional": False,
 }
 
+def _require_text_input(value, path):
+    family = value["family"]
+    maximum = 32 if family == "ipv4" else 128
+    if value["default_prefix"] > maximum:
+        raise ValidationError(
+            f"{path}.default_prefix",
+            f"default_prefix must be 0 through {maximum} for {family}",
+        )
+
+
 TEXT_INPUT = {
     "type": "object",
     "properties": {
         "paths": {"type": "array", "items": PATH, "min": 1},
         "family": FAMILY,
         "fix_network": {"type": "boolean"},
-        "default_prefix": U32,
+        "default_prefix": {"type": "integer", "min": 0, "max": 128},
         "dns": {
             "type": "object",
-            "properties": {"threads": U32, "silent": {"type": "boolean"}},
+            "properties": {"threads": {"type": "integer", "min": 1, "max": 2147483647},
+                            "silent": {"type": "boolean"}},
             "required": ["threads", "silent"],
             "additional": False,
         },
@@ -225,6 +279,7 @@ TEXT_INPUT = {
     "required": ["paths", "family", "fix_network", "default_prefix", "dns", "expand_at_paths",
                  "max_line_bytes", "max_expanded_paths"],
     "additional": False,
+    "validator": _require_text_input,
 }
 
 DIRECT_INPUT = {
@@ -290,8 +345,13 @@ def _self_test():
     assert rejects(PATH, "a\x00b")
     assert validate({"text": ""}, VALUE_TAG) == {"text": ""}
     assert rejects(VALUE_TAG, {"text": "bad\x00tag"})
-    assert rejects(VALUE_TAG, {"text": "bad\ntag"})
+    assert validate({"text": "bad\ntag"}, VALUE_TAG) == {"text": "bad\ntag"}
+    assert rejects(VALUE_TAG, {"hex": "6100"})
     assert validate({"mode": "replace_base64", "base64": ""}, METADATA_REPLACEMENT_INPUT)
+    assert validate("192.0.2.1", IP_ADDRESS) == "192.0.2.1"
+    assert validate("::ffff:192.0.2.1", IP_ADDRESS) == "::ffff:192.0.2.1"
+    for address in ("192.000.2.1", "not-an-ip", "2001:DB8::1", "2001:0db8::1"):
+        assert rejects(IP_ADDRESS, address)
     assert rejects(METADATA_REPLACEMENT_INPUT, {"mode": "keep"})
     assert validate({
         "mode": "named", "feeds": ["feed-a", "feed-b"]
@@ -305,6 +365,27 @@ def _self_test():
     assert rejects(TEXT_INPUT, _text_input(1, max_expanded_paths=1000001))
     assert rejects(DIRECT_INPUT, {"path": "/tmp/in", "max_line_bytes": 0})
     assert rejects(DIRECT_INPUT, {"path": "/tmp/in", "max_line_bytes": 1048577})
+    disabled = {"max_heap_bytes": "1", "max_open_files": 1,
+                "max_scratch_bytes": "0", "max_scratch_files": 0}
+    assert validate(disabled, VALIDATION_BUDGET) == disabled
+    enabled = dict(disabled, max_scratch_bytes="1", max_scratch_files=1,
+                   scratch_directory="/tmp/scratch")
+    assert validate(enabled, VALIDATION_BUDGET) == enabled
+    for bad in (
+        dict(disabled, max_scratch_bytes="1"),
+        dict(disabled, max_scratch_files=1),
+        dict(disabled, scratch_directory="/tmp/scratch"),
+        dict(enabled, max_scratch_files=0),
+    ):
+        assert rejects(VALIDATION_BUDGET, bad)
+    text_v4 = _text_input(1)
+    text_v6 = _text_input(1, family="ipv6", default_prefix=128, threads=2147483647)
+    assert validate(text_v4, TEXT_INPUT) == text_v4
+    assert validate(text_v6, TEXT_INPUT) == text_v6
+    assert rejects(TEXT_INPUT, _text_input(1, family="ipv4", default_prefix=33))
+    assert rejects(TEXT_INPUT, _text_input(1, family="ipv6", default_prefix=129))
+    assert rejects(TEXT_INPUT, _text_input(1, threads=0))
+    assert rejects(TEXT_INPUT, _text_input(1, threads=2147483648))
     valid_budget = {"max_rows": "1", "max_output_bytes": "1", "max_open_files": 1}
     assert validate(valid_budget, RESULT_BUDGET) == valid_budget
     for field, value in (
@@ -316,13 +397,13 @@ def _self_test():
         assert rejects(RESULT_BUDGET, bad)
 
 
-def _text_input(max_line_bytes, max_expanded_paths=1):
+def _text_input(max_line_bytes, max_expanded_paths=1, family="ipv4", default_prefix=32, threads=1):
     return {
         "paths": ["/tmp/input"],
-        "family": "ipv4",
+        "family": family,
         "fix_network": False,
-        "default_prefix": 32,
-        "dns": {"threads": 1, "silent": True},
+        "default_prefix": default_prefix,
+        "dns": {"threads": threads, "silent": True},
         "expand_at_paths": False,
         "max_line_bytes": max_line_bytes,
         "max_expanded_paths": max_expanded_paths,

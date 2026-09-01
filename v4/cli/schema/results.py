@@ -32,7 +32,7 @@ FILE_IDENTITY = {
 }
 RESULT_VALUE_TAG = {
     "type": "object",
-    "properties": {"hex": {"type": "string", "hex_even": True, "max_len": 30}},
+    "properties": {"hex": C.VALUE_TAG_HEX},
     "required": ["hex"],
     "additional": False,
 }
@@ -587,11 +587,17 @@ _register("iprange.v1.system.describe", _result(required_extra=(), body={
         "implementation": {"type": "string", "enum": ["rust", "go"]},
         "jsonrpc_version": {"type": "string"},
         "api_version": {"type": "string"},
-        "format": {"type": "string"},
+        "format": {"type": "string", "enum": ["iprange-v4-phase1-unsigned"]},
         "platform": {"type": "string", "enum": ["linux", "macos", "windows", "freebsd", "other"]},
-        "families": {"type": "array", "items": C.FAMILY, "min": 1},
+        "families": {"type": "array", "items": C.FAMILY, "min": 1, "unique": True},
         "methods": {"type": "array", "items": {"type": "string"}, "min": 1},
-        "export_formats": {"type": "array", "items": {"type": "string"}, "min": 1},
+        "export_formats": {
+            "type": "array",
+            "items": {"type": "string", "enum": ["netset", "ipset", "ranges", "csv",
+                                                   "jsonl", "legacy_binary"]},
+            "min": 1,
+            "unique": True,
+        },
         "limits": {
             "type": "object",
             "properties": {
@@ -1012,6 +1018,128 @@ _register("iprange.v1.maintenance.remove", _result(required_extra=("removal",), 
 }))
 
 
+def _self_test():
+    import json
+
+    from .engine import ValidationError, validate
+
+    assert validate({"hex": "61"}, RESULT_VALUE_TAG) == {"hex": "61"}
+    for bad in ({"hex": "00"}, {"hex": "6100"}, {"hex": "6"}):
+        try:
+            validate(bad, RESULT_VALUE_TAG)
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError(f"invalid result tag accepted: {bad!r}")
+
+    describe = {
+        "method": "iprange.v1.system.describe",
+        "format": "iprange-v4-phase1-unsigned",
+        "families": ["ipv4"],
+        "export_formats": ["netset"],
+        "methods": ["iprange.v1.system.describe"],
+        "limits": {
+            "input_frame_bytes": "1048576",
+            "output_frame_bytes": "1048576",
+            "response_object_bytes": "65000",
+            "batch_requests": 16,
+            "queued_requests": 16,
+            "reader_handles": 64,
+            "cursor_handles": 64,
+            "lookup_addresses": 4096,
+            "cursor_records": 4096,
+        },
+    }
+    # validate_system_describe intentionally checks semantics without requiring
+    # the full schema's build-variable fields.
+    assert validate_system_describe(describe)
+    original = json.loads(json.dumps(describe))
+    mutations = (
+        ("format", "wrong"),
+        ("families", ["ipx"]),
+        ("families", []),
+        ("export_formats", ["unknown"]),
+        ("export_formats", []),
+    )
+    for key, value in mutations:
+        invalid = json.loads(json.dumps(original))
+        invalid[key] = value
+        try:
+            validate_system_describe(invalid)
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError(f"invalid system.describe {key} accepted")
+    invalid = json.loads(json.dumps(original))
+    invalid["limits"]["reader_handles"] = 63
+    try:
+        validate_system_describe(invalid)
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError("invalid system.describe limits accepted")
+
+
+def validate_system_describe(result):
+    """Validate semantic system.describe facts not expressed by item schemas."""
+
+    from . import methods
+    from .engine import ValidationError
+
+    if result.get("format") != "iprange-v4-phase1-unsigned":
+        raise ValidationError(
+            "result[iprange.v1.system.describe].format",
+            "format must be iprange-v4-phase1-unsigned",
+        )
+    expected_limits = {
+        "input_frame_bytes": "1048576",
+        "output_frame_bytes": "1048576",
+        "response_object_bytes": "65000",
+        "batch_requests": 16,
+        "queued_requests": 16,
+        "reader_handles": 64,
+        "cursor_handles": 64,
+        "lookup_addresses": 4096,
+        "cursor_records": 4096,
+    }
+    if result.get("limits") != expected_limits:
+        raise ValidationError(
+            "result[iprange.v1.system.describe].limits",
+            "system.describe limits must match the documented API v1 values",
+        )
+    families = result.get("families", [])
+    if not families or not set(families) <= {"ipv4", "ipv6"}:
+        raise ValidationError(
+            "result[iprange.v1.system.describe].families",
+            "families must be a nonempty subset of ipv4 and ipv6",
+        )
+    export_formats = result.get("export_formats", [])
+    documented = {"netset", "ipset", "ranges", "csv", "jsonl", "legacy_binary"}
+    if not export_formats or not set(export_formats) <= documented:
+        raise ValidationError(
+            "result[iprange.v1.system.describe].export_formats",
+            "export_formats must be a nonempty subset of the documented formats",
+        )
+    advertised = result.get("methods", [])
+    if advertised != sorted(set(advertised)):
+        raise ValidationError(
+            "result[iprange.v1.system.describe].methods",
+            "advertised methods must be unique and bytewise sorted",
+        )
+    unknown = [name for name in advertised if name not in methods.METHODS]
+    if unknown:
+        raise ValidationError(
+            "result[iprange.v1.system.describe].methods",
+            f"unknown advertised methods {unknown!r}",
+        )
+    if methods.CANCEL_METHOD in advertised:
+        raise ValidationError(
+            "result[iprange.v1.system.describe].methods",
+            "cancel is a notification and must not be advertised as callable",
+        )
+    return result
+
+
 def validate_result(method, result):
     """Validate one result against its strict schema and method echo.
 
@@ -1025,23 +1153,7 @@ def validate_result(method, result):
         return result
     validate(result, body, f"result[{method}]")
     if method == "iprange.v1.system.describe":
-        advertised = result.get("methods", [])
-        if advertised != sorted(set(advertised)):
-            raise ValidationError(
-                "result[iprange.v1.system.describe].methods",
-                "advertised methods must be unique and bytewise sorted",
-            )
-        unknown = [name for name in advertised if name not in methods.METHODS]
-        if unknown:
-            raise ValidationError(
-                "result[iprange.v1.system.describe].methods",
-                f"unknown advertised methods {unknown!r}",
-            )
-        if methods.CANCEL_METHOD in advertised:
-            raise ValidationError(
-                "result[iprange.v1.system.describe].methods",
-                "cancel is a notification and must not be advertised as callable",
-            )
+        validate_system_describe(result)
     if method == "iprange.v1.reader.lookup":
         for index, fact in enumerate(result.get("matches", [])):
             keys = set(fact)
@@ -1069,3 +1181,7 @@ def validate_result(method, result):
             f"result[{method}].method",
             f"echo {result.get('method')!r} does not match requested method {method!r}")
     return result
+
+
+if __name__ == "__main__":
+    _self_test()
