@@ -10,7 +10,7 @@ repository.workspace = true
 [dependencies]
 iprange-livedb = { path = "../iprange-livedb" }
 serde = { version = "=1.0.229", features = ["derive"] }
-serde_json = "=1.0.151"
+serde_json = { version = "=1.0.151", features = ["arbitrary_precision"] }
 getrandom = { version = "=0.3.4", features = ["std"] }
 sha2 = "=0.10.9"
 

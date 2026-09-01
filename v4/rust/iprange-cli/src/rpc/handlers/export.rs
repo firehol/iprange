@@ -13,14 +13,17 @@ use iprange_livedb::publication::PublicationPolicy;
 use iprange_livedb::recovery::{inspect_recovery_candidates, RecoveryInspectionMode};
 use iprange_livedb::validation::{LocalFileIdentity, ValidationBudget};
 use iprange_livedb::{
-    AddressFamily, CancellationToken, FeedEntry, FeedName, ImmutableReader, RangeDirection,
+    AddressFamily, CancellationToken, FeedEntry, FeedName, ImmutableReader, LiveReader,
+    RangeDirection,
 };
 use serde_json::{json, Value};
 
 use super::super::dispatch::HandlerError;
 use super::super::session::SessionState;
+use super::super::state::ReaderValue;
 use super::reader::{
-    bounded_result, member_object, publication_policy, read_error, sdk, u64_string, validate_path,
+    bounded_result, member_object, positive_u32, positive_u64_string, publication_policy,
+    read_error, sdk, u64_string, validate_path,
 };
 use crate::io::export_writer::{
     csv_field, emit_ipset, emit_netset, format_address, legacy_binary_header,
@@ -132,15 +135,6 @@ pub fn validate_export(params: &Value) -> Result<(), String> {
 pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
     let object = params.as_object().expect("validator checked object");
     let (source_path, source_mode) = source_value(&object["source"])?;
-    if source_mode == "live" {
-        // Pinned-live readers are not registered yet; refuse before any
-        // file attempt exactly like the reader family.
-        return Err(HandlerError::new(
-            "io",
-            "not_started",
-            "live reader registration is unsupported",
-        ));
-    }
     match Path::new(&source_path).try_exists() {
         Ok(true) => {}
         Ok(false) => {
@@ -168,18 +162,101 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
     let policy = publication_policy(object["publication_policy"].as_str())
         .map_err(|_| HandlerError::invalid_params("publication_policy is invalid"))?;
     let budget = decode_budget(&object["result_budget"])?;
-    let reader = ImmutableReader::open(&source_path).map_err(read_error)?;
-    let host_prefix = match reader.info().address_family {
+    let mut reader = open_source(&source_path, &source_mode, &state.token)?;
+    let export_result = export_with_reader(
+        state,
+        object,
+        &view,
+        format,
+        destination,
+        policy,
+        &budget,
+        &reader,
+    );
+    let close_result = close_ephemeral_source(&mut reader);
+    let completed = export_result?;
+    close_result?;
+    bounded_result(json!({
+        "method": "iprange.v1.export",
+        "path": completed.facts.path,
+        "format": format,
+        "sha256": completed.facts.sha256,
+        "rows": completed.facts.rows.to_string(),
+        "addresses": completed.facts.addresses.to_string(),
+        "bytes": completed.facts.bytes.to_string(),
+        "identity": completed.identity,
+    }))
+}
+
+fn open_source(
+    path: &str,
+    mode: &str,
+    cancellation: &CancellationToken,
+) -> Result<ReaderValue, HandlerError> {
+    match mode {
+        "immutable" => ImmutableReader::open(path)
+            .map(ReaderValue::Immutable)
+            .map_err(read_error),
+        _ => LiveReader::open(path, cancellation)
+            .map(ReaderValue::Live)
+            .map_err(read_error),
+    }
+}
+
+fn close_ephemeral_source(reader: &mut ReaderValue) -> Result<(), HandlerError> {
+    let Some(result) = reader.close_live().map_err(read_error)? else {
+        return Ok(());
+    };
+    if result.outcome != iprange_livedb::CloseOutcome::Closed || result.cause.is_some() {
+        let code = result
+            .cause
+            .as_ref()
+            .map(|error| super::reader::sdk_code(error.code()))
+            .unwrap_or("io");
+        return Err(HandlerError {
+            code,
+            outcome: "read_only_failure",
+            message: result.cause.as_ref().map_or_else(
+                || "live export reader close is incomplete".to_owned(),
+                ToString::to_string,
+            ),
+            details: Some(json!({"source_close": {
+                "outcome": "close_incomplete",
+                "cleanup": {},
+                "coordination_cleanup": super::lifecycle::coordination_cleanup(
+                    result.coordination_cleanup
+                ),
+            }})),
+        });
+    }
+    Ok(())
+}
+
+/// One completed export plus the retained identity used in its wire result.
+struct ExportFactsWithIdentity {
+    facts: ExportFacts,
+    identity: Value,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn export_with_reader(
+    state: &mut SessionState,
+    object: &serde_json::Map<String, Value>,
+    view: &ExportView,
+    format: &str,
+    destination: &Path,
+    policy: PublicationPolicy,
+    budget: &ExportBudget,
+    reader: &ReaderValue,
+) -> Result<ExportFactsWithIdentity, HandlerError> {
+    let host_prefix = match sdk(reader.info())?.address_family {
         AddressFamily::Ipv4 => 32,
         AddressFamily::Ipv6 => 128,
     };
-    let filter = decode_prefixes(&object, format, host_prefix)?;
+    let filter = decode_prefixes(object, format, host_prefix)?;
     if format == "legacy_binary"
         && !matches!(view, ExportView::Feed { .. } | ExportView::Selection { .. })
     {
-        // The released binary record is a flat address interval, so a
-        // view with per-address values must be rejected rather than
-        // silently discarding those values (iprange-jsonrpc-v1.md).
         return Err(HandlerError::new(
             "invalid_argument",
             "not_started",
@@ -196,24 +273,33 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
             ),
         ));
     }
-    let identity = source_identity(state, &source_path, &budget)?;
+    let identity = source_identity(
+        state,
+        object["source"]["path"]
+            .as_str()
+            .expect("validator checked source.path"),
+        object["source"]["mode"]
+            .as_str()
+            .expect("validator checked source.mode"),
+        budget,
+    )?;
     let cancellation = state.token.clone();
     let facts = match format {
         "legacy_binary" => write_legacy_binary(
             destination,
             policy,
-            &budget,
-            &reader,
-            &view,
+            budget,
+            reader,
+            view,
             host_prefix,
             &cancellation,
         )?,
         "csv" | "jsonl" => write_rows(
             destination,
             policy,
-            &budget,
-            &reader,
-            &view,
+            budget,
+            reader,
+            view,
             host_prefix,
             &cancellation,
             format == "jsonl",
@@ -221,9 +307,9 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
         "ipset" => write_streamed(
             destination,
             policy,
-            &budget,
-            &reader,
-            &view,
+            budget,
+            reader,
+            view,
             &mut |writer, from, to| {
                 emit_ipset(from, to, host_prefix, &mut |line| {
                     check_cancelled(&cancellation)?;
@@ -234,9 +320,9 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
         "netset" => write_streamed(
             destination,
             policy,
-            &budget,
-            &reader,
-            &view,
+            budget,
+            reader,
+            view,
             &mut |writer, from, to| {
                 emit_netset(from, to, &filter, &mut |line, span| {
                     check_cancelled(&cancellation)?;
@@ -247,9 +333,9 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
         _ => write_streamed(
             destination,
             policy,
-            &budget,
-            &reader,
-            &view,
+            budget,
+            reader,
+            view,
             &mut |writer, from, to| {
                 check_cancelled(&cancellation)?;
                 let span = span_of(from, to);
@@ -257,16 +343,7 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
             },
         )?,
     };
-    bounded_result(json!({
-        "method": "iprange.v1.export",
-        "path": facts.path,
-        "format": format,
-        "sha256": facts.sha256,
-        "rows": facts.rows.to_string(),
-        "addresses": facts.addresses.to_string(),
-        "bytes": facts.bytes.to_string(),
-        "identity": identity,
-    }))
+    Ok(ExportFactsWithIdentity { facts, identity })
 }
 
 /// Create the writer, stream maximal coverage through one format
@@ -276,7 +353,7 @@ fn write_streamed(
     destination: &Path,
     policy: PublicationPolicy,
     budget: &ExportBudget,
-    reader: &ImmutableReader,
+    reader: &ReaderValue,
     view: &ExportView,
     format: &mut dyn FnMut(&mut ExportWriter, u128, u128) -> Result<(), HandlerError>,
 ) -> Result<ExportFacts, HandlerError> {
@@ -291,7 +368,7 @@ fn write_rows(
     destination: &Path,
     policy: PublicationPolicy,
     budget: &ExportBudget,
-    reader: &ImmutableReader,
+    reader: &ReaderValue,
     view: &ExportView,
     host_prefix: u32,
     cancellation: &CancellationToken,
@@ -382,7 +459,7 @@ fn write_legacy_binary(
     destination: &Path,
     policy: PublicationPolicy,
     budget: &ExportBudget,
-    reader: &ImmutableReader,
+    reader: &ReaderValue,
     view: &ExportView,
     host_prefix: u32,
     cancellation: &CancellationToken,
@@ -463,7 +540,7 @@ fn write_legacy_binary(
 /// Stream the view as maximal coverage ranges, merging adjacent
 /// segments regardless of their values (flat set semantics).
 fn stream_coverage(
-    reader: &ImmutableReader,
+    reader: &ReaderValue,
     view: &ExportView,
     sink: &mut CoverageSink<'_>,
 ) -> Result<(), HandlerError> {
@@ -494,11 +571,11 @@ fn stream_coverage(
 
 /// Stream one ordered canonical segment per constant semantic value.
 fn stream_segments(
-    reader: &ImmutableReader,
+    reader: &ReaderValue,
     view: &ExportView,
     sink: &mut SegmentSink<'_>,
 ) -> Result<(), HandlerError> {
-    match reader.info().address_family {
+    match sdk(reader.info())?.address_family {
         AddressFamily::Ipv4 => stream_segments_v4(reader, view, sink),
         AddressFamily::Ipv6 => stream_segments_v6(reader, view, sink),
     }
@@ -546,7 +623,7 @@ fn view_error(error: HandlerError) -> HandlerError {
 }
 
 fn stream_segments_v4(
-    reader: &ImmutableReader,
+    reader: &ReaderValue,
     view: &ExportView,
     sink: &mut SegmentSink<'_>,
 ) -> Result<(), HandlerError> {
@@ -566,7 +643,7 @@ fn stream_segments_v4(
             let mut cursor =
                 view_cursor(reader.network_enrichment_v1_cursor_v4(RangeDirection::Forward))?;
             while let Some(range) = sdk(cursor.next_range()).map_err(view_error)? {
-                let feeds = super::reader::immutable_threat_feed_names(reader, &range.value)?;
+                let feeds = super::reader::threat_feed_names(reader, &range.value)?;
                 let value =
                     ExportValue::Structured(super::convert::enrichment_view(&range.value, &feeds));
                 sink(u128::from(range.from.0), u128::from(range.to.0), &value)?;
@@ -614,7 +691,7 @@ fn stream_segments_v4(
 }
 
 fn stream_segments_v6(
-    reader: &ImmutableReader,
+    reader: &ReaderValue,
     view: &ExportView,
     sink: &mut SegmentSink<'_>,
 ) -> Result<(), HandlerError> {
@@ -634,7 +711,7 @@ fn stream_segments_v6(
             let mut cursor =
                 view_cursor(reader.network_enrichment_v1_cursor_v6(RangeDirection::Forward))?;
             while let Some(range) = sdk(cursor.next_range()).map_err(view_error)? {
-                let feeds = super::reader::immutable_threat_feed_names(reader, &range.value)?;
+                let feeds = super::reader::threat_feed_names(reader, &range.value)?;
                 let value =
                     ExportValue::Structured(super::convert::enrichment_view(&range.value, &feeds));
                 sink(range.from.to_u128(), range.to.to_u128(), &value)?;
@@ -686,7 +763,7 @@ struct SelectedFeed {
 }
 
 fn resolve_selection(
-    reader: &ImmutableReader,
+    reader: &ReaderValue,
     named: Option<&[String]>,
 ) -> Result<Vec<SelectedFeed>, HandlerError> {
     let mut feeds = match named {
@@ -717,7 +794,14 @@ fn resolve_selection(
     Ok(feeds)
 }
 
-fn require_feed(reader: &ImmutableReader, name: &str) -> Result<FeedEntry, HandlerError> {
+fn lookup_feed(reader: &ReaderValue, name: &str) -> iprange_livedb::Result<Option<FeedEntry>> {
+    match reader {
+        ReaderValue::Immutable(reader) => reader.lookup_feed(name),
+        ReaderValue::Live(reader) => reader.lookup_feed(name),
+    }
+}
+
+fn require_feed(reader: &ReaderValue, name: &str) -> Result<FeedEntry, HandlerError> {
     FeedName::new(name).map_err(|error| {
         HandlerError::new(
             "name_invalid",
@@ -725,7 +809,7 @@ fn require_feed(reader: &ImmutableReader, name: &str) -> Result<FeedEntry, Handl
             format!("export feed name is invalid: {error}"),
         )
     })?;
-    sdk(reader.lookup_feed(name))?.ok_or_else(|| {
+    sdk(lookup_feed(reader, name))?.ok_or_else(|| {
         HandlerError::new(
             "name_not_found",
             "not_started",
@@ -967,9 +1051,12 @@ fn validate_result_budget(value: &Value) -> Result<(), String> {
             "result_budget requires exactly max_rows, max_output_bytes, and max_open_files".into(),
         );
     }
-    u64_string(budget["max_rows"].as_str())?;
-    u64_string(budget["max_output_bytes"].as_str())?;
-    u32_member(&budget["max_open_files"]).ok_or("result_budget.max_open_files must be u32")?;
+    positive_u64_string(budget["max_rows"].as_str())
+        .map_err(|error| format!("result_budget.max_rows: {error}"))?;
+    positive_u64_string(budget["max_output_bytes"].as_str())
+        .map_err(|error| format!("result_budget.max_output_bytes: {error}"))?;
+    positive_u32(&budget["max_open_files"])
+        .map_err(|error| format!("result_budget.max_open_files: {error}"))?;
     Ok(())
 }
 
@@ -1039,26 +1126,25 @@ fn destination_exists(destination: &Path) -> Result<bool, HandlerError> {
 
 /// The retained source-file identity of one export source.
 ///
-/// The public immutable reader exposes no file identity, and the wire
-/// result requires the same `{volume,file}` pair as recovery
-/// inspection. `inspect_recovery_candidates` is the public SDK
-/// function that provides it without scanning the page graph; its
-/// budget needs exactly one open file and at most two retained u32
-/// unreadable-page records (worker/client/validation.rs).
+/// The public readers expose no file identity, and the wire result requires
+/// the same `{volume,file}` pair as recovery inspection. The public SDK
+/// inspection provides it without scanning the page graph; immutable mode
+/// needs one open file while live mode needs two.
 fn source_identity(
     state: &SessionState,
     source: &str,
+    source_mode: &str,
     budget: &ExportBudget,
 ) -> Result<Value, HandlerError> {
     let inspection =
         ValidationBudget::heap_only(2 * std::mem::size_of::<u32>() as u64, budget.max_open_files);
-    let result = inspect_recovery_candidates(
-        source,
-        RecoveryInspectionMode::Immutable,
-        &inspection,
-        &state.token,
-    )
-    .map_err(read_error)?;
+    let mode = if source_mode == "live" {
+        RecoveryInspectionMode::Live
+    } else {
+        RecoveryInspectionMode::Immutable
+    };
+    let result =
+        inspect_recovery_candidates(source, mode, &inspection, &state.token).map_err(read_error)?;
     file_identity(&result.source_identity)
 }
 
@@ -1188,6 +1274,14 @@ mod tests {
         let mut unknown = base.clone();
         unknown["unexpected"] = json!(1);
         assert!(validate_export(&unknown).is_err());
+        for field in ["max_rows", "max_output_bytes"] {
+            let mut zero = base.clone();
+            zero["result_budget"][field] = json!("0");
+            assert!(validate_export(&zero).is_err());
+        }
+        let mut zero_files = base.clone();
+        zero_files["result_budget"]["max_open_files"] = json!(0);
+        assert!(validate_export(&zero_files).is_err());
     }
 
     #[test]
@@ -1204,5 +1298,108 @@ mod tests {
         assert!(file_identity(&LocalFileIdentity { kind: 1, bytes }).is_err());
         bytes[16] = 0;
         assert!(file_identity(&LocalFileIdentity { kind: 9, bytes }).is_err());
+    }
+}
+
+#[cfg(test)]
+mod live_source_tests {
+    use super::*;
+    use iprange_livedb::{
+        create_live, AddressFamily, CancellationToken, FeedName, Ipv4Key, LiveWriter,
+        MembershipOperation, StructureKind, TransactionBudget, ValueKind, ValueTag,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn live_membership(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let main = std::env::temp_dir().join(format!(
+            "iprange-export-live-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        let token = CancellationToken::new();
+        create_live(
+            &main,
+            AddressFamily::Ipv4,
+            ValueKind::Membership,
+            StructureKind::None,
+            ValueTag::new(b"export-live").unwrap(),
+            2,
+            &token,
+        )
+        .unwrap();
+        let budget = TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 10_000,
+            max_file_growth_pages: 10_000,
+            max_open_files: 2,
+        };
+        let mut writer = LiveWriter::open(&main, budget, &token).unwrap();
+        let mut transaction = writer.begin_membership_transaction(&token).unwrap();
+        let feed = transaction
+            .ensure_feed(FeedName::new("feed-a").unwrap())
+            .unwrap();
+        let empty = transaction.empty_membership().unwrap();
+        let membership = transaction.add_feed(empty, feed).unwrap();
+        transaction
+            .apply_v4(
+                Ipv4Key(0xc0000201),
+                Ipv4Key(0xc000020a),
+                membership,
+                MembershipOperation::Replace,
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        writer.close().unwrap();
+        main
+    }
+
+    fn sidecar(main: &Path) -> PathBuf {
+        let mut name = main.file_name().unwrap().to_os_string();
+        name.push(".readers");
+        main.with_file_name(name)
+    }
+
+    #[test]
+    fn live_membership_feed_exports_exact_csv() {
+        let main = live_membership("csv");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let destination =
+            std::env::temp_dir().join(format!("iprange-export-live-out-{unique}.csv"));
+        let mut state = SessionState::default();
+        let result = export(
+            &mut state,
+            json!({
+                "source": {"path": main.display().to_string(), "mode": "live"},
+                "view": {"kind": "feed", "feed": "feed-a"},
+                "format": "csv",
+                "destination": destination.display().to_string(),
+                "publication_policy": "fail_if_exists",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "1000",
+                    "max_open_files": 2
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["method"], "iprange.v1.export");
+        assert_eq!(result["format"], "csv");
+        assert_eq!(result["rows"], "1");
+        assert_eq!(result["addresses"], "10");
+        assert_eq!(
+            fs::read_to_string(&destination).unwrap(),
+            "from,to,value\n192.0.2.1,192.0.2.10,feed-a\n"
+        );
+        fs::remove_file(&destination).unwrap();
+        fs::remove_file(&main).unwrap();
+        fs::remove_file(sidecar(&main)).unwrap();
     }
 }

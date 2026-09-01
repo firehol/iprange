@@ -60,33 +60,37 @@ def decode_frame(line):
     normalized request/notification dicts in array order.
     """
     # The byte ceiling applies to JSON payload bytes, not the LF/CRLF physical
-    # terminator. Accept the byte form used by a transport reader as well as
-    # the string form used by the golden validator.
+    # terminator. LF alone or CR immediately before LF is a terminator; a bare
+    # trailing CR remains payload and is rejected below as an unescaped break.
     if isinstance(line, (bytes, bytearray)):
         payload = bytes(line)
         if payload.endswith(b"\n"):
             payload = payload[:-1]
-        if payload.endswith(b"\r"):
-            payload = payload[:-1]
-    elif isinstance(line, str):
-        payload = line
-        if payload.endswith("\n"):
-            payload = payload[:-1]
-        if payload.endswith("\r"):
-            payload = payload[:-1]
+            if payload.endswith(b"\r"):
+                payload = payload[:-1]
         try:
-            payload = payload.encode("utf-8")
+            text = payload.decode("utf-8", "strict")
+        except UnicodeDecodeError as exc:
+            raise FrameError(STD_PARSE_ERROR, "frame is not UTF-8") from exc
+    elif isinstance(line, str):
+        text = line
+        if text.endswith("\n"):
+            text = text[:-1]
+            if text.endswith("\r"):
+                text = text[:-1]
+        try:
+            payload = text.encode("utf-8")
         except UnicodeEncodeError as exc:
             raise FrameError(STD_PARSE_ERROR, "frame is not UTF-8") from exc
     else:
         raise FrameError(STD_INVALID_REQUEST, "frame must be text or bytes")
     if len(payload) > INPUT_FRAME_LIMIT:
         raise FrameError(TRANSPORT_FRAME_TOO_LARGE, "frame over input limit")
-    if b"\n" in payload or b"\r" in payload:
+    if "\n" in text or "\r" in text:
         raise FrameError(STD_PARSE_ERROR, "unescaped line break inside frame")
     try:
-        value = json.loads(payload)
-    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
         raise FrameError(STD_PARSE_ERROR, f"parse error: {exc}") from exc
 
     if isinstance(value, list):
@@ -171,12 +175,30 @@ def _self_test():
     else:
         raise AssertionError("over-limit payload was accepted")
 
+    utf8_request = request(1).encode("utf-8")
+    for encoding in ("utf-16le", "utf-16be", "utf-32le", "utf-32be"):
+        try:
+            decode_frame(request(1).encode(encoding) + b"\n")
+        except FrameError as exc:
+            assert exc.code == STD_PARSE_ERROR
+        else:
+            raise AssertionError(f"{encoding} frame was accepted")
+
     try:
         decode_frame(b'\xff\n')
     except FrameError as exc:
         assert exc.code == STD_PARSE_ERROR
     else:
         raise AssertionError("non-UTF-8 payload was accepted")
+
+    for bare_cr in (utf8_request + b"\r", utf8_request.decode() + "\r"):
+        try:
+            decode_frame(bare_cr)
+        except FrameError as exc:
+            assert exc.code == STD_PARSE_ERROR
+            assert "unescaped line break" in str(exc)
+        else:
+            raise AssertionError("bare-CR terminator was accepted")
 
 
 def decode_response(text):

@@ -131,13 +131,18 @@ def exclude(left: IntervalLike, right: IntervalLike) -> List[Tuple[int, int]]:
 def compare(left: IntervalLike, right: IntervalLike) -> dict:
     """Return exact comparison facts for two address sets."""
 
+    left_total = union([left])
+    right_total = union([right])
     common = intersection([left, right])
     left_only = exclude(left, right)
     right_only = exclude(right, left)
     both = union([left_only, common, right_only])
     return {
-        "left_addresses": address_count(left_only),
-        "right_addresses": address_count(right_only),
+        # Side totals include each side's complete selected address set: its
+        # overlap segments plus its side-only segments, matching the SDK's
+        # analytical comparison contract.
+        "left_addresses": address_count(left_total),
+        "right_addresses": address_count(right_total),
         "overlap_addresses": address_count(common),
         "left_only_addresses": address_count(left_only),
         "right_only_addresses": address_count(right_only),
@@ -204,14 +209,17 @@ def _self_test():
 
     facts = compare([(0, 9)], [(5, 14)])
     assert facts == {
-        "left_addresses": 5,
-        "right_addresses": 5,
+        "left_addresses": 10,
+        "right_addresses": 10,
         "overlap_addresses": 5,
         "left_only_addresses": 5,
         "right_only_addresses": 5,
         "union_addresses": 15,
         "equal": False,
     }
+    duplicate_side = compare([(0, 9), (2, 12)], [(5, 14)])
+    assert duplicate_side["left_addresses"] == 13
+    assert duplicate_side["right_addresses"] == 10
 
 
 if __name__ == "__main__":

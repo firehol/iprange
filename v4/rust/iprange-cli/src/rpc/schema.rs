@@ -38,6 +38,14 @@ pub enum RequestId {
     Number(serde_json::Number),
 }
 
+impl Default for RequestId {
+    /// Only used to satisfy derive(Default) on connection state; the
+    /// active id is always overwritten before a handler runs.
+    fn default() -> Self {
+        RequestId::String(String::new())
+    }
+}
+
 impl RequestId {
     pub fn as_json(&self) -> Value {
         match self {
@@ -93,13 +101,21 @@ impl SchemaError {
     }
 }
 
+/// True when the preserved number text is an integral literal
+/// (arbitrary_precision stores the exact lexical token).
+fn integral_text(n: &serde_json::Number) -> bool {
+    let text = n.to_string();
+    !text.contains('.') && !text.contains('e') && !text.contains('E')
+}
+
 fn valid_id(v: &Value) -> Option<RequestId> {
     match v {
         Value::String(s) => Some(RequestId::String(s.clone())),
-        // Accept any integral JSON number that serde_json preserves
-        // exactly: i64, u64, and non-negative u64 fits. Floats are never
-        // integral ids under the v1 contract.
-        Value::Number(n) if n.is_i64() || n.is_u64() => {
+        // Accept any integral JSON number. serde_json runs with
+        // arbitrary_precision in this crate, so Number preserves the
+        // exact decimal text of out-of-range integers; only true
+        // floats (containing '.', 'e', or 'E') are rejected.
+        Value::Number(n) if n.is_i64() || n.is_u64() || integral_text(n) => {
             Some(RequestId::Number(n.clone()))
         }
         _ => None,
@@ -171,14 +187,13 @@ pub fn decode_frame(line: &[u8]) -> Result<Vec<Request>, SchemaError> {
             message: "frame over input limit".into(),
         });
     }
-    // The line reader strips the LF terminator; a CRLF input frame
-    // therefore arrives with one trailing CR.
+    // Only LF and CRLF terminate a frame; a bare trailing CR is part
+    // of the payload and is rejected below as an unescaped line break.
     let line = match line.strip_suffix(b"\n") {
-        Some(rest) => rest,
-        None => line,
-    };
-    let line = match line.strip_suffix(b"\r") {
-        Some(rest) => rest,
+        Some(rest) => match rest.strip_suffix(b"\r") {
+            Some(crlf) => crlf,
+            None => rest,
+        },
         None => line,
     };
     if line.contains(&b'\n') || line.contains(&b'\r') {

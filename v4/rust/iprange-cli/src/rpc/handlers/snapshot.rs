@@ -16,7 +16,8 @@ use serde_json::{json, Map, Value};
 use super::super::dispatch::HandlerError;
 use super::super::session::SessionState;
 use super::reader::{
-    bounded_result, member_object, publication_policy, sdk_code, u64_string, validate_path,
+    bounded_result, member_object, positive_u32, positive_u64_string, publication_policy, sdk_code,
+    u64_string, validate_path,
 };
 
 pub fn validate_snapshot(params: &Value) -> Result<(), String> {
@@ -66,14 +67,12 @@ pub fn validate_snapshot(params: &Value) -> Result<(), String> {
                 .into(),
         );
     }
-    u64_string(budget["max_heap_bytes"].as_str())?;
-    u64_string(budget["max_output_pages"].as_str())?;
-    let open_files = budget["max_open_files"]
-        .as_u64()
-        .and_then(|value| u32::try_from(value).ok());
-    if open_files.is_none() {
-        return Err("snapshot_budget.max_open_files must be u32".into());
-    }
+    positive_u64_string(budget["max_heap_bytes"].as_str())
+        .map_err(|error| format!("snapshot_budget.max_heap_bytes: {error}"))?;
+    positive_u64_string(budget["max_output_pages"].as_str())
+        .map_err(|error| format!("snapshot_budget.max_output_pages: {error}"))?;
+    positive_u32(&budget["max_open_files"])
+        .map_err(|error| format!("snapshot_budget.max_open_files: {error}"))?;
     Ok(())
 }
 
@@ -693,5 +692,33 @@ mod tests {
         let mut dash = valid.clone();
         dash["destination"] = json!("-");
         assert!(validate_snapshot(&dash).is_err());
+    }
+}
+
+#[cfg(test)]
+mod positive_budget_tests {
+    use super::*;
+
+    #[test]
+    fn snapshot_budget_rejects_zero_but_accepts_positive_limits() {
+        let valid = json!({
+            "source": {"path": "/tmp/db.iprange", "mode": "live"},
+            "destination": "/tmp/snap.iprange",
+            "publication_policy": "replace_existing",
+            "snapshot_budget": {
+                "max_heap_bytes": "1",
+                "max_output_pages": "1",
+                "max_open_files": 1
+            }
+        });
+        assert_eq!(validate_snapshot(&valid), Ok(()));
+        for field in ["max_heap_bytes", "max_output_pages"] {
+            let mut zero = valid.clone();
+            zero["snapshot_budget"][field] = json!("0");
+            assert!(validate_snapshot(&zero).is_err());
+        }
+        let mut zero_files = valid.clone();
+        zero_files["snapshot_budget"]["max_open_files"] = json!(0);
+        assert!(validate_snapshot(&zero_files).is_err());
     }
 }

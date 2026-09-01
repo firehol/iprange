@@ -53,6 +53,9 @@ pub struct SessionState {
     pub token: Arc<CancellationToken>,
     /// Ids of the request set currently executing.
     active_keys: HashSet<String>,
+    /// Id of the request currently executing; cursor handlers size pages
+    /// against the complete response-object ceiling using this id.
+    pub active_request_id: Option<RequestId>,
 }
 /// One element of a decoded frame in frame order.
 ///
@@ -110,6 +113,7 @@ impl Session {
             token: Arc::new(CancellationToken::new()),
             active_keys: HashSet::default(),
             cancelled: HashSet::default(),
+            active_request_id: None,
         }));
         Session {
             state,
@@ -458,7 +462,10 @@ fn execute(state: &Arc<Mutex<SessionState>>, request: &Request) -> Value {
         );
     }
     let mut st = state.lock().unwrap();
-    match handler(&mut st, request.params.clone()) {
+    st.active_request_id = request.id.clone();
+    let handled = handler(&mut st, request.params.clone());
+    st.active_request_id = None;
+    match handled {
         Ok(result) => schema::success_response(request.id.as_ref().unwrap(), result),
         Err(HandlerError {
             code,

@@ -555,23 +555,6 @@ pub(crate) fn threat_feed_names(
     Ok(feeds)
 }
 
-pub(crate) fn immutable_threat_feed_names(
-    reader: &ImmutableReader,
-    view: &NetworkEnrichmentV1View<'_>,
-) -> Result<Vec<String>, HandlerError> {
-    let Some(membership) = sdk(view.threat_membership())? else {
-        return Ok(Vec::new());
-    };
-    let mut feeds = Vec::new();
-    let mut cursor = sdk(reader.feed_cursor())?;
-    while let Some(entry) = sdk(cursor.next_feed())? {
-        if sdk(membership.contains_index(entry.index))? {
-            feeds.push(entry.name.as_str().to_owned());
-        }
-    }
-    Ok(feeds)
-}
-
 pub(crate) fn bounded_result(result: Value) -> Result<Value, HandlerError> {
     if schema::encode_response_object(&json!({"result": result})).is_err() {
         return Err(HandlerError::new(
@@ -821,6 +804,22 @@ pub(crate) fn u64_string(value: Option<&str>) -> Result<u64, String> {
     value
         .parse()
         .map_err(|_| "value must be a canonical unsigned decimal string".to_string())
+}
+
+pub(crate) fn positive_u64_string(value: Option<&str>) -> Result<u64, String> {
+    let parsed = u64_string(value)?;
+    if parsed == 0 {
+        return Err("value must be a positive canonical unsigned decimal string".into());
+    }
+    Ok(parsed)
+}
+
+pub(crate) fn positive_u32(value: &Value) -> Result<u32, String> {
+    match value.as_u64().and_then(|parsed| u32::try_from(parsed).ok()) {
+        Some(0) => Err("value must be a positive u32 integer".into()),
+        Some(parsed) => Ok(parsed),
+        None => Err("value must be a positive u32 integer".into()),
+    }
 }
 
 fn handle_param(params: &Value, name: &str) -> Result<String, String> {

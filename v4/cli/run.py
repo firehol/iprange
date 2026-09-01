@@ -99,6 +99,7 @@ class CaseRunner:
         self.service_argv = [binary, "--jsonrpc"]
         self.cursors = {}
         self.readers = {}
+        self.reader_families = {}
         self.fixture_intervals = {}
         self.pending_lookup = []
         self.oracle_checks = 0
@@ -310,8 +311,10 @@ class CaseRunner:
         elif method == "iprange.v1.reader.open":
             handle = result["reader"]
             self.readers[handle] = result["info"]["value_kind"]
+            self.reader_families[handle] = result["info"]["address_family"]
         elif method == "iprange.v1.reader.close":
             self.readers.pop(params["reader"], None)
+            self.reader_families.pop(params["reader"], None)
         elif method == "iprange.v1.reader.lookup":
             addresses = params.get("addresses", [])
             matches = result.get("matches", [])
@@ -320,7 +323,9 @@ class CaseRunner:
                     f"case {self.case['name']!r}: lookup returned {len(matches)} matches "
                     f"for {len(addresses)} addresses")
             reader_kind = self.readers.get(params["reader"])
+            reader_family = self.reader_families.get(params["reader"])
             for index, (want, got) in enumerate(zip(addresses, matches)):
+                self.check_address_family(reader_family, want, "lookup match", index)
                 if got.get("address") != want:
                     raise AssertionError(
                         f"case {self.case['name']!r}: lookup match[{index}] address "
@@ -333,6 +338,13 @@ class CaseRunner:
                     f"case {self.case['name']!r}: matching_feeds address "
                     f"{result.get('address')!r} != requested {params.get('address')!r}")
         elif method == "iprange.v1.reader.ranges.open":
+            if "start" in params:
+                self.check_address_family(
+                    self.reader_families.get(params["reader"]),
+                    params["start"],
+                    "ranges.open start",
+                    None,
+                )
             self.cursors[result["cursor"]] = {
                 "kind": "ranges",
                 "reader": params["reader"],
@@ -385,6 +397,21 @@ class CaseRunner:
             cursor = self.cursors.get(params["cursor"])
             if cursor is not None:
                 cursor["closed"] = True
+
+    @staticmethod
+    def check_address_family(expected, address, operation, index):
+        """Require a canonical address to belong to an opened reader's family."""
+
+        if expected is None:
+            return
+        import ipaddress
+
+        actual = "ipv4" if ipaddress.ip_address(address).version == 4 else "ipv6"
+        location = f"{operation}[{index}]" if index is not None else operation
+        if actual != expected:
+            raise AssertionError(
+                f"case {location}: address {address!r} is {actual}, "
+                f"but the reader family is {expected}")
 
     @staticmethod
     def check_lookup_payload_kind(reader_kind, fact, index):
@@ -800,6 +827,7 @@ def _self_test():
             "steps": [],
         }, work, "test")
         runner.readers["r"] = "membership"
+        runner.reader_families["r"] = "ipv4"
         runner.check_lookup_payload_kind("membership", {
             "address": "192.0.2.1", "present": False,
         }, 0)
@@ -814,6 +842,29 @@ def _self_test():
             pass
         else:
             raise AssertionError("membership reader accepted a direct payload")
+
+        try:
+            runner.check_protocol("iprange.v1.reader.lookup", {
+                "reader": "r", "addresses": ["2001:db8::1"],
+            }, {
+                "method": "iprange.v1.reader.lookup",
+                "matches": [{"address": "2001:db8::1", "present": False}],
+            })
+        except AssertionError as exc:
+            assert "reader family is ipv4" in str(exc)
+        else:
+            raise AssertionError("IPv4 reader accepted an IPv6 lookup address")
+
+        try:
+            runner.check_protocol("iprange.v1.reader.ranges.open", {
+                "reader": "r", "view": {"kind": "direct"},
+                "direction": "forward", "start": "2001:db8::1",
+                "batch_size": 1,
+            }, {"method": "iprange.v1.reader.ranges.open", "cursor": "c"})
+        except AssertionError as exc:
+            assert "reader family is ipv4" in str(exc)
+        else:
+            raise AssertionError("IPv4 reader accepted an IPv6 range start")
 
         fixture = os.path.join(work, "ranges.txt")
         write_text(fixture, "192.0.2.0-192.0.2.9\n198.51.100.0/30\n")
@@ -837,7 +888,7 @@ def _self_test():
         runner.check_algebra_oracle("iprange.v1.algebra.compare", compare_params, {
             "method": "iprange.v1.algebra.compare",
             "report": {
-                "left_addresses": "0", "right_addresses": "0",
+                "left_addresses": "14", "right_addresses": "14",
                 "overlap_addresses": "14", "left_only_addresses": "0",
                 "right_only_addresses": "0", "union_addresses": "14",
                 "equal": True,

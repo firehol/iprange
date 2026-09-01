@@ -513,16 +513,11 @@ fn validate_immutable_budget(value: &Value) -> Result<(), String> {
         ],
     )?;
     for field in ["max_heap_bytes", "max_output_pages", "max_workspace_pages"] {
-        reader::u64_string(object[field].as_str())
+        reader::positive_u64_string(object[field].as_str())
             .map_err(|error| format!("immutable_feed_budget.{field}: {error}"))?;
     }
-    if object["max_open_files"]
-        .as_u64()
-        .and_then(|value| u32::try_from(value).ok())
-        .is_none()
-    {
-        return Err("immutable_feed_budget.max_open_files must be u32".into());
-    }
+    reader::positive_u32(&object["max_open_files"])
+        .map_err(|error| format!("immutable_feed_budget.max_open_files: {error}"))?;
     Ok(())
 }
 
@@ -734,5 +729,29 @@ mod error_tests {
         assert!(!destination.exists());
         std::fs::remove_file(input).unwrap();
         std::fs::remove_dir(directory).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod positive_budget_tests {
+    use super::*;
+
+    #[test]
+    fn immutable_budget_rejects_zero_but_accepts_positive_limits() {
+        let valid = json!({
+            "max_heap_bytes": "1",
+            "max_output_pages": "1",
+            "max_workspace_pages": "1",
+            "max_open_files": 1
+        });
+        assert_eq!(validate_immutable_budget(&valid), Ok(()));
+        for field in ["max_heap_bytes", "max_output_pages", "max_workspace_pages"] {
+            let mut zero = valid.clone();
+            zero[field] = json!("0");
+            assert!(validate_immutable_budget(&zero).is_err());
+        }
+        let mut zero_files = valid.clone();
+        zero_files["max_open_files"] = json!(0);
+        assert!(validate_immutable_budget(&zero_files).is_err());
     }
 }

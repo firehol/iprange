@@ -5,6 +5,7 @@ use serde_json::{json, Value};
 
 use super::super::dispatch::HandlerError;
 use super::super::framing::RESPONSE_OBJECT_LIMIT;
+use super::super::schema::RequestId;
 use super::super::session::SessionState;
 use super::super::state::{CursorKind, CursorPoint, CursorValue, CursorView, ReaderValue};
 use super::reader::{bounded_result, exact_object, exact_object_opt, parse_address, sdk, validate_handle};
@@ -107,12 +108,12 @@ pub fn feeds_next(state: &mut SessionState, params: Value) -> Result<Value, Hand
     if cursor.kind != CursorKind::Feeds {
         return Err(wrong_cursor_kind());
     }
+    let mut encoded = cursor_base(state, "iprange.v1.reader.feeds.next", "feeds")?;
     let reader = super::reader::reader(state, &cursor.reader)?;
     let mut catalog = sdk(reader.feed_cursor())?;
     let mut rows = Vec::new();
     let mut last = cursor.last_feed_index;
     let mut done = false;
-    let mut encoded = array_response_base("iprange.v1.reader.feeds.next", "feeds");
     while rows.len() < cursor.batch_size {
         let Some(entry) = sdk(catalog.next_feed())? else {
             done = true;
@@ -228,12 +229,12 @@ pub fn ranges_next(state: &mut SessionState, params: Value) -> Result<Value, Han
             "done": true,
         }));
     }
+    let mut encoded = cursor_base(state, "iprange.v1.reader.ranges.next", "records")?;
     let reader = super::reader::reader(state, &cursor.reader)?;
     let mut point = cursor.point;
     let mut range_skip = cursor.range_skip;
     let mut records = Vec::new();
     let mut exhausted = false;
-    let mut encoded = array_response_base("iprange.v1.reader.ranges.next", "records");
     while records.len() < cursor.batch_size {
         let before_point = point;
         let before_skip = range_skip;
@@ -637,18 +638,48 @@ fn close(
     bounded_result(json!({ "method": method, "closed": true }))
 }
 
-fn array_response_base(method: &str, field: &str) -> usize {
+/// The byte size of the COMPLETE response object (jsonrpc, echoed id,
+/// and the result skeleton) for one feeds/ranges.next response. The
+/// session exposes the active request id so pages are sized against the
+/// real envelope; an unencodable id makes the base exceed the ceiling, in
+/// which case the first page is refused with output_limit like any other
+/// unencodable row.
+/// Envelope base for cursor pages: complete response object with the
+/// active request id echoed. The id is captured before any state borrow.
+fn cursor_base(state: &SessionState, method: &str, field: &str) -> Result<usize, HandlerError> {
+    response_base(state, method, field).map_err(|()| limit_error())
+}
+
+fn response_base(
+    state: &SessionState,
+    method: &str,
+    field: &str,
+) -> Result<usize, ()> {
+    let id = state
+        .active_request_id
+        .as_ref()
+        .map(RequestId::as_json)
+        .unwrap_or(Value::Null);
     let mut result = serde_json::Map::new();
     result.insert("method".into(), Value::String(method.into()));
     result.insert(field.into(), Value::Array(Vec::new()));
     result.insert("done".into(), Value::Bool(false));
-    serde_json::to_vec(&json!({"result": result}))
-        .expect("JSON values always serialize")
-        .len()
+    let complete = json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "result": result,
+    });
+    schema_complete_size(&complete).ok_or(())
 }
 
-fn fits_next_item(encoded: usize, items: &[Value], item: &Value) -> bool {
-    encoded + usize::from(!items.is_empty()) + item.to_string().len() <= RESPONSE_OBJECT_LIMIT
+fn schema_complete_size(complete: &Value) -> Option<usize> {
+    super::super::schema::encode_response_object(complete).ok().map(|s| s.len())
+}
+
+fn fits_next_item(base: usize, items: &[Value], item: &Value) -> bool {
+    // One comma per existing item plus the item text; the closing brace
+    // is already included in the base.
+    base + usize::from(!items.is_empty()) + item.to_string().len() <= RESPONSE_OBJECT_LIMIT
 }
 
 fn item_size(items: &[Value], item: &Value) -> usize {
@@ -818,6 +849,37 @@ mod tests {
         )
         .unwrap();
         path
+    }
+
+    #[test]
+    fn large_cursor_page_sizes_against_the_complete_envelope() {
+        // A page must be reduced against the full response object
+        // (jsonrpc, echoed id, method, rows), not the bare result
+        // skeleton; a valid large cursor must page, not output_limit.
+        let fixture = reader::test_support::create_direct_v6("cursor");
+        let mut state = SessionState::default();
+        state.active_request_id = Some(RequestId::String("cursor-large-page".into()));
+        let opened =
+            reader::open(&mut state, reader::test_support::live_source(&fixture.path)).unwrap();
+        let reader_handle = opened["reader"].as_str().unwrap().to_owned();
+        let opened = ranges_open(
+            &mut state,
+            serde_json::json!({
+                "reader": reader_handle,
+                "view": {"kind":"direct"},
+                "direction":"forward",
+                "batch_size":4096
+            }),
+        )
+        .unwrap();
+        let cursor = opened["cursor"].as_str().unwrap().to_owned();
+        // The envelope-aware base leaves room for rows; the oversized
+        // fallback would have returned output_limit instead.
+        let next = ranges_next(&mut state, serde_json::json!({"cursor": cursor})).unwrap();
+        assert_eq!(next["records"].as_array().unwrap().len(), 1);
+        assert_eq!(next["done"], true);
+        reader::close(&mut state, serde_json::json!({"reader": reader_handle})).unwrap();
+        fixture.remove();
     }
 
     #[test]

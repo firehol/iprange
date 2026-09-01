@@ -797,10 +797,12 @@ pub(crate) fn validate_writer_budget(value: &Value) -> Result<(), String> {
         ],
     )?;
     for field in ["max_heap_bytes", "max_private_pages", "max_growth_pages"] {
-        reader::u64_string(object[field].as_str())
+        reader::positive_u64_string(object[field].as_str())
             .map_err(|error| format!("writer_budget.{field}: {error}"))?;
     }
-    u32_member(object, "max_open_files")
+    reader::positive_u32(&object["max_open_files"])
+        .map(|_| ())
+        .map_err(|error| format!("writer_budget.max_open_files: {error}"))
 }
 
 pub(crate) fn writer_budget(value: &Value) -> Result<TransactionBudget, String> {
@@ -1049,5 +1051,29 @@ mod path_error_tests {
             (metadata.code, metadata.outcome),
             ("invalid_path", "not_started")
         );
+    }
+}
+
+#[cfg(test)]
+mod positive_budget_tests {
+    use super::*;
+
+    #[test]
+    fn writer_budget_rejects_zero_but_accepts_positive_limits() {
+        let valid = json!({
+            "max_heap_bytes": "1",
+            "max_private_pages": "1",
+            "max_growth_pages": "1",
+            "max_open_files": 1
+        });
+        assert_eq!(validate_writer_budget(&valid), Ok(()));
+        for field in ["max_heap_bytes", "max_private_pages", "max_growth_pages"] {
+            let mut zero = valid.clone();
+            zero[field] = json!("0");
+            assert!(validate_writer_budget(&zero).is_err());
+        }
+        let mut zero_files = valid.clone();
+        zero_files["max_open_files"] = json!(0);
+        assert!(validate_writer_budget(&zero_files).is_err());
     }
 }
