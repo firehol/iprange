@@ -23,10 +23,15 @@ fn main() {
         fail("usage: v4-fixture KIND OUTPUT");
     };
     let Some(output) = args.next() else {
-        fail("usage: v4-fixture KIND OUTPUT");
+        fail("usage: v4-fixture KIND OUTPUT [CSV]");
     };
+    let source_csv = args.next().map(std::path::PathBuf::from);
     if args.next().is_some() {
-        fail("usage: v4-fixture KIND OUTPUT");
+        fail("usage: v4-fixture KIND OUTPUT [CSV]");
+    }
+    let needs_csv = matches!(kind.as_str(), "direct-csv" | "membership-csv");
+    if needs_csv != source_csv.is_some() {
+        fail("direct-csv and membership-csv require exactly one CSV input path");
     }
     let output = PathBuf::from(output);
     let live = output.with_file_name(format!(
@@ -44,7 +49,7 @@ fn main() {
             .unwrap_or_default()
     ));
     remove_temporaries(&live);
-    if let Err(error) = run(&kind, &output, &live, &immutable_source) {
+    if let Err(error) = run(&kind, &output, &live, &immutable_source, &source_csv) {
         let _ = std::fs::remove_file(&live);
         let _ = std::fs::remove_file(sidecar(&live));
         let _ = std::fs::remove_file(&immutable_source);
@@ -53,13 +58,29 @@ fn main() {
     }
 }
 
-fn run(kind: &str, output: &Path, live: &Path, immutable_source: &Path) -> Result<(), String> {
+fn run(
+    kind: &str,
+    output: &Path,
+    live: &Path,
+    immutable_source: &Path,
+    source_csv: &Option<std::path::PathBuf>,
+) -> Result<(), String> {
     match kind {
         "direct-v4" => direct_v4(live, output),
+        "direct-csv" => direct_csv(
+            live,
+            source_csv.as_ref().expect("direct-csv requires CSV"),
+            output,
+        ),
+        "membership-csv" => membership_csv(
+            live,
+            source_csv.as_ref().expect("membership-csv requires CSV"),
+            output,
+        ),
         "membership-v4" => membership_v4(live, immutable_source, output),
         "structured-v4" => structured_v4(live, output),
         _ => Err(format!(
-            "unknown kind {kind:?}; expected direct-v4, membership-v4, or structured-v4"
+            "unknown kind {kind:?}; expected direct-v4, direct-csv, membership-v4, or structured-v4"
         )),
     }
 }
@@ -85,6 +106,124 @@ fn direct_v4(live: &Path, output: &Path) -> Result<(), String> {
         .set_metadata_json(br#"{"fixture":"direct-v4"}"#)
         .map_err(show)?;
     transaction.commit().map_err(show)?;
+    snapshot(live, output)
+}
+
+/// Parse a text CSV fixture into IPv4 range rows. A line is either
+/// `from,to` (membership) or `from,to,value` (direct); empty lines and
+/// a `from,to` header are skipped.
+fn parse_csv(csv: &std::path::Path) -> Result<Vec<(u32, u32, Option<u32>)>, String> {
+    let text = std::fs::read_to_string(csv)
+        .map_err(|error| format!("csv fixture: read {}: {error}", csv.display()))?;
+    let mut rows = Vec::new();
+    for (index, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') || line.starts_with("from,") {
+            continue;
+        }
+        let mut fields = line.split(',');
+        let from = fields
+            .next()
+            .ok_or_else(|| format!("csv fixture:{}: missing from", index + 1))?;
+        let to = fields
+            .next()
+            .ok_or_else(|| format!("csv fixture:{}: missing to", index + 1))?;
+        let value = match fields.next() {
+            Some(value) => Some(
+                value
+                    .trim()
+                    .parse::<u32>()
+                    .map_err(|error| format!("csv fixture:{}: bad value: {error}", index + 1))?,
+            ),
+            None => None,
+        };
+        if fields.next().is_some() {
+            return Err(format!("csv fixture:{}: too many fields", index + 1));
+        }
+        let from = from
+            .trim()
+            .parse::<std::net::Ipv4Addr>()
+            .map_err(|error| format!("csv fixture:{}: bad from: {error}", index + 1))?;
+        let to = to
+            .trim()
+            .parse::<std::net::Ipv4Addr>()
+            .map_err(|error| format!("csv fixture:{}: bad to: {error}", index + 1))?;
+        rows.push((u32::from(from), u32::from(to), value));
+    }
+    if rows.is_empty() {
+        return Err("csv fixture: no rows".into());
+    }
+    Ok(rows)
+}
+
+/// Build a direct database from a text CSV fixture: one
+/// `from,to,value` line per assignment. The runner feeds the same text
+/// to the scalar interval oracle, so algebra cases get independent
+/// expectations.
+fn direct_csv(live: &Path, csv: &std::path::Path, output: &Path) -> Result<(), String> {
+    let rows = parse_csv(csv)?;
+    let mut values = Vec::new();
+    for (from, to, value) in &rows {
+        let value = value.ok_or_else(|| "direct-csv: every row needs a value".to_owned())?;
+        values.push((*from, *to, value));
+    }
+    create(
+        live,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        StructureKind::None,
+        b"direct",
+        "direct-csv",
+    )?;
+    let cancellation = CancellationToken::new();
+    let mut writer = open_writer(live)?;
+    let mut transaction = writer
+        .begin_direct_transaction(&cancellation)
+        .map_err(show)?;
+    for (from, to, value) in values {
+        assign_direct(&mut transaction, from, to, value)?;
+    }
+    transaction
+        .set_metadata_json(br#"{"fixture":"direct-csv"}"#)
+        .map_err(show)?;
+    transaction.commit().map_err(show)?;
+    snapshot(live, output)
+}
+
+/// Build a single-feed membership database from a text CSV fixture
+/// (`from,to` per line, optional header). The runner registers the same
+/// text as scalar intervals for the algebra oracle.
+fn membership_csv(live: &Path, csv: &std::path::Path, output: &Path) -> Result<(), String> {
+    let rows = parse_csv(csv)?;
+    create(
+        live,
+        AddressFamily::Ipv4,
+        ValueKind::Membership,
+        StructureKind::None,
+        b"membership",
+        "membership-csv",
+    )?;
+    let cancellation = CancellationToken::new();
+    let mut writer = open_writer(live)?;
+    let mut transaction = writer
+        .begin_membership_transaction(&cancellation)
+        .map_err(show)?;
+    let alpha = transaction
+        .ensure_feed(FeedName::new("alpha").expect("valid fixed feed"))
+        .map_err(show)?;
+    let empty = transaction.empty_membership().map_err(show)?;
+    let mut membership = transaction.add_feed(empty, alpha).map_err(show)?;
+    for (from, to, _) in rows {
+        membership = transaction
+            .apply_v4(Ipv4Key(from), Ipv4Key(to), membership, MembershipOperation::Replace)
+            .map(|_| membership)
+            .map_err(show)?;
+    }
+    transaction
+        .set_metadata_json(br#"{"fixture":"membership-csv"}"#)
+        .map_err(show)?;
+    transaction.commit().map_err(show)?;
+    writer.close().map(|_| ()).map_err(show)?;
     snapshot(live, output)
 }
 

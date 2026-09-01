@@ -129,6 +129,24 @@ CASE = {
                                 "required": ["generator", "seed"],
                                 "additional": False,
                             },
+                            {
+                                # A deterministic v4 database built by the
+                                # v4-fixture csv tool from this exact CSV
+                                # text; the runner registers the same text
+                                # as scalar intervals for the algebra
+                                # oracle. `csv_kind` selects the database
+                                # value kind (direct or membership).
+                                "type": "object",
+                                "properties": {
+                                    "csv_db": {"type": "string"},
+                                    "csv_kind": {
+                                        "type": "string",
+                                        "enum": ["direct", "membership"],
+                                    },
+                                },
+                                "required": ["csv_db"],
+                                "additional": False,
+                            },
                         ],
                     },
                 },

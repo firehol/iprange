@@ -1,0 +1,62 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "reader.info",
+ "requires": "iprange.v1.reader.info",
+ "fixtures": [
+  {
+   "path": "direct.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 0
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.reader.open",
+   "params": {
+    "source": {
+     "path": "$WORK/direct.iprange",
+     "mode": "immutable"
+    }
+   },
+   "expect_result": {
+    "reader": {
+     "$ignore": true
+    }
+   },
+   "capture": ["reader"]
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.reader.info",
+   "params": {
+    "reader": "$CAPTURE/reader"
+   },
+   "expect_result": {
+    "info": {
+     "address_family": "ipv4",
+     "value_kind": "direct",
+     "structure_kind": "none",
+     "value_tag": {
+      "hex": "646972656374"
+     },
+     "database_id": {
+      "$ignore": true
+     }
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.reader.close",
+   "params": {
+    "reader": "$CAPTURE/reader"
+   },
+   "expect_result": {
+    "closed": true
+   }
+  }
+ ]
+}

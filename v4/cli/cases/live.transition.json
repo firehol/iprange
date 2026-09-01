@@ -1,0 +1,119 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "live.transition",
+ "requires": "iprange.v1.database.live_transition.resolve",
+ "fixtures": [
+  {
+   "path": "direct.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 0
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.database.initialize_live",
+   "params": {
+    "path": "$WORK/direct.iprange",
+    "reader_capacity": 8
+   },
+   "expect_result": {
+    "operation": "initialize",
+    "status": "initialized",
+    "main_basename": "direct.iprange",
+    "reader_capacity": 8,
+    "residue_possible": false,
+    "housekeeping": {
+     "artifacts": []
+    },
+    "visible_housekeeping": []
+   },
+   "capture": [
+    "operation",
+    "status",
+    "database_id",
+    "transaction_id",
+    "commit_nonce",
+    "directory_identity",
+    "main_identity",
+    "sidecar_id",
+    "new_sidecar_location",
+    "housekeeping",
+    "visible_housekeeping"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.database.live_transition.resolve",
+   "params": {
+    "path": "$WORK/direct.iprange",
+    "live_transition_result": {
+     "operation": "$CAPTURE/operation",
+     "status": "$CAPTURE/status",
+     "database_id": "$CAPTURE/database_id",
+     "transaction_id": "$CAPTURE/transaction_id",
+     "commit_nonce": "$CAPTURE/commit_nonce",
+     "directory_identity": "$CAPTURE/directory_identity",
+     "main_identity": "$CAPTURE/main_identity",
+     "main_basename": "direct.iprange",
+     "reader_capacity": 8,
+     "sidecar_id": "$CAPTURE/sidecar_id",
+     "new_sidecar_location": "$CAPTURE/new_sidecar_location",
+     "residue_possible": false,
+     "housekeeping": "$CAPTURE/housekeeping",
+     "visible_housekeeping": "$CAPTURE/visible_housekeeping"
+    },
+    "resolution_mode": "complete"
+   },
+   "expect_result": {
+    "operation": "initialize",
+    "status": "initialized",
+    "main_basename": "direct.iprange",
+    "residue_possible": false,
+    "housekeeping": {
+     "artifacts": []
+    },
+    "visible_housekeeping": [],
+    "database_id": {
+     "$ignore": true
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.database.live_residue.resolve",
+   "params": {
+    "path": "$WORK/direct.iprange",
+    "resolution_mode": "complete"
+   },
+   "expect_result": {
+    "status": "ready",
+    "residue_possible": false,
+    "housekeeping": {
+     "artifacts": []
+    },
+    "visible_housekeeping": []
+   }
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.database.reset_live",
+   "params": {
+    "path": "$WORK/direct.iprange",
+    "reader_capacity": 8,
+    "policy": "rollback_safe"
+   },
+   "expect_result": {
+    "operation": "reset",
+    "status": "initialized",
+    "residue_possible": false,
+    "housekeeping": {
+     "artifacts": []
+    },
+    "visible_housekeeping": []
+   }
+  }
+ ]
+}

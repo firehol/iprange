@@ -1,0 +1,103 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "snapshot",
+ "requires": "iprange.v1.snapshot",
+ "fixtures": [
+  {
+   "path": "membership.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 1
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.snapshot",
+   "params": {
+    "source": {
+     "path": "$WORK/membership.iprange",
+     "mode": "immutable"
+    },
+    "destination": "$WORK/snap.iprange",
+    "publication_policy": "fail_if_exists",
+    "snapshot_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "512",
+     "max_open_files": 32
+    }
+   },
+   "expect_result": {
+    "publication": {
+     "publication": "published",
+     "destination_content": "desired",
+     "attempt": {
+      "publication_policy": "fail_if_exists",
+      "database_id": {
+       "$ignore": true
+      }
+     },
+     "cleanup": {
+      "$ignore": true
+     }
+    }
+   },
+   "assert_files": [
+    {
+     "path": "snap.iprange"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.reader.open",
+   "params": {
+    "source": {
+     "path": "$WORK/snap.iprange",
+     "mode": "immutable"
+    }
+   },
+   "expect_result": {
+    "reader": {
+     "$ignore": true
+    }
+   },
+   "capture": [
+    "reader"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.reader.lookup",
+   "params": {
+    "reader": "$CAPTURE/reader",
+    "addresses": [
+     "192.0.2.10"
+    ]
+   },
+   "expect_result": {
+    "matches": [
+     {
+      "address": "192.0.2.10",
+      "present": true,
+      "feeds": [
+       "alpha",
+       "beta"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.reader.close",
+   "params": {
+    "reader": "$CAPTURE/reader"
+   },
+   "expect_result": {
+    "closed": true
+   }
+  }
+ ]
+}

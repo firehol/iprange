@@ -122,6 +122,25 @@ class CaseRunner:
                 intervals = parse_interval_text(data.decode("utf-8", "strict"))
                 if intervals is not None:
                     self.fixture_intervals[os.path.realpath(path)] = intervals
+            elif "csv_db" in source:
+                csv_path = os.path.join(self.work_dir, f"{fixture['path']}.csv")
+                write_text(csv_path, source["csv_db"])
+                csv_kind = source.get("csv_kind", "direct")
+                if csv_kind not in ("direct", "membership"):
+                    raise ValueError(f"unknown csv_kind {csv_kind!r}")
+                proc = subprocess.run(
+                    [self.fixture_tool, f"{csv_kind}-csv", path, csv_path],
+                    capture_output=True,
+                    timeout=300,
+                    env=child_environment(),
+                )
+                if proc.returncode != 0:
+                    detail = proc.stderr.decode("utf-8", "replace").strip()
+                    raise ValueError(
+                        f"v4-fixture direct-csv failed with exit {proc.returncode}: {detail}")
+                intervals = parse_interval_text(source["csv_db"])
+                if intervals is not None:
+                    self.fixture_intervals[os.path.realpath(path)] = intervals
             elif "generator" in source:
                 # Generated v4 files intentionally have no independent text
                 # representation here; oracle checks are skipped for them.
@@ -773,7 +792,14 @@ def parse_interval_text(text):
             line = raw_line.split("#", 1)[0].split(";", 1)[0].strip()
             if not line:
                 continue
-            if "-" in line:
+            if "," in line:
+                fields = line.split(",")
+                if fields[0].strip() == "from":
+                    continue  # CSV header
+                left, right = fields[0], fields[1]
+                start = int(ipaddress.ip_address(left.strip()))
+                end = int(ipaddress.ip_address(right.strip()))
+            elif "-" in line:
                 left, right = line.split("-", 1)
                 start = int(ipaddress.ip_address(left.strip()))
                 end = int(ipaddress.ip_address(right.strip()))
@@ -1056,6 +1082,7 @@ def main():
             binaries[key] = executable(path, f"{key} binary")
 
     try:
+        oracle._self_test()
         use_cases = load_cases(args.cases)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         parser.error(str(exc))

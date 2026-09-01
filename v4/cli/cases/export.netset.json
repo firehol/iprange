@@ -1,0 +1,51 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "export.netset",
+ "requires": "iprange.v1.export",
+ "fixtures": [
+  {
+   "path": "direct.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 0
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/direct.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "direct"
+    },
+    "format": "netset",
+    "destination": "$WORK/out.netset",
+    "publication_policy": "fail_if_exists",
+    "min_prefix": 32,
+    "result_budget": {
+     "max_rows": "100000",
+     "max_output_bytes": "10485760",
+     "max_open_files": 32
+    }
+   },
+   "expect_result": {
+    "format": "netset",
+    "rows": "26",
+    "addresses": "26",
+    "sha256": {
+     "$ignore": true
+    }
+   },
+   "assert_files": [
+    {
+     "path": "out.netset"
+    }
+   ]
+  }
+ ]
+}

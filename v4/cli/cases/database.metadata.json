@@ -1,0 +1,96 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "database.metadata",
+ "requires": "iprange.v1.database.metadata.replace",
+ "fixtures": [
+  {
+   "path": "zerodb.csv",
+   "source": {
+    "text": "from,to,value\n203.0.113.10,203.0.113.20,1\n"
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "path": "$WORK/meta.iprange",
+    "family": "ipv4",
+    "value_kind": "direct",
+    "structure_kind": "none",
+    "value_tag": {
+     "text": "metatag"
+    },
+    "reader_capacity": 8
+   },
+   "expect_result": {
+    "address_family": "ipv4",
+    "database_id": {
+     "$ignore": true
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.database.metadata.replace",
+   "params": {
+    "path": "$WORK/meta.iprange",
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "tenant-a"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "67108864",
+     "max_private_pages": "64",
+     "max_growth_pages": "64",
+     "max_open_files": 32
+    }
+   },
+   "expect_result": {
+    "logical_change": "changed",
+    "commit": {
+     "durability": "committed",
+     "attempted_database_id": {
+      "$ignore": true
+     }
+    },
+    "writer_close": {
+     "outcome": "closed",
+     "cleanup": {
+      "$ignore": true
+     },
+     "coordination_cleanup": {
+      "$ignore": true
+     }
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.database.metadata.get",
+   "params": {
+    "source": {
+     "path": "$WORK/meta.iprange",
+     "mode": "live"
+    },
+    "delivery": {
+     "mode": "inline"
+    }
+   },
+   "expect_result": {
+    "present": true,
+    "base64": "dGVuYW50LWE=",
+    "source_close": {
+     "outcome": "closed",
+     "cleanup": {
+      "$ignore": true
+     },
+     "coordination_cleanup": {
+      "$ignore": true
+     }
+    }
+   }
+  }
+ ]
+}

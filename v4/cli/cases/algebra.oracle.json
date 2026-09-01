@@ -1,0 +1,96 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "algebra.oracle",
+ "requires": "iprange.v1.algebra.compare",
+ "fixtures": [
+  {
+   "path": "algodb.iprange",
+   "source": {
+    "csv_db": "from,to\n192.0.2.0,192.0.2.10\n192.0.2.5,192.0.2.15\n198.51.100.0,198.51.100.20\n198.51.100.15,198.51.100.25\n203.0.113.10,203.0.113.20\n",
+    "csv_kind": "membership"
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.algebra.count",
+   "params": {
+    "sources": [
+     {
+      "source": {
+       "path": "$WORK/algodb.iprange",
+       "mode": "immutable"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      }
+     }
+    ],
+    "selection": {
+     "mode": "all"
+    },
+    "algebra_budget": {
+     "max_heap_bytes": "1048576",
+     "max_sources": 1
+    }
+   },
+   "expect_result": {
+    "cardinality": "53",
+    "report": {
+     "source_count": "1",
+     "addresses": "53",
+     "joined_segment_count": "3",
+     "source_range_count": "3"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "method": "iprange.v1.algebra.compare",
+   "params": {
+    "sources": [
+     {
+      "source": {
+       "path": "$WORK/algodb.iprange",
+       "mode": "immutable"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      }
+     }
+    ],
+    "left": {
+     "mode": "all"
+    },
+    "right": {
+     "mode": "all"
+    },
+    "algebra_budget": {
+     "max_heap_bytes": "1048576",
+     "max_sources": 1
+    }
+   },
+   "expect_result": {
+    "report": {
+     "left_addresses": "53",
+     "right_addresses": "53",
+     "overlap_addresses": "53",
+     "union_addresses": "53",
+     "left_only_addresses": "0",
+     "right_only_addresses": "0",
+     "equal": true,
+     "joined_segment_count": "3",
+     "source_count": "1",
+     "source_range_count": "3"
+    }
+   }
+  }
+ ]
+}
