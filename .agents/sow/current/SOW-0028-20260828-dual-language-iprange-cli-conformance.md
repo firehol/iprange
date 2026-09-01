@@ -2,6 +2,8 @@
 
 ## Standing Review Rules (user-mandated, read after every compaction)
 
+0. When the user asks to use the swarm, read and follow
+   `/home/costa/.codex/SWARM.md` in whole; never skim it.
 1. Prefer workers and reviewers in the lead assistant's own model.
 2. Use `glm-5.3-responses` for the final review of the whole milestone.
 3. Parallelize with the lead's own model as much as possible (the more
