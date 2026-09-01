@@ -188,6 +188,7 @@ dependencies = [
  "iprange-livedb",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

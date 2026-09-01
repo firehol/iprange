@@ -1,0 +1,63 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "reader.direct-v4",
+  "fixtures": [
+    {"path": "direct.iprange", "source": {"generator": "v4_fixture", "seed": 0}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.reader.open",
+     "params": {"source": {"path": "$WORK/direct.iprange", "mode": "immutable"}},
+     "expect_result": {"reader": {"$ignore": true}, "info": {
+       "address_family": "ipv4", "value_kind": "direct", "structure_kind": "none",
+       "value_tag": {"hex": "646972656374"}, "database_id": {"$ignore": true},
+       "transaction_id": "2", "commit_nonce": {"$ignore": true},
+       "page_count": {"$ignore": true}, "range_record_count": "3",
+       "active_feed_count": "0", "meta_selection": "proven_current"
+     }}, "capture": ["reader"]},
+    {"kind": "rpc", "method": "iprange.v1.reader.metadata",
+     "params": {"reader": "$CAPTURE/reader", "delivery": {"mode": "inline"}},
+     "expect_result": {"present": true, "base64": "eyJmaXh0dXJlIjoiZGlyZWN0LXY0In0="}},
+    {"kind": "rpc", "method": "iprange.v1.reader.lookup",
+     "params": {"reader": "$CAPTURE/reader", "addresses": [
+       "192.0.2.9", "192.0.2.10", "192.0.2.20", "192.0.2.21", "198.51.100.35"
+     ]},
+     "expect_result": {"matches": [
+       {"address": "192.0.2.9", "present": false},
+       {"address": "192.0.2.10", "present": true, "value": 10},
+       {"address": "192.0.2.20", "present": true, "value": 15},
+       {"address": "192.0.2.21", "present": true, "value": 15},
+       {"address": "198.51.100.35", "present": true, "value": 30}
+     ]}},
+    {"kind": "rpc", "method": "iprange.v1.reader.feeds.open",
+     "params": {"reader": "$CAPTURE/reader", "batch_size": 16},
+     "expect_error": {"code": "handle_wrong_kind", "outcome": "not_started"}},
+    {"kind": "rpc", "method": "iprange.v1.reader.ranges.open",
+     "params": {"reader": "$CAPTURE/reader",
+                "view": {"kind": "feed", "feed": "not-a-direct-feed"},
+                "direction": "forward", "batch_size": 16},
+     "expect_error": {"code": "handle_wrong_kind", "outcome": "not_started"}},
+    {"kind": "rpc", "method": "iprange.v1.reader.ranges.open",
+     "params": {"reader": "$CAPTURE/reader", "view": {"kind": "direct"},
+                "direction": "forward", "batch_size": 2},
+     "expect_result": {"cursor": {"$ignore": true}}, "capture": ["cursor"]},
+    {"kind": "rpc", "method": "iprange.v1.reader.ranges.next",
+     "params": {"cursor": "$CAPTURE/cursor"},
+     "expect_result": {"records": [
+       {"from": "192.0.2.10", "to": "192.0.2.14", "value": 10},
+       {"from": "192.0.2.15", "to": "192.0.2.25", "value": 15}
+     ], "done": false}},
+    {"kind": "rpc", "method": "iprange.v1.reader.ranges.next",
+     "params": {"cursor": "$CAPTURE/cursor"},
+     "expect_result": {"records": [
+       {"from": "198.51.100.30", "to": "198.51.100.39", "value": 30}
+     ], "done": true}},
+    {"kind": "rpc", "method": "iprange.v1.reader.ranges.next",
+     "params": {"cursor": "$CAPTURE/cursor"},
+     "expect_error": {"code": "cursor_closed", "outcome": "not_started"}},
+    {"kind": "rpc", "method": "iprange.v1.reader.ranges.close",
+     "params": {"cursor": "$CAPTURE/cursor"},
+     "expect_error": {"code": "cursor_closed", "outcome": "not_started"}},
+    {"kind": "rpc", "method": "iprange.v1.reader.close",
+     "params": {"reader": "$CAPTURE/reader"}, "expect_result": {"closed": true}}
+  ]
+}

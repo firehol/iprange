@@ -36,8 +36,9 @@ CAPTURE_PLACEHOLDER = "$CAPTURE/"
 class CaseRunner:
     """One case, one binary, one private work directory."""
 
-    def __init__(self, binary, case, work_dir, implementation):
+    def __init__(self, binary, case, work_dir, implementation, fixture_tool=None):
         self.binary = binary
+        self.fixture_tool = fixture_tool
         self.case = case
         self.work_dir = work_dir
         self.implementation = implementation
@@ -65,7 +66,8 @@ class CaseRunner:
                 data = base64.b64decode(source["base64"], validate=True)
                 write = lambda: write_bytes(path, data)  # noqa: E731
             elif "generator" in source:
-                write = lambda: generate_fixture(path, source)  # noqa: E731
+                write = lambda: generate_fixture(
+                    path, source, self.fixture_tool, self.substitute)  # noqa: E731
             else:
                 raise ValueError(f"fixture {fixture['path']!r}: no source")
             write()
@@ -86,6 +88,22 @@ class CaseRunner:
         if isinstance(value, dict):
             return {key: self.substitute(item) for key, item in value.items()}
         return value
+
+    def matches_expected(self, expected, got):
+        if expected == {"$ignore": True}:
+            return True
+        if callable(expected):
+            expected(expected, got)
+            return True
+        if isinstance(expected, dict):
+            return isinstance(got, dict) and all(
+                key in got and self.matches_expected(value, got[key])
+                for key, value in expected.items())
+        if isinstance(expected, list):
+            return isinstance(got, list) and len(expected) == len(got) and all(
+                self.matches_expected(value, item)
+                for value, item in zip(expected, got))
+        return expected == got
 
     # ---- rpc steps ------------------------------------------------
     def run_rpc_step(self, step):
@@ -130,11 +148,7 @@ class CaseRunner:
                 if key == "method":
                     continue
                 got = result.get(key)
-                if exp == {"$ignore": True}:
-                    continue
-                if callable(exp):
-                    exp(exp, got)
-                elif got != exp:
+                if not self.matches_expected(exp, got):
                     raise AssertionError(
                         f"case {self.case['name']!r}: result.{key} expected {exp!r}, got {got!r}")
         for pointer in step.get("capture", []):
@@ -382,7 +396,7 @@ def write_bytes(path, data):
         f.write(data)
 
 
-def generate_fixture(path, source):
+def generate_fixture(path, source, fixture_tool, substitute):
     generator = source["generator"]
     seed = source.get("seed", 0)
     if generator == "ipv4_random_ranges":
@@ -395,7 +409,8 @@ def generate_fixture(path, source):
             import ipaddress
             lines.append(f"{ipaddress.IPv4Address(a)}-{ipaddress.IPv4Address(b)}\n")
         write_text(path, "".join(lines))
-    elif generator == "ipv6_random_ranges":
+        return
+    if generator == "ipv6_random_ranges":
         import ipaddress
         import random
         rng = random.Random(seed)
@@ -405,8 +420,58 @@ def generate_fixture(path, source):
             b = min(a + rng.getrandbits(64), 2**128 - 1)
             lines.append(f"{ipaddress.IPv6Address(a)}-{ipaddress.IPv6Address(b)}\n")
         write_text(path, "".join(lines))
-    else:
+        return
+    if generator != "v4_fixture":
         raise ValueError(f"unknown fixture generator {generator!r}")
+
+    if fixture_tool is None:
+        raise ValueError("case uses v4_fixture but --fixture-tool was not supplied")
+    # The declarative case schema represents a generator as its name plus
+    # an integer seed; the fixed fixture kinds use stable seed values.
+    seeds = {0: "direct-v4", 1: "membership-v4", 2: "structured-v4"}
+    try:
+        argv = [seeds[seed], path]
+    except KeyError as exc:
+        raise ValueError(
+            f"v4_fixture seed {seed!r} has no fixed kind; expected one of {sorted(seeds)}"
+        ) from exc
+    proc = subprocess.run(
+        [fixture_tool, *argv],
+        capture_output=True,
+        timeout=300,
+    )
+    if proc.returncode != 0:
+        raise ValueError(
+            f"v4_fixture failed with exit {proc.returncode}: "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()}"
+        )
+
+
+CAPABILITIES_CACHE = {}
+
+
+def describe_methods(binary):
+    """Return the advertised method set of one executable, cached.
+
+    A binary that does not speak JSON-RPC (or that fails describe)
+    advertises nothing; cases requiring capabilities then skip instead
+    of failing, which keeps legacy-only oracles in the matrix honest.
+    """
+    if binary in CAPABILITIES_CACHE:
+        return CAPABILITIES_CACHE[binary]
+    methods = set()
+    try:
+        service = JsonRpcService([binary, "--jsonrpc"], "probe")
+        try:
+            response = service.call("capability-probe", "iprange.v1.system.describe", {})
+            if "result" in response:
+                methods = set(response["result"].get("methods", []))
+        finally:
+            service.close()
+    except (AssertionError, OSError):
+        methods = set()
+    CAPABILITIES_CACHE[binary] = methods
+    return methods
 
 
 def load_cases(case_dir):
@@ -424,6 +489,8 @@ def load_cases(case_dir):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--c", dest="c_binary", metavar="PATH")
+    parser.add_argument("--fixture-tool", metavar="PATH",
+                        help="absolute v4-fixture executable used by generated fixtures")
     parser.add_argument("--rust", dest="rust_binary", metavar="PATH")
     parser.add_argument("--go", dest="go_binary", metavar="PATH")
     parser.add_argument("--matrix", default="all",
@@ -434,6 +501,13 @@ def main():
     parser.add_argument("--filter", metavar="NAME")
     parser.add_argument("--json-report", metavar="PATH")
     args = parser.parse_args()
+
+    fixture_tool = None
+    if args.fixture_tool:
+        if not os.path.isabs(args.fixture_tool) or not os.path.isfile(args.fixture_tool) \
+                or not os.access(args.fixture_tool, os.X_OK):
+            parser.error(f"fixture tool is not an absolute executable file: {args.fixture_tool}")
+        fixture_tool = args.fixture_tool
 
     binaries = {}
     for key, attr in (("c", "c_binary"), ("rust", "rust_binary"), ("go", "go_binary")):
@@ -449,6 +523,12 @@ def main():
     if not use_cases:
         print("no cases selected")
         return 0
+
+    # Capability handshake: ask each executable once which methods it
+    # advertises, then skip cases whose required method is unshipped.
+    capabilities = {}
+    for key in binaries:
+        capabilities[key] = describe_methods(binaries[key])
 
     report = {"cases": [], "passed": 0, "failed": 0}
 
@@ -466,6 +546,11 @@ def main():
             if producer not in binaries or (consumer and consumer not in binaries):
                 continue
             for case in use_cases:
+                required = case.get("requires")
+                if required and required not in capabilities[producer]:
+                    label = f"{case['name']} [{producer}" + (f"->{consumer}]" if consumer else "]")
+                    print(f"SKIP {label}: requires unadvertised method {required}")
+                    continue
                 run_one(case, producer, consumer)
 
     def run_one(case, producer, consumer):
@@ -478,7 +563,7 @@ def main():
             owns_work = True
         label = f"{case['name']} [{producer}" + (f"->{consumer}]" if consumer else "]")
         try:
-            runner = CaseRunner(consume_bin, case, work, producer)
+            runner = CaseRunner(consume_bin, case, work, producer, fixture_tool)
             if any(step["kind"] == "rpc" for step in case["steps"]):
                 runner.service = JsonRpcService(runner.service_argv, producer)
             runner.run()

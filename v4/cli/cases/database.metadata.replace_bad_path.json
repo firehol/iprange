@@ -3,13 +3,27 @@
   "name": "database.metadata.replace_bad_path",
   "fixtures": [],
   "steps": [
-    {"kind": "rpc", "method": "iprange.v1.database.metadata.replace",
-     "params": {"path": "$WORK/missing-db.iprange",
-                "metadata": {"mode": "replace_utf8", "text": "example"},
-                "writer_budget": {"max_heap_bytes": "134217728",
-                                  "max_private_pages": "64",
-                                  "max_growth_pages": "64",
-                                  "max_open_files": 32}},
-     "expect_error": {"code": "invalid_path", "outcome": "not_started"}}
-  ]
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.database.metadata.replace",
+      "params": {
+        "path": "$WORK/missing-db.iprange",
+        "metadata": {
+          "mode": "replace_utf8",
+          "text": "example"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "134217728",
+          "max_private_pages": "64",
+          "max_growth_pages": "64",
+          "max_open_files": 32
+        }
+      },
+      "expect_error": {
+        "code": "invalid_path",
+        "outcome": "not_started"
+      }
+    }
+  ],
+  "requires": "iprange.v1.database.metadata.replace"
 }

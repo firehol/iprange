@@ -1,0 +1,66 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "reader.structured-v4",
+  "fixtures": [
+    {"path": "structured.iprange", "source": {"generator": "v4_fixture", "seed": 2}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.reader.open",
+     "params": {"source": {"path": "$WORK/structured.iprange", "mode": "immutable"}},
+     "expect_result": {"reader": {"$ignore": true}, "info": {
+       "address_family": "ipv4", "value_kind": "structured",
+       "structure_kind": "network_enrichment_v1",
+       "value_tag": {"hex": "656e726963686d656e74"},
+       "database_id": {"$ignore": true}, "transaction_id": "2",
+       "commit_nonce": {"$ignore": true}, "page_count": {"$ignore": true},
+       "range_record_count": "4", "active_feed_count": "1",
+       "meta_selection": "proven_current"
+     }}, "capture": ["reader"]},
+    {"kind": "rpc", "method": "iprange.v1.reader.lookup",
+     "params": {"reader": "$CAPTURE/reader", "addresses": [
+       "192.0.2.10", "192.0.2.25", "192.0.2.45", "192.0.2.100"
+     ]},
+     "expect_result": {"matches": [
+       {"address": "192.0.2.10", "present": true, "asn": 64512, "country_id": 1,
+        "state_id": 2, "city_id": 3,
+        "location": {"latitude_microdegrees": 37983810, "longitude_microdegrees": 23727539},
+        "threat_feeds": ["threat-a"]},
+       {"address": "192.0.2.25", "present": true, "asn": 64513, "country_id": 4,
+        "state_id": 5, "city_id": 6, "location": null, "threat_feeds": []},
+       {"address": "192.0.2.45", "present": false},
+       {"address": "192.0.2.100", "present": true, "asn": 64512, "country_id": 1,
+        "state_id": 2, "city_id": 3,
+        "location": {"latitude_microdegrees": 37983810, "longitude_microdegrees": 23727539},
+        "threat_feeds": ["threat-a"]}
+     ]}},
+    {"kind": "rpc", "method": "iprange.v1.reader.matching_feeds",
+     "params": {"reader": "$CAPTURE/reader", "address": "192.0.2.10"},
+     "expect_result": {"address": "192.0.2.10", "feeds": ["threat-a"],
+                        "matching_feed_count": "1"}},
+    {"kind": "rpc", "method": "iprange.v1.reader.ranges.open",
+     "params": {"reader": "$CAPTURE/reader", "view": {"kind": "structured"},
+                "direction": "forward", "batch_size": 5},
+     "expect_result": {"cursor": {"$ignore": true}}, "capture": ["cursor"]},
+    {"kind": "rpc", "method": "iprange.v1.reader.ranges.next",
+     "params": {"cursor": "$CAPTURE/cursor"},
+     "expect_result": {"records": [
+       {"from": "192.0.2.0", "to": "192.0.2.19", "value": {
+         "asn": 64512, "country_id": 1, "state_id": 2, "city_id": 3,
+         "location": {"latitude_microdegrees": 37983810, "longitude_microdegrees": 23727539},
+         "threat_feeds": ["threat-a"]}},
+       {"from": "192.0.2.20", "to": "192.0.2.30", "value": {
+         "asn": 64513, "country_id": 4, "state_id": 5, "city_id": 6,
+         "location": null, "threat_feeds": []}},
+       {"from": "192.0.2.31", "to": "192.0.2.39", "value": {
+         "asn": 64512, "country_id": 1, "state_id": 2, "city_id": 3,
+         "location": {"latitude_microdegrees": 37983810, "longitude_microdegrees": 23727539},
+         "threat_feeds": ["threat-a"]}},
+       {"from": "192.0.2.51", "to": "192.0.2.100", "value": {
+         "asn": 64512, "country_id": 1, "state_id": 2, "city_id": 3,
+         "location": {"latitude_microdegrees": 37983810, "longitude_microdegrees": 23727539},
+         "threat_feeds": ["threat-a"]}}
+     ], "done": true}},
+    {"kind": "rpc", "method": "iprange.v1.reader.close",
+     "params": {"reader": "$CAPTURE/reader"}, "expect_result": {"closed": true}}
+  ]
+}

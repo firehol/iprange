@@ -15,6 +15,7 @@ pub mod framing;
 pub mod handlers;
 pub mod schema;
 pub mod session;
+pub mod state;
 
 use std::io::{self, Write};
 
@@ -36,8 +37,6 @@ pub fn run() -> i32 {
 }
 
 /// A connection-local opaque handle (32 lowercase hex characters).
-/// Used by the reader/cursor handler increment.
-#[allow(dead_code)]
 pub fn new_handle() -> String {
     let mut bytes = [0u8; 16];
     let _ = getrandom::fill(&mut bytes);

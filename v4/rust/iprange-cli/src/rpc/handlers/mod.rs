@@ -6,4 +6,8 @@
 //! factual SDK results with the mechanical rules of the wire result
 //! schemas (v4/cli/schema/results.py is the machine authority).
 
+pub mod convert;
+pub mod cursors;
+pub mod output;
+pub mod reader;
 pub mod system;

@@ -22,7 +22,7 @@
 //! - a frame over the input ceiling produces -32001 with id null and
 //!   the process closes without parsing any later bytes.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender};
@@ -35,17 +35,13 @@ use serde_json::Value;
 use super::dispatch::{resolve, HandlerError};
 use super::framing::{FrameWriter, LineReader, QUEUED_LIMIT};
 use super::schema::{self, Request, RequestId, SchemaError};
+use super::state::ConnectionState;
 
 /// Conservative connection-owned state shared by handlers.
 #[derive(Default)]
 pub struct SessionState {
-    /// Connection-local reader handles (opaque 32-hex strings).
-    /// Populated by the reader-handler increment.
-    #[allow(dead_code)]
-    pub readers: HashMap<String, ()>,
-    /// Connection-local cursor handles.
-    #[allow(dead_code)]
-    pub cursors: HashMap<String, ()>,
+    /// Shared reader/cursor resources and their connection limits.
+    pub resources: ConnectionState,
     /// Request ids cancelled by the transport.
     pub cancelled: HashSet<String>,
     /// Cancellation signal for the active work unit.
@@ -53,7 +49,6 @@ pub struct SessionState {
     /// Ids of the request set currently executing.
     active_keys: HashSet<String>,
 }
-
 /// One decoded frame queued as a unit: array-order execution and one
 /// response frame per input frame.
 struct WorkUnit {
@@ -85,8 +80,10 @@ impl Session {
     pub fn new() -> Self {
         let (work_tx, work_rx) = std::sync::mpsc::channel::<WorkUnit>();
         let state = Arc::new(Mutex::new(SessionState {
+            resources: ConnectionState::default(),
             token: Arc::new(CancellationToken::new()),
-            ..SessionState::default()
+            active_keys: HashSet::default(),
+            cancelled: HashSet::default(),
         }));
         Session {
             state,
@@ -152,7 +149,10 @@ impl Session {
                         if self.in_flight.load(Ordering::Relaxed) >= QUEUED_LIMIT {
                             let payload = schema::error_response(
                                 request.id.as_ref().unwrap(),
-                                schema::TRANSPORT_SERVER_BUSY, "server_busy", None);
+                                schema::TRANSPORT_SERVER_BUSY,
+                                "server_busy",
+                                None,
+                            );
                             let mut w = writer.lock().unwrap();
                             w.write_line(&payload.to_string())?;
                             continue;
@@ -163,7 +163,14 @@ impl Session {
                     if unit.is_empty() {
                         continue;
                     }
-                    self.work_tx.as_ref().unwrap().send(WorkUnit { requests: unit, batch }).expect("worker alive");
+                    self.work_tx
+                        .as_ref()
+                        .unwrap()
+                        .send(WorkUnit {
+                            requests: unit,
+                            batch,
+                        })
+                        .expect("worker alive");
                 }
             }
         }
@@ -220,7 +227,9 @@ fn worker_loop<W: Write + Send + 'static>(
         for request in &unit.requests {
             let cancelled = {
                 let s = state.lock().unwrap();
-                request_key(request).map(|k| s.cancelled.contains(&k)).unwrap_or(false)
+                request_key(request)
+                    .map(|k| s.cancelled.contains(&k))
+                    .unwrap_or(false)
             };
             if cancelled {
                 continue;
@@ -234,7 +243,11 @@ fn worker_loop<W: Write + Send + 'static>(
         if responses.is_empty() {
             continue;
         }
-        let payload = if unit.batch { Value::Array(responses) } else { responses.pop().unwrap() };
+        let payload = if unit.batch {
+            Value::Array(responses)
+        } else {
+            responses.pop().unwrap()
+        };
         let text = schema::encode_response_frame(&payload).expect("response frame within ceiling");
         let mut w = writer.lock().unwrap();
         w.write_line(&text).ok();
@@ -261,12 +274,24 @@ fn execute(state: &Arc<Mutex<SessionState>>, request: &Request) -> Value {
     let mut st = state.lock().unwrap();
     match handler(&mut st, request.params.clone()) {
         Ok(result) => schema::success_response(request.id.as_ref().unwrap(), result),
-        Err(HandlerError { code, outcome, message, details }) => {
+        Err(HandlerError {
+            code,
+            outcome,
+            message,
+            details,
+        }) => {
             let data = match details {
-                Some(details) => serde_json::json!({"code": code, "outcome": outcome, "details": details}),
+                Some(details) => {
+                    serde_json::json!({"code": code, "outcome": outcome, "details": details})
+                }
                 None => serde_json::json!({"code": code, "outcome": outcome}),
             };
-            schema::error_response(request.id.as_ref().unwrap(), schema::PRODUCT_ERROR, &message, Some(data))
+            schema::error_response(
+                request.id.as_ref().unwrap(),
+                schema::PRODUCT_ERROR,
+                &message,
+                Some(data),
+            )
         }
     }
 }

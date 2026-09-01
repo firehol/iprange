@@ -14,7 +14,6 @@ use std::io::{self, BufRead, Write};
 pub const INPUT_FRAME_LIMIT: usize = 1_048_576;
 pub const OUTPUT_FRAME_LIMIT: usize = 1_048_576;
 pub const RESPONSE_OBJECT_LIMIT: usize = 65_000;
-#[allow(dead_code)] // used by the reader-handler increment for output_limit checks
 
 pub const BATCH_LIMIT: usize = 16;
 pub const QUEUED_LIMIT: usize = 16;
@@ -34,7 +33,11 @@ pub struct LineReader<R> {
 
 impl<R: BufRead> LineReader<R> {
     pub fn new(inner: R) -> Self {
-        Self { inner, buf: Vec::with_capacity(1024), eof: false }
+        Self {
+            inner,
+            buf: Vec::with_capacity(1024),
+            eof: false,
+        }
     }
 
     /// Returns Ok(None) at EOF with no pending bytes.
@@ -50,7 +53,7 @@ impl<R: BufRead> LineReader<R> {
         self.buf.clear();
         loop {
             match self.inner.fill_buf() {
-                Ok(b) if b.is_empty() => {
+                Ok([]) => {
                     self.eof = true;
                     if self.buf.is_empty() {
                         return Ok(None);

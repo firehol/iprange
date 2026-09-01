@@ -1,0 +1,703 @@
+//! Bounded feed and range cursor JSON-RPC handlers.
+
+use iprange_livedb::error::Error;
+use iprange_livedb::{AddressFamily, FeedName, Ipv4Key, Ipv6Key, RangeDirection, ValueKind};
+use serde_json::{json, Value};
+
+use super::super::dispatch::HandlerError;
+use super::super::framing::RESPONSE_OBJECT_LIMIT;
+use super::super::new_handle;
+use super::super::session::SessionState;
+use super::super::state::{CursorPoint, CursorValue, CursorView};
+use super::reader::{
+    bounded_result, exact_object, parse_address, read_error, sdk, validate_handle,
+};
+
+pub const CURSOR_LIMIT: usize = 64;
+
+pub fn validate_cursor(params: &Value) -> Result<(), String> {
+    let object = exact_object(params, &["cursor"])?;
+    validate_handle(object["cursor"].as_str())
+}
+
+pub fn validate_feeds_open(params: &Value) -> Result<(), String> {
+    let object = exact_object(params, &["reader", "batch_size"])?;
+    validate_handle(object["reader"].as_str())?;
+    validate_batch(object["batch_size"].as_u64())
+}
+
+pub fn validate_ranges_open(params: &Value) -> Result<(), String> {
+    let object = exact_object(params, &["reader", "view", "direction", "batch_size"])?;
+    validate_handle(object["reader"].as_str())?;
+    validate_view(&object["view"])?;
+    match object["direction"].as_str() {
+        Some("forward") | Some("reverse") => {}
+        _ => return Err("direction must be forward or reverse".into()),
+    }
+    match object.get("start") {
+        None => {}
+        Some(Value::String(address)) => {
+            parse_address(address)?;
+        }
+        Some(_) => return Err("start must be a canonical IP address when present".into()),
+    }
+    validate_batch(object["batch_size"].as_u64())
+}
+
+fn validate_view(value: &Value) -> Result<(), String> {
+    let view = value.as_object().ok_or("view must be an object")?;
+    match view.get("kind").and_then(Value::as_str) {
+        Some("direct") | Some("structured") => {
+            if view.len() != 1 {
+                return Err("direct and structured views accept only kind".into());
+            }
+        }
+        Some("feed") => {
+            if view.len() != 2 || !view.contains_key("feed") {
+                return Err("feed view requires exactly kind and feed".into());
+            }
+            FeedName::new(view["feed"].as_str().ok_or("view.feed must be a string")?)
+                .map_err(|error| error.to_string())?;
+        }
+        _ => return Err("view.kind must be direct, structured, or feed".into()),
+    }
+    Ok(())
+}
+
+pub fn feeds_open(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
+    let object = params.as_object().expect("validator checked object");
+    let reader_handle = object["reader"]
+        .as_str()
+        .expect("validator checked handle")
+        .to_owned();
+    let batch = object["batch_size"]
+        .as_u64()
+        .expect("validator checked batch") as usize;
+    ensure_cursor_capacity(state)?;
+    let reader = super::reader::reader(state, &reader_handle)?;
+    if reader.info().value_kind == ValueKind::Direct {
+        return Err(wrong_view(
+            "feed enumeration requires a membership-capable database",
+        ));
+    }
+    sdk(reader.feed_cursor()).map_err(view_error)?;
+    let view = CursorView::Feed {
+        name: String::new(),
+    };
+    let cursor = insert_cursor(state, reader_handle, view, false, None, batch)?;
+    bounded_result(json!({
+        "method": "iprange.v1.reader.feeds.open",
+        "cursor": cursor,
+    }))
+}
+
+pub fn feeds_next(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
+    let handle = cursor_handle(&params).map_err(HandlerError::invalid_params)?;
+    let Some(cursor) = state.resources.cursors.get(&handle).cloned() else {
+        return Err(closed_or_unknown_cursor(state, &handle));
+    };
+    let reader = super::reader::reader(state, &cursor.reader)?;
+    let mut catalog = sdk(reader.feed_cursor())?;
+    let mut rows = Vec::new();
+    let mut last = cursor.last_feed_index;
+    let mut done = false;
+    let mut encoded = array_response_base("iprange.v1.reader.feeds.next", "feeds");
+    while rows.len() < cursor.batch_size {
+        let Some(entry) = sdk(catalog.next_feed())? else {
+            done = true;
+            break;
+        };
+        if last.is_some_and(|index| entry.index <= index) {
+            continue;
+        }
+        let row = json!({"name": entry.name.as_str()});
+        if !fits_next_item(encoded, &rows, &row) {
+            if rows.is_empty() {
+                close_cursor(state, &handle);
+                return Err(limit_error());
+            }
+            break;
+        }
+        encoded += item_size(&rows, &row);
+        rows.push(row);
+        last = Some(entry.index);
+    }
+    let result = json!({
+        "method": "iprange.v1.reader.feeds.next",
+        "feeds": rows,
+        "done": done,
+    });
+    finish_cursor_result(state, &handle, result, done, |active| {
+        active.last_feed_index = last;
+    })
+}
+
+pub fn feeds_close(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
+    close(state, &params, "iprange.v1.reader.feeds.close")
+}
+
+pub fn ranges_open(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
+    let object = params.as_object().expect("validator checked object");
+    let reader_handle = object["reader"]
+        .as_str()
+        .expect("validator checked handle")
+        .to_owned();
+    let batch = object["batch_size"]
+        .as_u64()
+        .expect("validator checked batch") as usize;
+    let view_object = object["view"].as_object().expect("validator checked view");
+    let kind = view_object["kind"]
+        .as_str()
+        .expect("validator checked kind");
+    let feed = view_object
+        .get("feed")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let reverse = object["direction"].as_str() == Some("reverse");
+    let start = match object.get("start") {
+        None => None,
+        Some(value) => Some(
+            parse_address(value.as_str().expect("validator checked address"))
+                .map_err(HandlerError::invalid_params)?,
+        ),
+    };
+    ensure_cursor_capacity(state)?;
+    let reader = super::reader::reader(state, &reader_handle)?;
+    let view = match (kind, feed.as_deref()) {
+        ("direct", None) => CursorView::Direct,
+        ("structured", None) => CursorView::Structured,
+        ("feed", Some(name)) => CursorView::Feed {
+            name: name.to_owned(),
+        },
+        _ => {
+            return Err(HandlerError::invalid_params(
+                "view members do not match kind",
+            ))
+        }
+    };
+    if start.is_some() && matches!(view, CursorView::Feed { .. }) {
+        return Err(HandlerError::invalid_params(
+            "start is valid only for direct or structured views",
+        ));
+    }
+    open_and_seek(reader, &view, reverse, start)
+        .map_err(read_error)
+        .map_err(view_error)?;
+    let cursor = insert_cursor(state, reader_handle, view, reverse, start, batch)?;
+    bounded_result(json!({
+        "method": "iprange.v1.reader.ranges.open",
+        "cursor": cursor,
+    }))
+}
+
+pub fn ranges_next(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
+    let handle = cursor_handle(&params).map_err(HandlerError::invalid_params)?;
+    let Some(cursor) = state.resources.cursors.get(&handle).cloned() else {
+        return Err(closed_or_unknown_cursor(state, &handle));
+    };
+    if cursor.exhausted {
+        close_cursor(state, &handle);
+        return bounded_result(json!({
+            "method": "iprange.v1.reader.ranges.next",
+            "records": [],
+            "done": true,
+        }));
+    }
+    let reader = super::reader::reader(state, &cursor.reader)?;
+    let mut point = cursor.point;
+    let mut range_skip = cursor.range_skip;
+    let mut records = Vec::new();
+    let mut exhausted = false;
+    let mut encoded = array_response_base("iprange.v1.reader.ranges.next", "records");
+    while records.len() < cursor.batch_size {
+        let before_point = point;
+        let before_skip = range_skip;
+        if !next_record(
+            reader,
+            &cursor.view,
+            cursor.reverse,
+            &mut point,
+            &mut range_skip,
+            &mut records,
+        )? {
+            exhausted = true;
+            break;
+        }
+        let Some(record) = records.last() else {
+            break;
+        };
+        if !fits_next_item(encoded, &records, record) {
+            records.pop();
+            point = before_point;
+            range_skip = before_skip;
+            if records.is_empty() {
+                close_cursor(state, &handle);
+                return Err(limit_error());
+            }
+            break;
+        }
+        let size = item_size(&records, record);
+        encoded += size;
+        if point.is_none() {
+            exhausted = true;
+            break;
+        }
+    }
+    let result = json!({
+        "method": "iprange.v1.reader.ranges.next",
+        "records": records,
+        "done": exhausted,
+    });
+    finish_cursor_result(state, &handle, result, exhausted, |active| {
+        active.point = point;
+        active.range_skip = range_skip;
+    })
+}
+
+pub fn ranges_close(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
+    close(state, &params, "iprange.v1.reader.ranges.close")
+}
+
+fn next_record(
+    reader: &iprange_livedb::ImmutableReader,
+    view: &CursorView,
+    reverse: bool,
+    point: &mut Option<CursorPoint>,
+    range_skip: &mut u64,
+    records: &mut Vec<Value>,
+) -> Result<bool, HandlerError> {
+    let info = reader.info();
+    let direction = range_direction(reverse);
+    let family_matches = matches!(
+        (*point, info.address_family),
+        (None, _)
+            | (Some(CursorPoint::V4(_)), AddressFamily::Ipv4)
+            | (Some(CursorPoint::V6(_)), AddressFamily::Ipv6)
+    );
+    if !family_matches {
+        return Err(HandlerError::new(
+            "wrong_address_family",
+            "read_only_failure",
+            "cursor checkpoint does not match the reader family",
+        ));
+    }
+    let v4 = info.address_family == AddressFamily::Ipv4;
+    match (view, v4) {
+        (CursorView::Direct, true) => {
+            let mut cursor = sdk(reader.direct_cursor_v4(direction)).map_err(view_error)?;
+            seek_direct_v4(&mut cursor, *point)?;
+            let Some(range) = sdk(cursor.next_range())? else {
+                return Ok(false);
+            };
+            push_v4(
+                records,
+                range.from,
+                range.to,
+                Some(json!(range.value)),
+                reverse,
+                point,
+            );
+            *range_skip += 1;
+        }
+        (CursorView::Direct, false) => {
+            let mut cursor = sdk(reader.direct_cursor_v6(direction)).map_err(view_error)?;
+            seek_direct_v6(&mut cursor, *point)?;
+            let Some(range) = sdk(cursor.next_range())? else {
+                return Ok(false);
+            };
+            push_v6(
+                records,
+                range.from,
+                range.to,
+                Some(json!(range.value)),
+                reverse,
+                point,
+            );
+            *range_skip += 1;
+        }
+        (CursorView::Structured, true) => {
+            let mut cursor =
+                sdk(reader.network_enrichment_v1_cursor_v4(direction)).map_err(view_error)?;
+            seek_structured_v4(&mut cursor, *point)?;
+            let Some(range) = sdk(cursor.next_range())? else {
+                return Ok(false);
+            };
+            let feeds = super::reader::threat_feed_names(reader, &range.value)?;
+            let value = super::convert::enrichment_view(&range.value, &feeds);
+            push_v4(records, range.from, range.to, Some(value), reverse, point);
+            *range_skip += 1;
+        }
+        (CursorView::Structured, false) => {
+            let mut cursor =
+                sdk(reader.network_enrichment_v1_cursor_v6(direction)).map_err(view_error)?;
+            seek_structured_v6(&mut cursor, *point)?;
+            let Some(range) = sdk(cursor.next_range())? else {
+                return Ok(false);
+            };
+            let feeds = super::reader::threat_feed_names(reader, &range.value)?;
+            let value = super::convert::enrichment_view(&range.value, &feeds);
+            push_v6(records, range.from, range.to, Some(value), reverse, point);
+            *range_skip += 1;
+        }
+        (CursorView::Feed { name }, true) => {
+            let Some(range) = next_feed_v4(reader, name, direction, *range_skip)? else {
+                return Ok(false);
+            };
+            push_v4(records, range.from, range.to, None, reverse, point);
+            *range_skip += 1;
+        }
+        (CursorView::Feed { name }, false) => {
+            let Some(range) = next_feed_v6(reader, name, direction, *range_skip)? else {
+                return Ok(false);
+            };
+            push_v6(records, range.from, range.to, None, reverse, point);
+            *range_skip += 1;
+        }
+    }
+    Ok(true)
+}
+
+fn push_v4(
+    records: &mut Vec<Value>,
+    from: Ipv4Key,
+    to: Ipv4Key,
+    value: Option<Value>,
+    reverse: bool,
+    point: &mut Option<CursorPoint>,
+) {
+    let mut record = json!({
+        "from": super::convert::cursor_address(CursorPoint::V4(from.0)),
+        "to": super::convert::cursor_address(CursorPoint::V4(to.0)),
+    });
+    if let Some(value) = value {
+        record["value"] = value;
+    }
+    records.push(record);
+    *point = if reverse {
+        if from.0 == 0 {
+            None
+        } else {
+            Some(CursorPoint::V4(from.0 - 1))
+        }
+    } else if to.0 == u32::MAX {
+        None
+    } else {
+        Some(CursorPoint::V4(to.0 + 1))
+    };
+}
+
+fn push_v6(
+    records: &mut Vec<Value>,
+    from: Ipv6Key,
+    to: Ipv6Key,
+    value: Option<Value>,
+    reverse: bool,
+    point: &mut Option<CursorPoint>,
+) {
+    let mut record = json!({
+        "from": super::convert::cursor_address(CursorPoint::V6(from.to_u128())),
+        "to": super::convert::cursor_address(CursorPoint::V6(to.to_u128())),
+    });
+    if let Some(value) = value {
+        record["value"] = value;
+    }
+    records.push(record);
+    let value = if reverse {
+        from.to_u128().checked_sub(1)
+    } else {
+        to.to_u128().checked_add(1)
+    };
+    *point = value.map(CursorPoint::V6);
+}
+
+fn open_and_seek(
+    reader: &iprange_livedb::ImmutableReader,
+    view: &CursorView,
+    reverse: bool,
+    start: Option<CursorPoint>,
+) -> Result<(), Error> {
+    let direction = range_direction(reverse);
+    match view {
+        CursorView::Direct => match start {
+            Some(CursorPoint::V4(value)) => {
+                let mut cursor = reader.direct_cursor_v4(direction)?;
+                cursor.seek(Ipv4Key(value))
+            }
+            Some(CursorPoint::V6(value)) => {
+                let mut cursor = reader.direct_cursor_v6(direction)?;
+                cursor.seek(Ipv6Key::from_u128(value))
+            }
+            None => reader.direct_cursor_v4(direction).map(|_| ()),
+        },
+        CursorView::Structured => match start {
+            Some(CursorPoint::V4(value)) => {
+                let mut cursor = reader.network_enrichment_v1_cursor_v4(direction)?;
+                cursor.seek(Ipv4Key(value))
+            }
+            Some(CursorPoint::V6(value)) => {
+                let mut cursor = reader.network_enrichment_v1_cursor_v6(direction)?;
+                cursor.seek(Ipv6Key::from_u128(value))
+            }
+            None => reader
+                .network_enrichment_v1_cursor_v4(direction)
+                .map(|_| ()),
+        },
+        CursorView::Feed { name } => match start {
+            Some(_) => Err(Error::InvalidArgument("feed views do not accept start")),
+            None => reader.feed_range_cursor_v4(name, direction).map(|_| ()),
+        },
+    }
+}
+
+fn seek_direct_v4(
+    cursor: &mut iprange_livedb::DirectCursorV4<'_>,
+    point: Option<CursorPoint>,
+) -> Result<(), HandlerError> {
+    match point {
+        Some(CursorPoint::V4(value)) => sdk(cursor.seek(Ipv4Key(value))),
+        Some(CursorPoint::V6(_)) => Err(wrong_family()),
+        None => Ok(()),
+    }
+}
+
+fn seek_direct_v6(
+    cursor: &mut iprange_livedb::DirectCursorV6<'_>,
+    point: Option<CursorPoint>,
+) -> Result<(), HandlerError> {
+    match point {
+        Some(CursorPoint::V4(_)) => Err(wrong_family()),
+        Some(CursorPoint::V6(value)) => sdk(cursor.seek(Ipv6Key::from_u128(value))),
+        None => Ok(()),
+    }
+}
+
+fn seek_structured_v4(
+    cursor: &mut iprange_livedb::NetworkEnrichmentV1CursorV4<'_>,
+    point: Option<CursorPoint>,
+) -> Result<(), HandlerError> {
+    match point {
+        Some(CursorPoint::V4(value)) => sdk(cursor.seek(Ipv4Key(value))),
+        Some(CursorPoint::V6(_)) => Err(wrong_family()),
+        None => Ok(()),
+    }
+}
+
+fn next_feed_v4(
+    reader: &iprange_livedb::ImmutableReader,
+    name: &str,
+    direction: RangeDirection,
+    skip: u64,
+) -> Result<Option<iprange_livedb::AddressRange<Ipv4Key>>, HandlerError> {
+    let mut cursor = sdk(reader.feed_range_cursor_v4(name, direction))?;
+    for _ in 0..skip {
+        if sdk(cursor.next_range())?.is_none() {
+            return Ok(None);
+        }
+    }
+    sdk(cursor.next_range())
+}
+
+fn next_feed_v6(
+    reader: &iprange_livedb::ImmutableReader,
+    name: &str,
+    direction: RangeDirection,
+    skip: u64,
+) -> Result<Option<iprange_livedb::AddressRange<Ipv6Key>>, HandlerError> {
+    let mut cursor = sdk(reader.feed_range_cursor_v6(name, direction))?;
+    for _ in 0..skip {
+        if sdk(cursor.next_range())?.is_none() {
+            return Ok(None);
+        }
+    }
+    sdk(cursor.next_range())
+}
+
+fn seek_structured_v6(
+    cursor: &mut iprange_livedb::NetworkEnrichmentV1CursorV6<'_>,
+    point: Option<CursorPoint>,
+) -> Result<(), HandlerError> {
+    match point {
+        Some(CursorPoint::V4(_)) => Err(wrong_family()),
+        Some(CursorPoint::V6(value)) => sdk(cursor.seek(Ipv6Key::from_u128(value))),
+        None => Ok(()),
+    }
+}
+
+fn wrong_family() -> HandlerError {
+    HandlerError::new(
+        "wrong_address_family",
+        "read_only_failure",
+        "cursor checkpoint does not match the reader family",
+    )
+}
+
+fn finish_cursor_result(
+    state: &mut SessionState,
+    handle: &str,
+    result: Value,
+    done: bool,
+    update: impl FnOnce(&mut CursorValue),
+) -> Result<Value, HandlerError> {
+    bounded_result(result.clone()).map_err(|error| {
+        close_cursor(state, handle);
+        error
+    })?;
+    if done {
+        close_cursor(state, handle);
+    } else if let Some(cursor) = state.resources.cursors.get_mut(handle) {
+        update(cursor);
+    }
+    bounded_result(result)
+}
+
+fn close(
+    state: &mut SessionState,
+    params: &Value,
+    method: &'static str,
+) -> Result<Value, HandlerError> {
+    let handle = cursor_handle(params).map_err(HandlerError::invalid_params)?;
+    if state.resources.closed_cursors.contains_key(&handle) {
+        return Err(closed_error());
+    }
+    if state.resources.cursors.remove(&handle).is_none() {
+        return Err(unknown_error());
+    }
+    state.resources.closed_cursors.insert(handle, ());
+    bounded_result(json!({ "method": method, "closed": true }))
+}
+
+fn array_response_base(method: &str, field: &str) -> usize {
+    let mut result = serde_json::Map::new();
+    result.insert("method".into(), Value::String(method.into()));
+    result.insert(field.into(), Value::Array(Vec::new()));
+    result.insert("done".into(), Value::Bool(false));
+    serde_json::to_vec(&json!({"result": result}))
+        .expect("JSON values always serialize")
+        .len()
+}
+
+fn fits_next_item(encoded: usize, items: &[Value], item: &Value) -> bool {
+    encoded + usize::from(!items.is_empty()) + item.to_string().len() <= RESPONSE_OBJECT_LIMIT
+}
+
+fn item_size(items: &[Value], item: &Value) -> usize {
+    usize::from(!items.is_empty()) + item.to_string().len()
+}
+
+fn ensure_cursor_capacity(state: &SessionState) -> Result<(), HandlerError> {
+    if state.resources.cursors.len() >= CURSOR_LIMIT {
+        return Err(HandlerError::new(
+            "server_busy",
+            "not_started",
+            "connection cursor limit 64 is exhausted",
+        ));
+    }
+    Ok(())
+}
+
+fn insert_cursor(
+    state: &mut SessionState,
+    reader: String,
+    view: CursorView,
+    reverse: bool,
+    point: Option<CursorPoint>,
+    batch_size: usize,
+) -> Result<String, HandlerError> {
+    if state.resources.cursors.len() >= CURSOR_LIMIT {
+        return Err(HandlerError::new(
+            "server_busy",
+            "not_started",
+            "connection cursor limit 64 is exhausted",
+        ));
+    }
+    let mut handle = new_handle();
+    while state.resources.cursors.contains_key(&handle)
+        || state.resources.closed_cursors.contains_key(&handle)
+    {
+        handle = new_handle();
+    }
+    state.resources.cursors.insert(
+        handle.clone(),
+        CursorValue {
+            reader,
+            view,
+            reverse,
+            point,
+            range_skip: 0,
+            last_feed_index: None,
+            batch_size,
+            exhausted: false,
+        },
+    );
+    Ok(handle)
+}
+
+fn close_cursor(state: &mut SessionState, handle: &str) {
+    if state.resources.cursors.remove(handle).is_some() {
+        state.resources.closed_cursors.insert(handle.to_owned(), ());
+    }
+}
+
+fn cursor_handle(params: &Value) -> Result<String, String> {
+    let object = params.as_object().ok_or("params must be an object")?;
+    let handle = object
+        .get("cursor")
+        .and_then(Value::as_str)
+        .ok_or("cursor must be a string")?;
+    validate_handle(Some(handle))?;
+    Ok(handle.to_owned())
+}
+
+fn closed_or_unknown_cursor(state: &SessionState, handle: &str) -> HandlerError {
+    if state.resources.closed_cursors.contains_key(handle) {
+        closed_error()
+    } else {
+        unknown_error()
+    }
+}
+
+fn limit_error() -> HandlerError {
+    HandlerError::new(
+        "output_limit",
+        "read_only_failure",
+        "cursor response exceeds the 65000-byte object limit",
+    )
+}
+
+fn closed_error() -> HandlerError {
+    HandlerError::new("cursor_closed", "not_started", "cursor is already closed")
+}
+
+fn unknown_error() -> HandlerError {
+    HandlerError::new("cursor_not_found", "not_started", "cursor is unknown")
+}
+
+fn wrong_view(message: &'static str) -> HandlerError {
+    HandlerError::new("handle_wrong_kind", "not_started", message)
+}
+
+fn view_error(error: HandlerError) -> HandlerError {
+    if error.code == "wrong_value_kind" || error.code == "wrong_structure_kind" {
+        wrong_view("reader does not support the requested cursor view")
+    } else {
+        error
+    }
+}
+
+fn validate_batch(value: Option<u64>) -> Result<(), String> {
+    let Some(value) = value else {
+        return Err("batch_size must be a JSON integer from 1 through 4096".into());
+    };
+    if value == 0 || value > 4096 {
+        return Err("batch_size must be from 1 through 4096".into());
+    }
+    Ok(())
+}
+
+fn range_direction(reverse: bool) -> RangeDirection {
+    if reverse {
+        RangeDirection::Backward
+    } else {
+        RangeDirection::Forward
+    }
+}

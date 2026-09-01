@@ -1,0 +1,27 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "database.info-metadata-v4",
+  "fixtures": [
+    {"path": "direct.iprange", "source": {"generator": "v4_fixture", "seed": 0}}
+  ],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.database.info",
+     "params": {"source": {"path": "$WORK/direct.iprange", "mode": "immutable"}},
+     "expect_result": {"info": {
+       "address_family": "ipv4", "value_kind": "direct", "structure_kind": "none",
+       "value_tag": {"hex": "646972656374"}, "database_id": {"$ignore": true},
+       "transaction_id": "2", "commit_nonce": {"$ignore": true},
+       "page_count": {"$ignore": true}, "range_record_count": "3",
+       "active_feed_count": "0", "meta_selection": "proven_current"
+     }}},
+    {"kind": "rpc", "method": "iprange.v1.database.metadata.get",
+     "params": {"source": {"path": "$WORK/direct.iprange", "mode": "immutable"},
+                "delivery": {"mode": "file", "path": "$WORK/metadata.json",
+                              "publication_policy": "fail_if_exists",
+                              "max_output_bytes": "1024", "max_open_files": 1}},
+     "expect_result": {"present": true, "output": {
+       "path": {"$ignore": true}, "bytes": "23", "rows": "1"
+     }}, "assert_files": [{"path": "metadata.json",
+                           "sha256": "691d17b8ce39b3de9446508a34de72869d52f3247e8577e6adbf3a732882dd3e"}]}
+  ]
+}

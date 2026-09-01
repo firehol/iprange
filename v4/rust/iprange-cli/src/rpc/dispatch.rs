@@ -7,7 +7,6 @@
 
 use serde_json::Value;
 
-
 /// Product-domain failure with the documented stable error data.
 #[derive(Debug, Clone)]
 pub struct HandlerError {
@@ -18,18 +17,22 @@ pub struct HandlerError {
 }
 
 impl HandlerError {
-    #[allow(dead_code)] // used by handler families added in later delivery steps
     pub fn new(code: &'static str, outcome: &'static str, message: impl Into<String>) -> Self {
-        Self { code, outcome, message: message.into(), details: None }
+        Self {
+            code,
+            outcome,
+            message: message.into(),
+            details: None,
+        }
     }
-    #[allow(dead_code)] // used by handler families added in later delivery steps
     pub fn invalid_params(message: impl Into<String>) -> Self {
         Self::new("invalid_argument", "not_started", message)
     }
 }
 
 /// A request handler: params in, complete converted result out.
-pub type Handler = fn(state: &mut super::session::SessionState, params: Value) -> Result<Value, HandlerError>;
+pub type Handler =
+    fn(state: &mut super::session::SessionState, params: Value) -> Result<Value, HandlerError>;
 
 /// Strict per-method params schema. Err(message) becomes -32602.
 pub type ParamsValidator = fn(&Value) -> Result<(), String>;
@@ -92,22 +95,107 @@ pub const METHODS: &[&str] = &[
     "iprange.v1.validate",
 ];
 
-/// Methods advertised by system.describe: every registry entry except
-/// the cancel notification (which is not callable).
+/// Methods advertised by system.describe: exactly the methods that are
+/// callable in this build (the cancel notification is excluded), in
+/// bytewise order. Advertisement is the capability handshake the
+/// external runner uses to skip cases whose families are not shipped
+/// yet; it must never list a method that would reply -32601.
 pub fn advertised() -> Vec<&'static str> {
-    METHODS.iter().copied().filter(|m| *m != super::schema::CANCEL_METHOD).collect()
+    METHODS
+        .iter()
+        .copied()
+        .filter(|m| *m != super::schema::CANCEL_METHOD && registry_has(m))
+        .collect()
 }
 
-/// Registered handlers. system.describe is the only handler in the
-/// transport milestone; families are added in the fixed delivery
-/// order with qualification at each step.
+fn registry_has(method: &str) -> bool {
+    REGISTRY.iter().any(|(name, _, _)| *name == method)
+}
+
+/// Registered callable handlers. The complete METHODS inventory remains the
+/// wire authority; resolve returns callable entries only for implemented
+/// families.
 const REGISTRY: &[(&str, ParamsValidator, Handler)] = &[
-    ("iprange.v1.system.describe",
-     super::handlers::system::validate_describe_params,
-     super::handlers::system::describe),
+    (
+        "iprange.v1.system.describe",
+        super::handlers::system::validate_describe_params,
+        super::handlers::system::describe,
+    ),
+    (
+        "iprange.v1.reader.open",
+        super::handlers::reader::validate_reader_source,
+        super::handlers::reader::open,
+    ),
+    (
+        "iprange.v1.reader.close",
+        super::handlers::reader::validate_reader_handle,
+        super::handlers::reader::close,
+    ),
+    (
+        "iprange.v1.reader.info",
+        super::handlers::reader::validate_reader_handle,
+        super::handlers::reader::info,
+    ),
+    (
+        "iprange.v1.reader.metadata",
+        super::handlers::reader::validate_metadata,
+        super::handlers::reader::metadata,
+    ),
+    (
+        "iprange.v1.reader.lookup",
+        super::handlers::reader::validate_lookup,
+        super::handlers::reader::lookup,
+    ),
+    (
+        "iprange.v1.reader.feeds.open",
+        super::handlers::cursors::validate_feeds_open,
+        super::handlers::cursors::feeds_open,
+    ),
+    (
+        "iprange.v1.reader.feeds.next",
+        super::handlers::cursors::validate_cursor,
+        super::handlers::cursors::feeds_next,
+    ),
+    (
+        "iprange.v1.reader.feeds.close",
+        super::handlers::cursors::validate_cursor,
+        super::handlers::cursors::feeds_close,
+    ),
+    (
+        "iprange.v1.reader.matching_feeds",
+        super::handlers::reader::validate_matching_feeds,
+        super::handlers::reader::matching_feeds,
+    ),
+    (
+        "iprange.v1.reader.ranges.open",
+        super::handlers::cursors::validate_ranges_open,
+        super::handlers::cursors::ranges_open,
+    ),
+    (
+        "iprange.v1.reader.ranges.next",
+        super::handlers::cursors::validate_cursor,
+        super::handlers::cursors::ranges_next,
+    ),
+    (
+        "iprange.v1.reader.ranges.close",
+        super::handlers::cursors::validate_cursor,
+        super::handlers::cursors::ranges_close,
+    ),
+    (
+        "iprange.v1.database.info",
+        super::handlers::reader::validate_reader_source,
+        super::handlers::reader::database_info,
+    ),
+    (
+        "iprange.v1.database.metadata.get",
+        super::handlers::reader::validate_database_metadata,
+        super::handlers::reader::database_metadata,
+    ),
 ];
 
 pub fn resolve(method: &str) -> Option<(ParamsValidator, Handler)> {
-    REGISTRY.iter().find(|(name, _, _)| *name == method).map(|(_, validator, handler)| (*validator, *handler))
+    REGISTRY
+        .iter()
+        .find(|(name, _, _)| *name == method)
+        .map(|(_, validator, handler)| (*validator, *handler))
 }
-

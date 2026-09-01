@@ -1,5 +1,17 @@
 # SOW-0028 - Production `iprange` CLI, JSON-RPC API, And External Qualification
 
+## Standing Review Rules (user-mandated, read after every compaction)
+
+1. Prefer workers and reviewers in the lead assistant's own model.
+2. Use `glm-5.3-responses` for the final review of the whole milestone.
+3. Parallelize with the lead's own model as much as possible (the more
+   the better); never block on a single worker.
+4. Spawn multiple reviewers of the lead's own model, each with a
+   different focus, then run one `glm-5.3-responses` reviewer to
+   validate the entire milestone before closure.
+5. Running workers are never stopped by these rules; spawn in parallel
+   instead.
+
 ## Status
 
 Status: in-progress
@@ -852,6 +864,40 @@ Open decisions:
   - qualified by the external runner (`PASS system.describe [rust]`)
     and direct framing probes (batch, CRLF, cancel, over-limit,
     invalid envelope).
+- Read-only family implemented and qualified (worker + lead review):
+  - dev-only fixture producer `v4/rust/iprange-livedb/examples/v4-fixture.rs`
+    (kinds: direct-v4, membership-v4, structured-v4; deterministic
+    content via public SDK APIs; the production `iprange` binary
+    contains no fixture generation);
+  - handlers: reader.open/.close/.info/.metadata/.lookup/.matching_feeds/
+    .feeds.open/.feeds.next/.feeds.close/.ranges.open/.ranges.next/
+    .ranges.close plus database.info/.metadata.get, registered with
+    strict params validators in rpc/dispatch.rs; connection state in
+    rpc/state.rs (64 readers / 64 cursors, closed-cursor tombstones,
+    done-closes-cursor semantics, reader-close cascades to cursors);
+  - cursor contract: direct/structured cursors reopen and seek from
+    address checkpoints; feed cursors reopen and skip by range count
+    (the public SDK feed-range cursors expose no seek); reverse
+    iterations use exclusive checkpoints; every page is bounded by the
+    65,000-byte response-object ceiling and the batch size;
+  - error mapping: canonical SDK ErrorCode names become data.code
+    (wrong_value_kind, wrong_address_family, handle_wrong_kind,
+    handle_closed, invalid_argument, io, ...); outcomes use the
+    documented factual set (not_started/read_only_failure);
+  - metadata file delivery: atomic same-directory temp + fsync +
+    hard-link (fail_if_exists) or rename (replace_*), directory sync,
+    output_limit before publication; rows:"1" per output-fact schema
+    for a single opaque metadata blob (decision noted in code);
+  - decision recorded: `system.describe.methods` advertises exactly
+    the callable methods (15) so capability gating is honest;
+  - runner: `--fixture-tool` + `v4_fixture` generator with stable seed
+    mapping (0=direct-v4, 1=membership-v4, 2=structured-v4), nested
+    expectation matching, and case capability gating via `requires`
+    (one describe probe per binary; SKIP, not FAIL, for unshipped
+    families);
+  - two future-family cases declare `requires` and skip until their
+    families land; all 7 delivered cases PASS, check_golden and the
+    sensitivity gate stay green; cargo tests 13/13.
 
 ### 2026-08-28
 
