@@ -644,11 +644,12 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
     };
     let mut collector = match removals {
         // Collector creation is fallible and happens after the writer
-        // is open; a failure must still close the writer and report
-        // the factual close result with the error.
+        // is open; a failure must still close the source reader and
+        // the writer and report both factual close results with the
+        // error.
         Some(settings) => match RemovalCollector::new(settings, refresh_value) {
             Ok(collector) => Some(collector),
-            Err(error) => return Err(close_writer_facts(&mut writer, error)),
+            Err(error) => return Err(close_refresh_facts(&mut reader, &mut writer, error)),
         },
         None => None,
     };
