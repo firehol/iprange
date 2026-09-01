@@ -30,25 +30,36 @@ FEED_NAME = {
 }
 
 VALUE_TAG = {
-    "type": "object",
-    "properties": {
-        "text": {"type": "string", "max_len": 15},
-        "hex": {"type": "string", "hex_even": True, "max_len": 30},
-    },
-    "required": [],
-    "additional": False,
+    "type": "one_of",
+    "options": [
+        {"type": "object",
+         "properties": {"text": {"type": "string", "max_len": 15}},
+         "required": ["text"], "additional": False},
+        {"type": "object",
+         "properties": {"hex": {"type": "string", "hex_even": True, "max_len": 30}},
+         "required": ["hex"], "additional": False},
+    ],
 }
 
+def _metadata_form(mode, extra):
+    option = {"type": "object",
+              "properties": {"mode": {"type": "string", "enum": [mode]}},
+              "required": ["mode"], "additional": False}
+    for name, sub in extra.items():
+        option["properties"][name] = sub
+        option["required"].append(name)
+    return option
+
+
 METADATA_INPUT = {
-    "type": "object",
-    "properties": {
-        "mode": {"type": "string", "enum": ["keep", "clear", "replace_utf8", "replace_base64", "replace_file"]},
-        "text": {"type": "string"},
-        "base64": {"type": "string", "base64": True},
-        "path": PATH,
-    },
-    "required": ["mode"],
-    "additional": False,
+    "type": "one_of",
+    "options": [
+        _metadata_form("keep", {}),
+        _metadata_form("clear", {}),
+        _metadata_form("replace_utf8", {"text": {"type": "string"}}),
+        _metadata_form("replace_base64", {"base64": {"type": "string", "base64": True}}),
+        _metadata_form("replace_file", {"path": PATH}),
+    ],
 }
 
 WRITER_BUDGET = {
@@ -195,27 +206,41 @@ DIRECT_INPUT = {
     "additional": False,
 }
 
-OUTPUT_DESCRIPTOR = {
-    "type": "object",
-    "properties": {
-        "path": PATH,
-        "format": {"type": "string", "enum": ["jsonl", "csv"]},
-        "publication_policy": PUBLICATION_POLICY,
-        "result_budget": RESULT_BUDGET,
-    },
-    "required": ["path", "format", "publication_policy", "result_budget"],
-    "additional": False,
-}
+def _output_descriptor(formats):
+    return {
+        "type": "object",
+        "properties": {
+            "path": PATH,
+            "format": {"type": "string", "enum": formats},
+            "publication_policy": PUBLICATION_POLICY,
+            "result_budget": RESULT_BUDGET,
+        },
+        "required": ["path", "format", "publication_policy", "result_budget"],
+        "additional": False,
+    }
+
+
+# Most tabular methods accept JSONL or CSV. validate, recover, and
+# maintenance.list are JSONL-only because their rows carry nested
+# evidence that must not be flattened.
+OUTPUT_DESCRIPTOR = _output_descriptor(["jsonl", "csv"])
+OUTPUT_DESCRIPTOR_JSONL = _output_descriptor(["jsonl"])
 
 METADATA_DELIVERY = {
-    "type": "object",
-    "properties": {
-        "mode": {"type": "string", "enum": ["inline", "file"]},
-        "path": PATH,
-        "publication_policy": PUBLICATION_POLICY,
-        "max_output_bytes": U64,
-        "max_open_files": U32,
-    },
-    "required": ["mode"],
-    "additional": False,
+    "type": "one_of",
+    "options": [
+        {"type": "object",
+         "properties": {"mode": {"type": "string", "enum": ["inline"]}},
+         "required": ["mode"], "additional": False},
+        {"type": "object",
+         "properties": {
+             "mode": {"type": "string", "enum": ["file"]},
+             "path": PATH,
+             "publication_policy": PUBLICATION_POLICY,
+             "max_output_bytes": U64,
+             "max_open_files": U32,
+         },
+         "required": ["mode", "path", "publication_policy", "max_output_bytes", "max_open_files"],
+         "additional": False},
+    ],
 }

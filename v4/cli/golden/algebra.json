@@ -1,0 +1,182 @@
+{
+  "schema": "iprange-golden-v1",
+  "family": "algebra",
+  "note": "Same-name multi-file algebra: exact count, comparison, and publication.",
+  "exchanges": [
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-algebra.count",
+        "method": "iprange.v1.algebra.count",
+        "params": {
+          "sources": [
+            {
+              "source": {
+                "path": "/example/feeds.iprange",
+                "mode": "immutable"
+              },
+              "scope": {
+                "mode": "all"
+              },
+              "membership_query_budget": {
+                "max_heap_bytes": "16777216"
+              }
+            }
+          ],
+          "selection": {
+            "mode": "all"
+          },
+          "algebra_budget": {
+            "max_heap_bytes": "16777216",
+            "max_sources": 8
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-algebra.count",
+        "result": {
+          "method": "iprange.v1.algebra.count",
+          "report": {
+            "source_count": "2",
+            "source_range_count": "18",
+            "joined_segment_count": "3",
+            "addresses": "65536"
+          },
+          "cardinality": "65536"
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-algebra.compare",
+        "method": "iprange.v1.algebra.compare",
+        "params": {
+          "sources": [
+            {
+              "source": {
+                "path": "/example/feeds.iprange",
+                "mode": "immutable"
+              },
+              "scope": {
+                "mode": "all"
+              },
+              "membership_query_budget": {
+                "max_heap_bytes": "16777216"
+              }
+            }
+          ],
+          "left": {
+            "mode": "all"
+          },
+          "right": {
+            "mode": "all"
+          },
+          "algebra_budget": {
+            "max_heap_bytes": "16777216",
+            "max_sources": 8
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-algebra.compare",
+        "result": {
+          "method": "iprange.v1.algebra.compare",
+          "report": {
+            "source_count": "2",
+            "source_range_count": "18",
+            "joined_segment_count": "3",
+            "left_addresses": "65536",
+            "right_addresses": "65536",
+            "overlap_addresses": "65536",
+            "left_only_addresses": "0",
+            "right_only_addresses": "0",
+            "union_addresses": "65536",
+            "equal": true
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-algebra.publish",
+        "method": "iprange.v1.algebra.publish",
+        "params": {
+          "sources": [
+            {
+              "source": {
+                "path": "/example/feeds.iprange",
+                "mode": "immutable"
+              },
+              "scope": {
+                "mode": "all"
+              },
+              "membership_query_budget": {
+                "max_heap_bytes": "16777216"
+              }
+            }
+          ],
+          "operation": {
+            "kind": "union",
+            "selection": {
+              "mode": "all"
+            }
+          },
+          "output_mode": {
+            "kind": "flat",
+            "feed": "combined"
+          },
+          "value_tag": {
+            "hex": "00"
+          },
+          "metadata": {
+            "mode": "clear"
+          },
+          "destination": "/example/combined.iprange",
+          "publication_policy": "fail_if_exists",
+          "algebra_budget": {
+            "max_heap_bytes": "16777216",
+            "max_sources": 8
+          },
+          "algebra_output_budget": {
+            "max_output_pages": "512",
+            "max_open_files": 32
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-algebra.publish",
+        "result": {
+          "method": "iprange.v1.algebra.publish",
+          "report": {
+            "source_count": "2",
+            "source_range_count": "18",
+            "joined_segment_count": "3",
+            "output_feed_count": "1",
+            "output_range_count": "3",
+            "output_addresses": "65536"
+          },
+          "publication": {
+            "attempt": "attempted",
+            "main_namespace_may_have_been_attempted": true,
+            "publication": "published",
+            "destination_content": "created",
+            "later_canonical": "absent",
+            "main_access_policy": "creator_only",
+            "coordination_access_policy": "creator_only",
+            "cleanup": {},
+            "coordination_cleanup": {},
+            "housekeeping": {
+              "artifacts": []
+            },
+            "visible_housekeeping": []
+          }
+        }
+      }
+    }
+  ]
+}

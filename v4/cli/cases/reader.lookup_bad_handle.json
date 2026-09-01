@@ -1,0 +1,10 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "reader.lookup_bad_handle",
+  "fixtures": [],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.reader.lookup",
+     "params": {"reader": "deadbeefdeadbeefdeadbeefdeadbeef", "addresses": ["192.0.2.1"]},
+     "expect_error": {"code": "handle_not_found", "outcome": "not_started"}}
+  ]
+}

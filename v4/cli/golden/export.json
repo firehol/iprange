@@ -1,0 +1,52 @@
+{
+  "schema": "iprange-golden-v1",
+  "family": "export",
+  "note": "Canonical file export of one immutable database.",
+  "exchanges": [
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-export",
+        "method": "iprange.v1.export",
+        "params": {
+          "source": {
+            "path": "/example/feeds.iprange",
+            "mode": "immutable"
+          },
+          "view": {
+            "kind": "selection",
+            "selection": {
+              "mode": "all"
+            }
+          },
+          "format": "netset",
+          "destination": "/example/export.netset",
+          "publication_policy": "fail_if_exists",
+          "min_prefix": 8,
+          "result_budget": {
+            "max_rows": "100000",
+            "max_output_bytes": "10485760",
+            "max_open_files": 3
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-export",
+        "result": {
+          "method": "iprange.v1.export",
+          "path": "/example/export.netset",
+          "format": "netset",
+          "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+          "rows": "3",
+          "addresses": "65536",
+          "bytes": "2048",
+          "identity": {
+            "volume": "1",
+            "file": "99"
+          }
+        }
+      }
+    }
+  ]
+}

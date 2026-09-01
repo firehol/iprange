@@ -802,6 +802,37 @@ Open decisions:
     (`AttributeError` on any rpc step); CRLF terminator handling in
     `schema/frame.py`; `--matrix` crashed with `KeyError` when a
     consumer binary was absent.
+- Wire-result schemas rebuilt from the Rust SDK types (semantic
+  authority): every result models the snake_case conversion of its
+  public SDK type with depth-1 strictness and typed scalars
+  (u64 decimal strings, u32 integers, [u8;16] hex ids, result value
+  tags as `{"hex": ...}`, file identities as volume/file). Recording:
+  - plain SDK enums convert to lowercase snake_case strings (value
+    sets not re-listed; the JSON-RPC spec does not enumerate them);
+  - payload-carrying enum results (ReclaimResult) convert with an
+    explicit lowercase `kind` discriminator;
+  - `cause` is never a success field (it becomes the error message);
+  - recovery preparation failures are -32010 errors whose details
+    carry the failure facts (recover success = complete
+    RecoveryResult conversion);
+  - ranges records carry the semantic `value` for direct/structured
+    views and none for feed views; lookup matches carry the
+    kind-specific fields;
+  - query.matching_feeds reports the aggregate count as
+    `matching_feed_count` (from MatchingFeedsReport);
+  - validate, recover, and maintenance.list require JSONL output
+    descriptors (CSV is documented unsupported for their rows).
+- Value tags, metadata inputs, and metadata deliveries tightened to
+  the spec's exactly-one-of forms; responses now require an id and
+  reject unknown members/malformed error objects
+  (`schema/frame.decode_response`).
+- Golden corpus `v4/cli/golden/*.json`: 53 exchanges covering all 52
+  request methods plus the cancel notification, each schema-validated
+  at generation time and by `v4/cli/check_golden.py`.
+- Initial declarative cases `v4/cli/cases/`: system.describe and four
+  fixture-free server-error cases (invalid_path, handle_not_found).
+- `v4/cli/check_golden.py`: CI-grade wire gate (validates every golden
+  exchange and case file in well under a second; no binary needed).
 
 ### 2026-08-28
 

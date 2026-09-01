@@ -1,0 +1,12 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "database.create_bad_directory",
+  "fixtures": [],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.database.create",
+     "params": {"path": "$WORK/no-such-dir/db.iprange", "family": "ipv4",
+                "value_kind": "direct", "structure_kind": "none",
+                "value_tag": {"hex": "00"}, "reader_capacity": 256},
+     "expect_error": {"code": "invalid_path", "outcome": "not_started"}}
+  ]
+}

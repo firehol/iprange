@@ -1,0 +1,309 @@
+{
+  "schema": "iprange-golden-v1",
+  "family": "reader",
+  "note": "Reader lifecycle over one immutable direct IPv4 database.",
+  "exchanges": [
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.open",
+        "method": "iprange.v1.reader.open",
+        "params": {
+          "source": {
+            "path": "/example/blocklist.iprange",
+            "mode": "immutable"
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.open",
+        "result": {
+          "method": "iprange.v1.reader.open",
+          "reader": "a0000000000000000000000000000001",
+          "info": {
+            "address_family": "ipv4",
+            "value_kind": "direct",
+            "structure_kind": "none",
+            "value_tag": {
+              "hex": "00"
+            },
+            "database_id": "b0000000000000000000000000000001",
+            "transaction_id": "7",
+            "commit_nonce": "b0000000000000000000000000000003",
+            "page_count": "128",
+            "range_record_count": "1024",
+            "active_feed_count": "0",
+            "meta_selection": "proven_current"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.info",
+        "method": "iprange.v1.reader.info",
+        "params": {
+          "reader": "a0000000000000000000000000000001"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.info",
+        "result": {
+          "method": "iprange.v1.reader.info",
+          "info": {
+            "address_family": "ipv4",
+            "value_kind": "direct",
+            "structure_kind": "none",
+            "value_tag": {
+              "hex": "00"
+            },
+            "database_id": "b0000000000000000000000000000001",
+            "transaction_id": "7",
+            "commit_nonce": "b0000000000000000000000000000003",
+            "page_count": "128",
+            "range_record_count": "1024",
+            "active_feed_count": "0",
+            "meta_selection": "proven_current"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.metadata",
+        "method": "iprange.v1.reader.metadata",
+        "params": {
+          "reader": "a0000000000000000000000000000001",
+          "delivery": {
+            "mode": "inline"
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.metadata",
+        "result": {
+          "method": "iprange.v1.reader.metadata",
+          "present": true,
+          "base64": "eyJzb3VyY2UiOiJleGFtcGxlIn0="
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.lookup",
+        "method": "iprange.v1.reader.lookup",
+        "params": {
+          "reader": "a0000000000000000000000000000001",
+          "addresses": [
+            "192.0.2.1",
+            "198.51.100.7",
+            "203.0.113.9"
+          ]
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.lookup",
+        "result": {
+          "method": "iprange.v1.reader.lookup",
+          "matches": [
+            {
+              "address": "192.0.2.1",
+              "present": true,
+              "value": 5
+            },
+            {
+              "address": "198.51.100.7",
+              "present": false
+            },
+            {
+              "address": "203.0.113.9",
+              "present": true,
+              "value": 9
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.matching_feeds",
+        "method": "iprange.v1.reader.matching_feeds",
+        "params": {
+          "reader": "a0000000000000000000000000000001",
+          "address": "2001:db8::1"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.matching_feeds",
+        "result": {
+          "method": "iprange.v1.reader.matching_feeds",
+          "address": "2001:db8::1",
+          "feeds": [],
+          "matching_feed_count": "0"
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-feeds.open",
+        "method": "iprange.v1.reader.feeds.open",
+        "params": {
+          "reader": "a0000000000000000000000000000001",
+          "batch_size": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-feeds.open",
+        "result": {
+          "method": "iprange.v1.reader.feeds.open",
+          "cursor": "c0000000000000000000000000000001"
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-feeds.next",
+        "method": "iprange.v1.reader.feeds.next",
+        "params": {
+          "cursor": "c0000000000000000000000000000001"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-feeds.next",
+        "result": {
+          "method": "iprange.v1.reader.feeds.next",
+          "feeds": [
+            {
+              "name": "feed-a"
+            },
+            {
+              "name": "feed-b"
+            }
+          ],
+          "done": true
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-feeds.close",
+        "method": "iprange.v1.reader.feeds.close",
+        "params": {
+          "cursor": "c0000000000000000000000000000001"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-feeds.close",
+        "result": {
+          "method": "iprange.v1.reader.feeds.close",
+          "closed": true
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-ranges.open",
+        "method": "iprange.v1.reader.ranges.open",
+        "params": {
+          "reader": "a0000000000000000000000000000001",
+          "view": {
+            "kind": "direct"
+          },
+          "direction": "forward",
+          "start": "192.0.2.0",
+          "batch_size": 4096
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-ranges.open",
+        "result": {
+          "method": "iprange.v1.reader.ranges.open",
+          "cursor": "c0000000000000000000000000000002"
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-ranges.next",
+        "method": "iprange.v1.reader.ranges.next",
+        "params": {
+          "cursor": "c0000000000000000000000000000002"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-ranges.next",
+        "result": {
+          "method": "iprange.v1.reader.ranges.next",
+          "records": [
+            {
+              "from": "192.0.2.0",
+              "to": "192.0.2.255",
+              "value": 5
+            },
+            {
+              "from": "203.0.113.0",
+              "to": "203.0.113.255",
+              "value": 9
+            }
+          ],
+          "done": true
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-ranges.close",
+        "method": "iprange.v1.reader.ranges.close",
+        "params": {
+          "cursor": "c0000000000000000000000000000002"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-ranges.close",
+        "result": {
+          "method": "iprange.v1.reader.ranges.close",
+          "closed": true
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.close",
+        "method": "iprange.v1.reader.close",
+        "params": {
+          "reader": "a0000000000000000000000000000001"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-reader.close",
+        "result": {
+          "method": "iprange.v1.reader.close",
+          "closed": true
+        }
+      }
+    }
+  ]
+}

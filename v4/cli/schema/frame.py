@@ -131,6 +131,44 @@ def _validate_id(value):
     return str(value)
 
 
+def decode_response(text):
+    """Validate one server response object. Returns the response dict.
+
+    Enforces the documented envelope: jsonrpc exactly "2.0"; string or
+    integral id; no unknown members; exactly one of result/error; error
+    object with integer code, string message, and optional data.
+    Raises FrameError on any violation.
+    """
+    if len(text.encode("utf-8")) > OUTPUT_FRAME_LIMIT:
+        raise FrameError(TRANSPORT_FRAME_TOO_LARGE, "response frame over output limit")
+    try:
+        value = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise FrameError(STD_PARSE_ERROR, f"parse error: {exc}") from exc
+    if not isinstance(value, dict):
+        raise FrameError(STD_INVALID_REQUEST, "response must be an object")
+    unknown = set(value) - {"jsonrpc", "id", "result", "error"}
+    if unknown:
+        raise FrameError(STD_INVALID_REQUEST, f"unknown response members: {sorted(unknown)}")
+    if value.get("jsonrpc") != "2.0":
+        raise FrameError(STD_INVALID_REQUEST, "jsonrpc must be \"2.0\"")
+    if "id" not in value:
+        raise FrameError(STD_INVALID_REQUEST, "response id is required")
+    _validate_id(value["id"])
+    if ("result" in value) == ("error" in value):
+        raise FrameError(STD_INVALID_REQUEST, "response needs exactly one of result/error")
+    if "error" in value:
+        err = value["error"]
+        if not isinstance(err, dict):
+            raise FrameError(STD_INVALID_REQUEST, "error must be an object")
+        unknown = set(err) - {"code", "message", "data"}
+        if unknown or not isinstance(err.get("code"), int) \
+                or isinstance(err.get("code"), bool) \
+                or not isinstance(err.get("message"), str):
+            raise FrameError(STD_INVALID_REQUEST, "malformed error object")
+    return value
+
+
 def encode_response_object(payload):
     """Serialize one response object (result or error) with the 65,000
     byte object ceiling. Raises FrameError(TRANSPORT_FRAME_TOO_LARGE)

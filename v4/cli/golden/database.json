@@ -1,0 +1,476 @@
+{
+  "schema": "iprange-golden-v1",
+  "family": "database",
+  "note": "Explicit lifecycle and metadata operations over one direct v4 database.",
+  "exchanges": [
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-db.create",
+        "method": "iprange.v1.database.create",
+        "params": {
+          "path": "/example/db.iprange",
+          "family": "ipv4",
+          "value_kind": "direct",
+          "structure_kind": "none",
+          "value_tag": {
+            "hex": "00"
+          },
+          "reader_capacity": 256
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-db.create",
+        "result": {
+          "method": "iprange.v1.database.create",
+          "address_family": "ipv4",
+          "value_kind": "direct",
+          "structure_kind": "none",
+          "value_tag": {
+            "hex": "00"
+          },
+          "database_id": "b0000000000000000000000000000001",
+          "commit_nonce": "b0000000000000000000000000000003",
+          "sidecar_id": "b0000000000000000000000000000002",
+          "directory_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "main_basename": "db.iprange",
+          "main_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "sidecar_identity": {
+            "volume": "1",
+            "file": "43"
+          },
+          "reader_capacity": 256,
+          "state": "created",
+          "residue_possible": false,
+          "housekeeping": {
+            "artifacts": []
+          },
+          "visible_housekeeping": []
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-db.create.resolve",
+        "method": "iprange.v1.database.create.resolve",
+        "params": {
+          "path": "/example/db.iprange",
+          "create_result": {
+            "address_family": "ipv4",
+            "value_kind": "direct",
+            "structure_kind": "none",
+            "value_tag": {
+              "hex": "00"
+            },
+            "database_id": "b0000000000000000000000000000001",
+            "commit_nonce": "b0000000000000000000000000000003",
+            "sidecar_id": "b0000000000000000000000000000002",
+            "directory_identity": {
+              "volume": "1",
+              "file": "42"
+            },
+            "main_basename": "db.iprange",
+            "main_identity": {
+              "volume": "1",
+              "file": "42"
+            },
+            "sidecar_identity": {
+              "volume": "1",
+              "file": "43"
+            },
+            "reader_capacity": 256,
+            "state": "created",
+            "residue_possible": false,
+            "housekeeping": {
+              "artifacts": []
+            },
+            "visible_housekeeping": []
+          },
+          "resolution_mode": "complete"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-db.create.resolve",
+        "result": {
+          "method": "iprange.v1.database.create.resolve",
+          "address_family": "ipv4",
+          "value_kind": "direct",
+          "structure_kind": "none",
+          "value_tag": {
+            "hex": "00"
+          },
+          "database_id": "b0000000000000000000000000000001",
+          "commit_nonce": "b0000000000000000000000000000003",
+          "sidecar_id": "b0000000000000000000000000000002",
+          "directory_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "main_basename": "db.iprange",
+          "main_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "sidecar_identity": {
+            "volume": "1",
+            "file": "43"
+          },
+          "reader_capacity": 256,
+          "state": "created",
+          "residue_possible": false,
+          "housekeeping": {
+            "artifacts": []
+          },
+          "visible_housekeeping": []
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-db.initialize_live",
+        "method": "iprange.v1.database.initialize_live",
+        "params": {
+          "path": "/example/db.iprange",
+          "reader_capacity": 256
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-db.initialize_live",
+        "result": {
+          "method": "iprange.v1.database.initialize_live",
+          "operation": "initialize_live",
+          "status": "committed",
+          "database_id": "b0000000000000000000000000000001",
+          "transaction_id": "7",
+          "commit_nonce": "b0000000000000000000000000000003",
+          "directory_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "main_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "main_basename": "db.iprange",
+          "reader_capacity": 256,
+          "sidecar_id": "b0000000000000000000000000000002",
+          "new_sidecar_location": "canonical",
+          "residue_possible": false,
+          "housekeeping": {
+            "artifacts": []
+          },
+          "visible_housekeeping": []
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-db.reset_live",
+        "method": "iprange.v1.database.reset_live",
+        "params": {
+          "path": "/example/db.iprange",
+          "reader_capacity": 256,
+          "policy": "rollback_safe"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-db.reset_live",
+        "result": {
+          "method": "iprange.v1.database.reset_live",
+          "operation": "initialize_live",
+          "status": "committed",
+          "database_id": "b0000000000000000000000000000001",
+          "transaction_id": "7",
+          "commit_nonce": "b0000000000000000000000000000003",
+          "directory_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "main_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "main_basename": "db.iprange",
+          "reader_capacity": 256,
+          "sidecar_id": "b0000000000000000000000000000002",
+          "new_sidecar_location": "canonical",
+          "residue_possible": false,
+          "housekeeping": {
+            "artifacts": []
+          },
+          "visible_housekeeping": []
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-db.live_transition.resolve",
+        "method": "iprange.v1.database.live_transition.resolve",
+        "params": {
+          "path": "/example/db.iprange",
+          "live_transition_result": {
+            "operation": "initialize_live",
+            "status": "committed",
+            "database_id": "b0000000000000000000000000000001",
+            "transaction_id": "7",
+            "commit_nonce": "b0000000000000000000000000000003",
+            "directory_identity": {
+              "volume": "1",
+              "file": "42"
+            },
+            "main_identity": {
+              "volume": "1",
+              "file": "42"
+            },
+            "main_basename": "db.iprange",
+            "reader_capacity": 256,
+            "sidecar_id": "b0000000000000000000000000000002",
+            "new_sidecar_location": "canonical",
+            "residue_possible": false,
+            "housekeeping": {
+              "artifacts": []
+            },
+            "visible_housekeeping": []
+          },
+          "resolution_mode": "complete"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-db.live_transition.resolve",
+        "result": {
+          "method": "iprange.v1.database.live_transition.resolve",
+          "operation": "initialize_live",
+          "status": "committed",
+          "database_id": "b0000000000000000000000000000001",
+          "transaction_id": "7",
+          "commit_nonce": "b0000000000000000000000000000003",
+          "directory_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "main_identity": {
+            "volume": "1",
+            "file": "42"
+          },
+          "main_basename": "db.iprange",
+          "reader_capacity": 256,
+          "sidecar_id": "b0000000000000000000000000000002",
+          "new_sidecar_location": "canonical",
+          "residue_possible": false,
+          "housekeeping": {
+            "artifacts": []
+          },
+          "visible_housekeeping": []
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-db.live_residue.resolve",
+        "method": "iprange.v1.database.live_residue.resolve",
+        "params": {
+          "path": "/example/db.iprange",
+          "resolution_mode": "complete"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-db.live_residue.resolve",
+        "result": {
+          "method": "iprange.v1.database.live_residue.resolve",
+          "status": "complete",
+          "residue_possible": false,
+          "housekeeping": {
+            "artifacts": []
+          },
+          "visible_housekeeping": []
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-db.reclaim",
+        "method": "iprange.v1.database.reclaim",
+        "params": {
+          "path": "/example/db.iprange",
+          "max_transactions": "1000",
+          "max_pages": "4096",
+          "writer_budget": {
+            "max_heap_bytes": "134217728",
+            "max_private_pages": "64",
+            "max_growth_pages": "64",
+            "max_open_files": 32
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-db.reclaim",
+        "result": {
+          "method": "iprange.v1.database.reclaim",
+          "reclamation": {
+            "kind": "commit",
+            "transaction_count": "2",
+            "page_count": "3",
+            "commit": {
+              "attempted_database_id": "b0000000000000000000000000000001",
+              "directory_identity": {
+                "volume": "1",
+                "file": "42"
+              },
+              "main_identity": {
+                "volume": "1",
+                "file": "42"
+              },
+              "attempted_transaction_id": "7",
+              "attempted_commit_nonce": "b0000000000000000000000000000003",
+              "durability": "committed",
+              "cleanup": {},
+              "coordination_cleanup": {}
+            }
+          },
+          "writer_close": {
+            "outcome": "closed",
+            "cleanup": {},
+            "coordination_cleanup": {}
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-db.info",
+        "method": "iprange.v1.database.info",
+        "params": {
+          "source": {
+            "path": "/example/db.iprange",
+            "mode": "immutable"
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-db.info",
+        "result": {
+          "method": "iprange.v1.database.info",
+          "info": {
+            "address_family": "ipv4",
+            "value_kind": "direct",
+            "structure_kind": "none",
+            "value_tag": {
+              "hex": "00"
+            },
+            "database_id": "b0000000000000000000000000000001",
+            "transaction_id": "7",
+            "commit_nonce": "b0000000000000000000000000000003",
+            "page_count": "128",
+            "range_record_count": "1024",
+            "active_feed_count": "0",
+            "meta_selection": "proven_current"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-db.metadata.get",
+        "method": "iprange.v1.database.metadata.get",
+        "params": {
+          "source": {
+            "path": "/example/db.iprange",
+            "mode": "immutable"
+          },
+          "delivery": {
+            "mode": "file",
+            "path": "/example/meta.bin",
+            "publication_policy": "fail_if_exists",
+            "max_output_bytes": "1048576",
+            "max_open_files": 3
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-db.metadata.get",
+        "result": {
+          "method": "iprange.v1.database.metadata.get",
+          "present": true,
+          "output": {
+            "path": "/example/out.jsonl",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "bytes": "1024",
+            "rows": "16"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-db.metadata.replace",
+        "method": "iprange.v1.database.metadata.replace",
+        "params": {
+          "path": "/example/db.iprange",
+          "metadata": {
+            "mode": "replace_utf8",
+            "text": "example"
+          },
+          "writer_budget": {
+            "max_heap_bytes": "134217728",
+            "max_private_pages": "64",
+            "max_growth_pages": "64",
+            "max_open_files": 32
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-db.metadata.replace",
+        "result": {
+          "method": "iprange.v1.database.metadata.replace",
+          "logical_change": "changed",
+          "commit": {
+            "attempted_database_id": "b0000000000000000000000000000001",
+            "directory_identity": {
+              "volume": "1",
+              "file": "42"
+            },
+            "main_identity": {
+              "volume": "1",
+              "file": "42"
+            },
+            "attempted_transaction_id": "7",
+            "attempted_commit_nonce": "b0000000000000000000000000000003",
+            "durability": "committed",
+            "cleanup": {},
+            "coordination_cleanup": {}
+          },
+          "writer_close": {
+            "outcome": "closed",
+            "cleanup": {},
+            "coordination_cleanup": {}
+          }
+        }
+      }
+    }
+  ]
+}

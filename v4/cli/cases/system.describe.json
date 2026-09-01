@@ -1,0 +1,19 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "system.describe",
+  "fixtures": [],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.system.describe", "params": {},
+     "expect_result": {
+       "method": "iprange.v1.system.describe",
+       "product": "iprange",
+       "jsonrpc_version": "2.0",
+       "api_version": "1",
+       "families": {"$ignore": true},
+       "methods": {"$ignore": true},
+       "limits": {"$ignore": true},
+       "fault_worker": {"$ignore": true},
+       "platform_result_fields": {"$ignore": true}
+     }}
+  ]
+}

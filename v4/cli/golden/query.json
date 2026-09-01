@@ -1,0 +1,273 @@
+{
+  "schema": "iprange-golden-v1",
+  "family": "query",
+  "note": "Tabular membership queries and joins with caller-selected output files.",
+  "exchanges": [
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-query.cardinalities",
+        "method": "iprange.v1.query.cardinalities",
+        "params": {
+          "source": {
+            "path": "/example/feeds.iprange",
+            "mode": "immutable"
+          },
+          "selection": {
+            "mode": "all"
+          },
+          "membership_query_budget": {
+            "max_heap_bytes": "16777216"
+          },
+          "output": {
+            "path": "/example/out.csv",
+            "format": "csv",
+            "publication_policy": "replace_existing",
+            "result_budget": {
+              "max_rows": "4096",
+              "max_output_bytes": "1048576",
+              "max_open_files": 3
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-query.cardinalities",
+        "result": {
+          "method": "iprange.v1.query.cardinalities",
+          "output": {
+            "path": "/example/out.jsonl",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "bytes": "1024",
+            "rows": "16"
+          },
+          "report": {
+            "scanned_range_count": "12",
+            "scanned_addresses": "65536",
+            "feed_result_count": "2",
+            "pair_result_count": "1"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-query.overlaps",
+        "method": "iprange.v1.query.overlaps",
+        "params": {
+          "source": {
+            "path": "/example/feeds.iprange",
+            "mode": "immutable"
+          },
+          "selection": {
+            "mode": "all"
+          },
+          "membership_query_budget": {
+            "max_heap_bytes": "16777216"
+          },
+          "mode": {
+            "kind": "all_pairs"
+          },
+          "output": {
+            "path": "/example/out.csv",
+            "format": "csv",
+            "publication_policy": "replace_existing",
+            "result_budget": {
+              "max_rows": "4096",
+              "max_output_bytes": "1048576",
+              "max_open_files": 3
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-query.overlaps",
+        "result": {
+          "method": "iprange.v1.query.overlaps",
+          "output": {
+            "path": "/example/out.jsonl",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "bytes": "1024",
+            "rows": "16"
+          },
+          "report": {
+            "scanned_range_count": "12",
+            "scanned_addresses": "65536",
+            "feed_result_count": "2",
+            "pair_result_count": "1"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-query.matching_feeds",
+        "method": "iprange.v1.query.matching_feeds",
+        "params": {
+          "source": {
+            "path": "/example/feeds.iprange",
+            "mode": "immutable"
+          },
+          "addresses": [
+            "192.0.2.1",
+            "192.0.2.2"
+          ],
+          "output": {
+            "path": "/example/out.csv",
+            "format": "csv",
+            "publication_policy": "replace_existing",
+            "result_budget": {
+              "max_rows": "4096",
+              "max_output_bytes": "1048576",
+              "max_open_files": 3
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-query.matching_feeds",
+        "result": {
+          "method": "iprange.v1.query.matching_feeds",
+          "output": {
+            "path": "/example/out.jsonl",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "bytes": "1024",
+            "rows": "16"
+          },
+          "matching_feed_count": "1"
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-join.direct",
+        "method": "iprange.v1.join.direct",
+        "params": {
+          "membership": {
+            "source": {
+              "path": "/example/feeds.iprange",
+              "mode": "immutable"
+            },
+            "selection": {
+              "mode": "all"
+            },
+            "membership_query_budget": {
+              "max_heap_bytes": "16777216"
+            }
+          },
+          "direct": {
+            "path": "/example/feeds.iprange",
+            "mode": "immutable"
+          },
+          "output": {
+            "path": "/example/out.csv",
+            "format": "csv",
+            "publication_policy": "replace_existing",
+            "result_budget": {
+              "max_rows": "4096",
+              "max_output_bytes": "1048576",
+              "max_open_files": 3
+            }
+          },
+          "max_result_cells": "1048576"
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-join.direct",
+        "result": {
+          "method": "iprange.v1.join.direct",
+          "output": {
+            "path": "/example/out.jsonl",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "bytes": "1024",
+            "rows": "16"
+          },
+          "report": {
+            "membership_range_count": "8",
+            "direct_ranges_visited": "64",
+            "joined_segment_count": "3",
+            "selected_addresses": "256",
+            "mapped_addresses": "200",
+            "unmapped_addresses": "56",
+            "result_cell_count": "4"
+          }
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-join.membership",
+        "method": "iprange.v1.join.membership",
+        "params": {
+          "left": {
+            "source": {
+              "path": "/example/feeds.iprange",
+              "mode": "immutable"
+            },
+            "selection": {
+              "mode": "all"
+            },
+            "membership_query_budget": {
+              "max_heap_bytes": "16777216"
+            }
+          },
+          "right": {
+            "source": {
+              "path": "/example/feeds.iprange",
+              "mode": "immutable"
+            },
+            "selection": {
+              "mode": "all"
+            },
+            "membership_query_budget": {
+              "max_heap_bytes": "16777216"
+            }
+          },
+          "output": {
+            "path": "/example/out.csv",
+            "format": "csv",
+            "publication_policy": "replace_existing",
+            "result_budget": {
+              "max_rows": "4096",
+              "max_output_bytes": "1048576",
+              "max_open_files": 3
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-join.membership",
+        "result": {
+          "method": "iprange.v1.join.membership",
+          "output": {
+            "path": "/example/out.jsonl",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "bytes": "1024",
+            "rows": "16"
+          },
+          "report": {
+            "left_range_count": "8",
+            "right_range_count": "10",
+            "joined_segment_count": "2",
+            "left_addresses": "256",
+            "right_addresses": "300",
+            "overlap_addresses": "100",
+            "left_uncovered_addresses": "156",
+            "right_uncovered_addresses": "200",
+            "cross_result_count": "2",
+            "uncovered_result_count": "2"
+          }
+        }
+      }
+    }
+  ]
+}

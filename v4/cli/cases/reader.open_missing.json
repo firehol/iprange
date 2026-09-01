@@ -1,0 +1,10 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "reader.open_missing",
+  "fixtures": [],
+  "steps": [
+    {"kind": "rpc", "method": "iprange.v1.reader.open",
+     "params": {"source": {"path": "$WORK/missing.iprange", "mode": "immutable"}},
+     "expect_error": {"code": "invalid_path", "outcome": "not_started"}}
+  ]
+}

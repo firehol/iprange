@@ -1,0 +1,75 @@
+{
+  "schema": "iprange-golden-v1",
+  "family": "maintenance",
+  "note": "Explicit scratch/reservation maintenance with authenticated removal identities.",
+  "exchanges": [
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-maintenance.list",
+        "method": "iprange.v1.maintenance.list",
+        "params": {
+          "directory": "/example",
+          "kinds": [
+            "reservation"
+          ],
+          "max_entries": 4096,
+          "output": {
+            "path": "/example/maint.jsonl",
+            "format": "jsonl",
+            "publication_policy": "replace_existing",
+            "result_budget": {
+              "max_rows": "4096",
+              "max_output_bytes": "1048576",
+              "max_open_files": 3
+            }
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-maintenance.list",
+        "result": {
+          "method": "iprange.v1.maintenance.list",
+          "output": {
+            "path": "/example/out.jsonl",
+            "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "bytes": "1024",
+            "rows": "16"
+          },
+          "reports": [
+            {
+              "kind": "reservation",
+              "entries": 0
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "jsonrpc": "2.0",
+        "id": "g-maintenance.remove",
+        "method": "iprange.v1.maintenance.remove",
+        "params": {
+          "entry": {
+            "kind": "reservation",
+            "basename": "reservation-abc",
+            "identity": {}
+          }
+        }
+      },
+      "response": {
+        "jsonrpc": "2.0",
+        "id": "g-maintenance.remove",
+        "result": {
+          "method": "iprange.v1.maintenance.remove",
+          "removal": {
+            "removed": true,
+            "kind": "reservation"
+          }
+        }
+      }
+    }
+  ]
+}
