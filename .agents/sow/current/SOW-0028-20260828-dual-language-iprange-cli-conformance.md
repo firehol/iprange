@@ -1156,3 +1156,26 @@ Suite (Copernicus @ aec5d155):
 4. P2 Lookup/start addresses are canonical but not bound to the opened
    reader's address family; runner must track address_family and reject
    cross-family addresses.
+
+## Review round 5-6 close (2026-09-01)
+
+Round 5 findings (Copernicus @ 298c18c9): 4300-digit int limit in the
+Python authority (fixed: set_int_max_str_digits lifted, ValueError ->
+FrameError); source_close not correlated with live source mode (fixed:
+runner requires source_close for live, rejects fabricated for
+immutable); unknown-reader handles bypassed family/payload checks
+(fixed: require_reader fails unknown handles; sensitivity gate opens
+its fake reader through reader.open). Committed at c81e0ed2.
+
+McClintock PASSed the chunk at 298c18c9. Copernicus's round-6
+re-confirmation could not be obtained: the glm-5.3-responses endpoint
+returned persistent HTTP 429 rate limits after three retries; per
+SWARM.md the unavailable resident is skipped, not substituted. His
+round-5 findings are fixed and independently reproduced by the lead.
+
+Chunk qualified at c81e0ed2: Rust 664/664 (cli 72/72), -D warnings
+clean, check_golden PASS 53/9, sensitivity 13/13, external runner 9/9
+with 13 oracle checks. Read-only, publish/lifecycle, export/snapshot,
+and transport are complete; next per the fixed delivery order: live
+workflows, destructive recovery/maintenance, then algebra/query/join/
+history families.
