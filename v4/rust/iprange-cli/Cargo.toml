@@ -1,0 +1,18 @@
+[package]
+name = "iprange-cli"
+version = "0.0.0"
+description = "Production iprange CLI: released legacy surface plus the v1 JSON-RPC stdio API"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+iprange-livedb = { path = "../iprange-livedb" }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"
+getrandom = { version = "=0.3.4", features = ["std"] }
+
+[[bin]]
+name = "iprange"
+path = "src/main.rs"

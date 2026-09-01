@@ -1,7 +1,7 @@
 # Rust implementation of the exact iprange v4 database format.
 [workspace]
 resolver = "2"
-members = ["iprange-livedb", "iprange-capi"]
+members = ["iprange-livedb", "iprange-capi", "iprange-cli"]
 
 [workspace.package]
 edition = "2021"

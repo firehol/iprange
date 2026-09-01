@@ -181,6 +181,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "iprange-cli"
+version = "0.0.0"
+dependencies = [
+ "getrandom",
+ "iprange-livedb",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "iprange-livedb"
 version = "0.0.0"
 dependencies = [

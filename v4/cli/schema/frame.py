@@ -98,21 +98,19 @@ def _validate_envelope(item, *, index):
         raise FrameError(STD_METHOD_NOT_FOUND
                          if isinstance(method, str) else STD_INVALID_REQUEST,
                          "method must start with iprange.v1.")
-    if "params" in item and item["params"] is not None and not isinstance(item["params"], dict):
+    # The v1 contract requires object-valued params on every request.
+    if "params" not in item or item["params"] is None or not isinstance(item["params"], dict):
         raise FrameError(STD_INVALID_PARAMS, "params must be an object")
-    if "params" in item and item["params"] is None:
-        raise FrameError(STD_INVALID_PARAMS, "params must be an object, not null")
 
     request_id = _validate_id(item.get("id", _MISSING))
     if request_id is _MISSING:
         if method != CANCEL_METHOD:
             raise FrameError(STD_INVALID_REQUEST,
                              "notifications are not accepted except iprange.v1.cancel")
-        normalized = {"jsonrpc": "2.0", "method": method,
-                      "params": item.get("params", {}), "id": None}
+        normalized = {"jsonrpc": "2.0", "method": method, "params": item["params"], "id": None}
     else:
         normalized = {"jsonrpc": "2.0", "id": request_id, "method": method,
-                      "params": item.get("params", {})}
+                      "params": item["params"]}
     if index is not None:
         normalized["_batch_index"] = index
     return normalized

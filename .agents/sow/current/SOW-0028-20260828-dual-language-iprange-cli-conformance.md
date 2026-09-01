@@ -833,6 +833,25 @@ Open decisions:
   fixture-free server-error cases (invalid_path, handle_not_found).
 - `v4/cli/check_golden.py`: CI-grade wire gate (validates every golden
   exchange and case file in well under a second; no binary needed).
+- Rust crate `v4/rust/iprange-cli/` added to the workspace (binary
+  `iprange`). Transport milestone qualified:
+  - `main.rs`: exact legacy/`--jsonrpc` mode selection;
+  - `rpc/framing.rs`: LF/CRLF line transport, 1,048,576 input/output
+    ceilings, 65,000 response-object ceiling, -32001 shutdown path;
+  - `rpc/schema.rs`: strict envelope decoding (params required on
+    every request including cancel, unknown members rejected, string
+    or integral ids only, notification rule), response encoding;
+  - `rpc/session.rs`: worker-thread execution, 1 active + 16 queued
+    admission bound (-32002), immediate cancel application, EOF
+    shutdown that drains admitted units (client that sends then
+    closes stdin still receives the factual response);
+  - `rpc/dispatch.rs`: fixed 53-entry registry, per-method params
+    validators (-32602), unknown methods -32601;
+  - `rpc/handlers/system.rs`: system.describe advertising the 52
+    callable methods in bytewise order;
+  - qualified by the external runner (`PASS system.describe [rust]`)
+    and direct framing probes (batch, CRLF, cancel, over-limit,
+    invalid envelope).
 
 ### 2026-08-28
 
