@@ -89,21 +89,34 @@ pub fn open(state: &mut SessionState, params: Value) -> Result<Value, HandlerErr
             "connection reader limit 64 is exhausted",
         ));
     }
-    let reader = open_reader(&path, &mode, &state.token)?;
-    let info = sdk(reader.info())?;
-    let mut handle = random_handle()?;
-    while state.resources.readers.contains_key(&handle)
-        || state.resources.closed_readers.contains_key(&handle)
-    {
-        handle = random_handle()?;
-    }
+    let mut reader = open_reader(&path, &mode, &state.token)?;
+    // Info and handle allocation are fallible after the open; a failure
+    // must still close the reader it opened before responding.
+    let result = (|| -> Result<(String, iprange_livedb::DatabaseInfo), HandlerError> {
+        let info = sdk(reader.info())?;
+        let mut handle = random_handle()?;
+        while state.resources.readers.contains_key(&handle)
+            || state.resources.closed_readers.contains_key(&handle)
+        {
+            handle = random_handle()?;
+        }
+        Ok((handle, info))
+    })();
+    let (handle, info) = match result {
+        Ok(parts) => parts,
+        Err(error) => {
+            return Err(close_on_error(
+                std::slice::from_mut(&mut reader),
+                error,
+            ))
+        }
+    };
     state.resources.readers.insert(handle.clone(), reader);
-    let result = json!({
+    bounded_result(json!({
         "method": "iprange.v1.reader.open",
         "reader": handle,
         "info": convert::database_info(&info),
-    });
-    bounded_result(result)
+    }))
 }
 
 pub fn close(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {

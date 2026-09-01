@@ -628,10 +628,16 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
         .map_err(HandlerError::invalid_params)?;
 
     let mut reader = open_source_reader(&source_path, &source_mode, &state.token)?;
-    let family = reader
-        .info()
-        .map_err(|error| lifecycle::sdk_error(&error, "not_started"))?
-        .address_family;
+    let family = match reader.info() {
+        Ok(info) => info.address_family,
+        Err(error) => {
+            let error = lifecycle::sdk_error(&error, "not_started");
+            return Err(reader::close_on_error(
+                std::slice::from_mut(&mut reader),
+                error,
+            ));
+        }
+    };
     let mut writer = match LiveWriter::open(path, budget, &state.token) {
         Ok(writer) => writer,
         Err(error) => {
@@ -764,10 +770,16 @@ pub fn last_seen_refresh(state: &mut SessionState, params: Value) -> Result<Valu
         .map_err(HandlerError::invalid_params)?;
 
     let mut reader = open_source_reader(&source_path, &source_mode, &state.token)?;
-    let family = reader
-        .info()
-        .map_err(|error| lifecycle::sdk_error(&error, "not_started"))?
-        .address_family;
+    let family = match reader.info() {
+        Ok(info) => info.address_family,
+        Err(error) => {
+            let error = lifecycle::sdk_error(&error, "not_started");
+            return Err(reader::close_on_error(
+                std::slice::from_mut(&mut reader),
+                error,
+            ));
+        }
+    };
     let mut writer = match LiveWriter::open(path, budget, &state.token) {
         Ok(writer) => writer,
         Err(error) => {
