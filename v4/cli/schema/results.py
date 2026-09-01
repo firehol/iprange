@@ -67,49 +67,113 @@ NETWORK_ENRICHMENT_VALUE = {
     "additional": False,
 }
 
+# A generic ranges.next schema cannot know the view that opened the cursor,
+# but each record must still be exactly one complete wire shape.  The runner
+# cross-checks the selected shape against the opening request.
 ADDRESS_RANGE = {
-    "type": "object",
-    "properties": {
-        "from": C.IP_ADDRESS,
-        "to": C.IP_ADDRESS,
-        # Direct views: u32; structured views: network_enrichment_v1
-        # value; feed views: absent.
-        "value": {
-            "type": "one_of",
-            "options": [C.U32, NETWORK_ENRICHMENT_VALUE],
+    "type": "one_of",
+    "options": [
+        {
+            "type": "object",
+            "properties": {
+                "from": C.IP_ADDRESS,
+                "to": C.IP_ADDRESS,
+                "value": C.U32,
+            },
+            "required": ["from", "to", "value"],
+            "additional": False,
         },
-    },
-    "required": ["from", "to"],
-    "additional": False,
+        {
+            "type": "object",
+            "properties": {
+                "from": C.IP_ADDRESS,
+                "to": C.IP_ADDRESS,
+                "value": NETWORK_ENRICHMENT_VALUE,
+            },
+            "required": ["from", "to", "value"],
+            "additional": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "from": C.IP_ADDRESS,
+                "to": C.IP_ADDRESS,
+            },
+            "required": ["from", "to"],
+            "additional": False,
+        },
+    ],
 }
+# Lookup facts are exhaustive by database kind.  This prevents a direct value
+# from being polluted with membership feeds or enrichment fields, and prevents
+# an absent fact from carrying any kind-specific payload.
 LOOKUP_MATCH = {
-    "type": "object",
-    "properties": {
-        "address": C.IP_ADDRESS,
-        "present": BOOL,
-        "value": C.U32,                      # direct databases
-        "feeds": {"type": "array", "items": C.FEED_NAME},  # membership
-        # network_enrichment_v1 decoded scalar fields:
-        "asn": C.U32,
-        "country_id": C.U32,
-        "state_id": C.U32,
-        "city_id": C.U32,
-        "location": {
-            "type": "one_of",
-            "options": [
-                {"type": "null"},
-                {"type": "object",
-                 "properties": {"latitude_microdegrees": SIGNED32,
-                                "longitude_microdegrees": SIGNED32},
-                 "required": ["latitude_microdegrees", "longitude_microdegrees"],
-                 "additional": False},
-            ],
+    "type": "one_of",
+    "options": [
+        {
+            "type": "object",
+            "properties": {
+                "address": C.IP_ADDRESS,
+                "present": BOOL,
+                "value": C.U32,
+            },
+            "required": ["address", "present", "value"],
+            "additional": False,
         },
-        "threat_feeds": {"type": "array", "items": C.FEED_NAME},
-    },
-    "required": ["address", "present"],
-    "additional": False,
+        {
+            "type": "object",
+            "properties": {
+                "address": C.IP_ADDRESS,
+                "present": BOOL,
+                "feeds": {"type": "array", "items": C.FEED_NAME},
+            },
+            "required": ["address", "present", "feeds"],
+            "additional": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "address": C.IP_ADDRESS,
+                "present": BOOL,
+                "asn": C.U32,
+                "country_id": C.U32,
+                "state_id": C.U32,
+                "city_id": C.U32,
+                "location": {
+                    "type": "one_of",
+                    "options": [
+                        {"type": "null"},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "latitude_microdegrees": SIGNED32,
+                                "longitude_microdegrees": SIGNED32,
+                            },
+                            "required": ["latitude_microdegrees", "longitude_microdegrees"],
+                            "additional": False,
+                        },
+                    ],
+                },
+                "threat_feeds": {"type": "array", "items": C.FEED_NAME},
+            },
+            "required": [
+                "address", "present", "asn", "country_id", "state_id", "city_id",
+                "location", "threat_feeds",
+            ],
+            "additional": False,
+        },
+        {
+            "type": "object",
+            "properties": {
+                "address": C.IP_ADDRESS,
+                "present": BOOL,
+            },
+            "required": ["address", "present"],
+            "additional": False,
+        },
+    ],
 }
+
 OUTPUT_FACTS = {
     "type": "object",
     "properties": {
@@ -954,11 +1018,52 @@ def validate_result(method, result):
     Raises ValidationError on schema violations or when the result
     `method` member does not equal the requested method.
     """
+    from . import methods
     from .engine import ValidationError, validate
     body = RESULTS.get(method)
     if body is None:
         return result
     validate(result, body, f"result[{method}]")
+    if method == "iprange.v1.system.describe":
+        advertised = result.get("methods", [])
+        if advertised != sorted(set(advertised)):
+            raise ValidationError(
+                "result[iprange.v1.system.describe].methods",
+                "advertised methods must be unique and bytewise sorted",
+            )
+        unknown = [name for name in advertised if name not in methods.METHODS]
+        if unknown:
+            raise ValidationError(
+                "result[iprange.v1.system.describe].methods",
+                f"unknown advertised methods {unknown!r}",
+            )
+        if methods.CANCEL_METHOD in advertised:
+            raise ValidationError(
+                "result[iprange.v1.system.describe].methods",
+                "cancel is a notification and must not be advertised as callable",
+            )
+    if method == "iprange.v1.reader.lookup":
+        for index, fact in enumerate(result.get("matches", [])):
+            keys = set(fact)
+            if fact.get("present") is False:
+                if keys != {"address", "present"}:
+                    raise ValidationError(
+                        f"result[iprange.v1.reader.lookup].matches[{index}]",
+                        "an absent lookup fact may contain only address and present",
+                    )
+            elif fact.get("present") is True:
+                kind_keys = keys - {"address", "present"}
+                valid = [{"value"}, {"feeds"}, {"asn", "country_id", "state_id", "city_id", "location", "threat_feeds"}]
+                if kind_keys not in valid:
+                    raise ValidationError(
+                        f"result[iprange.v1.reader.lookup].matches[{index}]",
+                        "a present lookup fact must carry exactly one value-kind payload",
+                    )
+            else:
+                raise ValidationError(
+                    f"result[iprange.v1.reader.lookup].matches[{index}].present",
+                    "present must be a boolean selecting an exhaustive fact shape",
+                )
     if result.get("method") != method:
         raise ValidationError(
             f"result[{method}].method",

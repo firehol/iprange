@@ -5,16 +5,17 @@ use std::path::Path;
 
 use iprange_livedb::error::{Error, ErrorCode};
 use iprange_livedb::publication::PublicationPolicy;
-use iprange_livedb::{FeedName, ImmutableReader};
+use iprange_livedb::{CloseOutcome, FeedName, ImmutableReader};
 use iprange_livedb::{Ipv4Key, Ipv6Key};
 use iprange_livedb::{NetworkEnrichmentV1View, ValueKind};
 use serde_json::{json, Value};
 
 use super::super::dispatch::HandlerError;
+use super::super::schema;
 use super::super::session::SessionState;
 use super::super::state::{CursorPoint, ReaderValue};
-use super::super::{new_handle, schema};
 use super::convert;
+use super::lifecycle;
 use super::output;
 
 pub const READER_LIMIT: usize = 64;
@@ -88,16 +89,15 @@ pub fn open(state: &mut SessionState, params: Value) -> Result<Value, HandlerErr
             "connection reader limit 64 is exhausted",
         ));
     }
-    let reader = open_immutable(&path, &mode)?;
-    let info = reader.info();
-    let mut handle = new_handle();
-    while state.resources.readers.contains_key(&handle) {
-        handle = new_handle();
+    let reader = open_reader(&path, &mode, &state.token)?;
+    let info = sdk(reader.info())?;
+    let mut handle = random_handle()?;
+    while state.resources.readers.contains_key(&handle)
+        || state.resources.closed_readers.contains_key(&handle)
+    {
+        handle = random_handle()?;
     }
-    state
-        .resources
-        .readers
-        .insert(handle.clone(), ReaderValue::Immutable(reader));
+    state.resources.readers.insert(handle.clone(), reader);
     let result = json!({
         "method": "iprange.v1.reader.open",
         "reader": handle,
@@ -108,13 +108,20 @@ pub fn open(state: &mut SessionState, params: Value) -> Result<Value, HandlerErr
 
 pub fn close(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
     let handle = handle_param(&params, "reader").map_err(HandlerError::invalid_params)?;
-    if state.resources.readers.remove(&handle).is_none() {
+    if state.resources.closed_readers.contains_key(&handle) {
+        return Err(HandlerError::new(
+            "handle_closed",
+            "not_started",
+            "reader handle is already closed",
+        ));
+    }
+    let Some(mut reader) = state.resources.readers.remove(&handle) else {
         return Err(HandlerError::new(
             "handle_not_found",
             "not_started",
-            "reader handle is unknown or already closed",
+            "reader handle is unknown",
         ));
-    }
+    };
     let dependent: Vec<String> = state
         .resources
         .cursors
@@ -126,10 +133,46 @@ pub fn close(state: &mut SessionState, params: Value) -> Result<Value, HandlerEr
         state.resources.cursors.remove(&cursor);
         state.resources.closed_cursors.insert(cursor, ());
     }
-    bounded_result(json!({
+    let source_close = match reader.close_live() {
+        Ok(result) => result,
+        Err(error) => {
+            state.resources.readers.insert(handle.clone(), reader);
+            return Err(read_error(error));
+        }
+    };
+    let source_close = match source_close {
+        Some(result) => {
+            let close = reader_close_result(&result);
+            if result.outcome != CloseOutcome::Closed || result.cause.is_some() {
+                state.resources.readers.insert(handle.clone(), reader);
+                let code = result
+                    .cause
+                    .as_ref()
+                    .map(|error| sdk_code(error.code()))
+                    .unwrap_or("io");
+                return Err(HandlerError {
+                    code,
+                    outcome: "read_only_failure",
+                    message: result.cause.as_ref().map_or_else(
+                        || "live reader close is incomplete".to_owned(),
+                        ToString::to_string,
+                    ),
+                    details: Some(json!({"source_close": close})),
+                });
+            }
+            Some(close)
+        }
+        None => None,
+    };
+    state.resources.closed_readers.insert(handle.clone(), ());
+    let mut result = json!({
         "method": "iprange.v1.reader.close",
         "closed": true,
-    }))
+    });
+    if let Some(source_close) = source_close {
+        result["source_close"] = source_close;
+    }
+    bounded_result(result)
 }
 
 pub fn info(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
@@ -137,7 +180,7 @@ pub fn info(state: &mut SessionState, params: Value) -> Result<Value, HandlerErr
         state,
         &handle_param(&params, "reader").map_err(HandlerError::invalid_params)?,
     )?;
-    let info = reader.info();
+    let info = sdk(reader.info())?;
     bounded_result(json!({
         "method": "iprange.v1.reader.info",
         "info": convert::database_info(&info),
@@ -163,7 +206,7 @@ pub fn lookup(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
         .ok_or_else(|| invalid("params must be an object"))?;
     let reader = reader(state, object["reader"].as_str().unwrap_or(""))?;
     let addresses = object["addresses"].as_array().cloned().unwrap_or_default();
-    let info = reader.info();
+    let info = sdk(reader.info())?;
     let mut matches = Vec::with_capacity(addresses.len());
     for address in addresses {
         let text = address
@@ -233,7 +276,7 @@ pub fn matching_feeds(state: &mut SessionState, params: Value) -> Result<Value, 
         .as_str()
         .ok_or_else(|| invalid("address must be a string"))?;
     let point = parse_address(address).map_err(HandlerError::invalid_params)?;
-    let info = reader.info();
+    let info = sdk(reader.info())?;
     let (feeds, count) = match info.value_kind {
         ValueKind::Direct => {
             return Err(HandlerError::new(
@@ -290,60 +333,60 @@ pub fn matching_feeds(state: &mut SessionState, params: Value) -> Result<Value, 
     }))
 }
 
-pub fn database_info(_state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
+pub fn database_info(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
     let (path, mode) = source_params(&params).map_err(HandlerError::invalid_params)?;
-    let reader = open_immutable(&path, &mode)?;
-    let info = reader.info();
+    let reader = open_reader(&path, &mode, &state.token)?;
+    let info = sdk(reader.info())?;
+    close_ephemeral_reader(reader)?;
     bounded_result(json!({
         "method": "iprange.v1.database.info",
         "info": convert::database_info(&info),
     }))
 }
 
-pub fn database_metadata(_state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
+pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
     let object = params
         .as_object()
         .ok_or_else(|| invalid("params must be an object"))?;
     let (path, mode) = source_value(&object["source"]).map_err(HandlerError::invalid_params)?;
-    let reader = open_immutable(&path, &mode)?;
+    let reader = open_reader(&path, &mode, &state.token)?;
     let result = metadata_result(
         "iprange.v1.database.metadata.get",
         &reader,
         &object["delivery"],
-    )?;
-    drop(reader);
-    bounded_result(result)
+    );
+    close_ephemeral_reader(reader)?;
+    bounded_result(result?)
 }
 
 pub(crate) fn reader<'a>(
     state: &'a mut SessionState,
     handle: &str,
-) -> Result<&'a ImmutableReader, HandlerError> {
+) -> Result<&'a ReaderValue, HandlerError> {
     if !valid_handle(handle) {
         return Err(HandlerError::invalid_params("invalid reader handle"));
     }
-    state
-        .resources
-        .readers
-        .get(handle)
-        .and_then(ReaderValue::immutable)
-        .ok_or_else(|| {
-            HandlerError::new(
-                "handle_not_found",
-                "not_started",
-                "reader handle is unknown or already closed",
-            )
-        })
-}
-
-fn open_immutable(path: &str, mode: &str) -> Result<ImmutableReader, HandlerError> {
-    if mode == "live" {
+    if state.resources.closed_readers.contains_key(handle) {
         return Err(HandlerError::new(
-            "io",
+            "handle_closed",
             "not_started",
-            "live reader registration is unsupported",
+            "reader handle is already closed",
         ));
     }
+    state.resources.readers.get(handle).ok_or_else(|| {
+        HandlerError::new(
+            "handle_not_found",
+            "not_started",
+            "reader handle is unknown",
+        )
+    })
+}
+
+fn open_reader(
+    path: &str,
+    mode: &str,
+    cancellation: &iprange_livedb::CancellationToken,
+) -> Result<ReaderValue, HandlerError> {
     match Path::new(path).try_exists() {
         Ok(true) => {}
         Ok(false) => {
@@ -361,18 +404,68 @@ fn open_immutable(path: &str, mode: &str) -> Result<ImmutableReader, HandlerErro
             ));
         }
     }
-    ImmutableReader::open(path).map_err(|error| {
-        if error.code() == ErrorCode::Io {
-            HandlerError::new("io", "not_started", error.to_string())
-        } else {
-            HandlerError::new(sdk_code(error.code()), "not_started", error.to_string())
+    match mode {
+        "immutable" => ImmutableReader::open(path)
+            .map(ReaderValue::Immutable)
+            .map_err(read_error),
+        _ => iprange_livedb::LiveReader::open(path, cancellation)
+            .map(ReaderValue::Live)
+            .map_err(read_error),
+    }
+}
+
+fn close_ephemeral_reader(mut reader: ReaderValue) -> Result<(), HandlerError> {
+    if let Some(result) = reader.close_live().map_err(read_error)? {
+        if result.outcome != CloseOutcome::Closed || result.cause.is_some() {
+            let code = result
+                .cause
+                .as_ref()
+                .map(|error| sdk_code(error.code()))
+                .unwrap_or("io");
+            return Err(HandlerError {
+                code,
+                outcome: "read_only_failure",
+                message: result.cause.as_ref().map_or_else(
+                    || "live reader close is incomplete".to_owned(),
+                    ToString::to_string,
+                ),
+                details: Some(json!({"source_close": reader_close_result(&result)})),
+            });
         }
+    }
+    Ok(())
+}
+
+fn reader_close_result(result: &iprange_livedb::ReaderCloseResult) -> Value {
+    json!({
+        "outcome": close_outcome(result.outcome),
+        "cleanup": {},
+        "coordination_cleanup": lifecycle::coordination_cleanup(result.coordination_cleanup),
     })
+}
+
+fn close_outcome(value: CloseOutcome) -> &'static str {
+    match value {
+        CloseOutcome::Closed => "closed",
+        CloseOutcome::CloseIncomplete => "close_incomplete",
+    }
+}
+
+pub(crate) fn random_handle() -> Result<String, HandlerError> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|error| {
+        HandlerError::new(
+            "io",
+            "not_started",
+            format!("generate reader handle: {error}"),
+        )
+    })?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn metadata_result(
     method: &str,
-    reader: &ImmutableReader,
+    reader: &ReaderValue,
     delivery: &Value,
 ) -> Result<Value, HandlerError> {
     let delivery = delivery
@@ -429,8 +522,8 @@ fn metadata_result(
     }
 }
 
-fn membership_names(
-    reader: &ImmutableReader,
+pub(crate) fn membership_names(
+    reader: &ReaderValue,
     membership: Option<&iprange_livedb::MembershipView<'_>>,
 ) -> Result<Vec<String>, HandlerError> {
     let Some(membership) = membership else {
@@ -447,6 +540,23 @@ fn membership_names(
 }
 
 pub(crate) fn threat_feed_names(
+    reader: &ReaderValue,
+    view: &NetworkEnrichmentV1View<'_>,
+) -> Result<Vec<String>, HandlerError> {
+    let Some(membership) = sdk(view.threat_membership())? else {
+        return Ok(Vec::new());
+    };
+    let mut feeds = Vec::new();
+    let mut cursor = sdk(reader.feed_cursor())?;
+    while let Some(entry) = sdk(cursor.next_feed())? {
+        if sdk(membership.contains_index(entry.index))? {
+            feeds.push(entry.name.as_str().to_owned());
+        }
+    }
+    Ok(feeds)
+}
+
+pub(crate) fn immutable_threat_feed_names(
     reader: &ImmutableReader,
     view: &NetworkEnrichmentV1View<'_>,
 ) -> Result<Vec<String>, HandlerError> {
@@ -489,21 +599,82 @@ pub(crate) fn sdk<T>(result: Result<T, Error>) -> Result<T, HandlerError> {
 pub(crate) fn sdk_code(code: ErrorCode) -> &'static str {
     match code {
         ErrorCode::InvalidArgument => "invalid_argument",
-        ErrorCode::NameInvalid => "name_invalid",
-        ErrorCode::NameExists => "name_exists",
-        ErrorCode::NameNotFound => "name_not_found",
+        ErrorCode::NullPointer => "null_pointer",
+        ErrorCode::MisalignedPointer => "misaligned_pointer",
+        ErrorCode::InvalidLength => "invalid_length",
+        ErrorCode::InvalidEnum => "invalid_enum",
+        ErrorCode::ReservedNonzero => "reserved_nonzero",
+        ErrorCode::BufferTooSmall => "buffer_too_small",
+        ErrorCode::WrongHandleKind => "handle_wrong_kind",
+        ErrorCode::HandleClosed => "handle_closed",
+        ErrorCode::HandleBusy => "handle_busy",
         ErrorCode::WrongState => "wrong_state",
         ErrorCode::WrongAddressFamily => "wrong_address_family",
         ErrorCode::WrongValueKind => "wrong_value_kind",
         ErrorCode::WrongValueTag => "wrong_value_tag",
-        ErrorCode::UnsupportedStructure => "unsupported_structure",
-        ErrorCode::WrongStructureKind => "wrong_structure_kind",
+        ErrorCode::RangeReversed => "range_reversed",
+        ErrorCode::NameInvalid => "name_invalid",
+        ErrorCode::NameExists => "name_exists",
+        ErrorCode::NameNotFound => "name_not_found",
+        ErrorCode::StaleReference => "stale_reference",
+        ErrorCode::ForeignReference => "foreign_reference",
+        ErrorCode::NoPendingTransaction => "no_pending_transaction",
+        ErrorCode::TransactionAborted => "transaction_aborted",
+        ErrorCode::AbortIncomplete => "abort_incomplete",
+        ErrorCode::InsufficientResourceBudget => "insufficient_resource_budget",
+        ErrorCode::PageSpaceExhausted => "page_space_exhausted",
+        ErrorCode::WorkLimitTooSmall => "work_limit_too_small",
+        ErrorCode::Cancelled => "cancelled",
+        ErrorCode::SourceFailed => "source_failed",
+        ErrorCode::SinkFailed => "sink_failed",
+        ErrorCode::StoppedBySink => "stopped_by_sink",
         ErrorCode::Io => "io",
         ErrorCode::FormatInvalid => "format_invalid",
-        ErrorCode::Cancelled => "cancelled",
-        ErrorCode::InsufficientResourceBudget => "insufficient_resource_budget",
-        ErrorCode::WrongHandleKind => "handle_wrong_kind",
-        ErrorCode::HandleClosed => "handle_closed",
+        ErrorCode::NotV4 => "not_v4",
+        ErrorCode::DurabilityUnsupported => "durability_unsupported",
+        ErrorCode::PublicationUnsupported => "publication_unsupported",
+        ErrorCode::AccessPolicyUnsupported => "access_policy_unsupported",
+        ErrorCode::Conflict => "conflict",
+        ErrorCode::Unresolvable => "unresolvable",
+        ErrorCode::WriterBusy => "writer_busy",
+        ErrorCode::DirectoryIdentityMismatch => "directory_identity_mismatch",
+        ErrorCode::DestinationNameMismatch => "destination_name_mismatch",
+        ErrorCode::CleanupConflict => "cleanup_conflict",
+        ErrorCode::CoordinationSequenceExhausted => "coordination_sequence_exhausted",
+        ErrorCode::LiveCoordinationUnsupported => "live_coordination_unsupported",
+        ErrorCode::LiveCoordinationCleanupRequired => "live_coordination_cleanup_required",
+        ErrorCode::LiveCoordinationMalformedRequiresReset => {
+            "live_coordination_malformed_requires_reset"
+        }
+        ErrorCode::LiveOpenCleanupRequired => "live_open_cleanup_required",
+        ErrorCode::LiveRecoveryCoordinationUnavailable => "live_recovery_coordination_unavailable",
+        ErrorCode::LiveRecoveryCurrentGenerationUnprovable => {
+            "live_recovery_current_generation_unprovable"
+        }
+        ErrorCode::LiveRecoveryCurrentGenerationUnreadable => {
+            "live_recovery_current_generation_unreadable"
+        }
+        ErrorCode::RecoveryCandidateChanged => "recovery_candidate_changed",
+        ErrorCode::RecoveryPreparationFailed => "recovery_preparation_failed",
+        ErrorCode::SnapshotPreparationFailed => "snapshot_preparation_failed",
+        ErrorCode::TransitionSuperseded => "transition_superseded",
+        ErrorCode::CurrentGenerationUnprovable => "current_generation_unprovable",
+        ErrorCode::ForkedHandle => "forked_handle",
+        ErrorCode::Panic => "panic",
+        ErrorCode::OsUnsupported => "os_unsupported",
+        ErrorCode::TransactionIdExhausted => "transaction_id_exhausted",
+        ErrorCode::ArithmeticOverflow => "arithmetic_overflow",
+        ErrorCode::FeedIndexExhausted => "feed_index_exhausted",
+        ErrorCode::MembershipIdExhausted => "membership_id_exhausted",
+        ErrorCode::ReaderCapacityExhausted => "reader_capacity_exhausted",
+        ErrorCode::CleanupInProgress => "cleanup_in_progress",
+        ErrorCode::FaultWorkerUnavailable => "fault_worker_unavailable",
+        ErrorCode::FaultWorkerFailed => "fault_worker_failed",
+        ErrorCode::UnsupportedStructure => "unsupported_structure",
+        ErrorCode::WrongStructureKind => "wrong_structure_kind",
+        ErrorCode::StructureIdExhausted => "structure_id_exhausted",
+        // ErrorCode is #[non_exhaustive] in iprange-livedb, so Rust requires
+        // this arm even after naming every currently published variant.
         _ => "io",
     }
 }
@@ -519,6 +690,26 @@ pub(crate) fn exact_object<'a>(
         }
     }
     for field in fields {
+        if !object.contains_key(*field) {
+            return Err(format!("missing member {field:?}"));
+        }
+    }
+    Ok(object)
+}
+
+/// Same as `exact_object` but the optional fields may be absent.
+pub(crate) fn exact_object_opt<'a>(
+    value: &'a Value,
+    required: &[&str],
+    optional: &[&str],
+) -> Result<&'a serde_json::Map<String, Value>, String> {
+    let object = value.as_object().ok_or("params must be an object")?;
+    for key in object.keys() {
+        if !required.contains(&key.as_str()) && !optional.contains(&key.as_str()) {
+            return Err(format!("unknown member {key:?}"));
+        }
+    }
+    for field in required {
         if !object.contains_key(*field) {
             return Err(format!("missing member {field:?}"));
         }
@@ -687,5 +878,177 @@ impl MergeEnrichment for Value {
                 target.insert(key.clone(), item.clone());
             }
         }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use iprange_livedb::{
+        create_live, AddressFamily, CancellationToken, DirectTransaction, Ipv6Key, LiveWriter,
+        StructureKind, TransactionBudget, ValueKind, ValueTag,
+    };
+
+    pub(crate) struct DirectV6Live {
+        pub path: PathBuf,
+    }
+
+    impl DirectV6Live {
+        pub fn sidecar(&self) -> PathBuf {
+            let mut name = self.path.file_name().unwrap().to_os_string();
+            name.push(".readers");
+            self.path.with_file_name(name)
+        }
+
+        pub fn remove(self) {
+            let _ = fs::remove_file(&self.path);
+            let _ = fs::remove_file(self.sidecar());
+        }
+    }
+
+    pub(crate) fn create_direct_v6(label: &str) -> DirectV6Live {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-reader-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        let token = CancellationToken::new();
+        create_live(
+            &path,
+            AddressFamily::Ipv6,
+            ValueKind::Direct,
+            StructureKind::None,
+            ValueTag::new(b"reader-test").unwrap(),
+            2,
+            &token,
+        )
+        .unwrap();
+        let budget = TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 10_000,
+            max_file_growth_pages: 10_000,
+            max_open_files: 2,
+        };
+        let mut writer = LiveWriter::open(&path, budget, &token).unwrap();
+        let mut transaction: DirectTransaction<'_> =
+            writer.begin_direct_transaction(&token).unwrap();
+        transaction
+            .assign_v6(
+                Ipv6Key::from_u128(0x20010db8000000000000000000000001),
+                Ipv6Key::from_u128(0x20010db800000000000000000000000a),
+                7,
+            )
+            .unwrap();
+        transaction.commit().unwrap();
+        writer.close().unwrap();
+        DirectV6Live { path }
+    }
+
+    pub(crate) fn live_source(path: &Path) -> serde_json::Value {
+        serde_json::json!({
+            "source": {
+                "path": path.display().to_string(),
+                "mode": "live"
+            }
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rpc::handlers::cursors;
+
+    #[test]
+    fn ranges_open_accepts_optional_start() {
+        let params = serde_json::json!({
+            "reader": "a0000000000000000000000000000000",
+            "view": {"kind":"direct"},
+            "direction":"forward",
+            "start":"192.0.2.1",
+            "batch_size":16
+        });
+        assert!(cursors::validate_ranges_open(&params).is_ok());
+    }
+
+    #[test]
+    fn live_reader_roundtrip_and_closed_tombstone_are_factual() {
+        let fixture = test_support::create_direct_v6("roundtrip");
+        let mut state = SessionState::default();
+        let opened = open(&mut state, test_support::live_source(&fixture.path)).unwrap();
+        let handle = opened["reader"].as_str().unwrap().to_owned();
+        assert_eq!(opened["info"]["address_family"], "ipv6");
+
+        let lookup = lookup(
+            &mut state,
+            serde_json::json!({
+                "reader": handle,
+                "addresses": ["2001:db8::1"]
+            }),
+        )
+        .unwrap();
+        assert_eq!(lookup["matches"][0]["value"], 7);
+
+        let closed = close(&mut state, serde_json::json!({"reader": handle})).unwrap();
+        assert_eq!(closed["closed"], true);
+        assert_eq!(closed["source_close"]["outcome"], "closed");
+
+        let reused = info(&mut state, serde_json::json!({"reader": handle})).unwrap_err();
+        assert_eq!(
+            (reused.code, reused.outcome),
+            ("handle_closed", "not_started")
+        );
+        let twice = close(&mut state, serde_json::json!({"reader": handle})).unwrap_err();
+        assert_eq!(
+            (twice.code, twice.outcome),
+            ("handle_closed", "not_started")
+        );
+        let unknown = info(
+            &mut state,
+            serde_json::json!({"reader":"b0000000000000000000000000000000"}),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (unknown.code, unknown.outcome),
+            ("handle_not_found", "not_started")
+        );
+        fixture.remove();
+    }
+}
+
+#[cfg(test)]
+mod open_failure_tests {
+    use super::*;
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn sdk_open_failure_is_read_only_failure() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-reader-invalid-{}-{unique}",
+            std::process::id()
+        ));
+        fs::write(&path, b"not an immutable v4 database").unwrap();
+        let mut state = SessionState::default();
+        let error = open(
+            &mut state,
+            serde_json::json!({
+                "source":{"path":path.display().to_string(),"mode":"immutable"}
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(error.outcome, "read_only_failure");
+        assert_ne!(error.code, "io");
+        fs::remove_file(path).unwrap();
     }
 }

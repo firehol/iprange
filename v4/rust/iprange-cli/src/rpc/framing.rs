@@ -64,17 +64,22 @@ impl<R: BufRead> LineReader<R> {
                     if let Some(pos) = b.iter().position(|&ch| ch == b'\n') {
                         self.buf.extend_from_slice(&b[..pos]);
                         self.inner.consume(pos + 1);
-                        if self.buf.len() > INPUT_FRAME_LIMIT {
-                            return Err(FrameTooLarge);
-                        }
-                        // Strip the CR of a CRLF terminator so a blank
-                        // CRLF line is a genuinely empty frame.
+                        // Strip the CR of a CRLF terminator before the
+                        // limit check: the ceiling applies to the frame
+                        // payload, not the line terminator.
                         if self.buf.last() == Some(&b'\r') {
                             self.buf.pop();
                         }
+                        if self.buf.len() > INPUT_FRAME_LIMIT {
+                            return Err(FrameTooLarge);
+                        }
                         return Ok(Some(std::mem::take(&mut self.buf)));
                     }
-                    if self.buf.len() + b.len() > INPUT_FRAME_LIMIT {
+                    // One accumulated byte may still be the CR of a
+                    // CRLF terminator, so only a payload that exceeds
+                    // the limit even after stripping one byte is
+                    // definitely over the ceiling here.
+                    if self.buf.len() + b.len() > INPUT_FRAME_LIMIT + 1 {
                         // Consume and discard the rest of the line so
                         // shutdown stays deterministic.
                         let take = INPUT_FRAME_LIMIT + 1 - self.buf.len();
@@ -148,6 +153,34 @@ mod tests {
     fn over_limit_detected() {
         let body = vec![b'a'; INPUT_FRAME_LIMIT + 10];
         let mut data = body.clone();
+        data.push(b'\n');
+        let mut reader = LineReader::new(Cursor::new(data));
+        assert!(reader.read_line().is_err());
+        assert!(reader.read_line().unwrap().is_none());
+    }
+
+    #[test]
+    fn exact_limit_frames_are_accepted_with_lf_and_crlf() {
+        // The ceiling applies before the line terminator, so a payload
+        // of exactly INPUT_FRAME_LIMIT bytes is a legal frame under
+        // both LF and CRLF terminators.
+        let body = vec![b'x'; INPUT_FRAME_LIMIT];
+        let mut lf = body.clone();
+        lf.push(b'\n');
+        let mut reader = LineReader::new(Cursor::new(lf));
+        assert_eq!(reader.read_line().unwrap().unwrap(), body);
+        assert!(reader.read_line().unwrap().is_none());
+
+        let mut crlf = body.clone();
+        crlf.extend_from_slice(b"\r\n");
+        let mut reader = LineReader::new(Cursor::new(crlf));
+        assert_eq!(reader.read_line().unwrap().unwrap(), body);
+        assert!(reader.read_line().unwrap().is_none());
+    }
+
+    #[test]
+    fn one_byte_over_limit_is_rejected() {
+        let mut data = vec![b'x'; INPUT_FRAME_LIMIT + 1];
         data.push(b'\n');
         let mut reader = LineReader::new(Cursor::new(data));
         assert!(reader.read_line().is_err());

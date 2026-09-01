@@ -26,7 +26,7 @@
           },
           "feed": "feed-a",
           "value_tag": {
-            "hex": "00"
+            "hex": "01"
           },
           "metadata": {
             "mode": "clear"

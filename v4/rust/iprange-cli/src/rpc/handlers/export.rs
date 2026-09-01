@@ -566,7 +566,7 @@ fn stream_segments_v4(
             let mut cursor =
                 view_cursor(reader.network_enrichment_v1_cursor_v4(RangeDirection::Forward))?;
             while let Some(range) = sdk(cursor.next_range()).map_err(view_error)? {
-                let feeds = super::reader::threat_feed_names(reader, &range.value)?;
+                let feeds = super::reader::immutable_threat_feed_names(reader, &range.value)?;
                 let value =
                     ExportValue::Structured(super::convert::enrichment_view(&range.value, &feeds));
                 sink(u128::from(range.from.0), u128::from(range.to.0), &value)?;
@@ -634,7 +634,7 @@ fn stream_segments_v6(
             let mut cursor =
                 view_cursor(reader.network_enrichment_v1_cursor_v6(RangeDirection::Forward))?;
             while let Some(range) = sdk(cursor.next_range()).map_err(view_error)? {
-                let feeds = super::reader::threat_feed_names(reader, &range.value)?;
+                let feeds = super::reader::immutable_threat_feed_names(reader, &range.value)?;
                 let value =
                     ExportValue::Structured(super::convert::enrichment_view(&range.value, &feeds));
                 sink(range.from.to_u128(), range.to.to_u128(), &value)?;

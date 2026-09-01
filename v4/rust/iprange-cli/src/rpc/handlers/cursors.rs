@@ -1,17 +1,13 @@
 //! Bounded feed and range cursor JSON-RPC handlers.
 
-use iprange_livedb::error::Error;
 use iprange_livedb::{AddressFamily, FeedName, Ipv4Key, Ipv6Key, RangeDirection, ValueKind};
 use serde_json::{json, Value};
 
 use super::super::dispatch::HandlerError;
 use super::super::framing::RESPONSE_OBJECT_LIMIT;
-use super::super::new_handle;
 use super::super::session::SessionState;
-use super::super::state::{CursorPoint, CursorValue, CursorView};
-use super::reader::{
-    bounded_result, exact_object, parse_address, read_error, sdk, validate_handle,
-};
+use super::super::state::{CursorKind, CursorPoint, CursorValue, CursorView, ReaderValue};
+use super::reader::{bounded_result, exact_object, exact_object_opt, parse_address, sdk, validate_handle};
 
 pub const CURSOR_LIMIT: usize = 64;
 
@@ -27,7 +23,11 @@ pub fn validate_feeds_open(params: &Value) -> Result<(), String> {
 }
 
 pub fn validate_ranges_open(params: &Value) -> Result<(), String> {
-    let object = exact_object(params, &["reader", "view", "direction", "batch_size"])?;
+    let object = exact_object_opt(
+        params,
+        &["reader", "view", "direction", "batch_size"],
+        &["start"],
+    )?;
     validate_handle(object["reader"].as_str())?;
     validate_view(&object["view"])?;
     match object["direction"].as_str() {
@@ -75,7 +75,7 @@ pub fn feeds_open(state: &mut SessionState, params: Value) -> Result<Value, Hand
         .expect("validator checked batch") as usize;
     ensure_cursor_capacity(state)?;
     let reader = super::reader::reader(state, &reader_handle)?;
-    if reader.info().value_kind == ValueKind::Direct {
+    if sdk(reader.info())?.value_kind == ValueKind::Direct {
         return Err(wrong_view(
             "feed enumeration requires a membership-capable database",
         ));
@@ -84,7 +84,15 @@ pub fn feeds_open(state: &mut SessionState, params: Value) -> Result<Value, Hand
     let view = CursorView::Feed {
         name: String::new(),
     };
-    let cursor = insert_cursor(state, reader_handle, view, false, None, batch)?;
+    let cursor = insert_cursor(
+        state,
+        reader_handle,
+        CursorKind::Feeds,
+        view,
+        false,
+        None,
+        batch,
+    )?;
     bounded_result(json!({
         "method": "iprange.v1.reader.feeds.open",
         "cursor": cursor,
@@ -96,6 +104,9 @@ pub fn feeds_next(state: &mut SessionState, params: Value) -> Result<Value, Hand
     let Some(cursor) = state.resources.cursors.get(&handle).cloned() else {
         return Err(closed_or_unknown_cursor(state, &handle));
     };
+    if cursor.kind != CursorKind::Feeds {
+        return Err(wrong_cursor_kind());
+    }
     let reader = super::reader::reader(state, &cursor.reader)?;
     let mut catalog = sdk(reader.feed_cursor())?;
     let mut rows = Vec::new();
@@ -133,7 +144,12 @@ pub fn feeds_next(state: &mut SessionState, params: Value) -> Result<Value, Hand
 }
 
 pub fn feeds_close(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
-    close(state, &params, "iprange.v1.reader.feeds.close")
+    close(
+        state,
+        &params,
+        "iprange.v1.reader.feeds.close",
+        CursorKind::Feeds,
+    )
 }
 
 pub fn ranges_open(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
@@ -180,10 +196,16 @@ pub fn ranges_open(state: &mut SessionState, params: Value) -> Result<Value, Han
             "start is valid only for direct or structured views",
         ));
     }
-    open_and_seek(reader, &view, reverse, start)
-        .map_err(read_error)
-        .map_err(view_error)?;
-    let cursor = insert_cursor(state, reader_handle, view, reverse, start, batch)?;
+    open_and_seek(reader, &view, reverse, start)?;
+    let cursor = insert_cursor(
+        state,
+        reader_handle,
+        CursorKind::Ranges,
+        view,
+        reverse,
+        start,
+        batch,
+    )?;
     bounded_result(json!({
         "method": "iprange.v1.reader.ranges.open",
         "cursor": cursor,
@@ -195,6 +217,9 @@ pub fn ranges_next(state: &mut SessionState, params: Value) -> Result<Value, Han
     let Some(cursor) = state.resources.cursors.get(&handle).cloned() else {
         return Err(closed_or_unknown_cursor(state, &handle));
     };
+    if cursor.kind != CursorKind::Ranges {
+        return Err(wrong_cursor_kind());
+    }
     if cursor.exhausted {
         close_cursor(state, &handle);
         return bounded_result(json!({
@@ -255,18 +280,23 @@ pub fn ranges_next(state: &mut SessionState, params: Value) -> Result<Value, Han
 }
 
 pub fn ranges_close(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
-    close(state, &params, "iprange.v1.reader.ranges.close")
+    close(
+        state,
+        &params,
+        "iprange.v1.reader.ranges.close",
+        CursorKind::Ranges,
+    )
 }
 
 fn next_record(
-    reader: &iprange_livedb::ImmutableReader,
+    reader: &ReaderValue,
     view: &CursorView,
     reverse: bool,
     point: &mut Option<CursorPoint>,
     range_skip: &mut u64,
     records: &mut Vec<Value>,
 ) -> Result<bool, HandlerError> {
-    let info = reader.info();
+    let info = sdk(reader.info())?;
     let direction = range_direction(reverse);
     let family_matches = matches!(
         (*point, info.address_family),
@@ -411,40 +441,69 @@ fn push_v6(
 }
 
 fn open_and_seek(
-    reader: &iprange_livedb::ImmutableReader,
+    reader: &ReaderValue,
     view: &CursorView,
     reverse: bool,
     start: Option<CursorPoint>,
-) -> Result<(), Error> {
+) -> Result<(), HandlerError> {
+    let family = sdk(reader.info())?.address_family;
     let direction = range_direction(reverse);
+    let family_matches = |point: Option<CursorPoint>| {
+        matches!(
+            (point, family),
+            (None, _)
+                | (Some(CursorPoint::V4(_)), AddressFamily::Ipv4)
+                | (Some(CursorPoint::V6(_)), AddressFamily::Ipv6)
+        )
+    };
+    if !family_matches(start) {
+        return Err(wrong_family());
+    }
     match view {
         CursorView::Direct => match start {
             Some(CursorPoint::V4(value)) => {
-                let mut cursor = reader.direct_cursor_v4(direction)?;
-                cursor.seek(Ipv4Key(value))
+                let mut cursor = sdk(reader.direct_cursor_v4(direction)).map_err(view_error)?;
+                sdk(cursor.seek(Ipv4Key(value)))
             }
             Some(CursorPoint::V6(value)) => {
-                let mut cursor = reader.direct_cursor_v6(direction)?;
-                cursor.seek(Ipv6Key::from_u128(value))
+                let mut cursor = sdk(reader.direct_cursor_v6(direction)).map_err(view_error)?;
+                sdk(cursor.seek(Ipv6Key::from_u128(value)))
             }
-            None => reader.direct_cursor_v4(direction).map(|_| ()),
+            None if family == AddressFamily::Ipv4 => {
+                sdk(reader.direct_cursor_v4(direction)).map(|_| ())
+            }
+            None => sdk(reader.direct_cursor_v6(direction)).map(|_| ()),
         },
         CursorView::Structured => match start {
             Some(CursorPoint::V4(value)) => {
-                let mut cursor = reader.network_enrichment_v1_cursor_v4(direction)?;
-                cursor.seek(Ipv4Key(value))
+                let mut cursor =
+                    sdk(reader.network_enrichment_v1_cursor_v4(direction)).map_err(view_error)?;
+                sdk(cursor.seek(Ipv4Key(value)))
             }
             Some(CursorPoint::V6(value)) => {
-                let mut cursor = reader.network_enrichment_v1_cursor_v6(direction)?;
-                cursor.seek(Ipv6Key::from_u128(value))
+                let mut cursor =
+                    sdk(reader.network_enrichment_v1_cursor_v6(direction)).map_err(view_error)?;
+                sdk(cursor.seek(Ipv6Key::from_u128(value)))
             }
-            None => reader
-                .network_enrichment_v1_cursor_v4(direction)
-                .map(|_| ()),
+            None if family == AddressFamily::Ipv4 => {
+                sdk(reader.network_enrichment_v1_cursor_v4(direction))
+                    .map(|_| ())
+                    .map_err(view_error)
+            }
+            None => sdk(reader.network_enrichment_v1_cursor_v6(direction))
+                .map(|_| ())
+                .map_err(view_error),
         },
         CursorView::Feed { name } => match start {
-            Some(_) => Err(Error::InvalidArgument("feed views do not accept start")),
-            None => reader.feed_range_cursor_v4(name, direction).map(|_| ()),
+            Some(_) => Err(wrong_view("feed views do not accept start")),
+            None if family == AddressFamily::Ipv4 => {
+                sdk(reader.feed_range_cursor_v4(name, direction))
+                    .map(|_| ())
+                    .map_err(view_error)
+            }
+            None => sdk(reader.feed_range_cursor_v6(name, direction))
+                .map(|_| ())
+                .map_err(view_error),
         },
     }
 }
@@ -483,7 +542,7 @@ fn seek_structured_v4(
 }
 
 fn next_feed_v4(
-    reader: &iprange_livedb::ImmutableReader,
+    reader: &ReaderValue,
     name: &str,
     direction: RangeDirection,
     skip: u64,
@@ -498,7 +557,7 @@ fn next_feed_v4(
 }
 
 fn next_feed_v6(
-    reader: &iprange_livedb::ImmutableReader,
+    reader: &ReaderValue,
     name: &str,
     direction: RangeDirection,
     skip: u64,
@@ -554,10 +613,22 @@ fn close(
     state: &mut SessionState,
     params: &Value,
     method: &'static str,
+    expected: CursorKind,
 ) -> Result<Value, HandlerError> {
     let handle = cursor_handle(params).map_err(HandlerError::invalid_params)?;
     if state.resources.closed_cursors.contains_key(&handle) {
         return Err(closed_error());
+    }
+    let Some(kind) = state
+        .resources
+        .cursors
+        .get(&handle)
+        .map(|cursor| cursor.kind)
+    else {
+        return Err(unknown_error());
+    };
+    if kind != expected {
+        return Err(wrong_cursor_kind());
     }
     if state.resources.cursors.remove(&handle).is_none() {
         return Err(unknown_error());
@@ -598,6 +669,7 @@ fn ensure_cursor_capacity(state: &SessionState) -> Result<(), HandlerError> {
 fn insert_cursor(
     state: &mut SessionState,
     reader: String,
+    kind: CursorKind,
     view: CursorView,
     reverse: bool,
     point: Option<CursorPoint>,
@@ -610,15 +682,18 @@ fn insert_cursor(
             "connection cursor limit 64 is exhausted",
         ));
     }
-    let mut handle = new_handle();
+    let mut handle = super::reader::random_handle()?;
     while state.resources.cursors.contains_key(&handle)
         || state.resources.closed_cursors.contains_key(&handle)
+        || state.resources.readers.contains_key(&handle)
+        || state.resources.closed_readers.contains_key(&handle)
     {
-        handle = new_handle();
+        handle = super::reader::random_handle()?;
     }
     state.resources.cursors.insert(
         handle.clone(),
         CursorValue {
+            kind,
             reader,
             view,
             reverse,
@@ -676,6 +751,10 @@ fn wrong_view(message: &'static str) -> HandlerError {
     HandlerError::new("handle_wrong_kind", "not_started", message)
 }
 
+fn wrong_cursor_kind() -> HandlerError {
+    wrong_view("cursor handle belongs to the other cursor family")
+}
+
 fn view_error(error: HandlerError) -> HandlerError {
     if error.code == "wrong_value_kind" || error.code == "wrong_structure_kind" {
         wrong_view("reader does not support the requested cursor view")
@@ -699,5 +778,113 @@ fn range_direction(reverse: bool) -> RangeDirection {
         RangeDirection::Backward
     } else {
         RangeDirection::Forward
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rpc::handlers::reader;
+    use iprange_livedb::{
+        create_immutable_feed_v4, AddressRange, FeedName, ImmutableFeedBudget, PublicationPolicy,
+        SliceSource, ValueTag,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn immutable_membership(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-cursor-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        let ranges = [AddressRange {
+            from: Ipv4Key(1),
+            to: Ipv4Key(9),
+        }];
+        create_immutable_feed_v4(
+            &path,
+            ValueTag::new(b"feeds").unwrap(),
+            FeedName::new("feed-a").unwrap(),
+            None,
+            PublicationPolicy::FailIfExists,
+            &mut SliceSource::new(&ranges),
+            &ImmutableFeedBudget::new(2 * 1024 * 1024, 10_000, 10_000, 3),
+            &iprange_livedb::CancellationToken::new(),
+        )
+        .unwrap();
+        path
+    }
+
+    #[test]
+    fn ipv6_direct_cursor_without_start_uses_v6_preflight() {
+        let fixture = reader::test_support::create_direct_v6("cursor");
+        let mut state = SessionState::default();
+        let opened =
+            reader::open(&mut state, reader::test_support::live_source(&fixture.path)).unwrap();
+        let reader_handle = opened["reader"].as_str().unwrap().to_owned();
+        let opened = ranges_open(
+            &mut state,
+            serde_json::json!({
+                "reader": reader_handle,
+                "view": {"kind":"direct"},
+                "direction":"forward",
+                "batch_size":4
+            }),
+        )
+        .unwrap();
+        let cursor = opened["cursor"].as_str().unwrap().to_owned();
+        let next = ranges_next(&mut state, serde_json::json!({"cursor": cursor})).unwrap();
+        assert_eq!(next["records"][0]["from"], "2001:db8::1");
+        assert_eq!(next["records"][0]["to"], "2001:db8::a");
+        assert_eq!(next["records"][0]["value"], 7);
+        reader::close(&mut state, serde_json::json!({"reader": reader_handle})).unwrap();
+        fixture.remove();
+    }
+
+    #[test]
+    fn cursor_family_rejects_the_wrong_next_method() {
+        let path = immutable_membership("wrong-kind");
+        let mut state = SessionState::default();
+        let opened = reader::open(
+            &mut state,
+            serde_json::json!({
+                "source":{"path":path.display().to_string(),"mode":"immutable"}
+            }),
+        )
+        .unwrap();
+        let reader_handle = opened["reader"].as_str().unwrap().to_owned();
+        let feeds = feeds_open(
+            &mut state,
+            serde_json::json!({
+                "reader":reader_handle,
+                "batch_size":4
+            }),
+        )
+        .unwrap();
+        let cursor = feeds["cursor"].as_str().unwrap().to_owned();
+        let wrong = ranges_next(&mut state, serde_json::json!({"cursor":cursor})).unwrap_err();
+        assert_eq!(
+            (wrong.code, wrong.outcome),
+            ("handle_wrong_kind", "not_started")
+        );
+        let wrong_close =
+            ranges_close(&mut state, serde_json::json!({"cursor":cursor})).unwrap_err();
+        assert_eq!(
+            (wrong_close.code, wrong_close.outcome),
+            ("handle_wrong_kind", "not_started")
+        );
+
+        reader::close(&mut state, serde_json::json!({"reader":reader_handle})).unwrap();
+        let cascade = feeds_next(&mut state, serde_json::json!({"cursor":cursor})).unwrap_err();
+        assert_eq!(
+            (cascade.code, cascade.outcome),
+            ("cursor_closed", "not_started")
+        );
+        fs::remove_file(path).unwrap();
     }
 }

@@ -14,7 +14,7 @@
           "value_kind": "direct",
           "structure_kind": "none",
           "value_tag": {
-            "hex": "00"
+            "hex": "01"
           },
           "reader_capacity": 256
         }
@@ -28,7 +28,7 @@
           "value_kind": "direct",
           "structure_kind": "none",
           "value_tag": {
-            "hex": "00"
+            "hex": "01"
           },
           "database_id": "b0000000000000000000000000000001",
           "commit_nonce": "b0000000000000000000000000000003",
@@ -68,7 +68,7 @@
             "value_kind": "direct",
             "structure_kind": "none",
             "value_tag": {
-              "hex": "00"
+              "hex": "01"
             },
             "database_id": "b0000000000000000000000000000001",
             "commit_nonce": "b0000000000000000000000000000003",
@@ -106,7 +106,7 @@
           "value_kind": "direct",
           "structure_kind": "none",
           "value_tag": {
-            "hex": "00"
+            "hex": "01"
           },
           "database_id": "b0000000000000000000000000000001",
           "commit_nonce": "b0000000000000000000000000000003",
@@ -376,7 +376,7 @@
             "value_kind": "direct",
             "structure_kind": "none",
             "value_tag": {
-              "hex": "00"
+              "hex": "01"
             },
             "database_id": "b0000000000000000000000000000001",
             "transaction_id": "7",
@@ -415,7 +415,7 @@
           "method": "iprange.v1.database.metadata.get",
           "present": true,
           "output": {
-            "path": "/example/out.jsonl",
+            "path": "/example/meta.bin",
             "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "bytes": "1024",
             "rows": "16"

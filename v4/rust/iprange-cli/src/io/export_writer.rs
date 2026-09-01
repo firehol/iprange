@@ -75,7 +75,7 @@ impl ExportWriter {
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf();
         let mut temporary = parent.clone();
-        temporary.push(format!(".{}.export.tmp", new_handle()));
+        temporary.push(format!(".{}.export.tmp", new_handle()?));
         let file = OpenOptions::new()
             .write(true)
             .create_new(true)

@@ -12,7 +12,7 @@
         "value_kind": "direct",
         "structure_kind": "none",
         "value_tag": {
-          "hex": "00"
+          "hex": "01"
         },
         "reader_capacity": 256
       },

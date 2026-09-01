@@ -1,12 +1,44 @@
 """Fixed method registry and per-method params schemas (iprange-jsonrpc-v1.md)."""
 
 from . import common as C
+from .engine import ValidationError
 from .frame import CANCEL_METHOD
 
 METHODS = {}
 
+
 def _register(name, params):
     METHODS[name] = {"params": params}
+
+
+def _invalid(path, problem):
+    raise ValidationError(path, problem)
+
+
+def _require_unique_window_feeds(windows, path):
+    names = [window["feed"] for window in windows]
+    if len(set(names)) != len(names):
+        _invalid(path, "window feed names must be unique")
+
+
+def _require_nonself_pair(pair, path):
+    if pair["left"] == pair["right"]:
+        _invalid(path, "pair left and right feeds must differ")
+
+
+def _require_unique_unordered_pairs(pairs, path):
+    normalized = {frozenset((pair["left"], pair["right"])) for pair in pairs}
+    if len(normalized) != len(pairs):
+        _invalid(path, "unordered pairs must be unique")
+
+
+def _require_valid_export(value, path):
+    minimum = value.get("min_prefix")
+    prefixes = value.get("prefixes")
+    if minimum is not None and prefixes is not None:
+        _invalid(path, "min_prefix and prefixes are mutually exclusive")
+    if value["format"] != "netset" and (minimum is not None or prefixes is not None):
+        _invalid(path, "prefix controls are valid only for netset format")
 
 
 # system
@@ -54,13 +86,24 @@ _register("iprange.v1.reader.ranges.open", {
     "properties": {
         "reader": C.HANDLE,
         "view": {
-            "type": "object",
-            "properties": {
-                "kind": {"type": "string", "enum": ["direct", "structured", "feed"]},
-                "feed": C.FEED_NAME,
-            },
-            "required": ["kind"],
-            "additional": False,
+            "type": "one_of",
+            "options": [
+                {
+                    "type": "object",
+                    "properties": {"kind": {"type": "string", "enum": ["direct", "structured"]}},
+                    "required": ["kind"],
+                    "additional": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["feed"]},
+                        "feed": C.FEED_NAME,
+                    },
+                    "required": ["kind", "feed"],
+                    "additional": False,
+                },
+            ],
         },
         "direction": C.DIRECTION,
         "start": C.IP_ADDRESS,
@@ -135,8 +178,8 @@ _register("iprange.v1.database.reclaim", {
     "type": "object",
     "properties": {
         "path": C.PATH,
-        "max_transactions": C.U64,
-        "max_pages": C.U64,
+        "max_transactions": C.PARAM_U64,
+        "max_pages": C.PARAM_U64,
         "writer_budget": C.WRITER_BUDGET,
     },
     "required": ["path", "max_transactions", "max_pages", "writer_budget"],
@@ -153,7 +196,7 @@ _register("iprange.v1.database.metadata.get", {
 })
 _register("iprange.v1.database.metadata.replace", {
     "type": "object",
-    "properties": {"path": C.PATH, "metadata": C.METADATA_INPUT, "writer_budget": C.WRITER_BUDGET},
+    "properties": {"path": C.PATH, "metadata": C.METADATA_REPLACEMENT_INPUT, "writer_budget": C.WRITER_BUDGET},
     "required": ["path", "metadata", "writer_budget"],
     "additional": False,
 })
@@ -165,7 +208,7 @@ _register("iprange.v1.current.publish", {
         "input": C.TEXT_INPUT,
         "feed": C.FEED_NAME,
         "value_tag": C.VALUE_TAG,
-        "metadata": C.METADATA_INPUT,
+        "metadata": C.METADATA_REPLACEMENT_INPUT,
         "destination": C.PATH,
         "publication_policy": C.PUBLICATION_POLICY,
         "immutable_feed_budget": C.IMMUTABLE_FEED_BUDGET,
@@ -280,6 +323,7 @@ _register("iprange.v1.history.project", {
             },
             "min": 1,
             "max": 4096,
+            "validator": _require_unique_window_feeds,
         },
         "metadata": C.METADATA_INPUT,
         "writer_budget": C.WRITER_BUDGET,
@@ -322,8 +366,10 @@ _register("iprange.v1.query.overlaps", {
                                 "properties": {"left": C.FEED_NAME, "right": C.FEED_NAME},
                                 "required": ["left", "right"],
                                 "additional": False,
+                                "validator": _require_nonself_pair,
                             },
                             "min": 1,
+                            "validator": _require_unique_unordered_pairs,
                         },
                     },
                     "required": ["kind", "pairs"],
@@ -364,7 +410,7 @@ _register("iprange.v1.join.direct", {
         "membership": _join_membership_side,
         "direct": C.DATABASE_SOURCE,
         "output": C.OUTPUT_DESCRIPTOR,
-        "max_result_cells": C.U64,
+        "max_result_cells": C.PARAM_U64,
     },
     "required": ["membership", "direct", "output", "max_result_cells"],
     "additional": False,
@@ -439,7 +485,7 @@ _register("iprange.v1.algebra.publish", {
         "operation": _ALGEBRA_OPERATION,
         "output_mode": _ALGEBRA_OUTPUT_MODE,
         "value_tag": C.VALUE_TAG,
-        "metadata": C.METADATA_INPUT,
+        "metadata": C.METADATA_REPLACEMENT_INPUT,
         "destination": C.PATH,
         "publication_policy": C.PUBLICATION_POLICY,
         "algebra_budget": C.ALGEBRA_BUDGET,
@@ -456,22 +502,47 @@ _register("iprange.v1.export", {
     "properties": {
         "source": C.DATABASE_SOURCE,
         "view": {
-            "type": "object",
-            "properties": {
-                "kind": {"type": "string", "enum": ["direct", "structured", "feed", "selection"]},
-                "feed": C.FEED_NAME,
-                "selection": C.FEED_SELECTION,
-            },
-            "required": ["kind"],
-            "additional": False,
+            "type": "one_of",
+            "options": [
+                {
+                    "type": "object",
+                    "properties": {"kind": {"type": "string", "enum": ["direct", "structured"]}},
+                    "required": ["kind"],
+                    "additional": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["feed"]},
+                        "feed": C.FEED_NAME,
+                    },
+                    "required": ["kind", "feed"],
+                    "additional": False,
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "kind": {"type": "string", "enum": ["selection"]},
+                        "selection": C.FEED_SELECTION,
+                    },
+                    "required": ["kind", "selection"],
+                    "additional": False,
+                },
+            ],
         },
         "format": {"type": "string", "enum": ["netset", "ipset", "ranges", "csv", "jsonl", "legacy_binary"]},
         "destination": C.PATH,
         "publication_policy": C.PUBLICATION_POLICY,
-        "min_prefix": C.U32,
-        "prefixes": {"type": "array", "items": C.U32, "min": 1},
+        "min_prefix": {"type": "integer", "min": 0, "max": 128},
+        "prefixes": {
+            "type": "array",
+            "items": {"type": "integer", "min": 0, "max": 128},
+            "min": 1,
+            "unique": True,
+        },
         "result_budget": C.RESULT_BUDGET,
     },
+    "validator": _require_valid_export,
     "required": ["source", "view", "format", "destination", "publication_policy", "result_budget"],
     "additional": False,
 })
@@ -573,8 +644,9 @@ _register("iprange.v1.maintenance.list", {
             "items": {"type": "string", "enum": ["scratch", "reservation", "publication_temp", "windows_housekeeping"]},
             "min": 1,
             "max": 4,
+            "unique": True,
         },
-        "max_entries": C.U32,
+        "max_entries": {"type": "integer", "min": 1, "max": 65536},
         "output": C.OUTPUT_DESCRIPTOR_JSONL,
     },
     "required": ["directory", "kinds", "max_entries", "output"],
@@ -608,3 +680,75 @@ def validate_params(method, params):
 
 def known(method):
     return method in METHODS
+
+
+def _self_test():
+    from .engine import validate
+
+    def rejects(method, params):
+        try:
+            validate_params(method, params)
+        except ValidationError:
+            return True
+        return False
+
+    reader = {
+        "reader": "0" * 32,
+        "view": {"kind": "feed", "feed": "feed-a"},
+        "direction": "forward",
+        "batch_size": 1,
+    }
+    assert validate_params("iprange.v1.reader.ranges.open", reader) == reader
+    for view in (
+        {"kind": "direct", "feed": "feed-a"},
+        {"kind": "structured", "selection": {"mode": "all"}},
+        {"kind": "feed"},
+    ):
+        bad = dict(reader, view=view)
+        assert rejects("iprange.v1.reader.ranges.open", bad)
+
+    export = {
+        "source": {"path": "/tmp/db", "mode": "immutable"},
+        "view": {"kind": "selection", "selection": {"mode": "all"}},
+        "format": "netset",
+        "destination": "/tmp/out",
+        "publication_policy": "fail_if_exists",
+        "result_budget": {"max_rows": "1", "max_output_bytes": "1", "max_open_files": 1},
+    }
+    assert validate_params("iprange.v1.export", export) == export
+    for changes in (
+        {"min_prefix": 1, "prefixes": [1, 32]},
+        {"format": "ranges", "min_prefix": 1},
+        {"prefixes": [1, 129]},
+        {"prefixes": [1, 1]},
+    ):
+        bad = dict(export)
+        bad.pop("min_prefix", None)
+        bad.pop("prefixes", None)
+        bad.update(changes)
+        assert rejects("iprange.v1.export", bad)
+
+    export["prefixes"] = [1, 32]
+    assert validate_params("iprange.v1.export", export)
+
+    maintenance = {
+        "directory": "/tmp",
+        "kinds": ["scratch"],
+        "max_entries": 65536,
+        "output": {
+            "path": "/tmp/out",
+            "format": "jsonl",
+            "publication_policy": "fail_if_exists",
+            "result_budget": {"max_rows": "1", "max_output_bytes": "1", "max_open_files": 1},
+        },
+    }
+    assert validate_params("iprange.v1.maintenance.list", maintenance)
+    assert rejects("iprange.v1.maintenance.list", dict(maintenance, max_entries=65537))
+    assert rejects(
+        "iprange.v1.maintenance.list",
+        dict(maintenance, kinds=["scratch", "scratch"]),
+    )
+
+
+if __name__ == "__main__":
+    _self_test()

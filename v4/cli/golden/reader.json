@@ -1,7 +1,7 @@
 {
   "schema": "iprange-golden-v1",
   "family": "reader",
-  "note": "Reader lifecycle over one immutable direct IPv4 database.",
+  "note": "Reader lifecycle over one immutable membership IPv4 database.",
   "exchanges": [
     {
       "request": {
@@ -23,17 +23,17 @@
           "reader": "a0000000000000000000000000000001",
           "info": {
             "address_family": "ipv4",
-            "value_kind": "direct",
+            "value_kind": "membership",
             "structure_kind": "none",
             "value_tag": {
-              "hex": "00"
+              "hex": "01"
             },
             "database_id": "b0000000000000000000000000000001",
             "transaction_id": "7",
             "commit_nonce": "b0000000000000000000000000000003",
             "page_count": "128",
             "range_record_count": "1024",
-            "active_feed_count": "0",
+            "active_feed_count": "2",
             "meta_selection": "proven_current"
           }
         }
@@ -55,17 +55,17 @@
           "method": "iprange.v1.reader.info",
           "info": {
             "address_family": "ipv4",
-            "value_kind": "direct",
+            "value_kind": "membership",
             "structure_kind": "none",
             "value_tag": {
-              "hex": "00"
+              "hex": "01"
             },
             "database_id": "b0000000000000000000000000000001",
             "transaction_id": "7",
             "commit_nonce": "b0000000000000000000000000000003",
             "page_count": "128",
             "range_record_count": "1024",
-            "active_feed_count": "0",
+            "active_feed_count": "2",
             "meta_selection": "proven_current"
           }
         }
@@ -116,7 +116,9 @@
             {
               "address": "192.0.2.1",
               "present": true,
-              "value": 5
+              "feeds": [
+                "feed-a"
+              ]
             },
             {
               "address": "198.51.100.7",
@@ -125,7 +127,9 @@
             {
               "address": "203.0.113.9",
               "present": true,
-              "value": 9
+              "feeds": [
+                "feed-b"
+              ]
             }
           ]
         }
@@ -138,7 +142,7 @@
         "method": "iprange.v1.reader.matching_feeds",
         "params": {
           "reader": "a0000000000000000000000000000001",
-          "address": "2001:db8::1"
+          "address": "192.0.2.1"
         }
       },
       "response": {
@@ -146,9 +150,11 @@
         "id": "g-reader.matching_feeds",
         "result": {
           "method": "iprange.v1.reader.matching_feeds",
-          "address": "2001:db8::1",
-          "feeds": [],
-          "matching_feed_count": "0"
+          "address": "192.0.2.1",
+          "feeds": [
+            "feed-a"
+          ],
+          "matching_feed_count": "1"
         }
       }
     },
@@ -159,7 +165,7 @@
         "method": "iprange.v1.reader.feeds.open",
         "params": {
           "reader": "a0000000000000000000000000000001",
-          "batch_size": 4096
+          "batch_size": 1
         }
       },
       "response": {
@@ -188,12 +194,9 @@
           "feeds": [
             {
               "name": "feed-a"
-            },
-            {
-              "name": "feed-b"
             }
           ],
-          "done": true
+          "done": false
         }
       }
     },
@@ -223,11 +226,12 @@
         "params": {
           "reader": "a0000000000000000000000000000001",
           "view": {
-            "kind": "direct"
+            "kind": "feed",
+            "feed": "feed-a"
           },
           "direction": "forward",
           "start": "192.0.2.0",
-          "batch_size": 4096
+          "batch_size": 1
         }
       },
       "response": {
@@ -256,16 +260,10 @@
           "records": [
             {
               "from": "192.0.2.0",
-              "to": "192.0.2.255",
-              "value": 5
-            },
-            {
-              "from": "203.0.113.0",
-              "to": "203.0.113.255",
-              "value": 9
+              "to": "192.0.2.255"
             }
           ],
-          "done": true
+          "done": false
         }
       }
     },

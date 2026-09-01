@@ -82,7 +82,7 @@ fn publish(path: &Path, bytes: &[u8], policy: PublicationPolicy) -> Result<(), H
         .filter(|value| !value.as_os_str().is_empty())
         .unwrap_or_else(|| Path::new("."));
     let mut temporary = PathBuf::from(parent);
-    temporary.push(format!(".{}.metadata.tmp", new_handle()));
+    temporary.push(format!(".{}.metadata.tmp", new_handle()?));
     let file = OpenOptions::new()
         .write(true)
         .create_new(true)

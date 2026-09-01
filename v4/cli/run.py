@@ -1,20 +1,17 @@
 #!/usr/bin/env python3
 """External qualification runner for the iprange v1 production API.
 
-Standard-library Python client that drives the real `iprange`
-executables (Rust, Go, and/or the C legacy oracle) through the released
-legacy CLI and the `--jsonrpc` stdio protocol. It imports no SDK, has no
-test method in the production surface, and validates every request and
-response against the strict schemas in v4/cli/schema/.
-
-Usage:
-  nice python3 v4/cli/run.py --rust /ABS/RUST_IPRANGE --go /ABS/GO_IPRANGE \\
-      --c /ABS/C_IPRANGE --matrix all
+Standard-library Python client that drives real executables through the
+released legacy CLI and the ``--jsonrpc`` stdio protocol.  The runner owns
+strict client framing, declarative cases, deterministic fixtures, an
+independent scalar interval oracle, and a machine-readable provenance report.
 """
+
 import argparse
 import hashlib
 import json
 import os
+import platform as platform_module
 import shutil
 import subprocess
 import sys
@@ -24,59 +21,109 @@ import threading
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from schema.engine import ValidationError  # noqa: E402
-from schema import frame, methods, results, cases as case_schema  # noqa: E402
+from schema import cases as case_schema  # noqa: E402
+from schema import frame, methods, results  # noqa: E402
+from schema import oracle  # noqa: E402
 
 DEFAULT_CASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cases")
-DEFAULT_GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden")
 
 WORK_PLACEHOLDER = "$WORK/"
 CAPTURE_PLACEHOLDER = "$CAPTURE/"
 
+# Keep subprocess setup deterministic while retaining locale, sanitizer, and
+# platform variables needed by portable qualification runs.
+ENV_ALLOWLIST = (
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "ASAN_OPTIONS",
+    "LSAN_OPTIONS",
+    "MSAN_OPTIONS",
+    "TSAN_OPTIONS",
+    "UBSAN_OPTIONS",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "USERPROFILE",
+    "PROCESSOR_ARCHITECTURE",
+    "PROCESSOR_IDENTIFIER",
+)
+
+
+def child_environment():
+    """Return the documented subprocess environment allowlist."""
+
+    source = os.environ
+    result = {name: source[name] for name in ENV_ALLOWLIST if name in source}
+    return result
+
+
+def sha256_file(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def safe_work_path(work_dir, relative, *, must_exist=False):
+    """Resolve a case-relative path and reject lexical/symlink escapes."""
+
+    if os.path.isabs(relative):
+        raise ValueError(f"case path must be work-relative: {relative!r}")
+    path = os.path.abspath(os.path.join(work_dir, relative))
+    real_work = os.path.realpath(work_dir)
+    if os.path.commonpath((path, real_work)) != real_work:
+        raise ValueError(f"case path escapes the work directory: {relative!r}")
+    if must_exist:
+        real_path = os.path.realpath(path)
+        if os.path.commonpath((real_path, real_work)) != real_work:
+            raise ValueError(f"case path escapes the work directory: {relative!r}")
+        if not os.path.exists(real_path):
+            return path
+    return path
+
 
 class CaseRunner:
-    """One case, one binary, one private work directory."""
+    """One case, one consumer service, and one private work directory."""
 
     def __init__(self, binary, case, work_dir, implementation, fixture_tool=None):
         self.binary = binary
         self.fixture_tool = fixture_tool
         self.case = case
-        self.work_dir = work_dir
+        self.work_dir = os.path.realpath(work_dir)
         self.implementation = implementation
         self.captures = {}
         self.service = None
-        # Command that serves --jsonrpc. Production binaries are launched
-        # as [binary, "--jsonrpc"]; the sensitivity gate injects a fake
-        # server command whose argv[0] is the interpreter.
         self.service_argv = [binary, "--jsonrpc"]
-        # Protocol state the runner verifies: cursor handle -> view info.
         self.cursors = {}
+        self.readers = {}
+        self.oracle_ranges = {}
+        self.pending_lookup = []
+        self.oracle_checks = 0
 
     # ---- fixtures -------------------------------------------------
     def build_fixtures(self):
         for fixture in self.case.get("fixtures", []):
-            path = os.path.join(self.work_dir, fixture["path"])
+            path = safe_work_path(self.work_dir, fixture["path"])
             os.makedirs(os.path.dirname(path), exist_ok=True)
             source = fixture["source"]
             if "text" in source:
-                mode = "w"
-                data = source["text"]
-                write = lambda: write_text(path, data, mode)  # noqa: E731
+                write_text(path, source["text"])
             elif "base64" in source:
                 import base64
-                data = base64.b64decode(source["base64"], validate=True)
-                write = lambda: write_bytes(path, data)  # noqa: E731
+                write_bytes(path, base64.b64decode(source["base64"], validate=True))
             elif "generator" in source:
-                write = lambda: generate_fixture(
-                    path, source, self.fixture_tool, self.substitute)  # noqa: E731
-            else:
+                generate_fixture(path, source, self.fixture_tool)
+            else:  # case validation makes this unreachable
                 raise ValueError(f"fixture {fixture['path']!r}: no source")
-            write()
 
     # ---- substitutions --------------------------------------------
     def substitute(self, value):
         if isinstance(value, str):
             if value.startswith(WORK_PLACEHOLDER):
-                return os.path.join(self.work_dir, value[len(WORK_PLACEHOLDER):])
+                return safe_work_path(self.work_dir, value[len(WORK_PLACEHOLDER):])
             if value.startswith(CAPTURE_PLACEHOLDER):
                 name = value[len(CAPTURE_PLACEHOLDER):]
                 if name not in self.captures:
@@ -89,20 +136,30 @@ class CaseRunner:
             return {key: self.substitute(item) for key, item in value.items()}
         return value
 
+    # ---- expectations ---------------------------------------------
     def matches_expected(self, expected, got):
+        """Match expected values exhaustively, except explicit $ignore trees.
+
+        An expected object is partial only when one of its named members is
+        explicitly ignored.  This lets cases ignore random identities while a
+        complete result schema still validates every unmentioned field.
+        """
+
         if expected == {"$ignore": True}:
             return True
-        if callable(expected):
-            expected(expected, got)
-            return True
         if isinstance(expected, dict):
-            return isinstance(got, dict) and all(
-                key in got and self.matches_expected(value, got[key])
-                for key, value in expected.items())
+            if not isinstance(got, dict):
+                return False
+            partial = any(value == {"$ignore": True} for value in expected.values())
+            if not partial and set(expected) != set(got):
+                return False
+            return all(key in got and self.matches_expected(value, got[key])
+                       for key, value in expected.items())
         if isinstance(expected, list):
-            return isinstance(got, list) and len(expected) == len(got) and all(
-                self.matches_expected(value, item)
-                for value, item in zip(expected, got))
+            return (isinstance(got, list)
+                    and len(expected) == len(got)
+                    and all(self.matches_expected(value, item)
+                            for value, item in zip(expected, got)))
         return expected == got
 
     # ---- rpc steps ------------------------------------------------
@@ -112,29 +169,25 @@ class CaseRunner:
         if not methods.known(method):
             raise AssertionError(f"case {self.case['name']!r}: unknown method {method}")
         try:
-            methods.validate_params(method, params)
+            case_schema.validate_rpc_request(method, params)
         except ValidationError as exc:
-            raise AssertionError(f"case {self.case['name']!r}: invalid request params: {exc}") from exc
+            raise AssertionError(
+                f"case {self.case['name']!r}: invalid request params: {exc}") from exc
 
         request_id = f"case-{self.case['name']}"
         response = self.service.call(request_id, method, params)
         if "error" in response:
-            err = response["error"]
-            expected = step.get("expect_error")
-            if expected is None:
-                raise AssertionError(
-                    f"case {self.case['name']!r}: method {method} failed: "
-                    f"{err.get('code')} {err.get('message')} data={err.get('data')}")
-            data = err.get("data") or {}
-            if expected.get("code") is not None and data.get("code") != expected["code"]:
-                raise AssertionError(
-                    f"case {self.case['name']!r}: expected data.code {expected['code']}, "
-                    f"got {data.get('code')}")
-            if expected.get("outcome") is not None and data.get("outcome") != expected["outcome"]:
-                raise AssertionError(
-                    f"case {self.case['name']!r}: expected outcome {expected['outcome']}, "
-                    f"got {data.get('outcome')}")
+            self.check_expected_error(step, method, response["error"])
+            capture_root = {
+                "code": response["error"].get("code"),
+                "message": response["error"].get("message"),
+                "data": response["error"].get("data"),
+            }
+            self.process_captures(step.get("capture", []), capture_root)
+            for assertion in step.get("assert_files", []):
+                self.assert_file(assertion)
             return
+
         result = response["result"]
         try:
             results.validate_result(method, result)
@@ -142,31 +195,107 @@ class CaseRunner:
             raise AssertionError(
                 f"case {self.case['name']!r}: invalid result for {method}: {exc}") from exc
         self.check_protocol(method, params, result)
+        self.check_output_result(method, params, result)
         if "expect_result" in step:
             expected = step["expect_result"]
             for key, exp in expected.items():
                 if key == "method":
                     continue
-                got = result.get(key)
+                if key not in result:
+                    raise AssertionError(
+                        f"case {self.case['name']!r}: result.{key} is absent")
+                got = result[key]
                 if not self.matches_expected(exp, got):
                     raise AssertionError(
                         f"case {self.case['name']!r}: result.{key} expected {exp!r}, got {got!r}")
-        for pointer in step.get("capture", []):
-            value = result
+        self.process_captures(step.get("capture", []), result)
+        for assertion in step.get("assert_files", []):
+            self.assert_file(assertion)
+
+    def check_expected_error(self, step, method, error):
+        expected = step.get("expect_error")
+        if expected is None:
+            raise AssertionError(
+                f"case {self.case['name']!r}: method {method} failed unexpectedly: "
+                f"{error.get('code')} {error.get('message')} data={error.get('data')}")
+        if error.get("code") != frame.PRODUCT_ERROR:
+            raise AssertionError(
+                f"case {self.case['name']!r}: product error transport code must be "
+                f"{frame.PRODUCT_ERROR}, got {error.get('code')!r}: "
+                f"{error.get('message')}")
+        data = error.get("data")
+        if not isinstance(data, dict):
+            raise AssertionError(
+                f"case {self.case['name']!r}: product error data must be an object")
+        if data.get("code") != expected["code"]:
+            raise AssertionError(
+                f"case {self.case['name']!r}: expected data.code {expected['code']!r}, "
+                f"got {data.get('code')!r}")
+        if "outcome" in expected and data.get("outcome") != expected["outcome"]:
+            raise AssertionError(
+                f"case {self.case['name']!r}: expected outcome {expected['outcome']!r}, "
+                f"got {data.get('outcome')!r}")
+
+    def process_captures(self, pointers, root):
+        for pointer in pointers:
+            value = root
             for part in pointer.split("."):
                 if not isinstance(value, dict) or part not in value:
                     raise AssertionError(
                         f"case {self.case['name']!r}: capture {pointer!r} not found")
                 value = value[part]
             self.captures[pointer] = value
-        for assertion in step.get("assert_files", []):
-            self.assert_file(assertion)
+
+    def check_output_result(self, method, params, result):
+        """Verify response output facts against the requested local artifact."""
+
+        request_path = None
+        if isinstance(params.get("delivery"), dict) and params["delivery"].get("mode") == "file":
+            request_path = params["delivery"].get("path")
+        for name in ("output", "findings_output", "report_output"):
+            if isinstance(params.get(name), dict):
+                request_path = params[name].get("path")
+        if method == "iprange.v1.export":
+            request_path = params.get("destination")
+
+        if request_path is not None and not os.path.isabs(request_path):
+            request_path = safe_work_path(self.work_dir, request_path)
+        facts = result.get("output") if isinstance(result.get("output"), dict) else None
+        if facts is not None:
+            self.verify_output_facts(facts, request_path)
+        if method == "iprange.v1.export":
+            self.verify_output_facts(result, request_path)
+
+    def verify_output_facts(self, facts, request_path):
+        if request_path is not None and facts.get("path") != request_path:
+            raise AssertionError(
+                f"output path {facts.get('path')!r} does not match request {request_path!r}")
+        path = facts.get("path")
+        if not isinstance(path, str) or not path:
+            raise AssertionError("output facts have no usable path")
+        if not os.path.isabs(path):
+            path = safe_work_path(self.work_dir, path)
+        if not os.path.isfile(path):
+            raise AssertionError(f"output file is missing: {path}")
+        digest = sha256_file(path)
+        if facts.get("sha256") != digest:
+            raise AssertionError(
+                f"output sha256 {facts.get('sha256')!r} does not match file digest {digest}")
+        size = os.path.getsize(path)
+        if facts.get("bytes") != str(size):
+            raise AssertionError(
+                f"output bytes {facts.get('bytes')!r} do not match file size {size}")
 
     # ---- protocol semantics ---------------------------------------
     def check_protocol(self, method, params, result):
-        """Verify cross-request ordering and cursor lifecycle contracts
-        that per-result schemas cannot express."""
-        if method == "iprange.v1.reader.lookup":
+        """Check cross-request contracts not expressible by one result schema."""
+
+        if method == "iprange.v1.reader.open":
+            handle = result["reader"]
+            self.readers[handle] = result["info"]["value_kind"]
+        elif method == "iprange.v1.reader.close":
+            self.readers.pop(params["reader"], None)
+        elif method == "iprange.v1.reader.lookup":
             addresses = params.get("addresses", [])
             matches = result.get("matches", [])
             if len(matches) != len(addresses):
@@ -178,6 +307,7 @@ class CaseRunner:
                     raise AssertionError(
                         f"case {self.case['name']!r}: lookup match[{index}] address "
                         f"{got.get('address')!r} != requested {want!r}")
+                self.pending_lookup.append((params["reader"], self.readers.get(params["reader"]), got))
         elif method == "iprange.v1.reader.matching_feeds":
             if result.get("address") != params.get("address"):
                 raise AssertionError(
@@ -186,20 +316,19 @@ class CaseRunner:
         elif method == "iprange.v1.reader.ranges.open":
             self.cursors[result["cursor"]] = {
                 "kind": "ranges",
+                "reader": params["reader"],
+                "view": params["view"],
                 "direction": params["direction"],
                 "last": None,
                 "closed": False,
+                "complete": False,
+                "records": [],
             }
         elif method == "iprange.v1.reader.ranges.next":
-            cursor = self.cursors.get(params["cursor"])
-            if cursor is None:
-                raise AssertionError(
-                    f"case {self.case['name']!r}: ranges.next on unknown cursor {params['cursor']!r}")
-            if cursor["closed"]:
-                raise AssertionError(
-                    f"case {self.case['name']!r}: ranges.next after done/close")
+            cursor = self.require_cursor(params["cursor"], "ranges.next")
             forward = cursor["direction"] == "forward"
             for record in result.get("records", []):
+                self.check_range_record_shape(cursor["view"], record)
                 key = (ip_int(record["from"]), ip_int(record["to"]))
                 if cursor["last"] is not None:
                     prev, now = (cursor["last"], key) if forward else (key, cursor["last"])
@@ -209,8 +338,10 @@ class CaseRunner:
                             f"{'ascending' if forward else 'descending'} order: "
                             f"{key} after {cursor['last']}")
                 cursor["last"] = key
+                cursor["records"].extend(self.oracle_record(cursor, record))
             if result.get("done"):
                 cursor["closed"] = True
+                cursor["complete"] = True
         elif method == "iprange.v1.reader.ranges.close":
             cursor = self.cursors.get(params["cursor"])
             if cursor is not None:
@@ -220,13 +351,7 @@ class CaseRunner:
                 "kind": "feeds", "last": None, "closed": False,
             }
         elif method == "iprange.v1.reader.feeds.next":
-            cursor = self.cursors.get(params["cursor"])
-            if cursor is None:
-                raise AssertionError(
-                    f"case {self.case['name']!r}: feeds.next on unknown cursor {params['cursor']!r}")
-            if cursor["closed"]:
-                raise AssertionError(
-                    f"case {self.case['name']!r}: feeds.next after done/close")
+            cursor = self.require_cursor(params["cursor"], "feeds.next")
             for row in result.get("feeds", []):
                 name = row["name"]
                 if cursor["last"] is not None and name < cursor["last"]:
@@ -241,54 +366,154 @@ class CaseRunner:
             if cursor is not None:
                 cursor["closed"] = True
 
+    def require_cursor(self, handle, operation):
+        cursor = self.cursors.get(handle)
+        if cursor is None:
+            raise AssertionError(
+                f"case {self.case['name']!r}: {operation} on unknown cursor {handle!r}")
+        if cursor["closed"]:
+            raise AssertionError(
+                f"case {self.case['name']!r}: {operation} after done/close")
+        return cursor
+
+    @staticmethod
+    def check_range_record_shape(view, record):
+        kind = view["kind"]
+        if kind == "direct" and not isinstance(record.get("value"), int):
+            raise AssertionError("direct range record must carry exactly a u32 value")
+        if kind == "structured" and not isinstance(record.get("value"), dict):
+            raise AssertionError("structured range record must carry its complete value object")
+        if kind == "feed" and "value" in record:
+            raise AssertionError("feed range record must not carry a value")
+        if ip_int(record["from"]) > ip_int(record["to"]):
+            raise AssertionError("range record endpoints are reversed")
+
+    @staticmethod
+    def oracle_record(cursor, record):
+        start, end = ip_int(record["from"]), ip_int(record["to"])
+        if cursor["view"]["kind"] == "feed":
+            value = cursor["view"]["feed"]
+        elif cursor["view"]["kind"] == "direct":
+            value = record.get("value")
+        else:
+            value = record.get("value")
+        return [oracle.Interval(start, end, value)]
+
+    # ---- independent scalar oracle --------------------------------
+    def finish_oracle(self):
+        for handle, kind, actual in self.pending_lookup:
+            if kind == "direct":
+                state = self.completed_ranges(handle, "direct")
+                if state:
+                    expected = oracle.lookup_fact(oracle.normalize_intervals(state), ip_int(actual["address"]))
+                    self.check_oracle_lookup(actual, expected)
+            elif kind == "structured":
+                state = self.completed_ranges(handle, "structured")
+                if state:
+                    expected = oracle.lookup_fact(oracle.normalize_intervals(state), ip_int(actual["address"]))
+                    self.check_oracle_lookup(actual, expected)
+            elif kind == "membership":
+                for feed, state in self.completed_feed_ranges(handle).items():
+                    expected_present = oracle.lookup(state, ip_int(actual["address"])) == feed
+                    actual_present = feed in actual.get("feeds", [])
+                    if expected_present != actual_present:
+                        raise AssertionError(
+                            f"case {self.case['name']!r}: oracle mismatch for {actual['address']} "
+                            f"and feed {feed!r}: expected membership {expected_present}, "
+                            f"got {actual_present}")
+                    self.oracle_checks += 1
+
+    def completed_ranges(self, handle, view_kind):
+        intervals = []
+        for cursor in self.cursors.values():
+            if (cursor.get("kind") == "ranges" and cursor.get("reader") == handle
+                    and cursor.get("view", {}).get("kind") == view_kind
+                    and cursor.get("complete")):
+                intervals.extend(cursor["records"])
+        return intervals
+
+    def completed_feed_ranges(self, handle):
+        feeds = {}
+        for cursor in self.cursors.values():
+            view = cursor.get("view", {})
+            if (cursor.get("kind") == "ranges" and cursor.get("reader") == handle
+                    and view.get("kind") == "feed" and cursor.get("complete")):
+                feeds[view["feed"]] = cursor["records"]
+        return feeds
+
+    def check_oracle_lookup(self, actual, expected):
+        if actual.get("present") != expected.get("present"):
+            raise AssertionError(
+                f"case {self.case['name']!r}: oracle presence mismatch for "
+                f"{actual.get('address')!r}: expected {expected.get('present')}, "
+                f"got {actual.get('present')}")
+        if expected.get("present"):
+            expected_value = expected.get("value")
+            if isinstance(expected_value, dict):
+                actual_value = {key: actual.get(key) for key in expected_value}
+            else:
+                actual_value = actual.get("value")
+            if actual_value != expected_value:
+                raise AssertionError(
+                    f"case {self.case['name']!r}: oracle value mismatch for "
+                    f"{actual.get('address')!r}: expected {expected_value!r}, "
+                    f"got {actual_value!r}")
+        self.oracle_checks += 1
+
     # ---- legacy steps ---------------------------------------------
     def run_legacy_step(self, step):
         argv = self.substitute(step["argv"])
-        stdin_fixture = step.get("stdin_fixture")
         stdin_data = None
-        if stdin_fixture:
-            stdin_data = open(os.path.join(self.work_dir, stdin_fixture), "rb").read()
-        proc = subprocess.run(
-            [self.binary] + argv,
-            input=stdin_data,
-            capture_output=True,
-            timeout=300,
-        )
-        if "exit_status" in step and proc.returncode != step["exit_status"]:
+        if "stdin_fixture" in step:
+            fixture = safe_work_path(self.work_dir, step["stdin_fixture"], must_exist=True)
+            with open(fixture, "rb") as stream:
+                stdin_data = stream.read()
+        try:
+            proc = subprocess.run(
+                [self.binary] + argv,
+                cwd=self.work_dir,
+                input=stdin_data,
+                capture_output=True,
+                timeout=300,
+                env=child_environment(),
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise AssertionError(f"case {self.case['name']!r}: legacy command timed out") from exc
+        if proc.returncode != step["exit_status"]:
             raise AssertionError(
-                f"case {self.case['name']!r}: exit {proc.returncode}, expected {step['exit_status']}\n"
+                f"case {self.case['name']!r}: exit {proc.returncode}, "
+                f"expected {step['exit_status']}\n"
                 f"stdout={proc.stdout[:400]!r}\nstderr={proc.stderr[:400]!r}")
-        for key, expectation in step.get("stdout", {}).items():
-            self.match_stream("stdout", proc.stdout, expectation)
-        for key, expectation in step.get("stderr", {}).items():
-            self.match_stream("stderr", proc.stderr, expectation)
+        self.match_stream("stdout", proc.stdout, step["stdout"])
+        self.match_stream("stderr", proc.stderr, step["stderr"])
         for assertion in step.get("assert_files", []):
             self.assert_file(assertion)
 
     def match_stream(self, name, data, expectation):
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise AssertionError(f"case {self.case['name']!r}: {name} is not UTF-8") from exc
         if "$exact" in expectation:
-            if data.decode("utf-8", "replace") != expectation["$exact"]:
+            if text != expectation["$exact"]:
                 raise AssertionError(
                     f"case {self.case['name']!r}: {name} mismatch\n"
-                    f"expected {expectation['$exact']!r}\ngot {data[:400]!r}")
-        elif "$contains" in expectation:
-            if expectation["$contains"].encode() not in data:
-                raise AssertionError(
-                    f"case {self.case['name']!r}: {name} missing {expectation['$contains']!r}")
+                    f"expected {expectation['$exact']!r}\ngot {text[:400]!r}")
+        elif expectation["$contains"].encode("utf-8") not in data:
+            raise AssertionError(
+                f"case {self.case['name']!r}: {name} missing {expectation['$contains']!r}")
 
     # ---- filesystem assertions ------------------------------------
     def assert_file(self, assertion):
-        path = os.path.join(self.work_dir, assertion["path"])
-        if not os.path.exists(path):
-            raise AssertionError(f"case {self.case['name']!r}: missing file {assertion['path']}")
-        if "sha256" in assertion:
-            digest = hashlib.sha256(open(path, "rb").read()).hexdigest()
-            if digest != assertion["sha256"]:
-                raise AssertionError(
-                    f"case {self.case['name']!r}: {assertion['path']} sha256 {digest}, "
-                    f"expected {assertion['sha256']}")
+        path = safe_work_path(self.work_dir, assertion["path"], must_exist=True)
+        if not os.path.isfile(path):
+            raise AssertionError(
+                f"case {self.case['name']!r}: assertion target is not a file {assertion['path']}")
+        if "sha256" in assertion and sha256_file(path) != assertion["sha256"]:
+            raise AssertionError(
+                f"case {self.case['name']!r}: {assertion['path']} sha256 mismatch")
         if "equals_fixture" in assertion:
-            other = os.path.join(self.work_dir, assertion["equals_fixture"])
+            other = safe_work_path(self.work_dir, assertion["equals_fixture"], must_exist=True)
             if open(path, "rb").read() != open(other, "rb").read():
                 raise AssertionError(
                     f"case {self.case['name']!r}: {assertion['path']} differs from "
@@ -298,19 +523,19 @@ class CaseRunner:
     def run(self):
         self.build_fixtures()
         for step in self.case["steps"]:
-            kind = step["kind"]
-            if kind == "rpc":
+            if step["kind"] == "rpc":
                 self.run_rpc_step(step)
-            elif kind == "legacy":
-                self.run_legacy_step(step)
             else:
-                raise AssertionError(f"unknown step kind {kind!r}")
+                self.run_legacy_step(step)
+        for assertion in self.case.get("assertions", {}).get("files", []):
+            self.assert_file(assertion)
+        self.finish_oracle()
 
 
 class JsonRpcService:
     """Strict JSON-RPC stdio client over one persistent subprocess."""
 
-    def __init__(self, argv, implementation):
+    def __init__(self, argv, implementation, *, cwd=None):
         self.argv = list(argv)
         self.implementation = implementation
         self.proc = subprocess.Popen(
@@ -318,6 +543,8 @@ class JsonRpcService:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            env=child_environment(),
+            cwd=cwd,
         )
         self.lock = threading.Lock()
         self.stderr_tail = []
@@ -334,80 +561,82 @@ class JsonRpcService:
     def call(self, request_id, method, params):
         with self.lock:
             request = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
-            wire = json.dumps(request, separators=(",", ":"), ensure_ascii=False) + "\n"
+            wire = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
             if len(wire.encode("utf-8")) > frame.INPUT_FRAME_LIMIT:
                 raise AssertionError("client request frame over limit")
-            self.proc.stdin.write(wire.encode("utf-8"))
-            self.proc.stdin.flush()
+            try:
+                self.proc.stdin.write(wire.encode("utf-8") + b"\n")
+                self.proc.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                raise AssertionError(
+                    f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
             line = self.proc.stdout.readline()
             if not line:
                 raise AssertionError(
                     f"service closed stdout; stderr={''.join(self.stderr_tail[-5:])}")
-            text = line.decode("utf-8", "replace").rstrip("\n")
             try:
-                response = json.loads(text)
-            except json.JSONDecodeError as exc:
-                raise AssertionError(f"non-JSON response line: {exc}: {text[:200]!r}") from exc
-            if not isinstance(response, dict):
-                raise AssertionError(f"response is not an object: {text[:200]!r}")
-            if response.get("jsonrpc") != "2.0":
-                raise AssertionError(f"response jsonrpc != 2.0: {text[:200]!r}")
-            if response.get("id") != request_id:
-                raise AssertionError(
-                    f"response id {response.get('id')!r} != request id {request_id!r}")
-            if ("result" in response) == ("error" in response):
-                raise AssertionError(
-                    f"response must have exactly one of result/error: {text[:200]!r}")
-            unknown = set(response) - {"jsonrpc", "id", "result", "error"}
-            if unknown:
-                raise AssertionError(
-                    f"unknown response members {sorted(unknown)}: {text[:200]!r}")
-            if "error" in response:
-                err = response["error"]
-                if not isinstance(err, dict):
-                    raise AssertionError(f"error is not an object: {text[:200]!r}")
-                unknown = set(err) - {"code", "message", "data"}
-                if unknown or not isinstance(err.get("code"), int) \
-                        or not isinstance(err.get("message"), str):
-                    raise AssertionError(f"malformed error object: {text[:200]!r}")
-            return response
+                return self.decode_response_line(line, request_id)
+            except (frame.FrameError, UnicodeDecodeError) as exc:
+                raise AssertionError(str(exc)) from exc
+
+    def decode_response_line(self, line, request_id):
+        if not line.endswith(b"\n"):
+            raise frame.FrameError(frame.STD_PARSE_ERROR, "response frame is not LF terminated")
+        encoded = line[:-1]
+        if encoded.endswith(b"\r"):
+            raise frame.FrameError(frame.STD_PARSE_ERROR, "response uses CRLF instead of LF")
+        text = encoded.decode("utf-8")
+        response = frame.decode_response(text)
+        if len(text.encode("utf-8")) > frame.RESPONSE_OBJECT_LIMIT:
+            raise frame.FrameError(
+                frame.TRANSPORT_FRAME_TOO_LARGE, "response object exceeds 65000 bytes")
+        if response.get("id") != request_id:
+            raise frame.FrameError(
+                frame.STD_INVALID_REQUEST,
+                f"response id {response.get('id')!r} != request id {request_id!r}")
+        return response
 
     def close(self):
+        """Close stdin and wait for this owned subprocess to terminate."""
+
         try:
-            self.proc.stdin.close()
+            if self.proc.stdin and not self.proc.stdin.closed:
+                self.proc.stdin.close()
             self.proc.wait(timeout=30)
         except Exception:
             self.proc.kill()
+            self.proc.wait(timeout=5)
 
 
 def ip_int(address):
     """Numeric value of an IPv4/IPv6 address for order comparisons."""
+
     import ipaddress
     return int(ipaddress.ip_address(address))
 
 
-def write_text(path, data, mode="w"):
-    with open(path, mode, encoding="utf-8") as f:
-        f.write(data)
+def write_text(path, data):
+    with open(path, "w", encoding="utf-8", newline="") as stream:
+        stream.write(data)
 
 
 def write_bytes(path, data):
-    with open(path, "wb") as f:
-        f.write(data)
+    with open(path, "wb") as stream:
+        stream.write(data)
 
 
-def generate_fixture(path, source, fixture_tool, substitute):
+def generate_fixture(path, source, fixture_tool):
     generator = source["generator"]
     seed = source.get("seed", 0)
     if generator == "ipv4_random_ranges":
+        import ipaddress
         import random
         rng = random.Random(seed)
         lines = []
         for _ in range(1024):
-            a = rng.randrange(0, 2**32)
-            b = min(a + rng.randrange(0, 4096), 2**32 - 1)
-            import ipaddress
-            lines.append(f"{ipaddress.IPv4Address(a)}-{ipaddress.IPv4Address(b)}\n")
+            start = rng.randrange(0, 2**32)
+            end = min(start + rng.randrange(0, 4096), 2**32 - 1)
+            lines.append(f"{ipaddress.IPv4Address(start)}-{ipaddress.IPv4Address(end)}\n")
         write_text(path, "".join(lines))
         return
     if generator == "ipv6_random_ranges":
@@ -416,177 +645,261 @@ def generate_fixture(path, source, fixture_tool, substitute):
         rng = random.Random(seed)
         lines = []
         for _ in range(512):
-            a = rng.getrandbits(128)
-            b = min(a + rng.getrandbits(64), 2**128 - 1)
-            lines.append(f"{ipaddress.IPv6Address(a)}-{ipaddress.IPv6Address(b)}\n")
+            start = rng.getrandbits(128)
+            end = min(start + rng.getrandbits(64), 2**128 - 1)
+            lines.append(f"{ipaddress.IPv6Address(start)}-{ipaddress.IPv6Address(end)}\n")
         write_text(path, "".join(lines))
         return
     if generator != "v4_fixture":
         raise ValueError(f"unknown fixture generator {generator!r}")
-
     if fixture_tool is None:
         raise ValueError("case uses v4_fixture but --fixture-tool was not supplied")
-    # The declarative case schema represents a generator as its name plus
-    # an integer seed; the fixed fixture kinds use stable seed values.
-    seeds = {0: "direct-v4", 1: "membership-v4", 2: "structured-v4"}
+    kinds = {0: "direct-v4", 1: "membership-v4", 2: "structured-v4"}
     try:
-        argv = [seeds[seed], path]
+        kind = kinds[seed]
     except KeyError as exc:
         raise ValueError(
-            f"v4_fixture seed {seed!r} has no fixed kind; expected one of {sorted(seeds)}"
-        ) from exc
-    proc = subprocess.run(
-        [fixture_tool, *argv],
-        capture_output=True,
-        timeout=300,
-    )
-    if proc.returncode != 0:
-        raise ValueError(
-            f"v4_fixture failed with exit {proc.returncode}: "
-            f"{proc.stderr.decode('utf-8', 'replace').strip()}"
+            f"v4_fixture seed {seed!r} has no fixed kind; expected one of {sorted(kinds)}") from exc
+    try:
+        proc = subprocess.run(
+            [fixture_tool, kind, path],
+            capture_output=True,
+            timeout=300,
+            env=child_environment(),
         )
+    except subprocess.TimeoutExpired as exc:
+        raise ValueError("v4_fixture timed out") from exc
+    if proc.returncode != 0:
+        detail = proc.stderr.decode("utf-8", "replace").strip()
+        raise ValueError(f"v4_fixture failed with exit {proc.returncode}: {detail}")
 
 
 CAPABILITIES_CACHE = {}
 
 
-def describe_methods(binary):
-    """Return the advertised method set of one executable, cached.
+def describe_capabilities(binary):
+    """Validate and cache one binary's system.describe capability result."""
 
-    A binary that does not speak JSON-RPC (or that fails describe)
-    advertises nothing; cases requiring capabilities then skip instead
-    of failing, which keeps legacy-only oracles in the matrix honest.
-    """
-    if binary in CAPABILITIES_CACHE:
-        return CAPABILITIES_CACHE[binary]
-    methods = set()
+    identity = os.path.realpath(binary)
+    cache_key = (identity, sha256_file(identity))
+    if cache_key in CAPABILITIES_CACHE:
+        return CAPABILITIES_CACHE[cache_key]
+    record = {"path": binary, "sha256": cache_key[1], "methods": [], "available": False}
     try:
         service = JsonRpcService([binary, "--jsonrpc"], "probe")
         try:
-            response = service.call("capability-probe", "iprange.v1.system.describe", {})
+            response = service.call(
+                "capability-probe", "iprange.v1.system.describe", {})
             if "result" in response:
-                methods = set(response["result"].get("methods", []))
+                results.validate_result(
+                    "iprange.v1.system.describe", response["result"])
+                record["methods"] = list(response["result"]["methods"])
+                record["available"] = True
+                record["result"] = response["result"]
         finally:
             service.close()
     except (AssertionError, OSError):
-        methods = set()
-    CAPABILITIES_CACHE[binary] = methods
-    return methods
+        # Legacy-only executables do not expose --jsonrpc.  A returned describe
+        # result that fails the strict schema propagates ValidationError.
+        record["methods"] = []
+        record["available"] = False
+    CAPABILITIES_CACHE[cache_key] = record
+    return record
 
 
 def load_cases(case_dir):
     cases = []
+    names = set()
     for name in sorted(os.listdir(case_dir)):
         if not name.endswith(".json"):
             continue
-        with open(os.path.join(case_dir, name)) as f:
-            case = json.load(f)
-        case_schema.validate_case(case)
+        with open(os.path.join(case_dir, name), encoding="utf-8") as stream:
+            case = json.load(stream)
+        try:
+            case_schema.validate_case(case)
+        except ValidationError as exc:
+            raise ValueError(f"{name}: {exc}") from exc
+        if case["name"] in names:
+            raise ValueError(f"duplicate case name {case['name']!r}")
+        names.add(case["name"])
         cases.append(case)
     return cases
+
+
+def validate_explicit_work_dir(path):
+    if not os.path.isabs(path):
+        raise ValueError("--work-dir must be absolute")
+    real = os.path.realpath(path)
+    if not os.path.isdir(real):
+        raise ValueError("--work-dir must be an existing directory")
+    if os.listdir(real):
+        raise ValueError("--work-dir must be empty at the start of the run")
+    return real
+
+
+def binary_record(path):
+    return {
+        "path": path,
+        "sha256": sha256_file(path),
+    }
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--c", dest="c_binary", metavar="PATH")
     parser.add_argument("--fixture-tool", metavar="PATH",
-                        help="absolute v4-fixture executable used by generated fixtures")
+                        help="absolute v4-fixture producer executable")
     parser.add_argument("--rust", dest="rust_binary", metavar="PATH")
     parser.add_argument("--go", dest="go_binary", metavar="PATH")
     parser.add_argument("--matrix", default="all",
                         choices=["all", "c", "rust", "go", "rust_to_go", "go_to_rust"])
     parser.add_argument("--cases", default=DEFAULT_CASE_DIR)
     parser.add_argument("--work-dir", metavar="DIR",
-                        help="existing empty directory kept after the run (never deleted)")
+                        help="absolute empty directory kept after the run")
     parser.add_argument("--filter", metavar="NAME")
+    parser.add_argument("--allow-skips", action="store_true",
+                        help="permit reported capability or unavailable-matrix skips")
     parser.add_argument("--json-report", metavar="PATH")
     args = parser.parse_args()
 
+    try:
+        if args.work_dir is not None:
+            args.work_dir = validate_explicit_work_dir(args.work_dir)
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    def executable(value, label, *, require_absolute=True):
+        if require_absolute and not os.path.isabs(value):
+            parser.error(f"{label} is not an absolute executable file: {value}")
+        if not os.path.isfile(value) or not os.access(value, os.X_OK):
+            parser.error(f"{label} is not an absolute executable file: {value}")
+        return os.path.realpath(value)
+
     fixture_tool = None
     if args.fixture_tool:
-        if not os.path.isabs(args.fixture_tool) or not os.path.isfile(args.fixture_tool) \
-                or not os.access(args.fixture_tool, os.X_OK):
-            parser.error(f"fixture tool is not an absolute executable file: {args.fixture_tool}")
-        fixture_tool = args.fixture_tool
+        fixture_tool = executable(args.fixture_tool, "fixture tool")
 
     binaries = {}
     for key, attr in (("c", "c_binary"), ("rust", "rust_binary"), ("go", "go_binary")):
         path = getattr(args, attr)
         if path:
-            if not os.path.isfile(path) or not os.access(path, os.X_OK):
-                parser.error(f"{key} binary is not an absolute executable file: {path}")
-            binaries[key] = os.path.abspath(path)
+            binaries[key] = executable(path, f"{key} binary")
 
-    use_cases = load_cases(args.cases)
+    try:
+        use_cases = load_cases(args.cases)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        parser.error(str(exc))
     if args.filter:
         use_cases = [case for case in use_cases if args.filter in case["name"]]
     if not use_cases:
-        print("no cases selected")
-        return 0
+        parser.error("no cases selected")
 
-    # Capability handshake: ask each executable once which methods it
-    # advertises, then skip cases whose required method is unshipped.
-    capabilities = {}
-    for key in binaries:
-        capabilities[key] = describe_methods(binaries[key])
+    try:
+        capabilities = {key: describe_capabilities(path) for key, path in binaries.items()}
+    except ValidationError as exc:
+        parser.error(f"invalid capability advertisement: {exc}")
+    report = {
+        "schema": "iprange-cli-report-v2",
+        "command": sys.argv,
+        "platform": {
+            "system": platform_module.system(),
+            "release": platform_module.release(),
+            "machine": platform_module.machine(),
+            "python": platform_module.python_version(),
+        },
+        "environment_allowlist": list(ENV_ALLOWLIST),
+        "binaries": {key: dict(value) for key, value in capabilities.items()},
+        "fixture_tool": binary_record(fixture_tool) if fixture_tool else None,
+        "cases": [],
+        "passed": 0,
+        "failed": 0,
+        "skipped": 0,
+        "oracle_checks": 0,
+    }
 
-    report = {"cases": [], "passed": 0, "failed": 0}
-
-    def run_matrix(single=None):
-        matrix = {
-            "c": [("c", None)],
-            "rust": [("rust", None)],
-            "go": [("go", None)],
-            "rust_to_go": [("rust", "go")],
-            "go_to_rust": [("go", "rust")],
-            "all": [("c", None), ("rust", None), ("go", None),
-                    ("rust", "go"), ("go", "rust")],
-        }[single or args.matrix]
-        for producer, consumer in matrix:
-            if producer not in binaries or (consumer and consumer not in binaries):
-                continue
-            for case in use_cases:
-                required = case.get("requires")
-                if required and required not in capabilities[producer]:
-                    label = f"{case['name']} [{producer}" + (f"->{consumer}]" if consumer else "]")
-                    print(f"SKIP {label}: requires unadvertised method {required}")
-                    continue
-                run_one(case, producer, consumer)
+    def record_skip(name, matrix, reason):
+        report["skipped"] += 1
+        report["cases"].append({
+            "name": name, "matrix": matrix, "status": "SKIP", "reason": reason,
+        })
+        print(f"SKIP {name} [{matrix}]: {reason}")
 
     def run_one(case, producer, consumer):
-        produce_bin = binaries[producer]
-        consume_bin = binaries[consumer] if consumer else produce_bin
+        consume_bin = binaries[consumer] if consumer else binaries[producer]
         work = args.work_dir
         owns_work = False
         if work is None:
             work = tempfile.mkdtemp(prefix="iprange-cli-")
             owns_work = True
-        label = f"{case['name']} [{producer}" + (f"->{consumer}]" if consumer else "]")
+        matrix = producer if consumer is None else f"{producer}->{consumer}"
+        label = f"{case['name']} [{matrix}]"
+        runner = None
         try:
             runner = CaseRunner(consume_bin, case, work, producer, fixture_tool)
             if any(step["kind"] == "rpc" for step in case["steps"]):
-                runner.service = JsonRpcService(runner.service_argv, producer)
+                runner.service = JsonRpcService(runner.service_argv, producer, cwd=runner.work_dir)
             runner.run()
             report["passed"] += 1
-            report["cases"].append({"name": case["name"], "matrix": label, "status": "PASS"})
-            print(f"PASS {label}")
-        except (AssertionError, ValueError, ValidationError) as exc:
+            report["oracle_checks"] += runner.oracle_checks
+            report["cases"].append({
+                "name": case["name"], "matrix": matrix, "status": "PASS",
+                "oracle_checks": runner.oracle_checks,
+            })
+            print(f"PASS {label} (oracle={runner.oracle_checks})")
+        except (AssertionError, ValueError, ValidationError, OSError) as exc:
             report["failed"] += 1
-            report["cases"].append({"name": case["name"], "matrix": label,
-                                    "status": "FAIL", "error": str(exc)})
+            report["cases"].append({
+                "name": case["name"], "matrix": matrix, "status": "FAIL",
+                "error": str(exc),
+            })
             print(f"FAIL {label}: {exc}")
         finally:
-            if runner.service is not None:
+            if runner is not None and runner.service is not None:
                 runner.service.close()
             if owns_work:
                 shutil.rmtree(work, ignore_errors=True)
 
-    run_matrix()
-    print(f"\n{report['passed']} passed, {report['failed']} failed")
+    matrix = {
+        "c": (("c", None),),
+        "rust": (("rust", None),),
+        "go": (("go", None),),
+        "rust_to_go": (("rust", "go"),),
+        "go_to_rust": (("go", "rust"),),
+        "all": (("c", None), ("rust", None), ("go", None),
+                ("rust", "go"), ("go", "rust")),
+    }[args.matrix]
+
+    for producer, consumer in matrix:
+        direction = producer if consumer is None else f"{producer}->{consumer}"
+        missing = [key for key in (producer, consumer) if key is not None and key not in binaries]
+        if missing:
+            record_skip("matrix", direction, f"missing binary: {', '.join(missing)}")
+            continue
+        mixed = consumer is not None
+        if mixed and fixture_tool is None:
+            record_skip("matrix", direction, "mixed producer requires --fixture-tool")
+            continue
+        capability_key = consumer if consumer is not None else producer
+        for case in use_cases:
+            required = case.get("requires")
+            if required and required not in capabilities[capability_key]["methods"]:
+                record_skip(case["name"], direction,
+                            f"requires unadvertised method {required}")
+                continue
+            run_one(case, producer, consumer)
+
+    print(
+        f"\n{report['passed']} passed, {report['failed']} failed, "
+        f"{report['skipped']} skipped; oracle checks={report['oracle_checks']}")
     if args.json_report:
-        with open(args.json_report, "w") as f:
-            json.dump(report, f, indent=2)
-    return 1 if report["failed"] else 0
+        with open(args.json_report, "w", encoding="utf-8") as stream:
+            json.dump(report, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+    if report["failed"]:
+        return 1
+    if report["skipped"] and not args.allow_skips:
+        return 1
+    return 0
 
 
 if __name__ == "__main__":

@@ -152,7 +152,14 @@ def decode_response(text):
         raise FrameError(STD_INVALID_REQUEST, "jsonrpc must be \"2.0\"")
     if "id" not in value:
         raise FrameError(STD_INVALID_REQUEST, "response id is required")
-    _validate_id(value["id"])
+    if value["id"] is None:
+        # The spec blesses id:null only for the transport frame-too-large
+        # response (-32001); every other response must echo a real id.
+        err = value.get("error") or {}
+        if err.get("code") != TRANSPORT_FRAME_TOO_LARGE:
+            raise FrameError(STD_INVALID_REQUEST, "response id must be a string or integral number")
+    else:
+        _validate_id(value["id"])
     if ("result" in value) == ("error" in value):
         raise FrameError(STD_INVALID_REQUEST, "response needs exactly one of result/error")
     if "error" in value:

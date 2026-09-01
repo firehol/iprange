@@ -1,5 +1,7 @@
 """Common v1 types shared by every method params/results schema."""
 
+import re as _re
+
 from .engine import validate
 
 FAMILY = {"type": "string", "enum": ["ipv4", "ipv6"]}
@@ -15,13 +17,27 @@ PUBLICATION_RESOLUTION_MODE = {"type": "string", "enum": ["complete", "remove"]}
 LIVE_TRANSITION_RESOLUTION_MODE = {"type": "string", "enum": ["complete", "rollback"]}
 LOGICAL_CHANGE = {"type": "string", "enum": ["changed", "unchanged"]}
 
-PATH = {"type": "string", "min_len": 1, "max_len": 65536}
+PATH = {
+    "type": "string",
+    "pattern": _re.compile(r"(?!-$)[^\x00]+"),
+    "min_len": 1,
+    "max_len": 65536,
+}
 HANDLE = {"type": "string", "hex": 32}
+# Result cardinalities can exceed 64 bits; parameters using the common U64
+# vocabulary are bounded separately by PARAM_U64.
 U64 = {"type": "string", "decimal": True}
+PARAM_U64 = {"type": "string", "decimal": True, "decimal_max": (1 << 64) - 1}
+POSITIVE_U64 = {
+    "type": "string",
+    "decimal": True,
+    "decimal_min": 1,
+    "decimal_max": (1 << 64) - 1,
+}
 U32 = {"type": "u32"}
+POSITIVE_U32 = {"type": "integer", "min": 1, "max": 4294967295}
 IP_ADDRESS = {"type": "string", "min_len": 1, "max_len": 64}
 
-import re as _re
 FEED_NAME = {
     "type": "string",
     "pattern": _re.compile(r"^[a-z0-9](?:[a-z0-9_.-]*[a-z0-9])?$"),
@@ -33,7 +49,7 @@ VALUE_TAG = {
     "type": "one_of",
     "options": [
         {"type": "object",
-         "properties": {"text": {"type": "string", "max_len": 15}},
+         "properties": {"text": {"type": "string", "no_control": True, "max_len": 15, "max_bytes": 15}},
          "required": ["text"], "additional": False},
         {"type": "object",
          "properties": {"hex": {"type": "string", "hex_even": True, "max_len": 30}},
@@ -62,13 +78,25 @@ METADATA_INPUT = {
     ],
 }
 
+# Methods that create a new immutable destination cannot inherit metadata;
+# "keep" is therefore excluded. Empty replace_base64 is the valid empty blob.
+METADATA_REPLACEMENT_INPUT = {
+    "type": "one_of",
+    "options": [
+        _metadata_form("clear", {}),
+        _metadata_form("replace_utf8", {"text": {"type": "string"}}),
+        _metadata_form("replace_base64", {"base64": {"type": "string", "base64": True}}),
+        _metadata_form("replace_file", {"path": PATH}),
+    ],
+}
+
 WRITER_BUDGET = {
     "type": "object",
     "properties": {
-        "max_heap_bytes": U64,
-        "max_private_pages": U64,
-        "max_growth_pages": U64,
-        "max_open_files": U32,
+        "max_heap_bytes": POSITIVE_U64,
+        "max_private_pages": POSITIVE_U64,
+        "max_growth_pages": POSITIVE_U64,
+        "max_open_files": POSITIVE_U32,
     },
     "required": ["max_heap_bytes", "max_private_pages", "max_growth_pages", "max_open_files"],
     "additional": False,
@@ -76,9 +104,9 @@ WRITER_BUDGET = {
 SNAPSHOT_BUDGET = {
     "type": "object",
     "properties": {
-        "max_heap_bytes": U64,
-        "max_output_pages": U64,
-        "max_open_files": U32,
+        "max_heap_bytes": POSITIVE_U64,
+        "max_output_pages": POSITIVE_U64,
+        "max_open_files": POSITIVE_U32,
     },
     "required": ["max_heap_bytes", "max_output_pages", "max_open_files"],
     "additional": False,
@@ -86,16 +114,16 @@ SNAPSHOT_BUDGET = {
 def scratch_fields(*, recovery):
     names = ["max_scratch_bytes", "max_scratch_files", "scratch_directory"]
     props = {
-        "max_scratch_bytes": U64,
+        "max_scratch_bytes": PARAM_U64,
         "max_scratch_files": U32,
         "scratch_directory": PATH,
     }
     base = {
-        "max_heap_bytes": U64,
-        "max_open_files": U32,
+        "max_heap_bytes": POSITIVE_U64,
+        "max_open_files": POSITIVE_U32,
     }
     if recovery:
-        base["max_output_pages"] = U64
+        base["max_output_pages"] = POSITIVE_U64
     props.update(base)
     return {
         "type": "object",
@@ -109,28 +137,28 @@ VALIDATION_BUDGET = scratch_fields(recovery=False)
 RECOVERY_BUDGET = scratch_fields(recovery=True)
 MEMBERSHIP_QUERY_BUDGET = {
     "type": "object",
-    "properties": {"max_heap_bytes": U64},
+    "properties": {"max_heap_bytes": POSITIVE_U64},
     "required": ["max_heap_bytes"],
     "additional": False,
 }
 ALGEBRA_BUDGET = {
     "type": "object",
-    "properties": {"max_heap_bytes": U64, "max_sources": U32},
+    "properties": {"max_heap_bytes": POSITIVE_U64, "max_sources": POSITIVE_U32},
     "required": ["max_heap_bytes", "max_sources"],
     "additional": False,
 }
 ALGEBRA_OUTPUT_BUDGET = {
     "type": "object",
-    "properties": {"max_output_pages": U64, "max_open_files": U32},
+    "properties": {"max_output_pages": POSITIVE_U64, "max_open_files": POSITIVE_U32},
     "required": ["max_output_pages", "max_open_files"],
     "additional": False,
 }
 RESULT_BUDGET = {
     "type": "object",
     "properties": {
-        "max_rows": U64,
-        "max_output_bytes": U64,
-        "max_open_files": U32,
+        "max_rows": POSITIVE_U64,
+        "max_output_bytes": POSITIVE_U64,
+        "max_open_files": POSITIVE_U32,
     },
     "required": ["max_rows", "max_output_bytes", "max_open_files"],
     "additional": False,
@@ -138,10 +166,10 @@ RESULT_BUDGET = {
 IMMUTABLE_FEED_BUDGET = {
     "type": "object",
     "properties": {
-        "max_heap_bytes": U64,
-        "max_output_pages": U64,
-        "max_workspace_pages": U64,
-        "max_open_files": U32,
+        "max_heap_bytes": POSITIVE_U64,
+        "max_output_pages": POSITIVE_U64,
+        "max_workspace_pages": POSITIVE_U64,
+        "max_open_files": POSITIVE_U32,
     },
     "required": ["max_heap_bytes", "max_output_pages", "max_workspace_pages", "max_open_files"],
     "additional": False,
@@ -162,7 +190,7 @@ FEED_SELECTION = {
             "type": "object",
             "properties": {
                 "mode": {"type": "string", "enum": ["named"]},
-                "feeds": {"type": "array", "items": FEED_NAME, "min": 1},
+                "feeds": {"type": "array", "items": FEED_NAME, "min": 1, "unique": True},
             },
             "required": ["mode", "feeds"],
             "additional": False,
@@ -191,8 +219,8 @@ TEXT_INPUT = {
             "additional": False,
         },
         "expand_at_paths": {"type": "boolean"},
-        "max_line_bytes": U32,
-        "max_expanded_paths": U32,
+        "max_line_bytes": {"type": "integer", "min": 1, "max": 1048576},
+        "max_expanded_paths": {"type": "integer", "min": 1, "max": 1000000},
     },
     "required": ["paths", "family", "fix_network", "default_prefix", "dns", "expand_at_paths",
                  "max_line_bytes", "max_expanded_paths"],
@@ -201,7 +229,7 @@ TEXT_INPUT = {
 
 DIRECT_INPUT = {
     "type": "object",
-    "properties": {"path": PATH, "max_line_bytes": U32},
+    "properties": {"path": PATH, "max_line_bytes": {"type": "integer", "min": 1, "max": 1048576}},
     "required": ["path", "max_line_bytes"],
     "additional": False,
 }
@@ -237,10 +265,69 @@ METADATA_DELIVERY = {
              "mode": {"type": "string", "enum": ["file"]},
              "path": PATH,
              "publication_policy": PUBLICATION_POLICY,
-             "max_output_bytes": U64,
-             "max_open_files": U32,
+             "max_output_bytes": POSITIVE_U64,
+             "max_open_files": POSITIVE_U32,
          },
          "required": ["mode", "path", "publication_policy", "max_output_bytes", "max_open_files"],
          "additional": False},
     ],
 }
+
+
+def _self_test():
+    from .engine import ValidationError
+
+    def rejects(schema, value):
+        try:
+            validate(value, schema)
+        except ValidationError:
+            return True
+        return False
+
+    assert validate("18446744073709551615", PARAM_U64) == "18446744073709551615"
+    assert rejects(PARAM_U64, "18446744073709551616")
+    assert rejects(PATH, "-")
+    assert rejects(PATH, "a\x00b")
+    assert validate({"text": ""}, VALUE_TAG) == {"text": ""}
+    assert rejects(VALUE_TAG, {"text": "bad\x00tag"})
+    assert rejects(VALUE_TAG, {"text": "bad\ntag"})
+    assert validate({"mode": "replace_base64", "base64": ""}, METADATA_REPLACEMENT_INPUT)
+    assert rejects(METADATA_REPLACEMENT_INPUT, {"mode": "keep"})
+    assert validate({
+        "mode": "named", "feeds": ["feed-a", "feed-b"]
+    }, FEED_SELECTION)
+    assert rejects(FEED_SELECTION, {
+        "mode": "named", "feeds": ["feed-a", "feed-a"]
+    })
+    assert rejects(TEXT_INPUT, _text_input(max_line_bytes=0))
+    assert rejects(TEXT_INPUT, _text_input(max_line_bytes=1048577))
+    assert rejects(TEXT_INPUT, _text_input(1, max_expanded_paths=0))
+    assert rejects(TEXT_INPUT, _text_input(1, max_expanded_paths=1000001))
+    assert rejects(DIRECT_INPUT, {"path": "/tmp/in", "max_line_bytes": 0})
+    assert rejects(DIRECT_INPUT, {"path": "/tmp/in", "max_line_bytes": 1048577})
+    valid_budget = {"max_rows": "1", "max_output_bytes": "1", "max_open_files": 1}
+    assert validate(valid_budget, RESULT_BUDGET) == valid_budget
+    for field, value in (
+        ("max_rows", "0"),
+        ("max_output_bytes", "0"),
+        ("max_open_files", 0),
+    ):
+        bad = dict(valid_budget, **{field: value})
+        assert rejects(RESULT_BUDGET, bad)
+
+
+def _text_input(max_line_bytes, max_expanded_paths=1):
+    return {
+        "paths": ["/tmp/input"],
+        "family": "ipv4",
+        "fix_network": False,
+        "default_prefix": 32,
+        "dns": {"threads": 1, "silent": True},
+        "expand_at_paths": False,
+        "max_line_bytes": max_line_bytes,
+        "max_expanded_paths": max_expanded_paths,
+    }
+
+
+if __name__ == "__main__":
+    _self_test()

@@ -46,7 +46,7 @@ MODES = [
     ("describe_ok", [DESCRIBE_STEP], "PASS", ""),
     ("rows_ok", [
         {"kind": "rpc", "method": "iprange.v1.reader.ranges.open",
-         "params": {"reader": READER, "view": {"kind": "direct"},
+         "params": {"reader": READER, "view": {"kind": "feed", "feed": "feed-a"},
                     "direction": "forward", "batch_size": 4096},
          "expect_result": {"method": "iprange.v1.reader.ranges.open",
                            "cursor": {"$ignore": True}},
@@ -63,10 +63,10 @@ MODES = [
                            "matches": {"$ignore": True}}},
     ], "PASS", ""),
     # Envelope corruption.
-    ("describe_bad_json", [DESCRIBE_STEP], "FAIL", "non-JSON response line"),
+    ("describe_bad_json", [DESCRIBE_STEP], "FAIL", "parse error:"),
     ("describe_bad_id", [DESCRIBE_STEP], "FAIL", "response id"),
-    ("describe_no_jsonrpc", [DESCRIBE_STEP], "FAIL", "jsonrpc != 2.0"),
-    ("describe_bad_version", [DESCRIBE_STEP], "FAIL", "jsonrpc != 2.0"),
+    ("describe_no_jsonrpc", [DESCRIBE_STEP], "FAIL", 'jsonrpc must be "2.0"'),
+    ("describe_bad_version", [DESCRIBE_STEP], "FAIL", 'jsonrpc must be "2.0"'),
     # Result schema corruption.
     ("describe_bad_decimal", [DESCRIBE_STEP], "FAIL", "not a canonical unsigned decimal"),
     ("describe_missing_method", [DESCRIBE_STEP], "FAIL", "missing required field"),
@@ -75,7 +75,7 @@ MODES = [
     # Protocol semantics corruption.
     ("rows_bad_order", [
         {"kind": "rpc", "method": "iprange.v1.reader.ranges.open",
-         "params": {"reader": READER, "view": {"kind": "direct"},
+         "params": {"reader": READER, "view": {"kind": "feed", "feed": "feed-a"},
                     "direction": "forward", "batch_size": 4096},
          "expect_result": {"method": "iprange.v1.reader.ranges.open",
                            "cursor": {"$ignore": True}},

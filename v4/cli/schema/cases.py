@@ -1,19 +1,104 @@
 """Declarative external-case schema (iprange-cli-case-v1).
 
-The runner consumes cases exclusively through this schema. Case files
-live in v4/cli/cases/*.json and benchmark manifests in
-v4/cli/benchmarks/*.json.
+The schema is intentionally smaller than the runner: every member accepted here
+must have one executable runner interpretation.  In particular, expectations
+and filesystem assertions are validated before a subprocess is launched.
 """
 
-from .engine import validate
+import os
+from pathlib import PureWindowsPath
+
+from .engine import ValidationError, validate
 from . import common as C
+
+_ASSERT_FILE = {
+    "type": "object",
+    "properties": {
+        "path": C.PATH,
+        "sha256": {"type": "string", "hex": 64},
+        "equals_fixture": C.PATH,
+    },
+    "required": ["path"],
+    "additional": False,
+}
+
+_STREAM_EXPECTATION = {
+    "type": "one_of",
+    "options": [
+        {
+            "type": "object",
+            "properties": {"$exact": {"type": "string"}},
+            "required": ["$exact"],
+            "additional": False,
+        },
+        {
+            "type": "object",
+            "properties": {"$contains": {"type": "string"}},
+            "required": ["$contains"],
+            "additional": False,
+        },
+    ],
+}
+
+def _rpc_step(expectation):
+    properties = {
+        "kind": {"type": "string", "enum": ["rpc"]},
+        "method": {"type": "string", "min_len": 1},
+        "params": {"type": "object"},
+        "capture": {"type": "array", "items": {"type": "string", "min_len": 1}, "max": 16},
+        "assert_files": {"type": "array", "items": _ASSERT_FILE, "max": 64},
+    }
+    required = ["kind", "method", "params"]
+    if expectation is not None:
+        properties.update(expectation)
+        required.extend(expectation)
+    return {
+        "type": "object",
+        "properties": properties,
+        "required": required,
+        "additional": False,
+    }
+
+
+_EXPECT_RESULT = {"expect_result": {"type": "object"}}
+_EXPECT_ERROR = {
+    "expect_error": {
+        "type": "object",
+        "properties": {
+            "code": {"type": "string", "min_len": 1},
+            "outcome": {"type": "string", "min_len": 1},
+        },
+        "required": ["code"],
+        "additional": False,
+    }
+}
+_RPC_STEPS = (
+    _rpc_step(None),
+    _rpc_step(_EXPECT_RESULT),
+    _rpc_step(_EXPECT_ERROR),
+)
+
+_LEGACY_STEP = {
+    "type": "object",
+    "properties": {
+        "kind": {"type": "string", "enum": ["legacy"]},
+        "argv": {"type": "array", "items": C.PATH, "min": 1},
+        "stdin_fixture": C.PATH,
+        "exit_status": {"type": "integer", "min": 0, "max": 255},
+        "stdout": _STREAM_EXPECTATION,
+        "stderr": _STREAM_EXPECTATION,
+        "assert_files": {"type": "array", "items": _ASSERT_FILE, "max": 64},
+    },
+    "required": ["kind", "argv", "exit_status", "stdout", "stderr"],
+    "additional": False,
+}
 
 CASE = {
     "type": "object",
     "properties": {
         "schema": {"type": "string", "enum": ["iprange-cli-case-v1"]},
         "name": {"type": "string", "min_len": 1},
-        "requires": {"type": "string"},
+        "requires": {"type": "string", "min_len": 1},
         "fixtures": {
             "type": "array",
             "items": {
@@ -23,16 +108,27 @@ CASE = {
                     "source": {
                         "type": "one_of",
                         "options": [
-                            {"type": "object",
-                             "properties": {"text": {"type": "string"}},
-                             "required": ["text"], "additional": False},
-                            {"type": "object",
-                             "properties": {"base64": {"type": "string", "base64": True}},
-                             "required": ["base64"], "additional": False},
-                            {"type": "object",
-                             "properties": {"generator": {"type": "string"},
-                                            "seed": {"type": "integer", "min": 0}},
-                             "required": ["generator", "seed"], "additional": False},
+                            {
+                                "type": "object",
+                                "properties": {"text": {"type": "string"}},
+                                "required": ["text"],
+                                "additional": False,
+                            },
+                            {
+                                "type": "object",
+                                "properties": {"base64": {"type": "string", "base64": True}},
+                                "required": ["base64"],
+                                "additional": False,
+                            },
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "generator": {"type": "string"},
+                                    "seed": {"type": "integer", "min": 0},
+                                },
+                                "required": ["generator", "seed"],
+                                "additional": False,
+                            },
                         ],
                     },
                 },
@@ -42,54 +138,123 @@ CASE = {
         },
         "steps": {
             "type": "array",
-            "items": {
-                "type": "one_of",
-                "options": [
-                    # rpc step
-                    {"type": "object",
-                     "properties": {
-                         "kind": {"type": "string", "enum": ["rpc"]},
-                         "method": {"type": "string"},
-                         "params": {"type": "object"},
-                         "expect_result": {"type": "object"},
-                         "expect_error": {
-                             "type": "object",
-                             "properties": {
-                                 "code": {"type": "string"},
-                                 "outcome": {"type": "string"},
-                             },
-                             "required": ["code"], "additional": False,
-                         },
-                         "capture": {"type": "array", "items": {"type": "string"}, "max": 16},
-                         "assert_files": {"type": "array", "items": {"type": "object"}, "max": 64},
-                     },
-                     "required": ["kind", "method", "params"], "additional": False},
-                    # legacy step
-                    {"type": "object",
-                     "properties": {
-                         "kind": {"type": "string", "enum": ["legacy"]},
-                         "argv": {"type": "array", "items": C.PATH, "min": 1},
-                         "stdin_fixture": C.PATH,
-                         "exit_status": {"type": "integer", "min": 0, "max": 255},
-                         "stdout": {"type": "object"},
-                         "stderr": {"type": "object"},
-                         "assert_files": {"type": "array", "items": {"type": "object"}, "max": 64},
-                     },
-                     "required": ["kind", "argv"], "additional": False},
-                ],
-            },
+            "items": {"type": "one_of", "options": [*_RPC_STEPS, _LEGACY_STEP]},
             "min": 1,
         },
-        "assertions": {"type": "object"},
+        "assertions": {
+            "type": "object",
+            "properties": {"files": {"type": "array", "items": _ASSERT_FILE, "max": 64}},
+            "required": ["files"],
+            "additional": False,
+        },
     },
     "required": ["schema", "name", "fixtures", "steps"],
     "additional": False,
 }
 
 
+def _relative_work_path(value, path):
+    if os.path.isabs(value) or PureWindowsPath(value).is_absolute():
+        raise ValidationError(f"{path}", "work-directory path must be relative")
+    parts = value.split("/")
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValidationError(f"{path}", "work-directory path must stay inside $WORK")
+
+
+def _valid_pointer(value, path):
+    parts = value.split(".")
+    if not parts or any(not part for part in parts):
+        raise ValidationError(f"{path}", "capture pointer must contain nonempty dot-separated members")
+
+
 def validate_case(case):
+    """Validate the declarative schema and executable cross-field rules."""
+    from . import methods
+
     validate(case, CASE, "case")
+
+    fixture_paths = []
+    for index, fixture in enumerate(case["fixtures"]):
+        _relative_work_path(fixture["path"], f"fixtures[{index}].path")
+        fixture_paths.append(fixture["path"])
+    if len(fixture_paths) != len(set(fixture_paths)):
+        raise ValidationError("fixtures", "fixture paths must be unique")
+
+    rpc_methods = set()
+    available_captures = set()
+    for index, step in enumerate(case["steps"]):
+        if step["kind"] == "legacy":
+            if "stdin_fixture" in step:
+                _relative_work_path(step["stdin_fixture"], f"steps[{index}].stdin_fixture")
+            for assertion_index, assertion in enumerate(step.get("assert_files", [])):
+                _relative_work_path(assertion["path"], f"steps[{index}].assert_files[{assertion_index}].path")
+                if "equals_fixture" in assertion:
+                    _relative_work_path(
+                        assertion["equals_fixture"],
+                        f"steps[{index}].assert_files[{assertion_index}].equals_fixture",
+                    )
+            continue
+
+        method = step["method"]
+        if not methods.known(method):
+            raise ValidationError(f"steps[{index}].method", f"unknown production method {method!r}")
+        rpc_methods.add(method)
+
+        for pointer_index, pointer in enumerate(step.get("capture", [])):
+            _valid_pointer(pointer, f"steps[{index}].capture[{pointer_index}]")
+        for value in _walk_strings(step["params"]):
+            if value.startswith("$CAPTURE/") and value[len("$CAPTURE/"):] not in available_captures:
+                raise ValidationError(
+                    f"steps[{index}].params",
+                    f"unresolved capture placeholder {value!r}",
+                )
+            if (value.startswith("/") or value == ".." or value.startswith("../")
+                    or PureWindowsPath(value).is_absolute()):
+                raise ValidationError(
+                    f"steps[{index}].params",
+                    "raw escaping paths are invalid; use $WORK/path",
+                )
+        for assertion_index, assertion in enumerate(step.get("assert_files", [])):
+            _relative_work_path(assertion["path"], f"steps[{index}].assert_files[{assertion_index}].path")
+            if "equals_fixture" in assertion:
+                _relative_work_path(
+                    assertion["equals_fixture"],
+                    f"steps[{index}].assert_files[{assertion_index}].equals_fixture",
+                )
+        available_captures.update(step.get("capture", []))
+
+    for assertion_index, assertion in enumerate(case.get("assertions", {}).get("files", [])):
+        _relative_work_path(
+            assertion["path"],
+            f"assertions.files[{assertion_index}].path",
+        )
+        if "equals_fixture" in assertion:
+            _relative_work_path(
+                assertion["equals_fixture"],
+                f"assertions.files[{assertion_index}].equals_fixture",
+            )
+
+    required = case.get("requires")
+    if required is not None:
+        if not methods.known(required):
+            raise ValidationError("requires", f"unknown production method {required!r}")
+        if required not in rpc_methods:
+            raise ValidationError(
+                "requires",
+                "required capability must be exercised by an rpc step in this case",
+            )
     return case
+
+
+def _walk_strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_strings(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _walk_strings(item)
 
 
 def validate_rpc_request(method, params):

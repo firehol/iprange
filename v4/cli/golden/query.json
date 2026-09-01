@@ -37,7 +37,7 @@
         "result": {
           "method": "iprange.v1.query.cardinalities",
           "output": {
-            "path": "/example/out.jsonl",
+            "path": "/example/out.csv",
             "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "bytes": "1024",
             "rows": "16"
@@ -88,7 +88,7 @@
         "result": {
           "method": "iprange.v1.query.overlaps",
           "output": {
-            "path": "/example/out.jsonl",
+            "path": "/example/out.csv",
             "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "bytes": "1024",
             "rows": "16"
@@ -134,7 +134,7 @@
         "result": {
           "method": "iprange.v1.query.matching_feeds",
           "output": {
-            "path": "/example/out.jsonl",
+            "path": "/example/out.csv",
             "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "bytes": "1024",
             "rows": "16"
@@ -184,7 +184,7 @@
         "result": {
           "method": "iprange.v1.join.direct",
           "output": {
-            "path": "/example/out.jsonl",
+            "path": "/example/out.csv",
             "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "bytes": "1024",
             "rows": "16"
@@ -249,7 +249,7 @@
         "result": {
           "method": "iprange.v1.join.membership",
           "output": {
-            "path": "/example/out.jsonl",
+            "path": "/example/out.csv",
             "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "bytes": "1024",
             "rows": "16"

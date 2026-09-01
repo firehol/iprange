@@ -32,7 +32,7 @@
         "result": {
           "method": "iprange.v1.maintenance.list",
           "output": {
-            "path": "/example/out.jsonl",
+            "path": "/example/maint.jsonl",
             "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             "bytes": "1024",
             "rows": "16"

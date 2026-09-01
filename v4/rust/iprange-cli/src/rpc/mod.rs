@@ -19,6 +19,8 @@ pub mod state;
 
 use std::io::{self, Write};
 
+use self::dispatch::HandlerError;
+
 /// Run the JSON-RPC service to EOF or fatal transport failure.
 pub fn run() -> i32 {
     let stdin = io::stdin();
@@ -37,8 +39,16 @@ pub fn run() -> i32 {
 }
 
 /// A connection-local opaque handle (32 lowercase hex characters).
-pub fn new_handle() -> String {
+///
+/// Entropy failure is a server-side failure, not a silent zero handle:
+/// temporary names must be unpredictable.
+pub fn new_handle() -> Result<String, HandlerError> {
     let mut bytes = [0u8; 16];
-    let _ = getrandom::fill(&mut bytes);
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
+    getrandom::fill(&mut bytes).map_err(|error| HandlerError {
+        code: "internal",
+        outcome: "not_started",
+        message: "secure handle generation failed".into(),
+        details: Some(serde_json::json!({"cause": error.to_string()})),
+    })?;
+    Ok(bytes.iter().map(|b| format!("{b:02x}")).collect())
 }

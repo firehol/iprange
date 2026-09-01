@@ -38,7 +38,7 @@
         "result": {
           "method": "iprange.v1.algebra.count",
           "report": {
-            "source_count": "2",
+            "source_count": "1",
             "source_range_count": "18",
             "joined_segment_count": "3",
             "addresses": "65536"
@@ -85,7 +85,7 @@
         "result": {
           "method": "iprange.v1.algebra.compare",
           "report": {
-            "source_count": "2",
+            "source_count": "1",
             "source_range_count": "18",
             "joined_segment_count": "3",
             "left_addresses": "65536",
@@ -130,7 +130,7 @@
             "feed": "combined"
           },
           "value_tag": {
-            "hex": "00"
+            "hex": "01"
           },
           "metadata": {
             "mode": "clear"
@@ -153,7 +153,7 @@
         "result": {
           "method": "iprange.v1.algebra.publish",
           "report": {
-            "source_count": "2",
+            "source_count": "1",
             "source_range_count": "18",
             "joined_segment_count": "3",
             "output_feed_count": "1",

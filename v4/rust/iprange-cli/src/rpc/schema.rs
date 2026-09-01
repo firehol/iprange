@@ -166,6 +166,10 @@ pub fn decode_frame(line: &[u8]) -> Result<Vec<Request>, SchemaError> {
     if line.contains(&b'\n') || line.contains(&b'\r') {
         return Err(SchemaError::parse("unescaped line break inside frame"));
     }
+    // The transport is a UTF-8 byte stream; reject invalid UTF-8 with
+    // a deterministic parse error instead of letting the JSON decoder
+    // apply a lossy replacement.
+    std::str::from_utf8(line).map_err(|_| SchemaError::parse("frame is not valid UTF-8"))?;
     let value: Value = serde_json::from_slice(line)
         .map_err(|e| SchemaError::parse(format!("parse error: {e}")))?;
     if let Some(arr) = value.as_array() {
@@ -279,6 +283,25 @@ mod tests {
                 .unwrap();
         assert!(reqs[0].id.is_none());
         assert_eq!(reqs[0].method, CANCEL_METHOD);
+    }
+
+    #[test]
+    fn invalid_utf8_is_a_deterministic_parse_error() {
+        let err = decode_frame(b"{\"id\":\"\xff\xfe\"}").unwrap_err();
+        assert_eq!(err.code, STD_PARSE_ERROR);
+        assert_eq!(err.message, "frame is not valid UTF-8");
+        let err = decode_frame(b"\xff").unwrap_err();
+        assert_eq!(err.code, STD_PARSE_ERROR);
+        assert_eq!(err.message, "frame is not valid UTF-8");
+    }
+
+    #[test]
+    fn crlf_terminated_frames_decode() {
+        let inner =
+            r#"{"jsonrpc":"2.0","id":"1","method":"iprange.v1.system.describe","params":{}}"#;
+        let reqs = decode_frame(format!("{inner}\r\n").as_bytes()).unwrap();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].method, "iprange.v1.system.describe");
     }
 
     #[test]
