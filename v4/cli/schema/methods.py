@@ -685,10 +685,18 @@ _register("iprange.v1.maintenance.remove", {
     "additional": False,
 })
 
-# cancellation notification (transport control)
+# cancellation notification (transport control): request_id is a JSON
+# string or an integral JSON number, exactly like a request id; NaN and
+# other non-integer numbers are invalid.
 _register(CANCEL_METHOD, {
     "type": "object",
-    "properties": {"request_id": {"type": "any"}},
+    "properties": {"request_id": {
+        "type": "one_of",
+        "options": [
+            {"type": "string"},
+            {"type": "json_integer"},
+        ],
+    }},
     "required": ["request_id"],
     "additional": False,
 })

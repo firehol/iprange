@@ -139,6 +139,13 @@ def validate(value, schema, path="$"):
         _run_validator(schema, value, path)
         return value
 
+    if vtype == "json_integer":
+        # Any integral JSON number, unbounded: JSON text may carry any
+        # precision and the transport accepts it as a request id.
+        if isinstance(value, bool) or not isinstance(value, int):
+            _key_error(path, f"expected integer, got {type(value).__name__}")
+        return value
+
     if vtype in ("integer", "u32"):
         if isinstance(value, bool) or not isinstance(value, int):
             _key_error(path, f"expected integer, got {type(value).__name__}")
