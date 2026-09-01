@@ -26,8 +26,9 @@ use super::reader::{
     read_error, sdk, u64_string, validate_path,
 };
 use crate::io::export_writer::{
-    csv_field, emit_ipset, emit_netset, format_address, legacy_binary_header,
-    legacy_binary_min_header_bytes, legacy_binary_record_v4, legacy_binary_record_v6, ranges_line,
+    emit_ipset, emit_netset, legacy_binary_header,
+    legacy_binary_min_header_bytes, legacy_binary_record_v4, legacy_binary_record_v6, push_address,
+    push_ranges_line, write_json_value,
     ExportBudget, ExportFacts, ExportWriter, PrefixFilter, LEGACY_ENDIANNESS_MARKER,
 };
 
@@ -293,44 +294,55 @@ fn export_with_reader(
             &cancellation,
             format == "jsonl",
         )?,
-        "ipset" => write_streamed(
-            destination,
-            policy,
-            budget,
-            reader,
-            view,
-            &mut |writer, from, to| {
-                emit_ipset(from, to, host_prefix, &mut |line| {
+        "ipset" => {
+            let mut line = String::new();
+            write_streamed(
+                destination,
+                policy,
+                budget,
+                reader,
+                view,
+                &mut |writer, from, to| {
+                    emit_ipset(from, to, host_prefix, &mut line, &mut |text| {
+                        check_cancelled(&cancellation)?;
+                        writer.write_line(text, 1)
+                    })
+                },
+            )?
+        }
+        "netset" => {
+            let mut line = String::new();
+            write_streamed(
+                destination,
+                policy,
+                budget,
+                reader,
+                view,
+                &mut |writer, from, to| {
+                    emit_netset(from, to, &filter, &mut line, &mut |text, span| {
+                        check_cancelled(&cancellation)?;
+                        writer.write_line(text, span)
+                    })
+                },
+            )?
+        }
+        _ => {
+            let mut line = String::new();
+            write_streamed(
+                destination,
+                policy,
+                budget,
+                reader,
+                view,
+                &mut |writer, from, to| {
                     check_cancelled(&cancellation)?;
-                    writer.write_line(line, 1)
-                })
-            },
-        )?,
-        "netset" => write_streamed(
-            destination,
-            policy,
-            budget,
-            reader,
-            view,
-            &mut |writer, from, to| {
-                emit_netset(from, to, &filter, &mut |line, span| {
-                    check_cancelled(&cancellation)?;
-                    writer.write_line(line, span)
-                })
-            },
-        )?,
-        _ => write_streamed(
-            destination,
-            policy,
-            budget,
-            reader,
-            view,
-            &mut |writer, from, to| {
-                check_cancelled(&cancellation)?;
-                let span = span_of(from, to);
-                writer.write_line(&ranges_line(from, to, host_prefix), span)
-            },
-        )?,
+                    let span = span_of(from, to);
+                    line.clear();
+                    push_ranges_line(&mut line, from, to, host_prefix);
+                    writer.write_line(&line, span)
+                },
+            )?
+        }
     };
     Ok(ExportFactsWithIdentity { facts, identity })
 }
@@ -369,7 +381,10 @@ fn write_rows(
             writer.write_chunk(b"from,to,value\n", 0, 0)?;
         }
         // Buffer one row so adjacent equal-value segments become one
-        // canonical row without retaining the stream.
+        // canonical row without retaining the stream. One line buffer
+        // is reused for every row so large exports allocate no per-row
+        // strings.
+        let mut line = String::new();
         let mut pending: Option<(u128, u128, Value)> = None;
         stream_segments(reader, view, &mut |from, to, value| {
             check_cancelled(cancellation)?;
@@ -387,6 +402,7 @@ fn write_rows(
                             pending_from,
                             pending_to,
                             &pending_value,
+                            &mut line,
                         )?;
                         pending = Some((from, to, semantic));
                     }
@@ -395,7 +411,7 @@ fn write_rows(
             Ok(())
         })?;
         if let Some((from, to, value)) = pending {
-            write_row(&mut writer, host_prefix, jsonl, from, to, &value)?;
+            write_row(&mut writer, host_prefix, jsonl, from, to, &value, &mut line)?;
         }
         Ok(())
     })();
@@ -409,33 +425,66 @@ fn write_row(
     from: u128,
     to: u128,
     value: &Value,
+    line: &mut String,
 ) -> Result<(), HandlerError> {
     let span = span_of(from, to);
+    line.clear();
     if jsonl {
-        let row = json!({
-            "from": format_address(from, host_prefix),
-            "to": format_address(to, host_prefix),
-            "value": value,
-        });
-        writer.write_line(&row.to_string(), span)
+        line.push_str("{\"from\":");
+        push_address(line, from, host_prefix);
+        line.push_str(",\"to\":");
+        push_address(line, to, host_prefix);
+        line.push_str(",\"value\":");
+        write_json_value(line, value)?;
+        line.push('}');
     } else {
-        let field = match value {
-            Value::Number(number) => number.to_string(),
-            Value::Array(names) => names
-                .iter()
-                .filter_map(Value::as_str)
-                .collect::<Vec<_>>()
-                .join(";"),
-            other => other.to_string(),
-        };
-        let line = format!(
-            "{},{},{}",
-            format_address(from, host_prefix),
-            format_address(to, host_prefix),
-            csv_field(&field)
-        );
-        writer.write_line(&line, span)
+        push_address(line, from, host_prefix);
+        line.push(',');
+        push_address(line, to, host_prefix);
+        line.push(',');
+        match value {
+            Value::Number(number) => {
+                use std::fmt::Write as _;
+                let _ = write!(line, "{number}");
+            }
+            // Feed names are [a-z0-9_.-] (SDK FeedName grammar), so the
+            // semicolon-joined field never needs RFC-4180 quoting.
+            Value::Array(names) => {
+                let mut first = true;
+                for name in names.iter().filter_map(Value::as_str) {
+                    if !first {
+                        line.push(';');
+                    }
+                    first = false;
+                    line.push_str(name);
+                }
+            }
+            // Structured values are canonical compact JSON; quote the
+            // field when it contains RFC-4180 specials.
+            other => {
+                let start = line.len();
+                write_json_value(line, other)?;
+                let encoded = &line[start..];
+                let needs_quotes = encoded
+                    .bytes()
+                    .any(|byte| byte == b',' || byte == b'"' || byte == b'\r' || byte == b'\n');
+                if needs_quotes {
+                    let mut quoted = String::with_capacity(encoded.len() + 2);
+                    quoted.push('"');
+                    for character in encoded.chars() {
+                        if character == '"' {
+                            quoted.push('"');
+                        }
+                        quoted.push(character);
+                    }
+                    quoted.push('"');
+                    line.truncate(start);
+                    line.push_str(&quoted);
+                }
+            }
+        }
     }
+    writer.write_line(line, span)
 }
 
 /// Write the released legacy binary format for a flat address set.

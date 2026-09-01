@@ -240,14 +240,44 @@ pub(crate) fn hex_digest(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
-/// Canonical address text for one numeric family-local address.
-pub(crate) fn format_address(value: u128, host_prefix: u32) -> String {
+/// Write the canonical address text for one numeric family-local
+/// address into a reusable line buffer (no per-row allocation).
+pub(crate) fn push_address(output: &mut String, value: u128, host_prefix: u32) {
+    use std::fmt::Write as _;
     if host_prefix == 32 {
         let v4 = u32::try_from(value).expect("IPv4 value fits u32");
-        std::net::Ipv4Addr::from(v4).to_string()
+        let _ = write!(output, "{}", std::net::Ipv4Addr::from(v4));
     } else {
-        std::net::Ipv6Addr::from(value.to_be_bytes()).to_string()
+        let _ = write!(output, "{}", std::net::Ipv6Addr::from(value.to_be_bytes()));
     }
+}
+
+/// `io::Write` adapter over a `String` so `serde_json` can append a
+/// compact value directly into a reusable line buffer.
+struct StringWriter<'a>(&'a mut String);
+
+impl std::io::Write for StringWriter<'_> {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        let text = std::str::from_utf8(bytes)
+            .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))?;
+        self.0.push_str(text);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Serialize one JSON value into a reusable line buffer without a
+/// temporary string (all v4 wire values are valid UTF-8).
+pub(crate) fn write_json_value(output: &mut String, value: &serde_json::Value) -> Result<(), HandlerError> {
+    serde_json::to_writer(StringWriter(output), value).map_err(|error| {
+        HandlerError::new(
+            "io",
+            "not_started",
+            format!("export row JSON encoding failed: {error}"),
+        )
+    })
 }
 
 /// RFC-4180 CSV field: quote only when the field requires it and
@@ -293,26 +323,6 @@ pub(crate) fn push_json_string(output: &mut String, value: &str) {
     output.push('"');
 }
 
-/// RFC-4180 CSV field: quote only when the field requires it and
-/// double embedded quotes (allocating convenience form).
-pub(crate) fn csv_field(value: &str) -> String {
-    let needs_quotes = value
-        .bytes()
-        .any(|byte| byte == b',' || byte == b'"' || byte == b'\r' || byte == b'\n');
-    if !needs_quotes {
-        return value.to_owned();
-    }
-    let mut quoted = String::with_capacity(value.len() + 2);
-    quoted.push('"');
-    for character in value.chars() {
-        if character == '"' {
-            quoted.push('"');
-        }
-        quoted.push(character);
-    }
-    quoted.push('"');
-    quoted
-}
 
 /// Enabled netset prefix lengths for one address family.
 #[derive(Clone, Debug)]
@@ -359,17 +369,16 @@ impl PrefixFilter {
     }
 }
 
-/// One `from-to` line; a singleton is emitted as its single address
-/// (iprange-jsonrpc-v1.md, Export: `ranges`).
-pub(crate) fn ranges_line(from: u128, to: u128, host_prefix: u32) -> String {
+/// Write one `from-to` line; a singleton is emitted as its single
+/// address (iprange-jsonrpc-v1.md, Export: `ranges`). Reuses the
+/// caller's line buffer.
+pub(crate) fn push_ranges_line(output: &mut String, from: u128, to: u128, host_prefix: u32) {
     if from == to {
-        format_address(from, host_prefix)
+        push_address(output, from, host_prefix);
     } else {
-        format!(
-            "{}-{}",
-            format_address(from, host_prefix),
-            format_address(to, host_prefix)
-        )
+        push_address(output, from, host_prefix);
+        output.push('-');
+        push_address(output, to, host_prefix);
     }
 }
 
@@ -377,22 +386,26 @@ pub(crate) fn ranges_line(from: u128, to: u128, host_prefix: u32) -> String {
 /// only enabled prefixes, in address order (the released
 /// `split_range()` algorithm generalized to both families).
 ///
-/// The callback receives each output line and its exact address span.
+/// Each line is written into `line` and the callback receives it with
+/// its exact address span; the buffer is reused across blocks.
 pub(crate) fn emit_netset(
     from: u128,
     to: u128,
     filter: &PrefixFilter,
+    line: &mut String,
     emit: &mut dyn FnMut(&str, u128) -> Result<(), HandlerError>,
 ) -> Result<(), HandlerError> {
-    split_netset(0, 0, from, to, filter, emit)
+    split_netset(0, 0, from, to, filter, line, emit)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn split_netset(
     base: u128,
     prefix: u32,
     from: u128,
     to: u128,
     filter: &PrefixFilter,
+    line: &mut String,
     emit: &mut dyn FnMut(&str, u128) -> Result<(), HandlerError>,
 ) -> Result<(), HandlerError> {
     let host = filter.host_prefix();
@@ -403,36 +416,40 @@ fn split_netset(
         base | ((1u128 << bits) - 1)
     };
     if from == base && to == network_end && filter.enabled(prefix) {
-        let address = format_address(base, host);
-        let line = if prefix == host {
-            address
-        } else {
-            format!("{address}/{prefix}")
-        };
+        line.clear();
+        push_address(line, base, host);
+        if prefix != host {
+            line.push('/');
+            use std::fmt::Write as _;
+            let _ = write!(line, "{prefix}");
+        }
         // The full family space alone can exceed the u128 counter.
         let span = network_end.saturating_sub(base).saturating_add(1);
-        return emit(&line, span);
+        return emit(line, span);
     }
     let half = base | (1u128 << (host - prefix - 1));
     if to < half {
-        split_netset(base, prefix + 1, from, to, filter, emit)
+        split_netset(base, prefix + 1, from, to, filter, line, emit)
     } else if from >= half {
-        split_netset(half, prefix + 1, from, to, filter, emit)
+        split_netset(half, prefix + 1, from, to, filter, line, emit)
     } else {
-        split_netset(base, prefix + 1, from, half - 1, filter, emit)?;
-        split_netset(half, prefix + 1, half, to, filter, emit)
+        split_netset(base, prefix + 1, from, half - 1, filter, line, emit)?;
+        split_netset(half, prefix + 1, half, to, filter, line, emit)
     }
 }
 
-/// Emit every address in `[from, to]`, one per line.
+/// Emit every address in `[from, to]`, one per line, reusing `line`.
 pub(crate) fn emit_ipset(
     from: u128,
     to: u128,
     host_prefix: u32,
+    line: &mut String,
     emit: &mut dyn FnMut(&str) -> Result<(), HandlerError>,
 ) -> Result<(), HandlerError> {
     for address in from..=to {
-        emit(&format_address(address, host_prefix))?;
+        line.clear();
+        push_address(line, address, host_prefix);
+        emit(line)?;
     }
     Ok(())
 }
@@ -498,8 +515,9 @@ mod tests {
     fn lines(from: u128, to: u128, filter: &PrefixFilter) -> (Vec<String>, Vec<u128>) {
         let mut output = Vec::new();
         let mut spans = Vec::new();
-        emit_netset(from, to, filter, &mut |line, span| {
-            output.push(line.to_owned());
+        let mut line = String::new();
+        emit_netset(from, to, filter, &mut line, &mut |text, span| {
+            output.push(text.to_owned());
             spans.push(span);
             Ok(())
         })
@@ -566,28 +584,33 @@ mod tests {
 
     #[test]
     fn ranges_lines_are_ordered_with_single_addresses() {
-        assert_eq!(
-            ranges_line(0xC000_0200, 0xC000_0204, 32),
-            "192.0.2.0-192.0.2.4"
-        );
-        assert_eq!(ranges_line(0xC000_020A, 0xC000_020A, 32), "192.0.2.10");
+        let mut line = String::new();
+        push_ranges_line(&mut line, 0xC000_0200, 0xC000_0204, 32);
+        assert_eq!(line, "192.0.2.0-192.0.2.4");
+        line.clear();
+        push_ranges_line(&mut line, 0xC000_020A, 0xC000_020A, 32);
+        assert_eq!(line, "192.0.2.10");
     }
 
     #[test]
     fn csv_fields_follow_rfc4180() {
-        assert_eq!(csv_field("feed-a"), "feed-a");
-        assert_eq!(csv_field("42"), "42");
-        assert_eq!(
-            csv_field(r#"{"asn":64512,"country_id":1}"#),
-            r#""{""asn"":64512,""country_id"":1}""#
-        );
+        let mut line = String::new();
+        write_csv_field(&mut line, "feed-a");
+        assert_eq!(line, "feed-a");
+        line.clear();
+        write_csv_field(&mut line, "42");
+        assert_eq!(line, "42");
+        line.clear();
+        write_csv_field(&mut line, r#"{"asn":64512,"country_id":1}"#);
+        assert_eq!(line, r#""{""asn"":64512,""country_id"":1}""#);
     }
 
     #[test]
     fn ipset_expands_each_address() {
         let mut output = Vec::new();
-        emit_ipset(0xC000_020A, 0xC000_020C, 32, &mut |line| {
-            output.push(line.to_owned());
+        let mut line = String::new();
+        emit_ipset(0xC000_020A, 0xC000_020C, 32, &mut line, &mut |text| {
+            output.push(text.to_owned());
             Ok(())
         })
         .unwrap();

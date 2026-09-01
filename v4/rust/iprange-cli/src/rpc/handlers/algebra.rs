@@ -222,16 +222,15 @@ fn validate_selection(value: &Value) -> Result<(), String> {
             if feeds.is_empty() {
                 return Err("selection.feeds must contain at least one feed".into());
             }
-            let mut seen: Vec<&str> = Vec::new();
+            let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
             for feed in feeds {
                 let name = feed
                     .as_str()
                     .ok_or("each selection feed must be a string")?;
                 validate_feed_name(Some(name))?;
-                if seen.contains(&name) {
+                if !seen.insert(name) {
                     return Err("selection.feeds must be unique".into());
                 }
-                seen.push(name);
             }
             Ok(())
         }
@@ -321,7 +320,8 @@ fn validate_overlaps_mode(value: &Value) -> Result<(), String> {
             if pairs.is_empty() {
                 return Err("mode.pairs must contain at least one pair".into());
             }
-            let mut normalized: Vec<(String, String)> = Vec::new();
+            let mut normalized: std::collections::HashSet<(&str, &str)> =
+                std::collections::HashSet::new();
             for pair in pairs {
                 let pair_object = reader::exact_object(pair, &["left", "right"])
                     .map_err(|error| format!("mode.pairs: {error}"))?;
@@ -336,15 +336,10 @@ fn validate_overlaps_mode(value: &Value) -> Result<(), String> {
                 if left == right {
                     return Err("pair left and right feeds must differ".into());
                 }
-                let entry = if left < right {
-                    (left.to_owned(), right.to_owned())
-                } else {
-                    (right.to_owned(), left.to_owned())
-                };
-                if normalized.contains(&entry) {
+                let entry = if left < right { (left, right) } else { (right, left) };
+                if !normalized.insert(entry) {
                     return Err("unordered pairs must be unique".into());
                 }
-                normalized.push(entry);
             }
             Ok(())
         }
