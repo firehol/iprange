@@ -199,14 +199,7 @@ pub(crate) fn finish_publisher(
 pub(crate) fn workflow_failure(writer: &mut LiveWriter, error: HandlerError) -> HandlerError {
     let _ = writer.abort();
     let close = close_writer(writer).ok();
-    let mut details = json!({});
-    if let Some(close) = close {
-        details["writer_close"] = close;
-    }
-    HandlerError {
-        details: Some(details),
-        ..error
-    }
+    merge_writer_facts(error, close, None)
 }
 
 /// Close the writer after a metadata-stage failure; the draft is already
@@ -217,14 +210,28 @@ pub(crate) fn finish_writer_error(
     report: &Value,
 ) -> HandlerError {
     let close = close_writer(writer).ok();
-    let mut details = json!({"report": report});
+    merge_writer_facts(error, close, Some(report))
+}
+
+/// Merge the factual writer close (and the completed report, when one
+/// exists) into the error's existing details. The incoming error may
+/// already carry reader-close facts from an earlier stage; replacing
+/// the whole details object would drop them, so the new facts are
+/// inserted alongside the old ones.
+fn merge_writer_facts(
+    mut error: HandlerError,
+    close: Option<Value>,
+    report: Option<&Value>,
+) -> HandlerError {
+    let mut details = error.details.take().unwrap_or_else(|| json!({}));
+    if let Some(report) = report {
+        details["report"] = report.clone();
+    }
     if let Some(close) = close {
         details["writer_close"] = close;
     }
-    HandlerError {
-        details: Some(details),
-        ..error
-    }
+    error.details = Some(details);
+    error
 }
 
 
@@ -268,4 +275,49 @@ pub(crate) fn workflow_report(report: &WorkflowReport) -> Value {
         "source_distinct_membership_count": report.source_distinct_membership_count.to_string(),
         "translated_membership_count": report.translated_membership_count.to_string(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merge_writer_facts_preserves_existing_details() {
+        // A failed history projection with a failed live-reader close
+        // carries the reader close result in the error details before
+        // the writer facts are merged; the merge must keep it.
+        let error = HandlerError::new(
+            "insufficient_resource_budget",
+            "not_started",
+            "projection failed",
+        );
+        let mut error = error;
+        error.details =
+            Some(json!({"source_close": {"outcome": "close_incomplete", "cleanup": {}}}));
+
+        let merged = merge_writer_facts(
+            error.clone(),
+            Some(json!({"outcome": "closed", "cleanup": {}})),
+            None,
+        );
+        let details = merged.details.expect("details must survive");
+        assert_eq!(details["source_close"]["outcome"], "close_incomplete");
+        assert_eq!(details["writer_close"]["outcome"], "closed");
+        assert!(!details.as_object().unwrap().contains_key("report"));
+        assert_eq!(merged.code, "insufficient_resource_budget");
+        assert_eq!(merged.outcome, "not_started");
+    }
+
+    #[test]
+    fn merge_writer_facts_adds_report_alongside_existing_details() {
+        let error = HandlerError::new("io", "not_started", "draft failed");
+        let mut error = error;
+        error.details = Some(json!({"source_close": {"outcome": "closed"}}));
+
+        let report = json!({"workflow": "first_seen_refresh"});
+        let merged = merge_writer_facts(error, None, Some(&report));
+        let details = merged.details.expect("details must survive");
+        assert_eq!(details["source_close"]["outcome"], "closed");
+        assert_eq!(details["report"]["workflow"], "first_seen_refresh");
+    }
 }
