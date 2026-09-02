@@ -2473,3 +2473,29 @@ round-7 fixes at the new HEAD.
 - Next: delta re-review of this wave by the same three FAIL
   reviewers, then the glm-5.3-responses whole-milestone review, then
   milestone-3 close-out.
+
+### 2026-09-02 (continued) — delta-2 review at 299c5035 (3/3 PASS) and validator-strictness wave
+
+- The delta re-review of the second fix wave at 299c5035 returned:
+  Rust parity PASS, API/docs PASS, Go idioms FAIL (P2-C plus P3s).
+- P2-C fixed (validator-stage canonical decimals): five (six with the
+  delivery validator) param validators accepted non-canonical decimal
+  strings at validation (non-digits like `abc`, leading zeros like
+  `00`) that the Rust u64_string/positive_u64_string validators
+  reject, deferring the refusal to the decode stage with a different
+  message. All sites now parse through the single
+  internal/format.ParseCanonicalUint64 authority at validation time:
+  writer budget, validation/recovery budget, snapshot budget,
+  recovery candidate transaction_id, maintenance tuple
+  transaction_id and digest byte_length, and the file delivery
+  max_output_bytes validator (which Rust validates with u64_string).
+  The lax positiveDecimal helper is deleted; a table-driven
+  validator test refuses `abc`, `00`, and overflow at every surface.
+- P3 fixes: the base64-strictness CLI test now uses the real
+  writer_budget shape (its negative arm was order-dependent on
+  metadata-before-budget validation order); dead initializeReservation
+  wrapper deleted; the 69-name wire-code round trip is now committed
+  as an internal/format test; the CLI README no longer implies the
+  empty benchmarks directory or bench.py exist.
+- Re-validation at the final tree (fresh fixtures /tmp/m3f4-*): all
+  green as recorded in the previous entry; no gate regressed.

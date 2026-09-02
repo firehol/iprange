@@ -113,7 +113,7 @@ func validateCandidateObject(candidate rawObject) error {
 	if _, err := asHexString(candidate, "database_id"); err != nil || len(mustString(candidate, "database_id")) != 32 {
 		return errString("candidate.database_id must be 32 lowercase hexadecimal characters")
 	}
-	if _, err := asDecimalString(candidate, "transaction_id"); err != nil {
+	if _, err := canonicalU64RawMember(candidate, "transaction_id"); err != nil {
 		return errString("candidate.transaction_id must be a canonical unsigned decimal string")
 	}
 	if _, err := asHexString(candidate, "commit_nonce"); err != nil || len(mustString(candidate, "commit_nonce")) != 32 {
@@ -159,8 +159,7 @@ func validateScratchBudget(budget rawObject, recovery bool) error {
 	if _, err := exactObjectOpt(encoded, required, []string{"scratch_directory"}); err != nil {
 		return err
 	}
-	heap, err := asDecimalString(budget, "max_heap_bytes")
-	if err != nil || !positiveDecimal(heap) {
+	if _, err := asPositiveU64String(budget, "max_heap_bytes"); err != nil {
 		return errString("validation_budget.max_heap_bytes must be a positive canonical unsigned decimal string")
 	}
 	openFiles, err := asUint32(budget, "max_open_files")
@@ -168,14 +167,9 @@ func validateScratchBudget(budget rawObject, recovery bool) error {
 		return errString("validation_budget.max_open_files must be a positive u32 integer")
 	}
 	if recovery {
-		pages, err := asDecimalString(budget, "max_output_pages")
-		if err != nil || !positiveDecimal(pages) {
+		if _, err := asPositiveU64String(budget, "max_output_pages"); err != nil {
 			return errString("recovery_budget.max_output_pages must be a positive canonical unsigned decimal string")
 		}
-	}
-	scratchBytes, err := asDecimalString(budget, "max_scratch_bytes")
-	if err != nil {
-		return errString("validation_budget.max_scratch_bytes must be a canonical unsigned decimal string")
 	}
 	scratchFiles, err := asUint32(budget, "max_scratch_files")
 	if err != nil {
@@ -192,8 +186,12 @@ func validateScratchBudget(budget rawObject, recovery bool) error {
 			return err
 		}
 	}
-	disabled := scratchBytes == "0" && scratchFiles == 0
-	enabled := scratchBytes != "0" && scratchFiles != 0 && directoryPresent
+	scratchBytes, err := canonicalU64RawMember(budget, "max_scratch_bytes")
+	if err != nil {
+		return errString("validation_budget.max_scratch_bytes must be a canonical unsigned decimal string")
+	}
+	disabled := scratchBytes == 0 && scratchFiles == 0
+	enabled := scratchBytes != 0 && scratchFiles != 0 && directoryPresent
 	if (disabled && !directoryPresent) || enabled {
 		return nil
 	}

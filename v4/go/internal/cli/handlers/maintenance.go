@@ -42,12 +42,6 @@ func canonicalU64(raw json.RawMessage) (uint64, error) {
 	return canonicalU64FromRaw(raw)
 }
 
-// positiveDecimal reports whether the canonical decimal string is
-// nonzero.
-func positiveDecimal(text string) bool {
-	return text != "0" && text != ""
-}
-
 // decodeIdentityFromObject decodes one FILE_IDENTITY wire object
 // (volume/file decimal pair) into the portable SDK identity of the
 // current platform (Rust maintenance::identity_from_value).
@@ -1312,7 +1306,7 @@ func validateTupleObject(tuple rawObject) error {
 	if err := validateHex16Member(tuple, "database_id"); err != nil {
 		return err
 	}
-	if _, err := asDecimalString(tuple, "transaction_id"); err != nil {
+	if _, err := canonicalU64RawMember(tuple, "transaction_id"); err != nil {
 		return fmt.Errorf("tuple.transaction_id must be a canonical unsigned decimal string")
 	}
 	return validateHex16Member(tuple, "commit_nonce")
@@ -1331,7 +1325,7 @@ func validateDigestObject(digest rawObject) error {
 	if err := exactObjectRaw(digest, "byte_length", "sha512"); err != nil {
 		return err
 	}
-	if _, err := asDecimalString(digest, "byte_length"); err != nil {
+	if _, err := canonicalU64RawMember(digest, "byte_length"); err != nil {
 		return fmt.Errorf("digest.byte_length must be a canonical unsigned decimal string")
 	}
 	sha, err := asHexString(digest, "sha512")

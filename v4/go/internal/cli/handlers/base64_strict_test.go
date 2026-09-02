@@ -66,11 +66,10 @@ func TestBase64TrailingBitsRejected(t *testing.T) {
 				"base64": blob,
 			},
 			"writer_budget": map[string]any{
-				"size":    1,
-				"staging": 1,
-				"pages":   1,
-				"fds":     1,
-				"slots":   1,
+				"max_heap_bytes":    "67108864",
+				"max_private_pages": "64",
+				"max_growth_pages":  "64",
+				"max_open_files":    32,
 			},
 		})
 		if err != nil {

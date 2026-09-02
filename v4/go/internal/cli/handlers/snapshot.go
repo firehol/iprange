@@ -8,7 +8,6 @@ package handlers
 
 import (
 	"encoding/json"
-	"strconv"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
@@ -83,11 +82,7 @@ func validateSnapshotBudget(budget rawObject) error {
 		return err
 	}
 	for _, field := range []string{"max_heap_bytes", "max_output_pages"} {
-		value, err := asDecimalString(budget, field)
-		if err != nil || !positiveDecimal(value) {
-			return errUnexpected("snapshot_budget." + field + " must be a positive canonical unsigned decimal string")
-		}
-		if _, err := strconv.ParseUint(value, 10, 64); err != nil {
+		if _, err := asPositiveU64String(budget, field); err != nil {
 			return errUnexpected("snapshot_budget." + field + " must be a positive canonical unsigned decimal string")
 		}
 	}

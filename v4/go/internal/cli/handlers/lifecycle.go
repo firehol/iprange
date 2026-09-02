@@ -204,11 +204,7 @@ func validateWriterBudgetObject(budget rawObject) error {
 		return err
 	}
 	for _, field := range []string{"max_heap_bytes", "max_private_pages", "max_growth_pages"} {
-		value, err := asDecimalString(budget, field)
-		if err != nil {
-			return fmt.Errorf("writer_budget.%s must be a canonical unsigned decimal string", field)
-		}
-		if !positiveDecimal(value) {
+		if _, err := asPositiveU64String(budget, field); err != nil {
 			return fmt.Errorf("writer_budget.%s must be a positive canonical unsigned decimal string", field)
 		}
 	}

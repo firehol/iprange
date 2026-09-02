@@ -90,10 +90,6 @@ func (d *reservationDraft) initializeObserved(output *preparedOutput, afterSelec
 	}, nil
 }
 
-func initializeReservation(d *reservationDraft, output *preparedOutput) error {
-	return initializeReservationObserved(d, output, nil)
-}
-
 func initializeReservationObserved(d *reservationDraft, output *preparedOutput, afterSelection func(live.FileIdentity) error) error {
 	if err := prepareHeader(d, output); err != nil {
 		return err

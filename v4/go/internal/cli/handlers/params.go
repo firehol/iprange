@@ -348,6 +348,12 @@ func canonicalU64String(text string) (uint64, error) {
 
 // canonicalU64FromRaw parses one raw JSON member as a canonical
 // unsigned decimal string.
+// canonicalU64RawMember parses one raw object member as a canonical
+// unsigned decimal string (Rust u64_string; zero allowed).
+func canonicalU64RawMember(object rawObject, name string) (uint64, error) {
+	return canonicalU64FromRaw(object[name])
+}
+
 func canonicalU64FromRaw(raw json.RawMessage) (uint64, error) {
 	var text string
 	if err := json.Unmarshal(raw, &text); err != nil {

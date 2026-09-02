@@ -118,11 +118,11 @@ func ValidateDelivery(value rawObject) error {
 		if !validPublicationPolicyName(policy) {
 			return fmt.Errorf("delivery.publication_policy is invalid")
 		}
-		bytesLimit, err := asDecimalString(delivery, "max_output_bytes")
+		bytesLimit, err := canonicalU64RawMember(delivery, "max_output_bytes")
 		if err != nil {
-			return err
+			return fmt.Errorf("delivery.max_output_bytes must be a canonical unsigned decimal string")
 		}
-		if bytesLimit == "0" {
+		if bytesLimit == 0 {
 			return fmt.Errorf("delivery.max_output_bytes must be positive")
 		}
 		if _, err := asUint64(delivery, "max_open_files"); err != nil {

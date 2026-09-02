@@ -79,8 +79,8 @@ nice python3 v4/cli/sensitivity_gate.py    # 14 broken-server modes
   Rust binary and validated against the strict Python schemas.
 - `schema/` — the machine authority: framing, methods, results, and
   the scalar interval oracle. It imports no SDK.
-- `benchmarks/` — workload benchmarks for `bench.py` (SOW-0028
-  step 5).
+- `benchmarks/` — reserved for the consolidated workload manifests
+  and `bench.py` harness of SOW-0028 step 5 (currently empty).
 
 ## Known limitations
 
