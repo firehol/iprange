@@ -1971,3 +1971,38 @@ exchanges; sensitivity 13 modes; runner 24 cases / 13 oracle checks.
 The round-8 re-review (below) added the performance, coverage, wire,
 SDK-ownership, and records findings listed there and re-verified the
 round-7 fixes at the new HEAD.
+
+### 2026-09-02 — milestone 2 (delivery step 3): complete Rust legacy surface implemented
+
+- Implementation: five parallel own-model workers ported the released
+  legacy surface into `v4/rust/iprange-cli/src/legacy/` (6,932 C lines
+  across `src/iprange.c`, `src/iprange6_main.c`, `src/ipset{,6}_*.c`, the
+  100-dir `tests.d/` oracle, and the 13 wiki pages). Integration fixes by
+  the lead: v4 `parse_cidr` now parses the token's own `/prefix` (the
+  worker draft used the caller default); `parse::load_all` returns
+  `LoadedAll` with the group-B boundary in loaded-set units so `@file`/
+  `@dir` expansion splits groups exactly like the C `read_second` chains;
+  the diff/common/exclude walks build results unoptimized and flag them
+  optimized at the end (C `ipset{,6}_create(name, 0)` +
+  `flags |= OPTIMIZED`), preserving separate adjacent entries in diff
+  output; the `Cannot understand line No N` counter counts fgets records
+  (lineid off-by-one fixed); `convert_foreign` applies the C tail rule
+  (scan `[0-9./]`, then whitespace/`#`/`;` to EOL); the C `-v` timing
+  line prints in IPv4 mode; SIGPIPE and `strerror` are `cfg(unix)`
+  gated for the Windows target; dead code (`count_prefixes`, unused
+  mapped helpers, `Positional`, `SourceKind::Directory`) removed.
+- Validation at 43bf8929 (all gates green):
+  - `tests.d/` legacy suite: 100/100 pass through `IPRANGE_BIN`.
+  - Rust workspace: 50 suites, 0 failures; `-D warnings` clean on the 4
+    supported targets (linux amd64/arm64, windows, plus source-graph
+    targets); `check-source-graph.sh`: 502 sources, 4 targets.
+  - mmap storage/runtime and architecture gates: PASS.
+  - JSON-RPC external runner: 31/31, 15 oracle checks.
+  - Golden corpus: PASSED; sensitivity gate: 14 modes PASS.
+  - Oracle differentials by the workers: 36,408 IPv6 parse/format cases
+    0 mismatches; 600 randomized text-mode output trials byte-identical;
+    binary v1/v2 round-trips `cmp`-identical and cross-loadable in all 4
+    directions; 10 malformed-binary diagnostics byte-identical.
+- Scope guard: the legacy module uses only language-local grammar,
+  algebra, DNS, and formatting; it contains no v4 persistence logic and
+  creates no v4 artifact (JSON-RPC exclusivity enforced in main.rs).
