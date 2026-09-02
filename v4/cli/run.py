@@ -325,17 +325,26 @@ class CaseRunner:
                   if current is not None and isinstance(current.get("source"), dict) else None)
         if nested is not None:
             sources["params.current.source"] = nested
+        last_seen = params.get("last_seen") if isinstance(params.get("last_seen"), dict) else None
+        projection = (last_seen.get("source")
+                      if last_seen is not None and isinstance(last_seen.get("source"), dict)
+                      else None)
+        if projection is not None:
+            sources["params.last_seen.source"] = projection
+        # history.project reports the live close facts as source_closes
+        # (reader order); the other live-source families use source_close.
+        close_member = "source_closes" if method == "iprange.v1.history.project" else "source_close"
         for label, source in sources.items():
             mode = source.get("mode") if isinstance(source, dict) else None
             if mode not in ("live", "immutable"):
                 continue
-            if mode == "live" and "source_close" not in result:
+            if mode == "live" and close_member not in result:
                 raise AssertionError(
                     f"case {self.case['name']!r}: {method} opened a live source "
-                    f"({label}) but returned no source_close")
-            if mode == "immutable" and "source_close" in result:
+                    f"({label}) but returned no {close_member}")
+            if mode == "immutable" and close_member in result:
                 raise AssertionError(
-                    f"case {self.case['name']!r}: {method} fabricated source_close "
+                    f"case {self.case['name']!r}: {method} fabricated {close_member} "
                     f"for an immutable source ({label})")
 
     def verify_output_facts(self, facts, request_path):

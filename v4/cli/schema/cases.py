@@ -238,6 +238,11 @@ def validate_case(case):
                         f"steps[{index}].{member}",
                         "notification steps cannot expect a response, capture, or assert files",
                     )
+        elif method == CANCEL_METHOD:
+            raise ValidationError(
+                f"steps[{index}].notification",
+                "iprange.v1.cancel is a notification and requires \"notification\": true",
+            )
 
         for pointer_index, pointer in enumerate(step.get("capture", [])):
             _valid_pointer(pointer, f"steps[{index}].capture[{pointer_index}]")

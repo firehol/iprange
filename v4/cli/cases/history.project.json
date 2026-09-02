@@ -326,7 +326,12 @@
           "cleanup": {},
           "coordination_cleanup": {},
           "outcome": "closed"
-        }
+        },
+        "source_closes": [
+          {
+            "$ignore": true
+          }
+        ]
       }
     },
     {

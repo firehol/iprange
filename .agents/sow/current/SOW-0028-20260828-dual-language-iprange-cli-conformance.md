@@ -1226,6 +1226,85 @@ Open decisions:
   feeds.create/replace/import and the two retention refreshes; goldens
   use immutable fixtures and stay valid unchanged (absent member).
 
+### 2026-09-02 (continued) — round 11: five own-model delta re-review (FAIL) and fix wave
+
+- The five own-model delta reviewers re-verified the round-10 wave at
+  HEAD 061f8c71 and returned verified P2 findings; the round-11 fix
+  wave at HEAD b41550f3 fixes every finding:
+  1. Retention refreshes dropped the captured factual `source_close`
+     on error paths (close-facts and SDK-ownership scopes, identical
+     finding). Fixed in live.rs: all four run_* drivers merge
+     `source_close` into error `details` beside `writer_close` on
+     drain/finish failures; `publisher_value` merges it on every error
+     return (staging, metadata transactions, writer.close failure,
+     commit/durability, close_incomplete) via one shared
+     `merge_source_close` helper. Two new end-to-end tests: a live
+     first-seen refresh whose removals budget fails
+     `finish_input_with_removals_v4` after the reader closed carries
+     both `writer_close` and `source_close`; `publisher_value` with a
+     staging error preserves the fact.
+  2. `feeds.next` catalog paging was quadratic (performance and
+     SDK-ownership scopes). Fixed: `FeedCursor::seek_by_index` added
+     to iprange-livedb (one bounded B+tree seek per page,
+     at-or-after policy, `seeked` flag keeps the full-sweep count
+     health check for unseeked cursors); `feeds_next` opens one cursor
+     per page and seeks to last+1 instead of re-walking the prefix.
+     Equivalence test: paging a 2000-feed catalog matches one
+     unbounded sweep with one tree look-up per page.
+  3. Structured enumeration was O(N x F) (performance scope):
+     `threat_feed_names` opened a fresh catalog cursor per record and
+     called `contains_index` for every feed. Fixed: one catalog
+     snapshot per page/stream (`build_feed_snapshot`) plus one
+     reusable membership-word buffer; names resolve from set bits in
+     word order with catalog-order mapping. Used by structured
+     `ranges.next`, structured export, `reader.lookup`, and
+     `matching_feeds`; export stream pinned byte-identical. A
+     `cfg(test)`-only counter proves one sweep per page.
+  4. Closed-handle tombstones grew unboundedly (performance scope).
+     Fixed: FIFO-bounded closed-reader/closed-cursor tombstones
+     (1024 per family production, 8 under cfg(test)); an evicted
+     closed handle answers `handle_not_found`/`cursor_not_found`
+     (spec-permitted; handles are random 128-bit values never
+     reused). Unit test pins the bound.
+  5. Stale SOW validation records and unfilled fix-mapping SHA
+     (coverage scope). Fixed in this record: the round-10 mapping now
+     names commit 061f8c71 and the Validation section records the
+     re-run at 061f8c71; the round-11 re-run is recorded in the
+     Validation section below.
+  6. `iprange.v1.cancel` had no live behavioral coverage (coverage
+     scope). Fixed: notification-capable runner step (schema/cases.py
+     `"notification": true`, cancel-only, no expect/capture/assert;
+     run.py `notify()` never reads a response), new case
+     `cancel.unknown_id` (cancel unknown id then correlated
+     `system.describe` succeeds; cancel an already-terminal id then
+     describe succeeds again), and sensitivity mode `cancel_replies`
+     (server answers a notification; client rejects via stream
+     desync). Runner is now 31 cases / 15 oracle checks; sensitivity
+     gate is 14 modes.
+  7. `check_source_close` missed nested `current.source` (coverage
+     scope). Fixed: the checker now inspects `params.source`,
+     `params.current.source`, and `params.last_seen.source`; requires
+     the close member for live sources and forbids it for immutable
+     ones (history.project uses `source_closes`); `live.lifecycle.json`
+     pins `source_close` on the live feeds.create result and
+     `history.project.json` pins `source_closes` presence on the live
+     projection path.
+  8. `HOUSEKEEPING_ARTIFACT.ordinal` schema/emitter mismatch (wire
+     scope). Fixed: schema uses C.U32, consistent with the modeling
+     rule (u32 values are JSON integers) and the SDK/emitter.
+  9. Batch frame with one unanswerable request id silently dropped
+     every sibling (wire scope). Fixed in session.rs: unanswerable
+     elements answer -32001 with id null IN POSITION inside the batch
+     array via a new WorkEntry::Unanswerable variant; siblings
+     execute; single requests keep the standalone shape; unanswerable
+     entries never occupy queue capacity and are never cancellation
+     targets. Five unit tests added.
+- Validation at b41550f3: Rust workspace 50 suites / 726 tests, 0
+  failures; `-D warnings` clean; source graph 491 sources; runner
+  31 cases / 15 oracle checks; golden 53; sensitivity 14 modes; schema
+  self-tests pass; Go SDK suite green; mmap storage/runtime/
+  architecture gates pass; SOW audit and hygiene scans clean.
+
 ### 2026-09-01 (continued) — complete handler registry
 
 - All 32 remaining v1 methods implemented by three parallel workers and
@@ -1403,21 +1482,25 @@ Acceptance criteria evidence:
   same-language/cross-open/mixed-live matrices plus consolidated
   benchmarks (step 5), including `v4/cli/README.md` and `bench.py`.
 
-Tests or equivalent validation (re-run at HEAD 061f8c71, the
-round-10 fix wave commit):
+Tests or equivalent validation (re-run at HEAD b41550f3, the
+round-11 fix wave commit; round-10 wave re-run was recorded at
+061f8c71 with 50 suites / 710 tests, 30 cases, 13 sensitivity modes):
 
-- Rust workspace: 50 suites / 710 tests, 0 failures.
+- Rust workspace: 50 suites / 726 tests, 0 failures.
 - `-D warnings` build clean (rustc `-D warnings` via
   `v4/rust/check-source-graph.sh`); source graph 491 sources,
   4 supported targets, 1 runtime-compiled native fixture.
-- Runner matrix green: 30 cases / 15 oracle checks
-  (`nice python3 v4/cli/run.py --rust ... --matrix rust`).
+- Runner matrix green: 31 cases / 15 oracle checks
+  (`nice python3 v4/cli/run.py --rust ... --matrix rust`), including
+  the new `cancel.unknown_id` notification case.
 - Golden corpus: 53 exchanges PASS (`nice python3 v4/cli/check_golden.py`).
-- Sensitivity gate: 13 deliberate-brokenness modes PASS
-  (`nice python3 v4/cli/sensitivity_gate.py`).
+- Sensitivity gate: 14 deliberate-brokenness modes PASS
+  (`nice python3 v4/cli/sensitivity_gate.py`), including the new
+  `cancel_replies` mode.
 - Schema module self-tests PASS (`python3 -m v4.cli.schema.results`,
   `schema.cases`, `schema.frame`, `schema.methods`), including the
-  typed housekeeping/cleanup negative tests added in the round-10 wave.
+  typed housekeeping/cleanup negative tests added in the round-10 wave
+  and the round-11 u32 `ordinal` correction.
 - Go SDK suite green (`nice go -C v4/go test ./...`).
 - mmap-only gates: `check-mmap-storage.sh` (343 production sources),
   `check-mmap-runtime.sh`, `check-architecture.sh` all PASS.
