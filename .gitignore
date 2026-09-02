@@ -25,7 +25,10 @@ ltmain.sh
 missing
 stamp-h1
 
-iprange
+# The released C executable builds to ./iprange at the repository root;
+# the anchors keep generated build binaries ignored without hiding the
+# pure-Go product executable source under v4/go/cmd/iprange/.
+/iprange
 iprange.spec
 packaging/iprange.spec
 

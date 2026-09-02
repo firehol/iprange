@@ -200,8 +200,8 @@ func WidestIdentity() map[string]any {
 // the adapter close owners.
 func WidestCloseFact() map[string]any {
 	return map[string]any{
-		"outcome":             "close_incomplete",
-		"cleanup":             map[string]any{},
+		"outcome":              "close_incomplete",
+		"cleanup":              map[string]any{},
 		"coordination_cleanup": map[string]any{"kind": "retained_writer_close_required"},
 	}
 }
