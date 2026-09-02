@@ -7,7 +7,6 @@
 package handlers
 
 import (
-	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -15,6 +14,7 @@ import (
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
+	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
 // MetadataValue is the requested metadata terminal of one workflow:
@@ -67,10 +67,11 @@ func MetadataValueFromObject(object rawObject) (MetadataValue, *rpc.HandlerError
 	return MetadataValue{}, rpc.InvalidParamsError("metadata.mode is invalid")
 }
 
-// base64Decode is the standard padded base64 decoder with strict
-// padding validation (the wire metadata blob encoding).
+// base64Decode is the canonical wire base64 decoder (the wire
+// metadata blob encoding; Rust lifecycle.rs decode_base64), delegated
+// to the single internal/format authority.
 func base64Decode(text string) ([]byte, error) {
-	return base64.StdEncoding.DecodeString(text)
+	return format.DecodeCanonicalBase64(text)
 }
 
 // readMetadataFile reads a metadata source with the exact 20 MiB cap,

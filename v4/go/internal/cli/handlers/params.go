@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
 var (
@@ -333,27 +335,13 @@ func feedNameValid(name string) bool {
 	return true
 }
 
-// canonicalU64String is the single authoritative parser of the wire's
-// canonical unsigned decimal string form (Rust u64_string): "0" or
-// digits without a leading zero, within [0, 2^64-1].
+// canonicalU64String is the wire's canonical unsigned decimal string
+// parser (Rust u64_string), delegated to the single internal/format
+// authority.
 func canonicalU64String(text string) (uint64, error) {
-	if text == "0" {
-		return 0, nil
-	}
-	if text == "" || text[0] == '0' {
+	value, err := format.ParseCanonicalUint64(text)
+	if err != nil {
 		return 0, fmt.Errorf("must be a canonical unsigned decimal string")
-	}
-	var value uint64
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("must be a canonical unsigned decimal string")
-		}
-		digit := uint64(c - '0')
-		if value > (^uint64(0)-digit)/10 {
-			return 0, fmt.Errorf("must be a canonical unsigned decimal string")
-		}
-		value = value*10 + digit
 	}
 	return value, nil
 }

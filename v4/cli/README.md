@@ -32,7 +32,7 @@ CRLF), with these limits:
 - input and output frame ceiling: 1,048,576 bytes;
 - response object ceiling: 65,000 bytes (`output_limit` product error);
 - batches: 1..=16 requests, executed in array order;
-- queued requests per connection: 16 (`transport_server_busy`);
+- queued requests per connection: 16 (`server_busy`);
 - ids: string or integral JSON number; only `iprange.v1.cancel` may be
   a notification without an id;
 - reader handles and cursor handles: 64 each, bounded closed-handle
@@ -50,14 +50,17 @@ the worker process when one is installed beside the product binary).
 independent scalar-interval oracle:
 
 ```bash
-nice python3 v4/cli/run.py --matrix rust --rust v4/rust/target/release/iprange \
-  --fixture-tool v4/rust/target/release/examples/v4-fixture --work-dir /tmp/w
-nice python3 v4/cli/run.py --matrix go --go /tmp/iprange-go \
-  --fixture-tool v4/rust/target/release/examples/v4-fixture --work-dir /tmp/w
-nice python3 v4/cli/run.py --matrix rust_to_go --rust ... --go ... \
-  --fixture-tool ... --work-dir /tmp/w
-nice python3 v4/cli/run.py --matrix go_to_rust --rust ... --go ... \
-  --fixture-tool ... --work-dir /tmp/w
+RUST_IPRANGE=$PWD/v4/rust/target/release/iprange
+GO_IPRANGE=/tmp/iprange-go
+FIXTURE_TOOL=$PWD/v4/rust/target/release/examples/v4-fixture
+nice python3 v4/cli/run.py --matrix rust --rust "$RUST_IPRANGE" \
+  --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w
+nice python3 v4/cli/run.py --matrix go --go "$GO_IPRANGE" \
+  --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w
+nice python3 v4/cli/run.py --matrix rust_to_go --rust "$RUST_IPRANGE" --go "$GO_IPRANGE" \
+  --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w
+nice python3 v4/cli/run.py --matrix go_to_rust --rust "$RUST_IPRANGE" --go "$GO_IPRANGE" \
+  --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w
 ```
 
 `--allow-skips` is required for the C single-language surface that the

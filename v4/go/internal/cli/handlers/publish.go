@@ -19,6 +19,7 @@ import (
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/fileio"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
+	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
 // RegisterPublish installs the current.publish handler family.
@@ -509,60 +510,12 @@ func validateMetadataReplacement(raw json.RawMessage) error {
 	return fmt.Errorf("metadata.mode is invalid for this method")
 }
 
-// validateBase64Strict enforces canonical RFC 4648 base64 with the
-// released padding rules and zero trailing bits (Rust lifecycle.rs
-// decode_base64); Go's stdlib decoder accepts non-canonical padding
-// bits, so the wire validator is the strict authority.
+// validateBase64Strict enforces the canonical RFC 4648 wire base64
+// form and returns the first decode error (Rust lifecycle.rs
+// decode_base64), delegated to the single internal/format authority.
 func validateBase64Strict(value string) error {
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-	if len(value)%4 != 0 {
-		return fmt.Errorf("base64 length must be a multiple of four")
-	}
-	bytes := []byte(value)
-	chunkCount := len(bytes) / 4
-	for index := 0; index < chunkCount; index++ {
-		chunk := bytes[index*4 : index*4+4]
-		last := index == chunkCount-1
-		padding := 0
-		for i := len(chunk) - 1; i >= 0 && chunk[i] == '='; i-- {
-			padding++
-		}
-		if padding > 2 || (last && padding == 0 && len(bytes) == 0) {
-			return fmt.Errorf("base64 padding is invalid")
-		}
-		if !last && padding != 0 {
-			return fmt.Errorf("base64 padding is not at the end")
-		}
-		var word uint32
-		for position, b := range chunk {
-			var digit uint32
-			if b == '=' {
-				if !last || position < 4-padding {
-					return fmt.Errorf("base64 padding is invalid")
-				}
-				digit = 0
-			} else {
-				indexInAlphabet := -1
-				for i := 0; i < 64; i++ {
-					if alphabet[i] == b {
-						indexInAlphabet = i
-						break
-					}
-				}
-				if indexInAlphabet < 0 {
-					return fmt.Errorf("base64 uses the standard alphabet only")
-				}
-				digit = uint32(indexInAlphabet)
-			}
-			word = word<<6 | digit
-		}
-		if padding > 0 {
-			if word&((1<<(padding*8))-1) != 0 {
-				return fmt.Errorf("base64 has non-canonical trailing bits")
-			}
-		}
-	}
-	return nil
+	_, err := format.DecodeCanonicalBase64(value)
+	return err
 }
 
 // canonicalUint64 parses a canonical unsigned decimal string ("0" or

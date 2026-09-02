@@ -327,7 +327,7 @@ func (s *Session) applyCancel(request *Request) {
 	}
 }
 
-// beginShutdown marks the session shutting down an cancels the
+// beginShutdown marks the session shutting down and cancels the
 // active token, then closes the work channel so the worker drains and
 // exits.
 func (s *Session) beginShutdown() {

@@ -8,150 +8,16 @@ import (
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
+	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
 // sdkCode maps one SDK error code to its stable wire adapter code
-// (the closed product code list of iprange-jsonrpc-v1.md).
+// (the closed product code list of iprange-jsonrpc-v1.md). The
+// vocabulary is the single internal/format error-code table; an
+// out-of-table code degrades to the generic io name.
 func sdkCode(code iprangedb.ErrorCode) string {
-	switch code {
-	case iprangedb.ErrorInvalidArgument:
-		return "invalid_argument"
-	case iprangedb.ErrorNullPointer:
-		return "null_pointer"
-	case iprangedb.ErrorMisalignedPointer:
-		return "misaligned_pointer"
-	case iprangedb.ErrorInvalidLength:
-		return "invalid_length"
-	case iprangedb.ErrorInvalidEnum:
-		return "invalid_enum"
-	case iprangedb.ErrorReservedNonzero:
-		return "reserved_nonzero"
-	case iprangedb.ErrorBufferTooSmall:
-		return "buffer_too_small"
-	case iprangedb.ErrorWrongHandleKind:
-		return "handle_wrong_kind"
-	case iprangedb.ErrorHandleClosed:
-		return "handle_closed"
-	case iprangedb.ErrorHandleBusy:
-		return "handle_busy"
-	case iprangedb.ErrorWrongState:
-		return "wrong_state"
-	case iprangedb.ErrorWrongAddressFamily:
-		return "wrong_address_family"
-	case iprangedb.ErrorWrongValueKind:
-		return "wrong_value_kind"
-	case iprangedb.ErrorWrongValueTag:
-		return "wrong_value_tag"
-	case iprangedb.ErrorRangeReversed:
-		return "range_reversed"
-	case iprangedb.ErrorNameInvalid:
-		return "name_invalid"
-	case iprangedb.ErrorNameExists:
-		return "name_exists"
-	case iprangedb.ErrorNameNotFound:
-		return "name_not_found"
-	case iprangedb.ErrorStaleReference:
-		return "stale_reference"
-	case iprangedb.ErrorForeignReference:
-		return "foreign_reference"
-	case iprangedb.ErrorNoPendingTransaction:
-		return "no_pending_transaction"
-	case iprangedb.ErrorTransactionAborted:
-		return "transaction_aborted"
-	case iprangedb.ErrorAbortIncomplete:
-		return "abort_incomplete"
-	case iprangedb.ErrorInsufficientResourceBudget:
-		return "insufficient_resource_budget"
-	case iprangedb.ErrorPageSpaceExhausted:
-		return "page_space_exhausted"
-	case iprangedb.ErrorWorkLimitTooSmall:
-		return "work_limit_too_small"
-	case iprangedb.ErrorCancelled:
-		return "cancelled"
-	case iprangedb.ErrorSourceFailed:
-		return "source_failed"
-	case iprangedb.ErrorSinkFailed:
-		return "sink_failed"
-	case iprangedb.ErrorStoppedBySink:
-		return "stopped_by_sink"
-	case iprangedb.ErrorIO:
-		return "io"
-	case iprangedb.ErrorFormatInvalid:
-		return "format_invalid"
-	case iprangedb.ErrorNotV4:
-		return "not_v4"
-	case iprangedb.ErrorDurabilityUnsupported:
-		return "durability_unsupported"
-	case iprangedb.ErrorPublicationUnsupported:
-		return "publication_unsupported"
-	case iprangedb.ErrorAccessPolicyUnsupported:
-		return "access_policy_unsupported"
-	case iprangedb.ErrorConflict:
-		return "conflict"
-	case iprangedb.ErrorUnresolvable:
-		return "unresolvable"
-	case iprangedb.ErrorWriterBusy:
-		return "writer_busy"
-	case iprangedb.ErrorDirectoryIdentityMismatch:
-		return "directory_identity_mismatch"
-	case iprangedb.ErrorDestinationNameMismatch:
-		return "destination_name_mismatch"
-	case iprangedb.ErrorCleanupConflict:
-		return "cleanup_conflict"
-	case iprangedb.ErrorCoordinationSequenceExhausted:
-		return "coordination_sequence_exhausted"
-	case iprangedb.ErrorLiveCoordinationUnsupported:
-		return "live_coordination_unsupported"
-	case iprangedb.ErrorLiveCoordinationCleanupRequired:
-		return "live_coordination_cleanup_required"
-	case iprangedb.ErrorLiveCoordinationMalformedRequiresReset:
-		return "live_coordination_malformed_requires_reset"
-	case iprangedb.ErrorLiveOpenCleanupRequired:
-		return "live_open_cleanup_required"
-	case iprangedb.ErrorLiveRecoveryCoordinationUnavailable:
-		return "live_recovery_coordination_unavailable"
-	case iprangedb.ErrorLiveRecoveryCurrentGenerationUnprovable:
-		return "live_recovery_current_generation_unprovable"
-	case iprangedb.ErrorLiveRecoveryCurrentGenerationUnreadable:
-		return "live_recovery_current_generation_unreadable"
-	case iprangedb.ErrorRecoveryCandidateChanged:
-		return "recovery_candidate_changed"
-	case iprangedb.ErrorRecoveryPreparationFailed:
-		return "recovery_preparation_failed"
-	case iprangedb.ErrorSnapshotPreparationFailed:
-		return "snapshot_preparation_failed"
-	case iprangedb.ErrorTransitionSuperseded:
-		return "transition_superseded"
-	case iprangedb.ErrorCurrentGenerationUnprovable:
-		return "current_generation_unprovable"
-	case iprangedb.ErrorForkedHandle:
-		return "forked_handle"
-	case iprangedb.ErrorPanic:
-		return "panic"
-	case iprangedb.ErrorOSUnsupported:
-		return "os_unsupported"
-	case iprangedb.ErrorTransactionIdExhausted:
-		return "transaction_id_exhausted"
-	case iprangedb.ErrorArithmeticOverflow:
-		return "arithmetic_overflow"
-	case iprangedb.ErrorFeedIndexExhausted:
-		return "feed_index_exhausted"
-	case iprangedb.ErrorMembershipIdExhausted:
-		return "membership_id_exhausted"
-	case iprangedb.ErrorReaderCapacityExhausted:
-		return "reader_capacity_exhausted"
-	case iprangedb.ErrorCleanupInProgress:
-		return "cleanup_in_progress"
-	case iprangedb.ErrorFaultWorkerUnavailable:
-		return "fault_worker_unavailable"
-	case iprangedb.ErrorFaultWorkerFailed:
-		return "fault_worker_failed"
-	case iprangedb.ErrorUnsupportedStructure:
-		return "unsupported_structure"
-	case iprangedb.ErrorWrongStructureKind:
-		return "wrong_structure_kind"
-	case iprangedb.ErrorStructureIdExhausted:
-		return "structure_id_exhausted"
+	if name, ok := format.ErrorCodeWireName(code); ok {
+		return name
 	}
 	return "io"
 }

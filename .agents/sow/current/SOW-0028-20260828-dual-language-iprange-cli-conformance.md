@@ -2167,7 +2167,8 @@ round-7 fixes at the new HEAD.
     only ids, prefixed methods, object params, batch 1..=16,
     cancel-only notification, NaN-free id validation,
     -32001/-32002/-32010 error codes.
-  - `dispatch.go` — 52-method static inventory, Register (panic on
+  - `dispatch.go` — 53-entry static inventory (52 advertised
+    methods plus the cancel notification), Register (panic on
     unknown/duplicate), Advertised method list.
   - `state.go` — Immutable/Live reader values, cursor values, bounded
     closed-handle tombstones (1024 FIFO), deterministic-ordered
@@ -2208,7 +2209,7 @@ round-7 fixes at the new HEAD.
   absent-only optional forms, lowercase hex, decimal strings for u64,
   kind+tailing-zero identity validation). Round-trip test at
   `v4/go/publication_wire_decode_test.go`. Parity manifest records
-  39 new go-surface rows.
+  38 new go-surface rows.
 - Two parity gaps found by the SDK-surface explorer and fixed in this
   foundation: (1) `fault_worker` in system.describe is a CLI-local
   probe (candidate `iprange-v4-worker` executable beside the running
@@ -2420,3 +2421,55 @@ round-7 fixes at the new HEAD.
 - Next: delta five-reviewer round at the new HEAD (same five scopes),
   then the glm-5.3-responses whole-milestone review, then milestone-3
   close-out record in one lifecycle commit.
+
+### 2026-09-02 (continued) — delta five-reviewer round at 1ca05c28 (2 PASS, 3 FAIL) and second fix wave
+
+- The post-fix-wave delta round ran the same five own-model
+  reviewers at HEAD 1ca05c28 (after 44-file fix-wave commit). Verdicts:
+  performance PASS (two negligible P3 notes), wire integrity PASS
+  (one latent P3: private-output identity member), API/docs FAIL,
+  Go idioms FAIL, Rust parity FAIL.
+- Findings fixed in this wave:
+  - P2 (parity): the Go "strict" canonical base64 decoder accepted
+    non-canonical trailing bits in the final quartet where Rust
+    rejects them (`AB==`, `Zh==`, `Zx==`; Rust lifecycle.rs
+    decode_base64). Affected publication.resolve destination
+    basenames, database.metadata replace_base64, and
+    maintenance.remove entry basenames. One authority:
+    internal/format.DecodeCanonicalBase64 now implements the exact
+    Rust rules (multiple-of-four length, standard alphabet, end-only
+    padding, zero trailing bits) and the CLI validator, the metadata
+    blob decoder, and the SDK wire decoder all delegate to it. Live
+    probes confirm both binaries now return -32602 on identical
+    non-canonical inputs.
+  - P2 (idioms): two identical 69-entry error-code wire tables
+    (internal/format/codes.go and handlers sdkCode switch). The
+    format table is now package-level (no per-call map build, O(1)
+    reverse lookup) and sdkCode delegates to it; a parity test pins
+    69 unique round-tripping names.
+  - P2 (docs): v4/cli/README.md run.py examples used relative
+    executable paths that the runner rejects; now absolute through
+    $PWD variables. The README also named a nonexistent
+    `transport_server_busy` error; corrected to `server_busy`.
+  - P3: contradictory comment/assertion in the wire round-trip test
+    corrected (explicit null later_attempt_or_sidecar_id now
+    asserted to fail); a 15-case table-driven strictness test plus
+    positive optional-member cases committed in
+    publication_wire_decode_test.go; handler-level base64 strictness
+    tests added (base64_strict_test.go); internal/format base64 unit
+    tests added; dead isFeedEdge removed; maintenance
+    private_output_attempt_value always emits identity (null when
+    absent) matching Rust; session.go typo fixed; SOW stale counts
+    amended (38 go-surface rows, 53-entry inventory with 52
+    advertised); canonical u64 parsing consolidated in
+    internal/format.ParseCanonicalUint64 with the CLI helper
+    delegating.
+- Re-validation at the final tree (fresh fixtures /tmp/m3f3-*,
+  binary rebuilt from the working tree) — all green: matrices
+  go/rust_to_go/go_to_rust 31/31 each (oracle 15 each), golden 53
+  exchanges, sensitivity 14 modes, Go suite 22 packages plus root,
+  v4work suite, legacy C-oracle 100/100, mmap trace PASS, vet/gofmt
+  clean.
+- Next: delta re-review of this wave by the same three FAIL
+  reviewers, then the glm-5.3-responses whole-milestone review, then
+  milestone-3 close-out.

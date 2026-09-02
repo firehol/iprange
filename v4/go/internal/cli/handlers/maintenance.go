@@ -1499,6 +1499,8 @@ func privateOutputAttemptValue(attempt *iprangedb.PrivateOutputAttempt) map[stri
 	}
 	if attempt.IdentityPresent {
 		value["identity"] = FileIdentityJSONOrError(&attempt.Identity)
+	} else {
+		value["identity"] = nil
 	}
 	return value
 }

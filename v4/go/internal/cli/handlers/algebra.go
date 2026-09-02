@@ -433,10 +433,6 @@ func validateFeedName(feed string) error {
 	return nil
 }
 
-func isFeedEdge(b byte) bool {
-	return b >= 'a' && b <= 'z' || b >= '0' && b <= '9'
-}
-
 // validateOutput enforces the tabular output descriptor.
 func validateOutput(raw json.RawMessage) error {
 	object, err := decodeObject(raw)

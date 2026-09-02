@@ -547,83 +547,17 @@ func decodeDecimalUint64(raw json.RawMessage, field string) (uint64, error) {
 	return parsed, nil
 }
 
-// decodeCanonicalBase64 decodes the standard base64 form with the
-// exact Rust rules: length a multiple of four, standard alphabet only,
-// padding only in the final quartetcars, at most two '=' characters.
+// decodeCanonicalBase64 decodes the strict canonical base64 wire form
+// (Rust lifecycle.rs decode_base64) via the single internal/format
+// authority.
 func decodeCanonicalBase64(text string) ([]byte, error) {
-	if len(text)%4 != 0 {
-		return nil, fmt.Errorf("length must be a multiple of four")
-	}
-	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-	var output []byte
-	for index := 0; index < len(text); index += 4 {
-		chunk := text[index : index+4]
-		last := index+4 == len(text)
-		padding := 0
-		for i := len(chunk) - 1; i >= 0 && chunk[i] == '='; i-- {
-			padding++
-		}
-		if padding > 2 || (last && padding == 0 && text == "") {
-			return nil, fmt.Errorf("padding is invalid")
-		}
-		if !last && padding != 0 {
-			return nil, fmt.Errorf("padding is not at the end")
-		}
-		var word uint32
-		for position := 0; position < 4; position++ {
-			c := chunk[position]
-			var digit uint32
-			if c == '=' {
-				if !last || position < 4-padding {
-					return nil, fmt.Errorf("padding is invalid")
-				}
-				digit = 0
-			} else {
-				found := -1
-				for i := 0; i < len(alphabet); i++ {
-					if alphabet[i] == c {
-						found = i
-						break
-					}
-				}
-				if found < 0 {
-					return nil, fmt.Errorf("uses the standard alphabet only")
-				}
-				digit = uint32(found)
-			}
-			word = word<<6 | digit
-		}
-		output = append(output, byte(word>>16), byte(word>>8), byte(word))
-	}
-	if len(output) > 0 {
-		trim := 0
-		for n := len(text); n > 0 && text[n-1] == '='; n-- {
-			trim++
-		}
-		output = output[:len(output)-trim]
-	}
-	return output, nil
+	return format.DecodeCanonicalBase64(text)
 }
 
+// parseDecimalUint64 parses the canonical unsigned decimal wire form
+// via the single internal/format authority.
 func parseDecimalUint64(text string) (uint64, error) {
-	if text == "0" {
-		return 0, nil
-	}
-	if text == "" || text[0] == '0' {
-		return 0, fmt.Errorf("not canonical")
-	}
-	var value uint64
-	for i := 0; i < len(text); i++ {
-		digit := text[i]
-		if digit < '0' || digit > '9' {
-			return 0, fmt.Errorf("not decimal")
-		}
-		if value > (^uint64(0)-uint64(digit-'0'))/10 {
-			return 0, fmt.Errorf("overflow")
-		}
-		value = value*10 + uint64(digit-'0')
-	}
-	return value, nil
+	return format.ParseCanonicalUint64(text)
 }
 
 func decodeHex16(raw json.RawMessage, field string) ([16]byte, error) {
