@@ -36,7 +36,10 @@
 //!   the process closes without parsing any later bytes;
 //! - a request whose id alone cannot be echoed within the
 //!   65,000-byte response-object limit also produces -32001 with
-//!   id null, but the service keeps serving;
+//!   id null, but the service keeps serving; in a batch the
+//!   unanswerable element answers -32001 with id null in its
+//!   position in the response array and every sibling executes
+//!   normally;
 //! - broken stdout, termination signals, and stdin read errors are
 //!   fatal transport failures: the main loop runs the same
 //!   cancellation/handle-cleanup path as EOF and the process exits
@@ -86,18 +89,22 @@ pub struct SessionState {
 }
 /// One element of a decoded frame in frame order.
 ///
-/// `Busy` marks an element the read loop rejected with `server_busy`.
-/// Keeping rejected elements in position lets the worker emit exactly
-/// one batch response array whose members follow the request order.
+/// `Busy` marks an element the read loop rejected with `server_busy`;
+/// `Unanswerable` marks an element whose id alone cannot be echoed
+/// within the response-object ceiling (-32001, id null). Keeping
+/// rejected and unanswerable elements in position lets the worker emit
+/// exactly one batch response array whose members follow the request
+/// order.
 enum WorkEntry {
     Execute(Request),
     Busy(Request),
+    Unanswerable(Request),
 }
 
 impl WorkEntry {
     fn request(&self) -> &Request {
         match self {
-            Self::Execute(request) | Self::Busy(request) => request,
+            Self::Execute(request) | Self::Busy(request) | Self::Unanswerable(request) => request,
         }
     }
 
@@ -491,23 +498,6 @@ fn handle_frame<W: Write>(
     if ordinary.is_empty() {
         return Ok(());
     }
-    if ordinary
-        .iter()
-        .any(|request| preflight_unanswerable_id(request))
-    {
-        let payload = SchemaError::response(
-            None,
-            SchemaError {
-                code: schema::TRANSPORT_FRAME_TOO_LARGE,
-                message: "request id cannot be echoed within the response object limit".into(),
-            },
-        );
-        let text = schema::encode_response_frame(&payload)
-            .expect("constant transport error within limits");
-        let mut w = writer.lock().unwrap();
-        w.write_line(&text)?;
-        return Ok(());
-    }
     let entries = admit_frame(ordinary, &session.in_flight);
     mark_pending(&session.state, &entries);
     if batch {
@@ -525,14 +515,20 @@ fn handle_frame<W: Write>(
             })
             .map_err(worker_gone)?;
     } else {
-        // A single request keeps the standalone frame;
-        // a busy rejection is answered immediately and
-        // never occupies queue capacity.
+        // A single request keeps the standalone frame; a busy
+        // rejection or an unanswerable id is answered immediately
+        // and never occupies queue capacity.
         match entries.first() {
             Some(WorkEntry::Busy(request)) => {
                 let payload = bounded_response(busy_response(request), request);
                 let text = schema::encode_response_frame(&payload)
                     .expect("bounded response within frame limit");
+                let mut w = writer.lock().unwrap();
+                w.write_line(&text)?;
+            }
+            Some(WorkEntry::Unanswerable(_)) => {
+                let text = schema::encode_response_frame(&unanswerable_response())
+                    .expect("constant transport error within limits");
                 let mut w = writer.lock().unwrap();
                 w.write_line(&text)?;
             }
@@ -573,12 +569,16 @@ fn worker_gone(_: std::sync::mpsc::SendError<WorkUnit>) -> io::Error {
 
 /// Admit ordinary frame elements against the queue bound.
 ///
-/// Rejected elements stay in position as `Busy` entries and never
-/// occupy queue capacity.
+/// An element whose id alone cannot be echoed within the
+/// response-object ceiling becomes `Unanswerable` and never occupies
+/// queue capacity. Rejected elements stay in position as `Busy`
+/// entries and also never occupy queue capacity.
 fn admit_frame(requests: Vec<Request>, in_flight: &AtomicUsize) -> Vec<WorkEntry> {
     let mut entries = Vec::with_capacity(requests.len());
     for request in requests {
-        if in_flight.load(Ordering::Relaxed) >= QUEUED_LIMIT {
+        if preflight_unanswerable_id(&request) {
+            entries.push(WorkEntry::Unanswerable(request));
+        } else if in_flight.load(Ordering::Relaxed) >= QUEUED_LIMIT {
             entries.push(WorkEntry::Busy(request));
         } else {
             in_flight.fetch_add(1, Ordering::Relaxed);
@@ -594,6 +594,20 @@ fn busy_response(request: &Request) -> Value {
         schema::TRANSPORT_SERVER_BUSY,
         "server_busy",
         None,
+    )
+}
+
+/// The -32001 id:null transport response for an element whose id
+/// alone cannot be echoed within the response-object ceiling. Constant
+/// payload shared by the immediate single-request path and in-position
+/// batch elements.
+fn unanswerable_response() -> Value {
+    SchemaError::response(
+        None,
+        SchemaError {
+            code: schema::TRANSPORT_FRAME_TOO_LARGE,
+            message: "request id cannot be echoed within the response object limit".into(),
+        },
     )
 }
 
@@ -614,6 +628,7 @@ fn entry_response(state: &Arc<Mutex<SessionState>>, entry: &WorkEntry) -> Option
             Some(bounded_response(execute(state, request), request))
         }
         WorkEntry::Busy(request) => Some(bounded_response(busy_response(request), request)),
+        WorkEntry::Unanswerable(_) => Some(unanswerable_response()),
     }
 }
 
@@ -629,9 +644,11 @@ fn entry_response(state: &Arc<Mutex<SessionState>>, entry: &WorkEntry) -> Option
 /// the only remaining response that always satisfies the ceiling.
 /// Preflight: a request id that alone makes even the smallest faithful
 /// response (an error of the documented shape) exceed RESPONSE_OBJECT_LIMIT
-/// can never be answered. The frame answers -32001 with id null; an
-/// unanswerable id is an ordinary (if unusable) request, not an
-/// oversized input frame, so the service keeps serving after it.
+/// can never be answered. Admission answers it -32001 with id null:
+/// as the standalone response for a single request, or in position
+/// inside a batch response array. An unanswerable id is an ordinary
+/// (if unusable) request, not an oversized input frame, so the
+/// service keeps serving after it.
 fn preflight_unanswerable_id(request: &Request) -> bool {
     let id = request.id.as_ref().expect("ordinary requests carry ids");
     let probe = schema::error_response(
@@ -1005,6 +1022,66 @@ mod tests {
         }
     }
 
+    /// Reader that delivers one input line per fill_buf call (a batch
+    /// frame, then a follow-up frame), then waits until `marker`
+    /// appears in the worker output before reporting EOF. Delivering
+    /// one line at a time lets the next read_line observe the
+    /// following frame (ResponseAwareReader returns the whole buffer
+    /// exactly once, so it cannot carry a second frame).
+    struct FrameSequenceReader {
+        input: Vec<u8>,
+        offset: usize,
+        waiting: bool,
+        output: Arc<Mutex<Vec<u8>>>,
+        marker: &'static [u8],
+    }
+
+    impl std::io::Read for FrameSequenceReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let data = self.fill_buf()?.to_vec();
+            let n = data.len().min(buf.len());
+            buf[..n].copy_from_slice(&data[..n]);
+            self.consume(n);
+            Ok(n)
+        }
+    }
+
+    impl std::io::BufRead for FrameSequenceReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if !self.waiting {
+                if self.offset == 0 {
+                    // Deliver only the first line; the next read_line
+                    // observes the following frame on a later fill_buf.
+                    let nl = self.input.iter().position(|&b| b == b'\n').unwrap();
+                    return Ok(&self.input[..nl + 1]);
+                }
+                if self.offset < self.input.len() {
+                    return Ok(&self.input[self.offset..]);
+                }
+                self.waiting = true;
+            }
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                let seen = {
+                    let output = self.output.lock().unwrap();
+                    output
+                        .windows(self.marker.len())
+                        .any(|window| window == self.marker)
+                };
+                if seen {
+                    return Ok(&[]);
+                }
+                if std::time::Instant::now() > deadline {
+                    panic!("test reader: worker response never appeared");
+                }
+                std::thread::yield_now();
+            }
+        }
+        fn consume(&mut self, amt: usize) {
+            self.offset = (self.offset + amt).min(self.input.len());
+        }
+    }
+
     #[test]
     fn arbitrary_precision_numeric_ids_cancel_like_any_other_id() {
         // request_id may be any integral JSON number; the cancel key must
@@ -1192,6 +1269,76 @@ mod tests {
         assert_eq!(members[1]["error"]["message"], json!("server_busy"));
         assert!(members[2].get("result").is_some());
         assert!(schema::encode_response_frame(&payload).is_ok());
+    }
+
+    #[test]
+    fn batch_unit_answers_unanswerable_members_in_position() {
+        // Worker-level ordering: the -32001 id:null element keeps its
+        // frame position and the sibling executes normally.
+        let state = Arc::new(Mutex::new(SessionState::default()));
+        let huge = "I".repeat(super::super::framing::RESPONSE_OBJECT_LIMIT + 100);
+        let work = unit(
+            vec![
+                WorkEntry::Unanswerable(request(&huge, Some(0))),
+                WorkEntry::Execute(request("a", Some(1))),
+            ],
+            true,
+        );
+        let responses: Vec<Value> = work
+            .entries
+            .iter()
+            .filter_map(|entry| entry_response(&state, entry))
+            .collect();
+        let payload = Value::Array(responses);
+        let members = payload.as_array().unwrap();
+        assert_eq!(members.len(), 2);
+        assert_eq!(members[0]["id"], Value::Null);
+        assert_eq!(
+            members[0]["error"]["code"],
+            json!(schema::TRANSPORT_FRAME_TOO_LARGE)
+        );
+        assert_eq!(members[1]["id"], json!("a"));
+        assert!(members[1].get("result").is_some());
+        assert!(schema::encode_response_frame(&payload).is_ok());
+    }
+
+    #[test]
+    fn unanswerable_entries_never_occupy_queue_capacity() {
+        // An unanswerable id is answered without admission, so it
+        // never consumes queue capacity even when the queue is full;
+        // siblings still get normal busy/execute admission.
+        let huge = "I".repeat(super::super::framing::RESPONSE_OBJECT_LIMIT + 100);
+        let in_flight = AtomicUsize::new(QUEUED_LIMIT);
+        let entries = admit_frame(vec![request(&huge, Some(0)), request("b", Some(1))], &in_flight);
+        assert!(matches!(entries[0], WorkEntry::Unanswerable(_)));
+        assert!(matches!(entries[1], WorkEntry::Busy(_)));
+        assert_eq!(in_flight.load(Ordering::Relaxed), QUEUED_LIMIT);
+
+        let in_flight = AtomicUsize::new(QUEUED_LIMIT - 1);
+        let entries = admit_frame(
+            vec![request(&huge, Some(0)), request("a", Some(1))],
+            &in_flight,
+        );
+        assert!(matches!(entries[0], WorkEntry::Unanswerable(_)));
+        assert!(matches!(entries[1], WorkEntry::Execute(_)));
+        assert_eq!(in_flight.load(Ordering::Relaxed), QUEUED_LIMIT);
+    }
+
+    #[test]
+    fn unanswerable_entries_are_not_cancellation_targets() {
+        // Only admitted Execute ids become pending cancellation
+        // targets; an unanswerable element answers unconditionally.
+        let state = Arc::new(Mutex::new(SessionState::default()));
+        let huge = "I".repeat(super::super::framing::RESPONSE_OBJECT_LIMIT + 100);
+        let huge_key = format!("s:{huge}");
+        let entries = vec![
+            WorkEntry::Unanswerable(request(&huge, Some(0))),
+            WorkEntry::Execute(request("a", Some(1))),
+        ];
+        mark_pending(&state, &entries);
+        let s = state.lock().unwrap();
+        assert!(!s.pending.contains(&huge_key), "unanswerable id must not be cancellable");
+        assert!(s.pending.contains("s:a"));
     }
 
     #[test]
@@ -1451,6 +1598,98 @@ mod tests {
         session.run(reader, SharedVec(output.clone())).unwrap();
         let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
         assert!(text.contains("\"id\":\"1\""), "unexpected output: {text}");
+    }
+
+    #[test]
+    fn batch_with_unanswerable_id_answers_elements_in_order_and_keeps_serving() {
+        // A batch element whose id alone cannot be echoed answers
+        // -32001 with id null in its position; siblings execute
+        // normally and the connection keeps serving (spec batch
+        // contract: one response array, elements in frame order).
+        let huge = "I".repeat(super::super::framing::RESPONSE_OBJECT_LIMIT + 100);
+        let batch = json!([
+            {"jsonrpc": "2.0", "id": huge, "method": "iprange.v1.system.describe", "params": {}},
+            {"jsonrpc": "2.0", "id": "ok", "method": "iprange.v1.system.describe", "params": {}},
+        ]);
+        let follow_up = json!({
+            "jsonrpc": "2.0",
+            "id": "after",
+            "method": "iprange.v1.system.describe",
+            "params": {},
+        });
+        let input = format!("{batch}\n{follow_up}\n").into_bytes();
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = FrameSequenceReader {
+            input,
+            offset: 0,
+            waiting: false,
+            output: output.clone(),
+            marker: b"\"id\":\"after\"",
+        };
+        let session = Session::new();
+        session.run(reader, SharedVec(output.clone())).unwrap();
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let mut lines = text.lines();
+        let payload: Value = serde_json::from_str(lines.next().expect("batch response")).unwrap();
+        let members = payload.as_array().expect("batch answers exactly one array");
+        assert_eq!(members.len(), 2, "both elements must answer: {text}");
+        assert_eq!(members[0]["id"], Value::Null);
+        assert_eq!(
+            members[0]["error"]["code"],
+            json!(schema::TRANSPORT_FRAME_TOO_LARGE)
+        );
+        assert_eq!(
+            members[0]["error"]["message"],
+            json!("request id cannot be echoed within the response object limit")
+        );
+        // The sibling executed the real method, not a busy error.
+        assert_eq!(members[1]["id"], json!("ok"));
+        assert!(members[1].get("error").is_none());
+        assert_eq!(
+            members[1]["result"]["method"],
+            json!("iprange.v1.system.describe")
+        );
+        // The connection kept serving after the batch.
+        let follow_up_payload: Value =
+            serde_json::from_str(lines.next().expect("follow-up response")).unwrap();
+        assert_eq!(follow_up_payload["id"], json!("after"));
+        assert!(follow_up_payload.get("result").is_some());
+        assert!(lines.next().is_none(), "no extra output: {text}");
+    }
+
+    #[test]
+    fn single_unanswerable_request_answers_standalone_32001() {
+        // The existing standalone shape for a single request whose id
+        // cannot be echoed: one object with id null and -32001, never
+        // an array.
+        let huge = "I".repeat(super::super::framing::RESPONSE_OBJECT_LIMIT + 100);
+        let frame = json!({
+            "jsonrpc": "2.0",
+            "id": huge,
+            "method": "iprange.v1.system.describe",
+            "params": {},
+        });
+        let input = format!("{frame}\n").into_bytes();
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = ResponseAwareReader {
+            input,
+            delivered: false,
+            output: output.clone(),
+            marker: b"\"id\":null",
+        };
+        let session = Session::new();
+        session.run(reader, SharedVec(output.clone())).unwrap();
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let payload: Value = serde_json::from_str(text.trim()).unwrap();
+        assert!(
+            payload.as_array().is_none(),
+            "single request answers one object: {text}"
+        );
+        assert_eq!(payload["id"], Value::Null);
+        assert_eq!(
+            payload["error"]["code"],
+            json!(schema::TRANSPORT_FRAME_TOO_LARGE)
+        );
     }
 
     #[test]

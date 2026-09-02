@@ -395,7 +395,7 @@ HOUSEKEEPING_ARTIFACT = {
         "directory_identity": FILE_IDENTITY_OR_ERROR,
         "basename_encoding": U16,
         "attempt_id": HEX16,
-        "ordinal": C.U64,
+        "ordinal": C.U32,
         "envelope_basename": STRING,
         "envelope_identity": FILE_IDENTITY_OR_ERROR,
         "source_basename": STRING,

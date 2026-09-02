@@ -222,6 +222,11 @@
           "cleanup": {},
           "coordination_cleanup": {},
           "outcome": "closed"
+        },
+        "source_close": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "outcome": "closed"
         }
       },
       "capture": [

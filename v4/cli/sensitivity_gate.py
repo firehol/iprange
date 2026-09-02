@@ -9,7 +9,8 @@ production handler exists, that the external client:
 - PASSes well-behaved describe/ranges/lookup responses;
 - FAILs non-JSON frames, id/jsonrpc corruption, fractional decimal
   counters, missing/unknown result members, method-echo fabrication,
-  out-of-order cursor rows, and out-of-range values;
+  out-of-order cursor rows, out-of-range values, and any response to
+  a notification (cancel_replies mode);
 
 with the documented failure reason in every case. Exit status is 1 when
 any sensitivity expectation is violated.
@@ -38,6 +39,13 @@ DESCRIBE_STEP = {
     "method": "iprange.v1.system.describe",
     "params": {},
     "expect_result": {"method": "iprange.v1.system.describe"},
+}
+
+CANCEL_NOTIFICATION_STEP = {
+    "kind": "rpc",
+    "method": "iprange.v1.cancel",
+    "params": {"request_id": "never-pending-cancel-id"},
+    "notification": True,
 }
 
 # The runner now requires successful responses to reference a reader this
@@ -85,6 +93,9 @@ MODES = [
     ("describe_missing_method", [DESCRIBE_STEP], "FAIL", "missing required field"),
     ("describe_unknown_member", [DESCRIBE_STEP], "FAIL", "unknown member"),
     ("describe_false_outcome", [DESCRIBE_STEP], "FAIL", "does not match requested method"),
+    # A response to a notification must never be accepted: the reply
+    # desynchronizes the stream and the next correlated read fails.
+    ("cancel_replies", [CANCEL_NOTIFICATION_STEP, DESCRIBE_STEP], "FAIL", "response id"),
     # Protocol semantics corruption.
     ("rows_bad_order", [_open_step(), 
         {"kind": "rpc", "method": "iprange.v1.reader.ranges.open",

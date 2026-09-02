@@ -143,7 +143,7 @@ pub fn close(state: &mut SessionState, params: Value) -> Result<Value, HandlerEr
         .collect();
     for cursor in dependent {
         state.resources.cursors.remove(&cursor);
-        state.resources.closed_cursors.insert(cursor, ());
+        state.resources.record_closed_cursor(cursor);
     }
     let source_close = match reader.close_live() {
         Ok(result) => result,
@@ -176,7 +176,7 @@ pub fn close(state: &mut SessionState, params: Value) -> Result<Value, HandlerEr
         }
         None => None,
     };
-    state.resources.closed_readers.insert(handle.clone(), ());
+    state.resources.record_closed_reader(handle.clone());
     let mut result = json!({
         "method": "iprange.v1.reader.close",
         "closed": true,
@@ -232,6 +232,10 @@ pub fn lookup(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
     let reader = reader(state, object["reader"].as_str().unwrap_or(""))?;
     let addresses = object["addresses"].as_array().cloned().unwrap_or_default();
     let info = sdk(reader.info())?;
+    // One catalog snapshot per call, shared by every structured
+    // address, and one reusable membership-word buffer.
+    let mut structured_snapshot: Option<FeedSnapshot> = None;
+    let mut words: Vec<u64> = Vec::new();
     let mut matches = Vec::with_capacity(addresses.len());
     for address in addresses {
         let text = address
@@ -300,10 +304,14 @@ pub fn lookup(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
                 if let Some(view) = view {
                     // The SDK point query (MembershipQuery::matching_feeds_*)
                     // opens only membership-kind databases, so an
-                    // enrichment view's threat membership cannot be
-                    // enumerated without the catalog scan; keep it (no
-                    // new public SDK API was added for this).
-                    let feeds = threat_feed_names(reader, &view)?;
+                    // enrichment view's threat membership is enumerated
+                    // from the word bitmap against the one catalog
+                    // snapshot built for this call.
+                    if structured_snapshot.is_none() {
+                        structured_snapshot = Some(build_feed_snapshot(reader)?);
+                    }
+                    let snapshot = structured_snapshot.as_ref().expect("built above");
+                    let feeds = threat_feed_names(&view, snapshot, &mut words)?;
                     match_value["present"] = json!(true);
                     match_value.merge_enrichment(&convert::enrichment_view(&view, &feeds));
                 }
@@ -367,10 +375,12 @@ pub fn matching_feeds(state: &mut SessionState, params: Value) -> Result<Value, 
                     sdk(reader.lookup_network_enrichment_v1_v6(Ipv6Key::from_u128(value)))?
                 }
             };
-            let names = view
-                .map(|view| threat_feed_names(reader, &view))
-                .transpose()?
-                .unwrap_or_default();
+            let mut words = Vec::new();
+            let snapshot = build_feed_snapshot(reader)?;
+            let names = match view {
+                Some(view) => threat_feed_names(&view, &snapshot, &mut words)?,
+                None => Vec::new(),
+            };
             let count = names.len() as u64;
             (names, count)
         }
@@ -765,21 +775,93 @@ fn metadata_result(
     }
 }
 
+/// One in-memory projection of the numeric feed catalog: `(index,
+/// name)` pairs in ascending feed-index order. Built once per
+/// page/stream so structured enumeration never re-scans the catalog
+/// for every record.
+pub(crate) struct FeedSnapshot {
+    feeds: Vec<(u32, FeedName)>,
+}
+
+/// Sweep the catalog once into an ordered name snapshot. Structured
+/// pages and exports build this exactly once per page/stream and reuse
+/// it for every record on that page.
+pub(crate) fn build_feed_snapshot(reader: &ReaderValue) -> Result<FeedSnapshot, HandlerError> {
+    #[cfg(test)]
+    snapshot_observation::account_build();
+    let mut cursor = sdk(reader.feed_cursor())?;
+    let mut feeds = Vec::new();
+    while let Some(entry) = sdk(cursor.next_feed())? {
+        feeds.push((entry.index, entry.name));
+    }
+    Ok(FeedSnapshot { feeds })
+}
+
+/// Names of the feeds whose membership bitmap marks the record, in
+/// catalog order. The membership words are read once per record, in
+/// ascending word order, into a reusable caller-owned buffer sized to
+/// the record's bitmap; set bits map to names through the snapshot.
+/// Reading stops at the largest catalog index, so the buffer never
+/// scales with a pathological declared bitmap length.
 pub(crate) fn threat_feed_names(
-    reader: &ReaderValue,
     view: &NetworkEnrichmentV1View<'_>,
+    snapshot: &FeedSnapshot,
+    words: &mut Vec<u64>,
 ) -> Result<Vec<String>, HandlerError> {
     let Some(membership) = sdk(view.threat_membership())? else {
         return Ok(Vec::new());
     };
+    let Some((last_feed, _)) = snapshot.feeds.last() else {
+        // An empty catalog cannot name any feed.
+        return Ok(Vec::new());
+    };
+    let word_count = sdk(membership.word_count())?;
+    let needed = u64::from(*last_feed) / 64 + 1;
+    words.clear();
+    words.resize(
+        (needed as usize).min(word_count as usize),
+        0,
+    );
+    let read = sdk(membership.read_words(0, words))?;
     let mut feeds = Vec::new();
-    let mut cursor = sdk(reader.feed_cursor())?;
-    while let Some(entry) = sdk(cursor.next_feed())? {
-        if sdk(membership.contains_index(entry.index))? {
-            feeds.push(entry.name.as_str().to_owned());
+    for (word_index, &word) in words[..read].iter().enumerate() {
+        let mut bits = word;
+        while bits != 0 {
+            let bit = bits.trailing_zeros();
+            let index = (word_index as u64) * 64 + u64::from(bit);
+            if index <= u64::from(u32::MAX) {
+                let index = index as u32;
+                if let Ok(position) = snapshot
+                    .feeds
+                    .binary_search_by_key(&index, |&(feed, _)| feed)
+                {
+                    feeds.push(snapshot.feeds[position].1.as_str().to_owned());
+                }
+            }
+            bits &= bits - 1;
         }
     }
     Ok(feeds)
+}
+
+/// Test-only accounting for structured enumeration: the number of
+/// catalog sweeps this thread has built. Mirrors the SDK's `work`
+/// counters; compiles out of production builds.
+#[cfg(test)]
+pub(crate) mod snapshot_observation {
+    use std::cell::Cell;
+
+    thread_local! {
+        static CATALOG_SNAPSHOT_BUILDS: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub(crate) fn account_build() {
+        CATALOG_SNAPSHOT_BUILDS.with(|cell| cell.set(cell.get() + 1));
+    }
+
+    pub(crate) fn builds() -> u64 {
+        CATALOG_SNAPSHOT_BUILDS.with(Cell::get)
+    }
 }
 
 pub(crate) fn bounded_result(result: Value) -> Result<Value, HandlerError> {

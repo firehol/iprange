@@ -1,6 +1,6 @@
 //! Connection-owned reader and cursor state for the read-only methods.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io;
 
 use iprange_livedb::error::{Error, Result};
@@ -189,18 +189,50 @@ pub struct CursorValue {
     pub exhausted: bool,
 }
 
+/// Maximum closed-handle tombstones retained per handle family.
+///
+/// Closed handles are kept so a later operation can distinguish a
+/// closed handle from a totally unknown one (`handle_closed` /
+/// `cursor_closed`). The maps stay bounded with FIFO eviction: when
+/// the cap is exceeded the oldest tombstone is dropped, so a closed
+/// handle evicted from the bound answers as unknown (`handle_not_found`
+/// / `cursor_not_found`) - the spec permits this, and handles are
+/// random 128-bit values never reused, so an evicted tombstone cannot
+/// collide with a live handle. The bound is small under `cfg(test)` so
+/// the eviction path is exercised cheaply; production keeps 1024 per
+/// family.
+#[cfg(not(test))]
+const CLOSED_TOMBSTONE_CAP: usize = 1024;
+#[cfg(test)]
+const CLOSED_TOMBSTONE_CAP: usize = 8;
+
 /// Mutable per-connection resources. Closed handles are retained as
 /// tombstones so subsequent use can distinguish a closed handle from an
-/// unknown one; tombstones do not count against active limits.
+/// unknown one; tombstones do not count against active limits and are
+/// FIFO-evicted above `CLOSED_TOMBSTONE_CAP` per family.
 #[derive(Default)]
 pub struct ConnectionState {
     pub readers: HashMap<String, ReaderValue>,
     pub closed_readers: HashMap<String, ()>,
     pub cursors: HashMap<String, CursorValue>,
     pub closed_cursors: HashMap<String, ()>,
+    /// FIFO order of closed-reader tombstones for bounded eviction.
+    closed_reader_order: VecDeque<String>,
+    /// FIFO order of closed-cursor tombstones for bounded eviction.
+    closed_cursor_order: VecDeque<String>,
 }
 
 impl ConnectionState {
+    /// Record one closed reader handle as a bounded FIFO tombstone.
+    pub fn record_closed_reader(&mut self, handle: String) {
+        record_closed(&mut self.closed_readers, &mut self.closed_reader_order, handle);
+    }
+
+    /// Record one closed cursor handle as a bounded FIFO tombstone.
+    pub fn record_closed_cursor(&mut self, handle: String) {
+        record_closed(&mut self.closed_cursors, &mut self.closed_cursor_order, handle);
+    }
+
     /// Transport-shutdown cleanup: drop every cursor checkpoint and
     /// close each registered live reader in deterministic handle
     /// order (immutable readers have no registration lease and need no
@@ -211,6 +243,7 @@ impl ConnectionState {
     pub fn close_all(&mut self) -> Vec<(String, Error)> {
         self.cursors.clear();
         self.closed_cursors.clear();
+        self.closed_cursor_order.clear();
         let mut readers: Vec<(String, ReaderValue)> = self.readers.drain().collect();
         // HashMap iteration order is not deterministic; close in
         // sorted handle order so shutdown never depends on hashing.
@@ -232,6 +265,62 @@ impl ConnectionState {
             }
         }
         self.closed_readers.clear();
+        self.closed_reader_order.clear();
         failures
+    }
+}
+
+/// Insert one tombstone and FIFO-evict the oldest entry of the family
+/// when the bound is exceeded.
+fn record_closed(
+    map: &mut HashMap<String, ()>,
+    order: &mut VecDeque<String>,
+    handle: String,
+) {
+    map.insert(handle.clone(), ());
+    order.push_back(handle);
+    while order.len() > CLOSED_TOMBSTONE_CAP {
+        if let Some(oldest) = order.pop_front() {
+            map.remove(&oldest);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn handle(value: u64) -> String {
+        format!("{value:032x}")
+    }
+
+    #[test]
+    fn closed_handle_tombstones_stay_within_the_bound() {
+        let mut state = ConnectionState::default();
+        for index in 0..CLOSED_TOMBSTONE_CAP + 1 {
+            state.record_closed_reader(handle(index as u64));
+            state.record_closed_cursor(handle(index as u64));
+        }
+        assert!(state.closed_readers.len() <= CLOSED_TOMBSTONE_CAP);
+        assert!(state.closed_cursors.len() <= CLOSED_TOMBSTONE_CAP);
+        // The oldest tombstone of each family was FIFO-evicted; every
+        // handle inside the bound survives.
+        assert!(!state.closed_readers.contains_key(&handle(0)));
+        assert!(!state.closed_cursors.contains_key(&handle(0)));
+        assert!(state
+            .closed_readers
+            .contains_key(&handle(CLOSED_TOMBSTONE_CAP as u64)));
+        assert!(state
+            .closed_cursors
+            .contains_key(&handle(CLOSED_TOMBSTONE_CAP as u64)));
+        // Re-registering handles never grows the maps past the bound.
+        for index in 0..CLOSED_TOMBSTONE_CAP + 1 {
+            state.record_closed_cursor(handle(index as u64));
+        }
+        assert!(state.closed_cursors.len() <= CLOSED_TOMBSTONE_CAP);
+        // Shutdown clears tombstones and the eviction order.
+        assert!(state.close_all().is_empty());
+        assert!(state.closed_readers.is_empty());
+        assert!(state.closed_cursors.is_empty());
     }
 }

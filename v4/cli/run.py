@@ -204,6 +204,10 @@ class CaseRunner:
             raise AssertionError(
                 f"case {self.case['name']!r}: invalid request params: {exc}") from exc
 
+        if step.get("notification"):
+            self.service.notify(method, params)
+            return
+
         request_id = f"case-{self.case['name']}"
         response = self.service.call(request_id, method, params)
         if "error" in response:
@@ -299,25 +303,40 @@ class CaseRunner:
 
     def check_source_close(self, method, params, result):
         """Live sources must close internally and report source_close;
-        immutable sources must not fabricate one (spec factual-close rules)."""
+        immutable sources must not fabricate one (spec factual-close rules).
+
+        For feeds create/replace and retention refreshes the coverage
+        source is nested at params.current.source; feeds.import and the
+        query/export families carry it at params.source. Both locations
+        are checked for factual-close conformance.
+        """
 
         # snapshot_to opens and closes internally and its result is a
         # complete SnapshotResult without close facts; the public SDK
         # supplies no close result for it.
         if method == "iprange.v1.snapshot":
             return
-        source = params.get("source") if isinstance(params.get("source"), dict) else None
-        mode = source.get("mode") if source else None
-        if mode not in ("live", "immutable"):
-            return
-        if mode == "live" and "source_close" not in result:
-            raise AssertionError(
-                f"case {self.case['name']!r}: {method} opened a live source but "
-                f"returned no source_close")
-        if mode == "immutable" and "source_close" in result:
-            raise AssertionError(
-                f"case {self.case['name']!r}: {method} fabricated source_close for "
-                f"an immutable source")
+        sources = {}
+        top = params.get("source") if isinstance(params.get("source"), dict) else None
+        if top is not None:
+            sources["params.source"] = top
+        current = params.get("current") if isinstance(params.get("current"), dict) else None
+        nested = (current.get("source")
+                  if current is not None and isinstance(current.get("source"), dict) else None)
+        if nested is not None:
+            sources["params.current.source"] = nested
+        for label, source in sources.items():
+            mode = source.get("mode") if isinstance(source, dict) else None
+            if mode not in ("live", "immutable"):
+                continue
+            if mode == "live" and "source_close" not in result:
+                raise AssertionError(
+                    f"case {self.case['name']!r}: {method} opened a live source "
+                    f"({label}) but returned no source_close")
+            if mode == "immutable" and "source_close" in result:
+                raise AssertionError(
+                    f"case {self.case['name']!r}: {method} fabricated source_close "
+                    f"for an immutable source ({label})")
 
     def verify_output_facts(self, facts, request_path):
         if request_path is not None and facts.get("path") != request_path:
@@ -748,6 +767,27 @@ class JsonRpcService:
                 return self.decode_response_line(line, request_id)
             except (frame.FrameError, UnicodeDecodeError) as exc:
                 raise AssertionError(str(exc)) from exc
+
+    def notify(self, method, params):
+        """Send one JSON-RPC notification: no id, no response expected.
+
+        The transport accepts only iprange.v1.cancel as a notification
+        (frame.py contract).  The client never reads a line for a
+        notification; a server that answers one desynchronizes the
+        stream, and the next correlated read fails with an id mismatch.
+        """
+
+        with self.lock:
+            request = {"jsonrpc": "2.0", "method": method, "params": params}
+            wire = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
+            if len(wire.encode("utf-8")) > frame.INPUT_FRAME_LIMIT:
+                raise AssertionError("client notification frame over limit")
+            try:
+                self.proc.stdin.write(wire.encode("utf-8") + b"\n")
+                self.proc.stdin.flush()
+            except (BrokenPipeError, OSError) as exc:
+                raise AssertionError(
+                    f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
 
     def decode_response_line(self, line, request_id):
         if not line.endswith(b"\n"):

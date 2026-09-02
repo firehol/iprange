@@ -760,8 +760,13 @@ fn stream_segments_v4(
         ExportView::Structured => {
             let mut cursor =
                 view_cursor(reader.network_enrichment_v1_cursor_v4(RangeDirection::Forward))?;
+            // One catalog sweep for the whole stream and one reusable
+            // membership-word buffer shared by every record.
+            let snapshot = super::reader::build_feed_snapshot(reader)?;
+            let mut words: Vec<u64> = Vec::new();
             while let Some(range) = sdk(cursor.next_range()).map_err(view_error)? {
-                let feeds = super::reader::threat_feed_names(reader, &range.value)?;
+                let feeds =
+                    super::reader::threat_feed_names(&range.value, &snapshot, &mut words)?;
                 let value =
                     ExportValue::Structured(super::convert::enrichment_view(&range.value, &feeds));
                 sink(u128::from(range.from.0), u128::from(range.to.0), value)?;
@@ -830,8 +835,13 @@ fn stream_segments_v6(
         ExportView::Structured => {
             let mut cursor =
                 view_cursor(reader.network_enrichment_v1_cursor_v6(RangeDirection::Forward))?;
+            // One catalog sweep for the whole stream and one reusable
+            // membership-word buffer shared by every record.
+            let snapshot = super::reader::build_feed_snapshot(reader)?;
+            let mut words: Vec<u64> = Vec::new();
             while let Some(range) = sdk(cursor.next_range()).map_err(view_error)? {
-                let feeds = super::reader::threat_feed_names(reader, &range.value)?;
+                let feeds =
+                    super::reader::threat_feed_names(&range.value, &snapshot, &mut words)?;
                 let value =
                     ExportValue::Structured(super::convert::enrichment_view(&range.value, &feeds));
                 sink(range.from.to_u128(), range.to.to_u128(), value)?;
@@ -1519,7 +1529,8 @@ mod live_source_tests {
     use iprange_livedb::snapshot_to;
     use iprange_livedb::{
         create_live, AddressFamily, CancellationToken, FeedName, Ipv4Key, Ipv6Key, LiveWriter,
-        MembershipOperation, StructureKind, TransactionBudget, ValueKind, ValueTag,
+        MembershipOperation, NetworkEnrichmentV1, StructureKind, TransactionBudget, ValueKind,
+        ValueTag,
     };
     use std::fs;
     use std::path::PathBuf;
@@ -1575,6 +1586,85 @@ mod live_source_tests {
         let mut name = main.file_name().unwrap().to_os_string();
         name.push(".readers");
         main.with_file_name(name)
+    }
+
+    /// One live structured IPv4 database: three records whose threat
+    /// memberships are {a,b}, {c}, and none.
+    fn structured_live_v4(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let main = std::env::temp_dir().join(format!(
+            "iprange-export-live-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        let token = CancellationToken::new();
+        create_live(
+            &main,
+            AddressFamily::Ipv4,
+            ValueKind::Structured,
+            StructureKind::NetworkEnrichmentV1,
+            ValueTag::new(b"export-struct").unwrap(),
+            2,
+            &token,
+        )
+        .unwrap();
+        let budget = TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 10_000,
+            max_file_growth_pages: 10_000,
+            max_open_files: 2,
+        };
+        let mut writer = LiveWriter::open(&main, budget, &token).unwrap();
+        let mut transaction = writer.begin_structured_transaction(&token).unwrap();
+        let feed_a = transaction.ensure_feed(FeedName::new("feed-a").unwrap()).unwrap();
+        let feed_b = transaction.ensure_feed(FeedName::new("feed-b").unwrap()).unwrap();
+        let feed_c = transaction.ensure_feed(FeedName::new("feed-c").unwrap()).unwrap();
+        let empty = transaction.empty_membership().unwrap();
+        let membership_ab = transaction.add_feed(empty, feed_a).unwrap();
+        let membership_ab = transaction.add_feed(membership_ab, feed_b).unwrap();
+        let empty = transaction.empty_membership().unwrap();
+        let membership_c = transaction.add_feed(empty, feed_c).unwrap();
+        let structure_ab = transaction
+            .intern_network_enrichment_v1(
+                NetworkEnrichmentV1 {
+                    asn: 1,
+                    ..Default::default()
+                },
+                Some(membership_ab),
+            )
+            .unwrap();
+        let structure_c = transaction
+            .intern_network_enrichment_v1(
+                NetworkEnrichmentV1 {
+                    asn: 2,
+                    ..Default::default()
+                },
+                Some(membership_c),
+            )
+            .unwrap();
+        let structure_none = transaction
+            .intern_network_enrichment_v1(
+                NetworkEnrichmentV1 {
+                    asn: 3,
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+        transaction
+            .assign_v4(Ipv4Key(10), Ipv4Key(19), structure_ab)
+            .unwrap();
+        transaction
+            .assign_v4(Ipv4Key(20), Ipv4Key(29), structure_c)
+            .unwrap();
+        transaction
+            .assign_v4(Ipv4Key(30), Ipv4Key(39), structure_none)
+            .unwrap();
+        transaction.commit().unwrap();
+        writer.close().unwrap();
+        main
     }
 
     /// One live direct IPv6 database covering the complete address
@@ -1881,6 +1971,59 @@ mod live_source_tests {
             !destination.exists(),
             "preflight refusal must not create the destination"
         );
+        fs::remove_file(&main).unwrap();
+        fs::remove_file(sidecar(&main)).unwrap();
+    }
+
+    #[test]
+    fn structured_export_is_byte_identical_to_one_catalog_sweep_stream() {
+        // A structured export sweeps the catalog exactly once for the
+        // whole stream (never per record), and every row's
+        // `threat_feeds` value matches the catalog-order enumeration.
+        let main = structured_live_v4("export-structured");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let destination =
+            std::env::temp_dir().join(format!("iprange-export-structured-out-{unique}.jsonl"));
+        let mut state = SessionState::default();
+        let result = export(
+            &mut state,
+            json!({
+                "source": {"path": main.display().to_string(), "mode": "live"},
+                "view": {"kind": "structured"},
+                "format": "jsonl",
+                "destination": destination.display().to_string(),
+                "publication_policy": "fail_if_exists",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "4000",
+                    "max_open_files": 2
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["rows"], "3");
+        assert_eq!(result["addresses"], "30");
+        let exported = fs::read_to_string(&destination).unwrap();
+        let mut lines = exported.lines();
+        // The jsonl row format writes addresses as bare IPv4 text
+        // (push_address), matching the golden wire shape.
+        assert_eq!(
+            lines.next().unwrap(),
+            r#"{"from":0.0.0.10,"to":0.0.0.19,"value":{"asn":1,"city_id":0,"country_id":0,"location":null,"state_id":0,"threat_feeds":["feed-a","feed-b"]}}"#
+        );
+        assert_eq!(
+            lines.next().unwrap(),
+            r#"{"from":0.0.0.20,"to":0.0.0.29,"value":{"asn":2,"city_id":0,"country_id":0,"location":null,"state_id":0,"threat_feeds":["feed-c"]}}"#
+        );
+        assert_eq!(
+            lines.next().unwrap(),
+            r#"{"from":0.0.0.30,"to":0.0.0.39,"value":{"asn":3,"city_id":0,"country_id":0,"location":null,"state_id":0,"threat_feeds":[]}}"#
+        );
+        assert!(lines.next().is_none());
+        fs::remove_file(&destination).unwrap();
         fs::remove_file(&main).unwrap();
         fs::remove_file(sidecar(&main)).unwrap();
     }

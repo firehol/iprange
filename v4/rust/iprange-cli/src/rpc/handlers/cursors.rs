@@ -113,7 +113,22 @@ pub fn feeds_next(state: &mut SessionState, params: Value) -> Result<Value, Hand
     }
     let mut encoded = cursor_base(state, "iprange.v1.reader.feeds.next", "feeds")?;
     let reader = super::reader::reader(state, &cursor.reader)?;
+    // One catalog cursor per page, seeked once to the checkpoint
+    // (O(log n)) instead of reopened and skipped from the start for
+    // every row (the old paging was quadratic over the stream). The
+    // checkpoint below makes each re-open exact and bounded.
     let mut catalog = sdk(reader.feed_cursor())?;
+    if let Some(index) = cursor.last_feed_index {
+        if index == u32::MAX {
+            let done = json!({
+                "method": "iprange.v1.reader.feeds.next",
+                "feeds": [],
+                "done": true,
+            });
+            return finish_cursor_result(state, &handle, done, true, |_active| {});
+        }
+        sdk(catalog.seek_by_index(index + 1))?;
+    }
     let mut rows = Vec::new();
     let mut last = cursor.last_feed_index;
     let mut done = false;
@@ -122,9 +137,6 @@ pub fn feeds_next(state: &mut SessionState, params: Value) -> Result<Value, Hand
             done = true;
             break;
         };
-        if last.is_some_and(|index| entry.index <= index) {
-            continue;
-        }
         let row = json!({"name": entry.name.as_str()});
         if !fits_next_item(encoded, &rows, &row) {
             if rows.is_empty() {
@@ -254,6 +266,15 @@ pub fn ranges_next(state: &mut SessionState, params: Value) -> Result<Value, Han
         )?),
         _ => None,
     };
+    // Structured pages enumerate threat feeds from one catalog
+    // snapshot and one reusable membership-word buffer shared by every
+    // record of the page; the catalog is swept once per page, never
+    // per record.
+    let snapshot = match &cursor.view {
+        CursorView::Structured => Some(super::reader::build_feed_snapshot(reader)?),
+        _ => None,
+    };
+    let mut words: Vec<u64> = Vec::new();
     let mut point = cursor.point;
     let mut records = Vec::new();
     let mut exhausted = false;
@@ -268,6 +289,8 @@ pub fn ranges_next(state: &mut SessionState, params: Value) -> Result<Value, Han
             &mut point,
             &mut records,
             &mut feed,
+            snapshot.as_ref(),
+            &mut words,
         )? {
             exhausted = true;
             break;
@@ -318,6 +341,8 @@ fn next_record(
     point: &mut Option<CursorPoint>,
     records: &mut Vec<Value>,
     feed: &mut Option<PageFeedCursor<'_>>,
+    snapshot: Option<&super::reader::FeedSnapshot>,
+    words: &mut Vec<u64>,
 ) -> Result<bool, HandlerError> {
     let direction = range_direction(reverse);
     let family_matches = matches!(
@@ -372,7 +397,8 @@ fn next_record(
             let Some(range) = sdk(cursor.next_range())? else {
                 return Ok(false);
             };
-            let feeds = super::reader::threat_feed_names(reader, &range.value)?;
+            let snapshot = snapshot.expect("structured pages build one catalog snapshot");
+            let feeds = super::reader::threat_feed_names(&range.value, snapshot, words)?;
             let value = super::convert::enrichment_view(&range.value, &feeds);
             push_v4(records, range.from, range.to, Some(value), reverse, point);
         }
@@ -383,7 +409,8 @@ fn next_record(
             let Some(range) = sdk(cursor.next_range())? else {
                 return Ok(false);
             };
-            let feeds = super::reader::threat_feed_names(reader, &range.value)?;
+            let snapshot = snapshot.expect("structured pages build one catalog snapshot");
+            let feeds = super::reader::threat_feed_names(&range.value, snapshot, words)?;
             let value = super::convert::enrichment_view(&range.value, &feeds);
             push_v6(records, range.from, range.to, Some(value), reverse, point);
         }
@@ -702,7 +729,7 @@ fn close(
     if state.resources.cursors.remove(&handle).is_none() {
         return Err(unknown_error());
     }
-    state.resources.closed_cursors.insert(handle, ());
+    state.resources.record_closed_cursor(handle);
     bounded_result(json!({ "method": method, "closed": true }))
 }
 
@@ -807,7 +834,7 @@ fn insert_cursor(
 
 fn close_cursor(state: &mut SessionState, handle: &str) {
     if state.resources.cursors.remove(handle).is_some() {
-        state.resources.closed_cursors.insert(handle.to_owned(), ());
+        state.resources.record_closed_cursor(handle.to_owned());
     }
 }
 
@@ -884,11 +911,12 @@ mod tests {
     use super::*;
     use crate::rpc::handlers::reader;
     use iprange_livedb::{
-        create_immutable_feed_v4, AddressRange, FeedName, ImmutableFeedBudget, PublicationPolicy,
-        SliceSource, ValueTag,
+        create_immutable_feed_v4, create_live, AddressFamily, AddressRange, CancellationToken,
+        FeedName, ImmutableFeedBudget, LiveWriter, NetworkEnrichmentV1, PublicationPolicy,
+        SliceSource, StructureKind, TransactionBudget, ValueKind, ValueTag,
     };
     use std::fs;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn immutable_membership(label: &str) -> PathBuf {
@@ -996,6 +1024,321 @@ mod tests {
             );
             reader::close(&mut state, serde_json::json!({"reader": reader_handle})).unwrap();
         }
+        fs::remove_file(path).unwrap();
+    }
+
+    fn open_live_reader(state: &mut SessionState, path: &Path) -> String {
+        let opened = reader::open(
+            state,
+            serde_json::json!({
+                "source": {"path": path.display().to_string(), "mode": "live"}
+            }),
+        )
+        .unwrap();
+        opened["reader"].as_str().unwrap().to_owned()
+    }
+
+    /// One live membership database with `count` catalog feeds and no
+    /// assigned ranges; the feeds cursor enumerates the catalog.
+    fn membership_with_feeds(label: &str, count: u32) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let main = std::env::temp_dir().join(format!(
+            "iprange-cursor-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        let token = CancellationToken::new();
+        create_live(
+            &main,
+            AddressFamily::Ipv4,
+            ValueKind::Membership,
+            StructureKind::None,
+            ValueTag::new(b"feeds-paging").unwrap(),
+            2,
+            &token,
+        )
+        .unwrap();
+        let budget = TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 10_000,
+            max_file_growth_pages: 10_000,
+            max_open_files: 2,
+        };
+        let mut writer = LiveWriter::open(&main, budget, &token).unwrap();
+        let mut transaction = writer.begin_membership_transaction(&token).unwrap();
+        for index in 0..count {
+            transaction
+                .ensure_feed(FeedName::new(&format!("feed-{index:04}")).unwrap())
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+        writer.close().unwrap();
+        main
+    }
+
+    fn sidecar(main: &Path) -> PathBuf {
+        let mut name = main.file_name().unwrap().to_os_string();
+        name.push(".readers");
+        main.with_file_name(name)
+    }
+
+    /// One live structured IPv4 database: three records whose threat
+    /// memberships are {a,b}, {c}, and none.
+    fn structured_live_v4(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let main = std::env::temp_dir().join(format!(
+            "iprange-cursor-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        let token = CancellationToken::new();
+        create_live(
+            &main,
+            AddressFamily::Ipv4,
+            ValueKind::Structured,
+            StructureKind::NetworkEnrichmentV1,
+            ValueTag::new(b"cursor-struct").unwrap(),
+            2,
+            &token,
+        )
+        .unwrap();
+        let budget = TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 10_000,
+            max_file_growth_pages: 10_000,
+            max_open_files: 2,
+        };
+        let mut writer = LiveWriter::open(&main, budget, &token).unwrap();
+        let mut transaction = writer.begin_structured_transaction(&token).unwrap();
+        let feed_a = transaction.ensure_feed(FeedName::new("feed-a").unwrap()).unwrap();
+        let feed_b = transaction.ensure_feed(FeedName::new("feed-b").unwrap()).unwrap();
+        let feed_c = transaction.ensure_feed(FeedName::new("feed-c").unwrap()).unwrap();
+        let empty = transaction.empty_membership().unwrap();
+        let membership_ab = transaction.add_feed(empty, feed_a).unwrap();
+        let membership_ab = transaction.add_feed(membership_ab, feed_b).unwrap();
+        let empty = transaction.empty_membership().unwrap();
+        let membership_c = transaction.add_feed(empty, feed_c).unwrap();
+        let structure_ab = transaction
+            .intern_network_enrichment_v1(
+                NetworkEnrichmentV1 {
+                    asn: 1,
+                    ..Default::default()
+                },
+                Some(membership_ab),
+            )
+            .unwrap();
+        let structure_c = transaction
+            .intern_network_enrichment_v1(
+                NetworkEnrichmentV1 {
+                    asn: 2,
+                    ..Default::default()
+                },
+                Some(membership_c),
+            )
+            .unwrap();
+        let structure_none = transaction
+            .intern_network_enrichment_v1(
+                NetworkEnrichmentV1 {
+                    asn: 3,
+                    ..Default::default()
+                },
+                None,
+            )
+            .unwrap();
+        transaction
+            .assign_v4(Ipv4Key(10), Ipv4Key(19), structure_ab)
+            .unwrap();
+        transaction
+            .assign_v4(Ipv4Key(20), Ipv4Key(29), structure_c)
+            .unwrap();
+        transaction
+            .assign_v4(Ipv4Key(30), Ipv4Key(39), structure_none)
+            .unwrap();
+        transaction.commit().unwrap();
+        writer.close().unwrap();
+        main
+    }
+
+    /// Collect every row of one feeds catalog cursor until `done`.
+    fn collect_feeds_pages(
+        state: &mut SessionState,
+        reader_handle: &str,
+        batch_size: u64,
+    ) -> Vec<Value> {
+        let opened = feeds_open(
+            state,
+            serde_json::json!({
+                "reader": reader_handle,
+                "batch_size": batch_size,
+            }),
+        )
+        .unwrap();
+        let cursor = opened["cursor"].as_str().unwrap().to_owned();
+        let mut rows = Vec::new();
+        loop {
+            let next = feeds_next(state, serde_json::json!({"cursor": cursor})).unwrap();
+            rows.extend(next["feeds"].as_array().unwrap().iter().cloned());
+            if next["done"].as_bool().unwrap() {
+                break;
+            }
+        }
+        rows
+    }
+
+    /// Collect every record of one structured ranges cursor until
+    /// done; also returns the number of `ranges.next` pages served.
+    fn collect_structured_pages(
+        state: &mut SessionState,
+        reader_handle: &str,
+        direction: &str,
+        batch_size: u64,
+    ) -> (Vec<Value>, u64) {
+        let opened = ranges_open(
+            state,
+            serde_json::json!({
+                "reader": reader_handle,
+                "view": {"kind":"structured"},
+                "direction": direction,
+                "batch_size": batch_size,
+            }),
+        )
+        .unwrap();
+        let cursor = opened["cursor"].as_str().unwrap().to_owned();
+        let mut records = Vec::new();
+        let mut pages = 0u64;
+        loop {
+            let next = ranges_next(state, serde_json::json!({"cursor": cursor})).unwrap();
+            pages += 1;
+            records.extend(next["records"].as_array().unwrap().iter().cloned());
+            if next["done"].as_bool().unwrap() {
+                break;
+            }
+        }
+        (records, pages)
+    }
+
+    #[test]
+    fn feeds_catalog_paging_matches_one_unbounded_page() {
+        // Thousands of catalog feeds. The old feeds.next reopened the
+        // catalog cursor and skipped the emitted prefix for every page
+        // (quadratic over the stream); the seek-based paging must
+        // return byte-identical rows no matter how pages fall.
+        let path = membership_with_feeds("feeds-paging", 2000);
+        let mut state = SessionState::default();
+        let reader_handle = open_live_reader(&mut state, &path);
+        let unbounded = collect_feeds_pages(&mut state, &reader_handle, 4096);
+        let paged = collect_feeds_pages(&mut state, &reader_handle, 7);
+        assert_eq!(unbounded.len(), 2000);
+        assert_eq!(paged.len(), unbounded.len());
+        assert_eq!(
+            serde_json::to_string(&paged).unwrap(),
+            serde_json::to_string(&unbounded).unwrap(),
+            "feeds catalog paging diverged from the unbounded stream"
+        );
+        reader::close(&mut state, serde_json::json!({"reader": reader_handle})).unwrap();
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(sidecar(&path)).unwrap();
+    }
+
+    #[test]
+    fn structured_paging_matches_one_unbounded_page_and_sweeps_once_per_page() {
+        // One structured page must sweep the catalog at most once
+        // (never once per record): the snapshot counter delta equals
+        // the number of pages, and the paged stream is byte-identical
+        // to one unbounded page.
+        let path = structured_live_v4("structured-paging");
+        for direction in ["forward", "reverse"] {
+            let mut state = SessionState::default();
+            let reader_handle = open_live_reader(&mut state, &path);
+            let before = reader::snapshot_observation::builds();
+            let (unbounded, unbounded_pages) =
+                collect_structured_pages(&mut state, &reader_handle, direction, 4096);
+            let after_unbounded = reader::snapshot_observation::builds();
+            assert_eq!(
+                after_unbounded - before,
+                unbounded_pages,
+                "one unbounded structured stream must sweep the catalog exactly once per page"
+            );
+            let (paged, paged_pages) =
+                collect_structured_pages(&mut state, &reader_handle, direction, 1);
+            let after_paged = reader::snapshot_observation::builds();
+            assert_eq!(
+                after_paged - after_unbounded,
+                paged_pages,
+                "each structured page must sweep the catalog exactly once, not once per record"
+            );
+            assert_eq!(paged.len(), unbounded.len());
+            assert_eq!(
+                serde_json::to_string(&paged).unwrap(),
+                serde_json::to_string(&unbounded).unwrap(),
+                "{direction} structured paging diverged from the unbounded stream"
+            );
+            reader::close(&mut state, serde_json::json!({"reader": reader_handle})).unwrap();
+        }
+        fs::remove_file(&path).unwrap();
+        fs::remove_file(sidecar(&path)).unwrap();
+    }
+
+    #[test]
+    fn closed_cursor_tombstones_stay_bounded_after_many_closes() {
+        // The tombstone bound is 8 under cfg(test). Closing more
+        // cursors than the bound keeps the connection answering, the
+        // map within the bound, an evicted tombstone answering as
+        // unknown, and a retained tombstone answering as closed.
+        let path = immutable_membership("tombstone-cap");
+        let mut state = SessionState::default();
+        let reader_handle = open_immutable_feed(&mut state, &path);
+        let mut closed = Vec::new();
+        for _ in 0..10 {
+            let opened = feeds_open(
+                &mut state,
+                serde_json::json!({"reader": reader_handle, "batch_size": 1}),
+            )
+            .unwrap();
+            let cursor = opened["cursor"].as_str().unwrap().to_owned();
+            feeds_close(&mut state, serde_json::json!({"cursor": cursor})).unwrap();
+            closed.push(cursor);
+        }
+        assert!(
+            state.resources.closed_cursors.len() <= 8,
+            "closed-cursor tombstones exceeded the bound: {}",
+            state.resources.closed_cursors.len()
+        );
+        // The oldest tombstones were evicted and answer as unknown.
+        let error =
+            feeds_next(&mut state, serde_json::json!({"cursor": closed[0]})).unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome),
+            ("cursor_not_found", "not_started")
+        );
+        // A retained tombstone still answers as closed.
+        let error =
+            feeds_next(&mut state, serde_json::json!({"cursor": closed[9]})).unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome),
+            ("cursor_closed", "not_started")
+        );
+        // The connection still answers: a fresh cursor pages normally.
+        // The single-feed catalog fills the batch without probing
+        // exhaustion, so the first page is not done; the next page
+        // closes it.
+        let opened = feeds_open(
+            &mut state,
+            serde_json::json!({"reader": reader_handle, "batch_size": 1}),
+        )
+        .unwrap();
+        let cursor = opened["cursor"].as_str().unwrap().to_owned();
+        let next = feeds_next(&mut state, serde_json::json!({"cursor": cursor})).unwrap();
+        assert_eq!(next["feeds"].as_array().unwrap().len(), 1);
+        assert_eq!(next["done"], false);
+        let next = feeds_next(&mut state, serde_json::json!({"cursor": cursor})).unwrap();
+        assert_eq!(next["feeds"].as_array().unwrap().len(), 0);
+        assert_eq!(next["done"], true);
+        reader::close(&mut state, serde_json::json!({"reader": reader_handle})).unwrap();
         fs::remove_file(path).unwrap();
     }
 

@@ -129,128 +129,141 @@ fn publisher_value(
     let mut metadata_changed = facts.metadata_changed;
     let no_change = facts.no_change;
     let mut commit = facts.commit;
+    let staging_error = facts.staging_error;
     let source_close = facts.source_close;
-    if let Some(error) = facts.staging_error {
-        return Err(close_writer_facts(
-            writer,
-            lifecycle::sdk_error(&error, "not_started"),
-        ));
-    }
-    if no_change {
-        match metadata {
-            lifecycle::MetadataValue::Keep => {}
-            lifecycle::MetadataValue::Replace(bytes) => {
-                // One fresh direct transaction inside an owned-outcome
-                // closure: the transaction borrow dies with the call, so
-                // the writer is free again when the outcome is handled.
-                let outcome = (|| -> Result<CommitResult, Error> {
-                    let mut transaction = writer.begin_direct_transaction(cancellation)?;
-                    transaction.set_metadata_json(bytes)?;
-                    transaction.commit()
-                })();
-                match outcome {
-                    Ok(attempt) => {
-                        metadata_changed = true;
-                        commit = Some(Ok(attempt));
-                    }
-                    Err(error) => {
-                        return Err(close_writer_facts(
-                            writer,
-                            lifecycle::sdk_error(&error, "not_started"),
-                        ))
+    // Publish behind one closure so every error path can merge the
+    // already-factual source close into `details` next to `writer_close`
+    // (spec iprange-jsonrpc-v1.md factual-close rule); the success path
+    // keeps the `source_close` member.
+    let outcome = (|| -> Result<Value, HandlerError> {
+        if let Some(error) = staging_error {
+            return Err(close_writer_facts(
+                writer,
+                lifecycle::sdk_error(&error, "not_started"),
+            ));
+        }
+        if no_change {
+            match metadata {
+                lifecycle::MetadataValue::Keep => {}
+                lifecycle::MetadataValue::Replace(bytes) => {
+                    // One fresh direct transaction inside an owned-outcome
+                    // closure: the transaction borrow dies with the call, so
+                    // the writer is free again when the outcome is handled.
+                    let outcome = (|| -> Result<CommitResult, Error> {
+                        let mut transaction = writer.begin_direct_transaction(cancellation)?;
+                        transaction.set_metadata_json(bytes)?;
+                        transaction.commit()
+                    })();
+                    match outcome {
+                        Ok(attempt) => {
+                            metadata_changed = true;
+                            commit = Some(Ok(attempt));
+                        }
+                        Err(error) => {
+                            return Err(close_writer_facts(
+                                writer,
+                                lifecycle::sdk_error(&error, "not_started"),
+                            ))
+                        }
                     }
                 }
-            }
-            lifecycle::MetadataValue::Clear => {
-                let outcome = (|| -> Result<Option<CommitResult>, Error> {
-                    let mut transaction = writer.begin_direct_transaction(cancellation)?;
-                    let cleared = transaction.clear_metadata_json()?;
-                    if cleared {
-                        Ok(Some(transaction.commit()?))
-                    } else {
-                        Ok(None)
-                    }
-                })();
-                match outcome {
-                    Ok(Some(attempt)) => {
-                        metadata_changed = true;
-                        commit = Some(Ok(attempt));
-                    }
-                    Ok(None) => {}
-                    Err(error) => {
-                        return Err(close_writer_facts(
-                            writer,
-                            lifecycle::sdk_error(&error, "not_started"),
-                        ))
+                lifecycle::MetadataValue::Clear => {
+                    let outcome = (|| -> Result<Option<CommitResult>, Error> {
+                        let mut transaction = writer.begin_direct_transaction(cancellation)?;
+                        let cleared = transaction.clear_metadata_json()?;
+                        if cleared {
+                            Ok(Some(transaction.commit()?))
+                        } else {
+                            Ok(None)
+                        }
+                    })();
+                    match outcome {
+                        Ok(Some(attempt)) => {
+                            metadata_changed = true;
+                            commit = Some(Ok(attempt));
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            return Err(close_writer_facts(
+                                writer,
+                                lifecycle::sdk_error(&error, "not_started"),
+                            ))
+                        }
                     }
                 }
             }
         }
-    }
-    let close = match writer.close() {
-        Ok(close) => lifecycle::close_result(&close)?,
-        Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
-    };
-    let metadata_change = if metadata_changed { "changed" } else { "unchanged" };
-    let mut details = json!({
-        "report": report,
-        "metadata_logical_change": metadata_change,
-        "writer_close": close,
-    });
-    if let Some(removals) = removals {
-        details["removals"] = removals.unpublished_facts();
-    }
-    match &commit {
-        Some(Ok(attempt)) => {
-            details["commit"] = lifecycle::commit_result(attempt)?;
-            if attempt.durability != CommitDurability::Committed || attempt.cause.is_some() {
-                let cause = attempt.cause.as_ref();
-                let code = cause.map_or("io", |error| reader::sdk_code(error.code()));
-                let message = cause.map_or_else(
-                    || "publisher commit did not complete".to_owned(),
-                    ToString::to_string,
-                );
+        let close = match writer.close() {
+            Ok(close) => lifecycle::close_result(&close)?,
+            Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
+        };
+        let metadata_change = if metadata_changed { "changed" } else { "unchanged" };
+        let mut details = json!({
+            "report": report,
+            "metadata_logical_change": metadata_change,
+            "writer_close": close,
+        });
+        if let Some(removals) = removals {
+            details["removals"] = removals.unpublished_facts();
+        }
+        match &commit {
+            Some(Ok(attempt)) => {
+                details["commit"] = lifecycle::commit_result(attempt)?;
+                if attempt.durability != CommitDurability::Committed || attempt.cause.is_some() {
+                    let cause = attempt.cause.as_ref();
+                    let code = cause.map_or("io", |error| reader::sdk_code(error.code()));
+                    let message = cause.map_or_else(
+                        || "publisher commit did not complete".to_owned(),
+                        ToString::to_string,
+                    );
+                    return Err(HandlerError {
+                        code,
+                        outcome: durability_outcome(attempt.durability),
+                        message,
+                        details: Some(details),
+                    });
+                }
+            }
+            Some(Err(error)) => {
+                details["failure"] =
+                    json!({"code": reader::sdk_code(error.code()), "message": error.to_string()});
+                let failure = lifecycle::sdk_error(error, "not_started");
                 return Err(HandlerError {
-                    code,
-                    outcome: durability_outcome(attempt.durability),
-                    message,
                     details: Some(details),
+                    ..failure
                 });
             }
+            None => {}
         }
-        Some(Err(error)) => {
-            details["failure"] =
-                json!({"code": reader::sdk_code(error.code()), "message": error.to_string()});
-            let failure = lifecycle::sdk_error(error, "not_started");
+        let close_failed = matches!(close["outcome"].as_str(), Some("close_incomplete"));
+        if close_failed {
             return Err(HandlerError {
+                code: "io",
+                outcome: if commit.is_some() { "committed" } else { "not_started" },
+                message: "live writer close is incomplete".into(),
                 details: Some(details),
-                ..failure
             });
         }
-        None => {}
-    }
-    let close_failed = matches!(close["outcome"].as_str(), Some("close_incomplete"));
-    if close_failed {
-        return Err(HandlerError {
-            code: "io",
-            outcome: if commit.is_some() { "committed" } else { "not_started" },
-            message: "live writer close is incomplete".into(),
-            details: Some(details),
+        let mut value = json!({
+            "method": method,
+            "report": report,
+            "metadata_logical_change": metadata_change,
+            "writer_close": close,
         });
+        if let Some(Ok(attempt)) = &commit {
+            value["commit"] = lifecycle::commit_result(attempt)?;
+        }
+        Ok(value)
+    })();
+    match outcome {
+        Ok(mut value) => {
+            if let Some(close) = source_close {
+                value["source_close"] = close;
+            }
+            Ok(value)
+        }
+        Err(error) => Err(merge_source_close(error, source_close)),
     }
-    let mut value = json!({
-        "method": method,
-        "report": report,
-        "metadata_logical_change": metadata_change,
-        "writer_close": close,
-    });
-    if let Some(Ok(attempt)) = &commit {
-        value["commit"] = lifecycle::commit_result(attempt)?;
-    }
-    if let Some(close) = source_close {
-        value["source_close"] = close;
-    }
-    Ok(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -886,7 +899,15 @@ fn run_first_seen_v4(
             Err(error) => Err(lifecycle::sdk_error(&error, "not_started")),
         },
     };
-    let mut facts = outcome.map_err(|error| close_writer_facts(writer, error))?;
+    let mut facts = match outcome {
+        Ok(facts) => facts,
+        // The source reader was already factually closed; preserve its
+        // close result next to the writer close fact on this error path.
+        Err(error) => {
+            let error = close_writer_facts(writer, error);
+            return Err(merge_source_close(error, source_close));
+        }
+    };
     facts.source_close = source_close;
     Ok(facts)
 }
@@ -942,7 +963,15 @@ fn run_first_seen_v6(
             Err(error) => Err(lifecycle::sdk_error(&error, "not_started")),
         },
     };
-    let mut facts = outcome.map_err(|error| close_writer_facts(writer, error))?;
+    let mut facts = match outcome {
+        Ok(facts) => facts,
+        // The source reader was already factually closed; preserve its
+        // close result next to the writer close fact on this error path.
+        Err(error) => {
+            let error = close_writer_facts(writer, error);
+            return Err(merge_source_close(error, source_close));
+        }
+    };
     facts.source_close = source_close;
     Ok(facts)
 }
@@ -984,7 +1013,15 @@ fn run_last_seen_v4(
         Ok(finished) => Ok(consume_finished(finished, metadata)),
         Err(error) => Err(lifecycle::sdk_error(&error, "not_started")),
     };
-    let mut facts = outcome.map_err(|error| close_writer_facts(writer, error))?;
+    let mut facts = match outcome {
+        Ok(facts) => facts,
+        // The source reader was already factually closed; preserve its
+        // close result next to the writer close fact on this error path.
+        Err(error) => {
+            let error = close_writer_facts(writer, error);
+            return Err(merge_source_close(error, source_close));
+        }
+    };
     facts.source_close = source_close;
     Ok(facts)
 }
@@ -1026,7 +1063,15 @@ fn run_last_seen_v6(
         Ok(finished) => Ok(consume_finished(finished, metadata)),
         Err(error) => Err(lifecycle::sdk_error(&error, "not_started")),
     };
-    let mut facts = outcome.map_err(|error| close_writer_facts(writer, error))?;
+    let mut facts = match outcome {
+        Ok(facts) => facts,
+        // The source reader was already factually closed; preserve its
+        // close result next to the writer close fact on this error path.
+        Err(error) => {
+            let error = close_writer_facts(writer, error);
+            return Err(merge_source_close(error, source_close));
+        }
+    };
     facts.source_close = source_close;
     Ok(facts)
 }
@@ -1086,7 +1131,8 @@ fn open_source_reader(
 /// Close the ephemeral current-coverage reader and return its factual
 /// live close result (`None` for immutable sources). The retention
 /// success result carries it as `source_close`; error paths merge it
-/// through `close_refresh_facts`.
+/// through `close_refresh_facts` before the reader is closed and
+/// through `merge_source_close` afterwards.
 fn close_current_reader(reader: &mut ReaderValue) -> Result<Option<Value>, HandlerError> {
     reader::close_ephemeral_reader(reader)
 }
@@ -1113,6 +1159,23 @@ pub(crate) fn close_writer_facts(writer: &mut LiveWriter, mut error: HandlerErro
             }
             error.details = Some(details);
         }
+    }
+    error
+}
+
+/// Merge the already-factual source close into an error's `details`
+/// next to `writer_close` (spec iprange-jsonrpc-v1.md factual-close
+/// rule). Callers pass the captured `source_close` only after the
+/// current-coverage reader was factually closed; immutable sources
+/// pass `None` and the error is returned unchanged. Existing detail
+/// members are preserved.
+fn merge_source_close(mut error: HandlerError, source_close: Option<Value>) -> HandlerError {
+    if let Some(close) = source_close {
+        let mut details = error.details.take().unwrap_or_else(|| json!({}));
+        if let Some(members) = details.as_object_mut() {
+            members.insert("source_close".into(), close);
+        }
+        error.details = Some(details);
     }
     error
 }
@@ -1903,8 +1966,9 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    /// One live IPv4 membership database with an exact named feed.
-    fn live_membership_with_feed(label: &str) -> PathBuf {
+    /// One live IPv4 membership database with an exact named feed over
+    /// the given coverage ranges.
+    fn live_membership_with_ranges(label: &str, ranges: &[AddressRange<Ipv4Key>]) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -1931,20 +1995,10 @@ mod tests {
             max_open_files: 2,
         };
         let mut writer = LiveWriter::open(&path, budget, &token).unwrap();
-        let ranges = [
-            AddressRange {
-                from: Ipv4Key(u32::from(std::net::Ipv4Addr::new(192, 0, 2, 1))),
-                to: Ipv4Key(u32::from(std::net::Ipv4Addr::new(192, 0, 2, 10))),
-            },
-            AddressRange {
-                from: Ipv4Key(u32::from(std::net::Ipv4Addr::new(198, 51, 100, 5))),
-                to: Ipv4Key(u32::from(std::net::Ipv4Addr::new(198, 51, 100, 5))),
-            },
-        ];
         let mut draft = writer
             .begin_create_feed(FeedName::new("coverage").unwrap(), &token)
             .unwrap();
-        draft.add_ranges_v4_slice(&ranges).unwrap();
+        draft.add_ranges_v4_slice(ranges).unwrap();
         match draft.finish_input().unwrap() {
             FinishedWorkflow::Changed(prepared) => {
                 prepared.commit().unwrap();
@@ -1953,6 +2007,35 @@ mod tests {
         }
         writer.close().unwrap();
         path
+    }
+
+    /// One live IPv4 membership database with the canonical two-range feed.
+    fn live_membership_with_feed(label: &str) -> PathBuf {
+        live_membership_with_ranges(
+            label,
+            &[
+                AddressRange {
+                    from: Ipv4Key(u32::from(std::net::Ipv4Addr::new(192, 0, 2, 1))),
+                    to: Ipv4Key(u32::from(std::net::Ipv4Addr::new(192, 0, 2, 10))),
+                },
+                AddressRange {
+                    from: Ipv4Key(u32::from(std::net::Ipv4Addr::new(198, 51, 100, 5))),
+                    to: Ipv4Key(u32::from(std::net::Ipv4Addr::new(198, 51, 100, 5))),
+                },
+            ],
+        )
+    }
+
+    /// One live IPv4 membership database whose coverage omits the
+    /// 192.0.2.1-10 range, so a refresh over it must emit removals.
+    fn live_membership_with_single_range(label: &str) -> PathBuf {
+        live_membership_with_ranges(
+            label,
+            &[AddressRange {
+                from: Ipv4Key(u32::from(std::net::Ipv4Addr::new(198, 51, 100, 5))),
+                to: Ipv4Key(u32::from(std::net::Ipv4Addr::new(198, 51, 100, 5))),
+            }],
+        )
     }
 
     /// One empty live IPv4 direct database tagged `first_seen`.
@@ -2065,5 +2148,98 @@ mod tests {
         assert_eq!(result["source_close"]["outcome"], "closed");
         remove_live(&target);
         remove_live(&source);
+    }
+
+    #[test]
+    fn first_seen_refresh_removals_budget_error_after_reader_close_carries_source_close() {
+        let source = live_membership_with_feed("first-seen-err-src");
+        let target = live_first_seen_target("first-seen-err-dst");
+        let mut state = SessionState::default();
+        // Prime the target with first-seen records from the full coverage.
+        first_seen_refresh(&mut state, refresh_params(&target, &source, "live")).unwrap();
+        // A second refresh over narrowed coverage must emit one removal;
+        // a zero-row budget turns that drain failure into an
+        // output_limit error AFTER the live source reader was closed.
+        let narrow = live_membership_with_single_range("first-seen-err-narrow");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let removals_path = std::env::temp_dir().join(format!(
+            "iprange-retention-removals-{}-{unique}.jsonl",
+            std::process::id()
+        ));
+        let error = first_seen_refresh(
+            &mut state,
+            serde_json::json!({
+                "path": target.display().to_string(),
+                "current": {
+                    "feed": "coverage",
+                    "source": {"path": narrow.display().to_string(), "mode": "live"},
+                },
+                "refresh_value": 84,
+                "metadata": {"mode": "keep"},
+                "writer_budget": {
+                    "max_heap_bytes": "2097152",
+                    "max_private_pages": "10000",
+                    "max_growth_pages": "10000",
+                    "max_open_files": 2,
+                },
+                "removals_output": {
+                    "path": removals_path.display().to_string(),
+                    "publication_policy": "fail_if_exists",
+                    "result_budget": {
+                        "max_rows": "0",
+                        "max_output_bytes": "0",
+                        "max_open_files": 1,
+                    },
+                },
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, "output_limit");
+        assert_eq!(error.outcome, "not_started");
+        let details = error.details.expect("close facts must be merged into details");
+        assert_eq!(details["writer_close"]["outcome"], "closed");
+        assert_eq!(details["source_close"]["outcome"], "closed");
+        let _ = std::fs::remove_file(&removals_path);
+        remove_live(&narrow);
+        remove_live(&target);
+        remove_live(&source);
+    }
+
+    #[test]
+    fn publisher_value_staging_error_after_source_close_preserves_source_close() {
+        let target = live_first_seen_target("publisher-staging-dst");
+        let token = CancellationToken::new();
+        let budget = iprange_livedb::TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 10_000,
+            max_file_growth_pages: 10_000,
+            max_open_files: 2,
+        };
+        let mut writer = LiveWriter::open(&target, budget, &token).unwrap();
+        let facts = PublisherFacts {
+            report: serde_json::json!({"source_label": "changed"}),
+            metadata_changed: false,
+            no_change: false,
+            staging_error: Some(Error::InvalidArgument("metadata staging refused")),
+            commit: None,
+            source_close: Some(serde_json::json!({"outcome": "closed"})),
+        };
+        let outcome = publisher_value(
+            facts,
+            &mut writer,
+            &lifecycle::MetadataValue::Keep,
+            "iprange.v1.retention.first_seen.refresh",
+            None,
+            &token,
+        );
+        let error = outcome.unwrap_err();
+        assert_eq!(error.code, "invalid_argument");
+        let details = error.details.expect("close facts must be merged into details");
+        assert_eq!(details["writer_close"]["outcome"], "closed");
+        assert_eq!(details["source_close"]["outcome"], "closed");
+        remove_live(&target);
     }
 }

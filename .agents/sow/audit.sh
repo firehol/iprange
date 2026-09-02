@@ -62,7 +62,8 @@ read_sow_status() {
     /^status:[[:space:]]*/ { clean($0) }
     /^\*\*Status:\*\*[[:space:]]*/ { clean($0) }
     /^## Status[[:space:]]*$/ { in_status = 1; next }
-    in_status && NF { clean($0) }
+    in_status && /^(open|in-progress|paused|completed|closed|done|complete)[[:space:]]*$/ { print $1; exit }
+    in_status && /^Status:[[:space:]]*|^status:[[:space:]]*/ { clean($0) }
   ' "$1" 2>/dev/null
 }
 

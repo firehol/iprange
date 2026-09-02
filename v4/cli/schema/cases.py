@@ -3,12 +3,19 @@
 The schema is intentionally smaller than the runner: every member accepted here
 must have one executable runner interpretation.  In particular, expectations
 and filesystem assertions are validated before a subprocess is launched.
+
+An rpc step with ``"notification": true`` sends a JSON-RPC notification: the
+runner writes one frame without an id and never reads a response for it, so the
+step must not carry ``expect_result``, ``expect_error``, ``capture``, or
+``assert_files``.  The transport accepts only ``iprange.v1.cancel`` as a
+notification, so a notification step must use that method (frame.py contract).
 """
 
 import os
 from pathlib import PureWindowsPath
 
 from .engine import ValidationError, validate
+from .frame import CANCEL_METHOD
 from . import common as C
 
 _ASSERT_FILE = {
@@ -47,6 +54,7 @@ def _rpc_step(expectation):
         "params": {"type": "object"},
         "capture": {"type": "array", "items": {"type": "string", "min_len": 1}, "max": 16},
         "assert_files": {"type": "array", "items": _ASSERT_FILE, "max": 64},
+        "notification": {"type": "boolean"},
     }
     required = ["kind", "method", "params"]
     if expectation is not None:
@@ -217,6 +225,19 @@ def validate_case(case):
         if not methods.known(method):
             raise ValidationError(f"steps[{index}].method", f"unknown production method {method!r}")
         rpc_methods.add(method)
+
+        if step.get("notification"):
+            if method != CANCEL_METHOD:
+                raise ValidationError(
+                    f"steps[{index}].method",
+                    "only iprange.v1.cancel may be sent as a notification",
+                )
+            for member in ("expect_result", "expect_error", "capture", "assert_files"):
+                if member in step:
+                    raise ValidationError(
+                        f"steps[{index}].{member}",
+                        "notification steps cannot expect a response, capture, or assert files",
+                    )
 
         for pointer_index, pointer in enumerate(step.get("capture", [])):
             _valid_pointer(pointer, f"steps[{index}].capture[{pointer_index}]")

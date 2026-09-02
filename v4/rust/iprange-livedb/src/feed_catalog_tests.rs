@@ -327,3 +327,169 @@ fn live_cursor_rejects_a_foreign_process_owner() {
     let mut cursor = FeedCursor::new(&mapping, &meta, Some(foreign)).unwrap();
     assert!(matches!(cursor.next_feed(), Err(Error::ForkedHandle)));
 }
+
+/// 150 catalog entries across three name leaves and three index leaves
+/// with one branch level each, so seek and paging tests cross leaf
+/// boundaries.
+fn wide_catalog_fixture(active: u64) -> (ImmutableReader, TestPath) {
+    let entries: Vec<(FeedName, u32)> = (0..150)
+        .map(|index| (name(&format!("feed-{index}")), index))
+        .collect();
+    let first = |start: usize| name(&format!("feed-{start}"));
+    let pages = vec![
+        (
+            2,
+            catalog_page(
+                NAME_BRANCH,
+                1,
+                &[(first(0), 3), (first(50), 4), (first(100), 5)],
+            ),
+        ),
+        (3, catalog_page(NAME_LEAF, 0, &entries[0..50])),
+        (4, catalog_page(NAME_LEAF, 0, &entries[50..100])),
+        (5, catalog_page(NAME_LEAF, 0, &entries[100..150])),
+        (6, index_branch(&[(0, 7), (50, 8), (100, 9)])),
+        (7, catalog_page(INDEX_LEAF, 0, &entries[0..50])),
+        (8, catalog_page(INDEX_LEAF, 0, &entries[50..100])),
+        (9, catalog_page(INDEX_LEAF, 0, &entries[100..150])),
+        (10, used_bitmap(&(0..150).collect::<Vec<u32>>())),
+    ];
+    let meta = meta(11, 2, 6, 10, active, 150);
+    fixture(meta, &pages)
+}
+
+#[test]
+fn feed_cursor_seek_repositions_to_first_entry_at_or_after_target() {
+    let (reader, _path) = wide_catalog_fixture(150);
+    let mut cursor = reader.feed_cursor().unwrap();
+
+    // A fresh cursor starts at the first entry.
+    assert_eq!(cursor.next_feed().unwrap().unwrap().index, 0);
+
+    // Seek inside a leaf repositions forward without revisiting.
+    cursor.seek_by_index(3).unwrap();
+    assert_eq!(cursor.next_feed().unwrap().unwrap().index, 3);
+
+    // Seek exactly at a leaf boundary returns that entry.
+    cursor.seek_by_index(50).unwrap();
+    assert_eq!(cursor.next_feed().unwrap().unwrap().index, 50);
+
+    // Seek between leaves lands on the first entry of the next leaf.
+    cursor.seek_by_index(51).unwrap();
+    assert_eq!(cursor.next_feed().unwrap().unwrap().index, 51);
+
+    // Seek before the first entry restarts at the first entry.
+    cursor.seek_by_index(0).unwrap();
+    assert_eq!(cursor.next_feed().unwrap().unwrap().index, 0);
+    assert_eq!(cursor.next_feed().unwrap().unwrap().index, 1);
+    cursor.seek_by_index(97).unwrap();
+    assert_eq!(cursor.next_feed().unwrap().unwrap().index, 97);
+
+    // Seek past the last entry finishes the cursor.
+    cursor.seek_by_index(150).unwrap();
+    assert_eq!(cursor.next_feed().unwrap(), None);
+
+    // Seeking a finished cursor restarts it when the target exists.
+    cursor.seek_by_index(100).unwrap();
+    assert_eq!(cursor.next_feed().unwrap().unwrap().index, 100);
+    assert_eq!(cursor.next_feed().unwrap().unwrap().index, 101);
+    assert_eq!(cursor.next_feed().unwrap().unwrap().index, 102);
+}
+
+#[test]
+fn feed_cursor_paging_matches_one_unbounded_sweep() {
+    let (reader, _path) = wide_catalog_fixture(150);
+
+    // One unbounded sweep visits every entry exactly once in
+    // ascending feed-index order.
+    let mut reference = Vec::new();
+    {
+        let mut cursor = reader.feed_cursor().unwrap();
+        while let Some(entry) = cursor.next_feed().unwrap() {
+            reference.push((entry.index, entry.name.as_str().to_owned()));
+        }
+    }
+    assert_eq!(reference.len(), 150);
+
+    // Paged sweep: one cursor per page seeked to the checkpoint. The
+    // merged pages must match the unbounded sweep exactly: no entry
+    // skipped, none revisited.
+    let mut paged = Vec::new();
+    let mut last: Option<u32> = None;
+    loop {
+        let mut cursor = reader.feed_cursor().unwrap();
+        if let Some(index) = last {
+            cursor.seek_by_index(index + 1).unwrap();
+        }
+        let mut page = Vec::new();
+        while page.len() < 7 {
+            let Some(entry) = cursor.next_feed().unwrap() else {
+                break;
+            };
+            page.push((entry.index, entry.name.as_str().to_owned()));
+        }
+        let done = page.len() < 7;
+        last = page.last().map(|(index, _)| *index).or(last);
+        paged.extend(page);
+        if done {
+            break;
+        }
+    }
+    assert_eq!(paged.len(), reference.len());
+    assert_eq!(paged, reference);
+}
+
+#[test]
+fn feed_cursor_seek_reads_only_the_target_interval() {
+    let (reader, _path) = wide_catalog_fixture(150);
+    let mut cursor = reader.feed_cursor().unwrap();
+    let (entry, work) = crate::work::measure(|| {
+        cursor.seek_by_index(149).unwrap();
+        cursor.next_feed().unwrap()
+    });
+    assert_eq!(entry.unwrap().index, 149);
+    // One root-to-leaf lookup for the seek plus the leaf read of the
+    // first next_feed. A linear reopen-and-skip page would have
+    // visited every preceding leaf instead.
+    assert_eq!(work.tree_lookups, 1);
+    assert_eq!(work.tree_descents, 1);
+    assert_eq!(work.pages_visited, 3);
+    assert_eq!(work.catalog_lookups, 0);
+}
+
+#[test]
+fn feed_cursor_seek_paging_performs_one_lookup_per_page() {
+    let (reader, _path) = wide_catalog_fixture(150);
+    let (collected, work) = crate::work::measure(|| {
+        let mut collected = Vec::new();
+        let mut last: Option<u32> = None;
+        loop {
+            let mut cursor = reader.feed_cursor().unwrap();
+            if let Some(index) = last {
+                cursor.seek_by_index(index + 1).unwrap();
+            }
+            let mut page = Vec::new();
+            while page.len() < 7 {
+                let Some(entry) = cursor.next_feed().unwrap() else {
+                    break;
+                };
+                page.push((entry.index, entry.name.as_str().to_owned()));
+            }
+            let done = page.len() < 7;
+            last = page.last().map(|(index, _)| *index).or(last);
+            collected.extend(page);
+            if done {
+                break;
+            }
+        }
+        collected
+    });
+    assert_eq!(collected.len(), 150);
+    assert_eq!(collected[0].0, 0);
+    assert_eq!(collected[149].0, 149);
+    // 22 pages for 150 entries at 7 per page; every page after the
+    // first repositions with exactly one bounded root-to-leaf lookup,
+    // never a walk over the already-emitted prefix.
+    assert_eq!(work.tree_lookups, 21);
+    assert_eq!(work.catalog_lookups, 0);
+}

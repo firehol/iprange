@@ -6,7 +6,7 @@ malformed framing, missing fields, wrong integer encodings, false
 outcomes, and incorrect rows BEFORE any production handler is written.
 
 This is NOT a product binary. It never ships in an `iprange`
-executable and contains no v4 persistence logic)Skip. It is a test
+executable and contains no v4 persistence logic. It is a test
 double that reads one mode word from argv[1] and then emits the
 corresponding deliberately broken behavior on stdin/stdout.
 
@@ -18,9 +18,16 @@ Modes:
   describe_bad_version reply jsonrpc "1.0"
   describe_bad_decimal  reply fraction number in limits.input_frame_bytes
   describe_missing_method  reply result without the method member
+  describe_unknown_member  reply a result with a test-only extra member
   describe_false_outcome  reply a schema-valid result whose method does
                      not match the request (outcome fabrication)
   rows_bad_order     reply incorrect cursor rows (out of order)
+  rows_ok            reply cursor rows in ascending order (positive control)
+  lookup_ok          reply schema-valid lookup matches (positive control)
+  rows_wrong_value   reply a lookup value outside the u32 range
+  cancel_replies     answer an iprange.v1.cancel notification with a
+                     response object; the client must reject any response
+                     to a notification (stream desynchronization)
 """
 import json
 import sys
@@ -111,6 +118,19 @@ def handle(line):
         result = dict(DESCRIBE_OK["result"])
         result["method"] = "iprange.v1.database.metadata.replace"
         emit({"jsonrpc": "2.0", "id": request_id, "result": result})
+    elif MODE == "cancel_replies":
+        # JSON-RPC 2.0 forbids responding to a notification. Emit a
+        # response anyway so the sensitivity gate proves the client
+        # never accepts one: the reply poisons the stream and the next
+        # correlated read fails with an id mismatch.
+        if method == "iprange.v1.cancel":
+            emit({"jsonrpc": "2.0", "id": "cancel-reply",
+                  "result": dict(DESCRIBE_OK["result"])})
+            return True
+        # Non-cancel requests behave like describe_ok.
+        result = dict(DESCRIBE_OK["result"])
+        emit({"jsonrpc": "2.0", "id": request_id, "result": result})
+        return True
     elif method == "iprange.v1.reader.open":
         # Modes which exercise reader-bound protocol checks open a fake
         # reader first; the runner needs a schema-valid info response.

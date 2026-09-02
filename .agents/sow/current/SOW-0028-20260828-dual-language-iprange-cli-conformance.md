@@ -1204,8 +1204,10 @@ Open decisions:
      `v4/cli/schema/__pycache__/` appeared as untracked files; added
      `__pycache__/` to `.gitignore` (W5).
 - Fix mapping: the finding numbers above map to the W1-W5 fix areas as
-  marked. Fix-commit column: round-10 wave commits (the lead fills in
-  the exact SHAs as the wave lands).
+  marked. The complete round-10 wave landed as one commit: 061f8c71
+  (v4/rust/iprange-cli transport/session/handlers, iprange-livedb
+  feed_range_cursor.rs, v4/cli/schema/results.py, v4/cli/run.py,
+  spec, SOW records, .gitignore).
 - P2-9/P2-10 adjudication (clippy and rustfmt are NOT repository
   gates): the CI workflows `.github/workflows/v4-rust-performance.yml`
   and `.github/workflows/big-endian.yml` run no clippy or fmt job; the
@@ -1401,29 +1403,28 @@ Acceptance criteria evidence:
   same-language/cross-open/mixed-live matrices plus consolidated
   benchmarks (step 5), including `v4/cli/README.md` and `bench.py`.
 
-Tests or equivalent validation (recorded at HEAD 6b1837f4; every gate
-is re-run after the round-10 fix wave commits land):
+Tests or equivalent validation (re-run at HEAD 061f8c71, the
+round-10 fix wave commit):
 
-- Rust workspace: 50 suites / 687 tests green.
+- Rust workspace: 50 suites / 710 tests, 0 failures.
 - `-D warnings` build clean (rustc `-D warnings` via
-  `v4/rust/check-source-graph.sh`).
-- Runner default matrix green: 30 cases / 15 oracle checks.
+  `v4/rust/check-source-graph.sh`); source graph 491 sources,
+  4 supported targets, 1 runtime-compiled native fixture.
+- Runner matrix green: 30 cases / 15 oracle checks
+  (`nice python3 v4/cli/run.py --rust ... --matrix rust`).
 - Golden corpus: 53 exchanges PASS (`nice python3 v4/cli/check_golden.py`).
 - Sensitivity gate: 13 deliberate-brokenness modes PASS
   (`nice python3 v4/cli/sensitivity_gate.py`).
-- Schema module self-tests PASS (`python3 -m v4.cli.schema.results`
-  and siblings), including the typed housekeeping/cleanup negative
-  tests added in the round-10 wave.
-- Go SDK suite green.
-- mmap-only gates: `check-source-graph.sh` (four-target source graph,
-  491 sources), `check-mmap-storage.sh`, `check-mmap-runtime.sh`,
-  `check-architecture.sh`.
-- SOW audit and placeholder/personal-name/trailing-whitespace/
-  `git diff --check` hygiene scans pass.
-- The round-10 fix wave (typed housekeeping/cleanup schemas, optional
-  source_close schema, validation record refresh, `.gitignore`, and the
-  parallel Rust/runner fix areas W1-W4) is being committed by the lead;
-  gates are re-run after the wave commits land.
+- Schema module self-tests PASS (`python3 -m v4.cli.schema.results`,
+  `schema.cases`, `schema.frame`, `schema.methods`), including the
+  typed housekeeping/cleanup negative tests added in the round-10 wave.
+- Go SDK suite green (`nice go -C v4/go test ./...`).
+- mmap-only gates: `check-mmap-storage.sh` (343 production sources),
+  `check-mmap-runtime.sh`, `check-architecture.sh` all PASS.
+- SOW audit, placeholder/personal-name/trailing-whitespace scans and
+  `git diff --check` pass (the audit status-parser false positive on
+  the historical SOW-0025 `## Status` heading was fixed in the
+  round-11 wave).
 
 Real-use evidence:
 

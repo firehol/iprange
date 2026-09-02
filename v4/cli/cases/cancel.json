@@ -1,0 +1,40 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "cancel.unknown_id",
+  "requires": "iprange.v1.system.describe",
+  "fixtures": [],
+  "steps": [
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.cancel",
+      "params": {
+        "request_id": "cancel-unknown-request-0001"
+      },
+      "notification": true
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.system.describe",
+      "params": {},
+      "expect_result": {
+        "method": "iprange.v1.system.describe"
+      }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.cancel",
+      "params": {
+        "request_id": "case-cancel.unknown_id"
+      },
+      "notification": true
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.system.describe",
+      "params": {},
+      "expect_result": {
+        "method": "iprange.v1.system.describe"
+      }
+    }
+  ]
+}

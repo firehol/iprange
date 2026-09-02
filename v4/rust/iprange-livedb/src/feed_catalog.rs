@@ -5,7 +5,7 @@ use std::fmt;
 use crate::contract::{MetaV4, ValueKind};
 use crate::error::{Error, Result};
 use crate::feed::{FeedEntry, FeedName};
-use crate::fixed_tree::{self, CursorDirection, LeafQuery};
+use crate::fixed_tree::{self, CursorDirection, CursorSeek, LeafQuery, SeekPosition};
 use crate::format::Generation;
 use crate::mapping::{ByteSource, Mapping};
 use crate::process_identity::ProcessIdentity;
@@ -99,6 +99,29 @@ impl LeafQuery<IndexCodec> for IndexLookup {
     }
 }
 
+/// Forward seek policy for the numeric catalog: land on the record at
+/// or after the target, or advance to the next leaf when the target
+/// lies past this leaf. Mirrors the fixed-tree read path's
+/// `CurrentOrNext` policy used by `at_or_after` lookups.
+struct AtOrAfterIndex;
+
+impl CursorSeek<IndexCodec> for AtOrAfterIndex {
+    fn select<S: ByteSource>(
+        &mut self,
+        _page: S,
+        header: &Header,
+        position: usize,
+        _exact: bool,
+        _direction: CursorDirection,
+    ) -> Result<SeekPosition> {
+        Ok(if position < header.item_count {
+            SeekPosition::Index(position)
+        } else {
+            SeekPosition::NextLeaf
+        })
+    }
+}
+
 /// Forward cursor over the numeric catalog tree.
 pub struct FeedCursor<'a> {
     mapping: &'a Mapping,
@@ -106,6 +129,10 @@ pub struct FeedCursor<'a> {
     inner: fixed_tree::Cursor<IndexCodec>,
     emitted: u64,
     previous: Option<u32>,
+    /// The cursor has been repositioned with `seek_by_index`, so the
+    /// emitted count no longer covers the whole catalog and the
+    /// full-sweep count health check does not apply.
+    seeked: bool,
     finished: bool,
     owner_identity: Option<ProcessIdentity>,
 }
@@ -127,6 +154,7 @@ impl<'a> FeedCursor<'a> {
             )?,
             emitted: 0,
             previous: None,
+            seeked: false,
             finished: meta.catalog_index_root == 0,
             owner_identity,
         })
@@ -148,7 +176,7 @@ impl<'a> FeedCursor<'a> {
         }
         let Some(entry) = self.inner.next_leaf_mapped(self.mapping)? else {
             self.finished = true;
-            if self.emitted != self.meta.active_feed_count {
+            if !self.seeked && self.emitted != self.meta.active_feed_count {
                 return Err(Error::Corrupt("feed catalog count is incomplete"));
             }
             return Ok(None);
@@ -173,6 +201,34 @@ impl<'a> FeedCursor<'a> {
             return Err(Error::Corrupt("feed catalog exceeds its declared count"));
         }
         Ok(Some(entry))
+    }
+
+    /// Reposition to the first catalog entry whose feed index is at
+    /// least `target`, discarding already-consumed state. Entries
+    /// before the target are never revisited; subsequent `next_feed`
+    /// calls continue from the repositioned entry. Seeking to 0
+    /// restarts a complete sweep; seeking past the last entry
+    /// finishes the cursor.
+    pub fn seek_by_index(&mut self, target: u32) -> Result<()> {
+        self.require_owner()?;
+        let result = self.seek_by_index_inner(target);
+        if result.is_err() {
+            self.finished = true;
+        }
+        result
+    }
+
+    fn seek_by_index_inner(&mut self, target: u32) -> Result<()> {
+        self.inner.seek(
+            &Generation::new(self.mapping, self.meta),
+            target,
+            &mut AtOrAfterIndex,
+        )?;
+        self.emitted = 0;
+        self.previous = None;
+        self.seeked = target != 0;
+        self.finished = self.inner.finished();
+        Ok(())
     }
 
     fn require_owner(&self) -> Result<()> {
