@@ -856,3 +856,10 @@ go-surface	-	ArtifactPresence	present	Go surface type/constant with no same-name
 go-surface	-	ArtifactAbsent	present	Go surface type/constant with no same-name Rust export (adapted shape)
 go-surface	-	ArtifactPresent	present	Go surface type/constant with no same-name Rust export (adapted shape)
 go-surface	-	ArtifactUnclassified	present	Go surface type/constant with no same-name Rust export (adapted shape)
+surface	CommitCleanupArtifacts::clean	LiveCommitCleanupArtifacts	present	Rust empty-ledger constructor; the Go zero value of LiveCommitCleanupArtifacts is the empty ledger (Empty() true)
+surface	CommitCleanupArtifacts::tail		removed	Go builds the one-artifact ledger internally (live_writer_public.go CommitCleanupArtifacts); no public constructor
+surface	CleanupArtifacts::from_entries		removed	Go builds cleanup ledgers internally via publication.NewCleanupArtifacts + Push; no public constructor
+surface	LiveWriter::address_family		removed	Go fixes the address family at open and reports it through LiveWriter.Info; no per-writer method
+surface	LocalBasename::from_path		removed	Go builds LocalBasename values internally; no public path constructor
+surface	PublicationProblem::owned		removed	Go has no public PublicationProblem type; CLI problem objects are built from SDK errors
+surface	validation.rs worker_availability		removed	Go exposes worker availability only through the CLI-local system.describe fault_worker probe; no public SDK symbol

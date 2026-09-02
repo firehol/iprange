@@ -1018,7 +1018,7 @@ func fitsNextItem(base int, items []any, item any) bool {
 	if len(items) > 0 {
 		comma = 1
 	}
-	text, err := json.Marshal(item)
+	text, err := rpc.MarshalJSONL(item)
 	if err != nil {
 		return false
 	}
@@ -1031,7 +1031,7 @@ func itemSize(items []any, item any) int {
 	if len(items) > 0 {
 		comma = 1
 	}
-	text, err := json.Marshal(item)
+	text, err := rpc.MarshalJSONL(item)
 	if err != nil {
 		return 0
 	}

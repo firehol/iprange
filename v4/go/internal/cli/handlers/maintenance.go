@@ -696,7 +696,7 @@ func MaintenanceList(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Ha
 	}
 	for _, entries := range collected {
 		for _, entry := range entries {
-			row, err := json.Marshal(entry.value)
+			row, err := rpc.MarshalJSONL(entry.value)
 			if err != nil {
 				writer.Abort()
 				return nil, rpc.NewHandlerError("io", "not_started", "maintenance list row encoding failed")
@@ -1449,12 +1449,12 @@ func housekeepingRemoveFields(entry rawObject) (string, iprangedb.FileIdentity, 
 	if err != nil {
 		return "", zeroIdentity(), [16]byte{}, 0, zeroIdentity(), rpc.InvalidParamsError("entry.ordinal must be a u32 integer")
 	}
-	if raw, ok := entry["artifact"]; ok && !isRawNull(raw) {
+	if raw, ok := entry["artifact"]; ok {
 		if _, err := decodeObject(raw); err != nil {
 			return "", zeroIdentity(), [16]byte{}, 0, zeroIdentity(), rpc.InvalidParamsError("entry.artifact must be an object")
 		}
 	}
-	if raw, ok := entry["problem"]; ok && !isRawNull(raw) {
+	if raw, ok := entry["problem"]; ok {
 		if _, err := decodeObject(raw); err != nil {
 			return "", zeroIdentity(), [16]byte{}, 0, zeroIdentity(), rpc.InvalidParamsError("entry.problem must be an object")
 		}

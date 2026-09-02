@@ -6,9 +6,12 @@ Cardinality129	Cardinality129::checked_add
 Cardinality129	Cardinality129::checked_sub
 Cardinality129	Cardinality129::ipv4_inclusive
 Cardinality129	Cardinality129::ipv6_inclusive
+CleanupArtifacts	CleanupArtifacts::from_entries
 CleanupArtifacts	CleanupArtifacts::get
 CleanupArtifacts	CleanupArtifacts::iter
+CommitCleanupArtifacts	CommitCleanupArtifacts::clean
 CommitCleanupArtifacts	CommitCleanupArtifacts::iter
+CommitCleanupArtifacts	CommitCleanupArtifacts::tail
 CreateFeed	CreateFeed::add_ranges_v4
 CreateFeed	CreateFeed::add_ranges_v4_slice
 CreateFeed	CreateFeed::add_ranges_v6
@@ -32,6 +35,7 @@ DirectTransaction	DirectTransaction::metadata_json_len
 DirectTransaction	DirectTransaction::read_metadata_json
 DirectTransaction	DirectTransaction::set_metadata_json
 FeedCursor	FeedCursor::next_feed
+FeedCursor	FeedCursor::seek_by_index
 FeedName	FeedName::as_bytes
 FeedName	FeedName::as_str
 FeedName	FeedName::new
@@ -102,6 +106,7 @@ LiveReader	LiveReader::network_enrichment_v1_cursor_v4
 LiveReader	LiveReader::network_enrichment_v1_cursor_v6
 LiveReader	LiveReader::open
 LiveReader	LiveReader::read_metadata_json
+LiveWriter	LiveWriter::address_family
 LiveWriter	LiveWriter::begin_create_feed
 LiveWriter	LiveWriter::begin_direct_replacement
 LiveWriter	LiveWriter::begin_direct_transaction
@@ -120,6 +125,7 @@ LiveWriter	LiveWriter::project_history
 LiveWriter	LiveWriter::reclaim
 LiveWriter	LiveWriter::rename_feed
 LiveWriter	LiveWriter::set_metadata_json
+LocalBasename	LocalBasename::from_path
 MembershipAlgebra	MembershipAlgebra::address_family
 MembershipAlgebra	MembershipAlgebra::compare
 MembershipAlgebra	MembershipAlgebra::count
@@ -174,6 +180,7 @@ PreparedWorkflow	PreparedWorkflow::clear_metadata_json
 PreparedWorkflow	PreparedWorkflow::commit
 PreparedWorkflow	PreparedWorkflow::report
 PreparedWorkflow	PreparedWorkflow::set_metadata_json
+PublicationProblem	PublicationProblem::owned
 PublicationResidueHandle	PublicationResidueHandle::close
 PublicationResidueRemoval	PublicationResidueRemoval::inspect_publication_residue
 PublicationResidueRemoval	PublicationResidueRemoval::remove_publication_residue
@@ -493,3 +500,4 @@ recovery/scratch_maintenance.rs	list_abandoned_scratch
 recovery/scratch_maintenance.rs	remove_abandoned_scratch
 snapshot/api.rs	snapshot_to
 validation.rs	validate
+validation.rs	worker_availability

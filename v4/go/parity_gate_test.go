@@ -533,6 +533,7 @@ var rustTypeDivergence = map[string]string{
 	"CommitCleanupArtifacts":    "Go names the ledger LiveCommitCleanupArtifacts (and the artifact LiveCommitCleanupArtifact)",
 	"SliceSource":               "Go accepts plain Go slices directly as inputs; no source adapter type",
 	"MembershipJoinSink":        "Go delivers joins through the JoinMembership callback yields; no sink object",
+	"PublicationProblem":        "Go has no public problem type; CLI problem objects are built from SDK errors",
 }
 
 // inventoryTypes returns the set of Rust public type names (lib-reexport

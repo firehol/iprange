@@ -14,8 +14,6 @@ import (
 	"sort"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
-	//	"fmt"
-	//	"io"
 )
 
 // ReaderValue is one connection-local reader handle: an immutable

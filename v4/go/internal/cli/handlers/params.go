@@ -32,6 +32,9 @@ type rawObject map[string]json.RawMessage
 // decodeObject parses raw JSON as an object. Error strings become
 // invalid_params.
 func decodeObject(raw json.RawMessage) (rawObject, error) {
+	if isRawNull(raw) {
+		return nil, errObject
+	}
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &object); err != nil {
 		return nil, errObject
@@ -106,6 +109,9 @@ func asString(object rawObject, name string) (string, error) {
 	if !ok {
 		return "", fmt.Errorf("%s must be a string", name)
 	}
+	if isRawNull(raw) {
+		return "", fmt.Errorf("%s must be a string", name)
+	}
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
 		return "", fmt.Errorf("%s must be a string", name)
@@ -113,7 +119,9 @@ func asString(object rawObject, name string) (string, error) {
 	return value, nil
 }
 
-// asOptionalString decodes a string member or returns "" when absent.
+// asOptionalString decodes a string member or returns "" when absent
+// (a present null is treated as absent, mirroring the Rust
+// and_then(Value::as_str) optional-member pattern).
 func asOptionalString(object rawObject, name string) (string, error) {
 	raw, ok := object[name]
 	if !ok {
@@ -130,6 +138,9 @@ func asOptionalString(object rawObject, name string) (string, error) {
 func asBool(object rawObject, name string) (bool, error) {
 	raw, ok := object[name]
 	if !ok {
+		return false, fmt.Errorf("%s must be a boolean", name)
+	}
+	if isRawNull(raw) {
 		return false, fmt.Errorf("%s must be a boolean", name)
 	}
 	var value bool
@@ -169,7 +180,7 @@ func asUint32(object rawObject, name string) (uint32, error) {
 // exponent, no sign) into a u64.
 func decodeUint64(raw json.RawMessage) (uint64, error) {
 	text := strings.TrimSpace(string(raw))
-	if text == "" || text[0] == '-' || strings.ContainsAny(text, ".eE") {
+	if text == "" || text == "null" || text[0] == '-' || strings.ContainsAny(text, ".eE") {
 		return 0, errUnsigned
 	}
 	var value uint64
@@ -235,6 +246,9 @@ func asStringArray(object rawObject, name string) ([]string, error) {
 	if !ok {
 		return nil, fmt.Errorf("%s must be an array of strings", name)
 	}
+	if isRawNull(raw) {
+		return nil, fmt.Errorf("%s must be an array of strings", name)
+	}
 	var values []string
 	if err := json.Unmarshal(raw, &values); err != nil {
 		return nil, fmt.Errorf("%s must be an array of strings", name)
@@ -246,6 +260,9 @@ func asStringArray(object rawObject, name string) ([]string, error) {
 func asObjectArray(object rawObject, name string) ([]rawObject, error) {
 	raw, ok := object[name]
 	if !ok {
+		return nil, fmt.Errorf("%s must be an array of objects", name)
+	}
+	if isRawNull(raw) {
 		return nil, fmt.Errorf("%s must be an array of objects", name)
 	}
 	var raws []json.RawMessage
@@ -298,12 +315,15 @@ func isRawNull(raw json.RawMessage) bool {
 	return string(bytes.TrimSpace(raw)) == "null"
 }
 
-// asOptionalObject decodes an optional object member (absent or null
-// yields ok=false).
+// asOptionalObject decodes an optional object member (absent is the
+// only absent form; a present null is rejected).
 func asOptionalObject(object rawObject, name string) (rawObject, bool, error) {
 	raw, ok := object[name]
-	if !ok || isRawNull(raw) {
+	if !ok {
 		return nil, false, nil
+	}
+	if isRawNull(raw) {
+		return nil, false, fmt.Errorf("%s must not be null; absent is the only absent form", name)
 	}
 	decoded, err := decodeObject(raw)
 	if err != nil {

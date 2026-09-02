@@ -47,7 +47,7 @@ func RequestIdFromNumber(n string) RequestId { return RequestId{IsString: false,
 // AsJSON renders the id as a JSON value.
 func (id RequestId) AsJSON() json.RawMessage {
 	if id.IsString {
-		b, _ := json.Marshal(id.Text)
+		b, _ := Marshal(id.Text)
 		return b
 	}
 	return json.RawMessage(id.Text)
@@ -307,7 +307,7 @@ func DecodeFrame(line []byte) ([]*Request, *SchemaError) {
 // encodeResponseObject encodes one response object with the
 // 65,000-byte ceiling.
 func encodeResponseObject(payload any) (string, *SchemaError) {
-	text, err := json.Marshal(payload)
+	text, err := Marshal(payload)
 	if err != nil {
 		return "", &SchemaError{Code: TransportFrameTooLarge, Message: "response object encoding failed"}
 	}
@@ -320,7 +320,7 @@ func encodeResponseObject(payload any) (string, *SchemaError) {
 // encodeResponseFrame encodes one response frame with the
 // 1,048,576-byte ceiling.
 func encodeResponseFrame(payload any) (string, *SchemaError) {
-	text, err := json.Marshal(payload)
+	text, err := Marshal(payload)
 	if err != nil {
 		return "", &SchemaError{Code: TransportFrameTooLarge, Message: "response frame encoding failed"}
 	}
@@ -356,7 +356,7 @@ func ErrorResponse(id *RequestId, code int64, message string, data any) json.Raw
 // mustMarshal serializes a response envelope; the payloads here are
 // built from bounded constants and validated by the callers.
 func mustMarshal(v any) json.RawMessage {
-	b, err := json.Marshal(v)
+	b, err := Marshal(v)
 	if err != nil {
 		panic("rpc: marshal of response envelope failed: " + err.Error())
 	}

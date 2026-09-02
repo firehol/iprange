@@ -152,7 +152,7 @@ func validateScratchBudget(budget rawObject, recovery bool) error {
 	if recovery {
 		required = append(required, "max_output_pages")
 	}
-	encoded, err := json.Marshal(budget)
+	encoded, err := rpc.MarshalJSONL(budget)
 	if err != nil {
 		return fmt.Errorf("validation_budget must be an object")
 	}
@@ -176,11 +176,11 @@ func validateScratchBudget(budget rawObject, recovery bool) error {
 		return errString("validation_budget.max_scratch_files must be a u32 integer")
 	}
 	directoryPresent := false
-	if raw, ok := budget["scratch_directory"]; ok && !isRawNull(raw) {
+	if _, ok := budget["scratch_directory"]; ok {
 		directoryPresent = true
 		directory, err := asString(budget, "scratch_directory")
 		if err != nil {
-			return err
+			return errString("validation_budget.scratch_directory must be a string")
 		}
 		if err := validatePath(directory); err != nil {
 			return err
@@ -238,7 +238,7 @@ func Validate(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerEr
 		return nil, herr
 	}
 	sink := sinkFunc(func(finding *iprangedb.ValidationFinding) (iprangedb.ValidationSinkControl, error) {
-		row, err := json.Marshal(validationFindingValue(finding))
+		row, err := rpc.MarshalJSONL(validationFindingValue(finding))
 		if err != nil {
 			return iprangedb.SinkContinue, &exportSinkError{message: "validation finding encoding failed"}
 		}
@@ -856,7 +856,7 @@ func Recover(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerErr
 		return nil, herr
 	}
 	sink := recoverySinkFunc(func(envelope *iprangedb.RecoveryUnknownEnvelope) (iprangedb.RecoverySinkControl, error) {
-		row, err := json.Marshal(unknownEnvelopeValue(envelope))
+		row, err := rpc.MarshalJSONL(unknownEnvelopeValue(envelope))
 		if err != nil {
 			return iprangedb.RecoverySinkContinue, &exportSinkError{message: "recovery envelope encoding failed"}
 		}
@@ -1023,7 +1023,7 @@ func decodeValidationBudget(object rawObject) (*iprangedb.ValidationBudget, *rpc
 		return nil, rpc.InvalidParamsError("validation_budget.max_scratch_files must be a u32 integer")
 	}
 	scratchDirectory := ""
-	if raw, ok := budget["scratch_directory"]; ok && !isRawNull(raw) {
+	if _, ok := budget["scratch_directory"]; ok {
 		scratchDirectory, err = asString(budget, "scratch_directory")
 		if err != nil {
 			return nil, rpc.InvalidParamsError("validation_budget.scratch_directory must be a string")
@@ -1066,7 +1066,7 @@ func decodeRecoveryBudget(object rawObject) (*iprangedb.RecoveryBudget, *rpc.Han
 		return nil, rpc.InvalidParamsError("recovery_budget.max_scratch_files must be a u32 integer")
 	}
 	scratchDirectory := ""
-	if raw, ok := budget["scratch_directory"]; ok && !isRawNull(raw) {
+	if _, ok := budget["scratch_directory"]; ok {
 		scratchDirectory, err = asString(budget, "scratch_directory")
 		if err != nil {
 			return nil, rpc.InvalidParamsError("recovery_budget.scratch_directory must be a string")

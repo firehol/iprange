@@ -1949,7 +1949,7 @@ func pushJSONString(buffer []byte, value string) []byte {
 // writeJSONValue appends one compact JSON value into the buffer (all
 // v4 wire values are valid UTF-8; Rust write_json_value).
 func writeJSONValue(buffer []byte, value map[string]any) ([]byte, *rpc.HandlerError) {
-	encoded, err := json.Marshal(value)
+	encoded, err := rpc.MarshalJSONL(value)
 	if err != nil {
 		return buffer, rpc.NewHandlerError("io", "not_started",
 			fmt.Sprintf("export row JSON encoding failed: %v", err))

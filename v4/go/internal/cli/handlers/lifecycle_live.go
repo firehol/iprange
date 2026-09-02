@@ -54,7 +54,7 @@ func exactMembers(object rawObject, required, optional []string, field string) e
 // member is absent or not a string.
 func wireString(object rawObject, field string) (string, bool) {
 	raw, ok := object[field]
-	if !ok {
+	if !ok || isRawNull(raw) {
 		return "", false
 	}
 	var value string
@@ -68,6 +68,9 @@ func wireString(object rawObject, field string) (string, bool) {
 func wireBool(object rawObject, field string) (bool, error) {
 	raw, ok := object[field]
 	if !ok {
+		return false, fmt.Errorf("%s must be a boolean", field)
+	}
+	if isRawNull(raw) {
 		return false, fmt.Errorf("%s must be a boolean", field)
 	}
 	var value bool

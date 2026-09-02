@@ -2499,3 +2499,72 @@ round-7 fixes at the new HEAD.
   empty benchmarks directory or bench.py exist.
 - Re-validation at the final tree (fresh fixtures /tmp/m3f4-*): all
   green as recorded in the previous entry; no gate regressed.
+
+### 2026-09-02 (continued) — delta-3 (5/5 own-model PASS), glm whole-milestone review (FAIL), and the exact-HEAD fix wave
+
+- Delta-3 of the incremental five-reviewer rounds (same five
+  own-model reviewers, one scope each) recorded 5/5 PASS:
+  - Gauss (Rust parity) FINAL PASS after the canonical-decimal
+    validator wave: a 13-case identical-input probe matched both
+    binaries on every validator surface; error-code vocabulary
+    69/69 identical.
+  - Avicenna (Go idioms) DELTA3 PASS after P2-C (six validator sites
+    now parse canonical decimals at validation through the single
+    internal/format authority; lax positiveDecimal deleted) plus P3s
+    (canonicalU64 alias removed, comments fixed, committed
+    round-trip test).
+  - Aristotle (performance) FINAL PASS: hot paths untouched by diff;
+    smokes re-run (lookup ~29 us, flat paging).
+  - Gibbs (wire integrity) DELTA PASS: no wire-shape drift; bases64
+    trailing-bit rule and maintenance identity emission verified.
+  - Locke (API/docs) FINAL PASS after README $PWD runner examples,
+    server_busy name, committed strictness tests, and SOW count
+    fixes; remaining P3 nits fixed in this wave (69-name committed
+    test, benchmarks bullet rewording, delta-2 header count).
+- The glm-5.3-responses whole-milestone review at 836df335 returned
+  FAIL with proven findings; all were fixed in this wave:
+  - P1 null handling: Go primitive decoders silently accepted
+    explicit null (json.Unmarshal(null) semantics) for strings,
+    numbers, booleans, arrays, and objects, while Rust's
+    as_str/as_u64/as_object validators reject null. All primitive
+    decoders (params.go asString/asBool/decodeUint64/asStringArray/
+    asObjectArray/asOptionalObject/decodeObject, lifecycle_live
+    wireString/wireBool) are now null-strict; the scratch_directory
+    and maintenance artifact/problem null-as-absent special cases
+    were removed. A 5-surface live probe (scratch_directory null,
+    writer_budget.max_open_files null, reader.open source null,
+    reader.open mode null, delivery.max_output_bytes null) now
+    returns -32602 on both binaries; null-per-type negative tests
+    committed.
+  - P1 wire bytes: Go's default json.Marshal HTML-escaped <>& and
+    U+2028/U+2029 while Rust emits raw UTF-8. A serde_json-compatible
+    encoder (internal/cli/rpc/rustjson.go) is now the single byte
+    authority for response envelopes, echoed ids, and generated JSONL
+    rows; live probes show identical wire bytes for "<&>&" and
+    U+2028 ids; committed byte-vector tests pin the escape set.
+  - P2 parity inventory: parity_rust_public.tsv was frozen at the
+    SOW-0027 closure; the Rust public surface added since is now
+    inventoried and ledgered (CommitCleanupArtifacts::clean present
+    via the Go zero value, ::tail removed, CleanupArtifacts::
+    from_entries removed, FeedCursor::seek_by_index present,
+    LiveWriter::address_family removed, LocalBasename::from_path
+    removed, PublicationProblem::owned removed with recorded type
+    divergence, validation.rs worker_availability removed). The
+    full raw inventory was re-sorted; the gate passes all three
+    directions.
+  - P2 canonical-decimal test claim: the table now also refuses
+    abc/00/overflow on the recovery candidate, maintenance tuple,
+    and digest surfaces (TestCanonicalDecimalEverySurface) plus a
+    valid maintenance.remove housekeeping entry and null
+    artifact/problem negatives.
+  - P2 records: this entry records the delta-3 outcomes, the glm
+    review, and the exact-HEAD validation below; prepared binaries
+    are rebuilt per run.
+  - P3: stale alpha binaries replaced by exact-HEAD builds; dead
+    commented imports removed from rpc/state.go.
+- Exact-HEAD validation plan (final run happens after this entry is
+  committed, at the commit revision): build product and worker
+  together into one fresh directory; run the three 31-case matrices,
+  golden, sensitivity, Go suite, v4work suite, legacy C-oracle
+  100/100, mmap trace; record embedded vcs.revision and SHA-256 of
+  both binaries in the close-out entry.
