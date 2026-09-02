@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -324,4 +325,28 @@ func asOptionalObject(object rawObject, name string) (rawObject, bool, error) {
 		return nil, false, fmt.Errorf("%s must be an object", name)
 	}
 	return decoded, true, nil
+}
+
+// asPositiveU64String parses the wire's positive u64 decimal-string
+// form (common.POSITIVE_U64): canonical decimal, no sign, no leading
+// zeros beyond "0", within [1, 2^64-1].
+func asPositiveU64String(object rawObject, name string) (uint64, error) {
+	text, err := asDecimalString(object, name)
+	if err != nil {
+		return 0, err
+	}
+	if text == "0" {
+		return 0, fmt.Errorf("%s must be positive", name)
+	}
+	if len(text) > 1 && text[0] == '0' {
+		return 0, fmt.Errorf("%s must be a canonical decimal string", name)
+	}
+	if len(text) > 20 {
+		return 0, fmt.Errorf("%s exceeds u64", name)
+	}
+	value, err := strconv.ParseUint(text, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("%s exceeds u64", name)
+	}
+	return value, nil
 }

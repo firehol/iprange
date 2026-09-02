@@ -227,7 +227,9 @@ func MetadataResult(method string, reader *rpc.ReaderValue, delivery rawObject) 
 			return nil, rpc.InvalidParamsError("delivery.publication_policy is invalid")
 		}
 		policy := policyByName(policyName)
-		maxBytes, err := asUint64(delivery, "max_output_bytes")
+		// max_output_bytes is a decimal string on the wire (common.POSITIVE_U64);
+		// a JSON number cannot carry every u64 without client precision loss.
+		maxBytes, err := asPositiveU64String(delivery, "max_output_bytes")
 		if err != nil {
 			return nil, rpc.InvalidParamsError("delivery.max_output_bytes is invalid")
 		}

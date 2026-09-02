@@ -115,8 +115,11 @@ func LocationJSON(location iprangedb.NetworkEnrichmentV1Location, has bool) any 
 }
 
 // NetworkEnrichmentJSON converts one decoded structured payload to its
-// wire object.
+// wire object. The threat-feeds member is always an array, never null.
 func NetworkEnrichmentJSON(value iprangedb.NetworkEnrichmentV1, threatFeeds []string) map[string]any {
+	if threatFeeds == nil {
+		threatFeeds = []string{}
+	}
 	return map[string]any{
 		"asn":          value.ASN,
 		"country_id":   value.CountryID,

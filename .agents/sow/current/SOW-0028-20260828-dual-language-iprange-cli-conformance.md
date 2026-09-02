@@ -2247,3 +2247,61 @@ round-7 fixes at the new HEAD.
   live/feeds/lifecycle_live (Singer), lifecycle/maintenance/snapshot/
   recovery (Descartes). Each owns disjoint new files; the lead
   integrates seams and the register.go registry wiring.
+
+### 2026-09-02 (continued) — milestone 3: all 52 Go JSON-RPC methods integrated; wire-fix wave and full qualification
+
+- All five handler families are integrated and registered (register.go
+  RegisterAll): the Go binary at `v4/go/cmd/iprange` now implements
+  every callable v1 method and `system.describe` advertises exactly
+  the 52-method inventory, matching the Rust binary.
+- First external qualification of the integrated surface
+  (`nice python3 v4/cli/run.py --matrix go`): 25/31 PASS, 6 FAIL.
+  The six failures were verified wire defects in the Go adapters and
+  fixed in this wave:
+  1. `dbfile identity` decode used the dotted path as the member key:
+     `decimalU64FromWire(object, field+".volume")` looked up the
+     nonexistent key `directory_identity.volume` inside the identity
+     object, failing every replayed transition/commit result with
+     "volume must be a string". Fixed in `decodeFileIdentity`
+     (v4/go/internal/cli/handlers/lifecycle_live.go:188-194) to read
+     the `volume`/`file` keys and prefix the field path on errors.
+  2. Same member-key defect in the value-tag decoder
+     (`wireString(object, field+".hex")`, lifecycle_live.go:313):
+     `database.create.resolve` replayed a captured hex tag and failed
+     with "value_tag.hex must be a string" instead of reaching the SDK
+     conflict. Fixed to read the `hex` key.
+  3. Same defect in the creation-security decoder
+     (`u16IntegerFromWire(object, "creation_security.kind")` on the
+     member object, lifecycle_live.go:520). Fixed to read `kind`.
+  4. Go SDK publication-result wire decoder required the housekeeping
+     `state` member unconditionally, while the encoder (and the Rust
+     decoder) emit `{"artifacts": []}` for the none state. The decoder
+     rejected every replayed snapshot result with `missing member
+     "state"`. Fixed in
+     v4/go/internal/publication/wire_decoder.go:432-463 to mirror the
+     Rust semantics: `artifacts` required, `state` optional, and an
+     absent state with non-empty artifacts maps to `visible`.
+  5. Nil slices serialized as JSON `null` instead of empty arrays:
+     `feeds.next` (cursors.go), `ranges.next` (cursors.go), and the
+     structured-lookup `threat_feeds` member (convert.go
+     NetworkEnrichmentJSON). All now emit non-nil empty arrays.
+- Full external qualification after the wave:
+  `--matrix go`: 31/31 PASS, 15 oracle checks;
+  `--matrix rust_to_go`: 31/31 PASS; `--matrix go_to_rust`: 31/31
+  PASS (all with `--allow-skips` for unshipped single-language C
+  surface).
+- Static gates: `v4/cli/check_golden.py` 53 exchanges PASS;
+  `v4/cli/sensitivity_gate.py` 14 modes PASS.
+- Go suites at this HEAD: `nice go -C v4/go test ./... -count=1`
+  22 packages PASS incl. the CLI families and the publication wire
+  decoder; `-race` on `internal/cli/...` PASS; `-tags v4work ./...`
+  PASS; `go vet ./...` clean; gofmt clean.
+- Legacy C-oracle suite with the Go binary
+  (`env IPRANGE_BIN=/tmp/iprange-go nice ./run-tests.sh`): 100/100
+  PASS.
+- Go mmap trace gate: `nice ./check-mmap-trace.sh` PASS (fixtures
+  mapped, never streamed; no read/write/lseek on v4 artifacts or
+  worker-control descriptors).
+- Next: five own-model adversarial reviewers (one focus each), then
+  the glm-5.3-responses whole-milestone review, then milestone-3
+  closure in one lifecycle commit.

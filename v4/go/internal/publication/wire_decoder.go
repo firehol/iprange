@@ -429,10 +429,27 @@ func decodeHousekeeping(raw json.RawMessage) (Housekeeping, error) {
 	if len(object) == 0 {
 		return HousekeepingNone, nil
 	}
-	if err := exactMembers(object, []string{"state", "artifacts"}, nil); err != nil {
+	if err := exactMembers(object, []string{"artifacts"}, []string{"state"}); err != nil {
 		return HousekeepingNone, err
 	}
-	state, err := decodeString(object["state"], "housekeeping.state")
+	var artifacts []json.RawMessage
+	if err := json.Unmarshal(object["artifacts"], &artifacts); err != nil {
+		return HousekeepingNone, fmt.Errorf("housekeeping.artifacts must be an array")
+	}
+	for _, entry := range artifacts {
+		var placeholder map[string]json.RawMessage
+		if err := json.Unmarshal(entry, &placeholder); err != nil || placeholder == nil {
+			return HousekeepingNone, fmt.Errorf("housekeeping.artifacts entries must be objects")
+		}
+	}
+	stateRaw, hasState := object["state"]
+	if !hasState {
+		if len(artifacts) == 0 {
+			return HousekeepingNone, nil
+		}
+		return HousekeepingVisible, nil
+	}
+	state, err := decodeString(stateRaw, "housekeeping.state")
 	if err != nil {
 		return HousekeepingNone, err
 	}
