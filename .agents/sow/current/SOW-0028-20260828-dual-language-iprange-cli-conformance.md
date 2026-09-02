@@ -1473,9 +1473,10 @@ Acceptance criteria evidence:
   every callable method has a registered handler
   (`v4/rust/iprange-cli/src/rpc/dispatch.rs`).
 - The qualification area ties every callable method to real wire
-  exchanges: 53 golden exchanges (`v4/cli/golden/`) and 30 declarative
-  cases (`v4/cli/cases/`) cover every method family; the independent
-  scalar interval oracle contributes 15 checks.
+  exchanges: 53 golden exchanges (`v4/cli/golden/`) and 31 declarative
+  cases (`v4/cli/cases/`, including the cancel notification case)
+  cover every method family; the independent scalar interval oracle
+  contributes 15 checks.
 - Later acceptance evidence is milestone work of this SOW, not
   milestone 1: the complete Rust legacy surface against the C oracle
   (delivery-order step 3), the Go product executable (step 4), and the
