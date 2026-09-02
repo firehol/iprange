@@ -2223,3 +2223,27 @@ round-7 fixes at the new HEAD.
   cursors, algebra/query, export, live/feeds, lifecycle/maintenance/
   snapshot/recovery), then dispatch registration in
   `v4/go/cmd/iprange/`, then the external qualification matrix.
+
+### 2026-09-02 (continued) — milestone 3: system.describe wired; five handler workers in flight
+
+- `system.describe` is implemented and registered
+  (`internal/cli/handlers/system.go`): static capability object with the
+  registered v1 inventory, production limits, and the CLI-local
+  fault-worker probe (candidate `iprange-v4-worker` beside the running
+  binary; protocol "1"). The Go binary now answers the full capability
+  exchange end-to-end (`implementation:"go"`, `product_version:"0.0.0"`,
+  matching the Rust build's CARGO_PKG_VERSION).
+- Dispatch wiring: `handlers.RegisterAll()` (register.go) is called by
+  `cmd/iprange` before the session starts; families register through
+  `rpc.Register` and system.describe advertises exactly the registered
+  inventory so the external runner skips unshipped methods.
+- Repo defect found and fixed: the root gitignore pattern `iprange` hid
+  `v4/go/cmd/iprange/` entirely, so the product executable main was
+  never committed although the legacy surface and transport depend on
+  it. Anchored the C binary pattern to `/iprange`; committed main.go.
+- Five parallel own-model handler workers are implementing the
+  step-2 families over the foundation: reader/cursors (Confucius),
+  algebra/query (Schrodinger), publish/export/input (Laplace),
+  live/feeds/lifecycle_live (Singer), lifecycle/maintenance/snapshot/
+  recovery (Descartes). Each owns disjoint new files; the lead
+  integrates seams and the register.go registry wiring.
