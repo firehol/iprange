@@ -1314,6 +1314,82 @@ Open decisions:
   notification-flag schema requirement, round-11 SOW record); the
   acceptance-case count was corrected to 31 at 2c3e1058.
 
+### 2026-09-02 (continued) — round 12: glm whole-milestone re-review (FAIL) and fix wave
+
+- The glm-5.3-responses whole-milestone reviewer re-verified the
+  round-11 result at 60b95b0c and returned three verified findings
+  (one P1, two P2) plus a P3 hardening; the round-12 fix wave at HEAD
+  a6640a9d fixes every finding:
+  1. P1 — cancellation could never fire during active work
+     (v4/rust/iprange-cli/src/rpc/session.rs). The worker held the
+     entire SessionState mutex around every handler call, so
+     apply_cancel (cancel notification) and begin_shutdown (EOF and
+     SIGINT/SIGTERM) blocked behind that same mutex until the handler
+     finished: long SDK work (export, cursor pages, live refresh)
+     ran to completion uncancelled and Ctrl+C left the process alive
+     until the work ended, while the reader thread stayed blocked and
+     the events channel grew without admission backpressure. Fixed by
+     splitting a SessionControl plane (pending/cancelled ids, active
+     keys, the per-unit cancellation token, shutting_down,
+     fatal_error) behind its own mutex that handlers never lock;
+     SessionState now keeps only resources, the active-request id,
+     and a control Arc. apply_cancel/begin_shutdown lock control
+     only, the worker installs one fresh token per unit and the
+     active-keys set in one control scope (closing the
+     install-versus-cancel race; units queued at EOF keep the
+     already-cancelled token), and handlers read the token through
+     SessionState::token() (one short control lock plus an Arc
+     clone). The lock graph is state->control only; no control->state
+     or control->writer edge exists, so no interleaving can
+     deadlock. New test
+     cancel_and_eof_reach_an_active_handler_holding_the_state_lock
+     simulates an in-flight handler holding the state lock, proves
+     cancel+EOF complete promptly and the active token is cancelled,
+     and drives a queued live reader.open under the shutdown-cancelled
+     token to the factual data.code "cancelled" outcome.
+  2. P2 — a same-batch cancel of an earlier sibling never fired.
+     Cancels were applied during the frame scan but ordinary elements
+     only became pending after the whole frame was scanned, so a
+     sibling cancel always no-op'd. Fixed: handle_frame now admits
+     each ordinary element and marks it pending immediately during
+     the scan, so a later cancel element targets an earlier sibling
+     (spec: "already queued from the same batch") and the worker
+     omits its response; elements scanned after the cancel are not
+     yet admitted and are not targets. Pinned at control, unit, and
+     full-loop wire level
+     (same_batch_cancel_marks_an_earlier_sibling_before_later_elements_scan,
+     same_batch_cancel_before_an_element_is_not_its_target,
+     same_batch_cancel_omits_the_sibling_on_the_wire).
+  3. P2 — the Validation section recorded the full gate re-run at
+     b41550f3 while 60b95b0c changed the corpus afterwards. The dated
+     re-run entry below records the gate at the round-12 final HEAD
+     and names the last corpus/schema-affecting commits (60b95b0c,
+     a6640a9d).
+  4. P3 — v4/cli/schema/methods.py typed batch_size as C.U32
+     (0 allowed) while the spec and the Rust validator bound it to
+     1..4096. Fixed: new C.BATCH_U32 ({u32, min 1, max 4096}) used by
+     reader.feeds.open and reader.ranges.open, with negative
+     schema.methods self-tests for 0 and 4097 and a positive 4096.
+- Validation at a6640a9d: Rust workspace 50 suites / 730 tests, 0
+  failures; `-D warnings` clean; source graph 491 sources; runner
+  31 cases / 15 oracle checks; golden 53; sensitivity 14 modes;
+  schema self-tests pass; Go SDK suite green; mmap storage/runtime/
+  architecture gates pass; SOW audit and hygiene scans clean.
+- The five own-model delta reviewers (wire, coverage, SDK-ownership,
+  performance, close-facts) re-verified the round-12 fixes at
+  a6640a9d and all PASS; the glm-5.3-responses whole-milestone
+  reviewer PASSed the same revision on the condition that this
+  close-out commit is strictly record-only (SOW-0028 records only;
+  nothing under v4/, specs, or schemas), which this commit satisfies.
+- Non-blocking follow-up recorded from the glm review: the
+  cancellation token is installed per unit, so cancelling one id of
+  a currently executing batch aborts the shared token and
+  non-targeted siblings in that same unit end with factual
+  "cancelled" outcomes (no false commit, every response truthful).
+  Per-entry tokens or re-arming a fresh token after a mid-unit
+  cancellation remain options for a later milestone; tracked in
+  Followup below.
+
 ### 2026-09-01 (continued) — complete handler registry
 
 - All 32 remaining v1 methods implemented by three parallel workers and
@@ -1519,6 +1595,17 @@ round-11 fix wave commit; round-10 wave re-run was recorded at
   the historical SOW-0025 `## Status` heading was fixed in the
   round-11 wave).
 
+- Dated re-run at the round-12 final HEAD (fix wave a6640a9d plus
+  this record commit): Rust workspace 50 suites / 730 tests, 0
+  failures; `-D warnings` clean; source graph 491 sources; runner
+  31 cases / 15 oracle checks; golden 53; sensitivity 14 modes;
+  schema self-tests pass (including the new batch_size 1..4096
+  negative cases); Go SDK suite green; mmap storage/runtime/
+  architecture gates pass; SOW audit and hygiene scans clean. This
+  entry supersedes the b41550f3 re-run and covers the corpus changes
+  of 60b95b0c and the schema-bounds change of a6640a9d (the last
+  corpus/schema-affecting commits before this record).
+
 Real-use evidence:
 
 - The qualification client (`v4/cli/run.py`) drives the real Rust
@@ -1619,6 +1706,12 @@ Pending implementation and final review.
 
 ## Followup
 
+- Cancellation tokens are installed per work unit: cancelling one id
+  of a currently executing batch aborts the shared token, so
+  non-targeted siblings in that same unit end with factual
+  "cancelled" outcomes. Re-arm per entry or use per-entry tokens in a
+  later milestone if narrower cancellation is required (round-12 glm
+  observation, non-blocking).
 - SOW-0027 closed 2026-09-01; this SOW is the sole current SOW.
 - Implement WebSocket daemon separately in SOW-0029 after this API is accepted.
 - Keep authenticated publication in SOW-0017.
