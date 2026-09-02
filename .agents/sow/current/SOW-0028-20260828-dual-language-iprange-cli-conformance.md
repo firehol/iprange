@@ -2683,3 +2683,35 @@ round-7 fixes at the new HEAD.
   harness and measured ceilings; step 7: platform/artifact/docs/
   skill/final gates) form the next milestone and continue in this
   SOW.
+
+### 2026-09-03 — milestone 4 starts (delivery step 5: cross-language, crash, resource, and publisher-workflow proof)
+
+- Step-5 scope per the plan and acceptance criteria:
+  - Crash/cancellation proof at the product interface: kill the
+    producer mid-workflow (publish/commit/finish/export/validate) and
+    prove with both consumers in both directions that the outcome is
+    truthful — no partial replacement, no false success after unknown
+    outcome, no unrelated rollback, bounded residue, reopen succeeds.
+    The runner today has cancellation cases but no producer-crash
+    simulation (run.py:826 kill is cleanup-only).
+  - Cross-language file-kind coverage audit: every persistent file
+    kind created by each producer and opened/queried/exported/
+    validated/transformed by both consumers (the go_to_rust and
+    rust_to_go matrices cover the case list; a kind ledger must prove
+    completeness).
+  - Resource proof at the product interface: bounded response frames,
+    bounded cursor batches, bounded reader/cursor counts, no
+    file-sized heap state in the adapters (the 65 KB ceiling and
+    trace gates exist; a step-5 resource record consolidates them).
+  - Publisher-workflow proof: the complete publisher workflow
+    composed only through JSON-RPC and filesystem actions in both
+    language directions (current-feed publication, first/last-seen
+    refresh, multi-feed updates, snapshot, validation, recovery,
+    cleanup).
+- Cross-language/legacy correctness gates already green at milestone
+  3 close and remain the baseline: matrices 31/31 x3, golden 53,
+  sensitivity 14, tests.d 100/100, mmap trace.
+- Next actions: (1) crash harness as a runner mode or adversarial
+  script reusing the case definitions; (2) file-kind ledger; (3)
+  resource record; (4) publisher workflow script; (5) five-reviewer
+  + glm final rounds before step-5 close.
