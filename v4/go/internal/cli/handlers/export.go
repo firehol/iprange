@@ -174,6 +174,9 @@ func ValidateExport(params json.RawMessage) error {
 		}
 	}
 	if hasPrefixes {
+		if isRawNull(prefixes) {
+			return fmt.Errorf("prefixes must be an array; null is not valid")
+		}
 		var list []json.RawMessage
 		if err := json.Unmarshal(prefixes, &list); err != nil {
 			return fmt.Errorf("prefixes must be an array")
@@ -659,6 +662,9 @@ func decodePrefixes(object rawObject, format string, hostPrefix uint32) (*prefix
 		return minPrefixFilter(hostPrefix, uint32(value)), nil
 	}
 	if raw, ok := object["prefixes"]; ok {
+		if isRawNull(raw) {
+			return nil, rpc.InvalidParamsError("each prefix must be u32; null is not valid")
+		}
 		var list []json.RawMessage
 		if err := json.Unmarshal(raw, &list); err != nil {
 			return nil, rpc.InvalidParamsError("each prefix must be u32")

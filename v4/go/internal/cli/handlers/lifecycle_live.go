@@ -295,6 +295,9 @@ func valueTagFromWire(object rawObject, field string) (iprangedb.ValueTag, error
 	var tag iprangedb.ValueTag
 	if len(object) == 1 {
 		if textRaw, ok := object["text"]; ok {
+			if isRawNull(textRaw) {
+				return tag, fmt.Errorf("%s.text must be a string; null is not valid", field)
+			}
 			var text string
 			if err := json.Unmarshal(textRaw, &text); err != nil || len(text) > 15 || strings.IndexByte(text, 0) >= 0 {
 				return tag, fmt.Errorf("%s.text must encode 0 through 15 bytes without NUL", field)
@@ -306,6 +309,9 @@ func valueTagFromWire(object rawObject, field string) (iprangedb.ValueTag, error
 			return created, nil
 		}
 		if hexRaw, ok := object["hex"]; ok {
+			if isRawNull(hexRaw) {
+				return tag, fmt.Errorf("%s.hex must be a string; null is not valid", field)
+			}
 			var text string
 			if err := json.Unmarshal(hexRaw, &text); err != nil {
 				return tag, fmt.Errorf("%s.hex must be a string", field)
@@ -537,6 +543,9 @@ func decodeHousekeeping(object rawObject, field string) (iprangedb.Housekeeping,
 		return iprangedb.HousekeepingNone, err
 	}
 	raw := object["artifacts"]
+	if isRawNull(raw) {
+		return iprangedb.HousekeepingNone, fmt.Errorf("%s.artifacts must be an array; null is not valid", field)
+	}
 	var entries []json.RawMessage
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		return iprangedb.HousekeepingNone, fmt.Errorf("%s.artifacts must be an array", field)
@@ -553,6 +562,9 @@ func decodeHousekeeping(object rawObject, field string) (iprangedb.Housekeeping,
 		}
 		return iprangedb.HousekeepingVisible, nil
 	}
+	if isRawNull(stateRaw) {
+		return iprangedb.HousekeepingNone, fmt.Errorf("%s.state is invalid; null is not valid", field)
+	}
 	var state string
 	if err := json.Unmarshal(stateRaw, &state); err != nil {
 		return iprangedb.HousekeepingNone, fmt.Errorf("%s.state is invalid", field)
@@ -568,6 +580,9 @@ func decodeHousekeeping(object rawObject, field string) (iprangedb.Housekeeping,
 
 // decodeHousekeepingArtifacts decodes the visible_housekeeping ledger.
 func decodeHousekeepingArtifacts(raw json.RawMessage) ([]iprangedb.HousekeepingArtifact, error) {
+	if isRawNull(raw) {
+		return nil, fmt.Errorf("visible_housekeeping must be an array; null is not valid")
+	}
 	var entries []json.RawMessage
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil, fmt.Errorf("visible_housekeeping must be an array")
@@ -779,6 +794,9 @@ func validateCommitCleanup(object rawObject) error {
 	}
 	if err := exactMembers(object, []string{"artifacts"}, nil, "cleanup"); err != nil {
 		return err
+	}
+	if isRawNull(object["artifacts"]) {
+		return fmt.Errorf("cleanup.artifacts must be an array; null is not valid")
 	}
 	var entries []json.RawMessage
 	if err := json.Unmarshal(object["artifacts"], &entries); err != nil {

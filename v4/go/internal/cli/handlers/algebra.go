@@ -243,6 +243,9 @@ func ValidateHistoryProjectParams(params json.RawMessage) error {
 // _ALGEBRA_SOURCE): 1..budget entries, each with scope all.
 func validateSources(raw json.RawMessage) error {
 	var sources []json.RawMessage
+	if isRawNull(raw) {
+		return fmt.Errorf("raw must be an array; null is not valid")
+	}
 	if err := json.Unmarshal(raw, &sources); err != nil {
 		return fmt.Errorf("sources must be an array")
 	}
@@ -297,6 +300,9 @@ func validateAlgebraBudget(raw, sourcesRaw json.RawMessage) error {
 		return fmt.Errorf("algebra_budget.max_sources: %v", err)
 	}
 	var sources []json.RawMessage
+	if isRawNull(sourcesRaw) {
+		return fmt.Errorf("sourcesRaw must be an array; null is not valid")
+	}
 	if err := json.Unmarshal(sourcesRaw, &sources); err != nil {
 		return fmt.Errorf("sources must be an array")
 	}
@@ -485,6 +491,9 @@ func validateOutput(raw json.RawMessage) error {
 // validateAddresses enforces the 1..4096 canonical-address array.
 func validateAddresses(raw json.RawMessage) error {
 	var values []string
+	if isRawNull(raw) {
+		return fmt.Errorf("raw must be an array; null is not valid")
+	}
 	if err := json.Unmarshal(raw, &values); err != nil {
 		return fmt.Errorf("addresses must be an array of strings")
 	}
@@ -646,6 +655,9 @@ func validateOutputMode(raw json.RawMessage) error {
 // validateWindows enforces the 1..4096 unique window list.
 func validateWindows(raw json.RawMessage) error {
 	var windows []json.RawMessage
+	if isRawNull(raw) {
+		return fmt.Errorf("raw must be an array; null is not valid")
+	}
 	if err := json.Unmarshal(raw, &windows); err != nil {
 		return fmt.Errorf("windows must be an array")
 	}
@@ -1089,6 +1101,9 @@ func decodeWriterBudgetRaw(raw json.RawMessage) (iprangedb.PageBudget, *rpc.Hand
 // decodeWindows converts the wire window list into SDK windows.
 func decodeWindows(raw json.RawMessage) ([]iprangedb.HistoryWindow, *rpc.HandlerError) {
 	var windows []json.RawMessage
+	if isRawNull(raw) {
+		return nil, rpc.InvalidParamsError("windows must be an array; null is not valid")
+	}
 	if err := json.Unmarshal(raw, &windows); err != nil {
 		return nil, rpc.InvalidParamsError("windows must be an array")
 	}
@@ -2262,6 +2277,9 @@ func runJoinMembership(st *rpc.SessionState, readers []*rpc.ReaderValue, leftSel
 // the readers already opened (Rust open_sources).
 func openSources(raw json.RawMessage, st *rpc.SessionState) ([]*rpc.ReaderValue, *rpc.HandlerError) {
 	var sources []json.RawMessage
+	if isRawNull(raw) {
+		return nil, rpc.InvalidParamsError("sources must be an array; null is not valid")
+	}
 	if err := json.Unmarshal(raw, &sources); err != nil {
 		return nil, rpc.InvalidParamsError("sources must be an array")
 	}
@@ -2339,6 +2357,9 @@ func AlgebraCount(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Handl
 
 func runAlgebraCount(st *rpc.SessionState, readers []*rpc.ReaderValue, sourcesRaw json.RawMessage, selection *decodedSelection, budget iprangedb.MembershipAlgebraBudget) (map[string]any, *rpc.HandlerError) {
 	var sources []json.RawMessage
+	if isRawNull(sourcesRaw) {
+		return nil, rpc.InvalidParamsError("sources must be an array; null is not valid")
+	}
 	if err := json.Unmarshal(sourcesRaw, &sources); err != nil {
 		return nil, rpc.InvalidParamsError("sources must be an array")
 	}
@@ -2393,6 +2414,9 @@ func AlgebraCompare(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Han
 
 func runAlgebraCompare(st *rpc.SessionState, readers []*rpc.ReaderValue, sourcesRaw json.RawMessage, left, right *decodedSelection, budget iprangedb.MembershipAlgebraBudget) (map[string]any, *rpc.HandlerError) {
 	var sources []json.RawMessage
+	if isRawNull(sourcesRaw) {
+		return nil, rpc.InvalidParamsError("sources must be an array; null is not valid")
+	}
 	if err := json.Unmarshal(sourcesRaw, &sources); err != nil {
 		return nil, rpc.InvalidParamsError("sources must be an array")
 	}
@@ -2427,6 +2451,9 @@ func AlgebraPublish(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Han
 	budget, herr := decodeAlgebraBudget(object["algebra_budget"])
 	if herr != nil {
 		return nil, herr
+	}
+	if isRawNull(object["sources"]) {
+		return nil, rpc.InvalidParamsError("sources must be an array; null is not valid")
 	}
 	var sources []json.RawMessage
 	if err := json.Unmarshal(object["sources"], &sources); err != nil {

@@ -44,3 +44,16 @@ func TestMarshalEnvelopeParity(t *testing.T) {
 		t.Fatalf("envelope = %s, want %s", envelope, want)
 	}
 }
+
+// TestMarshalStringSliceParity pins []string emission through the
+// strict writer (no encoding/json fallback) with the Rust escape set.
+func TestMarshalStringSliceParity(t *testing.T) {
+	got, err := Marshal([]string{"<&>", "a\u2028b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[\"<&>\",\"a\xe2\x80\xa8b\"]"
+	if string(got) != want {
+		t.Fatalf("Marshal([]string) = %s, want %s", got, want)
+	}
+}

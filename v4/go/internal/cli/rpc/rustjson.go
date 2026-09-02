@@ -45,8 +45,12 @@ func writeValue(builder *strings.Builder, v any) error {
 		builder.Write(value)
 	case int:
 		builder.WriteString(strconv.FormatInt(int64(value), 10))
+	case int32:
+		builder.WriteString(strconv.FormatInt(int64(value), 10))
 	case int64:
 		builder.WriteString(strconv.FormatInt(value, 10))
+	case uint32:
+		builder.WriteString(strconv.FormatUint(uint64(value), 10))
 	case uint64:
 		builder.WriteString(strconv.FormatUint(value, 10))
 	case float64:
@@ -60,6 +64,42 @@ func writeValue(builder *strings.Builder, v any) error {
 			if err := writeValue(builder, item); err != nil {
 				return err
 			}
+		}
+		builder.WriteByte(']')
+	case []string:
+		builder.WriteByte('[')
+		for index, item := range value {
+			if index > 0 {
+				builder.WriteByte(',')
+			}
+			writeString(builder, item)
+		}
+		builder.WriteByte(']')
+	case []json.RawMessage:
+		builder.WriteByte('[')
+		for index, item := range value {
+			if index > 0 {
+				builder.WriteByte(',')
+			}
+			builder.Write(item)
+		}
+		builder.WriteByte(']')
+	case []int64:
+		builder.WriteByte('[')
+		for index, item := range value {
+			if index > 0 {
+				builder.WriteByte(',')
+			}
+			builder.WriteString(strconv.FormatInt(item, 10))
+		}
+		builder.WriteByte(']')
+	case []uint64:
+		builder.WriteByte('[')
+		for index, item := range value {
+			if index > 0 {
+				builder.WriteByte(',')
+			}
+			builder.WriteString(strconv.FormatUint(item, 10))
 		}
 		builder.WriteByte(']')
 	case map[string]any:
@@ -81,14 +121,18 @@ func writeValue(builder *strings.Builder, v any) error {
 		}
 		builder.WriteByte('}')
 	default:
-		// Fall back for exotic payloads; the wire surfaces only emit
-		// the types above, so this path is a safety net, not parity
-		// for bytes.
+		// Unsupported composite payloads are re-encoded through the
+		// strict writer: decode to the generic shapes and re-emit so
+		// string escaping never falls back to encoding/json.
 		text, err := json.Marshal(v)
 		if err != nil {
 			return err
 		}
-		builder.Write(text)
+		var generic any
+		if err := json.Unmarshal(text, &generic); err != nil {
+			return err
+		}
+		return writeValue(builder, generic)
 	}
 	return nil
 }

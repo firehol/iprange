@@ -110,6 +110,9 @@ func decodeFeedParams(params json.RawMessage, required []string) (*feedParams, *
 		if !ok {
 			continue
 		}
+		if isRawNull(raw) {
+			return nil, rpc.InvalidParamsError(member + " must be a string; null is not valid")
+		}
 		var text string
 		if err := json.Unmarshal(raw, &text); err != nil {
 			return nil, rpc.InvalidParamsError(member + " must be a string")

@@ -111,6 +111,9 @@ func ValidateRangesOpen(params json.RawMessage) error {
 		if kind == "feed" {
 			return fmt.Errorf("start is not valid for a feed view")
 		}
+		if isRawNull(raw) {
+			return fmt.Errorf("start must be a canonical IP address when present; null is not valid")
+		}
 		var text string
 		if err := json.Unmarshal(raw, &text); err != nil {
 			return fmt.Errorf("start must be a canonical IP address when present")
@@ -345,6 +348,9 @@ func RangesOpen(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Handler
 	}
 	var start *rpc.CursorPoint
 	if raw, ok := object["start"]; ok {
+		if isRawNull(raw) {
+			return nil, rpc.InvalidParamsError("start must be a canonical IP address when present; null is not valid")
+		}
 		var text string
 		if err := json.Unmarshal(raw, &text); err != nil {
 			return nil, rpc.InvalidParamsError("start must be a canonical IP address when present")

@@ -455,6 +455,7 @@ lib-reexport	UncoveredFeed
 lib-reexport	UncoveredSide
 lib-reexport	ValueKind
 lib-reexport	ValueTag
+lib-reexport	WorkerAvailability
 lib-reexport	WorkflowKind
 lib-reexport	WorkflowReport
 lib-reexport	create_immutable_feed_v4

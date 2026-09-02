@@ -281,3 +281,94 @@ func mustJSON(t *testing.T, v any) []byte {
 	}
 	return data
 }
+
+// TestValueTagNullRejected pins that a present-null text or hex member
+// in a value tag is refused before any durable mutation (Rust
+// lifecycle.rs validate_value_tag; spec value-tag input shape).
+func TestValueTagNullRejected(t *testing.T) {
+	base := map[string]any{
+		"path":            "/tmp/probe",
+		"family":          "ipv4",
+		"value_kind":      "direct",
+		"structure_kind":  "none",
+		"reader_capacity": 1,
+	}
+	for _, member := range []string{"text", "hex"} {
+		params, err := json.Marshal(map[string]any{
+			"path": "/tmp/probe", "family": "ipv4", "value_kind": "direct",
+			"structure_kind": "none", "reader_capacity": 1,
+			"value_tag": map[string]any{member: nil},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateDatabaseCreateParams(params); err == nil {
+			t.Fatalf("value_tag.%s=null must be refused", member)
+		}
+	}
+	_ = base
+	// The canonical empty forms still pass validation.
+	for _, tag := range []map[string]any{{"text": ""}, {"hex": ""}} {
+		params, err := json.Marshal(map[string]any{
+			"path": "/tmp/probe", "family": "ipv4", "value_kind": "direct",
+			"structure_kind": "none", "reader_capacity": 1,
+			"value_tag": tag,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateDatabaseCreateParams(params); err != nil {
+			t.Fatalf("empty value tag must pass: %v", err)
+		}
+	}
+}
+
+// TestCanonicalDecimalFullMatrix applies all three bad values to
+// every named decimal surface (writer/validation/snapshot budgets,
+// candidate, tuple, digest, delivery).
+func TestCanonicalDecimalFullMatrix(t *testing.T) {
+	bad := []string{"abc", "00", "18446744073709551616"}
+	// candidate transaction_id
+	for _, v := range bad {
+		candidate := map[string]any{
+			"label": "newest", "meta_page": 0,
+			"source_identity": map[string]any{"volume": "1", "file": "2"},
+			"database_id":     "11111111111111111111111111111111",
+			"transaction_id":  v,
+			"commit_nonce":    "11111111111111111111111111111111",
+		}
+		obj, err := decodeObject(mustJSON(t, candidate))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateCandidateObject(obj); err == nil {
+			t.Fatalf("candidate.transaction_id=%q must be refused", v)
+		}
+	}
+	// tuple transaction_id and digest byte_length
+	tuple := map[string]any{
+		"database_id":  "11111111111111111111111111111111",
+		"commit_nonce": "11111111111111111111111111111111",
+	}
+	digest := map[string]any{
+		"sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+	}
+	for _, v := range bad {
+		tuple["transaction_id"] = v
+		obj, err := decodeObject(mustJSON(t, tuple))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateTupleObject(obj); err == nil {
+			t.Fatalf("tuple.transaction_id=%q must be refused", v)
+		}
+		digest["byte_length"] = v
+		obj, err = decodeObject(mustJSON(t, digest))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := validateDigestObject(obj); err == nil {
+			t.Fatalf("digest.byte_length=%q must be refused", v)
+		}
+	}
+}

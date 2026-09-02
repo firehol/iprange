@@ -93,6 +93,9 @@ func validateCreateStructureKind(valueKind string, object rawObject) error {
 func validateValueTagObject(tag rawObject) error {
 	if len(tag) == 1 {
 		if text, ok := tag["text"]; ok {
+			if isRawNull(text) {
+				return fmt.Errorf("value_tag.text must be a string; null is not valid")
+			}
 			var value string
 			if err := json.Unmarshal(text, &value); err != nil || strings.IndexByte(value, 0) >= 0 || len(value) > 15 {
 				return fmt.Errorf("value_tag.text must encode 0 through 15 bytes without NUL")
@@ -100,6 +103,9 @@ func validateValueTagObject(tag rawObject) error {
 			return nil
 		}
 		if hex, ok := tag["hex"]; ok {
+			if isRawNull(hex) {
+				return fmt.Errorf("value_tag.hex must be a string; null is not valid")
+			}
 			var value string
 			if err := json.Unmarshal(hex, &value); err != nil {
 				return fmt.Errorf("value_tag.hex must be a string")
