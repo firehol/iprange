@@ -2568,3 +2568,53 @@ round-7 fixes at the new HEAD.
   golden, sensitivity, Go suite, v4work suite, legacy C-oracle
   100/100, mmap trace; record embedded vcs.revision and SHA-256 of
   both binaries in the close-out entry.
+
+### 2026-09-03 — milestone-3 close-out: exact-HEAD validation evidence and glm final re-review
+
+- The glm-5.3-responses whole-milestone re-review at e0bbd5a8
+  returned FAIL with one new proven P1 (value-tag null bypass) and
+  record/encoder nits; all were fixed in commit 82828999:
+  - P1 value-tag: validator and replay value-tag decoders accepted
+    `{"text":null}` / `{"hex":null}` as the zero-byte tag and created
+    a durable database; Rust rejects with -32602. Both decoders now
+    refuse present null; a live probe shows database.create with a
+    null value-tag member returns -32602 on both binaries and creates
+    nothing; committed negatives cover both members plus the legal
+    empty forms.
+  - Complete null sweep: every direct json.Unmarshal into a primitive
+    string or slice in the CLI handlers now rejects null (cursor
+    start, feed members, prefixes, algebra sources/addresses/windows/
+    values, housekeeping/cleanup artifacts and state) — the full
+    null-as-zero class is closed, not just the reported surface.
+  - P3 encoder: rustjson adds direct []string/[]json.RawMessage/
+    []int64/[]uint64 cases and a recursive re-emit fallback so no
+    wire bytes fall back to encoding/json escaping; a []string
+    byte-vector test pins the escape set.
+  - P3 inventory: the module-only WorkerAvailability type is now an
+    explicit inventory row with a recorded divergence.
+  - P3 decimal matrix: every named decimal surface is now covered by
+    all three bad values (abc, 00, overflow).
+- Exact-HEAD validation evidence (revision 82828999, all gates run
+  with the fresh pair built from that revision):
+  - Product /tmp/iprange-final/iprange: vcs.revision
+    8282899930ce02e823a352151ef687af0b2083b8, SHA-256
+    4ae1673f52ade4324322193d37ec611c558d0aac83879afde206487e3ec1088c.
+  - Worker /tmp/iprange-final/iprange-v4-worker: same embedded
+    revision, SHA-256
+    28f97d6c15fb7efc51caa0afed19b31498f3f096a6b49a92aeced34717a1b961.
+  - Matrices: go 31/31 (oracle 15), rust_to_go 31/31 (oracle 15),
+    go_to_rust 31/31 (oracle 15), 0 skips; fresh work dirs
+    /tmp/m3f6-* and /tmp/m3f7-* (pre-commit tree) and /tmp/m3f8-go
+    (exact 82828999 binary).
+  - Golden 53 exchanges PASS; sensitivity 14 modes PASS; Go suite 22
+    packages + root PASS; v4work PASS; legacy C-oracle 100/100 PASS
+    (IPRANGE_BIN=/tmp/iprange-final/iprange); mmap trace PASS; vet
+    and gofmt clean.
+  - Cross-language byte probes at the exact binary: null-per-type
+    (6 surfaces) identical, value-tag nulls identical, "<&>&" and
+    U+2028 id echoes byte-identical, matching_feeds zero-match
+    identical.
+- This milestone-3 entry is the delivery-step-4 close; the remaining
+  SOW steps (consolidated benchmark harness and platform/artifact
+  gates) continue as the next milestone after the glm final verdict
+  and the five-reviewer consensus recorded above.
