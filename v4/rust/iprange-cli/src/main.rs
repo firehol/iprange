@@ -13,7 +13,9 @@ mod legacy;
 mod rpc;
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut argv = std::env::args();
+    let prog = argv.next().unwrap_or_else(|| "iprange".to_string());
+    let args: Vec<String> = argv.collect();
     if args.first().map(String::as_str) == Some("--jsonrpc") {
         if args.len() != 1 {
             // `--jsonrpc` is exclusive: mixing it with legacy options
@@ -24,5 +26,5 @@ fn main() {
         }
         std::process::exit(rpc::run());
     }
-    std::process::exit(legacy::run(&args));
+    std::process::exit(legacy::run(&prog, &args));
 }

@@ -1738,9 +1738,9 @@ Pending implementation and final review.
 - Cancellation tokens are installed per work unit: cancelling one id
   of a currently executing batch aborts the shared token, so
   non-targeted siblings in that same unit end with factual
-  "cancelled" outcomes. Re-arm per entry or use per-entry tokens in a
-  later milestone if narrower cancellation is required (round-12 glm
-  observation, non-blocking).
+  "cancelled" outcomes. Re-arm per entry or use per-entry tokens if
+  narrower cancellation is required (round-12 glm observation,
+  non-blocking; tracked in SOW-0030).
 - SOW-0027 closed 2026-09-01; this SOW is the sole current SOW.
 - Implement WebSocket daemon separately in SOW-0029 after this API is accepted.
 - Keep authenticated publication in SOW-0017.
@@ -1999,10 +1999,13 @@ round-7 fixes at the new HEAD.
   - mmap storage/runtime and architecture gates: PASS.
   - JSON-RPC external runner: 31/31, 15 oracle checks.
   - Golden corpus: PASSED; sensitivity gate: 14 modes PASS.
-  - Oracle differentials by the workers: 36,408 IPv6 parse/format cases
+  - Oracle differentials by the workers (worker-attested scratch
+    evidence, not repo-reproducible): 36,408 IPv6 parse/format cases
     0 mismatches; 600 randomized text-mode output trials byte-identical;
     binary v1/v2 round-trips `cmp`-identical and cross-loadable in all 4
-    directions; 10 malformed-binary diagnostics byte-identical.
+    directions; 10 malformed-binary diagnostics byte-identical. The
+    classes are covered by committed gates: binary round-trip and
+    malformed-binary cases live in `tests.d` 27/46/57/58/59/62/82.
 - Scope guard: the legacy module uses only language-local grammar,
   algebra, DNS, and formatting; it contains no v4 persistence logic and
   creates no v4 artifact (JSON-RPC exclusivity enforced in main.rs).

@@ -6,6 +6,11 @@
 //! v4 persistence logic. Legacy mode runs the exact C oracle
 //! semantics: one authoritative generic core (range/ops/print) with
 //! IPv4/IPv6 family hooks.
+//!
+//! Public surface (the Go port must reproduce these names):
+//! [`run`], [`Mode`], [`Options`], [`PrintMode`], [`SourceKind`],
+//! [`SourceSpec`], [`IpNum`], and [`dns`] (`Resolver`, `DnsError`).
+//! Everything else in this module is crate-internal.
 
 mod binary;
 pub mod dns;
@@ -34,7 +39,7 @@ const VERSION: &str = "2.1.2_master";
 /// Legacy entry point. `--jsonrpc` mixed with other arguments is an
 /// invalid JSON-RPC startup and must not fall back here silently;
 /// main.rs already rejects that combination before calling us.
-pub fn run(args: &[String]) -> i32 {
+pub fn run(prog: &str, args: &[String]) -> i32 {
     // The C binary dies of SIGPIPE on a closed stdout; the Rust
     // runtime ignores SIGPIPE by default. Restore the default
     // disposition for legacy mode only (the JSON-RPC transport keeps
@@ -64,12 +69,13 @@ pub fn run(args: &[String]) -> i32 {
         };
         match arg {
             "-h" | "--help" => {
-                // C usage() substitutes the program name and the
-                // current dns-threads maximum into the format text.
+                // C usage(argv[0]) substitutes the invocation name
+                // and the current dns-threads maximum into the format
+                // text (the full argv[0], not the basename).
                 print!(
                     "{}",
                     USAGE
-                        .replace("%s", "iprange")
+                        .replace("%s", prog)
                         .replace("%d", &options.dns_threads.to_string())
                 );
                 return 0;
