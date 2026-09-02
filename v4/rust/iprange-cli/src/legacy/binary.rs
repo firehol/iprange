@@ -568,7 +568,10 @@ pub fn load_v2(data: &[u8], source: &str) -> Result<IpSet<u128>, String> {
 /// Serialize an optimized IPv4 set as the released v1.0 binary
 /// payload (header lines, marker, native-endian records). An empty
 /// set writes nothing (`test -s file` semantics of the C saver).
-pub fn write_v1<W: io::Write>(w: &mut W, set: &IpSet<u32>) -> io::Result<()> {
+/// Generic over the family so the printer passes its set directly;
+/// only the 32-bit family is meaningful (asserted).
+pub fn write_v1<W: io::Write, F: IpNum>(w: &mut W, set: &IpSet<F>) -> io::Result<()> {
+    debug_assert_eq!(F::BITS, 32);
     if set.entries == 0 {
         return Ok(());
     }
@@ -585,15 +588,17 @@ pub fn write_v1<W: io::Write>(w: &mut W, set: &IpSet<u32>) -> io::Result<()> {
     write!(w, "unique ips {}\n", set.unique)?;
     w.write_all(&ENDIAN_MARKER.to_ne_bytes())?;
     for range in &set.ranges {
-        w.write_all(&range.lo.to_ne_bytes())?;
-        w.write_all(&range.hi.to_ne_bytes())?;
+        w.write_all(&(range.lo.as_u128() as u32).to_ne_bytes())?;
+        w.write_all(&(range.hi.as_u128() as u32).to_ne_bytes())?;
     }
     Ok(())
 }
 
 /// Serialize an optimized IPv6 set as the released v2.0 binary
-/// payload. An empty set writes nothing.
-pub fn write_v2<W: io::Write>(w: &mut W, set: &IpSet<u128>) -> io::Result<()> {
+/// payload. An empty set writes nothing. Generic over the family
+/// (only the 128-bit family is meaningful, asserted).
+pub fn write_v2<W: io::Write, F: IpNum>(w: &mut W, set: &IpSet<F>) -> io::Result<()> {
+    debug_assert_eq!(F::BITS, 128);
     if set.entries == 0 {
         return Ok(());
     }
@@ -611,8 +616,8 @@ pub fn write_v2<W: io::Write>(w: &mut W, set: &IpSet<u128>) -> io::Result<()> {
     write!(w, "unique ips {}\n", set.unique)?;
     w.write_all(&ENDIAN_MARKER.to_ne_bytes())?;
     for range in &set.ranges {
-        w.write_all(&range.lo.to_ne_bytes())?;
-        w.write_all(&range.hi.to_ne_bytes())?;
+        w.write_all(&range.lo.as_u128().to_ne_bytes())?;
+        w.write_all(&range.hi.as_u128().to_ne_bytes())?;
     }
     Ok(())
 }

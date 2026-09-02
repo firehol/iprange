@@ -20,32 +20,14 @@ use std::io;
 
 use super::binary;
 use super::family::{Family, FamilyImpl};
-use super::options::Options;
-use super::range::{IpNum, IpSet, Range};
+use super::options::{Options, PrintMode};
+use super::range::IpSet;
 
 /// The C `256 * 256 * 256` cap on one range in `-1`/`--print-single-ips`
 /// mode: a range strictly larger than 16,777,216 addresses is
 /// eliminated (with a stderr warning) instead of expanded.
 const SINGLE_IPS_CAP: u128 = 256 * 256 * 256;
 
-/// Identity conversion of an `IpSet<F>` to the concrete family type
-/// (values are unchanged; the v1/v2 writers are typed per family).
-fn convert_family<F: FamilyImpl, T: IpNum>(set: &IpSet<F>) -> IpSet<T> {
-    IpSet {
-        ranges: set
-            .ranges
-            .iter()
-            .map(|r| Range {
-                lo: T::from_u128(r.lo.as_u128()),
-                hi: T::from_u128(r.hi.as_u128()),
-            })
-            .collect(),
-        entries: set.entries,
-        lines: set.lines,
-        unique: set.unique,
-        optimized: set.optimized,
-    }
-}
 
 /// Broadcast address of `addr` at `prefix` (C `broadcast()` /
 /// `broadcast6()`): `addr | ((1 << (BITS - prefix)) - 1)`, with the
@@ -143,6 +125,7 @@ fn write_single_line<F: FamilyImpl, W: io::Write>(
 /// largest enabled CIDR blocks, printing each block. `enabled` is
 /// the family prefix array (`prefix_enabled`/`prefix6_enabled`);
 /// a block is emitted only when its prefix is enabled.
+#[allow(clippy::too_many_arguments)]
 fn split_range<F: FamilyImpl, W: io::Write>(
     w: &mut W,
     options: &Options,
@@ -151,10 +134,14 @@ fn split_range<F: FamilyImpl, W: io::Write>(
     lo: F,
     hi: F,
     enabled: &[bool],
+    mut counters: Option<&mut Vec<u64>>,
 ) -> io::Result<()> {
     let bc = broadcast_of(addr, prefix);
 
     if lo == addr && hi == bc && enabled[prefix as usize] {
+        if let Some(counters) = counters {
+            counters[prefix as usize] += 1;
+        }
         return write_cidr_line(w, options, addr, prefix);
     }
 
@@ -163,10 +150,10 @@ fn split_range<F: FamilyImpl, W: io::Write>(
     let upper_half = F::from_u128(addr.as_u128() | (1u128 << (F::BITS - prefix)));
 
     if hi < upper_half {
-        return split_range(w, options, lower_half, prefix, lo, hi, enabled);
+        return split_range(w, options, lower_half, prefix, lo, hi, enabled, counters);
     }
     if lo >= upper_half {
-        return split_range(w, options, upper_half, prefix, lo, hi, enabled);
+        return split_range(w, options, upper_half, prefix, lo, hi, enabled, counters);
     }
 
     split_range(
@@ -177,8 +164,9 @@ fn split_range<F: FamilyImpl, W: io::Write>(
         lo,
         broadcast_of(lower_half, prefix),
         enabled,
+        counters.as_deref_mut(),
     )?;
-    split_range(w, options, upper_half, prefix, upper_half, hi, enabled)
+    split_range(w, options, upper_half, prefix, upper_half, hi, enabled, counters)
 }
 
 /// Render one optimized set with the selected print shape
@@ -186,13 +174,15 @@ fn split_range<F: FamilyImpl, W: io::Write>(
 ///
 /// Order matches the C `ipset_print`/`ipset6_print` dispatch: the
 /// set is optimized first (the caller may hand a merged-but-dirty
-/// set, exactly like the C mode walks), `--print-binary` wins,
-/// then `--print-ranges`, then `--print-single-ips`, and the
-/// default is the CIDR decomposition. `--quiet` suppresses output
-/// (the C honors it only for diff; the caller also guards there).
+/// set, exactly like the C mode walks), then the single `PrintMode`
+/// shape selected by the last `--print-*` flag. The optional `name`
+/// feeds the C `-v` "Printing ..." diagnostic. `--quiet` suppresses
+/// output (the C honors it only for diff; the caller also guards
+/// there).
 pub fn print_set<F: FamilyImpl, W: io::Write>(
     w: &mut W,
     options: &Options,
+    name: &str,
     set: &IpSet<F>,
 ) -> io::Result<()> {
     if options.quiet {
@@ -209,55 +199,128 @@ pub fn print_set<F: FamilyImpl, W: io::Write>(
         &owned
     };
 
-    if options.print.binary {
+    if options.print.mode == PrintMode::Binary {
+        // The writer is generic over the family (v1 only ever sees
+        // the u32 family, v2 the u128 family), so no identity
+        // conversion pass is needed.
         return match F::FAMILY {
-            Family::V4 => binary::write_v1(w, &convert_family::<F, u32>(set)),
-            Family::V6 => binary::write_v2(w, &convert_family::<F, u128>(set)),
+            Family::V4 => binary::write_v1(w, set),
+            Family::V6 => binary::write_v2(w, set),
         };
     }
 
-    if options.print.ranges {
-        for r in &set.ranges {
-            write_range_line(w, options, r.lo, r.hi)?;
+    // C debug "Printing ..." line (after the binary early return).
+    if options.debug {
+        match F::FAMILY {
+            Family::V4 => eprintln!(
+                "iprange: Printing {name} with {} ranges, {} unique IPs",
+                set.entries, set.unique
+            ),
+            Family::V6 => eprintln!(
+                "iprange: Printing {name} (IPv6) with {} ranges, {} unique IPs",
+                set.entries, set.unique
+            ),
         }
-        return Ok(());
     }
 
-    if options.print.single_ips {
-        for r in &set.ranges {
-            let start = r.lo.as_u128();
-            let end = r.hi.as_u128();
-            if end - start > SINGLE_IPS_CAP {
-                // C warning text is family-specific; the range is
-                // skipped either way.
-                if F::FAMILY == Family::V4 {
-                    eprintln!(
-                        "iprange: too big range eliminated start={} end={} gives {} IPs",
-                        F::fmt_addr(r.lo),
-                        F::fmt_addr(r.hi),
-                        end - start
-                    );
-                } else {
-                    eprintln!(
-                        "iprange: too big range eliminated start={} end={}",
-                        F::fmt_addr(r.lo),
-                        F::fmt_addr(r.hi)
-                    );
+    // Per-prefix counters for the `-v` breakdown (C prefix_counters /
+    // prefix6_counters); alive only under debug.
+    let mut counters: Vec<u64> = if options.debug && options.print.mode == PrintMode::Cidr {
+        vec![0; F::BITS as usize + 1]
+    } else {
+        Vec::new()
+    };
+
+    let mut total: u128 = 0;
+    match options.print.mode {
+        PrintMode::Binary => unreachable!("handled above"),
+        PrintMode::Ranges => {
+            for r in &set.ranges {
+                write_range_line(w, options, r.lo, r.hi)?;
+            }
+            total = set.ranges.len() as u128;
+        }
+        PrintMode::SingleIps => {
+            for r in &set.ranges {
+                let start = r.lo.as_u128();
+                let end = r.hi.as_u128();
+                if end - start > SINGLE_IPS_CAP {
+                    // C warning text is family-specific; the range
+                    // is skipped either way.
+                    if F::FAMILY == Family::V4 {
+                        eprintln!(
+                            "iprange: too big range eliminated start={} end={} gives {} IPs",
+                            F::fmt_addr(r.lo),
+                            F::fmt_addr(r.hi),
+                            end - start
+                        );
+                    } else {
+                        eprintln!(
+                            "iprange: too big range eliminated start={} end={}",
+                            F::fmt_addr(r.lo),
+                            F::fmt_addr(r.hi)
+                        );
+                    }
+                    continue;
                 }
-                continue;
-            }
-            for x in start..=end {
-                write_single_line(w, options, F::from_u128(x))?;
+                for x in start..=end {
+                    write_single_line(w, options, F::from_u128(x))?;
+                    total += 1;
+                }
             }
         }
-        return Ok(());
+        PrintMode::Cidr => {
+            // The recursive walk starts at the family network zero
+            // with prefix 0 (C split_range / split_range6).
+            let enabled = options.enabled();
+            for r in &set.ranges {
+                split_range(
+                    w,
+                    options,
+                    F::from_u128(0),
+                    0,
+                    r.lo,
+                    r.hi,
+                    enabled,
+                    if counters.is_empty() {
+                        None
+                    } else {
+                        Some(&mut counters)
+                    },
+                )?;
+            }
+            total = counters.iter().sum::<u64>() as u128;
+        }
     }
 
-    // Default: CIDR decomposition (C PRINT_CIDR). The recursive walk
-    // starts at the family network zero with prefix 0.
-    let enabled = options.enabled();
-    for r in &set.ranges {
-        split_range(w, options, F::from_u128(0), 0, r.lo, r.hi, enabled)?;
+    // C debug breakdown and totals block.
+    if options.debug {
+        let mut prefixes = 0usize;
+        if options.print.mode == PrintMode::Cidr {
+            eprintln!();
+            eprintln!("{total} printed CIDRs, break down by prefix:");
+            let mut total_cidrs: u128 = 0;
+            for (prefix, &count) in counters.iter().enumerate() {
+                if count > 0 {
+                    eprintln!("\t- prefix /{prefix} counts {count} entries");
+                    total_cidrs += count as u128;
+                    prefixes += 1;
+                }
+            }
+            total = total_cidrs;
+        } else if options.print.mode == PrintMode::SingleIps {
+            prefixes = 1;
+        }
+        let units = match options.print.mode {
+            PrintMode::Cidr => "CIDRs",
+            PrintMode::SingleIps => "IPs",
+            _ => "ranges",
+        };
+        eprintln!();
+        eprintln!(
+            "totals: {} lines read, {} distinct IP ranges found, {} CIDR prefixes, {} {units} printed, {} unique IPs",
+            set.lines, set.entries, prefixes, total, set.unique
+        );
     }
     Ok(())
 }
@@ -288,13 +351,13 @@ mod tests {
 
     fn render4(options: &Options, set: &IpSet<u32>) -> String {
         let mut buf = Vec::new();
-        print_set::<u32, _>(&mut buf, options, set).unwrap();
+        print_set::<u32, _>(&mut buf, options, "test", set).unwrap();
         String::from_utf8(buf).unwrap()
     }
 
     fn render6(options: &Options, set: &IpSet<u128>) -> String {
         let mut buf = Vec::new();
-        print_set::<u128, _>(&mut buf, options, set).unwrap();
+        print_set::<u128, _>(&mut buf, options, "test", set).unwrap();
         String::from_utf8(buf).unwrap()
     }
 
@@ -348,7 +411,7 @@ mod tests {
     #[test]
     fn ranges_mode_prints_lo_dash_hi() {
         let mut options = Options::default();
-        options.print.ranges = true;
+        options.print.mode = PrintMode::Ranges;
         let set = set4(&[(0x0a00_0001, 0x0a00_0001), (0x0a00_0008, 0x0a00_000b)]);
         assert_eq!(
             render4(&options, &set),
@@ -359,7 +422,7 @@ mod tests {
     #[test]
     fn single_ips_mode_expands_every_address() {
         let mut options = Options::default();
-        options.print.single_ips = true;
+        options.print.mode = PrintMode::SingleIps;
         let set = set4(&[(0x0a00_0000, 0x0a00_0003)]);
         assert_eq!(
             render4(&options, &set),
@@ -401,7 +464,7 @@ mod tests {
     #[test]
     fn single_ips_wrappers_match_c() {
         let mut options = Options::default();
-        options.print.single_ips = true;
+        options.print.mode = PrintMode::SingleIps;
         options.print.prefix_ips = "P-".into();
         options.print.suffix_ips = "-S".into();
         let set = set4(&[(0x0a00_000a, 0x0a00_000a)]);
@@ -411,11 +474,11 @@ mod tests {
     #[test]
     fn binary_mode_emits_v1_payload() {
         let mut options = Options::default();
-        options.print.binary = true;
+        options.print.mode = PrintMode::Binary;
         let mut set = set4(&[(0xac10_6301, 0xac10_6301)]);
         set.lines = 1;
         let mut buf = Vec::new();
-        print_set::<u32, _>(&mut buf, &options, &set).unwrap();
+        print_set::<u32, _>(&mut buf, &options, "test", &set).unwrap();
         let mut expected = Vec::new();
         binary::write_v1(&mut expected, &set).unwrap();
         assert_eq!(buf, expected);
@@ -425,10 +488,10 @@ mod tests {
     #[test]
     fn binary_mode_empty_set_writes_nothing() {
         let mut options = Options::default();
-        options.print.binary = true;
+        options.print.mode = PrintMode::Binary;
         let set = IpSet::<u32>::default();
         let mut buf = Vec::new();
-        print_set::<u32, _>(&mut buf, &options, &set).unwrap();
+        print_set::<u32, _>(&mut buf, &options, "test", &set).unwrap();
         assert!(buf.is_empty());
     }
 

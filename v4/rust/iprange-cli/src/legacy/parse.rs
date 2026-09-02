@@ -299,6 +299,10 @@ struct FileIssues {
     /// At least one hostname failed to resolve (v4 fails the file;
     /// v6 ignores, mirroring `dns_done` vs `dns6_done`).
     dns_failed: bool,
+    /// A DNS request could not be queued at all (C `dns_request()`
+    /// / `dns6_request()` returning -1; fails the file in both
+    /// families).
+    request_failed: bool,
     /// Non-mapped IPv6 lines dropped in IPv4 mode (C
     /// `ipv6_dropped_in_ipv4_mode`, reset per successful load).
     dropped_v6: u64,
@@ -385,6 +389,7 @@ fn load_one<F: FamilyImpl>(
         parse_failed: false,
         dns_used: false,
         dns_failed: false,
+        request_failed: false,
         dropped_v6: 0,
     };
 
@@ -406,10 +411,48 @@ fn load_one<F: FamilyImpl>(
         process_record::<F>(rec, lineid, name, options, resolver, &mut set, &mut issues);
     }
 
-    // C ipset_load() order: dns_done() (v4 fails on any failed name),
-    // then parse_errors, then the IPv6-drop warning, then the debug
-    // "Loaded" line. The failure itself is reported by the caller.
-    if issues.dns_failed && F::FAMILY == Family::V4 {
+    // C ipset_load() order: dns_done() drains the file's batch,
+    // adds the replies in load order, and fails the file in v4 mode
+    // when any reply failed; then the parse-errors check, the
+    // IPv6-drop warning, and the debug "Loaded" line. The failure
+    // itself is reported by the caller.
+    if issues.dns_used {
+        for reply in resolver.drain() {
+            match reply.result {
+                Ok(addrs) => {
+                    // One entry (and one C `lines` unit) per
+                    // reply address; per-name duplicates are
+                    // dropped (v6 mapped-A duplicates too).
+                    let mut seen = std::collections::HashSet::new();
+                    for addr in addrs {
+                        if seen.insert(addr) {
+                            let ip = F::from_u128(addr);
+                            add_entry(&mut set, Range { lo: ip, hi: ip });
+                        }
+                    }
+                }
+                Err(e) => {
+                    // The parse worker renders the C final-failure
+                    // line from the variant (silent gates the
+                    // permanent failure class exactly like C
+                    // dns_request_failed); the name contributes
+                    // nothing.
+                    match e {
+                        DnsError::NotFound(msg) => {
+                            if !options.dns_silent {
+                                eprintln!("{msg}");
+                            }
+                        }
+                        DnsError::System(msg) => {
+                            eprintln!("{msg}");
+                        }
+                    }
+                    issues.dns_failed = true;
+                }
+            }
+        }
+    }
+    if (issues.dns_failed && F::FAMILY == Family::V4) || issues.request_failed {
         return Err(context.to_owned());
     }
     if issues.parse_failed {
@@ -516,38 +559,15 @@ fn process_record<F: FamilyImpl>(
                     ),
                 }
             }
-            match resolver.resolve(&host) {
-                Ok(addrs) => {
-                    // One entry (and one C `lines` unit) per reply
-                    // address; per-name duplicates are dropped (v6
-                    // mapped-A duplicates included).
-                    let mut seen = std::collections::HashSet::new();
-                    for addr in addrs {
-                        if seen.insert(addr) {
-                            let ip = F::from_u128(addr);
-                            add_entry(set, Range { lo: ip, hi: ip });
-                        }
-                    }
-                }
+            // Queue the host; C dns_request()/dns6_request() returns
+            // -1 (failing the file) only for empty/oversized names.
+            // The replies are added by the per-file drain below.
+            match resolver.request(&host) {
+                Ok(()) => {}
                 Err(e) => {
-                    // The pool returns the resolution outcome; the
-                    // parse worker renders the C final-failure line
-                    // from the variant (silent gates the permanent
-                    // failure class exactly like C dns_request_failed).
-                    match e {
-                        DnsError::NotFound(msg) => {
-                            if !options.dns_silent {
-                                eprintln!("{msg}");
-                            }
-                        }
-                        DnsError::System(msg) => {
-                            eprintln!("{msg}");
-                        }
-                    }
-                    // The name contributes nothing (no entry, no
-                    // line); a failure fails the whole file in v4
-                    // mode (C dns_done returns replies_failed).
-                    issues.dns_failed = true;
+                    // Always printed (C does not gate this class).
+                    eprintln!("{e}");
+                    issues.request_failed = true;
                 }
             }
         }
@@ -1154,22 +1174,24 @@ mod tests {
         const FAMILY: Family = Family::V6;
 
         fn parse_addr(_t: &str) -> Result<Self, String> {
-            unimplemented!("test family: only family-flag paths are exercised")
+            // Only the family-flag paths exercise F6; parsing never
+            // happens (the binary family-mismatch test fails first).
+            panic!("F6 test family: parsing is unreachable")
         }
         fn parse_cidr(_t: &str, _p: u32, _f: bool, _d: u32) -> Result<Range<Self>, String> {
-            unimplemented!("test family: only family-flag paths are exercised")
+            panic!("F6 test family: parsing is unreachable")
         }
         fn parse_prefix(_t: &str) -> Result<u32, String> {
-            unimplemented!("test family")
+            panic!("F6 test family: parsing is unreachable")
         }
         fn fmt_addr(_a: Self) -> String {
-            unimplemented!("test family")
+            panic!("F6 test family: formatting is unreachable")
         }
         fn fmt_cidr(_a: Self, _p: u32) -> String {
-            unimplemented!("test family")
+            panic!("F6 test family: formatting is unreachable")
         }
         fn convert_foreign(_t: &str) -> Option<Range<Self>> {
-            unimplemented!("test family")
+            panic!("F6 test family: conversion is unreachable")
         }
     }
 

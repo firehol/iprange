@@ -83,15 +83,6 @@ CIDR output modes:
 		if they are below ENTRIES
 		(the internal default ENTRIES is 16384).
 
-	--histogram
-		> IPSET HISTOGRAM mode
-		Maintain histogram data for ipset and
-   dump current status.
-
-	--histogram-dir PATH
-		> IPSET HISTOGRAM mode
-		Specify where to keep histogram data.
-
 
 CSV output modes:
 	--compare

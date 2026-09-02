@@ -70,15 +70,28 @@ fn optimize_operand<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, name: 
 /// the C-style stderr message and exit code 1 (SIGPIPE terminates the
 /// process first, exactly like the C binary). The concrete locked
 /// stdout type keeps `print_set`'s `W: io::Write` (Sized) bound.
-fn emit(body: impl FnOnce(&mut std::io::StdoutLock<'static>) -> std::io::Result<()>) -> i32 {
-    let mut w = std::io::stdout().lock();
-    match body(&mut w) {
-        Ok(()) => 0,
+fn emit(body: impl FnOnce(&mut std::io::BufWriter<std::io::StdoutLock<'static>>) -> std::io::Result<()>) -> i32 {
+    // Rust's stdout is a line-buffered LineWriter (one write syscall
+    // per newline); the C binary emits through stdio's 4 KB pipe
+    // buffering. Wrap the locked stdout so bulk text and binary
+    // output coalesces into large writes, then flush once. SIGPIPE
+    // still terminates the process on a closed pipe (default
+    // disposition, restored in legacy::run), exactly like C.
+    let mut w = std::io::BufWriter::with_capacity(64 * 1024, std::io::stdout().lock());
+    let ret = match body(&mut w) {
+        Ok(()) => match w.flush() {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("iprange: {}", e);
+                1
+            }
+        },
         Err(e) => {
             eprintln!("iprange: {}", e);
             1
         }
-    }
+    };
+    ret
 }
 
 /// C `iprange_csv_write_field` (src/iprange.h): quote only when the
@@ -733,7 +746,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
         Mode::Merge => {
             let merged = merge_group(options, a, Some("combined ipset"));
             let set = merged;
-            emit(|w| print::print_set::<F, _>(w, options, &set))
+            emit(|w| print::print_set::<F, _>(w, options, "combined ipset", &set))
         }
 
         Mode::Reduce => {
@@ -748,7 +761,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
                 apply_reduce(options, &mut merged, enabled);
             }
             let set = merged;
-            emit(|w| print::print_set::<F, _>(w, &reduced, &set))
+            emit(|w| print::print_set::<F, _>(w, &reduced, "combined ipset", &set))
         }
 
         Mode::Common => {
@@ -786,7 +799,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
                 common = intersect_op(&common, &set.set);
             }
             let set = common;
-            emit(|w| print::print_set::<F, _>(w, options, &set))
+            emit(|w| print::print_set::<F, _>(w, options, "common", &set))
         }
 
         Mode::ExcludeNext => {
@@ -810,7 +823,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
                 excluded = subtract_op(&excluded, &set.set);
             }
             let set = excluded;
-            emit(|w| print::print_set::<F, _>(w, options, &set))
+            emit(|w| print::print_set::<F, _>(w, options, "exclude", &set))
         }
 
         Mode::Diff => {
@@ -844,7 +857,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
             }
             let result = diff_op(&merged_a, &merged_b);
             if !options.quiet {
-                emit(|w| print::print_set::<F, _>(w, options, &result));
+                emit(|w| print::print_set::<F, _>(w, options, "diff", &result));
             }
             if result.unique > 0 {
                 1

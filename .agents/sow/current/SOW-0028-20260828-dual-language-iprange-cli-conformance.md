@@ -2006,3 +2006,51 @@ round-7 fixes at the new HEAD.
 - Scope guard: the legacy module uses only language-local grammar,
   algebra, DNS, and formatting; it contains no v4 persistence logic and
   creates no v4 artifact (JSON-RPC exclusivity enforced in main.rs).
+
+### 2026-09-02 (continued) — review-delta fixes and DNS pool OOM root cause
+
+- The five own-model reviewers and glm-5.3-responses reviewed the
+  milestone-2 HEAD (d0f2afb3, implementation 43bf8929). Findings
+  fixed in this delta: P1 text output was syscall-per-line (stdout
+  `LineWriter`, not `BufWriter`; strace: 198,769 vs 666 `write`
+  syscalls on 200k lines) — fixed in print.rs, re-measured at
+  0.179 s vs C 0.212 s byte-identical; P2 the DNS pool never grew
+  past one worker (the loader drained before the pool could grow)
+  — fixed with a per-file batch drain in dns.rs/parse.rs; the pool
+  now reaches `--dns-threads` exactly like C ("threads used 5 of 5");
+  plus the P3 import fix and binary.rs family-generic writers.
+- Resolved user decision (2026-09-02, "fix the OOM now"):
+  hard-cap the DNS worker pool. Root cause of the 13:57 OOM kill
+  (kernel: pid 3784613 `iprange`, 155 GB VSZ / 74.6 GB RSS): the C
+  oracle and the port spawn one worker per pending request while
+  `pending > workers && workers < --dns-threads`; a legal but large
+  `--dns-threads` value with a large host file spawns tens of
+  thousands of 2 MiB worker stacks (the C is worse: 8 MiB stacks).
+  Fix: `DNS_POOL_HARD_MAX = 128` workers in dns.rs — unobservable
+  wherever C survives (default 5, legacy suite uses at most 4),
+  bounds worst-case stack reservation to 256 MiB. Plus C-identical
+  spawn-failure handling: with no worker yet, roll back the request
+  and fail the file like `dns_request() -1`; afterwards stop
+  spawning (C prints one line per failed attempt, a storm we bound
+  to a single line).
+- Regression found by the 100-dir suite after the drain rework: the
+  per-host DNS failure lines ("failed permanently", system, error)
+  were swallowed because drain() returned Err before rendering.
+  Fixed: drain() returns every reply and the loader renders the
+  failure lines then fails the file (C order: worker prints, then
+  dns_done() reports the failed count).
+- Validation at HEAD:
+  - OOM reproduction: `--dns-threads 100000` + 50k-host file now
+    completes rc=0 with max RSS 49,708 KB (was kernel-OOM at
+    74.6 GB RSS); default-threads 300k-host file rc=0; comparisons
+    with C byte-identical on stdout.
+  - tests.d legacy suite: 100/100 pass through `IPRANGE_BIN`;
+    Rust workspace 50 suites / 0 failures, `--all-features` 50
+    suites; `-D warnings` clean (all-targets build); source graph
+    502 sources / 4 targets; new unit test
+    `pool_is_hard_capped_with_huge_threads_max`.
+  - Known residual, recorded: when the OS cannot satisfy an
+    allocation at all (e.g. artificial `ulimit -v` 1 GiB while the
+    pool has grown), the Rust process aborts (core dump, rc 134)
+    instead of C's per-host graceful degradation — Rust's standard
+    OOM behavior; the pool cap keeps real runs far from that point.

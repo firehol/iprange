@@ -22,7 +22,7 @@ mod usage;
 use std::time::Instant;
 
 use family::{Family, FamilyImpl};
-pub use options::{Mode, Options, SourceKind, SourceSpec};
+pub use options::{Mode, Options, PrintMode, SourceKind, SourceSpec};
 pub use range::IpNum;
 
 use crate::legacy::usage::USAGE;
@@ -47,6 +47,10 @@ pub fn run(args: &[String]) -> i32 {
 
     let started = Instant::now();
     let mut options = Options::default();
+    // C iprange6_run() re-scans the whole argv whenever -6 is
+    // present, so --min-prefix/--prefixes apply to the IPv6 prefix
+    // array regardless of position (see those branches below).
+    let has_v6 = args.iter().any(|a| a == "-6" || a == "--ipv6");
 
     // One-pass argv scan: flags are positional and the last mode flag
     // wins; file arguments load as their own ipsets in order; `as NAME`
@@ -60,7 +64,14 @@ pub fn run(args: &[String]) -> i32 {
         };
         match arg {
             "-h" | "--help" => {
-                print!("{}", USAGE.replace("%s", "iprange"));
+                // C usage() substitutes the program name and the
+                // current dns-threads maximum into the format text.
+                print!(
+                    "{}",
+                    USAGE
+                        .replace("%s", "iprange")
+                        .replace("%d", &options.dns_threads.to_string())
+                );
                 return 0;
             }
             "--version" => {
@@ -107,102 +118,185 @@ pub fn run(args: &[String]) -> i32 {
             "--count-unique" | "-C" => options.mode = Mode::CountUnique,
             "--count-unique-all" => options.mode = Mode::CountUniqueAll,
             "--ipset-reduce" | "--reduce-factor" => {
-                let v = next_value(&mut i);
-                let n = parse_size(&arg, &v, "positive integer");
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
+                };
+                // C bounds the percentage at SIZE_MAX - 100 so the
+                // stored factor (100 + N) cannot wrap.
+                let n = parse_size(
+                    &arg,
+                    &value,
+                    "It must be a non-negative integer percentage.",
+                    u64::MAX - 100,
+                );
                 options.mode = Mode::Reduce;
                 options.reduce_factor = 100 + n;
             }
             "--ipset-reduce-entries" | "--reduce-entries" => {
-                let v = next_value(&mut i);
-                let n = parse_size(&arg, &v, "positive integer");
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
+                };
+                let n = parse_size(
+                    &arg,
+                    &value,
+                    "It must be a non-negative integer.",
+                    u64::MAX,
+                );
                 options.mode = Mode::Reduce;
                 options.reduce_entries = n;
             }
             "--min-prefix" => {
-                let v = next_value(&mut i);
-                let (min, max, n) = match options.family {
-                    Family::V4 => (1i64, 32i64, 33usize),
-                    Family::V6 => (1i64, 128i64, 129usize),
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
                 };
-                let v = parse_number(&arg, &v, "prefix length", min, max) as usize;
-                for slot in 0..n {
-                    if slot < v {
-                        match options.family {
-                            Family::V4 => options.prefix4_enabled[slot] = false,
-                            Family::V6 => options.prefix6_enabled[slot] = false,
+                // C main() validates with the family active at this
+                // argv position; iprange6_run() re-applies the
+                // option to the IPv6 array whenever -6 is present.
+                match options.family {
+                    Family::V4 => {
+                        let v = parse_number(
+                            &arg, &value,
+                            "It must be between 1 and 32.", 1, 32,
+                        ) as usize;
+                        for slot in 0..v {
+                            options.prefix4_enabled[slot] = false;
+                        }
+                        if has_v6 {
+                            for slot in 0..v {
+                                options.prefix6_enabled[slot] = false;
+                            }
+                        }
+                    }
+                    Family::V6 => {
+                        let v = parse_number(
+                            &arg, &value,
+                            "It must be between 1 and 128.", 1, 128,
+                        ) as usize;
+                        for slot in 0..v {
+                            options.prefix6_enabled[slot] = false;
                         }
                     }
                 }
             }
             "--prefixes" => {
-                let v = next_value(&mut i);
-                let (max, n) = match options.family {
-                    Family::V4 => (32usize, 33usize),
-                    Family::V6 => (128usize, 129usize),
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
                 };
-                let mut slots: Vec<usize> = Vec::new();
-                for part in v.split(|c: char| c == ',' || c == ' ' || c == '\t') {
-                    if part.is_empty() {
-                        continue;
-                    }
-                    let p = parse_number(&arg, part, "prefix list", 1, max as i64) as usize;
-                    slots.push(p);
-                }
-                for slot in 0..n {
-                    if slot < max && !slots.contains(&slot) {
-                        match options.family {
-                            Family::V4 => options.prefix4_enabled[slot] = false,
-                            Family::V6 => options.prefix6_enabled[slot] = false,
+                // C main() parses with strtol over comma/space
+                // separated tokens; iprange6_run() re-applies the
+                // option to the IPv6 array whenever -6 is present
+                // (with the IPv6 1..128 bound at that phase). The
+                // tokenizer is strtol-exact: whitespace, signs and
+                // empty tokens behave like the C loop.
+                match parse_prefix_list(&value, options.family) {
+                    Ok(list) => {
+                        for slot in 0..33 {
+                            if slot < 32 && !list.contains(&slot) {
+                                options.prefix4_enabled[slot] = false;
+                            }
                         }
+                        if has_v6 {
+                            for slot in 0..129 {
+                                if slot < 128 && !list.contains(&slot) {
+                                    options.prefix6_enabled[slot] = false;
+                                }
+                            }
+                        }
+                    }
+                    Err(message) => {
+                        eprintln!("{message}");
+                        std::process::exit(1);
                     }
                 }
             }
             "--default-prefix" | "-p" => {
-                let v = next_value(&mut i);
-                let v = parse_number(&arg, &v, "0..32", 0, 32) as u32;
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
+                };
+                if options.family == Family::V6 {
+                    // C: IPv6 always uses /128; the value is
+                    // consumed and not validated.
+                    continue;
+                }
+                let v = parse_number(
+                    &arg, &value,
+                    "It must be between 0 and 32.", 0, 32,
+                ) as u32;
                 options.default_prefix = v;
             }
             "--dont-fix-network" => options.dont_fix_network = true,
             "--print-prefix" => {
-                let v = next_value(&mut i);
-                options.print.prefix = v.clone();
-                options.print.prefix_ips = v.clone();
-                options.print.prefix_nets = v;
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
+                };
+                options.print.prefix_ips = value.clone();
+                options.print.prefix_nets = value;
             }
             "--print-suffix" => {
-                let v = next_value(&mut i);
-                options.print.suffix = v.clone();
-                options.print.suffix_ips = v.clone();
-                options.print.suffix_nets = v;
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
+                };
+                options.print.suffix_ips = value.clone();
+                options.print.suffix_nets = value;
             }
             "--print-prefix-ips" => {
-                options.print.prefix_ips = next_value(&mut i);
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
+                };
+                options.print.prefix_ips = value;
             }
             "--print-suffix-ips" => {
-                options.print.suffix_ips = next_value(&mut i);
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
+                };
+                options.print.suffix_ips = value;
             }
             "--print-prefix-nets" => {
-                options.print.prefix_nets = next_value(&mut i);
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
+                };
+                options.print.prefix_nets = value;
             }
             "--print-suffix-nets" => {
-                options.print.suffix_nets = next_value(&mut i);
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
+                };
+                options.print.suffix_nets = value;
             }
-            "--print-ranges" | "-j" => options.print.ranges = true,
-            "--print-single-ips" | "-1" => options.print.single_ips = true,
-            "--print-binary" => options.print.binary = true,
+            "--print-ranges" | "-j" => options.print.mode = PrintMode::Ranges,
+            "--print-single-ips" | "-1" => options.print.mode = PrintMode::SingleIps,
+            "--print-binary" => options.print.mode = PrintMode::Binary,
             "--quiet" => options.quiet = true,
             "--header" => options.header = true,
             "-v" => options.debug = true,
             "--dns-threads" => {
-                let v = next_value(&mut i);
-                let v = parse_number(&arg, &v, "positive integer", 1, i32::MAX as i64) as u32;
+                let Some(value) = take_value(&mut i, args, &arg, &mut options) else {
+                    continue;
+                };
+                let v = parse_number(
+                    &arg, &value,
+                    "It must be an integer greater than or equal to 1.",
+                    1, i32::MAX as i64,
+                ) as u32;
                 options.dns_threads = v;
             }
             "--dns-silent" => options.dns_silent = true,
             "--dns-progress" => options.dns_progress = true,
             "as" => {
-                let name = next_value(&mut i);
-                if let Some(last) = options.sources.last_mut() {
+                if i + 1 >= args.len() {
+                    // Trailing keyword: C's branch needs a next arg,
+                    // so "as" falls through to the file branch.
+                    options.sources.push(SourceSpec {
+                        kind: SourceKind::Path,
+                        arg: Some(arg.to_owned()),
+                        label: None,
+                    });
+                } else if options.sources.is_empty() {
+                    // No prior ipset: C ignores the keyword and the
+                    // following token is an ordinary input (processed
+                    // on the next iteration).
+                } else if let Some(last) = options.sources.last_mut() {
+                    let name = next_value(&mut i);
                     last.label = Some(name);
                 }
             }
@@ -226,8 +320,12 @@ pub fn run(args: &[String]) -> i32 {
         }
         i += 1;
     }
-    // No sources at all: read stdin (C behavior for both families).
+    // No sources at all: read stdin (C behavior for both families;
+    // the IPv4 twin prints one debug note first).
     if options.sources.is_empty() {
+        if options.debug && options.family == Family::V4 {
+            eprintln!("iprange: No input files provided, reading from stdin");
+        }
         options.sources.push(SourceSpec {
             kind: SourceKind::Path,
             arg: None,
@@ -325,8 +423,9 @@ fn parse_number(option: &str, value: &str, expected: &str, min: i64, max: i64) -
 }
 
 /// Strict full-string unsigned decimal parse (C strtoull semantics),
-/// used for the reduce options (0 ..= u64::MAX).
-fn parse_size(option: &str, value: &str, expected: &str) -> u64 {
+/// used for the reduce options (bounds checked per the C option;
+/// out-of-bounds values print the C message).
+fn parse_size(option: &str, value: &str, expected: &str, max: u64) -> u64 {
     let bytes = value.as_bytes();
     if bytes.is_empty() || !bytes[0].is_ascii_digit() {
         invalid_option_value(option, value, expected);
@@ -341,7 +440,101 @@ fn parse_size(option: &str, value: &str, expected: &str) -> u64 {
             .and_then(|v| v.checked_add((b - b'0') as u64))
             .unwrap_or_else(|| invalid_option_value(option, value, expected));
     }
+    if parsed > max {
+        invalid_option_value(option, value, expected);
+    }
     parsed
+}
+
+/// Consume the value of an argv option exactly like the C scan: a
+/// value-less trailing option falls through to the file-input branch
+/// (the option token becomes a load path), returning None; otherwise
+/// the next token is returned.
+fn take_value(
+    i: &mut usize,
+    args: &[String],
+    arg: &str,
+    options: &mut Options,
+) -> Option<String> {
+    if *i + 1 >= args.len() {
+        options.sources.push(SourceSpec {
+            kind: SourceKind::Path,
+            arg: Some(arg.to_owned()),
+            label: None,
+        });
+        None
+    } else {
+        *i += 1;
+        Some(args[*i].clone())
+    }
+}
+
+/// C `--prefixes` tokenizer (strtol base 10 over comma/space
+/// separated tokens): leading whitespace and signs are consumed by
+/// strtol, empty tokens yield 0 (invalid), and the first
+/// out-of-range value aborts with the exact C message. Returns the
+/// allowed prefixes or the full C diagnostic.
+fn parse_prefix_list(
+    text: &str,
+    family: Family,
+) -> Result<Vec<usize>, String> {
+    let (max, invalid_text) = match family {
+        Family::V4 => (32usize, "Only prefixes from 1 to 32 can be set (32 is always enabled)."),
+        Family::V6 => (128usize, "Only prefixes from 1 to 128 can be set."),
+    };
+    let mut allowed: Vec<usize> = Vec::new();
+    let bytes = text.as_bytes();
+    let mut pos = 0usize;
+    loop {
+        if pos >= bytes.len() {
+            break;
+        }
+        // strtol: skip leading whitespace, optional sign.
+        while pos < bytes.len() && bytes[pos].is_ascii_whitespace() {
+            pos += 1;
+        }
+        let start = pos;
+        if pos < bytes.len() && (bytes[pos] == b'-' || bytes[pos] == b'+') {
+            pos += 1;
+        }
+        let digits = pos;
+        while pos < bytes.len() && bytes[pos].is_ascii_digit() {
+            pos += 1;
+        }
+        let mut value: i64 = 0;
+        if pos > digits {
+            for &b in &bytes[digits..pos] {
+                value = value
+                    .checked_mul(10)
+                    .and_then(|v| v.checked_add((b - b'0') as i64))
+                    .unwrap_or(i64::MAX);
+            }
+            if bytes[start] == b'-' {
+                value = -value;
+            }
+        }
+        if pos == start {
+            // No digits at all (empty token, comma, or junk): the C
+            // strtol yields 0 and the bounds check rejects it.
+            value = 0;
+        }
+        if value <= 0 || value as usize > max {
+            return Err(format!(
+                "iprange: {invalid_text} {value} is invalid."
+            ));
+        }
+        allowed.push(value as usize);
+        // Consume one separator (comma or space) like the C loop.
+        if pos < bytes.len() && (bytes[pos] == b',' || bytes[pos] == b' ') {
+            pos += 1;
+        }
+        // The C loop also stops on a second consecutive separator
+        // (strtol on the comma yields 0 -> invalid).
+        if pos < bytes.len() && (bytes[pos] == b',' || bytes[pos] == b' ') {
+            return Err(format!("iprange: {invalid_text} 0 is invalid."));
+        }
+    }
+    Ok(allowed)
 }
 
 /// IPv4 positional operators require a prior loaded ipset (C error

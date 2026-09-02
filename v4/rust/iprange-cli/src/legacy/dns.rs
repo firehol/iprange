@@ -49,6 +49,17 @@ const MAX_HOSTNAME_V6: usize = 256;
 /// number of EAI_AGAIN re-attempts before a permanent failure.
 const RETRIES: i32 = 20;
 
+/// Hard ceiling for the DNS worker pool. The C oracle eagerly spawns
+/// up to `--dns-threads` workers while requests are pending, so a
+/// legal-but-large value (up to INT_MAX) combined with a large host
+/// file makes the C tool (8 MiB stacks) and this port (2 MiB stacks)
+/// reserve hundreds of GiB and get OOM-killed. The released default
+/// is 5 and the legacy suite uses at most 4, so this ceiling is
+/// unobservable wherever C itself survives; it only bounds the pool
+/// in the regime where C dies. 128 workers (256 MiB of stacks) is far
+/// beyond useful getaddrinfo parallelism.
+const DNS_POOL_HARD_MAX: usize = 128;
+
 /// One host resolution failure; the parse worker renders the exact C
 /// stderr text from the variant.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -59,11 +70,34 @@ pub enum DnsError {
     System(String),
 }
 
-/// One queued job: the hostname and the per-job reply channel
-/// (per-host error isolation, C `DNSREQ` + the reply it produces).
+impl std::fmt::Display for DnsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The payload is the full pre-rendered C stderr line.
+        match self {
+            DnsError::NotFound(line) | DnsError::System(line) => f.write_str(line),
+        }
+    }
+}
+
+/// One queued job: the submission sequence number, the hostname,
+/// and the per-job reply channel (per-host error isolation, C
+/// `DNSREQ` + the reply it produces). The sequence number orders the
+/// per-file drain output exactly like the C load order.
 struct Job {
+    seq: usize,
     host: String,
     reply: Sender<Result<Vec<u128>, DnsError>>,
+}
+
+/// One completed reply, kept in submission order for the per-file
+/// drain (the C processes replies as they arrive; the ipset is an
+/// ordered set, so the entry set is identical, and the diagnostics
+/// are printed in file order here).
+pub struct ReplyRecord {
+    /// Submission order (C load order).
+    pub seq: usize,
+    /// The resolution outcome for the per-file drain to render.
+    pub result: Result<Vec<u128>, DnsError>,
 }
 
 /// Shared pool state: the C globals (`dns_requests_made`,
@@ -77,6 +111,11 @@ struct Shared {
     stats: Mutex<Stats>,
     jobs: Mutex<Receiver<Job>>,
     jobs_cond: Condvar,
+    /// Completed replies in completion order (sorted by seq at
+    /// drain time); workers append under the lock and notify
+    /// `replies_cond` so the drain can wait for the batch.
+    replies: Mutex<Vec<ReplyRecord>>,
+    replies_cond: Condvar,
 }
 
 /// C pool counters (`src/ipset_dns.c`): `made` counts requests that
@@ -101,6 +140,15 @@ pub struct Resolver {
     sender: Option<Sender<Job>>,
     workers: Vec<std::thread::JoinHandle<()>>,
     threads_max: u32,
+    /// Sequence of the next job to submit (C load order).
+    next_seq: usize,
+    /// Sequence of the first job of the current per-file batch.
+    batch_start: usize,
+    /// Set once a worker spawn fails: further spawn attempts in the
+    /// same run are pointless (the C retries and prints one line per
+    /// attempt, which under resource exhaustion is a storm of failed
+    /// mmaps); the pool keeps serving with the workers that exist.
+    spawn_failed: bool,
 }
 
 impl Resolver {
@@ -124,6 +172,8 @@ impl Resolver {
             stats: Mutex::new(Stats::default()),
             jobs: Mutex::new(receiver),
             jobs_cond: Condvar::new(),
+            replies: Mutex::new(Vec::new()),
+            replies_cond: Condvar::new(),
         });
         Resolver {
             _private: (),
@@ -132,22 +182,46 @@ impl Resolver {
             workers: Vec::new(),
             // C validates --dns-threads as >= 1; clamp defensively.
             threads_max: _threads.max(1),
+            next_seq: 0,
+            batch_start: 0,
+            spawn_failed: false,
         }
     }
 
-    /// Resolve one hostname; returns the family-appropriate
-    /// addresses (IPv4 values, or IPv6 values with IPv4 mapped to
-    /// `::ffff:x.x.x.x`), deduplicated, in getaddrinfo order (the C
-    /// ipset makes per-host order unobservable, so the C stack
-    /// reversal is not reproduced).
+    /// Queue one hostname and wait for its own reply (synchronous
+    /// test convenience; the production path queues with
+    /// [`Resolver::request`] and drains per file).
     ///
     /// Mirrors C `dns_request()` (`src/ipset_dns.c`,
     /// `src/ipset6_dns.c`): the hostname length check runs before
-    /// the request is counted or queued, and the caller receives the
-    /// full pre-rendered C stderr line on failure (`DnsError`), with
-    /// EAI_AGAIN retries and their messages emitted while the
-    /// request is in flight.
-    pub fn resolve(&mut self, _host: &str) -> Result<Vec<u128>, DnsError> {
+    /// the request is counted or queued, the caller receives the
+    /// full pre-rendered C stderr line on failure (`DnsError`), and
+    /// EAI_AGAIN retries plus their messages are emitted while the
+    /// request is in flight (this call blocks until that one host
+    /// finishes).
+    #[cfg(test)]
+    pub fn resolve(&mut self, host: &str) -> Result<Vec<u128>, DnsError> {
+        let reply = self.submit(host)?;
+        reply
+            .recv()
+            .expect("iprange: internal error: DNS worker died while resolving")
+    }
+
+    /// Queue one hostname for resolution and return immediately. The
+    /// caller drains the per-file batch with [`Resolver::drain`] and
+    /// the pool grows exactly like the C (pending requests trigger
+    /// lazy worker spawn up to `--dns-threads`).
+    pub fn request(&mut self, host: &str) -> Result<(), DnsError> {
+        self.submit(host).map(|reply| drop(reply))
+    }
+
+    /// Validate, count, and queue one hostname; return the per-job
+    /// reply channel. Logs the C "Creating new DNS thread" debug
+    /// line when the pending count forces pool growth.
+    fn submit(
+        &mut self,
+        _host: &str,
+    ) -> Result<Receiver<Result<Vec<u128>, DnsError>>, DnsError> {
         // C iprange_cstrnlen(): the hostname is a C string, so any
         // interior NUL truncates it (fgets can deliver NUL bytes).
         let host = match _host.split('\0').next() {
@@ -170,11 +244,17 @@ impl Resolver {
         {
             let mut stats = self.shared.stats.lock().unwrap();
             stats.made += 1;
+            // C dns_request_add(): pending counts requests that
+            // entered the queue and have not terminated; grow the
+            // pool while that exceeds the workers and the max is not
+            // reached. With the batch API the loader queues the whole
+            // file first, so pending accumulates and the pool reaches
+            // `--dns-threads` exactly like C.
             let pending = stats.made - stats.finished;
-            // C dns_request_add(): grow the pool while unfinished
-            // requests exceed the workers and the max is not reached.
-            if (pending as usize) > self.workers.len()
+            if !self.spawn_failed
+                && (pending as usize) > self.workers.len()
                 && (self.workers.len() as u32) < self.threads_max
+                && self.workers.len() < DNS_POOL_HARD_MAX
             {
                 drop(stats);
                 // C dns_request_add() debug line (IPv4 only; the
@@ -189,11 +269,23 @@ impl Resolver {
                 {
                     Ok(handle) => self.workers.push(handle),
                     Err(_) => {
-                        // C pthread_create failure text; with zero
-                        // workers left the request below falls back
-                        // to in-caller resolution instead of failing
-                        // the file like C dns_request() -1.
+                        // C pthread_create failure text (printed once
+                        // per run; C prints it per attempt).
+                        self.spawn_failed = true;
                         eprintln!("iprange: Cannot create DNS thread.");
+                        if self.workers.is_empty() {
+                            // C dns_request_add(): with no worker yet
+                            // the request is rolled back (pending--,
+                            // made--) and dns_request() returns -1 so
+                            // the loader fails the file cleanly;
+                            // requests already queued stay queued for
+                            // the workers that exist.
+                            let mut stats = self.shared.stats.lock().unwrap();
+                            stats.made -= 1;
+                            return Err(DnsError::System(
+                                "iprange: Cannot create DNS thread.".to_string(),
+                            ));
+                        }
                     }
                 }
             }
@@ -205,15 +297,20 @@ impl Resolver {
             // synchronously so the caller still gets an answer.
             None => {
                 let shared = self.shared.clone();
-                return resolve_host(&shared, host);
+                let (reply_tx, reply_rx) = channel();
+                let result = resolve_host(&shared, host);
+                let _ = reply_tx.send(result);
+                return Ok(reply_rx);
             }
         };
 
         let (reply_tx, reply_rx) = channel();
         let job = Job {
+            seq: self.next_seq,
             host: host.to_string(),
             reply: reply_tx,
         };
+        self.next_seq += 1;
         // Send while holding the jobs lock so a worker cannot miss
         // the notification between try_recv() and wait() (it is then
         // either already waiting on the condvar or blocked on the
@@ -226,32 +323,36 @@ impl Resolver {
             self.shared.jobs_cond.notify_one();
         }
 
-        reply_rx
-            .recv()
-            .expect("iprange: internal error: DNS worker died while resolving")
+        Ok(reply_rx)
     }
 
-    /// Wait for all in-flight work and print the C summary/progress
-    /// text; Err when the C resolver would exit non-zero.
+    /// Collect the replies of the current per-file batch in load
+    /// order, print the C per-file diagnostics, and reset the
+    /// per-file counters (C `dns_done()` + `dns_reset_stats()`).
     ///
-    /// C `dns_done()` (`src/ipset_dns.c`) / `dns6_done()`
-    /// (`src/ipset6_dns.c`): with no requests made (C `made == 0`)
-    /// it is a silent no-op; the IPv4 side prints the progress bar
-    /// (--dns-progress) or the `-v` summary and fails the run when
-    /// any reply failed; the IPv6 side never prints and never fails.
-    pub fn finish(&mut self) -> Result<(), ()> {
-        let (shared, threads_max) = (self.shared.clone(), self.threads_max);
-        let made = shared.stats.lock().unwrap().made;
-        if made == 0 {
-            // C: dns_reset_stats(); return 0;
-            return Ok(());
+    /// Every reply is returned, failed ones included: the caller
+    /// renders the per-host C failure lines and decides whether the
+    /// run fails (C prints each line when the worker finishes and
+    /// then dns_done() reports the failed count).
+    pub fn drain(&mut self) -> Vec<ReplyRecord> {
+        let (shared, made, batch_start, batch_len) = {
+            let shared = self.shared.clone();
+            let stats = shared.stats.lock().unwrap();
+            let made = stats.made;
+            drop(stats);
+            (shared, made, self.batch_start, self.next_seq - self.batch_start)
+        };
+        if made == 0 || batch_len == 0 {
+            self.batch_start = self.next_seq;
+            return Vec::new();
         }
 
         // C dns_done() wait loop: while requests are pending it
         // prints the debug "waiting" line (or the partial progress
-        // bar) once per second. The drain below completes in
-        // milliseconds, so only the first observation is reproduced;
-        // the partial per-second bars collapse into the final bar.
+        // bar) once per second. The drain below completes when the
+        // batch finishes, so only the first observation is
+        // reproduced; the partial per-second bars collapse into the
+        // final bar (accepted timing deviation, recorded in SOW-0028).
         if shared.family == Family::V4 {
             let pending = {
                 let stats = shared.stats.lock().unwrap();
@@ -262,11 +363,65 @@ impl Resolver {
             }
         }
 
-        // Drain the queue: drop the last job sender while holding
-        // the jobs lock (see resolve() for the missed-wakeup
-        // argument), wake every worker and join them. The worker
-        // count for the C summary is captured before the drain.
+        // Wait for every job of the batch to record its reply. The
+        // stats reset below makes `made` per-file, so the wait
+        // condition is length-based instead (seqs are contiguous).
+        {
+            let mut replies = shared.replies.lock().unwrap();
+            while replies.len() < batch_start + batch_len {
+                replies = shared.replies_cond.wait(replies).unwrap();
+            }
+        }
+
         let threads_used = self.workers.len() as u32;
+        let mut batch: Vec<ReplyRecord> = Vec::with_capacity(batch_len);
+        {
+            let mut replies = shared.replies.lock().unwrap();
+            batch.extend(replies.drain(batch_start..batch_start + batch_len));
+        }
+        batch.sort_by_key(|r| r.seq);
+
+        let stats = shared.stats.lock().unwrap();
+        let (made, failed, retries, found) =
+            (stats.made, stats.failed, stats.retries, stats.found);
+        if shared.family == Family::V4 {
+            // C dns_done(): debug wins over the progress bar.
+            if shared.debug {
+                eprintln!(
+                    "{}",
+                    summary_line(made, failed, retries, found, threads_used, self.threads_max)
+                );
+            } else if shared.progress {
+                eprintln!("{}", progress_bar());
+            }
+        }
+        drop(stats);
+
+        // C dns_reset_stats() after dns_done(); the pool stays alive
+        // for the next file.
+        {
+            let mut stats = shared.stats.lock().unwrap();
+            *stats = Stats::default();
+        }
+        self.batch_start = self.next_seq;
+
+        batch
+    }
+
+    /// Wait for all in-flight work and print the C summary/progress
+    /// text; Err when the C resolver would exit non-zero.
+    ///
+    /// Run-end counterpart of C `dns_done()`: the per-file drain
+    /// (called by the loader after every file) already collected the
+    /// replies and texts; this final call only drains any remaining
+    /// batch, closes the job queue, and joins the workers.
+    pub fn finish(&mut self) -> Result<(), ()> {
+        let batch = self.drain();
+        // C dns_done(): a failed IPv4 reply fails the run; the IPv6
+        // side never fails.
+        let failed = self.shared.family == Family::V4
+            && batch.iter().any(|r| r.result.is_err());
+        let shared = self.shared.clone();
         {
             let _jobs = shared.jobs.lock().unwrap();
             drop(self.sender.take());
@@ -275,31 +430,7 @@ impl Resolver {
         for worker in self.workers.drain(..) {
             let _ = worker.join();
         }
-
-        let stats = shared.stats.lock().unwrap();
-        if shared.family == Family::V4 {
-            // C dns_done(): debug wins over the progress bar.
-            if shared.debug {
-                eprintln!(
-                    "{}",
-                    summary_line(
-                        stats.made,
-                        stats.failed,
-                        stats.retries,
-                        stats.found,
-                        threads_used,
-                        threads_max,
-                    )
-                );
-            } else if shared.progress {
-                eprintln!("{}", progress_bar());
-            }
-        }
-        let failed = stats.failed;
-        drop(stats);
-
-        // C: return (replies_failed != 0); the IPv6 side is 0.
-        if shared.family == Family::V4 && failed > 0 {
+        if failed {
             Err(())
         } else {
             Ok(())
@@ -343,12 +474,21 @@ fn progress_bar() -> String {
 }
 
 /// One worker: take jobs from the queue until it is closed, resolve
-/// each host exactly like the C worker thread, and answer the caller
-/// of that host (`dns_thread_resolve` / `dns6_thread_resolve`).
+/// each host exactly like the C worker thread, answer the caller of
+/// that host (`dns_thread_resolve` / `dns6_thread_resolve`), and
+/// record the reply for the per-file drain.
 fn worker_loop(shared: Arc<Shared>) {
     while let Some(job) = next_job(&shared) {
         let result = resolve_host(&shared, &job.host);
-        let _ = job.reply.send(result);
+        let _ = job.reply.send(result.clone());
+        {
+            let mut replies = shared.replies.lock().unwrap();
+            replies.push(ReplyRecord {
+                seq: job.seq,
+                result,
+            });
+            shared.replies_cond.notify_all();
+        }
     }
 }
 
@@ -427,8 +567,14 @@ fn resolve_host(shared: &Shared, host: &str) -> Result<Vec<u128>, DnsError> {
             continue;
         }
 
-        // Terminal failure: C dns_request_done(d, 0) counts it.
-        shared.stats.lock().unwrap().failed += 1;
+        // Terminal failure: C dns_request_done(d, 0) counts it as
+        // finished with zero added addresses (the pending counter
+        // must reach zero for the drain wait to end).
+        {
+            let mut stats = shared.stats.lock().unwrap();
+            stats.finished += 1;
+            stats.failed += 1;
+        }
         let line = match shared.family {
             Family::V4 => match rc {
                 libc::EAI_AGAIN => format!(
@@ -693,6 +839,8 @@ mod tests {
             stats: Mutex::new(Stats::default()),
             jobs: Mutex::new(rx),
             jobs_cond: Condvar::new(),
+            replies: Mutex::new(Vec::new()),
+            replies_cond: Condvar::new(),
         }
     }
 
@@ -833,6 +981,32 @@ mod tests {
             "got: {msg}"
         );
         // C dns6_done() always returns 0.
+        assert_eq!(r.finish(), Ok(()));
+    }
+
+    #[test]
+    fn pool_is_hard_capped_with_huge_threads_max() {
+        // The C oracle spawns one worker per pending request while
+        // `pending > workers && workers < --dns-threads`; a legal but
+        // huge --dns-threads value therefore reserves hundreds of GiB
+        // of worker stacks and OOMs the process. The pool must stop
+        // at DNS_POOL_HARD_MAX so the run stays bounded.
+        let mut r = Resolver::new(1_000_000, false, false, Family::V4, false);
+        for _ in 0..DNS_POOL_HARD_MAX * 4 {
+            r.request("localhost").expect("queue localhost");
+        }
+        assert!(
+            r.workers.len() <= DNS_POOL_HARD_MAX,
+            "pool grew to {} workers, ceiling is {}",
+            r.workers.len(),
+            DNS_POOL_HARD_MAX
+        );
+        let replies = r.drain();
+        assert_eq!(replies.len(), DNS_POOL_HARD_MAX * 4, "every job must reply");
+        assert!(
+            replies.iter().all(|r| r.result.is_ok()),
+            "localhost replies must all resolve"
+        );
         assert_eq!(r.finish(), Ok(()));
     }
 

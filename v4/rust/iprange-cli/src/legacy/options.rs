@@ -41,19 +41,29 @@ pub enum Mode {
     Reduce,
 }
 
+/// The one print shape of the run (C `IPSET_PRINT_CMD`): the last
+/// `--print-*` flag in argv wins; there is no precedence between
+/// shapes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PrintMode {
+    /// Default: per-range CIDR decomposition.
+    #[default]
+    Cidr,
+    /// `--print-ranges` / `-j`: one `lo-hi` line per range.
+    Ranges,
+    /// `--print-single-ips` / `-1`: one address per line.
+    SingleIps,
+    /// `--print-binary`: the released v1.0/v2.0 binary payload.
+    Binary,
+}
+
 /// Print-shape flags (accepted by merge/common/exclude/diff/reduce;
 /// ignored by the CSV modes).
 #[derive(Clone, Debug, Default)]
 pub struct Print {
-    /// `--print-ranges` / `-j`.
-    pub ranges: bool,
-    /// `--print-single-ips` / `-1`.
-    pub single_ips: bool,
-    /// `--print-binary`.
-    pub binary: bool,
+    /// The selected shape (last flag wins).
+    pub mode: PrintMode,
     /// Prefix/suffix wrappers; the family splits ips and nets sets.
-    pub prefix: String,
-    pub suffix: String,
     pub prefix_ips: String,
     pub suffix_ips: String,
     pub prefix_nets: String,
