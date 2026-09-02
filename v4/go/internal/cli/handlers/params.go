@@ -120,12 +120,14 @@ func asString(object rawObject, name string) (string, error) {
 }
 
 // asOptionalString decodes a string member or returns "" when absent
-// (a present null is treated as absent, mirroring the Rust
-// and_then(Value::as_str) optional-member pattern).
+// (absent is the only absent form; a present null is rejected).
 func asOptionalString(object rawObject, name string) (string, error) {
 	raw, ok := object[name]
 	if !ok {
 		return "", nil
+	}
+	if isRawNull(raw) {
+		return "", fmt.Errorf("%s must be a string; null is not valid", name)
 	}
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {

@@ -55,3 +55,4 @@ v4/go/cmd/iprange-v4-bench/iprange-v4-worker
 /build-*/
 /src/.dirstamp
 /v4/go/*.test
+/local-build-objects.stamp

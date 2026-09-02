@@ -2581,11 +2581,11 @@ round-7 fixes at the new HEAD.
     null value-tag member returns -32602 on both binaries and creates
     nothing; committed negatives cover both members plus the legal
     empty forms.
-  - Complete null sweep: every direct json.Unmarshal into a primitive
-    string or slice in the CLI handlers now rejects null (cursor
-    start, feed members, prefixes, algebra sources/addresses/windows/
-    values, housekeeping/cleanup artifacts and state) — the full
-    null-as-zero class is closed, not just the reported surface.
+  - Complete null sweep: every json.Unmarshal into a primitive string
+    or slice in the CLI handlers now rejects null (cursor start, feed
+    members, prefixes, algebra sources/addresses/windows/values,
+    housekeeping/cleanup artifacts and state, and the last optional
+    helper asOptionalString) - the full null-as-zero class is closed.
   - P3 encoder: rustjson adds direct []string/[]json.RawMessage/
     []int64/[]uint64 cases and a recursive re-emit fallback so no
     wire bytes fall back to encoding/json escaping; a []string
@@ -2610,11 +2610,44 @@ round-7 fixes at the new HEAD.
     packages + root PASS; v4work PASS; legacy C-oracle 100/100 PASS
     (IPRANGE_BIN=/tmp/iprange-final/iprange); mmap trace PASS; vet
     and gofmt clean.
-  - Cross-language byte probes at the exact binary: null-per-type
-    (6 surfaces) identical, value-tag nulls identical, "<&>&" and
-    U+2028 id echoes byte-identical, matching_feeds zero-match
-    identical.
+  - Cross-language probes at the exact binary: null-per-type and
+    value-tag null requests return the identical machine outcome
+    (-32602) with no residue on both binaries; "<&>&" and U+2028 id
+    echoes are byte-identical; matching_feeds zero-match identical.
+    (Human diagnostic message text differs on some refusal paths, as
+    the spec's message field is explicitly human-diagnostic.)
 - This milestone-3 entry is the delivery-step-4 close; the remaining
   SOW steps (consolidated benchmark harness and platform/artifact
   gates) continue as the next milestone after the glm final verdict
   and the five-reviewer consensus recorded above.
+
+### 2026-09-03 (continued) — glm final re-review (third round) and record-proof corrections
+
+- The glm-5.3-responses re-review at 5810eaf6 returned FAIL with
+  three P2 record/proof findings and two P3s; the executable
+  behavior was verified green (value-tag nulls refused with no
+  residue on both binaries, all gates pass). Corrections in this
+  wave:
+  - P2-1 asOptionalString: the last direct primitive helper now
+    rejects present null (absent-only), and its sole caller
+    (reader.ranges.open view.feed) was already protected by
+    validateView; the null-sweep claim is now exactly true.
+  - P2-2 delivery matrix: delivery.max_output_bytes negatives now
+    cover abc, 00, and overflow (full Cartesian matrix on every
+    named surface).
+  - P2-3 wording: the close-out record now says the value-tag/null
+    probes return identical machine outcomes with no residue and
+    notes that human diagnostic message text is not byte-identical
+    on refusal paths (spec: message is human-diagnostic); the
+    byte-identical claims are limited to the id/escape probes where
+    they are true.
+  - P3 WorkerAvailability: the inventory row remains the type-carrier
+    convention (the inventory format carries types as lib-reexport
+    rows or method owners) and its divergence note names it as a
+    module-only public type; the gate passes.
+  - P3 local-build-objects.stamp: the empty build-artifact stamp is
+    now gitignored so the worktree stays clean for build provenance.
+- Re-validation after corrections: Go suite, v4work, vet, gofmt,
+  matrices, golden, sensitivity, C-oracle, mmap trace - all PASS
+  (detailed results in the close-out entry above; the binary pair
+  from 82828999 remains the exact code identity and was re-probed).

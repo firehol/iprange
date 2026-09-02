@@ -74,24 +74,26 @@ func TestValidatorStrictCanonicalDecimals(t *testing.T) {
 		}
 	}
 	// delivery max_output_bytes (export/query file delivery)
-	dparams, err := json.Marshal(map[string]any{
-		"delivery": map[string]any{
-			"mode":               "file",
-			"path":               "/tmp/probe",
-			"publication_policy": "replace_existing",
-			"max_output_bytes":   "abc",
-			"max_open_files":     32,
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := decodeObject(dparams)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ValidateDelivery(raw); err == nil {
-		t.Fatal("delivery max_output_bytes=\"abc\" must be refused at validation")
+	for _, bad := range []string{"abc", "00", "18446744073709551616"} {
+		dparams, err := json.Marshal(map[string]any{
+			"delivery": map[string]any{
+				"mode":               "file",
+				"path":               "/tmp/probe",
+				"publication_policy": "replace_existing",
+				"max_output_bytes":   bad,
+				"max_open_files":     32,
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw, err := decodeObject(dparams)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateDelivery(raw); err == nil {
+			t.Fatalf("delivery max_output_bytes=%q must be refused at validation", bad)
+		}
 	}
 	// canonical values still pass validation
 	good, err := json.Marshal(map[string]any{
