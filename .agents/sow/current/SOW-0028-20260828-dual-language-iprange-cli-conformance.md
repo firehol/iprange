@@ -1305,6 +1305,15 @@ Open decisions:
   self-tests pass; Go SDK suite green; mmap storage/runtime/
   architecture gates pass; SOW audit and hygiene scans clean.
 
+- Five own-model delta reviewers re-verified the round-11 fixes at
+  b41550f3 and 60b95b0c: wire (Boole), close-facts (Ohm),
+  performance (Tesla), coverage/oracles (Pauli), and SDK-ownership
+  (Ramanujan) scopes all PASS; no P0-P2 finding remains open after
+  the round-11 wave. Pauli's follow-up record/pin fixes landed at
+  60b95b0c (history.project live source_closes pin, cancel
+  notification-flag schema requirement, round-11 SOW record); the
+  acceptance-case count was corrected to 31 at 2c3e1058.
+
 ### 2026-09-01 (continued) — complete handler registry
 
 - All 32 remaining v1 methods implemented by three parallel workers and
