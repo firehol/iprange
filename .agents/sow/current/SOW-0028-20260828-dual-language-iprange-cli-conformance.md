@@ -2057,3 +2057,41 @@ round-7 fixes at the new HEAD.
     pool has grown), the Rust process aborts (core dump, rc 134)
     instead of C's per-host graceful degradation — Rust's standard
     OOM behavior; the pool cap keeps real runs far from that point.
+
+### 2026-09-02 (continued) — milestone 2 closes (delivery step 3)
+
+- glm-5.3-responses whole-milestone final review at 51839fa5: FAIL
+  with two P2s, both fixed and re-reviewed:
+  - F1: `--help` printed a literal "iprange" for `%s`; C prints
+    `usage(argv[0])`. Fixed at d96797e0: main.rs captures the real
+    argv[0] and legacy::run substitutes it; help is byte-identical
+    to C under the same argv0 (`exec -a` differential).
+  - F2: three reviewer resolutions were uncommitted working-tree
+    edits; committed at d96797e0 (mod.rs doc enumeration,
+    check-architecture.sh legacy-isolation scan, SOW labels).
+  - glm delta re-review at d96797e0: PASS; one cosmetic P3 recorded:
+    a program name containing `%d`/`%s` literals would be re-scanned
+    by the sequential replace (C passes argv0 as a printf argument).
+    Disposition: not worth fixing — no realistic invocation uses such
+    an argv0, and any fix would add a formatting pass to a cold path;
+    recorded here as the rejection evidence.
+- Review verdicts at milestone-2 HEAD, all handled: Tesla P1/P2/P3
+  (buffered stdout, pool growth, import) fixed; Pauli F1/F2/F3
+  (help %s/%d, unimplemented! scaffold removed, DNS waiting cadence
+  accepted deviation) resolved; Ohm P3-1 (worker-attested counts
+  labeled), P3-2 (cancellation follow-up tracked in SOW-0030),
+  P3-3 (help argv0) resolved; Ramanujan P3-3/P3-4/P3-5 (doc
+  enumeration, dual writers deliberate, isolation scan) resolved.
+- All gates re-run at final HEAD d96797e0 (nice): tests.d legacy
+  suite 100/100; Rust workspace 50 suites plain and --all-features,
+  iprange-cli 251 tests, -D warnings clean; source graph 502/4;
+  v4/cli runner 31/31 with 15 oracle checks; golden PASSED;
+  sensitivity 14 modes; mmap storage 343 files, mmap runtime,
+  architecture (incl. the new legacy-isolation scan), and the Go
+  mmap-trace gate all PASS.
+- Milestone 2 closes; delivery-order step 4 starts: implement the
+  pure-Go product executable `v4/go/cmd/iprange` (legacy surface +
+  JSON-RPC over stdin/stdout) with `v4/go/internal/cli/{legacy,rpc,
+  handlers,fileio}`, importing only the public Go module, in the same
+  family order as the Rust port, with C-authoritative expectations
+  only (never Rust-produced expected answers).
