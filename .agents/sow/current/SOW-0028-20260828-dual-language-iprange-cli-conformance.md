@@ -2661,3 +2661,25 @@ round-7 fixes at the new HEAD.
   already-unreachable-by-validation helper), so the pairs are
   behaviorally equivalent on every public request. The a4dd504c
   pair is the exact identity for milestone-3 close-out.
+
+### 2026-09-03 (continued) — milestone-3 closed: glm whole-milestone final review PASS
+
+- The glm-5.3-responses whole-milestone review PASSED at 5151992e
+  after four review rounds (FAIL at 836df335; FAIL with value-tag P1
+  at e0bbd5a8; FAIL with record-proof P2s at 5810eaf6; PASS after
+  the record corrections). The final round verified: value-tag null
+  refusals with no residue on both binaries, byte-identical id and
+  escape vectors, the complete null sweep, the full decimal bad-value
+  matrix, fresh exact-HEAD binaries with vcs.modified=false, clean
+  worktree, and accurate close-out records.
+- Milestone 3 (delivery step 4: the pure-Go JSON-RPC product
+  executable at v4/go/cmd/iprange with the CLI-only SDK surfaces) is
+  closed. Final review consensus: five own-model adversarial
+  reviewers (Rust parity, Go idioms, performance, wire integrity,
+  API/docs) PASS through incremental rounds, and the user-mandated
+  glm-5.3-responses whole-milestone review PASS at exact HEAD
+  5151992e.
+- Remaining SOW steps (delivery step 6: consolidated benchmark
+  harness and measured ceilings; step 7: platform/artifact/docs/
+  skill/final gates) form the next milestone and continue in this
+  SOW.
