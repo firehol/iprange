@@ -36,12 +36,6 @@ import (
 // recovery candidates use the same exact shapes).
 // ---------------------------------------------------------------------------
 
-// canonicalU64 parses one canonical unsigned decimal string ("0" or
-// digits without a leading zero) into a u64 (Rust reader::u64_string).
-func canonicalU64(raw json.RawMessage) (uint64, error) {
-	return canonicalU64FromRaw(raw)
-}
-
 // decodeIdentityFromObject decodes one FILE_IDENTITY wire object
 // (volume/file decimal pair) into the portable SDK identity of the
 // current platform (Rust maintenance::identity_from_value).
@@ -50,11 +44,11 @@ func decodeIdentityFromObject(object rawObject) (iprangedb.FileIdentity, error) 
 	if err := exactMembers(object, []string{"volume", "file"}, nil, "identity"); err != nil {
 		return identity, err
 	}
-	volume, err := canonicalU64(object["volume"])
+	volume, err := canonicalU64FromRaw(object["volume"])
 	if err != nil {
 		return identity, fmt.Errorf("identity.volume must be a canonical unsigned decimal string")
 	}
-	file, err := canonicalU64(object["file"])
+	file, err := canonicalU64FromRaw(object["file"])
 	if err != nil {
 		return identity, fmt.Errorf("identity.file must be a canonical unsigned decimal string")
 	}
@@ -115,11 +109,11 @@ func DatabaseReclaim(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Ha
 	if herr := requireExistingLiveDatabase(path); herr != nil {
 		return nil, herr
 	}
-	maxTransactions, err := canonicalU64(object["max_transactions"])
+	maxTransactions, err := canonicalU64FromRaw(object["max_transactions"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("max_transactions must be a canonical unsigned decimal string")
 	}
-	maxPages, err := canonicalU64(object["max_pages"])
+	maxPages, err := canonicalU64FromRaw(object["max_pages"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("max_pages must be a canonical unsigned decimal string")
 	}
@@ -1384,7 +1378,7 @@ func decodeTupleObject(tuple rawObject) (*iprangedb.PublicationTuple, *rpc.Handl
 	if err != nil {
 		return nil, rpc.InvalidParamsError("entry.tuple.database_id is invalid")
 	}
-	transactionID, err := canonicalU64(tuple["transaction_id"])
+	transactionID, err := canonicalU64FromRaw(tuple["transaction_id"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("entry.tuple.transaction_id must be a canonical unsigned decimal string")
 	}
@@ -1398,7 +1392,7 @@ func decodeTupleObject(tuple rawObject) (*iprangedb.PublicationTuple, *rpc.Handl
 // decodeDigestObject converts one validated digest wire object into
 // the SDK digest.
 func decodeDigestObject(digest rawObject) (*iprangedb.PublicationDigest, *rpc.HandlerError) {
-	byteLength, err := canonicalU64(digest["byte_length"])
+	byteLength, err := canonicalU64FromRaw(digest["byte_length"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("entry.digest.byte_length must be a canonical unsigned decimal string")
 	}
@@ -1547,11 +1541,11 @@ func decodeOutputDescriptor(output rawObject) (string, iprangedb.PublicationPoli
 	if err != nil {
 		return "", 0, fileio.ExportBudget{}, rpc.InvalidParamsError("result_budget must be an object")
 	}
-	maxRows, err := canonicalU64(budgetObj["max_rows"])
+	maxRows, err := canonicalU64FromRaw(budgetObj["max_rows"])
 	if err != nil {
 		return "", 0, fileio.ExportBudget{}, rpc.InvalidParamsError("result_budget.max_rows is invalid")
 	}
-	maxBytes, err := canonicalU64(budgetObj["max_output_bytes"])
+	maxBytes, err := canonicalU64FromRaw(budgetObj["max_output_bytes"])
 	if err != nil {
 		return "", 0, fileio.ExportBudget{}, rpc.InvalidParamsError("result_budget.max_output_bytes is invalid")
 	}

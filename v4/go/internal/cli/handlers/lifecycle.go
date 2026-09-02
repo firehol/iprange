@@ -217,15 +217,15 @@ func validateWriterBudgetObject(budget rawObject) error {
 // decodeWriterBudget converts the validated wire budget into the SDK
 // PageBudget limits.
 func decodeWriterBudget(budget rawObject) (iprangedb.PageBudget, error) {
-	heap, err := canonicalU64(budget["max_heap_bytes"])
+	heap, err := canonicalU64FromRaw(budget["max_heap_bytes"])
 	if err != nil {
 		return iprangedb.PageBudget{}, err
 	}
-	privatePages, err := canonicalU64(budget["max_private_pages"])
+	privatePages, err := canonicalU64FromRaw(budget["max_private_pages"])
 	if err != nil {
 		return iprangedb.PageBudget{}, err
 	}
-	growthPages, err := canonicalU64(budget["max_growth_pages"])
+	growthPages, err := canonicalU64FromRaw(budget["max_growth_pages"])
 	if err != nil {
 		return iprangedb.PageBudget{}, err
 	}

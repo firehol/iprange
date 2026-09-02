@@ -102,11 +102,11 @@ func decodeSnapshotBudget(object rawObject) (*iprangedb.SnapshotBudget, *rpc.Han
 	if err != nil {
 		return nil, rpc.InvalidParamsError("snapshot_budget must be an object")
 	}
-	heap, err := canonicalU64(budget["max_heap_bytes"])
+	heap, err := canonicalU64FromRaw(budget["max_heap_bytes"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("snapshot_budget.max_heap_bytes is invalid")
 	}
-	outputPages, err := canonicalU64(budget["max_output_pages"])
+	outputPages, err := canonicalU64FromRaw(budget["max_output_pages"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("snapshot_budget.max_output_pages is invalid")
 	}

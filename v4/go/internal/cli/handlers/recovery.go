@@ -738,7 +738,7 @@ func decodeCandidateObject(candidate rawObject) (*iprangedb.RecoveryCandidate, *
 	if err != nil {
 		return nil, rpc.InvalidParamsError(err.Error())
 	}
-	transactionID, err := canonicalU64(candidate["transaction_id"])
+	transactionID, err := canonicalU64FromRaw(candidate["transaction_id"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("candidate.transaction_id must be a canonical unsigned decimal string")
 	}
@@ -1006,7 +1006,7 @@ func decodeValidationBudget(object rawObject) (*iprangedb.ValidationBudget, *rpc
 	if err != nil {
 		return nil, rpc.InvalidParamsError("validation_budget must be an object")
 	}
-	heap, err := canonicalU64(budget["max_heap_bytes"])
+	heap, err := canonicalU64FromRaw(budget["max_heap_bytes"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("validation_budget.max_heap_bytes is invalid")
 	}
@@ -1014,7 +1014,7 @@ func decodeValidationBudget(object rawObject) (*iprangedb.ValidationBudget, *rpc
 	if err != nil {
 		return nil, rpc.InvalidParamsError("validation_budget.max_open_files must be a u32 integer")
 	}
-	scratchBytes, err := canonicalU64(budget["max_scratch_bytes"])
+	scratchBytes, err := canonicalU64FromRaw(budget["max_scratch_bytes"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("validation_budget.max_scratch_bytes is invalid")
 	}
@@ -1045,11 +1045,11 @@ func decodeRecoveryBudget(object rawObject) (*iprangedb.RecoveryBudget, *rpc.Han
 	if err != nil {
 		return nil, rpc.InvalidParamsError("recovery_budget must be an object")
 	}
-	heap, err := canonicalU64(budget["max_heap_bytes"])
+	heap, err := canonicalU64FromRaw(budget["max_heap_bytes"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("recovery_budget.max_heap_bytes is invalid")
 	}
-	outputPages, err := canonicalU64(budget["max_output_pages"])
+	outputPages, err := canonicalU64FromRaw(budget["max_output_pages"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("recovery_budget.max_output_pages is invalid")
 	}
@@ -1057,7 +1057,7 @@ func decodeRecoveryBudget(object rawObject) (*iprangedb.RecoveryBudget, *rpc.Han
 	if err != nil {
 		return nil, rpc.InvalidParamsError("recovery_budget.max_open_files must be a u32 integer")
 	}
-	scratchBytes, err := canonicalU64(budget["max_scratch_bytes"])
+	scratchBytes, err := canonicalU64FromRaw(budget["max_scratch_bytes"])
 	if err != nil {
 		return nil, rpc.InvalidParamsError("recovery_budget.max_scratch_bytes is invalid")
 	}

@@ -2474,7 +2474,7 @@ round-7 fixes at the new HEAD.
   reviewers, then the glm-5.3-responses whole-milestone review, then
   milestone-3 close-out.
 
-### 2026-09-02 (continued) — delta-2 review at 299c5035 (3/3 PASS) and validator-strictness wave
+### 2026-09-02 (continued) — delta-2 review at 299c5035 (2/3 PASS, 1 FAIL) and validator-strictness wave
 
 - The delta re-review of the second fix wave at 299c5035 returned:
   Rust parity PASS, API/docs PASS, Go idioms FAIL (P2-C plus P3s).
