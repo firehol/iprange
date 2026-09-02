@@ -104,7 +104,7 @@ func validateValueTagObject(tag rawObject) error {
 			if err := json.Unmarshal(hex, &value); err != nil {
 				return fmt.Errorf("value_tag.hex must be a string")
 			}
-			if value == "" || len(value) > 30 || len(value)%2 != 0 {
+			if len(value) > 30 || len(value)%2 != 0 {
 				return fmt.Errorf("value_tag.hex must be even lowercase hex encoding at most 15 bytes")
 			}
 			for i := 0; i < len(value); i++ {
@@ -165,14 +165,12 @@ func validateReplacementMetadata(metadata rawObject) error {
 	case "clear":
 		return exactObjectRaw(metadata, "mode")
 	case "replace_utf8":
-		var text string
 		if err := exactObjectRaw(metadata, "mode", "text"); err != nil {
 			return err
 		}
 		if _, err := asString(metadata, "text"); err != nil {
 			return fmt.Errorf("metadata.text must be a string")
 		}
-		_ = text
 		return nil
 	case "replace_base64":
 		if err := exactObjectRaw(metadata, "mode", "base64"); err != nil {
@@ -356,28 +354,13 @@ func structureKindByName(name string) iprangedb.StructureKind {
 }
 
 // valueTagFromObject decodes the strict value-tag wire object into
-// the canonical SDK tag.
+// the canonical SDK tag (valueTagFromWire authority).
 func valueTagFromObject(object rawObject) (iprangedb.ValueTag, error) {
 	tag, err := memberObject(object, "value_tag")
 	if err != nil {
 		return iprangedb.ValueTag{}, err
 	}
-	if textRaw, ok := tag["text"]; ok {
-		var text string
-		if err := json.Unmarshal(textRaw, &text); err != nil {
-			return iprangedb.ValueTag{}, fmt.Errorf("value_tag.text must be a string")
-		}
-		return iprangedb.NewValueTag([]byte(text))
-	}
-	hex, err := asHexString(tag, "hex")
-	if err != nil {
-		return iprangedb.ValueTag{}, err
-	}
-	bytes := make([]byte, len(hex)/2)
-	for i := 0; i < len(bytes); i++ {
-		bytes[i] = hexNibble(hex[2*i])<<4 | hexNibble(hex[2*i+1])
-	}
-	return iprangedb.NewValueTag(bytes)
+	return valueTagFromWire(tag, "value_tag")
 }
 
 // CreateResultJSON converts one SDK creation result to its complete
@@ -527,14 +510,22 @@ func DatabaseMetadataReplace(st *rpc.SessionState, params json.RawMessage) (any,
 	if herr := requireExistingLiveDatabase(path); herr != nil {
 		return nil, herr
 	}
-	metadata, herr := MetadataValueFromObject(mustMemberObject(object, "metadata"))
+	metadataObject, merr := memberObject(object, "metadata")
+	if merr != nil {
+		return nil, rpc.InvalidParamsError(merr.Error())
+	}
+	metadata, herr := MetadataValueFromObject(metadataObject)
 	if herr != nil {
 		return nil, herr
 	}
 	if metadata.Keep {
 		return nil, rpc.InvalidParamsError("metadata.mode is invalid for this method")
 	}
-	budget, err := decodeWriterBudget(mustMemberObject(object, "writer_budget"))
+	budgetObject, merr := memberObject(object, "writer_budget")
+	if merr != nil {
+		return nil, rpc.InvalidParamsError("writer_budget is invalid")
+	}
+	budget, err := decodeWriterBudget(budgetObject)
 	if err != nil {
 		return nil, rpc.InvalidParamsError("writer_budget is invalid")
 	}
@@ -622,7 +613,7 @@ func DatabaseMetadataReplace(st *rpc.SessionState, params json.RawMessage) (any,
 				}
 			}
 			return nil, &rpc.HandlerError{
-				Code: code, Outcome: DurabilityOutcome(commit.Status), Message: message,
+				Code: code, Outcome: CommitDurabilityName(commit.Status), Message: message,
 				Details: details,
 			}
 		}
@@ -630,7 +621,7 @@ func DatabaseMetadataReplace(st *rpc.SessionState, params json.RawMessage) (any,
 	if closeFacts["outcome"] == "close_incomplete" {
 		outcome := "not_started"
 		if commit != nil {
-			outcome = DurabilityOutcome(commit.Status)
+			outcome = CommitDurabilityName(commit.Status)
 		}
 		return nil, &rpc.HandlerError{
 			Code: "io", Outcome: outcome, Message: "live writer close is incomplete",
@@ -648,17 +639,6 @@ func stageMetadata(transaction metadataTransaction, metadata *MetadataValue) (bo
 		return transaction.ClearMetadataJSON()
 	}
 	return transaction.SetMetadataJSON(metadata.Bytes)
-}
-
-// mustMemberObject returns the named member as an object; the
-// validator already proved the shape, so a failure here is a
-// programming error that the product reports as invalid params.
-func mustMemberObject(object rawObject, name string) rawObject {
-	value, err := memberObject(object, name)
-	if err != nil {
-		panic(err)
-	}
-	return value
 }
 
 // RegisterLifecycle installs the database lifecycle handler family.

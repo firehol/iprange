@@ -289,7 +289,7 @@ func ReaderOpen(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Handler
 		return nil, rpc.NewHandlerError("server_busy", "not_started",
 			"connection reader limit 64 is exhausted")
 	}
-	reader, herr := openReader(path, mode, st.Token())
+	reader, herr := openReader(path, mode, "database source", st.Token())
 	if herr != nil {
 		return nil, herr
 	}
@@ -569,7 +569,7 @@ func ReaderLookup(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Handl
 		if herr != nil {
 			return nil, herr
 		}
-		words := []uint64{}
+		var words []uint64
 		for _, text := range addresses {
 			point, herr := ParseAddress(text)
 			if herr != nil {
@@ -647,7 +647,7 @@ func lookupStructured(pin *iprangedb.Pin, point *rpc.CursorPoint, snapshot *Feed
 	if !found {
 		return nil, false, nil
 	}
-	feeds, herr := ThreatFeedNames(view, snapshot, words)
+	feeds, herr := ThreatFeedNames(view, snapshot, &words)
 	if herr != nil {
 		return nil, false, herr
 	}
@@ -687,7 +687,7 @@ func ReaderMatchingFeeds(st *rpc.SessionState, params json.RawMessage) (any, *rp
 	if herr != nil {
 		return nil, herr
 	}
-	var feeds []string
+	feeds := make([]string, 0)
 	var count uint64
 	switch info.ValueKind {
 	case iprangedb.ValueKindDirect:
@@ -739,8 +739,8 @@ func ReaderMatchingFeeds(st *rpc.SessionState, params json.RawMessage) (any, *rp
 			if herr != nil {
 				return nil, herr
 			}
-			words := []uint64{}
-			feeds, herr = ThreatFeedNames(view, snapshot, words)
+			var words []uint64
+			feeds, herr = ThreatFeedNames(view, snapshot, &words)
 			if herr != nil {
 				return nil, herr
 			}
@@ -763,7 +763,7 @@ func DatabaseInfo(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Handl
 	if herr != nil {
 		return nil, herr
 	}
-	reader, herr := openReader(path, mode, st.Token())
+	reader, herr := openReader(path, mode, "database source", st.Token())
 	if herr != nil {
 		return nil, herr
 	}
@@ -807,7 +807,7 @@ func DatabaseMetadataGet(st *rpc.SessionState, params json.RawMessage) (any, *rp
 	if err != nil {
 		return nil, rpc.InvalidParamsError(err.Error())
 	}
-	reader, herr := openReader(path, mode, st.Token())
+	reader, herr := openReader(path, mode, "database source", st.Token())
 	if herr != nil {
 		return nil, herr
 	}
@@ -827,14 +827,14 @@ func DatabaseMetadataGet(st *rpc.SessionState, params json.RawMessage) (any, *rp
 // openReader opens one database source; the path is verified before the
 // SDK open so a missing path reports invalid_path and an unverifiable
 // path reports io (Rust reader.rs open_reader parity).
-func openReader(path, mode string, cancellation *iprangedb.CancellationToken) (*rpc.ReaderValue, *rpc.HandlerError) {
+func openReader(path, mode, label string, cancellation *iprangedb.CancellationToken) (*rpc.ReaderValue, *rpc.HandlerError) {
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, rpc.NewHandlerError("invalid_path", "not_started",
-				"database source does not exist: "+path)
+				label+" does not exist: "+path)
 		}
 		return nil, rpc.NewHandlerError("io", "not_started",
-			"cannot inspect database source "+path+": "+err.Error())
+			"cannot inspect "+label+" "+path+": "+err.Error())
 	}
 	if mode == "immutable" {
 		reader, err := iprangedb.OpenImmutable(path)
@@ -954,23 +954,5 @@ func closeReadersOnError(reader *rpc.ReaderValue, failure *rpc.HandlerError) *rp
 // no sign, separator, leading zero (except "0"), fraction, or exponent
 // (Rust reader.rs u64_string parity).
 func parseCanonicalU64(text string) (uint64, error) {
-	if text == "0" {
-		return 0, nil
-	}
-	if text == "" || text[0] == '0' {
-		return 0, fmt.Errorf("not a canonical unsigned decimal string")
-	}
-	var value uint64
-	for i := 0; i < len(text); i++ {
-		c := text[i]
-		if c < '0' || c > '9' {
-			return 0, fmt.Errorf("not a canonical unsigned decimal string")
-		}
-		digit := uint64(c - '0')
-		if value > (^uint64(0)-digit)/10 {
-			return 0, fmt.Errorf("not a canonical unsigned decimal string")
-		}
-		value = value*10 + digit
-	}
-	return value, nil
+	return canonicalU64String(text)
 }

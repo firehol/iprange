@@ -200,3 +200,38 @@ func TestWorkFeedProjection(t *testing.T) {
 		t.Fatalf("projection counters = %+v, want %+v", got, want)
 	}
 }
+
+// TestWorkFeedCursorSeekByIndex pins the O(log n) reposition budget on
+// the wide three-leaf catalog (Rust feed_catalog_tests.rs
+// feed_cursor_seek_reads_only_the_target_interval): one root-to-leaf
+// seek visits the branch and the target leaf, the next_feed re-reads
+// the cached leaf, and Go's eager advance re-inspects the branch before
+// finishing. A linear reopen-and-skip page would have visited every
+// preceding leaf instead.
+func TestWorkFeedCursorSeekByIndex(t *testing.T) {
+	r, err := OpenImmutable(buildWideCatalogDatabase(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+
+	c, err := r.NewFeedCursor()
+	if err != nil {
+		t.Fatal(err)
+	}
+	work.Reset()
+	if err := c.SeekByIndex(149); err != nil {
+		t.Fatal(err)
+	}
+	entry, ok, err := c.Next()
+	if err != nil || !ok || entry.FeedIndex != 149 {
+		t.Fatalf("seek(149) next = (%+v, %v, %v), want 149", entry, ok, err)
+	}
+	want := work.Snapshot{
+		TreeDescents: 1, PagesVisited: 4, PagesParsed: 4,
+		LeafValidations: 1,
+	}
+	if got := work.Read(); got != want {
+		t.Fatalf("seek counters = %+v, want %+v", got, want)
+	}
+}

@@ -24,23 +24,7 @@ const CursorLimit = 64
 // sources and selections): 1 through 255 lowercase ASCII bytes, first
 // and last char a-z or 0-9, interior also _ - .
 func validFeedName(name string) bool {
-	if len(name) < 1 || len(name) > 255 {
-		return false
-	}
-	for i := 0; i < len(name); i++ {
-		c := name[i]
-		alnum := c >= 'a' && c <= 'z' || c >= '0' && c <= '9'
-		if i == 0 || i == len(name)-1 {
-			if !alnum {
-				return false
-			}
-			continue
-		}
-		if !alnum && c != '_' && c != '-' && c != '.' {
-			return false
-		}
-	}
-	return true
+	return feedNameValid(name)
 }
 
 // RegisterCursors installs the reader feeds/ranges cursor methods. The
@@ -230,8 +214,8 @@ func FeedsOpen(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerE
 
 // FeedsNext returns one bounded page of catalog rows in feed-catalog
 // order (spec reader.feeds.next). Each page re-opens the catalog cursor
-// and skips to the retained feed-index checkpoint. The cursor closes
-// automatically at done:true.
+// and seeks it once to the retained feed-index checkpoint. The cursor
+// closes automatically at done:true.
 func FeedsNext(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerError) {
 	object, err := exactObject(params, "cursor")
 	if err != nil {
@@ -271,16 +255,12 @@ func FeedsNext(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerE
 			closeCursor(st, handle)
 			return boundedResult(result)
 		}
-		// The public SDK catalog cursor has no seek, so the checkpoint
-		// is reached by consuming (last+1) leading entries.
-		for skip := uint64(0); skip <= uint64(*cursor.LastFeedIndex); skip++ {
-			_, ok, err := catalog.NextFeed()
-			if err != nil {
-				return nil, readError(err)
-			}
-			if !ok {
-				break
-			}
+		// One O(log n) reposition per page (Rust cursors.rs
+		// feeds.next parity): the catalog cursor seeks directly to the
+		// checkpoint so the first row of this page is exactly the row
+		// that follows the last emitted row of the previous page.
+		if err := catalog.SeekByIndex(*cursor.LastFeedIndex + 1); err != nil {
+			return nil, readError(err)
 		}
 	}
 	rows := make([]any, 0)
@@ -410,9 +390,8 @@ func RangesOpen(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Handler
 // RangesNext returns one bounded page of range records (spec
 // reader.ranges.next): direct and structured records carry the semantic
 // value, feed records carry only from/to. Each page re-opens fresh SDK
-// cursors positioned at the retained address checkpoint (feed views
-// skip because their projection has no public seek). The cursor closes
-// automatically at done:true.
+// cursors and seeks each once to the retained address checkpoint. The
+// cursor closes automatically at done:true.
 func RangesNext(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerError) {
 	object, err := exactObject(params, "cursor")
 	if err != nil {
@@ -453,8 +432,7 @@ func RangesNext(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Handler
 		return nil, herr
 	}
 	// Feed views keep one projection cursor open for the whole page,
-	// positioned once at the checkpoint (the projection has no public
-	// seek, so positioning skips leading records).
+	// seeked once to the checkpoint.
 	var feedPage *pageFeedCursor
 	if cursor.View.FeedName != "" {
 		feedPage, herr = openFeedPage(reader, info, cursor.View.FeedName, rangeDirection(cursor.Reverse), cursor.Point)
@@ -480,7 +458,7 @@ func RangesNext(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Handler
 			return nil, rpc.NewHandlerError("cancelled", "not_started",
 				"cursor read was cancelled")
 		}
-		record, nextPoint, ok, herr := nextRecord(reader, info, cursor.View, cursor.Reverse, point, feedPage, snapshot, words)
+		record, nextPoint, ok, herr := nextRecord(reader, info, cursor.View, cursor.Reverse, point, feedPage, snapshot, &words)
 		if herr != nil {
 			return nil, herr
 		}
@@ -532,18 +510,19 @@ func RangesClose(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Handle
 // ---------------------------------------------------------------------------
 
 // pageFeedCursor is one feed projection held open for one ranges.next
-// page. The projection has no public seek, so the checkpoint skip
-// buffers the first positioned record as pending.
+// page, seeked once to the retained address checkpoint (Rust
+// cursors.rs open_feed_page parity: one O(log n) seek per page instead
+// of a linear walk from the start of the projection).
 type pageFeedCursor struct {
-	v4       *iprangedb.FeedRangeCursorV4
-	v6       *iprangedb.FeedRangeCursorV6
-	pending4 *iprangedb.AddressRange4
-	pending6 *iprangedb.AddressRange6
+	v4 *iprangedb.FeedRangeCursorV4
+	v6 *iprangedb.FeedRangeCursorV6
 }
 
 // openFeedPage opens the named-feed projection and positions it at the
-// checkpoint (Rust cursors.rs open_feed_page parity; skip-based because
-// the public projection cursors offer no Seek).
+// checkpoint (Rust cursors.rs open_feed_page parity: the projection
+// seeks once per page to the retained address, so the first record of
+// the page is exactly the record that follows the last emitted record
+// of the previous page).
 func openFeedPage(reader *rpc.ReaderValue, info iprangedb.DatabaseInfo, name string, direction iprangedb.RangeDirection, point *rpc.CursorPoint) (*pageFeedCursor, *rpc.HandlerError) {
 	if !familyMatches(point, info.Family) {
 		return nil, wrongFamily()
@@ -554,59 +533,29 @@ func openFeedPage(reader *rpc.ReaderValue, info iprangedb.DatabaseInfo, name str
 		if herr != nil {
 			return nil, viewError(herr)
 		}
-		page := &pageFeedCursor{v4: c}
 		if point != nil && point.V4 != nil {
-			target := uint32(*point.V4)
-			for {
-				rng, ok, err := c.NextRange()
-				if err != nil {
-					return nil, readError(err)
-				}
-				if !ok {
-					break
-				}
-				atOrAfter := direction == iprangedb.RangeDirectionForward && uint32(rng.To) >= target
-				atOrBefore := direction == iprangedb.RangeDirectionBackward && uint32(rng.From) <= target
-				if atOrAfter || atOrBefore {
-					page.pending4 = &rng
-					break
-				}
+			if herr := sdkErr(c.Seek(iprangedb.IPv4(*point.V4))); herr != nil {
+				return nil, herr
 			}
 		}
-		return page, nil
+		return &pageFeedCursor{v4: c}, nil
 	}
 	c, herr := sdk(op.FeedRangeCursorV6(name, direction))
 	if herr != nil {
 		return nil, viewError(herr)
 	}
-	page := &pageFeedCursor{v6: c}
 	if point != nil && point.V6 != nil {
-		target := *point.V6
-		for {
-			rng, ok, err := c.NextRange()
-			if err != nil {
-				return nil, readError(err)
-			}
-			if !ok {
-				break
-			}
-			atOrAfter := direction == iprangedb.RangeDirectionForward &&
-				(rng.ToHi > target.Hi || (rng.ToHi == target.Hi && rng.ToLo >= target.Lo))
-			atOrBefore := direction == iprangedb.RangeDirectionBackward &&
-				(rng.FromHi < target.Hi || (rng.FromHi == target.Hi && rng.FromLo <= target.Lo))
-			if atOrAfter || atOrBefore {
-				page.pending6 = &rng
-				break
-			}
+		if herr := sdkErr(c.Seek(*point.V6)); herr != nil {
+			return nil, herr
 		}
 	}
-	return page, nil
+	return &pageFeedCursor{v6: c}, nil
 }
 
 // nextRecord produces the next page record and the checkpoint that
 // follows it (nil when the record ends the family range), or ok=false
 // when the stream is exhausted.
-func nextRecord(reader *rpc.ReaderValue, info iprangedb.DatabaseInfo, view rpc.CursorView, reverse bool, point *rpc.CursorPoint, feed *pageFeedCursor, snapshot *FeedSnapshot, words []uint64) (any, *rpc.CursorPoint, bool, *rpc.HandlerError) {
+func nextRecord(reader *rpc.ReaderValue, info iprangedb.DatabaseInfo, view rpc.CursorView, reverse bool, point *rpc.CursorPoint, feed *pageFeedCursor, snapshot *FeedSnapshot, words *[]uint64) (any, *rpc.CursorPoint, bool, *rpc.HandlerError) {
 	if !familyMatches(point, info.Family) {
 		return nil, nil, false, wrongFamily()
 	}
@@ -769,17 +718,12 @@ func nextRecord(reader *rpc.ReaderValue, info iprangedb.DatabaseInfo, view rpc.C
 	return nil, nil, false, wrongView("reader does not support the requested cursor view")
 }
 
-// nextFeedPage4 returns the next record of an open IPv4 feed page,
-// serving the checkpoint-buffered record first.
+// nextFeedPage4 returns the next record of an open IPv4 feed page; the
+// page cursor was already seeked to the checkpoint at open.
 func nextFeedPage4(feed *pageFeedCursor) (*iprangedb.AddressRange4, bool, *rpc.HandlerError) {
 	if feed == nil || feed.v4 == nil {
 		return nil, false, rpc.NewHandlerError("handle_wrong_kind", "not_started",
 			"feed page cursor does not match the reader family")
-	}
-	if feed.pending4 != nil {
-		rng := feed.pending4
-		feed.pending4 = nil
-		return rng, true, nil
 	}
 	rng, ok, err := feed.v4.NextRange()
 	if err != nil {
@@ -791,17 +735,12 @@ func nextFeedPage4(feed *pageFeedCursor) (*iprangedb.AddressRange4, bool, *rpc.H
 	return &rng, true, nil
 }
 
-// nextFeedPage6 returns the next record of an open IPv6 feed page,
-// serving the checkpoint-buffered record first.
+// nextFeedPage6 returns the next record of an open IPv6 feed page; the
+// page cursor was already seeked to the checkpoint at open.
 func nextFeedPage6(feed *pageFeedCursor) (*iprangedb.AddressRange6, bool, *rpc.HandlerError) {
 	if feed == nil || feed.v6 == nil {
 		return nil, false, rpc.NewHandlerError("handle_wrong_kind", "not_started",
 			"feed page cursor does not match the reader family")
-	}
-	if feed.pending6 != nil {
-		rng := feed.pending6
-		feed.pending6 = nil
-		return rng, true, nil
 	}
 	rng, ok, err := feed.v6.NextRange()
 	if err != nil {

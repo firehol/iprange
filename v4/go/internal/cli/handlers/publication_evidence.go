@@ -8,8 +8,6 @@
 package handlers
 
 import (
-	"fmt"
-
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 )
@@ -248,20 +246,9 @@ func PublicationProblemJSON(err error) map[string]any {
 		code = sdkCode(typed.Code)
 		detail = typed.Detail
 	}
-	result := map[string]any{"code": code, "detail": detail}
-	if osCode := osCodeOf(err); osCode != nil {
-		result["os_code"] = *osCode
-	}
-	return result
-}
-
-// osCodeOf extracts an OS-level error code when the SDK problem
-// carries one; nil when absent (the Go SDK folds it into the detail).
-func osCodeOf(err error) *int64 {
-	// The Go SDK does not expose a separate os_code on the public
-	// surface; the wire field is omitted, which the schema treats as
-	// absent (Rust emits it only when the SDK problem has one).
-	return nil
+	// The Go SDK folds the OS-level code into the detail; the wire
+	// field is omitted, which the schema treats as absent.
+	return map[string]any{"code": code, "detail": detail}
 }
 
 // PublicationAttemptJSON converts one exact publication attempt.
@@ -367,5 +354,3 @@ func VisibleHousekeepingJSON(visible []iprangedb.HousekeepingArtifact) []any {
 	}
 	return artifacts
 }
-
-var _ = fmt.Sprintf

@@ -170,6 +170,20 @@ func (c *FeedCursor) NextFeed() (FeedEntry, bool, error) {
 	return FeedEntry{Index: entry.FeedIndex, Name: string(entry.Name)}, true, nil
 }
 
+// SeekByIndex repositions to the first catalog entry whose feed index
+// is at least target, discarding already-consumed state (Rust
+// feed_catalog.rs FeedCursor::seek_by_index parity). Entries before
+// the target are never revisited; subsequent NextFeed calls continue
+// from the repositioned entry. Seeking to 0 restarts a complete sweep;
+// seeking past the last entry finishes the cursor. Seeks are repeatable
+// on an exhausted cursor.
+func (c *FeedCursor) SeekByIndex(target uint32) error {
+	if err := c.r.checkOpen(); err != nil {
+		return err
+	}
+	return publicError(c.inner.SeekByIndex(target))
+}
+
 // FeedRangeCursorV4 returns the coalesced IPv4 intervals of one named
 // feed in one direction.
 type FeedRangeCursorV4 struct {
@@ -219,6 +233,17 @@ func (c *FeedRangeCursorV4) NextRange() (AddressRange4, bool, error) {
 	return AddressRange4{From: IPv4(rec.From), To: IPv4(rec.To)}, true, nil
 }
 
+// Seek repositions to the containing feed interval or the nearest
+// interval in the cursor's direction, discarding the projection
+// coalescing state (Rust ProjectionState::seek parity). Seeks are
+// repeatable on an exhausted cursor.
+func (c *FeedRangeCursorV4) Seek(target IPv4) error {
+	if err := c.r.checkOpen(); err != nil {
+		return err
+	}
+	return publicError(c.inner.Seek(uint32(target)))
+}
+
 // FeedRangeCursorV6 returns the coalesced IPv6 intervals of one named
 // feed in one direction.
 type FeedRangeCursorV6 struct {
@@ -266,6 +291,17 @@ func (c *FeedRangeCursorV6) NextRange() (AddressRange6, bool, error) {
 		return AddressRange6{}, false, nil
 	}
 	return AddressRange6{FromHi: rec.FromHi, FromLo: rec.FromLo, ToHi: rec.ToHi, ToLo: rec.ToLo}, true, nil
+}
+
+// Seek repositions to the containing feed interval or the nearest
+// interval in the cursor's direction, discarding the projection
+// coalescing state (Rust ProjectionState::seek parity). Seeks are
+// repeatable on an exhausted cursor.
+func (c *FeedRangeCursorV6) Seek(target IPv6) error {
+	if err := c.r.checkOpen(); err != nil {
+		return err
+	}
+	return publicError(c.inner.Seek(target.Hi, target.Lo))
 }
 
 // NetworkEnrichmentV1RangeV4 is one typed IPv4 enrichment interval

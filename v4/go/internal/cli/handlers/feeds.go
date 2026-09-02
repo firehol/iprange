@@ -18,7 +18,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"os"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
@@ -224,24 +223,7 @@ func writerBudgetFromObject(object rawObject) (iprangedb.PageBudget, error) {
 // mode (Rust live.rs open_source_reader / feeds.rs open_temporary);
 // label names the source in error messages.
 func openDatabaseSource(path, mode, label string, token *iprangedb.CancellationToken) (*rpc.ReaderValue, *rpc.HandlerError) {
-	if _, err := os.Stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, rpc.NewHandlerError("invalid_path", "not_started", label+" does not exist: "+path)
-		}
-		return nil, rpc.NewHandlerError("io", "not_started", "cannot inspect "+label+" "+path+": "+err.Error())
-	}
-	if mode == "immutable" {
-		reader, oerr := iprangedb.OpenImmutable(path)
-		if oerr != nil {
-			return nil, readError(oerr)
-		}
-		return &rpc.ReaderValue{Immutable: reader}, nil
-	}
-	reader, oerr := iprangedb.OpenLiveReader(path, token)
-	if oerr != nil {
-		return nil, readError(oerr)
-	}
-	return &rpc.ReaderValue{Live: reader}, nil
+	return openReader(path, mode, label, token)
 }
 
 // readerInfo returns the info facts of either reader kind.
@@ -356,6 +338,13 @@ func closeEphemeralReader(reader *rpc.ReaderValue) (map[string]any, *rpc.Handler
 		return nil, readError(err)
 	}
 	if !ok {
+		// Immutable readers carry no close fact but their mapping must
+		// still be released (Rust close_ephemeral_reader parity).
+		if reader.Immutable != nil {
+			if err := reader.Immutable.Close(); err != nil {
+				return nil, readError(err)
+			}
+		}
 		return nil, nil
 	}
 	closeFacts := map[string]any{

@@ -118,21 +118,11 @@ type exportReader interface {
 // ValidateExport enforces the strict export params schema
 // (v4/cli/schema/methods.py iprange.v1.export).
 func ValidateExport(params json.RawMessage) error {
-	object, err := decodeObject(params)
+	object, err := exactObjectOpt(params,
+		[]string{"source", "view", "format", "destination", "publication_policy", "result_budget"},
+		[]string{"min_prefix", "prefixes"})
 	if err != nil {
-		return fmt.Errorf("params must be an object")
-	}
-	for key := range object {
-		if !containsString([]string{"source", "view", "format", "destination",
-			"publication_policy", "min_prefix", "prefixes", "result_budget"}, key) {
-			return fmt.Errorf("unknown member %q", key)
-		}
-	}
-	for _, field := range []string{"source", "view", "format", "destination",
-		"publication_policy", "result_budget"} {
-		if _, ok := object[field]; !ok {
-			return fmt.Errorf("missing member %q", field)
-		}
+		return err
 	}
 	if err := validateExportSource(object["source"]); err != nil {
 		return err
@@ -175,7 +165,7 @@ func ValidateExport(params json.RawMessage) error {
 		return fmt.Errorf("min_prefix and prefixes apply only to netset format")
 	}
 	if hasMinimum {
-		value, err := asUint64FromRaw(minimum)
+		value, err := decodeUint64(minimum)
 		if err != nil {
 			return fmt.Errorf("min_prefix must be u32")
 		}
@@ -207,12 +197,6 @@ func ValidateExport(params json.RawMessage) error {
 		}
 	}
 	return nil
-}
-
-// asUint64FromRaw decodes one raw JSON member as a strict unsigned
-// integral number.
-func asUint64FromRaw(raw json.RawMessage) (uint64, error) {
-	return decodeUint64(raw)
 }
 
 func validateExportSource(raw json.RawMessage) error {
@@ -416,6 +400,12 @@ func Export(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerErro
 	var closeErr *rpc.HandlerError
 	if live != nil {
 		closeFacts, closeErr = closeExportSource(live)
+	} else if immutable != nil {
+		// Immutable sources carry no close fact but their mapping must
+		// still be released (Rust export.rs source close parity).
+		if cerr := immutable.Close(); cerr != nil {
+			closeErr = readError(cerr)
+		}
 	}
 	if exportErr != nil {
 		// A product error preserves the close result of the reader it
@@ -659,7 +649,7 @@ func decodePrefixes(object rawObject, format string, hostPrefix uint32) (*prefix
 		return allPrefixes(hostPrefix), nil
 	}
 	if raw, ok := object["min_prefix"]; ok {
-		value, err := asUint64FromRaw(raw)
+		value, err := decodeUint64(raw)
 		if err != nil {
 			return nil, rpc.InvalidParamsError("min_prefix must be u32")
 		}
@@ -1266,7 +1256,7 @@ func streamSegmentsV4(reader exportReader, view *exportView, sink func(u128, u12
 		if herr != nil {
 			return herr
 		}
-		words := make([]uint64, 0, 8)
+		var words []uint64
 		for {
 			record, ok, err := cursor.NextRange()
 			if err != nil {
@@ -1275,7 +1265,7 @@ func streamSegmentsV4(reader exportReader, view *exportView, sink func(u128, u12
 			if !ok {
 				return nil
 			}
-			feeds, herr := ThreatFeedNames(record.Value, snapshot, words)
+			feeds, herr := ThreatFeedNames(record.Value, snapshot, &words)
 			if herr != nil {
 				return herr
 			}
@@ -1391,7 +1381,7 @@ func streamSegmentsV6(reader exportReader, view *exportView, sink func(u128, u12
 		if herr != nil {
 			return herr
 		}
-		words := make([]uint64, 0, 8)
+		var words []uint64
 		for {
 			record, ok, err := cursor.NextRange()
 			if err != nil {
@@ -1400,7 +1390,7 @@ func streamSegmentsV6(reader exportReader, view *exportView, sink func(u128, u12
 			if !ok {
 				return nil
 			}
-			feeds, herr := ThreatFeedNames(record.Value, snapshot, words)
+			feeds, herr := ThreatFeedNames(record.Value, snapshot, &words)
 			if herr != nil {
 				return herr
 			}

@@ -153,14 +153,24 @@ func (r AlgebraSetResult) CleanupState() CleanupState {
 }
 
 // AlgebraPreparationFailure classes one failed set publication before
-// the destination provably held the output (Rust AlgebraPreparationFailure
-// = the snapshot preparation failure shapes collapsed on the Go
-// boundary: early/new carry Clean, discarded carries the attempt discard
-// state, and from_publication carries the staging result cleanup). Cause
-// is the public typed error with the Rust-verbatim detail.
+// the destination provably held the output (Rust
+// AlgebraPreparationFailure = the snapshot preparation failure shapes
+// projected onto the Go boundary): the primary cause plus the full
+// attempt facts (the private output identity, the cleanup ledger, the
+// coordination cleanup class, and the housekeeping evidence). Cleanup
+// is the derived state enum (clean exactly when the ledger is empty
+// and no coordination guard is held, Rust cleanup_state()); early paths
+// carry the empty facts, discarded paths the attempt discard facts, and
+// from_publication paths the staging publication facts. Cause is the
+// public typed error with the Rust-verbatim detail.
 type AlgebraPreparationFailure struct {
-	Cause   error
-	Cleanup CleanupState
+	Cause               error
+	Cleanup             CleanupState
+	Output              *PrivateOutputAttempt
+	CleanupArtifacts    CleanupArtifacts
+	CoordinationCleanup CoordinationCleanup
+	Housekeeping        Housekeeping
+	VisibleHousekeeping []HousekeepingArtifact
 }
 
 func (f *AlgebraPreparationFailure) Error() string {
@@ -175,6 +185,44 @@ func (f *AlgebraPreparationFailure) Unwrap() error {
 		return nil
 	}
 	return f.Cause
+}
+
+// algebraFailureOf converts one publication preparation failure into
+// the public algebra failure (Rust failure_from_early /
+// AlgebraPreparationFailure::from_publication: the machine facts carry
+// the attempt identity, the cleanup ledger, the coordination class, and
+// the housekeeping evidence; the derived enum matches the ledger and
+// coordination rule).
+func algebraFailureOf(failure *publication.PublicationPreparationFailure) *AlgebraPreparationFailure {
+	return &AlgebraPreparationFailure{
+		Cause:               publicError(failure.Cause),
+		Cleanup:             cleanupStateOf(failure.Cleanup, failure.CoordinationCleanup),
+		Output:              failure.OutputAttempt(),
+		CleanupArtifacts:    failure.Cleanup,
+		CoordinationCleanup: failure.CoordinationCleanup,
+		Housekeeping:        failure.Housekeeping,
+		VisibleHousekeeping: failure.VisibleHousekeeping,
+	}
+}
+
+// discardAlgebraFailure builds one algebra preparation failure from an
+// attempt discard (Rust AlgebraPreparationFailure::discarded: the
+// attempt identity and the fixed cleanup ledger of the removal).
+func discardAlgebraFailure(cause error, attempt *publication.PublishAttempt) *AlgebraPreparationFailure {
+	output, artifact := attempt.DiscardFacts()
+	cleanup := publication.NewCleanupArtifacts()
+	if artifact != nil {
+		cleanup.Push(*artifact)
+	}
+	return &AlgebraPreparationFailure{
+		Cause:               publicError(cause),
+		Cleanup:             cleanupStateOf(cleanup, CoordinationCleanupNone),
+		Output:              &output,
+		CleanupArtifacts:    cleanup,
+		CoordinationCleanup: CoordinationCleanupNone,
+		Housekeeping:        HousekeepingNone,
+		VisibleHousekeeping: nil,
+	}
 }
 
 // PublishSet materializes one set operation directly into its final
@@ -217,11 +265,11 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	// the preparation failure ledger.
 	attempt, failure := publication.CreatePublishAttempt(destination, policy)
 	if failure != nil {
-		return zero, &AlgebraPreparationFailure{Cause: publicError(failure.Cause), Cleanup: failure.CleanupState()}
+		return zero, algebraFailureOf(failure)
 	}
 	spec, err := writer.FreshOutputSpec(a.inner.AddressFamily(), format.ValueKindMembership, format.StructureKindNone, valueTag.Wire(), uint64(prepared.OutputFeedCount()))
 	if err != nil {
-		return zero, &AlgebraPreparationFailure{Cause: publicError(err), Cleanup: attempt.Discard()}
+		return zero, discardAlgebraFailure(err, attempt)
 	}
 	// The immutable reference batch is sized and charged from the
 	// operation heap exactly like Rust ReferenceBatch::new at builder
@@ -229,11 +277,11 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	// decisions stay byte-identical with the authority.
 	refEntries, err := prepared.ChargeReferenceBatch()
 	if err != nil {
-		return zero, &AlgebraPreparationFailure{Cause: publicError(err), Cleanup: attempt.Discard()}
+		return zero, discardAlgebraFailure(err, attempt)
 	}
 	builder, err := writer.NewOutputBuilderOverFile(attempt.File(), spec, writer.OutputBudget{MaxOutputPages: budget.MaxOutputPages}, refEntries)
 	if err != nil {
-		return zero, &AlgebraPreparationFailure{Cause: publicError(err), Cleanup: attempt.Discard()}
+		return zero, discardAlgebraFailure(err, attempt)
 	}
 	// The attempt identity is captured by the secured composition owner
 	// (Rust OutputAttempt::identity at workflow::create): every Discard
@@ -243,14 +291,13 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 		// exclusive lifetime lock before the caller can reopen the
 		// destination, so the builder closes before the attempt discard.
 		closeErr := builder.Close()
-		cleanup := attempt.Discard()
 		if closeErr != nil {
 			// Keep the primary cause and attach the close error: a
 			// cleanup-side close failure must not erase why the
 			// operation failed.
 			cause = mergeErrors(cause, closeErr)
 		}
-		return zero, &AlgebraPreparationFailure{Cause: publicError(cause), Cleanup: cleanup}
+		return zero, discardAlgebraFailure(cause, attempt)
 	}
 	if metadataJSON != nil {
 		if err := builder.WriteMetadataWithBudget(metadataJSON, prepared.HeapRemaining()); err != nil {
@@ -272,7 +319,7 @@ func (a *MembershipAlgebra) PublishSet(destination string, valueTag ValueTag, op
 	// one preparation failure surface carries the folded cleanup state.
 	result, failure := attempt.Finish(publication.FinishedOutput{File: attempt.File(), Mapping: builder.Mapping(), Meta: builder.Meta()}, cancellation.check)
 	if failure != nil {
-		return zero, &AlgebraPreparationFailure{Cause: publicError(failure.Cause), Cleanup: failure.CleanupState()}
+		return zero, algebraFailureOf(failure)
 	}
 	// A refused or outcome-unknown publish is a Rust Ok result carrying
 	// its Cause, not an error: the caller inspects Publication,

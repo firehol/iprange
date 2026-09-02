@@ -9,6 +9,7 @@ package handlers
 
 import (
 	"fmt"
+	"math/bits"
 	"net/netip"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
@@ -195,64 +196,6 @@ func outputRefusal() *rpc.HandlerError {
 		"request refused: the complete inline result cannot fit the 65000-byte response object")
 }
 
-// MetadataResult converts one reader metadata fetch under the strict
-// delivery object. Callers must run the inline preflight before this
-// materializes the blob.
-func MetadataResult(method string, reader *rpc.ReaderValue, delivery rawObject) (any, *rpc.HandlerError) {
-	mode, err := asString(delivery, "mode")
-	if err != nil {
-		return nil, rpc.InvalidParamsError("delivery.mode must be inline or file")
-	}
-	switch mode {
-	case "inline":
-		bytes, present, err := readerMetadata(reader)
-		if err != nil {
-			return nil, readError(err)
-		}
-		if !present {
-			return boundedResult(map[string]any{"method": method, "present": false})
-		}
-		return boundedResult(map[string]any{
-			"method":  method,
-			"present": true,
-			"base64":  Base64Padded(bytes),
-		})
-	case "file":
-		path, err := asString(delivery, "path")
-		if err != nil {
-			return nil, rpc.InvalidParamsError("delivery.path must be a string")
-		}
-		policyName, err := asString(delivery, "publication_policy")
-		if err != nil {
-			return nil, rpc.InvalidParamsError("delivery.publication_policy is invalid")
-		}
-		policy := policyByName(policyName)
-		// max_output_bytes is a decimal string on the wire (common.POSITIVE_U64);
-		// a JSON number cannot carry every u64 without client precision loss.
-		maxBytes, err := asPositiveU64String(delivery, "max_output_bytes")
-		if err != nil {
-			return nil, rpc.InvalidParamsError("delivery.max_output_bytes is invalid")
-		}
-		maxFiles, err := asUint64(delivery, "max_open_files")
-		if err != nil {
-			return nil, rpc.InvalidParamsError("delivery.max_open_files must be u32")
-		}
-		bytes, present, err := readerMetadata(reader)
-		if err != nil {
-			return nil, readError(err)
-		}
-		if !present {
-			return boundedResult(map[string]any{"method": method, "present": false})
-		}
-		facts, herr := MetadataOutput(path, bytes, policy, maxBytes, uint32(maxFiles))
-		if herr != nil {
-			return nil, herr
-		}
-		return boundedResult(map[string]any{"method": method, "present": true, "output": facts})
-	}
-	return nil, rpc.InvalidParamsError("delivery.mode must be inline or file")
-}
-
 func policyByName(name string) iprangedb.PublicationPolicy {
 	switch name {
 	case "fail_if_exists":
@@ -313,16 +256,16 @@ func BuildFeedSnapshot(reader *rpc.ReaderValue) (*FeedSnapshot, *rpc.HandlerErro
 
 // ThreatFeedNames maps the membership bitmap of one structured record
 // to catalog-ordered feed names.
-func ThreatFeedNames(view iprangedb.NetworkEnrichmentV1View, snapshot *FeedSnapshot, words []uint64) ([]string, *rpc.HandlerError) {
+func ThreatFeedNames(view iprangedb.NetworkEnrichmentV1View, snapshot *FeedSnapshot, words *[]uint64) ([]string, *rpc.HandlerError) {
 	membership, found, err := view.ThreatMembership()
 	if err != nil {
 		return nil, readError(err)
 	}
 	if !found {
-		return nil, nil
+		return []string{}, nil
 	}
 	if len(snapshot.Feeds) == 0 {
-		return nil, nil
+		return []string{}, nil
 	}
 	lastFeed := snapshot.Feeds[len(snapshot.Feeds)-1].Index
 	canonicalWords, err := membership.WordCount()
@@ -333,30 +276,28 @@ func ThreatFeedNames(view iprangedb.NetworkEnrichmentV1View, snapshot *FeedSnaps
 	if needed > uint64(canonicalWords) {
 		needed = uint64(canonicalWords)
 	}
-	if uint64(len(words)) < needed {
-		words = append(words, make([]uint64, needed-uint64(len(words)))...)
+	if uint64(len(*words)) < needed {
+		*words = append(*words, make([]uint64, needed-uint64(len(*words)))...)
 	}
-	words = words[:needed]
-	read, err := membership.ReadWords(0, words)
+	buffer := (*words)[:needed]
+	read, err := membership.ReadWords(0, buffer)
 	if err != nil {
 		return nil, readError(err)
 	}
-	var feeds []string
+	// The membership bitmap is in catalog order; each set bit maps to
+	// the feed whose index equals the bit position. The snapshot is
+	// index-ordered ascending, so the mapping is one binary search per
+	// set bit (Rust snapshot.feeds.binary_search_by_key parity).
+	feeds := make([]string, 0)
 	for wordIndex := 0; wordIndex < read; wordIndex++ {
-		word := words[wordIndex]
+		word := buffer[wordIndex]
 		for word != 0 {
-			bit := uint64(0)
-			for i := uint64(0); i < 64; i++ {
-				if word&(1<<i) != 0 {
-					bit = i
-					break
-				}
-			}
+			bit := uint64(bits.TrailingZeros64(word))
 			index := uint64(wordIndex)*64 + bit
 			if index <= uint64(^uint32(0)) {
-				_, name := snapshotFeedAt(snapshot, uint32(index))
-				if name != "" {
-					feeds = append(feeds, name)
+				entry, found := snapshotFeedAt(snapshot, uint32(index))
+				if found {
+					feeds = append(feeds, entry.Name)
 				}
 			}
 			word &= word - 1
@@ -365,13 +306,22 @@ func ThreatFeedNames(view iprangedb.NetworkEnrichmentV1View, snapshot *FeedSnaps
 	return feeds, nil
 }
 
-func snapshotFeedAt(snapshot *FeedSnapshot, index uint32) (bool, string) {
-	for _, entry := range snapshot.Feeds {
-		if entry.Index == index {
-			return true, entry.Name
+// snapshotFeedAt resolves one feed index through the index-ordered
+// catalog snapshot (O(log F), Rust binary_search_by_key parity).
+func snapshotFeedAt(snapshot *FeedSnapshot, index uint32) (FeedIndexName, bool) {
+	lo, hi := 0, len(snapshot.Feeds)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		switch {
+		case snapshot.Feeds[mid].Index < index:
+			lo = mid + 1
+		case snapshot.Feeds[mid].Index > index:
+			hi = mid
+		default:
+			return snapshot.Feeds[mid], true
 		}
 	}
-	return false, ""
+	return FeedIndexName{}, false
 }
 
 // ParseAddress parses canonical IP text into a cursor checkpoint.

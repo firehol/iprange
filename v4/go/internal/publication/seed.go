@@ -225,6 +225,9 @@ func (s *seed) preparationWithHousekeeping(cleanup CleanupArtifacts, housekeepin
 		Housekeeping:                  housekeeping,
 		VisibleHousekeeping:           visibleHousekeeping,
 		Cause:                         cause,
+		// The machine attempt existed on every preparation terminal
+		// (Rust Failure::Publication; OutputAttempt carries it).
+		discardPresent: true,
 	}
 }
 

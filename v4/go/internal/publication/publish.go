@@ -197,20 +197,27 @@ func (a *PublishAttempt) Finish(finished FinishedOutput, check func() error) (Pu
 }
 
 // earlyPreparationFailure builds one pre-machine publication failure
-// with the fixed cleanup ledger of the discard (Rust
-// Failure::Early mapped onto the machine failure surface).
+// with the fixed cleanup ledger and attempt facts of the discard (Rust
+// Failure::Early mapped onto the machine failure surface). The attempt
+// identity fields are populated whenever a discard happened, even when
+// the removal proved clean, exactly like the Rust Early arms that keep
+// discarded.output in the failure; the OutputAttempt projection uses
+// them as its presence signal.
 func earlyPreparationFailure(cause error, discarded *earlyDiscard) *PublicationPreparationFailure {
 	failure := &PublicationPreparationFailure{Cause: cause}
-	if discarded != nil && discarded.artifact != nil {
-		ledger := newCleanupArtifacts()
-		ledger.Push(*discarded.artifact)
-		failure.Cleanup = ledger
+	if discarded != nil {
+		failure.discardPresent = true
 		failure.PublicationAttemptID = discarded.output.PublicationAttemptID
 		failure.DirectoryIdentity = discarded.output.DirectoryIdentity
 		failure.PrivateOutputBasenameEncoding = discarded.output.BasenameEncoding
 		failure.PrivateOutputBasename = discarded.output.Basename
 		failure.OutputIdentity = discarded.output.Identity
 		failure.CreationSecurity = discarded.output.CreationSecurity
+		if discarded.artifact != nil {
+			ledger := newCleanupArtifacts()
+			ledger.Push(*discarded.artifact)
+			failure.Cleanup = ledger
+		}
 	}
 	return failure
 }

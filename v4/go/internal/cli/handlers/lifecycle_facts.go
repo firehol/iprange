@@ -142,12 +142,6 @@ func CommitDurabilityName(status iprangedb.CommitStatus) string {
 	return "outcome_unknown"
 }
 
-// DurabilityOutcome is the sentence outcome of one commit durability
-// (committed vs not committed vs unknown) for mutation failures.
-func DurabilityOutcome(status iprangedb.CommitStatus) string {
-	return CommitDurabilityName(status)
-}
-
 func CloseOutcomeName(outcome iprangedb.CloseOutcome) string {
 	switch outcome {
 	case iprangedb.CloseOutcomeClosed:

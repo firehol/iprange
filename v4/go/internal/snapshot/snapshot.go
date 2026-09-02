@@ -61,15 +61,66 @@ func (b *Budget) Validate(mode SourceMode, policy publication.PublicationPolicy)
 }
 
 // Failure is one preparation failure (Rust SnapshotPreparationFailure
-// collapsed to the Go-visible terminal, the AlgebraPreparationFailure
-// precedent): the primary cause plus the cleanup state of the private
-// attempt. A failed source release maps to CleanupStateResiduePossible,
-// the Go projection of the Rust coordination_cleanup CleanupGuard state
-// (the retryable source guard itself is not carried; recovery ports it
-// when its surface needs it).
+// projected onto the Go-visible terminal): the primary cause, the
+// cleanup state enum, and the full attempt facts (the private output
+// identity, the cleanup ledger, the coordination cleanup class, and
+// the housekeeping evidence). Cleanup is derived from the ledger and
+// the coordination class exactly like Rust cleanup_state(); a failed
+// source release maps to CoordinationCleanupCleanupGuard (which makes
+// the enum ResiduePossible), the Go projection of the Rust
+// coordination_cleanup CleanupGuard state (the retryable source guard
+// itself is not carried; recovery ports it when its surface needs it).
 type Failure struct {
-	Cause   error
-	Cleanup publication.CleanupState
+	Cause               error
+	Cleanup             publication.CleanupState
+	Output              *publication.PrivateOutputAttempt
+	CleanupArtifacts    publication.CleanupArtifacts
+	CoordinationCleanup publication.CoordinationCleanup
+	Housekeeping        publication.Housekeeping
+	VisibleHousekeeping []publication.HousekeepingArtifact
+}
+
+// attemptFacts is one folded discard of the snapshot machine (Rust
+// cleanup::EarlyDiscard projection): the private attempt identity, the
+// cleanup ledger, and the housekeeping facts. The zero value is the
+// empty facts of the no-attempt early paths.
+type attemptFacts struct {
+	output              *publication.PrivateOutputAttempt
+	cleanup             publication.CleanupArtifacts
+	housekeeping        publication.Housekeeping
+	visibleHousekeeping []publication.HousekeepingArtifact
+}
+
+// discardAttemptFacts discards the attempt and folds the discard into
+// the failure facts (Rust cleanup::discard_attempt -> EarlyDiscard:
+// the ledger holds the artifact when the removal could not be proved).
+func discardAttemptFacts(attempt *publication.PublishAttempt) (*publication.PrivateOutputAttempt, publication.CleanupArtifacts) {
+	output, artifact := attempt.DiscardFacts()
+	cleanup := publication.NewCleanupArtifacts()
+	if artifact != nil {
+		cleanup.Push(*artifact)
+	}
+	return &output, cleanup
+}
+
+// newFailure derives one preparation failure from the cause and the
+// discard and coordination facts (Rust SnapshotPreparationFailure
+// construction: Cleanup is clean exactly when the ledger is empty and
+// no coordination guard is held).
+func newFailure(cause error, output *publication.PrivateOutputAttempt, cleanup publication.CleanupArtifacts, coordination publication.CoordinationCleanup, housekeeping publication.Housekeeping, visible []publication.HousekeepingArtifact) *Failure {
+	state := publication.CleanupStateClean
+	if !cleanup.Empty() || coordination != publication.CoordinationCleanupNone {
+		state = publication.CleanupStateResiduePossible
+	}
+	return &Failure{
+		Cause:               cause,
+		Cleanup:             state,
+		Output:              output,
+		CleanupArtifacts:    cleanup,
+		CoordinationCleanup: coordination,
+		Housekeeping:        housekeeping,
+		VisibleHousekeeping: visible,
+	}
 }
 
 // source is one opened snapshot source (Rust recovery/source_guard.rs
@@ -109,11 +160,11 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 	// check before any path access for direct machine callers.
 	if mode == SourceLive {
 		if err := live.CheckSupported(); err != nil {
-			return publication.PublicationResult{}, &Failure{Cause: err}
+			return publication.PublicationResult{}, newFailure(err, nil, publication.NewCleanupArtifacts(), publication.CoordinationCleanupNone, publication.HousekeepingNone, nil)
 		}
 	}
 	if err := budget.Validate(mode, policy); err != nil {
-		return publication.PublicationResult{}, &Failure{Cause: err}
+		return publication.PublicationResult{}, newFailure(err, nil, publication.NewCleanupArtifacts(), publication.CoordinationCleanupNone, publication.HousekeepingNone, nil)
 	}
 	// Source first (api.rs open_source before publication::workflow::
 	// create): the opened generation pins its identity and holds its
@@ -123,11 +174,13 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 		return publication.PublicationResult{}, fail
 	}
 	// failSource folds one failing pre-finish step (Rust fail_source):
-	// the source releases without the final check, and a failed release
-	// reports residue possible. After finishCurrent the source is never
-	// released again (Rust finish_current already released it; the
-	// carried guard projects to the cleanup classification).
-	failSource := func(cause error, cleanup publication.CleanupState) (publication.PublicationResult, *Failure) {
+	// the source releases without the final check (a failed release
+	// reports residue possible through the coordination cleanup guard)
+	// and the given discard facts become the preparation failure.
+	// After finishCurrent the source is never released again (Rust
+	// finish_current already released it; the carried guard projects to
+	// the cleanup classification).
+	failSource := func(cause error, facts attemptFacts) (publication.PublicationResult, *Failure) {
 		// Rust fail_source keeps the primary cause pure and surfaces a
 		// failed release only through the cleanup guard; the residue
 		// classification is the Go projection of that guard.
@@ -135,22 +188,23 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 		if end.cause != nil && cause == nil {
 			cause = end.cause
 		}
+		coordination := publication.CoordinationCleanupNone
 		if end.residue {
-			cleanup = publication.CleanupStateResiduePossible
+			coordination = publication.CoordinationCleanupCleanupGuard
 		}
-		return publication.PublicationResult{}, &Failure{Cause: cause, Cleanup: cleanup}
+		return publication.PublicationResult{}, newFailure(cause, facts.output, facts.cleanup, coordination, facts.housekeeping, facts.visibleHousekeeping)
 	}
 	// api.rs rejects a live snapshot that would replace its own source
 	// path, after the source open and before the destination create.
 	if err := rejectLiveSelf(src, mode, destinationPath, policy); err != nil {
-		return failSource(err, publication.CleanupStateClean)
+		return failSource(err, attemptFacts{})
 	}
 	// A pre-cancelled snapshot refuses before any destination artifact
 	// exists (Rust source_guard lock_file_cancellable refuses at the
 	// source-open cancellation lock): the attempt is never created, so
 	// there is nothing to discard.
 	if err := checkCancellation(check); err != nil {
-		return failSource(err, publication.CleanupStateClean)
+		return failSource(err, attemptFacts{})
 	}
 	// api.rs publication::workflow::create: the exchange probe, the
 	// creation, and the security proof fold their discard evidence into
@@ -158,7 +212,14 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 	// failSource below).
 	attempt, failure := publication.CreatePublishAttempt(destinationPath, policy)
 	if failure != nil {
-		return failSource(failure.Cause, failure.CleanupState())
+		// Rust fail_source over workflow::create Failure::Early: the
+		// failure facts and the source-release residue fold together.
+		return failSource(failure.Cause, attemptFacts{
+			output:              failure.OutputAttempt(),
+			cleanup:             failure.Cleanup,
+			housekeeping:        failure.Housekeeping,
+			visibleHousekeeping: failure.VisibleHousekeeping,
+		})
 	}
 	// api.rs compares the source identity with the private output
 	// identity immediately after workflow::create and refuses before
@@ -167,11 +228,13 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 	// direct).
 	srcDevice, srcInode, err := src.FileIdentity()
 	if err != nil {
-		return failSource(err, attempt.Discard())
+		output, cleanup := discardAttemptFacts(attempt)
+		return failSource(err, attemptFacts{output: output, cleanup: cleanup})
 	}
 	attemptDevice, attemptInode := attempt.FileIdentity()
 	if encodeIdentity(srcDevice, srcInode) == encodeIdentity(attemptDevice, attemptInode) {
-		return failSource(&format.Error{Code: format.CodeInvalidArgument, Detail: "source and snapshot output identities match"}, attempt.Discard())
+		output, cleanup := discardAttemptFacts(attempt)
+		return failSource(&format.Error{Code: format.CodeInvalidArgument, Detail: "source and snapshot output identities match"}, attemptFacts{output: output, cleanup: cleanup})
 	}
 	// The output identity is preserved from the source meta verbatim
 	// (GenerationReader::output_spec): database id, transaction id, and
@@ -207,7 +270,8 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 	if err != nil {
 		// Rust build::copy folds a builder-construction failure with the
 		// still-owned file into fail_attempt: discard the attempt.
-		return failSource(err, attempt.Discard())
+		output, cleanup := discardAttemptFacts(attempt)
+		return failSource(err, attemptFacts{output: output, cleanup: cleanup})
 	}
 	// The attempt identity comes from the secured composition owner
 	// (Rust OutputAttempt::identity captured at workflow::create):
@@ -217,11 +281,11 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 		// Rust drops the mapped writer in every failing path; Go must
 		// release the builder before the attempt discard.
 		closeErr := builder.Close()
-		cleanup := attempt.Discard()
+		output, cleanup := discardAttemptFacts(attempt)
 		if closeErr != nil {
 			cause = attachClose(cause, closeErr)
 		}
-		return failSource(cause, cleanup)
+		return failSource(cause, attemptFacts{output: output, cleanup: cleanup})
 	}
 	// abortAfterFinish folds one post-finish failure: the builder
 	// closes, the attempt discards, the close error attaches, and the
@@ -231,14 +295,15 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 	// guard projects to the cleanup state).
 	abortAfterFinish := func(cause error, residue bool) (publication.PublicationResult, *Failure) {
 		closeErr := builder.Close()
-		cleanup := attempt.Discard()
+		output, cleanup := discardAttemptFacts(attempt)
 		if closeErr != nil {
 			cause = attachClose(cause, closeErr)
 		}
+		coordination := publication.CoordinationCleanupNone
 		if residue {
-			cleanup = publication.CleanupStateResiduePossible
+			coordination = publication.CoordinationCleanupCleanupGuard
 		}
-		return publication.PublicationResult{}, &Failure{Cause: cause, Cleanup: cleanup}
+		return publication.PublicationResult{}, newFailure(cause, output, cleanup, coordination, publication.HousekeepingNone, nil)
 	}
 	if err := copyInto(src.Core(), builder, available, check); err != nil {
 		return discarded(err)
@@ -261,7 +326,10 @@ func To(sourcePath string, mode SourceMode, destinationPath string, policy publi
 	// like the Rust move of the Finished value.
 	result, failure := attempt.Finish(publication.FinishedOutput{File: attempt.File(), Mapping: builder.Mapping(), Meta: builder.Meta()}, check)
 	if failure != nil {
-		return publication.PublicationResult{}, &Failure{Cause: failure.Cause, Cleanup: failure.CleanupState()}
+		// Rust workflow::publish Failure::Publication: every machine
+		// fact converts; the source was already released by
+		// finishCurrent, so no coordination guard is added.
+		return publication.PublicationResult{}, newFailure(failure.Cause, failure.OutputAttempt(), failure.Cleanup, failure.CoordinationCleanup, failure.Housekeeping, failure.VisibleHousekeeping)
 	}
 	return result, nil
 }
@@ -289,9 +357,12 @@ func openSource(path string, mode SourceMode, check func() error) (source, *Fail
 	case SourceLive:
 		ls, err := live.OpenLiveSourceCurrent(path, check)
 		if err != nil {
-			fail := &Failure{Cause: err}
+			// Rust Source::open_current failure: the source guard
+			// projects to the coordination cleanup class.
+			fail := newFailure(err, nil, publication.NewCleanupArtifacts(), publication.CoordinationCleanupNone, publication.HousekeepingNone, nil)
 			var open *live.OpenFailure
 			if errors.As(err, &open) && open.Residue {
+				fail.CoordinationCleanup = publication.CoordinationCleanupCleanupGuard
 				fail.Cleanup = publication.CleanupStateResiduePossible
 			}
 			return nil, fail, nil

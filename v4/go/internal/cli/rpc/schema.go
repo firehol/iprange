@@ -1,6 +1,6 @@
 // Strict v1 envelope decoding, response encoding, and error payloads
 // (iprange-jsonrpc-v1.md): requests carry `jsonrpc:"2.0"`, a string
-// or integral id, a method with the `iprange.v1.` prefix)Skip, and
+// or integral id, a method with the `iprange.v1.` prefix, and
 // object params; unknown members are rejected. Only the cancel
 // notification may omit the id. Batches hold 1..=16 objects and
 // execute in array order with valid notifications excluded from the

@@ -242,8 +242,9 @@ func (c *treeCursor) branchChild(b []byte) (uint32, error) {
 }
 
 // leafSeekPolicy selects the starting leaf cell for the current seek
-// target (Rust RangeSeek parity); finished reports a target strictly
-// before or after every cell of the tree in the cursor's direction.
+// target (Rust range-seek and catalog at-or-after policies); finished
+// reports a target strictly before or after every cell of the tree in
+// the cursor's direction.
 func (c *treeCursor) leafSeekPolicy(sl format.SlottedPage) (int, bool, error) {
 	switch c.branchType {
 	case format.PageTypeRangeBranch:
@@ -251,6 +252,8 @@ func (c *treeCursor) leafSeekPolicy(sl format.SlottedPage) (int, bool, error) {
 			return rangeLeafSeek4(sl, c.seek4, c.dir)
 		}
 		return rangeLeafSeek6(sl, c.seekHi, c.seekLo, c.dir)
+	case format.PageTypeCatalogIndexBranch:
+		return indexLeafSeek4(sl, c.seek4, c.dir)
 	}
 	return 0, true, corrupt("tree leaf seek is unsupported for page type %d", c.branchType)
 }
@@ -265,6 +268,8 @@ func (c *treeCursor) branchSelectPolicy(sl format.SlottedPage, level uint16) (in
 			return rangeBranchSeek4(sl, c.seek4, c.dir, c.r.meta.PageCount)
 		}
 		return rangeBranchSeek6(sl, c.seekHi, c.seekLo, c.dir, c.r.meta.PageCount)
+	case format.PageTypeCatalogIndexBranch:
+		return indexBranchSeek4(sl, c.seek4, c.dir, c.r.meta.PageCount)
 	}
 	return 0, 0, false, corrupt("tree branch seek is unsupported for page type %d", c.branchType)
 }

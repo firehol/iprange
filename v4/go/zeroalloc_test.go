@@ -106,6 +106,17 @@ func TestZeroAllocationLookups(t *testing.T) {
 	if err != nil {
 		t.Fatal("membership query:", err)
 	}
+	// The catalog seek and the feed projection seek are self-restoring
+	// per iteration (a seek repositions without consuming the cursor),
+	// so they are measured directly on handles opened once.
+	feedSeekCur, err := member.FeedCursor()
+	if err != nil {
+		t.Fatal("feed cursor:", err)
+	}
+	feedRangeSeekCur, err := member.FeedRangeCursorV4("feed-000", RangeDirectionForward)
+	if err != nil {
+		t.Fatal("feed range cursor:", err)
+	}
 	checks := []struct {
 		name string
 		fn   func() error
@@ -231,6 +242,25 @@ func TestZeroAllocationLookups(t *testing.T) {
 					return err
 				}
 				if _, _, err := v6Cur.NextRange(); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+		{"feed-cursor-seek", func() error {
+			for _, idx := range []uint32{0, 5, 33, 69, 17, 3, 50} {
+				if err := feedSeekCur.SeekByIndex(idx); err != nil {
+					return err
+				}
+			}
+			return nil
+		}},
+		{"feed-range-seek-v4", func() error {
+			for _, ip := range probe {
+				if err := feedRangeSeekCur.Seek(ip); err != nil {
+					return err
+				}
+				if _, _, err := feedRangeSeekCur.NextRange(); err != nil {
 					return err
 				}
 			}

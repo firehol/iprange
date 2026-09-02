@@ -5,8 +5,9 @@
 // mirrors iprange-livedb/src/snapshot/{api.rs,build.rs,terminal.rs}: the
 // source opens before the destination create, a live snapshot cannot
 // replace its own source path, the source final check runs between the
-// build and the publish rename, and every failure collapses to Cause plus
-// CleanupState like AlgebraPreparationFailure.
+// build and the publish rename, and every failure carries the primary
+// cause plus the full discarded-attempt and coordination facts like
+// AlgebraPreparationFailure.
 
 package iprangedb
 
@@ -60,15 +61,34 @@ func (r SnapshotResult) CleanupState() CleanupState {
 	return r.Publication.CleanupState()
 }
 
+// cleanupStateOf derives the cleanup state enum from the machine facts
+// (Rust CleanupState: clean exactly when the cleanup ledger is empty
+// and no coordination cleanup is held; any artifact or guard means
+// residue is possible).
+func cleanupStateOf(artifacts CleanupArtifacts, coordination CoordinationCleanup) CleanupState {
+	if artifacts.Empty() && coordination == CoordinationCleanupNone {
+		return CleanupStateClean
+	}
+	return CleanupStateResiduePossible
+}
+
 // SnapshotPreparationFailure is the failing terminal of one snapshot
-// (Rust SnapshotPreparationFailure collapsed to the Go-visible fields,
-// the AlgebraPreparationFailure precedent): the primary cause and the
-// cleanup state of the private attempt artifact. A failed source release
-// reports CleanupStateResiduePossible, the Go projection of the Rust
-// source-cleanup-guard state.
+// (Rust SnapshotPreparationFailure projected onto the Go-visible
+// fields): the primary cause and the full attempt facts (the private
+// output identity, the cleanup ledger, the coordination cleanup class,
+// and the housekeeping evidence). Cleanup is the derived state enum
+// (clean exactly when the ledger is empty and no coordination guard is
+// held, Rust cleanup_state()); a failed source release reports
+// CleanupStateResiduePossible with CoordinationCleanupCleanupGuard, the
+// Go projection of the Rust source-cleanup-guard state.
 type SnapshotPreparationFailure struct {
-	Cause   error
-	Cleanup CleanupState
+	Cause               error
+	Cleanup             CleanupState
+	Output              *PrivateOutputAttempt
+	CleanupArtifacts    CleanupArtifacts
+	CoordinationCleanup CoordinationCleanup
+	Housekeeping        Housekeeping
+	VisibleHousekeeping []HousekeepingArtifact
 }
 
 // Error renders the preparation failure.
@@ -113,7 +133,15 @@ func SnapshotTo(sourcePath string, sourceMode SnapshotSourceMode, destinationPat
 	check := cancellation.check
 	result, failure := snapshot.To(sourcePath, internalMode, destinationPath, publicationPolicy, budget.internal(), check)
 	if failure != nil {
-		return zero, &SnapshotPreparationFailure{Cause: publicError(failure.Cause), Cleanup: failure.Cleanup}
+		return zero, &SnapshotPreparationFailure{
+			Cause:               publicError(failure.Cause),
+			Cleanup:             cleanupStateOf(failure.CleanupArtifacts, failure.CoordinationCleanup),
+			Output:              failure.Output,
+			CleanupArtifacts:    failure.CleanupArtifacts,
+			CoordinationCleanup: failure.CoordinationCleanup,
+			Housekeeping:        failure.Housekeeping,
+			VisibleHousekeeping: failure.VisibleHousekeeping,
+		}
 	}
 	return SnapshotResult{Publication: result}, nil
 }

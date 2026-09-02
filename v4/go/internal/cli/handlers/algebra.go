@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -428,18 +427,7 @@ func validateSelection(raw json.RawMessage) error {
 // validateFeedName enforces the exact v4 FeedName grammar (1..255
 // lowercase ASCII bytes; interior bytes additionally _, -, .).
 func validateFeedName(feed string) error {
-	bytes := []byte(feed)
-	valid := len(bytes) >= 1 && len(bytes) <= 255 &&
-		isFeedEdge(bytes[0]) && isFeedEdge(bytes[len(bytes)-1])
-	if valid {
-		for _, b := range bytes[1 : len(bytes)-1] {
-			if !isFeedEdge(b) && b != '_' && b != '-' && b != '.' {
-				valid = false
-				break
-			}
-		}
-	}
-	if !valid {
+	if !feedNameValid(feed) {
 		return fmt.Errorf("feed does not use the v4 FeedName grammar")
 	}
 	return nil
@@ -726,7 +714,7 @@ func validateValueTag(raw json.RawMessage) error {
 
 // validateTagHex enforces the even lowercase hex form with no NUL byte.
 func validateTagHex(text string) error {
-	if text == "" || len(text) > 30 || len(text)%2 != 0 {
+	if len(text) > 30 || len(text)%2 != 0 {
 		return fmt.Errorf("value-tag hex must be an even number of lowercase digits")
 	}
 	for i := 0; i < len(text); i++ {
@@ -808,56 +796,19 @@ func validateMetadata(raw json.RawMessage, allowKeep bool) error {
 // canonicalU64 parses one canonical unsigned decimal string ("0" or a
 // non-zero-leading digit string within u64).
 func canonicalDecimalString(value string) (uint64, error) {
-	if value == "0" {
-		return 0, nil
-	}
-	if value == "" || !allASCIIDigits(value) || value[0] == '0' {
-		return 0, fmt.Errorf("value must be a canonical unsigned decimal string")
-	}
-	var parsed uint64
-	if _, err := fmt.Sscanf(value, "%d", &parsed); err != nil || fmt.Sprintf("%d", parsed) != value {
-		return 0, fmt.Errorf("value must be a canonical unsigned decimal string")
-	}
-	return parsed, nil
-}
-
-func allASCIIDigits(value string) bool {
-	for i := 0; i < len(value); i++ {
-		if value[i] < '0' || value[i] > '9' {
-			return false
-		}
-	}
-	return true
+	return canonicalU64String(value)
 }
 
 // parsePositiveU64Member reads a strict decimal-string member and
 // requires the canonical positive u64 form.
 func parsePositiveU64Member(object rawObject, name string) (uint64, error) {
-	text, err := asDecimalString(object, name)
-	if err != nil {
-		return 0, err
-	}
-	parsed, err := canonicalDecimalString(text)
-	if err != nil {
-		return 0, err
-	}
-	if parsed == 0 {
-		return 0, fmt.Errorf("value must be a positive canonical unsigned decimal string")
-	}
-	return parsed, nil
+	return asPositiveU64String(object, name)
 }
 
 // parsePositiveU32Member reads a strict integral JSON member in
 // 1..=2^32-1 (Rust positive_u32).
 func parsePositiveU32Member(object rawObject, name string) (uint32, error) {
-	value, err := asUint32(object, name)
-	if err != nil {
-		return 0, fmt.Errorf("value must be a positive u32 integer")
-	}
-	if value == 0 {
-		return 0, fmt.Errorf("value must be a positive u32 integer")
-	}
-	return value, nil
+	return asPositiveU32(object, name)
 }
 
 // ---------------------------------------------------------------------------
@@ -1174,25 +1125,9 @@ func decodeValueTag(object rawObject, name string) (iprangedb.ValueTag, *rpc.Han
 	if err != nil {
 		return iprangedb.ValueTag{}, rpc.InvalidParamsError(name + " must be a value tag")
 	}
-	text, err := asString(tagObject, "text")
-	if err == nil {
-		tag, terr := iprangedb.NewValueTag([]byte(text))
-		if terr != nil {
-			return iprangedb.ValueTag{}, rpc.InvalidParamsError(name + " is invalid")
-		}
-		return tag, nil
-	}
-	hexText, err := asString(tagObject, "hex")
+	tag, err := valueTagFromWire(tagObject, name)
 	if err != nil {
-		return iprangedb.ValueTag{}, rpc.InvalidParamsError(name + " must be exactly one of text or hex")
-	}
-	decoded, derr := hex.DecodeString(hexText)
-	if derr != nil {
-		return iprangedb.ValueTag{}, rpc.InvalidParamsError(name + " is invalid")
-	}
-	tag, terr := iprangedb.NewValueTag(decoded)
-	if terr != nil {
-		return iprangedb.ValueTag{}, rpc.InvalidParamsError(name + " is invalid")
+		return iprangedb.ValueTag{}, rpc.InvalidParamsError(err.Error())
 	}
 	return tag, nil
 }
@@ -1643,26 +1578,7 @@ func historyWindowReportJSON(window iprangedb.HistoryWindowReport) map[string]an
 // reader kind. Live readers pin one committed generation for the
 // method's lifetime and close before the response.
 func openTemporaryReader(path, mode string, st *rpc.SessionState) (*rpc.ReaderValue, *rpc.HandlerError) {
-	if _, err := os.Stat(path); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, rpc.NewHandlerError("invalid_path", "not_started",
-				fmt.Sprintf("database source does not exist: %s", path))
-		}
-		return nil, rpc.NewHandlerError("io", "not_started",
-			fmt.Sprintf("cannot inspect database source %s: %v", path, err))
-	}
-	if mode == "immutable" {
-		reader, err := iprangedb.OpenImmutable(path)
-		if err != nil {
-			return nil, readError(err)
-		}
-		return &rpc.ReaderValue{Immutable: reader}, nil
-	}
-	reader, err := iprangedb.OpenLiveReader(path, st.Token())
-	if err != nil {
-		return nil, readError(err)
-	}
-	return &rpc.ReaderValue{Live: reader}, nil
+	return openReader(path, mode, "database source", st.Token())
 }
 
 // readerCloseFact converts one live reader close result to its wire
@@ -1674,6 +1590,13 @@ func openTemporaryReader(path, mode string, st *rpc.SessionState) (*rpc.ReaderVa
 // (Rust close_ephemeral_reader).
 func closeEphemeralFact(reader *rpc.ReaderValue) (any, *rpc.HandlerError) {
 	if reader.Live == nil {
+		// Immutable readers carry no close fact but their mapping must
+		// still be released (Rust close_ephemeral_reader parity).
+		if reader.Immutable != nil {
+			if err := reader.Immutable.Close(); err != nil {
+				return nil, readError(err)
+			}
+		}
 		return nil, nil
 	}
 	result, err := reader.Live.Close()
@@ -2631,9 +2554,12 @@ func metadataJSONBytes(metadata MetadataValue) []byte {
 	return metadata.Bytes
 }
 
-// algebraPreparationError converts an SDK preparation failure: the Go
-// SDK collapses the Rust failure ledger into the cause and the cleanup
-// state, which is all the evidence the public boundary exposes.
+// algebraPreparationError converts an SDK preparation failure to the
+// full wire facts (Rust algebra.rs algebra_preparation_error: cleanup
+// state, the cleanup ledger, the coordination cleanup class, the
+// housekeeping evidence, and the private attempt identity; the attempt
+// never completed a durable publication, so the outcome is
+// not_started).
 func algebraPreparationError(failure *iprangedb.AlgebraPreparationFailure) *rpc.HandlerError {
 	code := "io"
 	message := "algebra preparation failed"
@@ -2643,15 +2569,18 @@ func algebraPreparationError(failure *iprangedb.AlgebraPreparationFailure) *rpc.
 		}
 		message = "algebra preparation failed: " + failure.Cause.Error()
 	}
-	cleanupState := "clean"
-	if failure.Cleanup == iprangedb.CleanupStateResiduePossible {
-		cleanupState = "residue_possible"
-	}
 	return &rpc.HandlerError{
 		Code:    code,
 		Outcome: "not_started",
 		Message: message,
-		Details: map[string]any{"cleanup_state": cleanupState},
+		Details: map[string]any{
+			"cleanup_state":        cleanupStateName(failure.Cleanup),
+			"cleanup":              CleanupArtifactsJSON(failure.CleanupArtifacts),
+			"coordination_cleanup": CoordinationCleanupJSON(failure.CoordinationCleanup),
+			"housekeeping":         HousekeepingJSON(failure.Housekeeping, failure.VisibleHousekeeping),
+			"visible_housekeeping": VisibleHousekeepingJSON(failure.VisibleHousekeeping),
+			"output":               privateOutputAttemptValueOrNil(failure.Output),
+		},
 	}
 }
 

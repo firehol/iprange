@@ -35,7 +35,7 @@ func TestDecodePublicationResultWireRoundTrip(t *testing.T) {
 		"coordination_access_policy":             "absent",
 		"cleanup":                                map[string]any{},
 		"coordination_cleanup":                   map[string]any{},
-		"housekeeping":                           map[string]any{},
+		"housekeeping":                           map[string]any{"artifacts": []any{}},
 		"visible_housekeeping":                   []any{},
 		"live_lineage":                           map[string]any{"kind": "same_generation_exact_bytes"},
 		"later_selected_transaction_id":          "99",

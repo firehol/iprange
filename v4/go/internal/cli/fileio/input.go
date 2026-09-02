@@ -126,7 +126,6 @@ type parsedLine struct {
 
 type activeText struct {
 	reader      *bufio.Reader
-	firstLine   bool
 	droppedIPv6 uint64
 	hostnames   []string
 }
@@ -477,7 +476,7 @@ func (c *textInputCore[K]) openNext() (bool, error) {
 			}
 			syntheticNewline = true
 		}
-		c.active = &activeInput{text: &activeText{reader: reader, firstLine: true}}
+		c.active = &activeInput{text: &activeText{reader: reader}}
 		if syntheticNewline {
 			first = first[:len(first)-1]
 		}
@@ -487,9 +486,6 @@ func (c *textInputCore[K]) openNext() (bool, error) {
 		}
 		if err := c.consumeParsed(parsed); err != nil {
 			return false, err
-		}
-		if c.active != nil && c.active.text != nil {
-			c.active.text.firstLine = false
 		}
 		return true, nil
 	}

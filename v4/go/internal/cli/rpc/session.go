@@ -327,7 +327,7 @@ func (s *Session) applyCancel(request *Request) {
 	}
 }
 
-// beginShutdown marks the session shutting downandan cancels the
+// beginShutdown marks the session shutting down an cancels the
 // active token, then closes the work channel so the worker drains and
 // exits.
 func (s *Session) beginShutdown() {
@@ -587,6 +587,14 @@ func entryResponse(s *Session, entry *workEntry) (json.RawMessage, bool) {
 // output_limit product error; an oversized product error keeps its
 // stable data.code/data.outcome and drops free-form details.
 func boundedResponse(response json.RawMessage, request *Request) json.RawMessage {
+	// Success fast path: the envelope bytes are exactly what the
+	// handlers produced, so the ceiling is a length check; the
+	// parse-and-reencode path below runs only for genuinely oversized
+	// responses (Rust session.rs bounded_response parity, zero parses
+	// on the hot path).
+	if len(response) <= ResponseObjectLimit {
+		return response
+	}
 	var payload any
 	if err := json.Unmarshal(response, &payload); err != nil {
 		// Built envelopes always marshal; defensive fallback.

@@ -11,9 +11,10 @@
 package publication
 
 import (
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
+
+	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
 // DecodePublicationResultWire reconstructs the exact SDK publication
@@ -168,7 +169,7 @@ func decodePublicationAttempt(raw json.RawMessage) (PublicationAttempt, error) {
 	if err != nil {
 		return PublicationAttempt{}, err
 	}
-	destinationBasename, err := base64.StdEncoding.DecodeString(basenameText)
+	destinationBasename, err := decodeCanonicalBase64(basenameText)
 	if err != nil {
 		return PublicationAttempt{}, fmt.Errorf("destination_basename: %v", err)
 	}
@@ -374,8 +375,11 @@ func decodePublicationCleanup(raw json.RawMessage) (CleanupArtifacts, error) {
 		return CleanupArtifacts{}, err
 	}
 	artifactsRaw, ok := object["artifacts"]
-	if !ok || isNull(artifactsRaw) {
+	if !ok {
 		return NewCleanupArtifacts(), nil
+	}
+	if isNull(artifactsRaw) {
+		return CleanupArtifacts{}, fmt.Errorf("cleanup.artifacts must be an array")
 	}
 	var entries []json.RawMessage
 	if err := json.Unmarshal(artifactsRaw, &entries); err != nil {
@@ -393,11 +397,8 @@ func decodePublicationCleanup(raw json.RawMessage) (CleanupArtifacts, error) {
 }
 
 func decodeCoordinationCleanup(raw json.RawMessage) (CoordinationCleanup, error) {
-	if isNull(raw) {
-		return CoordinationCleanupNone, nil
-	}
 	var object map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &object); err != nil {
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
 		return CoordinationCleanupNone, fmt.Errorf("coordination_cleanup must be an object")
 	}
 	if len(object) == 0 {
@@ -423,14 +424,14 @@ func decodeCoordinationCleanup(raw json.RawMessage) (CoordinationCleanup, error)
 
 func decodeHousekeeping(raw json.RawMessage) (Housekeeping, error) {
 	var object map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &object); err != nil {
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
 		return HousekeepingNone, fmt.Errorf("housekeeping must be an object")
-	}
-	if len(object) == 0 {
-		return HousekeepingNone, nil
 	}
 	if err := exactMembers(object, []string{"artifacts"}, []string{"state"}); err != nil {
 		return HousekeepingNone, err
+	}
+	if isNull(object["artifacts"]) {
+		return HousekeepingNone, fmt.Errorf("housekeeping.artifacts must be an array")
 	}
 	var artifacts []json.RawMessage
 	if err := json.Unmarshal(object["artifacts"], &artifacts); err != nil {
@@ -463,6 +464,9 @@ func decodeHousekeeping(raw json.RawMessage) (Housekeeping, error) {
 }
 
 func decodeHousekeepingArtifacts(raw json.RawMessage) ([]HousekeepingArtifact, error) {
+	if isNull(raw) {
+		return nil, fmt.Errorf("visible_housekeeping must be an array")
+	}
 	var entries []json.RawMessage
 	if err := json.Unmarshal(raw, &entries); err != nil {
 		return nil, fmt.Errorf("visible_housekeeping must be an array")
@@ -543,9 +547,70 @@ func decodeDecimalUint64(raw json.RawMessage, field string) (uint64, error) {
 	return parsed, nil
 }
 
+// decodeCanonicalBase64 decodes the standard base64 form with the
+// exact Rust rules: length a multiple of four, standard alphabet only,
+// padding only in the final quartetcars, at most two '=' characters.
+func decodeCanonicalBase64(text string) ([]byte, error) {
+	if len(text)%4 != 0 {
+		return nil, fmt.Errorf("length must be a multiple of four")
+	}
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	var output []byte
+	for index := 0; index < len(text); index += 4 {
+		chunk := text[index : index+4]
+		last := index+4 == len(text)
+		padding := 0
+		for i := len(chunk) - 1; i >= 0 && chunk[i] == '='; i-- {
+			padding++
+		}
+		if padding > 2 || (last && padding == 0 && text == "") {
+			return nil, fmt.Errorf("padding is invalid")
+		}
+		if !last && padding != 0 {
+			return nil, fmt.Errorf("padding is not at the end")
+		}
+		var word uint32
+		for position := 0; position < 4; position++ {
+			c := chunk[position]
+			var digit uint32
+			if c == '=' {
+				if !last || position < 4-padding {
+					return nil, fmt.Errorf("padding is invalid")
+				}
+				digit = 0
+			} else {
+				found := -1
+				for i := 0; i < len(alphabet); i++ {
+					if alphabet[i] == c {
+						found = i
+						break
+					}
+				}
+				if found < 0 {
+					return nil, fmt.Errorf("uses the standard alphabet only")
+				}
+				digit = uint32(found)
+			}
+			word = word<<6 | digit
+		}
+		output = append(output, byte(word>>16), byte(word>>8), byte(word))
+	}
+	if len(output) > 0 {
+		trim := 0
+		for n := len(text); n > 0 && text[n-1] == '='; n-- {
+			trim++
+		}
+		output = output[:len(output)-trim]
+	}
+	return output, nil
+}
+
 func parseDecimalUint64(text string) (uint64, error) {
-	if text == "" {
-		return 0, fmt.Errorf("empty")
+	if text == "0" {
+		return 0, nil
+	}
+	if text == "" || text[0] == '0' {
+		return 0, fmt.Errorf("not canonical")
 	}
 	var value uint64
 	for i := 0; i < len(text); i++ {
@@ -703,8 +768,8 @@ func decodeCleanupArtifact(raw json.RawMessage) (CleanupArtifact, error) {
 	}
 	if err := exactMembers(object, []string{
 		"kind", "directory_role", "directory_identity", "basename_encoding",
-		"basename", "error",
-	}, []string{"identity", "creation_security", "unpublished_tail"}); err != nil {
+		"error",
+	}, []string{"identity", "creation_security", "unpublished_tail", "basename"}); err != nil {
 		return CleanupArtifact{}, err
 	}
 	kind, err := decodeArtifactKind(object["kind"])
@@ -723,13 +788,16 @@ func decodeCleanupArtifact(raw json.RawMessage) (CleanupArtifact, error) {
 	if err != nil {
 		return CleanupArtifact{}, err
 	}
-	basenameText, err := decodeString(object["basename"], "basename")
-	if err != nil {
-		return CleanupArtifact{}, err
-	}
-	basename, err := parseHexBytes(basenameText, len(basenameText)/2, "basename")
-	if err != nil {
-		return CleanupArtifact{}, err
+	var basename []byte
+	if rawBasename, ok := object["basename"]; ok {
+		basenameText, err := decodeString(rawBasename, "basename")
+		if err != nil {
+			return CleanupArtifact{}, err
+		}
+		basename, err = parseHexBytes(basenameText, len(basenameText)/2, "basename")
+		if err != nil {
+			return CleanupArtifact{}, err
+		}
 	}
 	var identity *LocalFileIdentity
 	if rawIdentity, ok := object["identity"]; ok {
@@ -928,18 +996,34 @@ func decodeUnpublishedTail(raw json.RawMessage) (UnpublishedTailFacts, error) {
 
 func decodePublicationProblem(raw json.RawMessage) (error, error) {
 	var object map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &object); err != nil {
+	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
 		return nil, fmt.Errorf("error must be an object")
 	}
-	code, err := decodeString(object["code"], "error.code")
+	if err := exactMembers(object, []string{"code", "detail"}, []string{"os_code"}); err != nil {
+		return nil, err
+	}
+	codeText, err := decodeString(object["code"], "error.code")
 	if err != nil {
 		return nil, err
+	}
+	_, ok := format.ErrorCodeFromWireName(codeText)
+	if !ok {
+		return nil, fmt.Errorf("error.code is not a canonical SDK error name")
+	}
+	if rawOS, ok := object["os_code"]; ok {
+		if isNull(rawOS) {
+			return nil, fmt.Errorf("error.os_code must not be null; absent is the only absent form")
+		}
+		var osValue int64
+		if err := json.Unmarshal(rawOS, &osValue); err != nil || osValue < -0x80000000 || osValue > 0x7fffffff {
+			return nil, fmt.Errorf("error.os_code must be a signed 32-bit integer")
+		}
 	}
 	detail, err := decodeString(object["detail"], "error.detail")
 	if err != nil {
 		return nil, err
 	}
-	return fmt.Errorf("%s: %s", code, detail), nil
+	return fmt.Errorf("%s: %s", codeText, detail), nil
 }
 
 func decodeUint32(raw json.RawMessage, field string) (uint32, error) {

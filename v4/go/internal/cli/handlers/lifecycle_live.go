@@ -24,7 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"strconv"
+	"strings"
 	"unsafe"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
@@ -142,18 +142,7 @@ func decimalU64FromWire(object rawObject, field string) (uint64, error) {
 	if !ok {
 		return 0, fmt.Errorf("%s must be a string", field)
 	}
-	if text == "0" {
-		return 0, nil
-	}
-	if text == "" || text[0] == '0' {
-		return 0, fmt.Errorf("%s must be a canonical unsigned decimal string", field)
-	}
-	for i := 0; i < len(text); i++ {
-		if text[i] < '0' || text[i] > '9' {
-			return 0, fmt.Errorf("%s must be a canonical unsigned decimal string", field)
-		}
-	}
-	value, err := strconv.ParseUint(text, 10, 64)
+	value, err := canonicalU64String(text)
 	if err != nil {
 		return 0, fmt.Errorf("%s must be a canonical unsigned decimal string", field)
 	}
@@ -196,17 +185,6 @@ func decodeFileIdentity(object rawObject, field string) (iprangedb.FileIdentity,
 	binary.LittleEndian.PutUint64(identity.Bytes[0:8], volume)
 	binary.LittleEndian.PutUint64(identity.Bytes[8:16], file)
 	identity.Kind = 1
-	return identity, nil
-}
-
-// FileIdentityFromWire decodes one wire identity object into the
-// kind-1 SDK local identity (Rust decode_file_identity). field names
-// the identity only in error messages.
-func FileIdentityFromWire(object rawObject, field string) (iprangedb.FileIdentity, *rpc.HandlerError) {
-	identity, err := decodeFileIdentity(object, field)
-	if err != nil {
-		return iprangedb.FileIdentity{}, rpc.InvalidParamsError(err.Error())
-	}
 	return identity, nil
 }
 
@@ -305,35 +283,53 @@ func MainBasenameFromWire(object rawObject, path string) (iprangedb.LocalBasenam
 }
 
 // valueTagFromWire decodes one wire {"hex": ...} value tag member.
+// valueTagFromWire is the single authoritative value-tag decoder:
+// exactly one of {text} (0 through 15 bytes without NUL) or {hex}
+// (even lowercase hex encoding at most 15 bytes without a NUL byte;
+// the empty string is the zero-byte tag). Mirrors Rust
+// validate_value_tag + value_tag composition.
 func valueTagFromWire(object rawObject, field string) (iprangedb.ValueTag, error) {
 	var tag iprangedb.ValueTag
-	if err := exactMembers(object, []string{"hex"}, nil, field); err != nil {
-		return tag, err
-	}
-	text, ok := wireString(object, "hex")
-	if !ok {
-		return tag, fmt.Errorf("%s.hex must be a string", field)
-	}
-	if len(text)%2 != 0 {
-		return tag, fmt.Errorf("%s.hex must be even lowercase hex encoding at most 15 bytes", field)
-	}
-	bytes := make([]byte, 0, len(text)/2)
-	for i := 0; i < len(text); i += 2 {
-		hi, ok1 := hexDigit(text[i])
-		lo, ok2 := hexDigit(text[i+1])
-		if !ok1 || !ok2 {
-			return tag, fmt.Errorf("%s.hex must be even lowercase hex encoding at most 15 bytes", field)
+	if len(object) == 1 {
+		if textRaw, ok := object["text"]; ok {
+			var text string
+			if err := json.Unmarshal(textRaw, &text); err != nil || len(text) > 15 || strings.IndexByte(text, 0) >= 0 {
+				return tag, fmt.Errorf("%s.text must encode 0 through 15 bytes without NUL", field)
+			}
+			created, err := iprangedb.NewValueTag([]byte(text))
+			if err != nil {
+				return tag, fmt.Errorf("%s encodes an invalid value tag", field)
+			}
+			return created, nil
 		}
-		bytes = append(bytes, hi<<4|lo)
+		if hexRaw, ok := object["hex"]; ok {
+			var text string
+			if err := json.Unmarshal(hexRaw, &text); err != nil {
+				return tag, fmt.Errorf("%s.hex must be a string", field)
+			}
+			if len(text) > 30 || len(text)%2 != 0 {
+				return tag, fmt.Errorf("%s.hex must be even lowercase hex encoding at most 15 bytes", field)
+			}
+			bytes := make([]byte, 0, len(text)/2)
+			for i := 0; i < len(text); i += 2 {
+				hi, ok1 := hexDigit(text[i])
+				lo, ok2 := hexDigit(text[i+1])
+				if !ok1 || !ok2 {
+					return tag, fmt.Errorf("%s.hex must be even lowercase hex encoding at most 15 bytes", field)
+				}
+				bytes = append(bytes, hi<<4|lo)
+			}
+			if len(bytes) > 15 {
+				return tag, fmt.Errorf("%s.hex must be even lowercase hex encoding at most 15 bytes", field)
+			}
+			created, err := iprangedb.NewValueTag(bytes)
+			if err != nil {
+				return tag, fmt.Errorf("%s encodes an invalid value tag", field)
+			}
+			return created, nil
+		}
 	}
-	if len(bytes) > 15 {
-		return tag, fmt.Errorf("%s.hex must be even lowercase hex encoding at most 15 bytes", field)
-	}
-	created, err := iprangedb.NewValueTag(bytes)
-	if err != nil {
-		return tag, fmt.Errorf("%s encodes an invalid value tag", field)
-	}
-	return created, nil
+	return tag, fmt.Errorf("%s must contain exactly one of text or hex", field)
 }
 
 // decodeValueTagMember decodes one value-tag-valued member.
@@ -736,7 +732,11 @@ func decodeHousekeepingArtifact(object rawObject) (iprangedb.HousekeepingArtifac
 	if err != nil {
 		return artifact, err
 	}
-	creationSecurity, err := decodeCreationSecurity(mustMemberObject(object, "creation_security"))
+	securityObject, merr := memberObject(object, "creation_security")
+	if merr != nil {
+		return artifact, merr
+	}
+	creationSecurity, err := decodeCreationSecurity(securityObject)
 	if err != nil {
 		return artifact, err
 	}
@@ -992,7 +992,11 @@ func decodeCreateResult(object rawObject, path string) (*iprangedb.CreateResult,
 	if err != nil {
 		return nil, err
 	}
-	housekeeping, err := decodeHousekeeping(mustMemberObject(object, "housekeeping"), "housekeeping")
+	housekeepingObject, merr := memberObject(object, "housekeeping")
+	if merr != nil {
+		return nil, merr
+	}
+	housekeeping, err := decodeHousekeeping(housekeepingObject, "housekeeping")
 	if err != nil {
 		return nil, err
 	}
@@ -1112,7 +1116,11 @@ func decodeLiveTransitionResult(object rawObject, path string) (*iprangedb.LiveT
 	if err != nil {
 		return nil, err
 	}
-	housekeeping, err := decodeHousekeeping(mustMemberObject(object, "housekeeping"), "housekeeping")
+	housekeepingObject, merr := memberObject(object, "housekeeping")
+	if merr != nil {
+		return nil, merr
+	}
+	housekeeping, err := decodeHousekeeping(housekeepingObject, "housekeeping")
 	if err != nil {
 		return nil, err
 	}
@@ -1233,19 +1241,6 @@ func ResidueKindName(kind iprangedb.LiveResidueKind) string {
 		return "private_reset"
 	}
 	return "canonical"
-}
-
-// CreationStateName maps the SDK creation state to its wire name.
-func CreationStateName(state iprangedb.CreationState) string {
-	switch state {
-	case iprangedb.CreationStateNotCreated:
-		return "not_created"
-	case iprangedb.CreationStateCreated:
-		return "created"
-	case iprangedb.CreationStateOutcomeUnknown:
-		return "outcome_unknown"
-	}
-	return "outcome_unknown"
 }
 
 // LocalFileRelationName maps the SDK local-file relation to its wire

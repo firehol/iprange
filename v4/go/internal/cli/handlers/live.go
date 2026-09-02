@@ -1273,11 +1273,7 @@ func positiveU64String(object rawObject, field string) (uint64, error) {
 
 // positiveU32 decodes one positive u32 JSON integer member.
 func positiveU32(object rawObject, field string) (uint32, error) {
-	value, err := asUint64(object, field)
-	if err != nil || value == 0 || value > 0xffffffff {
-		return 0, fmt.Errorf("%s must be a positive u32 integer", field)
-	}
-	return uint32(value), nil
+	return asPositiveU32(object, field)
 }
 
 // removalCollector is the bounded, digest-tracking JSONL writer for

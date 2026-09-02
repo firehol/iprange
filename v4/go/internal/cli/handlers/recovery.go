@@ -137,7 +137,7 @@ func validateIdentityObject(identity rawObject) error {
 		if err != nil {
 			return errString("identity." + field + " must be a canonical unsigned decimal string")
 		}
-		if _, err := strconv.ParseUint(value, 10, 64); err != nil || value != "0" && (value[0] == '0' || !allDecimalDigits(value)) {
+		if _, err := canonicalU64String(value); err != nil {
 			return errString("identity." + field + " must be a canonical unsigned decimal string")
 		}
 	}
@@ -227,7 +227,11 @@ func Validate(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerEr
 	if herr != nil {
 		return nil, herr
 	}
-	outputPath, policy, exportBudget, herr := decodeOutputDescriptor(mustMemberObject(object, "findings_output"))
+	outputObject, merr := memberObject(object, "findings_output")
+	if merr != nil {
+		return nil, rpc.InvalidParamsError("findings_output must be an object")
+	}
+	outputPath, policy, exportBudget, herr := decodeOutputDescriptor(outputObject)
 	if herr != nil {
 		return nil, herr
 	}
@@ -254,7 +258,12 @@ func Validate(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerEr
 		result, failure := iprangedb.Validate(path, iprangedb.ValidationModeLiveCurrent, budget, st.Token(), sink)
 		return validateTerminal(result, failure, writer)
 	default:
-		candidate, herr := decodeCandidateObject(mustMemberObject(mode, "candidate"))
+		candidateObject, merr := memberObject(mode, "candidate")
+		if merr != nil {
+			writer.Abort()
+			return nil, rpc.InvalidParamsError("mode.candidate must be an object")
+		}
+		candidate, herr := decodeCandidateObject(candidateObject)
 		if herr != nil {
 			writer.Abort()
 			return nil, herr
@@ -820,7 +829,11 @@ func Recover(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerErr
 	if err != nil {
 		return nil, rpc.InvalidParamsError("source_mode must be immutable, live, or caller_certified_offline")
 	}
-	candidate, herr := decodeCandidateObject(mustMemberObject(object, "candidate"))
+	candidateObject, merr := memberObject(object, "candidate")
+	if merr != nil {
+		return nil, rpc.InvalidParamsError("candidate must be an object")
+	}
+	candidate, herr := decodeCandidateObject(candidateObject)
 	if herr != nil {
 		return nil, herr
 	}
@@ -832,7 +845,11 @@ func Recover(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerErr
 	if herr != nil {
 		return nil, herr
 	}
-	reportPath, policy, exportBudget, herr := decodeOutputDescriptor(mustMemberObject(object, "report_output"))
+	reportObject, merr := memberObject(object, "report_output")
+	if merr != nil {
+		return nil, rpc.InvalidParamsError("report_output must be an object")
+	}
+	reportPath, policy, exportBudget, herr := decodeOutputDescriptor(reportObject)
 	if herr != nil {
 		return nil, herr
 	}

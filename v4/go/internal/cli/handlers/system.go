@@ -30,7 +30,7 @@ func ValidateDescribeParams(params json.RawMessage) error {
 }
 
 // Describe implements the capability snapshot (spec system.describe):
-// methods, limits, worker availabilityable, and no platform result
+// methods, limits, worker availability, and no platform result
 // fields. The methods list is exactly the registered inventory in
 // bytewise order; cancel is a transport notification and is never
 // advertised.

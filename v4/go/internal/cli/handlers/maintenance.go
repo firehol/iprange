@@ -24,7 +24,6 @@ import (
 	"os"
 	"runtime"
 	"sort"
-	"strconv"
 	"sync"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
@@ -40,29 +39,11 @@ import (
 // canonicalU64 parses one canonical unsigned decimal string ("0" or
 // digits without a leading zero) into a u64 (Rust reader::u64_string).
 func canonicalU64(raw json.RawMessage) (uint64, error) {
-	var text string
-	if err := json.Unmarshal(raw, &text); err != nil {
-		return 0, fmt.Errorf("must be a canonical unsigned decimal string")
-	}
-	if text == "" || text != "0" && (text[0] < '1' || text[0] > '9' || !allDecimalDigits(text)) {
-		return 0, fmt.Errorf("must be a canonical unsigned decimal string")
-	}
-	if _, err := strconv.ParseUint(text, 10, 64); err != nil {
-		return 0, fmt.Errorf("must be a canonical unsigned decimal string")
-	}
-	return strconv.ParseUint(text, 10, 64)
+	return canonicalU64FromRaw(raw)
 }
 
-func allDecimalDigits(text string) bool {
-	for i := 0; i < len(text); i++ {
-		if text[i] < '0' || text[i] > '9' {
-			return false
-		}
-	}
-	return true
-}
-
-// positiveDecimal reports whether the canonical decimal is nonzero.
+// positiveDecimal reports whether the canonical decimal string is
+// nonzero.
 func positiveDecimal(text string) bool {
 	return text != "0" && text != ""
 }
@@ -72,6 +53,9 @@ func positiveDecimal(text string) bool {
 // current platform (Rust maintenance::identity_from_value).
 func decodeIdentityFromObject(object rawObject) (iprangedb.FileIdentity, error) {
 	var identity iprangedb.FileIdentity
+	if err := exactMembers(object, []string{"volume", "file"}, nil, "identity"); err != nil {
+		return identity, err
+	}
 	volume, err := canonicalU64(object["volume"])
 	if err != nil {
 		return identity, fmt.Errorf("identity.volume must be a canonical unsigned decimal string")
@@ -111,7 +95,7 @@ func ValidateDatabaseReclaimParams(params json.RawMessage) error {
 		if err != nil {
 			return fmt.Errorf("%s must be a canonical unsigned decimal string", field)
 		}
-		if _, err := strconv.ParseUint(value, 10, 64); err != nil || value != "0" && (value[0] == '0' || !allDecimalDigits(value)) {
+		if _, err := canonicalU64String(value); err != nil {
 			return fmt.Errorf("%s must be a canonical unsigned decimal string", field)
 		}
 	}
@@ -145,7 +129,11 @@ func DatabaseReclaim(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Ha
 	if err != nil {
 		return nil, rpc.InvalidParamsError("max_pages must be a canonical unsigned decimal string")
 	}
-	budget, err := decodeWriterBudget(mustMemberObject(object, "writer_budget"))
+	budgetObject, merr := memberObject(object, "writer_budget")
+	if merr != nil {
+		return nil, rpc.InvalidParamsError("writer_budget is invalid")
+	}
+	budget, err := decodeWriterBudget(budgetObject)
 	if err != nil {
 		return nil, rpc.InvalidParamsError("writer_budget is invalid")
 	}
@@ -179,7 +167,7 @@ func DatabaseReclaim(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Ha
 				}
 			}
 			return nil, &rpc.HandlerError{
-				Code: code, Outcome: DurabilityOutcome(commit.Status), Message: message,
+				Code: code, Outcome: CommitDurabilityName(commit.Status), Message: message,
 				Details: map[string]any{"reclamation": reclamation, "writer_close": closeFacts},
 			}
 		}
@@ -187,7 +175,7 @@ func DatabaseReclaim(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Ha
 	if closeFacts["outcome"] == "close_incomplete" {
 		outcome := "not_started"
 		if reclaim.Outcome == iprangedb.ReclaimOutcomeCommitted {
-			outcome = DurabilityOutcome(reclaim.Commit.Status)
+			outcome = CommitDurabilityName(reclaim.Commit.Status)
 		}
 		return nil, &rpc.HandlerError{
 			Code: "io", Outcome: outcome, Message: "live writer close is incomplete",
@@ -678,7 +666,11 @@ func MaintenanceList(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Ha
 	if err != nil || maxEntries == 0 {
 		return nil, rpc.InvalidParamsError("max_entries must be 1 through 65536")
 	}
-	outputPath, policy, budget, herr := decodeOutputDescriptor(mustMemberObject(object, "output"))
+	outputObject, merr := memberObject(object, "output")
+	if merr != nil {
+		return nil, rpc.InvalidParamsError("output must be an object")
+	}
+	outputPath, policy, budget, herr := decodeOutputDescriptor(outputObject)
 	if herr != nil {
 		return nil, herr
 	}

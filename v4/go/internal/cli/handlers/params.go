@@ -13,7 +13,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 )
@@ -218,22 +217,6 @@ func asHexString(object rawObject, name string) (string, error) {
 	return value, nil
 }
 
-// asBytes16 decodes a 32-char lowercase hex string into 16 bytes.
-func asBytes16(object rawObject, name string) ([16]byte, error) {
-	var result [16]byte
-	text, err := asHexString(object, name)
-	if err != nil {
-		return result, err
-	}
-	if len(text) != 32 {
-		return result, fmt.Errorf("%s must be 32 hex characters", name)
-	}
-	for i := 0; i < 16; i++ {
-		result[i] = hexNibble(text[2*i])<<4 | hexNibble(text[2*i+1])
-	}
-	return result, nil
-}
-
 func hexNibble(c byte) byte {
 	switch {
 	case c >= '0' && c <= '9':
@@ -327,9 +310,66 @@ func asOptionalObject(object rawObject, name string) (rawObject, bool, error) {
 	return decoded, true, nil
 }
 
+// feedNameValid reports whether name matches the exact v4 FeedName
+// grammar (Rust FeedNameValidString): 1 through 255 ASCII bytes, the
+// first and last byte a-z or 0-9, and the interior additionally
+// '_', '-', '.'.
+func feedNameValid(name string) bool {
+	if len(name) < 1 || len(name) > 255 {
+		return false
+	}
+	edge := func(b byte) bool {
+		return b >= 'a' && b <= 'z' || b >= '0' && b <= '9'
+	}
+	if !edge(name[0]) || !edge(name[len(name)-1]) {
+		return false
+	}
+	for i := 1; i < len(name)-1; i++ {
+		c := name[i]
+		if !edge(c) && c != '_' && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+// canonicalU64String is the single authoritative parser of the wire's
+// canonical unsigned decimal string form (Rust u64_string): "0" or
+// digits without a leading zero, within [0, 2^64-1].
+func canonicalU64String(text string) (uint64, error) {
+	if text == "0" {
+		return 0, nil
+	}
+	if text == "" || text[0] == '0' {
+		return 0, fmt.Errorf("must be a canonical unsigned decimal string")
+	}
+	var value uint64
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if c < '0' || c > '9' {
+			return 0, fmt.Errorf("must be a canonical unsigned decimal string")
+		}
+		digit := uint64(c - '0')
+		if value > (^uint64(0)-digit)/10 {
+			return 0, fmt.Errorf("must be a canonical unsigned decimal string")
+		}
+		value = value*10 + digit
+	}
+	return value, nil
+}
+
+// canonicalU64FromRaw parses one raw JSON member as a canonical
+// unsigned decimal string.
+func canonicalU64FromRaw(raw json.RawMessage) (uint64, error) {
+	var text string
+	if err := json.Unmarshal(raw, &text); err != nil {
+		return 0, fmt.Errorf("must be a canonical unsigned decimal string")
+	}
+	return canonicalU64String(text)
+}
+
 // asPositiveU64String parses the wire's positive u64 decimal-string
-// form (common.POSITIVE_U64): canonical decimal, no sign, no leading
-// zeros beyond "0", within [1, 2^64-1].
+// member (common.POSITIVE_U64): canonical decimal within [1, 2^64-1].
 func asPositiveU64String(object rawObject, name string) (uint64, error) {
 	text, err := asDecimalString(object, name)
 	if err != nil {
@@ -338,15 +378,19 @@ func asPositiveU64String(object rawObject, name string) (uint64, error) {
 	if text == "0" {
 		return 0, fmt.Errorf("%s must be positive", name)
 	}
-	if len(text) > 1 && text[0] == '0' {
-		return 0, fmt.Errorf("%s must be a canonical decimal string", name)
-	}
-	if len(text) > 20 {
-		return 0, fmt.Errorf("%s exceeds u64", name)
-	}
-	value, err := strconv.ParseUint(text, 10, 64)
+	value, err := canonicalU64String(text)
 	if err != nil {
-		return 0, fmt.Errorf("%s exceeds u64", name)
+		return 0, fmt.Errorf("%s must be a canonical unsigned decimal string", name)
+	}
+	return value, nil
+}
+
+// asPositiveU32 decodes one positive u32 JSON integer member (Rust
+// positive_u32): a strict integral number in [1, 2^32-1].
+func asPositiveU32(object rawObject, name string) (uint32, error) {
+	value, err := asUint32(object, name)
+	if err != nil || value == 0 {
+		return 0, fmt.Errorf("%s must be a positive u32 integer", name)
 	}
 	return value, nil
 }

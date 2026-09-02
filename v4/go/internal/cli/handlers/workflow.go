@@ -127,7 +127,12 @@ func FinishPublisher(writer *iprangedb.LiveWriter, method string, report any, me
 			code := "io"
 			message := "publisher commit did not complete"
 			if commit.Cause != nil {
-				code = sdkCode(commit.Cause.(*iprangedb.Error).Code)
+				// The SDK folds unclassed causes to a plain error; the
+				// wire code then falls back to the io class exactly
+				// like the other adapter failure paths.
+				if typed, ok := commit.Cause.(*iprangedb.Error); ok {
+					code = sdkCode(typed.Code)
+				}
 				message = commit.Cause.Error()
 			}
 			commitFacts, cerr := CommitResultJSON(commit)
@@ -144,7 +149,7 @@ func FinishPublisher(writer *iprangedb.LiveWriter, method string, report any, me
 			}
 			return nil, &rpc.HandlerError{
 				Code:    code,
-				Outcome: DurabilityOutcome(commit.Status),
+				Outcome: CommitDurabilityName(commit.Status),
 				Message: message,
 				Details: details,
 			}

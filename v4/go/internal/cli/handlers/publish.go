@@ -72,22 +72,7 @@ func ValidateCurrentPublish(params json.RawMessage) error {
 // lowercase ASCII alphanumerics with '_', '-', '.' inside (Rust
 // publish.rs validate_feed).
 func feedNameGrammarValid(feed string) bool {
-	bytes := []byte(feed)
-	if len(bytes) < 1 || len(bytes) > 255 {
-		return false
-	}
-	edge := func(b byte) bool {
-		return b >= 'a' && b <= 'z' || b >= '0' && b <= '9'
-	}
-	if !edge(bytes[0]) || !edge(bytes[len(bytes)-1]) {
-		return false
-	}
-	for _, b := range bytes {
-		if !(edge(b) || b == '_' || b == '-' || b == '.') {
-			return false
-		}
-	}
-	return true
+	return feedNameValid(feed)
 }
 
 // CurrentPublish implements the immutable current-feed publication.
@@ -268,10 +253,14 @@ func immutableFeedReportJSON(report *iprangedb.ImmutableFeedReport) map[string]a
 	}
 }
 
-// preparationError converts one preparation failure; when the input
-// source itself failed, the source code/message win and the outcome is
-// not_started; a discarded private attempt reports not_published (Rust
-// publish.rs preparation_error, collapsed Go failure surface).
+// preparationError converts one preparation failure (Rust publish.rs
+// preparation_error): when the input source itself failed, the source
+// code/message win and the outcome is not_started; otherwise the
+// outcome is not_published exactly when a private attempt exists or
+// the cleanup ledger is non-empty, else not_started. The details carry
+// the five fact members without cleanup_state, exactly like Rust (the
+// feed surface derives the cleanup state from the ledger and
+// coordination facts on the wire).
 func preparationError(failure *iprangedb.ImmutableFeedPreparationFailure, sourceCode, sourceMessage string) *rpc.HandlerError {
 	code := "io"
 	message := "immutable feed preparation failed"
@@ -286,12 +275,16 @@ func preparationError(failure *iprangedb.ImmutableFeedPreparationFailure, source
 		} else {
 			message = failure.Cause.Error()
 		}
-		if failure.Cleanup == iprangedb.CleanupStateResiduePossible {
+		if failure.Output != nil || !failure.CleanupArtifacts.Empty() {
 			outcome = "not_published"
 		}
 	}
 	details := map[string]any{
-		"cleanup_state": cleanupStateName(failure.Cleanup),
+		"output":               privateOutputAttemptValueOrNil(failure.Output),
+		"cleanup":              CleanupArtifactsJSON(failure.CleanupArtifacts),
+		"coordination_cleanup": CoordinationCleanupJSON(failure.CoordinationCleanup),
+		"housekeeping":         HousekeepingJSON(failure.Housekeeping, failure.VisibleHousekeeping),
+		"visible_housekeeping": VisibleHousekeepingJSON(failure.VisibleHousekeeping),
 	}
 	return &rpc.HandlerError{Code: code, Outcome: outcome, Message: message, Details: details}
 }
@@ -471,15 +464,6 @@ func validateTextInput(object rawObject, name string) error {
 	return nil
 }
 
-func containsNUL(value string) bool {
-	for i := 0; i < len(value); i++ {
-		if value[i] == 0 {
-			return true
-		}
-	}
-	return false
-}
-
 // validateMetadataReplacement enforces METADATA_REPLACEMENT_INPUT (no
 // keep): clear, replace_utf8, replace_base64, or replace_file (Rust
 // lifecycle.rs validate_metadata with allow_keep=false).
@@ -585,21 +569,7 @@ func validateBase64Strict(value string) error {
 // digits without a leading zero) into a u64 (Rust reader.rs
 // u64_string; methods.py decimal_max).
 func canonicalUint64(text string) (uint64, error) {
-	if text == "0" {
-		return 0, nil
-	}
-	if text == "" || !allASCIIDigits(text) || text[0] == '0' {
-		return 0, fmt.Errorf("value must be a canonical unsigned decimal string")
-	}
-	var value uint64
-	for i := 0; i < len(text); i++ {
-		next := value*10 + uint64(text[i]-'0')
-		if next < value {
-			return 0, fmt.Errorf("value must be a canonical unsigned decimal string")
-		}
-		value = next
-	}
-	return value, nil
+	return canonicalU64String(text)
 }
 
 // positiveU64String parses a positive canonical u64 (Rust

@@ -2305,3 +2305,118 @@ round-7 fixes at the new HEAD.
 - Next: five own-model adversarial reviewers (one focus each), then
   the glm-5.3-responses whole-milestone review, then milestone-3
   closure in one lifecycle commit.
+
+### 2026-09-02 (continued) — milestone 3: first five-reviewer round (FAIL, 14 findings) and fix wave
+
+- The first post-integration five-reviewer round ran at 048c09f4
+  (lead's own model, one focus each: Rust parity, Go idioms,
+  performance, wire integrity, API/docs). Verdicts: all five FAIL,
+  with every executable gate verified green (all three matrices,
+  golden, sensitivity, parity gate, Go suites, tests.d, mmap trace).
+  Findings:
+  - P1 (parity): snapshot preparation-failure error `details` drops
+    the factual members (`cleanup`, `coordination_cleanup`,
+    `housekeeping`, `visible_housekeeping`, `output`) because the Go
+    SDK collapsed SnapshotPreparationFailure/ImmutableFeed-
+    PreparationFailure/AlgebraPreparationFailure to {Cause, Cleanup};
+    the Rust adapters emit all six (snapshot.rs:156-171,
+    algebra.rs:2108-2130, publish.rs:208-241).
+  - P1 (perf): every response object was fully unmarshaled and
+    re-marshaled in boundedResponse to enforce the 65 KB ceiling
+    (session.go) instead of an O(1) length check + parse-on-overflow.
+  - P1 (perf): cursor paging re-positioned by consuming leading
+    entries (O(n) per page, O(n^2) total); the Rust adapter seeks per
+    page (catalog.seek_by_index, feed-range seek).
+  - P1 (wire): reader.matching_feeds emitted `"feeds": null` on
+    zero-match; the strict schema requires an array.
+  - P1 (wire): the SDK publication-result evidence decoder was weaker
+    than the Rust decoder in 10 proven cases (null optionals,
+    `housekeeping: {}`, `artifacts: null`, non-canonical decimals,
+    non-canonical base64, permissive problem objects).
+  - P2 (idioms): duplicated decimal/u64/value-tag/identity/feed-name
+    helpers across worker files with divergent rules; unguarded type
+    assertion in workflow.go; three close-ephemeral-reader helpers of
+    which two leaked immutable reader mappings; maintenance identity
+    decoder missing the exact-member check; dead code (osCodeOf,
+    CreationStateName, FileIdentityFromWire, asBytes16, MetadataResult,
+    IsLive, snapshot errString pair, asUint64FromRaw, DurabilityOutcome
+    alias, input firstLine, lifecycle `_ = text`).
+  - P2 (wire): `value_tag: {"hex": ""}` refused by Go, accepted by
+    Rust (a zero-byte tag is legal).
+  - P2 (docs): `v4/cli/README.md` absent (scheduled by the fixed
+    delivery order at step 5/close; produced in this wave).
+  - P3: comment typos; SOW record "39 new go-surface rows" is 38;
+    dispatch record wording; optional cleanup-artifact basename
+    reverse-strictness.
+- Fix wave (in progress at this entry): all P1s and the P2s above,
+  plus the shared SDK preparation-failure fact threading, SDK cursor
+  seeks (FeedCursor.SeekByIndex, feed-range seeks) with handler
+  adoption, and the helper consolidation; re-validation and a delta
+  review round follow.
+
+### 2026-09-02 (continued) — fix wave landed: all P1/P2 findings closed, re-validation green
+
+- Fix wave completed and committed. Every P1 and P2 finding from the
+  first five-reviewer round above is closed:
+  - Preparation-failure facts: SnapshotPreparationFailure,
+    ImmutableFeedPreparationFailure, and AlgebraPreparationFailure now
+    carry the full factual set (`output`, `cleanup`,
+    `coordination_cleanup`, `housekeeping`, `visible_housekeeping`);
+    the snapshot/algebra/feed CLI emitters print all six (five for
+    feed, matching the Rust `output != nil || !cleanup.empty()` rule);
+    new preparation_failure_test.go pins every emission path. A real
+    snapshot failure now emits exactly Rust's shape: `{"cleanup":{},
+    "cleanup_state":"clean","coordination_cleanup":{},"housekeeping":
+    {"artifacts":[]},"output":null,"visible_housekeeping":[]}`.
+  - Cursor paging: FeedCursor.SeekByIndex and FeedRangeProjection
+    seeks implemented in the SDK (internal/reader/cursor.go,
+    index.go, feed_range.go) and adopted by the CLI page loops
+    (handlers/cursors.go, feeds.go) — per-page O(log n), no leading-
+    entry consumption; parity manifest +3 rows; new cursor_seek and
+    index_seek unit tests.
+  - Response ceiling: boundedResponse now checks the marshaled length
+    in O(1) and only parses/re-marshals on overflow (rpc/session.go).
+  - matching_feeds zero-match now emits `"feeds": []`; a single
+    session probe against both binaries returns `[]`/`'0'` for
+    203.0.113.1 and `["alpha","beta"]`/`'2'` for 192.0.2.15, matching
+    Rust exactly.
+  - Wire decoder: the SDK publication-result decoder now matches Rust
+    strictness in all 10 reviewed cases (null `coordination_cleanup`/
+    `visible_housekeeping`/`artifacts` rejected, `housekeeping: {}`
+    rejected, canonical decimals, strict canonical base64 via
+    decodeCanonicalBase64 with Rust alphabet/padding rules, strict
+    problem objects with exact members and i32 `os_code`, canonical
+    wire-code vocabulary via internal/format ErrorCodeWireName/
+    ErrorCodeFromWireName, optional cleanup-artifact basename,
+    lowercase-hex identities). A 12-mutation CLI probe
+    (publication.resolve with mutated publication_result objects)
+    returns `-32602` on both binaries for every case.
+  - value_tag empty hex accepted (`{"hex": ""}`), matching Rust.
+  - Panic guard: workflow.go typed-assertion guard; the
+    mustMemberObject helper removed at all 10 call sites.
+  - Key-lookup bugs: decodeFileIdentity/valueTagFromWire/creation-
+    security no longer use dotted paths as member keys.
+  - Leaks: closeEphemeral helpers in feeds.go/algebra.go and
+    export.go close immutable readers.
+  - Cleanup: dead code removed (osCodeOf, CreationStateName,
+    asBytes16, MetadataResult, IsLive, containsNUL, asUint64FromRaw,
+    DurabilityOutcome alias, firstLine, `_ = text`); errUnexpected
+    collapsed into errString; single authorities for canonical u64
+    strings (params.go), value tags, and feed-name validation;
+    maintenance identity exact-member check; RecordClosed simplified;
+    typo fixes.
+  - Docs: `v4/cli/README.md` added (both binaries, JSON-RPC stdio
+    protocol, limits, runner commands, known limitations).
+- Re-validation at the final tree (matrix dirs /tmp/cli-m3v1-3,
+  fresh per matrix) — all green:
+  - Matrix go 31/31, rust_to_go 31/31, go_to_rust 31/31 (fresh
+    fixtures per matrix; oracle 15 in matrix go).
+  - check_golden.py 53 exchanges PASS; sensitivity_gate.py 14 modes
+    PASS.
+  - Go suite 22 packages PASS; `-tags v4work` PASS; go vet clean;
+    gofmt clean.
+  - Legacy C-oracle suite (IPRANGE_BIN=/tmp/iprange-go): 100/100
+    PASS; mmap trace gate PASS.
+- Next: delta five-reviewer round at the new HEAD (same five scopes),
+  then the glm-5.3-responses whole-milestone review, then milestone-3
+  close-out record in one lifecycle commit.

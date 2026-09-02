@@ -25,8 +25,6 @@ type ReaderValue struct {
 	Live      *iprangedb.LiveReader
 }
 
-func (rv *ReaderValue) IsLive() bool { return rv.Live != nil }
-
 // CloseLive closes only a registered live reader. Immutable readers
 // have no registration lease and are released by the connection map.
 func (rv *ReaderValue) CloseLive() (iprangedb.ReaderCloseResult, bool, error) {
@@ -101,23 +99,23 @@ func NewConnectionState() *ConnectionState {
 
 // RecordClosedReader keeps a bounded FIFO tombstone.
 func (cs *ConnectionState) RecordClosedReader(handle string) {
-	cs.RecordClosed(&cs.ClosedReaders, &cs.closedReaderOrder, handle)
+	cs.recordClosed(cs.ClosedReaders, &cs.closedReaderOrder, handle)
 }
 
 // RecordClosedCursor keeps a bounded FIFO tombstone.
 func (cs *ConnectionState) RecordClosedCursor(handle string) {
-	cs.RecordClosed(&cs.ClosedCursors, &cs.closedCursorOrder, handle)
+	cs.recordClosed(cs.ClosedCursors, &cs.closedCursorOrder, handle)
 }
 
-// RecordClosed inserts one tombstone and FIFO-evicts the oldest entry
+// recordClosed inserts one tombstone and FIFO-evicts the oldest entry
 // of the family when the bound is exceeded.
-func (cs *ConnectionState) RecordClosed(set *map[string]bool, order *[]string, handle string) {
-	(*set)[handle] = true
+func (cs *ConnectionState) recordClosed(set map[string]bool, order *[]string, handle string) {
+	set[handle] = true
 	*order = append(*order, handle)
 	for len(*order) > ClosedHandleTombstoneCap {
 		oldest := (*order)[0]
 		*order = (*order)[1:]
-		delete(*set, oldest)
+		delete(set, oldest)
 	}
 }
 

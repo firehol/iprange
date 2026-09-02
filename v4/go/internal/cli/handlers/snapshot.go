@@ -98,7 +98,7 @@ func validateSnapshotBudget(budget rawObject) error {
 	return nil
 }
 
-func errUnexpected(message string) error { return errStringValue{message} }
+func errUnexpected(message string) error { return errString(message) }
 
 // decodeSnapshotBudget converts the validated wire budget into the
 // SDK SnapshotBudget.
@@ -196,7 +196,9 @@ func snapshotSuccess(result *iprangedb.SnapshotResult) (any, *rpc.HandlerError) 
 // snapshotPreparationFailure converts one SnapshotPreparationFailure:
 // the attempt never completed a durable publication, so the outcome is
 // not_started and the discarded-attempt and residue facts stay in the
-// details (Rust publication_failure).
+// details (Rust publication_failure / preparation_details: cleanup
+// state, the cleanup ledger, the coordination cleanup class, the
+// housekeeping evidence, and the private attempt identity).
 func snapshotPreparationFailure(err error) *rpc.HandlerError {
 	failure, ok := err.(*iprangedb.SnapshotPreparationFailure)
 	if !ok {
@@ -206,16 +208,29 @@ func snapshotPreparationFailure(err error) *rpc.HandlerError {
 	if typed, ok := failure.Cause.(*iprangedb.Error); ok {
 		code = publicationCode(typed.Code)
 	}
-	// The Go SDK collapses the Rust preparation terminal to the primary
-	// cause and the cleanup state of the private attempt artifact (the
-	// AlgebraPreparationFailure precedent); those are the factual fields
-	// this adapter can report.
 	return &rpc.HandlerError{
 		Code:    code,
 		Outcome: "not_started",
 		Message: "snapshot preparation failed: " + failure.Cause.Error(),
-		Details: map[string]any{"cleanup_state": cleanupStateName(failure.Cleanup)},
+		Details: map[string]any{
+			"cleanup_state":        cleanupStateName(failure.Cleanup),
+			"cleanup":              CleanupArtifactsJSON(failure.CleanupArtifacts),
+			"coordination_cleanup": CoordinationCleanupJSON(failure.CoordinationCleanup),
+			"housekeeping":         HousekeepingJSON(failure.Housekeeping, failure.VisibleHousekeeping),
+			"visible_housekeeping": VisibleHousekeepingJSON(failure.VisibleHousekeeping),
+			"output":               privateOutputAttemptValueOrNil(failure.Output),
+		},
 	}
+}
+
+// privateOutputAttemptValueOrNil converts the optional private attempt
+// identity of one preparation failure (Rust Option projection: null
+// when no attempt artifact existed, the attempt facts otherwise).
+func privateOutputAttemptValueOrNil(attempt *iprangedb.PrivateOutputAttempt) any {
+	if attempt == nil {
+		return nil
+	}
+	return privateOutputAttemptValue(attempt)
 }
 
 // publicationCode maps the publication-specific SDK error classes to

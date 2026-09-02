@@ -71,12 +71,20 @@ func (r ImmutableFeedResult) CleanupState() CleanupState {
 
 // ImmutableFeedPreparationFailure is the failing terminal of one
 // immutable feed construction (Rust ImmutableFeedPreparationFailure
-// collapsed to the Go-visible fields, the SnapshotPreparationFailure
-// precedent): the primary cause and the cleanup state of the private
-// attempt artifact.
+// projected onto the Go-visible fields, the SnapshotPreparationFailure
+// precedent): the primary cause plus the full attempt facts (the
+// private output identity, the cleanup ledger, the coordination cleanup
+// class, and the housekeeping evidence). Cleanup is the derived state
+// enum (clean exactly when the ledger is empty and no coordination
+// guard is held, Rust cleanup_state()).
 type ImmutableFeedPreparationFailure struct {
-	Cause   error
-	Cleanup CleanupState
+	Cause               error
+	Cleanup             CleanupState
+	Output              *PrivateOutputAttempt
+	CleanupArtifacts    CleanupArtifacts
+	CoordinationCleanup CoordinationCleanup
+	Housekeeping        Housekeeping
+	VisibleHousekeeping []HousekeepingArtifact
 }
 
 // Error renders the preparation failure.
@@ -93,6 +101,44 @@ func (f *ImmutableFeedPreparationFailure) Unwrap() error {
 		return nil
 	}
 	return f.Cause
+}
+
+// feedFailureOf converts one publication preparation failure into the
+// public feed failure (Rust failure_from_early /
+// ImmutableFeedPreparationFailure::from_publication: the machine facts
+// carry the attempt identity, the cleanup ledger, the coordination
+// class, and the housekeeping evidence; the derived enum matches the
+// ledger and coordination rule).
+func feedFailureOf(failure *publication.PublicationPreparationFailure) *ImmutableFeedPreparationFailure {
+	return &ImmutableFeedPreparationFailure{
+		Cause:               publicError(failure.Cause),
+		Cleanup:             cleanupStateOf(failure.Cleanup, failure.CoordinationCleanup),
+		Output:              failure.OutputAttempt(),
+		CleanupArtifacts:    failure.Cleanup,
+		CoordinationCleanup: failure.CoordinationCleanup,
+		Housekeeping:        failure.Housekeeping,
+		VisibleHousekeeping: failure.VisibleHousekeeping,
+	}
+}
+
+// discardFeedFailure builds one feed preparation failure from an
+// attempt discard (Rust ImmutableFeedPreparationFailure::discarded:
+// the attempt identity and the fixed cleanup ledger of the removal).
+func discardFeedFailure(cause error, attempt *publication.PublishAttempt) *ImmutableFeedPreparationFailure {
+	output, artifact := attempt.DiscardFacts()
+	cleanup := publication.NewCleanupArtifacts()
+	if artifact != nil {
+		cleanup.Push(*artifact)
+	}
+	return &ImmutableFeedPreparationFailure{
+		Cause:               publicError(cause),
+		Cleanup:             cleanupStateOf(cleanup, CoordinationCleanupNone),
+		Output:              &output,
+		CleanupArtifacts:    cleanup,
+		CoordinationCleanup: CoordinationCleanupNone,
+		Housekeeping:        HousekeepingNone,
+		VisibleHousekeeping: nil,
+	}
 }
 
 // CreateImmutableFeedV4 normalizes one unordered IPv4 feed directly
@@ -243,11 +289,11 @@ func createImmutableFeed(
 	}
 	attempt, failure := publication.CreatePublishAttempt(destination, publicationPolicy)
 	if failure != nil {
-		return zero, &ImmutableFeedPreparationFailure{Cause: publicError(failure.Cause), Cleanup: failure.CleanupState()}
+		return zero, feedFailureOf(failure)
 	}
 	spec, err := writer.FreshOutputSpec(family, format.ValueKindMembership, format.StructureKindNone, valueTag.Wire(), 1)
 	if err != nil {
-		return zero, &ImmutableFeedPreparationFailure{Cause: publicError(err), Cleanup: attempt.Discard()}
+		return zero, discardFeedFailure(err, attempt)
 	}
 	// The reference batch charges the operation heap exactly like Rust
 	// new_owned_with_extent; the remaining heap becomes the normalize
@@ -257,17 +303,16 @@ func createImmutableFeed(
 	prepared.MaxHeapBytes = heap
 	builder, err := writer.NewImmutableFeedOutputBuilder(attempt.File(), spec, writer.OutputBudget{MaxOutputPages: prepared.MaxOutputPages}, prepared.TotalPages, membershipEntries)
 	if err != nil {
-		return zero, &ImmutableFeedPreparationFailure{Cause: publicError(err), Cleanup: attempt.Discard()}
+		return zero, discardFeedFailure(err, attempt)
 	}
 	discarded := func(cause error) (ImmutableFeedResult, error) {
 		// Rust drops the mapped writer in every failing path; Go must
 		// release the builder before the attempt discard.
 		closeErr := builder.Close()
-		cleanup := attempt.Discard()
 		if closeErr != nil {
 			cause = mergeErrors(cause, closeErr)
 		}
-		return zero, &ImmutableFeedPreparationFailure{Cause: publicError(cause), Cleanup: cleanup}
+		return zero, discardFeedFailure(cause, attempt)
 	}
 	report, err := build(builder, spec, prepared, attempt.File(), check)
 	if err != nil {
@@ -279,7 +324,7 @@ func createImmutableFeed(
 	// one preparation failure surface carries the folded cleanup state.
 	result, failure := attempt.Finish(publication.FinishedOutput{File: attempt.File(), Mapping: builder.Mapping(), Meta: builder.Meta()}, check)
 	if failure != nil {
-		return zero, &ImmutableFeedPreparationFailure{Cause: publicError(failure.Cause), Cleanup: failure.CleanupState()}
+		return zero, feedFailureOf(failure)
 	}
 	return ImmutableFeedResult{
 		Report: ImmutableFeedReport{

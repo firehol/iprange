@@ -62,6 +62,23 @@ func requireFeedCursor(valueKind uint8, feedIndex uint32, feedIndexLimit uint64)
 	return nil
 }
 
+// Seek repositions the projection to the containing feed interval or
+// the nearest interval in the cursor's direction, discarding the
+// coalescing state (Rust feed_range_cursor.rs ProjectionState::seek
+// parity): the inner range cursor seeks and the pending interval,
+// membership cache, and finished flags reset so the next Next call
+// starts clean at the repositioned point.
+func (c *FeedRangeProjection4) Seek(target uint32) error {
+	if err := c.inner.Seek(target); err != nil {
+		return err
+	}
+	c.pending, c.hasPending = AddressRange4{}, false
+	c.membershipCacheValid = false
+	c.rawFinished = false
+	c.finished = false
+	return nil
+}
+
 // Next returns the next coalesced interval belonging to the feed; ok
 // reports whether an interval was produced.
 func (c *FeedRangeProjection4) Next() (AddressRange4, bool, error) {
@@ -224,6 +241,21 @@ func (r *ImmutableReader) NewFeedRangeProjection6(feedIndex uint32, direction Ra
 		return nil, err
 	}
 	return &FeedRangeProjection6{r: r, feedIndex: feedIndex, direction: direction, inner: inner}, nil
+}
+
+// Seek repositions the projection to the containing feed interval or
+// the nearest interval in the cursor's direction, discarding the
+// coalescing state (Rust feed_range_cursor.rs ProjectionState::seek
+// parity; IPv6 twin of the v4 Seek).
+func (c *FeedRangeProjection6) Seek(targetHi, targetLo uint64) error {
+	if err := c.inner.Seek(targetHi, targetLo); err != nil {
+		return err
+	}
+	c.pending, c.hasPending = AddressRange6{}, false
+	c.membershipCacheValid = false
+	c.rawFinished = false
+	c.finished = false
+	return nil
 }
 
 // Next returns the next coalesced interval belonging to the feed; ok

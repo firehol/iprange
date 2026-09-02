@@ -364,6 +364,32 @@ type PublicationPreparationFailure struct {
 	Housekeeping                  Housekeeping
 	VisibleHousekeeping           []HousekeepingArtifact
 	Cause                         error
+	// discardPresent records whether the failure happened after an
+	// attempt artifact existed (Rust workflow::Failure::Early
+	// discarded Option projection: the identity fields above carry the
+	// discard facts exactly when this is set).
+	discardPresent bool
+}
+
+// OutputAttempt reports the discarded-output facts of the failure, or
+// nil when the failure happened before any attempt artifact existed
+// (Rust SnapshotPreparationFailure::from_publication output
+// construction; the Early arms without a discard leave it nil). The
+// output identity is always the retained output inode (Rust
+// identity: Some(output_identity)).
+func (f *PublicationPreparationFailure) OutputAttempt() *PrivateOutputAttempt {
+	if f == nil || !f.discardPresent {
+		return nil
+	}
+	return &PrivateOutputAttempt{
+		PublicationAttemptID: f.PublicationAttemptID,
+		DirectoryIdentity:    f.DirectoryIdentity,
+		BasenameEncoding:     f.PrivateOutputBasenameEncoding,
+		Basename:             f.PrivateOutputBasename,
+		Identity:             f.OutputIdentity,
+		IdentityPresent:      true,
+		CreationSecurity:     f.CreationSecurity,
+	}
 }
 
 // CleanupState reports the combined cleanup state of the failure (Rust

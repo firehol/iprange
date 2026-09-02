@@ -275,8 +275,11 @@ surface	same-name Rust method report	FinishedHistoryProjection.Report	present	ge
 surface	same-name Rust method report	FinishedWorkflow.Report	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 surface	same-name Rust method seek	DirectCursorV4.Seek	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 surface	same-name Rust method seek	DirectCursorV6.Seek	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method seek	FeedRangeCursorV4.Seek	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method seek	FeedRangeCursorV6.Seek	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 surface	same-name Rust method seek	NetworkEnrichmentV1CursorV4.Seek	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 surface	same-name Rust method seek	NetworkEnrichmentV1CursorV6.Seek	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
+surface	same-name Rust method seek_by_index	FeedCursor.SeekByIndex	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 surface	same-name Rust method set_metadata_json	FinishedHistoryProjection.SetMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 surface	same-name Rust method set_metadata_json	FinishedWorkflow.SetMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
 surface	same-name Rust method set_metadata_json	MembershipTransaction.SetMetadataJSON	present	generated surface row; go-surface extras are Go SDK conveniences without a Rust counterpart
