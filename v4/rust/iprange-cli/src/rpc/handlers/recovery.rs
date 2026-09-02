@@ -83,7 +83,7 @@ pub fn validate(state: &mut SessionState, params: Value) -> Result<Value, Handle
         path,
         mode,
         &budget,
-        &state.token,
+        &state.token(),
         &mut FindingSink { writer: &mut writer },
     ) {
         Ok(result) => {
@@ -156,7 +156,7 @@ pub fn recovery_inspect(state: &mut SessionState, params: Value) -> Result<Value
         _ => RecoveryInspectionMode::Offline,
     };
     let budget = validation_budget(&object["validation_budget"])?;
-    let inspection = inspect_recovery_candidates(path, mode, &budget, &state.token)
+    let inspection = inspect_recovery_candidates(path, mode, &budget, &state.token())
         .map_err(reader::read_error)?;
     let mut candidates = Vec::new();
     for candidate in inspection.candidates() {
@@ -223,7 +223,7 @@ pub fn recover(state: &mut SessionState, params: Value) -> Result<Value, Handler
             destination,
             &budget,
             &mut sink,
-            &state.token,
+            &state.token(),
         ),
         "live" => recover_live(
             source_path,
@@ -231,7 +231,7 @@ pub fn recover(state: &mut SessionState, params: Value) -> Result<Value, Handler
             destination,
             &budget,
             &mut sink,
-            &state.token,
+            &state.token(),
         ),
         _ => recover_offline(
             source_path,
@@ -240,7 +240,7 @@ pub fn recover(state: &mut SessionState, params: Value) -> Result<Value, Handler
             OfflineQuiescenceCertification::CallerCertified,
             &budget,
             &mut sink,
-            &state.token,
+            &state.token(),
         ),
     };
     match outcome {

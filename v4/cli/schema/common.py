@@ -37,6 +37,7 @@ POSITIVE_U64 = {
 }
 U32 = {"type": "u32"}
 POSITIVE_U32 = {"type": "integer", "min": 1, "max": 4294967295}
+BATCH_U32 = {"type": "u32", "min": 1, "max": 4096}
 def _canonical_ip_address(value, path):
     try:
         parsed = _ipaddress.ip_address(value)

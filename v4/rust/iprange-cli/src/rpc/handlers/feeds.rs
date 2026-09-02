@@ -132,7 +132,7 @@ pub fn feeds_import(state: &mut SessionState, params: Value) -> Result<Value, Ha
     let budget = lifecycle::writer_budget(&object["writer_budget"])
         .map_err(HandlerError::invalid_params)?;
     let (source_path, source_mode) = source_parts(object, "source")?;
-    let mut writer = match LiveWriter::open(path, budget, &state.token) {
+    let mut writer = match LiveWriter::open(path, budget, &state.token()) {
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
@@ -147,16 +147,16 @@ pub fn feeds_import(state: &mut SessionState, params: Value) -> Result<Value, Ha
         ReaderValue::Immutable(source) => run_import(
             &mut writer,
             MembershipImportSource::Immutable(source),
-            &state.token,
+            &state.token(),
         ),
         ReaderValue::Live(source) => run_import(
             &mut writer,
             MembershipImportSource::Live(source),
-            &state.token,
+            &state.token(),
         ),
     };
     let facts = collect_workflow_facts(&mut reader, outcome, &metadata);
-    finish_workflow_facts(&mut writer, facts, &metadata, &state.token, "iprange.v1.feeds.import")
+    finish_workflow_facts(&mut writer, facts, &metadata, &state.token(), "iprange.v1.feeds.import")
 }
 
 /// Create or replace one named feed from the `current` coverage source.
@@ -188,7 +188,7 @@ fn publisher_feed_workflow(
         .as_str()
         .ok_or_else(|| HandlerError::invalid_params("current.feed must be a string"))?;
     let (source_path, source_mode) = source_parts(current, "source")?;
-    let mut writer = match LiveWriter::open(path, budget, &state.token) {
+    let mut writer = match LiveWriter::open(path, budget, &state.token()) {
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
@@ -202,10 +202,10 @@ fn publisher_feed_workflow(
         current_feed,
         target,
         create,
-        &state.token,
+        &state.token(),
     );
     let facts = collect_workflow_facts(&mut reader, outcome, &metadata);
-    finish_workflow_facts(&mut writer, facts, &metadata, &state.token, method)
+    finish_workflow_facts(&mut writer, facts, &metadata, &state.token(), method)
 }
 
 /// Mutate one existing feed (delete or rename) and publish metadata facts.
@@ -233,11 +233,11 @@ fn feed_change_workflow(
             .ok_or_else(|| HandlerError::invalid_params("feed must be a string"))?,
     )
     .map_err(|_| HandlerError::invalid_params("feed is invalid"))?;
-    let mut writer = match LiveWriter::open(path, budget, &state.token) {
+    let mut writer = match LiveWriter::open(path, budget, &state.token()) {
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
-    let facts = match run_feed_change(&mut writer, object, workflow, old, &state.token) {
+    let facts = match run_feed_change(&mut writer, object, workflow, old, &state.token()) {
         Ok(prepared) => match publish_changed(prepared, &metadata) {
             Ok((metadata_logical_change, commit)) => FeedChangeFacts::Changed {
                 metadata_logical_change,
@@ -674,7 +674,7 @@ fn open_temporary(path: &str, mode: &str, state: &SessionState) -> Result<Reader
         "immutable" => ImmutableReader::open(path)
             .map(ReaderValue::Immutable)
             .map_err(reader::read_error),
-        _ => LiveReader::open(path, &state.token)
+        _ => LiveReader::open(path, &state.token())
             .map(ReaderValue::Live)
             .map_err(reader::read_error),
     }

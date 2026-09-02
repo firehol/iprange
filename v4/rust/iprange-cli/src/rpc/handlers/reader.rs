@@ -89,7 +89,7 @@ pub fn open(state: &mut SessionState, params: Value) -> Result<Value, HandlerErr
             "connection reader limit 64 is exhausted",
         ));
     }
-    let mut reader = open_reader(&path, &mode, &state.token)?;
+    let mut reader = open_reader(&path, &mode, &state.token())?;
     // Info and handle allocation are fallible after the open; a failure
     // must still close the reader it opened before responding.
     let result = (|| -> Result<(String, iprange_livedb::DatabaseInfo), HandlerError> {
@@ -228,7 +228,7 @@ pub fn lookup(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
     let object = params
         .as_object()
         .ok_or_else(|| invalid("params must be an object"))?;
-    let cancellation = state.token.clone();
+    let cancellation = state.token();
     let reader = reader(state, object["reader"].as_str().unwrap_or(""))?;
     let addresses = object["addresses"].as_array().cloned().unwrap_or_default();
     let info = sdk(reader.info())?;
@@ -395,7 +395,7 @@ pub fn matching_feeds(state: &mut SessionState, params: Value) -> Result<Value, 
 
 pub fn database_info(state: &mut SessionState, params: Value) -> Result<Value, HandlerError> {
     let (path, mode) = source_params(&params).map_err(HandlerError::invalid_params)?;
-    let mut reader = open_reader(&path, &mode, &state.token)?;
+    let mut reader = open_reader(&path, &mode, &state.token())?;
     let result = (|| -> Result<Value, HandlerError> {
         let info = sdk(reader.info())?;
         Ok(json!({
@@ -417,7 +417,7 @@ pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Valu
         .as_object()
         .ok_or_else(|| invalid("params must be an object"))?;
     let (path, mode) = source_value(&object["source"]).map_err(HandlerError::invalid_params)?;
-    let mut reader = open_reader(&path, &mode, &state.token)?;
+    let mut reader = open_reader(&path, &mode, &state.token())?;
     let result = (|| -> Result<Value, HandlerError> {
         let delivery = &object["delivery"];
         // Inline preflight before the blob is materialized; the reader

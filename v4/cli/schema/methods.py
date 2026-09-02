@@ -91,7 +91,7 @@ _register("iprange.v1.reader.lookup", {
 })
 _register("iprange.v1.reader.feeds.open", {
     "type": "object",
-    "properties": {"reader": C.HANDLE, "batch_size": C.U32},
+    "properties": {"reader": C.HANDLE, "batch_size": C.BATCH_U32},
     "required": ["reader", "batch_size"],
     "additional": False,
 })
@@ -129,7 +129,7 @@ _register("iprange.v1.reader.ranges.open", {
         },
         "direction": C.DIRECTION,
         "start": C.IP_ADDRESS,
-        "batch_size": C.U32,
+        "batch_size": C.BATCH_U32,
     },
     "required": ["reader", "view", "direction", "batch_size"],
     "additional": False,
@@ -734,6 +734,18 @@ def _self_test():
         "batch_size": 1,
     }
     assert validate_params("iprange.v1.reader.ranges.open", reader) == reader
+    # batch_size is 1 through 4096 (spec); 0 and 4097 are rejected.
+    assert rejects("iprange.v1.reader.ranges.open", dict(reader, batch_size=0))
+    assert rejects("iprange.v1.reader.ranges.open", dict(reader, batch_size=4097))
+    assert rejects("iprange.v1.reader.feeds.open", {
+        "reader": "0" * 32, "batch_size": 0,
+    })
+    assert rejects("iprange.v1.reader.feeds.open", {
+        "reader": "0" * 32, "batch_size": 4097,
+    })
+    assert validate_params("iprange.v1.reader.feeds.open", {
+        "reader": "0" * 32, "batch_size": 4096,
+    })
     for view in (
         {"kind": "direct", "feed": "feed-a"},
         {"kind": "structured", "selection": {"mode": "all"}},

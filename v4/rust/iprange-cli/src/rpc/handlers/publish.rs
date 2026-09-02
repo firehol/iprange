@@ -85,7 +85,7 @@ pub fn current_publish(state: &mut SessionState, params: Value) -> Result<Value,
                 policy,
                 &mut source,
                 &budget,
-                &state.token,
+                &state.token(),
             );
             (
                 outcome,
@@ -110,7 +110,7 @@ pub fn current_publish(state: &mut SessionState, params: Value) -> Result<Value,
                 policy,
                 &mut source,
                 &budget,
-                &state.token,
+                &state.token(),
             );
             (
                 outcome,

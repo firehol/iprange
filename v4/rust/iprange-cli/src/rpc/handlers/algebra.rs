@@ -434,7 +434,7 @@ pub fn query_cardinalities(state: &mut SessionState, params: Value) -> Result<Va
             sdk(scope.aggregate(
                 MembershipAggregationMode::Cardinalities,
                 &mut sink,
-                &state.token,
+                &state.token(),
             ))
         };
         if let Some(error) = captured.take() {
@@ -489,7 +489,7 @@ pub fn query_overlaps(state: &mut SessionState, params: Value) -> Result<Value, 
                     MembershipAggregationMode::SelectedPairs(pairs)
                 }
             };
-            sdk(scope.aggregate(aggregation, &mut sink, &state.token))
+            sdk(scope.aggregate(aggregation, &mut sink, &state.token()))
         };
         if let Some(error) = captured.take() {
             return Err(error);
@@ -545,7 +545,7 @@ pub fn query_matching_feeds(state: &mut SessionState, params: Value) -> Result<V
                         names.push(feed.as_str().to_owned());
                         Ok(())
                     },
-                    &state.token,
+                    &state.token(),
                 ))?,
                 CursorPoint::V6(value) => sdk(query.matching_feeds_v6(
                     V6Key::from_u128(value),
@@ -553,7 +553,7 @@ pub fn query_matching_feeds(state: &mut SessionState, params: Value) -> Result<V
                         names.push(feed.as_str().to_owned());
                         Ok(())
                     },
-                    &state.token,
+                    &state.token(),
                 ))?,
             };
             line.clear();
@@ -649,7 +649,7 @@ pub fn join_direct(state: &mut SessionState, params: Value) -> Result<Value, Han
                 source,
                 DirectJoinBudget { max_result_cells },
                 &mut sink,
-                &state.token,
+                &state.token(),
             ))
         };
         if let Some(error) = captured.take() {
@@ -713,7 +713,7 @@ pub fn join_membership(state: &mut SessionState, params: Value) -> Result<Value,
                 slot: &mut captured,
                 line: String::new(),
             };
-            sdk(left_scope.join_membership(&right_scope, &mut sink, &state.token))
+            sdk(left_scope.join_membership(&right_scope, &mut sink, &state.token()))
         };
         if let Some(error) = captured.take() {
             return Err(error);
@@ -751,8 +751,8 @@ pub fn algebra_count(state: &mut SessionState, params: Value) -> Result<Value, H
     let result = (|| -> Result<Value, HandlerError> {
         let scopes = resolve_algebra_scopes(&readers, &object["sources"], state)?;
         let refs: Vec<&MembershipScope<'_>> = scopes.iter().collect();
-        let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token))?;
-        let report = sdk(algebra.count(feed_selection(&selection), &state.token))?;
+        let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token()))?;
+        let report = sdk(algebra.count(feed_selection(&selection), &state.token()))?;
         Ok(json!({
             "method": "iprange.v1.algebra.count",
             "report": count_report(&report),
@@ -776,11 +776,11 @@ pub fn algebra_compare(state: &mut SessionState, params: Value) -> Result<Value,
     let result = (|| -> Result<Value, HandlerError> {
         let scopes = resolve_algebra_scopes(&readers, &object["sources"], state)?;
         let refs: Vec<&MembershipScope<'_>> = scopes.iter().collect();
-        let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token))?;
+        let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token()))?;
         let report = sdk(algebra.compare(
             feed_selection(&left),
             feed_selection(&right),
-            &state.token,
+            &state.token(),
         ))?;
         Ok(json!({
             "method": "iprange.v1.algebra.compare",
@@ -810,7 +810,7 @@ pub fn algebra_publish(state: &mut SessionState, params: Value) -> Result<Value,
     let result = (|| -> Result<Value, HandlerError> {
         let scopes = resolve_algebra_scopes(&readers, &object["sources"], state)?;
         let refs: Vec<&MembershipScope<'_>> = scopes.iter().collect();
-        let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token))?;
+        let algebra = sdk(MembershipAlgebra::new(&refs, budget, &state.token()))?;
         let destination = object["destination"]
             .as_str()
             .ok_or_else(|| HandlerError::invalid_params("destination must be a string"))?;
@@ -835,7 +835,7 @@ pub fn algebra_publish(state: &mut SessionState, params: Value) -> Result<Value,
             metadata.as_deref(),
             policy,
             output_budget,
-            &state.token,
+            &state.token(),
         );
         let result = match outcome {
             Ok(result) => result,
@@ -895,7 +895,7 @@ pub fn history_project(state: &mut SessionState, params: Value) -> Result<Value,
     // object ceiling BEFORE any writer is opened or mutation runs, so
     // a committed workflow is never relabeled as a read-only failure.
     preflight_history_result(state, &windows)?;
-    let mut writer = match LiveWriter::open(path, budget, &state.token) {
+    let mut writer = match LiveWriter::open(path, budget, &state.token()) {
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
@@ -910,16 +910,16 @@ pub fn history_project(state: &mut SessionState, params: Value) -> Result<Value,
         ReaderValue::Immutable(source) => sdk(writer.project_history(
             HistoryProjectionSource::Immutable(source),
             &windows,
-            &state.token,
+            &state.token(),
         )),
         ReaderValue::Live(source) => sdk(writer.project_history(
             HistoryProjectionSource::Live(source),
             &windows,
-            &state.token,
+            &state.token(),
         )),
     };
     let facts = collect_projection_facts(&mut reader, outcome, &metadata);
-    finish_projection_facts(&mut writer, facts, &metadata, &state.token)
+    finish_projection_facts(&mut writer, facts, &metadata, &state.token())
 }
 
 /// Carry the factual live source close into a publisher outcome: the
@@ -1897,8 +1897,8 @@ fn resolve_scope<'a>(
 ) -> Result<MembershipScope<'a>, HandlerError> {
     let query = sdk(reader.membership_query())?;
     match selection {
-        Selection::All => sdk(query.all_feeds(budget, &state.token)),
-        Selection::Named(names) => sdk(query.named_feeds(names, budget, &state.token)),
+        Selection::All => sdk(query.all_feeds(budget, &state.token())),
+        Selection::Named(names) => sdk(query.named_feeds(names, budget, &state.token())),
     }
 }
 
@@ -1913,7 +1913,7 @@ fn resolve_algebra_scopes<'a>(
         let object = source.as_object().expect("validator checked algebra source");
         let budget = decode_membership_budget(&object["membership_query_budget"])?;
         let query = sdk(readers[index].membership_query())?;
-        scopes.push(sdk(query.all_feeds(budget, &state.token))?);
+        scopes.push(sdk(query.all_feeds(budget, &state.token()))?);
     }
     Ok(scopes)
 }
@@ -1985,7 +1985,7 @@ fn open_temporary(path: &str, mode: &str, state: &SessionState) -> Result<Reader
         "immutable" => ImmutableReader::open(path)
             .map(ReaderValue::Immutable)
             .map_err(reader::read_error),
-        _ => LiveReader::open(path, &state.token)
+        _ => LiveReader::open(path, &state.token())
             .map(ReaderValue::Live)
             .map_err(reader::read_error),
     }

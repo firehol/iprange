@@ -174,7 +174,7 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
     // published export is never relabeled as a read-only failure by
     // the post-hoc response bound (iprange-jsonrpc-v1.md).
     preflight_export(state, format, destination_text, &source_mode)?;
-    let mut reader = open_source(&source_path, &source_mode, &state.token)?;
+    let mut reader = open_source(&source_path, &source_mode, &state.token())?;
     let export_result = export_with_reader(
         state,
         object,
@@ -310,7 +310,7 @@ fn export_with_reader(
             .expect("validator checked source.mode"),
         budget,
     )?;
-    let cancellation = state.token.clone();
+    let cancellation = state.token();
     let facts = match format {
         "legacy_binary" => write_legacy_binary(
             destination,
@@ -1326,7 +1326,7 @@ fn source_identity(
         RecoveryInspectionMode::Immutable
     };
     let result =
-        inspect_recovery_candidates(source, mode, &inspection, &state.token).map_err(read_error)?;
+        inspect_recovery_candidates(source, mode, &inspection, &state.token()).map_err(read_error)?;
     file_identity(&result.source_identity)
 }
 

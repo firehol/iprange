@@ -95,7 +95,7 @@ pub fn database_create(state: &mut SessionState, params: Value) -> Result<Value,
         structure_kind,
         value_tag,
         reader_capacity,
-        &state.token,
+        &state.token(),
     )
     .map_err(|error| sdk_error(&error, "not_started"))?;
     if result.state != CreationState::Created {
@@ -103,7 +103,7 @@ pub fn database_create(state: &mut SessionState, params: Value) -> Result<Value,
             path,
             &result,
             LiveTransitionResolutionMode::Complete,
-            &state.token,
+            &state.token(),
         )
         .map_err(|error| sdk_error(&error, "outcome_unknown"))?;
     }
@@ -147,13 +147,13 @@ pub fn database_metadata_replace(
     let metadata = metadata_value(&object["metadata"])?;
     let budget = writer_budget(&object["writer_budget"]).map_err(HandlerError::invalid_params)?;
 
-    let mut writer = match LiveWriter::open(path, budget, &state.token) {
+    let mut writer = match LiveWriter::open(path, budget, &state.token()) {
         Ok(writer) => writer,
         Err(error) => return Err(sdk_error(&error, "not_started")),
     };
     let staged = match &metadata {
-        MetadataValue::Clear => writer.clear_metadata_json(&state.token),
-        MetadataValue::Replace(bytes) => writer.set_metadata_json(bytes, &state.token),
+        MetadataValue::Clear => writer.clear_metadata_json(&state.token()),
+        MetadataValue::Replace(bytes) => writer.set_metadata_json(bytes, &state.token()),
         MetadataValue::Keep => Ok(false),
     };
     let stage_failed = staged.is_err();
@@ -163,7 +163,7 @@ pub fn database_metadata_replace(
         MetadataValue::Keep => false,
     };
     let commit = if should_commit {
-        Some(writer.commit(&state.token))
+        Some(writer.commit(&state.token()))
     } else {
         None
     };

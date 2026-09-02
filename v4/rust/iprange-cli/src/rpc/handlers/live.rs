@@ -428,7 +428,7 @@ pub fn database_initialize_live(
     let path = required_str(object, "path")?;
     require_existing_database(Path::new(path))?;
     let capacity = u32_value(&object["reader_capacity"]).map_err(HandlerError::invalid_params)?;
-    let result = initialize_live(path, capacity, &state.token)
+    let result = initialize_live(path, capacity, &state.token())
         .map_err(|error| lifecycle::sdk_error(&error, "not_started"))?;
     bounded(completed_result(
         "iprange.v1.database.initialize_live",
@@ -447,7 +447,7 @@ pub fn database_reset_live(state: &mut SessionState, params: Value) -> Result<Va
         Some("rollback_safe") => LiveResetPolicy::RollbackSafe,
         _ => LiveResetPolicy::DiscardPrevious,
     };
-    let result = reset_live_coordination(path, capacity, policy, &state.token)
+    let result = reset_live_coordination(path, capacity, policy, &state.token())
         .map_err(|error| lifecycle::sdk_error(&error, "not_started"))?;
     bounded(completed_result(
         "iprange.v1.database.reset_live",
@@ -464,7 +464,7 @@ pub fn create_resolve(state: &mut SessionState, params: Value) -> Result<Value, 
     let supplied = lifecycle_live::create_result_from_wire(&object["create_result"], path)
         .map_err(HandlerError::invalid_params)?;
     let mode = resolve_mode(&object["resolution_mode"])?;
-    let result = resolve_create_live(path, &supplied, mode, &state.token)
+    let result = resolve_create_live(path, &supplied, mode, &state.token())
         .map_err(|error| lifecycle::sdk_error(&error, "outcome_unknown"))?;
     let mut value = lifecycle::create_result(&result)?;
     value["method"] = json!("iprange.v1.database.create.resolve");
@@ -484,7 +484,7 @@ pub fn live_transition_resolve(
         lifecycle_live::live_transition_result_from_wire(&object["live_transition_result"], path)
             .map_err(HandlerError::invalid_params)?;
     let mode = resolve_mode(&object["resolution_mode"])?;
-    let result = resolve_live_transition(path, &supplied, mode, &state.token)
+    let result = resolve_live_transition(path, &supplied, mode, &state.token())
         .map_err(|error| lifecycle::sdk_error(&error, "outcome_unknown"))?;
     bounded(completed_result(
         "iprange.v1.database.live_transition.resolve",
@@ -503,7 +503,7 @@ pub fn live_residue_resolve(
     let mode = resolve_mode(&object["resolution_mode"])?;
     // The residue resolver may recover a transition whose main is already
     // gone, so no existence pre-check applies here.
-    let result = resolve_interrupted_live_transition(path, mode, &state.token)
+    let result = resolve_interrupted_live_transition(path, mode, &state.token())
         .map_err(|error| lifecycle::sdk_error(&error, "outcome_unknown"))?;
     bounded(completed_result(
         "iprange.v1.database.live_residue.resolve",
@@ -523,7 +523,7 @@ pub fn commit_resolve(state: &mut SessionState, params: Value) -> Result<Value, 
         Some("live") => CommitResolutionMode::Live,
         _ => CommitResolutionMode::Immutable,
     };
-    let result = resolve_commit(path, &supplied, mode, &state.token)
+    let result = resolve_commit(path, &supplied, mode, &state.token())
         .map_err(|error| lifecycle::sdk_error(&error, "outcome_unknown"))?;
     bounded(completed_result(
         "iprange.v1.commit.resolve",
@@ -568,12 +568,12 @@ pub fn direct_replace(state: &mut SessionState, params: Value) -> Result<Value, 
     let budget = lifecycle::writer_budget(&object["writer_budget"])
         .map_err(HandlerError::invalid_params)?;
 
-    let mut writer = match LiveWriter::open(path, budget, &state.token) {
+    let mut writer = match LiveWriter::open(path, budget, &state.token()) {
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
     let ipv6 = writer.address_family() == AddressFamily::Ipv6;
-    let mut workflow = match writer.begin_direct_replacement(&state.token) {
+    let mut workflow = match writer.begin_direct_replacement(&state.token()) {
         Ok(workflow) => workflow,
         Err(error) => {
             return Err(close_writer_facts(
@@ -626,7 +626,7 @@ pub fn direct_replace(state: &mut SessionState, params: Value) -> Result<Value, 
         &metadata,
         "iprange.v1.direct.replace",
         None,
-        &state.token,
+        &state.token(),
     )?;
     bounded(value)
 }
@@ -650,7 +650,7 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
     let budget = lifecycle::writer_budget(&object["writer_budget"])
         .map_err(HandlerError::invalid_params)?;
 
-    let mut reader = open_source_reader(&source_path, &source_mode, &state.token)?;
+    let mut reader = open_source_reader(&source_path, &source_mode, &state.token())?;
     let family = match reader.info() {
         Ok(info) => info.address_family,
         Err(error) => {
@@ -661,7 +661,7 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
             ));
         }
     };
-    let mut writer = match LiveWriter::open(path, budget, &state.token) {
+    let mut writer = match LiveWriter::open(path, budget, &state.token()) {
         Ok(writer) => writer,
         Err(error) => {
             let error = lifecycle::sdk_error(&error, "not_started");
@@ -690,7 +690,7 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
             refresh_value,
             collector.as_mut(),
             &metadata,
-            &state.token,
+            &state.token(),
         )
         .and_then(|facts| {
             publisher_value(
@@ -699,7 +699,7 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
                 &metadata,
                 "iprange.v1.retention.first_seen.refresh",
                 collector.as_ref(),
-                &state.token,
+                &state.token(),
             )
         }),
         AddressFamily::Ipv6 => run_first_seen_v6(
@@ -709,7 +709,7 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
             refresh_value,
             collector.as_mut(),
             &metadata,
-            &state.token,
+            &state.token(),
         )
         .and_then(|facts| {
             publisher_value(
@@ -718,7 +718,7 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
                 &metadata,
                 "iprange.v1.retention.first_seen.refresh",
                 collector.as_ref(),
-                &state.token,
+                &state.token(),
             )
         }),
     };
@@ -792,7 +792,7 @@ pub fn last_seen_refresh(state: &mut SessionState, params: Value) -> Result<Valu
     let budget = lifecycle::writer_budget(&object["writer_budget"])
         .map_err(HandlerError::invalid_params)?;
 
-    let mut reader = open_source_reader(&source_path, &source_mode, &state.token)?;
+    let mut reader = open_source_reader(&source_path, &source_mode, &state.token())?;
     let family = match reader.info() {
         Ok(info) => info.address_family,
         Err(error) => {
@@ -803,7 +803,7 @@ pub fn last_seen_refresh(state: &mut SessionState, params: Value) -> Result<Valu
             ));
         }
     };
-    let mut writer = match LiveWriter::open(path, budget, &state.token) {
+    let mut writer = match LiveWriter::open(path, budget, &state.token()) {
         Ok(writer) => writer,
         Err(error) => {
             let error = lifecycle::sdk_error(&error, "not_started");
@@ -821,7 +821,7 @@ pub fn last_seen_refresh(state: &mut SessionState, params: Value) -> Result<Valu
             refresh_value,
             cutoff,
             &metadata,
-            &state.token,
+            &state.token(),
         )?,
         AddressFamily::Ipv6 => run_last_seen_v6(
             &mut writer,
@@ -830,7 +830,7 @@ pub fn last_seen_refresh(state: &mut SessionState, params: Value) -> Result<Valu
             refresh_value,
             cutoff,
             &metadata,
-            &state.token,
+            &state.token(),
         )?,
     };
     let value = publisher_value(
@@ -839,7 +839,7 @@ pub fn last_seen_refresh(state: &mut SessionState, params: Value) -> Result<Valu
         &metadata,
         "iprange.v1.retention.last_seen.refresh",
         None,
-        &state.token,
+        &state.token(),
     )?;
     bounded(value)
 }

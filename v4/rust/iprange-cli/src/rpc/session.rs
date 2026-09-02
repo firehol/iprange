@@ -12,12 +12,19 @@
 //!   request exceeding the bound fails with -32002 server_busy;
 //! - the reader stays active while work executes so cancellation
 //!   and EOF are observed;
-//! - cancel notifications apply immediately after frame validation:
-//!   only ids admitted but not yet terminal (`pending`) are valid
-//!   cancellation targets, so cancelling an id never poisons a later
-//!   request that reuses it; queued matches are skipped without a
-//!   response; the active request set is signalled only when it
-//!   contains the cancelled id;
+//! - the control plane (cancelled/pending ids, active keys, the
+//!   cancellation token, shutting-down, fatal-error) is locked
+//!   separately from connection resources, so a cancel notification,
+//!   EOF, or termination signal can always cancel the active unit's
+//!   token while its handler is running;
+//! - cancel notifications apply during the frame scan: only ids
+//!   admitted and not yet terminal (`pending`) are valid targets, so
+//!   cancelling an id never poisons a later request that reuses it;
+//!   a same-batch cancel may target an earlier sibling (already
+//!   admitted and marked pending) but not a later sibling (not yet
+//!   admitted); queued matches are skipped without a response; the
+//!   active request set is signalled only when it contains the
+//!   cancelled id;
 //! - a whole frame decodes strictly before anything in it executes;
 //!   envelope failures produce one id-null error and the service
 //!   keeps serving;
@@ -60,15 +67,20 @@ use super::framing::{FrameWriter, LineReader, QUEUED_LIMIT};
 use super::schema::{self, Request, RequestId, SchemaError};
 use super::state::ConnectionState;
 
-/// Conservative connection-owned state shared by handlers.
-#[derive(Default)]
-pub struct SessionState {
-    /// Shared reader/cursor resources and their connection limits.
-    pub resources: ConnectionState,
+/// Cancellation and shutdown control plane, locked separately from
+/// [`SessionState`].
+///
+/// A handler may run for a long time while the session-state mutex is
+/// held (the worker locks it around every handler call), so a cancel
+/// notification, EOF, or termination signal must not need that mutex
+/// to reach the active unit's token. None of the fields here are ever
+/// touched by a handler; the session loop and the worker update them
+/// under this lock only, in short critical sections.
+struct SessionControl {
     /// Request ids cancelled by the transport. Always a subset of
     /// `pending`: ids are removed when their unit reaches its terminal
     /// state so a reused id starts with a clean slate.
-    pub cancelled: HashSet<String>,
+    cancelled: HashSet<String>,
     /// Request ids admitted but not yet terminal; only these ids are
     /// valid cancellation targets.
     pending: HashSet<String>,
@@ -79,13 +91,61 @@ pub struct SessionState {
     /// Clone); makes the shutdown path exit non-zero when stdout broke
     /// while draining queued units.
     fatal_error: Option<(io::ErrorKind, String)>,
-    /// Cancellation signal for the active work unit.
-    pub token: Arc<CancellationToken>,
+    /// Cancellation signal for the active work unit; the worker
+    /// replaces it once per unit.
+    token: Arc<CancellationToken>,
     /// Ids of the request set currently executing.
     active_keys: HashSet<String>,
+}
+
+impl SessionControl {
+    fn new() -> Self {
+        SessionControl {
+            cancelled: HashSet::default(),
+            pending: HashSet::default(),
+            shutting_down: false,
+            fatal_error: None,
+            token: Arc::new(CancellationToken::new()),
+            active_keys: HashSet::default(),
+        }
+    }
+}
+
+/// Connection-owned state shared by handlers.
+pub struct SessionState {
+    /// Shared reader/cursor resources and their connection limits.
+    pub resources: ConnectionState,
     /// Id of the request currently executing; cursor handlers size pages
     /// against the complete response-object ceiling using this id.
     pub active_request_id: Option<RequestId>,
+    /// Cancellation/shutdown control plane; never held by handlers.
+    control: Arc<Mutex<SessionControl>>,
+}
+
+impl Default for SessionState {
+    fn default() -> Self {
+        SessionState {
+            resources: ConnectionState::default(),
+            active_request_id: None,
+            control: Arc::new(Mutex::new(SessionControl::new())),
+        }
+    }
+}
+
+impl SessionState {
+    /// Clone of the active unit's cancellation token. Handlers poll
+    /// this token during long SDK work; the session loop can cancel it
+    /// at any time through the control plane.
+    pub fn token(&self) -> Arc<CancellationToken> {
+        self.control.lock().unwrap().token.clone()
+    }
+
+    /// Replace the active unit's token (test support: the worker
+    /// installs tokens through its direct control-lock scope).
+    #[cfg(test)]
+    pub(crate) fn install_token(&self, token: Arc<CancellationToken>) {
+        self.control.lock().unwrap().token = token;
+    }
 }
 /// One element of a decoded frame in frame order.
 ///
@@ -136,7 +196,12 @@ enum SessionEvent {
 }
 
 pub struct Session {
+    /// Resources and active-request identity; the worker holds this
+    /// lock for the whole duration of a handler call.
     state: Arc<Mutex<SessionState>>,
+    /// Cancellation/shutdown control plane; never held by handlers,
+    /// so cancel/EOF always reach an active unit's token.
+    control: Arc<Mutex<SessionControl>>,
     /// Requests admitted to the channel but not yet executed.
     in_flight: Arc<AtomicUsize>,
     work_tx: Option<Sender<WorkUnit>>,
@@ -155,18 +220,15 @@ fn request_key(request: &Request) -> Option<String> {
 impl Session {
     pub fn new() -> Self {
         let (work_tx, work_rx) = std::sync::mpsc::channel::<WorkUnit>();
+        let control = Arc::new(Mutex::new(SessionControl::new()));
         let state = Arc::new(Mutex::new(SessionState {
             resources: ConnectionState::default(),
-            token: Arc::new(CancellationToken::new()),
-            active_keys: HashSet::default(),
-            cancelled: HashSet::default(),
-            pending: HashSet::default(),
-            shutting_down: false,
-            fatal_error: None,
             active_request_id: None,
+            control: Arc::clone(&control),
         }));
         Session {
             state,
+            control,
             in_flight: Arc::new(AtomicUsize::new(0)),
             work_tx: Some(work_tx),
             work_rx: Some(work_rx),
@@ -193,6 +255,7 @@ impl Session {
 
         let writer = Arc::new(Mutex::new(FrameWriter::new(writer)));
         let worker_state = Arc::clone(&self.state);
+        let worker_control = Arc::clone(&self.control);
         let worker_writer = Arc::clone(&writer);
         let worker_in_flight = Arc::clone(&self.in_flight);
         let worker_events = events_tx.clone();
@@ -200,7 +263,14 @@ impl Session {
         let worker = std::thread::Builder::new()
             .name("iprange-jsonrpc".into())
             .spawn(move || {
-                worker_loop(worker_state, worker_writer, worker_in_flight, work_rx, worker_events)
+                worker_loop(
+                    worker_state,
+                    worker_control,
+                    worker_writer,
+                    worker_in_flight,
+                    work_rx,
+                    worker_events,
+                )
             })
             .expect("spawn jsonrpc worker");
         self.worker = Some(worker);
@@ -259,17 +329,22 @@ impl Session {
         }
     }
 
-    /// Cancel one request id immediately after frame validation.
+    /// Cancel one request id during the frame scan.
     ///
     /// The notification params must match the strict CANCEL schema
     /// (exactly one member `request_id`, string or integral number)
     /// before anything is cancelled; an invalid notification is
     /// ignored and produces no response. Only ids that were admitted
-    /// and have not reached their terminal state (`pending`) can be
-    /// cancelled: unknown and already terminal ids are ignored, so
-    /// cancelling an id never poisons a later request that reuses it.
-    /// An id in the currently executing request set also cancels the
-    /// unit's cancellation token.
+    /// before this element (pending ids from earlier frames, plus
+    /// earlier siblings of the same frame, which the scan marked
+    /// pending as it admitted them) and have not reached their
+    /// terminal state can be cancelled: unknown, already terminal, and
+    /// not-yet-admitted ids are ignored, so cancelling an id never
+    /// poisons a later request that reuses it. An id in the
+    /// currently executing request set also cancels the unit's
+    /// cancellation token. The control plane is locked independently
+    /// of session resources, so this applies even while a handler is
+    /// running.
     fn apply_cancel(&mut self, request: &Request) {
         if !schema::valid_cancel_params(&request.params) {
             return;
@@ -280,13 +355,13 @@ impl Session {
             _ => None,
         };
         let Some(cancel_id) = cancel_id else { return };
-        let mut state = self.state.lock().unwrap();
-        if !state.pending.contains(&cancel_id) {
+        let mut control = self.control.lock().unwrap();
+        if !control.pending.contains(&cancel_id) {
             return;
         }
-        state.cancelled.insert(cancel_id.clone());
-        if state.active_keys.contains(&cancel_id) {
-            state.token.cancel();
+        control.cancelled.insert(cancel_id.clone());
+        if control.active_keys.contains(&cancel_id) {
+            control.token.cancel();
         }
     }
 
@@ -296,9 +371,9 @@ impl Session {
     /// exits after draining queued units.
     fn begin_shutdown(&mut self) {
         {
-            let mut s = self.state.lock().unwrap();
-            s.shutting_down = true;
-            s.token.cancel();
+            let mut control = self.control.lock().unwrap();
+            control.shutting_down = true;
+            control.token.cancel();
         }
         self.work_tx.take();
     }
@@ -338,7 +413,7 @@ impl Session {
         self.begin_shutdown();
         let worker_failed = if let Some(worker) = self.worker.take() {
             let _ = worker.join();
-            self.state.lock().unwrap().fatal_error.take().map(|(kind, message)| {
+            self.control.lock().unwrap().fatal_error.take().map(|(kind, message)| {
                 io::Error::new(kind, message)
             })
         } else {
@@ -399,6 +474,7 @@ fn reader_loop<R: BufRead>(mut reader: LineReader<R>, events: Sender<SessionEven
 
 fn worker_loop<W: Write + Send + 'static>(
     state: Arc<Mutex<SessionState>>,
+    control: Arc<Mutex<SessionControl>>,
     writer: Arc<Mutex<FrameWriter<W>>>,
     in_flight: Arc<AtomicUsize>,
     rx: Receiver<WorkUnit>,
@@ -412,9 +488,9 @@ fn worker_loop<W: Write + Send + 'static>(
             .filter(|entry| matches!(entry, WorkEntry::Execute(_)))
             .filter_map(|entry| request_key(entry.request()))
             .collect();
-        // Token/flag update in one lock scope: if shutdown lands
-        // between a check and a fresh token install, the fresh token
-        // would escape cancellation. A unit admitted before EOF
+        // Token/flag update in one control lock scope: if shutdown
+        // lands between a check and a fresh token install, the fresh
+        // token would escape cancellation. A unit admitted before EOF
         // installs its own token (shutdown then cancels it: active,
         // factual). A unit still queued when EOF lands keeps the
         // already-cancelled token installed by begin_shutdown: quick
@@ -422,27 +498,27 @@ fn worker_loop<W: Write + Send + 'static>(
         // no admitted unit is skipped. The channel close (work_tx
         // dropped by shutdown) ends the loop.
         {
-            let mut s = state.lock().unwrap();
-            if !s.shutting_down {
-                s.token = Arc::new(CancellationToken::new());
+            let mut c = control.lock().unwrap();
+            if !c.shutting_down {
+                c.token = Arc::new(CancellationToken::new());
             }
-            s.active_keys = keys.clone();
+            c.active_keys = keys.clone();
         }
         let mut responses: Vec<Value> = unit
             .entries
             .iter()
-            .filter_map(|entry| entry_response(&state, entry))
+            .filter_map(|entry| entry_response(&state, &control, entry))
             .collect();
         {
             // Terminal state: the unit's request ids are no longer
             // cancellation targets, so a later request reusing an id
             // starts with a clean slate.
-            let mut s = state.lock().unwrap();
+            let mut c = control.lock().unwrap();
             for key in &keys {
-                s.cancelled.remove(key);
-                s.pending.remove(key);
+                c.cancelled.remove(key);
+                c.pending.remove(key);
             }
-            s.active_keys.clear();
+            c.active_keys.clear();
         }
         if responses.is_empty() {
             continue;
@@ -460,7 +536,7 @@ fn worker_loop<W: Write + Send + 'static>(
         if let Err(err) = w.write_line(&text) {
             // Broken stdout is a fatal transport failure: record it,
             // report it to the main loop, and stop executing.
-            state.lock().unwrap().fatal_error = Some((err.kind(), err.to_string()));
+            control.lock().unwrap().fatal_error = Some((err.kind(), err.to_string()));
             let _ = events.send(SessionEvent::Fatal(err));
             return;
         }
@@ -485,7 +561,15 @@ fn handle_frame<W: Write>(
             return Ok(());
         }
     };
-    let mut ordinary = Vec::new();
+    // The scan admits one element at a time in array order: a cancel
+    // element is applied immediately against ids admitted so far (an
+    // active/queued request from an earlier frame or an earlier
+    // sibling of this frame), and every ordinary element is marked
+    // pending the moment it is admitted, so a later cancel element in
+    // the same array can target it. Elements later in the array are
+    // not yet admitted when a cancel is scanned, so they are not
+    // cancellation targets (spec: only elements already queued).
+    let mut entries = Vec::with_capacity(requests.len());
     let mut batch = false;
     for request in requests {
         if request.method == schema::CANCEL_METHOD {
@@ -493,17 +577,19 @@ fn handle_frame<W: Write>(
             continue;
         }
         batch |= request.batch_index.is_some();
-        ordinary.push(request);
+        let entry = admit_one(request, &session.in_flight);
+        if matches!(entry, WorkEntry::Execute(_)) {
+            mark_pending(&session.control, &entry);
+        }
+        entries.push(entry);
     }
-    if ordinary.is_empty() {
+    if entries.is_empty() {
         return Ok(());
     }
-    let entries = admit_frame(ordinary, &session.in_flight);
-    mark_pending(&session.state, &entries);
+    let admitted = entries.iter().filter(|entry| entry.occupies_queue()).count();
     if batch {
         // Every element answers inside one array in the
         // frame's order, including busy rejections.
-        let admitted = entries.iter().filter(|e| e.occupies_queue()).count();
         session
             .work_tx
             .as_ref()
@@ -549,15 +635,17 @@ fn handle_frame<W: Write>(
     Ok(())
 }
 
-/// Record every admitted Execute key as a valid cancellation target.
-fn mark_pending(state: &Arc<Mutex<SessionState>>, entries: &[WorkEntry]) {
-    let mut s = state.lock().unwrap();
-    for entry in entries {
-        if matches!(entry, WorkEntry::Execute(_)) {
-            if let Some(key) = request_key(entry.request()) {
-                s.pending.insert(key);
-            }
-        }
+/// Record one admitted Execute key as a valid cancellation target.
+///
+/// Called during the frame scan, immediately after admission, so a
+/// cancel element later in the same array can target the element.
+fn mark_pending(control: &Arc<Mutex<SessionControl>>, entry: &WorkEntry) {
+    if !matches!(entry, WorkEntry::Execute(_)) {
+        return;
+    }
+    let mut c = control.lock().unwrap();
+    if let Some(key) = request_key(entry.request()) {
+        c.pending.insert(key);
     }
 }
 
@@ -573,19 +661,23 @@ fn worker_gone(_: std::sync::mpsc::SendError<WorkUnit>) -> io::Error {
 /// response-object ceiling becomes `Unanswerable` and never occupies
 /// queue capacity. Rejected elements stay in position as `Busy`
 /// entries and also never occupy queue capacity.
-fn admit_frame(requests: Vec<Request>, in_flight: &AtomicUsize) -> Vec<WorkEntry> {
-    let mut entries = Vec::with_capacity(requests.len());
-    for request in requests {
-        if preflight_unanswerable_id(&request) {
-            entries.push(WorkEntry::Unanswerable(request));
-        } else if in_flight.load(Ordering::Relaxed) >= QUEUED_LIMIT {
-            entries.push(WorkEntry::Busy(request));
-        } else {
-            in_flight.fetch_add(1, Ordering::Relaxed);
-            entries.push(WorkEntry::Execute(request));
-        }
+fn admit_one(request: Request, in_flight: &AtomicUsize) -> WorkEntry {
+    if preflight_unanswerable_id(&request) {
+        WorkEntry::Unanswerable(request)
+    } else if in_flight.load(Ordering::Relaxed) >= QUEUED_LIMIT {
+        WorkEntry::Busy(request)
+    } else {
+        in_flight.fetch_add(1, Ordering::Relaxed);
+        WorkEntry::Execute(request)
     }
-    entries
+}
+
+#[cfg(test)]
+fn admit_frame(requests: Vec<Request>, in_flight: &AtomicUsize) -> Vec<WorkEntry> {
+    requests
+        .into_iter()
+        .map(|request| admit_one(request, in_flight))
+        .collect()
 }
 
 fn busy_response(request: &Request) -> Value {
@@ -613,13 +705,17 @@ fn unanswerable_response() -> Value {
 
 /// Build one frame-ordered response object, or `None` for a request
 /// cancelled before execution (it is omitted from a batch array).
-fn entry_response(state: &Arc<Mutex<SessionState>>, entry: &WorkEntry) -> Option<Value> {
+fn entry_response(
+    state: &Arc<Mutex<SessionState>>,
+    control: &Arc<Mutex<SessionControl>>,
+    entry: &WorkEntry,
+) -> Option<Value> {
     match entry {
         WorkEntry::Execute(request) => {
             let cancelled = {
-                let s = state.lock().unwrap();
+                let c = control.lock().unwrap();
                 request_key(request)
-                    .map(|k| s.cancelled.contains(&k))
+                    .map(|k| c.cancelled.contains(&k))
                     .unwrap_or(false)
             };
             if cancelled {
@@ -1093,7 +1189,7 @@ mod tests {
         let key = format!("n:{big}");
         let mut session = Session::new();
         // A cancel is only valid for an admitted (pending) id.
-        session.state.lock().unwrap().pending.insert(key.clone());
+        session.control.lock().unwrap().pending.insert(key.clone());
         let cancel = Request {
             id: Some(RequestId::String("c".into())),
             method: schema::CANCEL_METHOD.into(),
@@ -1101,8 +1197,8 @@ mod tests {
             batch_index: None,
         };
         session.apply_cancel(&cancel);
-        let state = session.state.lock().unwrap();
-        assert!(state.cancelled.contains(&key), "missing cancel key {key:?}");
+        let control = session.control.lock().unwrap();
+        assert!(control.cancelled.contains(&key), "missing cancel key {key:?}");
     }
 
     #[test]
@@ -1111,10 +1207,11 @@ mod tests {
         // later request reusing the id still executes and responds.
         let mut session = Session::new();
         session.apply_cancel(&cancel_request("a"));
-        assert!(session.state.lock().unwrap().cancelled.is_empty());
+        assert!(session.control.lock().unwrap().cancelled.is_empty());
 
         let state = session.state.clone();
-        let response = entry_response(&state, &WorkEntry::Execute(request("a", None)));
+        let control = session.control.clone();
+        let response = entry_response(&state, &control, &WorkEntry::Execute(request("a", None)));
         assert!(
             response.is_some(),
             "later request with the same id was poisoned by an ignored cancel"
@@ -1126,9 +1223,13 @@ mod tests {
         // Read loop admitted the request (pending) and a cancel arrived
         // before the worker picked it up: the response is omitted.
         let mut session = Session::new();
-        session.state.lock().unwrap().pending.insert("s:a".to_owned());
+        session.control.lock().unwrap().pending.insert("s:a".to_owned());
         session.apply_cancel(&cancel_request("a"));
-        let response = entry_response(&session.state, &WorkEntry::Execute(request("a", None)));
+        let response = entry_response(
+            &session.state,
+            &session.control,
+            &WorkEntry::Execute(request("a", None)),
+        );
         assert!(response.is_none());
     }
 
@@ -1138,15 +1239,15 @@ mod tests {
         // state; a cancel for the same id afterwards is ignored, so a
         // freshly admitted reuse of the id cannot be dropped.
         let mut session = Session::new();
-        session.state.lock().unwrap().pending.insert("s:a".to_owned());
+        session.control.lock().unwrap().pending.insert("s:a".to_owned());
         session.apply_cancel(&cancel_request("a"));
         {
-            let mut s = session.state.lock().unwrap();
-            s.pending.remove("s:a");
-            s.cancelled.remove("s:a");
+            let mut c = session.control.lock().unwrap();
+            c.pending.remove("s:a");
+            c.cancelled.remove("s:a");
         }
         session.apply_cancel(&cancel_request("a"));
-        assert!(session.state.lock().unwrap().cancelled.is_empty());
+        assert!(session.control.lock().unwrap().cancelled.is_empty());
     }
 
     #[test]
@@ -1156,7 +1257,7 @@ mod tests {
         // missing members, and non-object params never cancel (and a
         // notification produces no response).
         let mut session = Session::new();
-        session.state.lock().unwrap().pending.insert("s:a".to_owned());
+        session.control.lock().unwrap().pending.insert("s:a".to_owned());
         for bad in [
             json!({"request_id": "a", "extra": 1}),
             json!({"request_id": 1.5}),
@@ -1176,14 +1277,14 @@ mod tests {
             };
             session.apply_cancel(&cancel);
             assert!(
-                session.state.lock().unwrap().cancelled.is_empty(),
+                session.control.lock().unwrap().cancelled.is_empty(),
                 "malformed cancel cancelled a request: {bad}"
             );
         }
         // A well-formed cancel still applies after invalid ones, so the
         // strict gate never poisons valid notifications.
         session.apply_cancel(&cancel_request("a"));
-        assert!(session.state.lock().unwrap().cancelled.contains("s:a"));
+        assert!(session.control.lock().unwrap().cancelled.contains("s:a"));
     }
 
     #[test]
@@ -1245,6 +1346,7 @@ mod tests {
     #[test]
     fn batch_unit_answers_busy_members_inside_one_array_in_order() {
         let state = Arc::new(Mutex::new(SessionState::default()));
+        let control = state.lock().unwrap().control.clone();
         let work = unit(
             vec![
                 WorkEntry::Execute(request("a", Some(0))),
@@ -1256,7 +1358,7 @@ mod tests {
         let responses: Vec<Value> = work
             .entries
             .iter()
-            .filter_map(|entry| entry_response(&state, entry))
+            .filter_map(|entry| entry_response(&state, &control, entry))
             .collect();
         let payload = Value::Array(responses);
         assert_eq!(ids(&payload), ["a", "b", "c"]);
@@ -1276,6 +1378,7 @@ mod tests {
         // Worker-level ordering: the -32001 id:null element keeps its
         // frame position and the sibling executes normally.
         let state = Arc::new(Mutex::new(SessionState::default()));
+        let control = state.lock().unwrap().control.clone();
         let huge = "I".repeat(super::super::framing::RESPONSE_OBJECT_LIMIT + 100);
         let work = unit(
             vec![
@@ -1287,7 +1390,7 @@ mod tests {
         let responses: Vec<Value> = work
             .entries
             .iter()
-            .filter_map(|entry| entry_response(&state, entry))
+            .filter_map(|entry| entry_response(&state, &control, entry))
             .collect();
         let payload = Value::Array(responses);
         let members = payload.as_array().unwrap();
@@ -1329,26 +1432,30 @@ mod tests {
         // Only admitted Execute ids become pending cancellation
         // targets; an unanswerable element answers unconditionally.
         let state = Arc::new(Mutex::new(SessionState::default()));
+        let control = state.lock().unwrap().control.clone();
         let huge = "I".repeat(super::super::framing::RESPONSE_OBJECT_LIMIT + 100);
         let huge_key = format!("s:{huge}");
         let entries = vec![
             WorkEntry::Unanswerable(request(&huge, Some(0))),
             WorkEntry::Execute(request("a", Some(1))),
         ];
-        mark_pending(&state, &entries);
-        let s = state.lock().unwrap();
-        assert!(!s.pending.contains(&huge_key), "unanswerable id must not be cancellable");
-        assert!(s.pending.contains("s:a"));
+        for entry in &entries {
+            mark_pending(&control, entry);
+        }
+        let c = control.lock().unwrap();
+        assert!(!c.pending.contains(&huge_key), "unanswerable id must not be cancellable");
+        assert!(c.pending.contains("s:a"));
     }
 
     #[test]
     fn non_batch_unit_answers_one_standalone_object() {
         let state = Arc::new(Mutex::new(SessionState::default()));
+        let control = state.lock().unwrap().control.clone();
         let work = unit(vec![WorkEntry::Execute(request("a", None))], false);
         let responses: Vec<Value> = work
             .entries
             .iter()
-            .filter_map(|entry| entry_response(&state, entry))
+            .filter_map(|entry| entry_response(&state, &control, entry))
             .collect();
         assert_eq!(responses.len(), 1);
         assert!(responses[0].get("result").is_some());
@@ -1357,10 +1464,11 @@ mod tests {
     #[test]
     fn cancelled_batch_member_is_omitted_from_the_array() {
         let state = Arc::new(Mutex::new(SessionState::default()));
+        let control = state.lock().unwrap().control.clone();
         {
-            let mut s = state.lock().unwrap();
-            s.pending.insert("s:a".to_owned());
-            s.cancelled.insert("s:a".to_owned());
+            let mut c = control.lock().unwrap();
+            c.pending.insert("s:a".to_owned());
+            c.cancelled.insert("s:a".to_owned());
         }
         let work = unit(
             vec![
@@ -1372,7 +1480,7 @@ mod tests {
         let responses: Vec<Value> = work
             .entries
             .iter()
-            .filter_map(|entry| entry_response(&state, entry))
+            .filter_map(|entry| entry_response(&state, &control, entry))
             .collect();
         assert_eq!(ids(&Value::Array(responses.clone())), ["b"]);
         assert_eq!(
@@ -1459,13 +1567,13 @@ mod tests {
         // shutdown, so quick work (system.describe) answers normally
         // and SDK long work aborts factually.
         let (work_tx, work_rx) = std::sync::mpsc::channel::<WorkUnit>();
-        let token = Arc::new(iprange_livedb::CancellationToken::new());
-        token.cancel();
-        let state = Arc::new(Mutex::new(SessionState {
-            shutting_down: true,
-            token,
-            ..SessionState::default()
-        }));
+        let state = Arc::new(Mutex::new(SessionState::default()));
+        let control = state.lock().unwrap().control.clone();
+        {
+            let mut c = control.lock().unwrap();
+            c.shutting_down = true;
+            c.token.cancel();
+        }
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
         let in_flight = Arc::new(AtomicUsize::new(3));
@@ -1478,7 +1586,7 @@ mod tests {
         }
         drop(work_tx);
 
-        worker_loop(state, writer, in_flight.clone(), work_rx, events_tx);
+        worker_loop(state, control, writer, in_flight.clone(), work_rx, events_tx);
 
         let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
         for id in ["a", "b", "c"] {
@@ -1504,13 +1612,13 @@ mod tests {
             "eof-queued-cancel",
         );
         let (work_tx, work_rx) = std::sync::mpsc::channel::<WorkUnit>();
-        let token = Arc::new(iprange_livedb::CancellationToken::new());
-        token.cancel();
-        let state = Arc::new(Mutex::new(SessionState {
-            shutting_down: true,
-            token,
-            ..SessionState::default()
-        }));
+        let state = Arc::new(Mutex::new(SessionState::default()));
+        let control = state.lock().unwrap().control.clone();
+        {
+            let mut c = control.lock().unwrap();
+            c.shutting_down = true;
+            c.token.cancel();
+        }
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
         let in_flight = Arc::new(AtomicUsize::new(1));
@@ -1527,7 +1635,7 @@ mod tests {
             .unwrap();
         drop(work_tx);
 
-        worker_loop(state, writer, in_flight.clone(), work_rx, events_tx);
+        worker_loop(state, control, writer, in_flight.clone(), work_rx, events_tx);
 
         let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
         let payload: Value = serde_json::from_str(text.trim()).unwrap();
@@ -1545,6 +1653,7 @@ mod tests {
     fn worker_write_failure_sends_fatal_and_stops() {
         let (work_tx, work_rx) = std::sync::mpsc::channel::<WorkUnit>();
         let state = Arc::new(Mutex::new(SessionState::default()));
+        let control = state.lock().unwrap().control.clone();
         let writer = Arc::new(Mutex::new(FrameWriter::new(FailingWriter)));
         let in_flight = Arc::new(AtomicUsize::new(2));
         let (events_tx, events_rx) = std::sync::mpsc::channel::<SessionEvent>();
@@ -1557,7 +1666,7 @@ mod tests {
             .unwrap();
         drop(work_tx);
 
-        worker_loop(state, writer, in_flight.clone(), work_rx, events_tx);
+        worker_loop(state, control, writer, in_flight.clone(), work_rx, events_tx);
 
         match events_rx.recv().unwrap() {
             SessionEvent::Fatal(err) => assert_eq!(err.kind(), io::ErrorKind::BrokenPipe),
@@ -1767,5 +1876,204 @@ mod tests {
             "open must have succeeded before EOF: {text}"
         );
         fixture.remove();
+    }
+
+    #[test]
+    fn cancel_and_eof_reach_an_active_handler_holding_the_state_lock() {
+        // P1 regression: a cancel notification or EOF arriving while a
+        // handler runs must reach the active unit's token even though
+        // the worker holds the session-state mutex for the whole
+        // handler call. Previously the control fields (pending,
+        // cancelled, active keys, token) lived behind that same mutex,
+        // so cancellation blocked until the handler finished: a
+        // Ctrl+C left the process alive until the work ended.
+        let mut session = Session::new();
+        session
+            .control
+            .lock()
+            .unwrap()
+            .pending
+            .insert("s:slow".to_owned());
+        session
+            .control
+            .lock()
+            .unwrap()
+            .active_keys
+            .insert("s:slow".to_owned());
+
+        // Simulate the in-flight handler: a helper thread holds the
+        // session-state (resources) mutex until signalled.
+        let big = session.state.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let handler = std::thread::spawn(move || {
+            let _guard = big.lock().unwrap();
+            let _ = locked_tx.send(());
+            let _ = release_rx.recv();
+        });
+        locked_rx.recv().unwrap();
+
+        // Cancel + EOF must apply while the handler runs: both complete
+        // promptly (a timed handoff proves the pre-fix code would block
+        // behind the state lock) and the active unit token is
+        // cancelled.
+        let cancel = cancel_request("slow");
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                session.apply_cancel(&cancel);
+                session.begin_shutdown();
+                let _ = done_tx.send(());
+            });
+            match done_rx.recv_timeout(std::time::Duration::from_secs(5)) {
+                Ok(()) => {}
+                Err(_) => panic!(
+                    "cancel/shutdown blocked behind the active handler's state lock"
+                ),
+            }
+        });
+        assert!(
+            session.control.lock().unwrap().token.is_cancelled(),
+            "cancel must reach the active unit token"
+        );
+
+        // Release the simulated handler.
+        let _ = release_tx.send(());
+        handler.join().unwrap();
+
+        // Worker-side factual outcome: a unit that was admitted before
+        // EOF executes under the already-cancelled token and reports
+        // the factual cancellation instead of running uncancelled.
+        let fixture = crate::rpc::handlers::reader::test_support::create_direct_v6(
+            "active-cancel-eof",
+        );
+        let (work_tx, work_rx) = std::sync::mpsc::channel::<WorkUnit>();
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
+        let in_flight = Arc::new(AtomicUsize::new(1));
+        let (events_tx, _events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+        let open = Request {
+            id: Some(RequestId::String("queued".into())),
+            method: "iprange.v1.reader.open".into(),
+            params: crate::rpc::handlers::reader::test_support::live_source(&fixture.path),
+            batch_index: None,
+        };
+        work_tx
+            .send(unit(vec![WorkEntry::Execute(open)], false))
+            .unwrap();
+        drop(work_tx);
+
+        worker_loop(
+            session.state.clone(),
+            session.control.clone(),
+            writer,
+            in_flight.clone(),
+            work_rx,
+            events_tx,
+        );
+
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let payload: Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(payload["id"], json!("queued"));
+        assert_eq!(
+            payload["error"]["data"]["code"],
+            json!("cancelled"),
+            "admitted SDK work must end in a factual outcome: {text}"
+        );
+        assert_eq!(in_flight.load(Ordering::Relaxed), 0);
+        fixture.remove();
+    }
+
+    #[test]
+    fn same_batch_cancel_marks_an_earlier_sibling_before_later_elements_scan() {
+        // P2: a cancel element may target an ordinary element already
+        // queued from the same batch (spec, the sole exception to
+        // array-order execution). Admission marks each element pending
+        // during the scan, so a later cancel sees the earlier sibling
+        // and the worker omits its response.
+        let mut session = Session::new();
+        let batch = json!([
+            {"jsonrpc": "2.0", "id": "a", "method": "iprange.v1.system.describe", "params": {}},
+            {"jsonrpc": "2.0", "method": "iprange.v1.cancel", "params": {"request_id": "a"}},
+            {"jsonrpc": "2.0", "id": "b", "method": "iprange.v1.system.describe", "params": {}},
+        ]);
+        let line = serde_json::to_vec(&batch).unwrap();
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
+        handle_frame(&mut session, line, &writer).unwrap();
+        {
+            let c = session.control.lock().unwrap();
+            assert!(c.pending.contains("s:a"), "earlier sibling must be pending");
+            assert!(c.cancelled.contains("s:a"), "sibling cancel must apply");
+            assert!(c.pending.contains("s:b"), "later sibling must stay pending");
+            assert!(!c.cancelled.contains("s:b"), "later sibling must not be cancelled");
+        }
+        let work = session.work_rx.take().unwrap().recv().unwrap();
+        assert_eq!(work.admitted, 2, "both executes occupy queue capacity");
+        let responses: Vec<Value> = work
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                entry_response(&session.state, &session.control, entry)
+            })
+            .collect();
+        assert_eq!(ids(&Value::Array(responses.clone())), ["b"]);
+    }
+
+    #[test]
+    fn same_batch_cancel_before_an_element_is_not_its_target() {
+        // A cancel can only target an element already admitted from
+        // the same batch; an element scanned after the cancel is not
+        // yet pending and must still execute.
+        let mut session = Session::new();
+        let batch = json!([
+            {"jsonrpc": "2.0", "method": "iprange.v1.cancel", "params": {"request_id": "a"}},
+            {"jsonrpc": "2.0", "id": "a", "method": "iprange.v1.system.describe", "params": {}},
+        ]);
+        let line = serde_json::to_vec(&batch).unwrap();
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
+        handle_frame(&mut session, line, &writer).unwrap();
+        assert!(
+            !session.control.lock().unwrap().cancelled.contains("s:a"),
+            "a not-yet-admitted element must not be a cancellation target"
+        );
+        let work = session.work_rx.take().unwrap().recv().unwrap();
+        assert_eq!(work.admitted, 1);
+        let responses: Vec<Value> = work
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                entry_response(&session.state, &session.control, entry)
+            })
+            .collect();
+        assert_eq!(ids(&Value::Array(responses.clone())), ["a"]);
+    }
+
+    #[test]
+    fn same_batch_cancel_omits_the_sibling_on_the_wire() {
+        // Full-loop evidence for the same-batch cancel exception: one
+        // batch frame then EOF; the cancelled sibling produces no
+        // member in the response array and the later sibling answers.
+        let batch = json!([
+            {"jsonrpc": "2.0", "id": "a", "method": "iprange.v1.system.describe", "params": {}},
+            {"jsonrpc": "2.0", "method": "iprange.v1.cancel", "params": {"request_id": "a"}},
+            {"jsonrpc": "2.0", "id": "b", "method": "iprange.v1.system.describe", "params": {}},
+        ]);
+        let input = format!("{batch}\n").into_bytes();
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = PlainEofReader {
+            remaining: Box::leak(input.into_boxed_slice()),
+        };
+        let session = Session::new();
+        session.run(reader, SharedVec(output.clone())).unwrap();
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let mut lines = text.lines();
+        let payload: Value = serde_json::from_str(lines.next().expect("batch response")).unwrap();
+        let members = payload.as_array().expect("batch answers one array");
+        assert_eq!(members.len(), 1, "cancelled sibling must be omitted: {text}");
+        assert_eq!(members[0]["id"], json!("b"));
+        assert!(members[0].get("result").is_some());
+        assert!(lines.next().is_none(), "no extra output: {text}");
     }
 }

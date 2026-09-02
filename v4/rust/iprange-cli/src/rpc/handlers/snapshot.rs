@@ -103,7 +103,7 @@ pub fn snapshot(state: &mut SessionState, params: Value) -> Result<Value, Handle
         destination,
         snapshot_policy(policy),
         &budget,
-        &state.token,
+        &state.token(),
     ) {
         Ok(result) => publication_success(&result),
         Err(failure) => Err(publication_failure(&failure)),

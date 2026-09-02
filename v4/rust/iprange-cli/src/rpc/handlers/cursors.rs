@@ -247,7 +247,7 @@ pub fn ranges_next(state: &mut SessionState, params: Value) -> Result<Value, Han
     let mut encoded = cursor_base(state, "iprange.v1.reader.ranges.next", "records")?;
     // Captured before the reader borrow so the page loop can poll the
     // transport cancellation token while the cursor holds the reader.
-    let cancellation = state.token.clone();
+    let cancellation = state.token();
     let reader = super::reader::reader(state, &cursor.reader)?;
     let info = sdk(reader.info())?;
     // Feed views keep one cursor open for the whole page: the cursor is
@@ -1361,12 +1361,12 @@ mod tests {
         )
         .unwrap();
         let cursor = opened["cursor"].as_str().unwrap().to_owned();
-        state.token.cancel();
+        state.token().cancel();
         let error = ranges_next(&mut state, serde_json::json!({"cursor": cursor})).unwrap_err();
         assert_eq!((error.code, error.outcome), ("cancelled", "not_started"));
         // A fresh active unit replaces the token; the paused cursor
         // resumes from its stored checkpoint unchanged.
-        state.token = std::sync::Arc::new(iprange_livedb::CancellationToken::new());
+        state.install_token(std::sync::Arc::new(iprange_livedb::CancellationToken::new()));
         let next = ranges_next(&mut state, serde_json::json!({"cursor": cursor})).unwrap();
         assert!(next["records"].as_array().unwrap().len() == 1);
         assert_eq!(next["records"][0]["from"], "0.0.0.1");

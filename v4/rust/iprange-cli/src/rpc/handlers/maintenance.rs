@@ -67,11 +67,11 @@ pub fn database_reclaim(state: &mut SessionState, params: Value) -> Result<Value
         .map_err(HandlerError::invalid_params)?;
     require_existing_database(Path::new(path))?;
 
-    let mut writer = match LiveWriter::open(path, budget, &state.token) {
+    let mut writer = match LiveWriter::open(path, budget, &state.token()) {
         Ok(writer) => writer,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
     };
-    let reclaim = writer.reclaim(max_transactions, max_pages, &state.token);
+    let reclaim = writer.reclaim(max_transactions, max_pages, &state.token());
     let close = match writer.close() {
         Ok(result) => lifecycle::close_result(&result)?,
         Err(error) => return Err(lifecycle::sdk_error(&error, "not_started")),
@@ -193,7 +193,7 @@ pub fn publication_inspect(state: &mut SessionState, params: Value) -> Result<Va
     let object = params.as_object().expect("validator checked object");
     let path = object["path"].as_str().expect("validator checked path");
     require_existing_path(path)?;
-    let inspection = inspect_publication_residue(path, &state.token)
+    let inspection = inspect_publication_residue(path, &state.token())
         .map_err(|problem| publication_error(problem, "read_only_failure"))?;
     let PublicationResidueInspection {
         directory_identity,
@@ -253,7 +253,7 @@ pub fn publication_resolve(state: &mut SessionState, params: Value) -> Result<Va
         ),
         None => None,
     };
-    let result = resolve_publication(path, supplied.as_ref(), mode, &state.token)
+    let result = resolve_publication(path, supplied.as_ref(), mode, &state.token())
         .map_err(|problem| publication_error(problem, "not_started"))?;
     if let Some(cause) = result.cause.as_ref() {
         let outcome = match result.publication {
@@ -296,7 +296,7 @@ pub fn publication_residue_remove(
                 "publication residue handle is unknown or already consumed",
             )
         })?;
-    let removal = remove_publication_residue(handle, &state.token)
+    let removal = remove_publication_residue(handle, &state.token())
         .map_err(|problem| publication_error(problem, "not_started"))?;
     let PublicationResidueRemoval {
         directory_identity,
@@ -489,7 +489,7 @@ pub fn maintenance_list(state: &mut SessionState, params: Value) -> Result<Value
             "scratch" => {
                 let mut sink = ScratchCollector { directory, remaining, entries: Vec::new() };
                 let reported = list_reported(
-                    list_abandoned_scratch(directory, &state.token, &mut sink),
+                    list_abandoned_scratch(directory, &state.token(), &mut sink),
                     sink.entries.len() as u64,
                 )
                 .map_err(reader::read_error)?;
@@ -499,7 +499,7 @@ pub fn maintenance_list(state: &mut SessionState, params: Value) -> Result<Value
                 let mut sink = ReservationCollector { directory, remaining, entries: Vec::new() };
                 let reported = list_reported(
                     iprange_livedb::publication::list_abandoned_reservation_artifacts(
-                        directory, &state.token, &mut sink,
+                        directory, &state.token(), &mut sink,
                     ),
                     sink.entries.len() as u64,
                 )
@@ -510,7 +510,7 @@ pub fn maintenance_list(state: &mut SessionState, params: Value) -> Result<Value
                 let mut sink = PublicationTempCollector { directory, remaining, entries: Vec::new() };
                 let reported = list_reported(
                     iprange_livedb::publication::list_abandoned_publication_temps(
-                        directory, &state.token, &mut sink,
+                        directory, &state.token(), &mut sink,
                     ),
                     sink.entries.len() as u64,
                 )
@@ -521,7 +521,7 @@ pub fn maintenance_list(state: &mut SessionState, params: Value) -> Result<Value
                 let mut sink = HousekeepingCollector { directory, remaining, entries: Vec::new() };
                 let reported = list_reported(
                     iprange_livedb::publication::list_windows_housekeeping(
-                        directory, &state.token, &mut sink,
+                        directory, &state.token(), &mut sink,
                     ),
                     sink.entries.len() as u64,
                 )
@@ -838,7 +838,7 @@ pub fn maintenance_remove(state: &mut SessionState, params: Value) -> Result<Val
                 attempt_id,
                 ordinal,
                 artifact_identity,
-                &state.token,
+                &state.token(),
             )
             .map_err(sdk_remove_error)?;
             removal_result(removal)
@@ -851,7 +851,7 @@ pub fn maintenance_remove(state: &mut SessionState, params: Value) -> Result<Val
                 directory_identity,
                 attempt_id,
                 artifact_identity,
-                &state.token,
+                &state.token(),
             )
             .map_err(sdk_remove_error)?;
             removal_result(removal)
@@ -866,7 +866,7 @@ pub fn maintenance_remove(state: &mut SessionState, params: Value) -> Result<Val
                 artifact_identity,
                 tuple,
                 digest,
-                &state.token,
+                &state.token(),
             )
             .map_err(sdk_remove_error)?;
             removal_result(removal)
@@ -881,7 +881,7 @@ pub fn maintenance_remove(state: &mut SessionState, params: Value) -> Result<Val
                 ordinal,
                 envelope_identity,
                 None::<HousekeepingPayloadIdentity>,
-                &state.token,
+                &state.token(),
             )
             .map_err(sdk_remove_error)?;
             windows_removal_result(removal)
