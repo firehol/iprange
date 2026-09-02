@@ -5,13 +5,18 @@
 // SDK.
 package rpc
 
-import "os"
+import (
+	"fmt"
+	"os"
+)
 
 // Run executes the JSON-RPC transport until EOF or fatal error and
 // returns the process exit code.
 func Run() int {
-	// Implemented in the JSON-RPC delivery step of SOW-0028
-	// milestone 3; legacy surface lands first.
-	os.Stderr.WriteString("iprange: --jsonrpc transport not implemented yet\n")
-	return 1
+	session := NewSession()
+	if err := session.Run(os.Stdin, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "iprange: %v\n", err)
+		return 1
+	}
+	return 0
 }

@@ -242,3 +242,109 @@ func publicationCheck(token *CancellationToken) func() error {
 		return nil
 	}
 }
+
+// DecodePublicationResultJSON reconstructs the exact SDK publication
+// result from its preserved JSON-RPC wire object
+// (iprange-jsonrpc-v1.md `publication_result`; Rust
+// publication_evidence::decode_publication_result). The CLI product
+// adapters may use only the public module, and the SDK hides the
+// evidence field types, so the wire decoder lives here as the single
+// public entry point. The decoder is strict: missing, extra, stale,
+// or foreign evidence fails before any destructive action.
+func DecodePublicationResultJSON(data []byte) (*PublicationResult, error) {
+	return publication.DecodePublicationResultWire(data)
+}
+
+// Publication evidence value types (Rust publication::* public
+// surface parity). The CLI product adapters convert these exact SDK
+// facts to the JSON-RPC wire objects, so the root module exports the
+// same names as the Rust SDK.
+
+// PublicationAttempt is the exact identity of one reservation attempt
+// (Rust PublicationAttempt).
+type PublicationAttempt = publication.PublicationAttempt
+
+// PreviousDestination is the exact previous-destination evidence of
+// one replacement reservation (Rust PreviousDestination).
+type PreviousDestination = publication.PreviousDestination
+
+// UnpublishedTailFacts is the exact unpublished main tail evidence of
+// one abandoned artifact (Rust UnpublishedTailFacts).
+type UnpublishedTailFacts = publication.UnpublishedTailFacts
+
+// CleanupArtifact is one exact unresolved artifact of one publication
+// attempt (Rust CleanupArtifact).
+type CleanupArtifact = publication.CleanupArtifact
+
+// LaterCanonical classifies the canonical reservation observed after
+// one publication attempt (Rust LaterCanonical).
+type LaterCanonical = publication.LaterCanonical
+
+const (
+	LaterCanonicalNone                    = publication.LaterCanonicalNone
+	LaterCanonicalReservationOrTransition = publication.LaterCanonicalReservationOrTransition
+	LaterCanonicalReadyLiveSidecar        = publication.LaterCanonicalReadyLiveSidecar
+)
+
+// LiveLineage classifies the live sidecar observed after a
+// publication that lost the destination race (Rust LiveLineage).
+type LiveLineage = publication.LiveLineage
+
+const (
+	LiveLineageSameGenerationExactBytes           = publication.LiveLineageSameGenerationExactBytes
+	LiveLineageSameGenerationPhysicalBytesChanged = publication.LiveLineageSameGenerationPhysicalBytesChanged
+	LiveLineageAdvancedGeneration                 = publication.LiveLineageAdvancedGeneration
+)
+
+// AccessPolicy classifies the creator-only security evidence of one
+// destination or coordination artifact (Rust AccessPolicy).
+type AccessPolicy = publication.AccessPolicy
+
+const (
+	AccessPolicyAbsent            = publication.AccessPolicyAbsent
+	AccessPolicyCreatorOnly       = publication.AccessPolicyCreatorOnly
+	AccessPolicyChangedOrUnproven = publication.AccessPolicyChangedOrUnproven
+	AccessPolicyUnclassified      = publication.AccessPolicyUnclassified
+)
+
+// ArtifactKind is the live cleanup authority kind (Rust ArtifactKind).
+type ArtifactKind = publication.ArtifactKind
+
+const (
+	ArtifactPrivateOutput       = publication.ArtifactPrivateOutput
+	ArtifactPrivateReservation  = publication.ArtifactPrivateReservation
+	ArtifactOwnedCoordination   = publication.ArtifactOwnedCoordination
+	ArtifactAuthorizedScratch   = publication.ArtifactAuthorizedScratch
+	ArtifactOwnedMain           = publication.ArtifactOwnedMain
+	ArtifactUnpublishedMainTail = publication.ArtifactUnpublishedMainTail
+)
+
+// DirectoryRole is the cleanup directory role (Rust DirectoryRole).
+type DirectoryRole = publication.DirectoryRole
+
+const (
+	DirectoryRoleDestination      = publication.DirectoryRoleDestination
+	DirectoryRoleScratchDirectory = publication.DirectoryRoleScratchDirectory
+	DirectoryRoleMainFile         = publication.DirectoryRoleMainFile
+)
+
+// HousekeepingState classifies one housekeeping artifact (Rust
+// HousekeepingState).
+type HousekeepingState = publication.HousekeepingState
+
+const (
+	HousekeepingMovePending   = publication.HousekeepingMovePending
+	HousekeepingMoveAmbiguous = publication.HousekeepingMoveAmbiguous
+	HousekeepingInert         = publication.HousekeepingInert
+	HousekeepingConflict      = publication.HousekeepingConflict
+)
+
+// ArtifactPresence classifies the observed presence of one artifact
+// (Rust ArtifactPresence).
+type ArtifactPresence = publication.ArtifactPresence
+
+const (
+	ArtifactAbsent       = publication.ArtifactAbsent
+	ArtifactPresent      = publication.ArtifactPresent
+	ArtifactUnclassified = publication.ArtifactUnclassified
+)

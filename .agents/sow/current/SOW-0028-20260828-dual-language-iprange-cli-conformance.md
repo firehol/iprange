@@ -2153,3 +2153,73 @@ round-7 fixes at the new HEAD.
   order, then fileio for the export family, using only the public Go
   module; `v4/go/internal/cli/rpc/rpc.go` is currently the
   not-implemented stub.
+
+### 2026-09-02 (continued) — milestone 3 JSON-RPC foundation (Go transport + shared handlers)
+
+- The Go JSON-RPC transport is implemented under `v4/go/internal/cli/
+  rpc/` as a strict mirror of the Rust `rpc/{framing,schema,dispatch,
+  session,state}.rs` responsibilities, per the fixed step-2 family
+  order:
+  - `framing.go` — newline-delimited JSON framing: 1,048,576-byte
+    ceiling, LF/CRLF, exact-limit edge cases; 64 KiB buffered writer,
+    flush per line.
+  - `schema.go` — strict envelope decode: `jsonrpc:"2.0"`, integral-
+    only ids, prefixed methods, object params, batch 1..=16,
+    cancel-only notification, NaN-free id validation,
+    -32001/-32002/-32010 error codes.
+  - `dispatch.go` — 52-method static inventory, Register (panic on
+    unknown/duplicate), Advertised method list.
+  - `state.go` — Immutable/Live reader values, cursor values, bounded
+    closed-handle tombstones (1024 FIFO), deterministic-ordered
+    CloseAll.
+  - `session.go` — reader goroutine + event loop + worker goroutine;
+    queue bound 16, busy/unanswerable in-position batch members,
+    cancel-during-scan (same-batch earlier sibling only), EOF
+    cancels token then drains admitted units, fatal on broken
+    stdout/stdin-read-error/signal, 65,000-byte bounded response
+    (`output_limit` product error), preflight unanswerable id,
+    session token.
+  - `handle.go` — secure 32-hex handle via crypto/rand.
+- Shared handler foundation under `v4/go/internal/cli/handlers/`
+  (public-SDK-only adapters): `sdkcode` (SDK ErrorCode -> wire code
+  map, boundedResult, preflightResponse, WidestU64/129),
+  `params` (strict exact-object decoders, path/handle validation),
+  `convert` (DatabaseInfoJSON, ValueTagJSON, CursorAddress, netip
+  canonical IPv6), `output` (standard base64, MetadataOutput atomic
+  file publish: hard-link fail_if_exists / rename replace),
+  `lifecycle_facts` (MetadataValue, CommitResultJSON, CloseResultJSON,
+  FileIdentityJSON, cleanup JSON), `workflow` (CloseWriter,
+  PublishChanged/PublishNoChange, FinishPublisher outcome-preserving,
+  WorkflowFailure, WorkflowReportJSON), `reader_helpers`
+  (ReaderHandle, CloseOnError, PreserveCompletedReport,
+  ValidateDelivery, MetadataResult, BuildFeedSnapshot,
+  ThreatFeedNames, ParseAddress).
+- `v4/go/internal/cli/fileio/export_writer.go` — streaming export
+  writer: row+byte budgets checked before next write, flush -> fsync
+  -> hard-link/rename -> dir sync, Abort, exact 129-bit cardinality
+  accumulation, SHA-256 running digest, outcome_unknown
+  publication-failure details.
+- Public SDK additions: `v4/go/publication_public.go` exports the
+  evidence-type aliases (PublicationAttempt, LaterCanonical,
+  LiveLineage, AccessPolicy, ArtifactKind, DirectoryRole,
+  HousekeepingState, ArtifactPresence, ...) plus
+  `DecodePublicationResultJSON` -> the strict wire decoder at
+  `v4/go/internal/publication/wire_decoder.go` (exact member sets,
+  absent-only optional forms, lowercase hex, decimal strings for u64,
+  kind+tailing-zero identity validation). Round-trip test at
+  `v4/go/publication_wire_decode_test.go`. Parity manifest records
+  39 new go-surface rows.
+- Two parity gaps found by the SDK-surface explorer and fixed in this
+  foundation: (1) `fault_worker` in system.describe is a CLI-local
+  probe (candidate `iprange-v4-worker` executable beside the running
+  binary, protocol "1"); (2) the Go root now exposes a strict
+  publication-result wire decoder instead of hiding all evidence
+  field types.
+- Qualification at this point: `nice go build ./...`, `nice go vet
+  ./internal/cli/...`, and `nice go test ./... -count=1` all pass;
+  parity gate green; legacy transport tests pass incl. -race.
+- Next: `system.go` (system.describe), then five parallel handler-
+  family workers over this foundation in step-2 order (reader/
+  cursors, algebra/query, export, live/feeds, lifecycle/maintenance/
+  snapshot/recovery), then dispatch registration in
+  `v4/go/cmd/iprange/`, then the external qualification matrix.
