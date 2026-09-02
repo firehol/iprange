@@ -23,8 +23,9 @@ use super::super::dispatch::HandlerError;
 use super::super::session::SessionState;
 use super::super::state::ReaderValue;
 use super::reader::{
-    bounded_result, member_object, positive_u32, positive_u64_string, publication_policy,
-    read_error, sdk, u64_string, validate_path,
+    bounded_result, member_object, positive_u32, positive_u64_string, preflight_response,
+    publication_policy, read_error, sdk, u64_string, validate_path, widest_close_fact,
+    widest_identity, WIDEST_129, WIDEST_U64,
 };
 use crate::io::export_writer::{
     emit_ipset, emit_netset, inclusive_span as span_of, legacy_binary_header,
@@ -160,14 +161,19 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
     }
     let view = decode_view(&object["view"])?;
     let format = object["format"].as_str().expect("validator checked format");
-    let destination = Path::new(
-        object["destination"]
-            .as_str()
-            .expect("validator checked path"),
-    );
+    let destination_text = object["destination"]
+        .as_str()
+        .expect("validator checked path");
+    let destination = Path::new(destination_text);
     let policy = publication_policy(object["publication_policy"].as_str())
         .map_err(|_| HandlerError::invalid_params("publication_policy is invalid"))?;
     let budget = decode_budget(&object["result_budget"])?;
+    // The complete inline result carries the destination string and
+    // the source identity; refuse an unrepresentable request before
+    // the source reader is opened or any output file is created, so a
+    // published export is never relabeled as a read-only failure by
+    // the post-hoc response bound (iprange-jsonrpc-v1.md).
+    preflight_export(state, format, destination_text, &source_mode)?;
     let mut reader = open_source(&source_path, &source_mode, &state.token)?;
     let export_result = export_with_reader(
         state,
@@ -1226,6 +1232,57 @@ fn decode_prefixes(
     Ok(PrefixFilter::all(host_prefix))
 }
 
+/// Worst-case JSON serialization of the export destination string.
+///
+/// `schema::encode_response_object` serializes with serde_json's
+/// default string escaping: `"` and `\` double to two bytes, control
+/// bytes escape to two or six, and every other byte passes through
+/// raw. A byte at or above 0x7f is modeled at six bytes, an upper
+/// bound of its raw pass-through and of any `\u` escape of the same
+/// character, so the modeled length is never below the real
+/// serialized length of the destination path.
+fn worst_json_path(destination: &str) -> String {
+    let mut worst = String::with_capacity(destination.len());
+    for byte in destination.bytes() {
+        match byte {
+            b'"' | b'\\' => worst.push(byte as char),
+            0x00..=0x1f => worst.push(byte as char),
+            byte if byte < 0x7f => worst.push(byte as char),
+            _ => worst.push_str("xxxxxx"),
+        }
+    }
+    worst
+}
+
+/// Refuse an export whose worst-case complete inline result cannot fit
+/// the 65,000-byte response object, before any file is opened or
+/// created. The template uses the real destination string with its
+/// worst-case JSON escaping and the real format name, widest count,
+/// identity, and sha256 fields, and (for live sources) the widest
+/// factual source-close shape; the shared helper echoes the real
+/// request id.
+fn preflight_export(
+    state: &SessionState,
+    format: &str,
+    destination: &str,
+    source_mode: &str,
+) -> Result<(), HandlerError> {
+    let mut worst = json!({
+        "method": "iprange.v1.export",
+        "path": worst_json_path(destination),
+        "format": format,
+        "sha256": "f".repeat(128),
+        "rows": WIDEST_U64,
+        "addresses": WIDEST_129,
+        "bytes": WIDEST_U64,
+        "identity": widest_identity(),
+    });
+    if source_mode == "live" {
+        worst["source_close"] = widest_close_fact();
+    }
+    preflight_response(state, worst)
+}
+
 fn destination_exists(destination: &Path) -> Result<bool, HandlerError> {
     destination.try_exists().map_err(|error| {
         HandlerError::new(
@@ -1413,6 +1470,45 @@ mod tests {
         assert!(file_identity(&LocalFileIdentity { kind: 1, bytes }).is_err());
         bytes[16] = 0;
         assert!(file_identity(&LocalFileIdentity { kind: 9, bytes }).is_err());
+    }
+
+    #[test]
+    fn worst_json_path_is_exact_for_ascii_and_bounds_non_ascii() {
+        // Printable ASCII passes through unchanged: the modeled
+        // serialization equals the real one byte for byte.
+        let ascii = "/example/export.netset";
+        assert_eq!(worst_json_path(ascii), ascii);
+
+        // For every tricky input the modeled serialization is never
+        // shorter than serde_json's real serialization, so the
+        // preflight bound is faithful.
+        for destination in [
+            "a\"b\\c\n\t\u{1f}",
+            "greek-αβγ-emoji-😀",
+            "\u{7f}",
+            "中文字符",
+            "mixed \"quote\" \\ \u{0} tail",
+            "крайний путь /tmp/π-файл",
+        ] {
+            let worst = worst_json_path(destination);
+            let real = serde_json::to_string(&serde_json::json!(destination)).unwrap();
+            let modeled = serde_json::to_string(&serde_json::json!(worst)).unwrap();
+            assert!(
+                modeled.len() >= real.len(),
+                "worst model ({} bytes) must bound the real serialization ({} bytes) for {destination:?}",
+                modeled.len(),
+                real.len()
+            );
+        }
+
+        // A two-byte UTF-8 char is modeled at exactly six bytes per
+        // byte (12 chars) plus the surrounding quotes.
+        let worst = worst_json_path("π");
+        assert_eq!(worst.len(), 12);
+        assert_eq!(
+            serde_json::to_string(&serde_json::json!(worst)).unwrap().len(),
+            14
+        );
     }
 }
 
@@ -1692,6 +1788,99 @@ mod live_source_tests {
         let exported = fs::read_to_string(&destination).unwrap();
         assert_eq!(exported, "::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff\n");
         fs::remove_file(&destination).unwrap();
+        fs::remove_file(&main).unwrap();
+        fs::remove_file(sidecar(&main)).unwrap();
+    }
+
+    #[test]
+    fn export_preflight_refuses_unanswerable_id_before_creating_destination() {
+        // A valid request whose complete response cannot fit the
+        // 65,000-byte response object (the echoed id alone nearly
+        // fills it) must be refused with output_limit/not_started
+        // BEFORE the source reader opens or the destination is
+        // created. Previously the export published the file and only
+        // then was relabeled output_limit/read_only_failure by the
+        // post-hoc bound (final-review finding T1).
+        let main = live_membership("preflight-id");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let destination = std::env::temp_dir().join(format!(
+            "iprange-export-preflight-out-{unique}.csv"
+        ));
+        let mut state = SessionState::default();
+        assert_eq!(state.active_request_id, None);
+        state.active_request_id =
+            Some(crate::rpc::schema::RequestId::String("R".repeat(64_530)));
+        let error = export(
+            &mut state,
+            json!({
+                "source": {"path": main.display().to_string(), "mode": "live"},
+                "view": {"kind": "feed", "feed": "feed-a"},
+                "format": "csv",
+                "destination": destination.display().to_string(),
+                "publication_policy": "fail_if_exists",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "1000",
+                    "max_open_files": 2
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome),
+            ("output_limit", "not_started")
+        );
+        assert!(
+            !destination.exists(),
+            "preflight refusal must not create the destination"
+        );
+        fs::remove_file(&main).unwrap();
+        fs::remove_file(sidecar(&main)).unwrap();
+    }
+
+    #[test]
+    fn export_preflight_refuses_unrepresentable_destination_before_creating_output() {
+        // A monster non-ASCII destination is schema-valid, but its
+        // worst-case JSON escaping (six bytes per non-ASCII byte)
+        // cannot fit the response object; the request must be refused
+        // before any output file exists.
+        let main = live_membership("preflight-path");
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let destination = std::env::temp_dir().join(format!(
+            "{}-export-many-π-{unique}.csv",
+            "π".repeat(12_000)
+        ));
+        let mut state = SessionState::default();
+        let error = export(
+            &mut state,
+            json!({
+                "source": {"path": main.display().to_string(), "mode": "live"},
+                "view": {"kind": "feed", "feed": "feed-a"},
+                "format": "csv",
+                "destination": destination.display().to_string(),
+                "publication_policy": "fail_if_exists",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "1000",
+                    "max_open_files": 2
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome),
+            ("output_limit", "not_started")
+        );
+        assert!(
+            !destination.exists(),
+            "preflight refusal must not create the destination"
+        );
         fs::remove_file(&main).unwrap();
         fs::remove_file(sidecar(&main)).unwrap();
     }

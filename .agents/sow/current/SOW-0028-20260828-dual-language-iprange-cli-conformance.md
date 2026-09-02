@@ -1100,9 +1100,13 @@ Open decisions:
     reachable; double-fault preserves the close result.
   - export: the product error now keeps the factual source_close
     whether the source close succeeded or failed.
-- Feeds success results keep the frozen _PUBLISHER_COMMON shape (no
-  source_close member; recorded results.py decision), so the feeds
-  close fact appears only in error details.
+- Feeds success results kept the _PUBLISHER_COMMON shape without a
+  source_close member during round 9, so the feeds close fact appeared
+  only in error details. That was a schema omission, not a frozen user
+  decision; round 10 aligns the success schema with the spec
+  factual-close rule (iprange-jsonrpc-v1.md:351-357) by adding the
+  optional source_close member to feeds.create/replace/import and the
+  retention refreshes.
 - Pinned by tests (af728001): close_on_error merges factual live
   closes and omits facts for immutable readers; an end-to-end handler
   test proves query.cardinalities on a direct live database carries
@@ -1113,6 +1117,112 @@ Open decisions:
 - Validation at 6b1837f4: -D warnings clean; Rust workspace 50 suites
   (687 tests); runner 30 cases / 15 oracle checks; golden 53;
   sensitivity 13 modes; Go suite green; source graph 491.
+
+### 2026-09-02 (continued) — round 10: glm-5.3-responses whole-milestone re-review (FAIL) and fix wave
+
+- The mandated glm-5.3-responses whole-milestone review at HEAD
+  fe220f17 returned FAIL with 6 P1, 13 P2, and 3 P3 findings. The
+  round-10 fix wave is being committed by the lead across the W1-W5
+  fix areas; the validation gates are re-run after the wave commits
+  land (recorded in the Validation section).
+- P1 findings:
+  1. scope-surface: the review scope included later-order deliverables
+     (the full Rust legacy surface, `Go cmd/iprange`, `v4/cli/README.md`,
+     `bench.py`, and benchmark manifests). Adjudication: milestone 1 is
+     the Rust JSON-RPC service, the scope of the round-8/9 reviews; the
+     later surfaces are fixed delivery-order work of this SOW, not
+     milestone-1 blockers: step 3 "Implement and qualify the complete
+     Rust legacy surface against the C oracle."; step 4 "Freeze only
+     independently modeled or C-authoritative expectations, never
+     Rust-produced expected answers, then implement Go in the same
+     family order."; step 5 "Run same-language, cross-open, and
+     mixed-live matrices before performance acceptance and
+     documentation." (fixed delivery order lines 454-458).
+  2. EOF-loss: queued/active work state lost on stdin EOF or
+     termination; fixed in the round-10 transport wave (W1).
+  3. export post-mutation output_limit: the export result can exceed
+     the response bound after the destination is published; fixed in
+     the round-10 export wave (W3).
+  4. EOF reader-close: open readers not factually closed on EOF;
+     fixed in the round-10 session/reader wave (W1).
+  5. feeds/retention source-close omission: success results of
+     `feeds.create`, `feeds.replace`, `feeds.import`,
+     `retention.first_seen.refresh`, and `retention.last_seen.refresh`
+     now carry the optional factual `source_close` per the spec
+     factual-close rule (iprange-jsonrpc-v1.md:351-357): Rust emission
+     (W3) plus the result schema (W5). This was a schema omission, not
+     a frozen user decision; the round-9 delta note above that called
+     the `_PUBLISHER_COMMON` shape frozen is corrected.
+  6. quadratic feed cursors: feed cursor enumeration work grows
+     quadratically with pages; fixed in the round-10 cursor wave (W4).
+- P2 findings:
+  1. cancel validation: cancel admission/unknown-id handling; fixed in
+     the round-10 transport wave (W1); the Python CANCEL params schema
+     is correct and unchanged.
+  2. stdin-io-as-EOF: stdin I/O errors were treated as clean EOF;
+     fixed in the round-10 transport wave (W1).
+  3. multi-reader close facts: some multi-reader error paths still
+     dropped close facts; fixed in the round-10 close-facts wave (W2).
+  4. schema OPAQUE shapes: lifecycle results still used generic OPAQUE
+     housekeeping/cleanup members and the container housekeeping state
+     used the artifact vocabulary; fixed in results.py (W5): every
+     housekeeping/cleanup member in create/transition/residue/commit-
+     resolution/publication-residue results now uses the typed
+     HOUSEKEEPING/CLEANUP/COORDINATION_CLEANUP schemas, the container
+     state vocabulary (crash_reappearance_possible/visible) is distinct
+     from the per-artifact vocabulary, and negative schema self-tests
+     reject fabrications such as {"housekeeping": {"banana": "jar"}}.
+     iprange-jsonrpc-v1.md enumerates no value sets for the lifecycle
+     enums (state, operation, reset_policy, status, kind, resolution,
+     local_file_relation, coordination), so those members stay open
+     strings by the documented modeling rule.
+  5. run.py work-dir collisions: concurrent cases could share a work
+     directory; fixed in the round-10 runner wave (W4).
+  6. per-line allocations: an export row writer allocated per line;
+     fixed in the round-10 export wave (W3).
+  7. metadata inline materialization: inline metadata delivery
+     materializes the full value; fixed in the round-10 reader wave
+     (W2).
+  8. export publish outcome: export publication outcome facts on
+     failure paths; fixed in the round-10 export wave (W3).
+  9. clippy: not a repository gate; adjudicated below (W5 record).
+  10. rustfmt: not a repository gate; adjudicated below (W5 record).
+  11. stale validation records: the canonical Validation section still
+      described a pending design-only SOW; replaced with current
+      milestone-1 evidence (W5, see Validation section).
+  12. reviewer-record incompleteness: fixed by this round-10 record and
+      the corrected round-9 delta note (W5).
+  13. oversized-id: request-id bound not enforced; fixed in the
+      round-10 transport wave (W1).
+- P3 findings:
+  1. Cardinality129 internal truncation: a private counter path
+     truncates 129-bit values; fixed in the round-10 cardinality wave
+     (W3).
+  2. push_json_string UTF-8: the row writer escapes some UTF-8
+     incorrectly; fixed in the round-10 export wave (W3).
+  3. pycache untracked: `v4/cli/__pycache__/` and
+     `v4/cli/schema/__pycache__/` appeared as untracked files; added
+     `__pycache__/` to `.gitignore` (W5).
+- Fix mapping: the finding numbers above map to the W1-W5 fix areas as
+  marked. Fix-commit column: round-10 wave commits (the lead fills in
+  the exact SHAs as the wave lands).
+- P2-9/P2-10 adjudication (clippy and rustfmt are NOT repository
+  gates): the CI workflows `.github/workflows/v4-rust-performance.yml`
+  and `.github/workflows/big-endian.yml` run no clippy or fmt job; the
+  recorded "-D warnings clean" gate is rustc `-D warnings`
+  (`v4/rust/check-source-graph.sh` sets `RUSTFLAGS=... -D warnings`),
+  which passes. `v4/rust/README.md` lists `cargo clippy` and
+  `cargo fmt --check` as developer commands only. The attested clippy
+  `large_enum_variant` suppressions carry allocation-free rationale
+  comments and remain accepted non-gate hygiene debt.
+- The five own-model delta reviewer scopes (coverage, SDK-ownership,
+  wire, performance, and the close-facts delta reviewer) returned PASS
+  at 6b1837f4 and re-affirmed PASS at fe220f17; no P0-P2 finding from
+  those scopes remains open.
+- Feeds/retention source_close correction record: the optional
+  source_close member is added to the result schemas of
+  feeds.create/replace/import and the two retention refreshes; goldens
+  use immutable fixtures and stay valid unchanged (absent member).
 
 ### 2026-09-01 (continued) — complete handler registry
 
@@ -1276,74 +1386,114 @@ Open decisions:
 
 Acceptance criteria evidence:
 
-- Pending implementation. Design/user decisions are complete; SOW-0027 closure
-  is the only activation dependency.
+- Milestone 1 (the Rust JSON-RPC service) is implemented and
+  qualified: `iprange --jsonrpc` registers 53 method names - 52
+  callable methods plus the `iprange.v1.cancel` notification - and
+  every callable method has a registered handler
+  (`v4/rust/iprange-cli/src/rpc/dispatch.rs`).
+- The qualification area ties every callable method to real wire
+  exchanges: 53 golden exchanges (`v4/cli/golden/`) and 30 declarative
+  cases (`v4/cli/cases/`) cover every method family; the independent
+  scalar interval oracle contributes 15 checks.
+- Later acceptance evidence is milestone work of this SOW, not
+  milestone 1: the complete Rust legacy surface against the C oracle
+  (delivery-order step 3), the Go product executable (step 4), and the
+  same-language/cross-open/mixed-live matrices plus consolidated
+  benchmarks (step 5), including `v4/cli/README.md` and `bench.py`.
 
-Tests or equivalent validation:
+Tests or equivalent validation (recorded at HEAD 6b1837f4; every gate
+is re-run after the round-10 fix wave commits land):
 
-- `nice .agents/sow/audit.sh`: SOW-0028 and SOW-0029 pass their
-  status/directory, regression-placement, open-source-evidence, and
-  sensitive-data checks. The repository-wide verdict remains partial only
-  because completed historical SOW-0025 lacks a canonical top-level status;
-  this SOW does not modify that unrelated record.
-- Placeholder, personal-name, trailing-whitespace, and `git diff --check`
-  hygiene scans: pass.
-- No product test/benchmark is claimed for a pending design-only SOW.
+- Rust workspace: 50 suites / 687 tests green.
+- `-D warnings` build clean (rustc `-D warnings` via
+  `v4/rust/check-source-graph.sh`).
+- Runner default matrix green: 30 cases / 15 oracle checks.
+- Golden corpus: 53 exchanges PASS (`nice python3 v4/cli/check_golden.py`).
+- Sensitivity gate: 13 deliberate-brokenness modes PASS
+  (`nice python3 v4/cli/sensitivity_gate.py`).
+- Schema module self-tests PASS (`python3 -m v4.cli.schema.results`
+  and siblings), including the typed housekeeping/cleanup negative
+  tests added in the round-10 wave.
+- Go SDK suite green.
+- mmap-only gates: `check-source-graph.sh` (four-target source graph,
+  491 sources), `check-mmap-storage.sh`, `check-mmap-runtime.sh`,
+  `check-architecture.sh`.
+- SOW audit and placeholder/personal-name/trailing-whitespace/
+  `git diff --check` hygiene scans pass.
+- The round-10 fix wave (typed housekeeping/cleanup schemas, optional
+  source_close schema, validation record refresh, `.gitignore`, and the
+  parallel Rust/runner fix areas W1-W4) is being committed by the lead;
+  gates are re-run after the wave commits land.
 
 Real-use evidence:
 
-- Pending; no production executable or JSON-RPC service exists yet.
+- The qualification client (`v4/cli/run.py`) drives the real Rust
+  binary over the bidirectional stdin/stdout pipe with ordinary
+  production JSON-RPC requests; the golden exchanges were generated
+  from real outputs.
+- Publisher workflows, live lifecycle, export, snapshot, validation,
+  recovery, and maintenance execute through the service in the
+  declarative corpus and in the recorded review rounds 7-10.
 
 Reviewer findings:
 
-- Design-readiness findings were corrected: no schema invention remains in the
-  worker plan; nonexistent create/recovery/publication/reset options were
-  removed; full scratch/query budgets and factual resolution modes were added;
-  and metadata/catalog/query/maintenance results are bounded.
-- Independent implementation final review remains pending because no product
-  implementation exists.
+- Rounds 7-10 each returned FAIL with a verified numbered inventory and
+  a matching fix wave; the round-10 glm-5.3-responses review at HEAD
+  fe220f17 and its fix wave are recorded in the round-10 section above.
+- The five own-model delta reviewers (coverage, SDK-ownership, wire,
+  performance, close-facts) PASSed at 6b1837f4/fe220f17.
 
 Same-failure scan:
 
-- No production JSON-RPC contract or Rust/Go product `iprange` exists.
-- Reviews must search for duplicate persistence algorithms, complete-feed JSON,
-  test-only fields, text-as-error identity, false cross-file atomicity,
-  unbounded queues/frames, leaked handles, and accidental listeners.
+- Each wave scans the full class of every finding before landing: the
+  round-10 wave typed every OPAQUE housekeeping/cleanup member in the
+  lifecycle results, added the optional source_close to every
+  feed/retention result schema, and checked every CI workflow before
+  recording clippy/rustfmt as non-gates.
+- Reviews must continue to search for duplicate persistence algorithms,
+  complete-feed JSON, test-only fields, text-as-error identity, false
+  cross-file atomicity, unbounded queues/frames, leaked handles, and
+  accidental listeners.
 
 Sensitive data gate:
 
-- This SOW contains public paths/protocol references and synthetic product
-  descriptions only; no secrets, credentials, tokens, SNMP communities,
-  customer/community/personal data, identifying addresses, private endpoints,
-  or proprietary incidents.
+- This SOW contains public paths/protocol references and synthetic
+  product descriptions only; no secrets, credentials, tokens, SNMP
+  communities, customer/community/personal data, identifying addresses,
+  private endpoints, or proprietary incidents.
 
 Artifact maintenance gate:
 
-- AGENTS.md: unchanged; implementation must update it before completion.
-- Runtime project skills: unchanged; implementation must update them.
-- Specs: added `iprange-jsonrpc-v1.md`; implementation must update the engine
-  and adoption specs to link the delivered public contract.
-- End-user/operator docs: unchanged; delivery requires updates.
+- AGENTS.md: unchanged; must be updated to describe the delivered
+  JSON-RPC service before SOW-0028 closes.
+- Runtime project skills: unchanged; `project-v4-rust` must be updated
+  with the delivered CLI/RPC qualification workflow before close.
+- Specs: `iprange-jsonrpc-v1.md` is the normative approved contract and
+  is updated when a wave corrects contract text; engine/adoption specs
+  must describe delivered behavior at close.
+- End-user/operator docs: `v4/cli/README.md` and wiki/ updates are
+  scheduled by delivery-order steps 3-5 and the close.
 - End-user/operator skills: none exist; reassess before close.
-- SOW lifecycle: SOW-0028 is current/in-progress (sole current SOW,
-  2026-09-01); SOW-0027 is closed; SOW-0029 tracks daemon (pending);
-  SOW-0017 remains paused; SOW-0030 owns engine performance residuals
+- SOW lifecycle: SOW-0028 is current/in-progress (sole current SOW);
+  SOW-0027 is closed; SOW-0029 tracks the daemon (pending); SOW-0017
+  remains paused; SOW-0030 owns engine performance residuals
+  (pending); SOW-0031 owns the history-project report-output option
   (pending).
 
 Specs update:
 
-- Added `.agents/sow/specs/iprange-jsonrpc-v1.md`. It is approved but explicitly
-  marked unsupported until SOW-0028 delivers both binaries.
-- Engine/adoption integration remains part of implementation because those
-  specs must describe delivered, not merely proposed, behavior.
+- `.agents/sow/specs/iprange-jsonrpc-v1.md` is the approved normative
+  contract for the delivered milestone; the round-10 wave updates it
+  where the fix wave corrected contract text.
 
 Project skills update:
 
-- Pending delivered workflow.
+- Update `project-v4-rust` with the delivered CLI/RPC qualification
+  workflow before SOW-0028 closes.
 
 End-user/operator docs update:
 
-- Pending delivered behavior.
+- Pending delivery-order steps 3-5 and final close.
 
 End-user/operator skills update:
 
@@ -1357,10 +1507,13 @@ Lessons:
 
 Follow-up mapping:
 
-- SOW-0027 supplies final parity and direct-performance input.
-- SOW-0029 owns daemon transport/security/path/concurrency.
-- SOW-0017 owns authenticated public snapshots.
+- SOW-0027 supplies final parity and direct-performance input (closed).
+- SOW-0029 owns daemon transport/security/path/concurrency (pending).
+- SOW-0031 owns the history-project report-output option (pending).
+- SOW-0017 owns authenticated public snapshots (paused).
+- SOW-0030 owns engine-level performance residuals (pending).
 - `update-ipsets` migration remains outside scope; no architecture was selected.
+
 
 ## Outcome
 

@@ -26,16 +26,21 @@
 //!   is replaced by the `output_limit` product error, never an
 //!   oversized frame; a busy-rejected batch element stays inside its
 //!   batch response array at its original position;
-//! - stdin EOF stops acceptance, cancels queued requests, signals the
-//!   active work, waits for its factual terminal outcome, closes all
-//!   cursors and readers, and exits 0 unless transport shutdown
+//! - stdin EOF stops acceptance, cancels queued requests and the
+//!   active work token, lets every admitted unit reach a factual
+//!   terminal outcome (quick work answers normally; SDK long work
+//!   aborts through the cancelled token), closes all cursors and
+//!   registered live readers, and exits 0 unless transport shutdown
 //!   itself failed;
 //! - a frame over the input ceiling produces -32001 with id null and
 //!   the process closes without parsing any later bytes;
-//! - broken stdout and termination signals are fatal transport
-//!   failures: the worker reports the first write error, the main
-//!   loop runs the same cancellation/handle-cleanup path as EOF, and
-//!   the process exits non-zero.
+//! - a request whose id alone cannot be echoed within the
+//!   65,000-byte response-object limit also produces -32001 with
+//!   id null, but the service keeps serving;
+//! - broken stdout, termination signals, and stdin read errors are
+//!   fatal transport failures: the main loop runs the same
+//!   cancellation/handle-cleanup path as EOF and the process exits
+//!   non-zero.
 
 use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
@@ -113,20 +118,14 @@ struct WorkUnit {
 /// Events the transport threads report to the main session loop.
 #[derive(Debug)]
 enum SessionEvent {
-    /// One physical input frame (`Ok(Some)`), EOF (`Ok(None)`), or the
-    /// frame-over-input-ceiling failure (`Err(FrameTooLarge)`).
-    Line(Result<Option<Vec<u8>>, super::framing::FrameTooLarge>),
+    /// One physical input frame (`Ok(Some)`), EOF (`Ok(None)`), or a
+    /// line-read failure: the frame-over-input-ceiling case
+    /// (`Err(LineReadError::FrameTooLarge)`) or a real stdin io error
+    /// (`Err(LineReadError::Io)`), which is fatal like broken stdout.
+    Line(Result<Option<Vec<u8>>, super::framing::LineReadError>),
     /// Unrecoverable transport failure: broken stdout, a termination
     /// signal (Unix), or a signal-watcher spawn failure.
     Fatal(io::Error),
-}
-
-/// What the main loop should do after handling one input frame.
-enum FrameAction {
-    /// Keep reading input.
-    Continue,
-    /// The frame is a transport failure: run the shutdown path.
-    Shutdown,
 }
 
 pub struct Session {
@@ -218,7 +217,7 @@ impl Session {
                     ));
                 }
                 Ok(SessionEvent::Fatal(err)) => return self.fatal(err),
-                Ok(SessionEvent::Line(Err(_))) => {
+                Ok(SessionEvent::Line(Err(super::framing::LineReadError::FrameTooLarge))) => {
                     let payload = SchemaError::response(
                         None,
                         SchemaError {
@@ -234,12 +233,19 @@ impl Session {
                     }
                     return self.shutdown();
                 }
+                Ok(SessionEvent::Line(Err(super::framing::LineReadError::Io(error)))) => {
+                    // A real stdin read error is not EOF: the input
+                    // transport failed, so the session runs the fatal
+                    // cancellation/cleanup path and exits non-zero.
+                    return self.fatal(io::Error::new(
+                        error.kind(),
+                        format!("stdin read failed: {error}"),
+                    ));
+                }
                 Ok(SessionEvent::Line(Ok(None))) => return self.shutdown(),
                 Ok(SessionEvent::Line(Ok(Some(line)))) => {
-                    match handle_frame(&mut self, line, &writer) {
-                        Ok(FrameAction::Continue) => {}
-                        Ok(FrameAction::Shutdown) => return self.shutdown(),
-                        Err(err) => return self.fatal(err),
+                    if let Err(err) = handle_frame(&mut self, line, &writer) {
+                        return self.fatal(err);
                     }
                 }
             }
@@ -248,12 +254,19 @@ impl Session {
 
     /// Cancel one request id immediately after frame validation.
     ///
-    /// Only ids that were admitted and have not reached their terminal
-    /// state (`pending`) can be cancelled: unknown and already
-    /// terminal ids are ignored, so cancelling an id never poisons a
-    /// later request that reuses it. An id in the currently executing
-    /// request set also cancels the unit's cancellation token.
+    /// The notification params must match the strict CANCEL schema
+    /// (exactly one member `request_id`, string or integral number)
+    /// before anything is cancelled; an invalid notification is
+    /// ignored and produces no response. Only ids that were admitted
+    /// and have not reached their terminal state (`pending`) can be
+    /// cancelled: unknown and already terminal ids are ignored, so
+    /// cancelling an id never poisons a later request that reuses it.
+    /// An id in the currently executing request set also cancels the
+    /// unit's cancellation token.
     fn apply_cancel(&mut self, request: &Request) {
+        if !schema::valid_cancel_params(&request.params) {
+            return;
+        }
         let cancel_id = match request.params.get("request_id") {
             Some(Value::String(s)) => Some(format!("s:{s}")),
             Some(n @ Value::Number(_)) => schema::number_cancel_key(n),
@@ -283,13 +296,37 @@ impl Session {
         self.work_tx.take();
     }
 
+    /// Close all connection resources held at shutdown: drop cursor
+    /// checkpoints and close every registered live reader in
+    /// deterministic handle order (see `ConnectionState::close_all`).
+    ///
+    /// Must run only after the worker joined, so no thread is left
+    /// holding the state mutex while readers are closed. Returns the
+    /// first close failure; an incomplete live-reader close is a
+    /// transport-shutdown failure, never silently converted to Ok.
+    fn close_registered_resources(&mut self) -> Option<io::Error> {
+        let failures = {
+            let mut state = self.state.lock().unwrap();
+            state.resources.close_all()
+        };
+        if failures.is_empty() {
+            return None;
+        }
+        let mut message = String::from("transport shutdown failed to close a live reader");
+        for (handle, error) in failures {
+            message.push_str(&format!("; {handle}: {error}"));
+        }
+        Some(io::Error::new(io::ErrorKind::Other, message))
+    }
+
     /// EOF shutdown: stop acceptance, cancel queued units, request
-    /// cancellation of the active unit, and wait for its factual
-    /// terminal outcome.
+    /// cancellation of the active unit, wait for its factual terminal
+    /// outcome, and close every connection resource.
     ///
     /// Exits zero unless the transport itself failed: a worker write
-    /// failure observed while draining queued units is a fatal
-    /// transport failure (broken stdout exits non-zero).
+    /// failure observed while draining queued units (broken stdout)
+    /// or an incomplete live-reader close is a fatal transport
+    /// failure (non-zero exit).
     fn shutdown(&mut self) -> io::Result<()> {
         self.begin_shutdown();
         let worker_failed = if let Some(worker) = self.worker.take() {
@@ -300,20 +337,30 @@ impl Session {
         } else {
             None
         };
-        match worker_failed {
-            Some(err) => Err(err),
-            None => Ok(()),
+        let close_failed = self.close_registered_resources();
+        match (worker_failed, close_failed) {
+            (Some(first), Some(second)) => Err(io::Error::new(
+                first.kind(),
+                format!("{first}; {second}"),
+            )),
+            (Some(err), None) | (None, Some(err)) => Err(err),
+            (None, None) => Ok(()),
         }
     }
 
     /// Fatal transport failure: same cancellation and handle cleanup
-    /// as EOF, then report the failure (non-zero exit).
+    /// as EOF (including closing connection resources), then report
+    /// the failure (non-zero exit).
     fn fatal(&mut self, err: io::Error) -> io::Result<()> {
         self.begin_shutdown();
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
-        Err(err)
+        let close_failed = self.close_registered_resources();
+        match close_failed {
+            Some(close) => Err(io::Error::new(err.kind(), format!("{err}; {close}"))),
+            None => Err(err),
+        }
     }
 }
 
@@ -358,28 +405,21 @@ fn worker_loop<W: Write + Send + 'static>(
             .filter(|entry| matches!(entry, WorkEntry::Execute(_)))
             .filter_map(|entry| request_key(entry.request()))
             .collect();
-        // Check-and-install in one lock scope: if shutdown lands
-        // between the check and the token install, the fresh token
-        // would escape cancellation. With one scope, either the unit
-        // observes shutting_down (queued, skipped) or the shutdown
-        // cancels the token this scope installed (active, factual).
-        let shutting_down = {
+        // Token/flag update in one lock scope: if shutdown lands
+        // between a check and a fresh token install, the fresh token
+        // would escape cancellation. A unit admitted before EOF
+        // installs its own token (shutdown then cancels it: active,
+        // factual). A unit still queued when EOF lands keeps the
+        // already-cancelled token installed by begin_shutdown: quick
+        // work answers normally, SDK long work aborts factually, and
+        // no admitted unit is skipped. The channel close (work_tx
+        // dropped by shutdown) ends the loop.
+        {
             let mut s = state.lock().unwrap();
-            s.token = Arc::new(CancellationToken::new());
-            s.active_keys = keys.clone();
-            s.shutting_down
-        };
-        if shutting_down {
-            // EOF or fatal: queued units are cancelled and produce no
-            // response; queue capacity was released above and the
-            // channel close ends the loop.
-            let mut s = state.lock().unwrap();
-            for key in &keys {
-                s.cancelled.remove(key);
-                s.pending.remove(key);
+            if !s.shutting_down {
+                s.token = Arc::new(CancellationToken::new());
             }
-            s.active_keys.clear();
-            continue;
+            s.active_keys = keys.clone();
         }
         let mut responses: Vec<Value> = unit
             .entries
@@ -426,7 +466,7 @@ fn handle_frame<W: Write>(
     session: &mut Session,
     line: Vec<u8>,
     writer: &Arc<Mutex<FrameWriter<W>>>,
-) -> io::Result<FrameAction> {
+) -> io::Result<()> {
     let requests = match schema::decode_frame(&line) {
         Ok(requests) => requests,
         Err(err) => {
@@ -435,7 +475,7 @@ fn handle_frame<W: Write>(
                 .expect("constant schema error within limits");
             let mut w = writer.lock().unwrap();
             w.write_line(&text)?;
-            return Ok(FrameAction::Continue);
+            return Ok(());
         }
     };
     let mut ordinary = Vec::new();
@@ -449,7 +489,7 @@ fn handle_frame<W: Write>(
         ordinary.push(request);
     }
     if ordinary.is_empty() {
-        return Ok(FrameAction::Continue);
+        return Ok(());
     }
     if ordinary
         .iter()
@@ -466,7 +506,7 @@ fn handle_frame<W: Write>(
             .expect("constant transport error within limits");
         let mut w = writer.lock().unwrap();
         w.write_line(&text)?;
-        return Ok(FrameAction::Shutdown);
+        return Ok(());
     }
     let entries = admit_frame(ordinary, &session.in_flight);
     mark_pending(&session.state, &entries);
@@ -510,7 +550,7 @@ fn handle_frame<W: Write>(
             }
         }
     }
-    Ok(FrameAction::Continue)
+    Ok(())
 }
 
 /// Record every admitted Execute key as a valid cancellation target.
@@ -589,9 +629,9 @@ fn entry_response(state: &Arc<Mutex<SessionState>>, entry: &WorkEntry) -> Option
 /// the only remaining response that always satisfies the ceiling.
 /// Preflight: a request id that alone makes even the smallest faithful
 /// response (an error of the documented shape) exceed RESPONSE_OBJECT_LIMIT
-/// can never be answered. When it appears in an admitted frame, the whole
-/// frame is a transport failure: -32001 with id null, then the process
-/// closes, exactly like the input-frame-over-limit path.
+/// can never be answered. The frame answers -32001 with id null; an
+/// unanswerable id is an ordinary (if unusable) request, not an
+/// oversized input frame, so the service keeps serving after it.
 fn preflight_unanswerable_id(request: &Request) -> bool {
     let id = request.id.as_ref().expect("ordinary requests carry ids");
     let probe = schema::error_response(
@@ -855,13 +895,71 @@ mod tests {
         }
     }
 
-    /// Reader that delivers one frame, then waits until the worker's
+    /// Reader that delivers its input and then reports EOF on the next
+    /// fill_buf, without waiting for worker output: the plain
+    /// request-then-close transport pattern.
+    struct PlainEofReader {
+        remaining: &'static [u8],
+    }
+
+    impl std::io::Read for PlainEofReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let data = self.fill_buf()?.to_vec();
+            let n = data.len().min(buf.len());
+            buf[..n].copy_from_slice(&data[..n]);
+            self.consume(n);
+            Ok(n)
+        }
+    }
+
+    impl std::io::BufRead for PlainEofReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if self.remaining.is_empty() {
+                return Ok(&[]);
+            }
+            Ok(self.remaining)
+        }
+        fn consume(&mut self, amt: usize) {
+            self.remaining = &self.remaining[amt..];
+        }
+    }
+
+    /// Reader that delivers its input and then fails like stdin on a
+    /// broken pipe instead of reporting EOF: a real io error must
+    /// never masquerade as a clean end of input.
+    struct ErrorAfterFrameReader {
+        remaining: &'static [u8],
+    }
+
+    impl std::io::Read for ErrorAfterFrameReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let data = self.fill_buf()?.to_vec();
+            let n = data.len().min(buf.len());
+            buf[..n].copy_from_slice(&data[..n]);
+            self.consume(n);
+            Ok(n)
+        }
+    }
+
+    impl std::io::BufRead for ErrorAfterFrameReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if self.remaining.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "stdin broken"));
+            }
+            Ok(self.remaining)
+        }
+        fn consume(&mut self, amt: usize) {
+            self.remaining = &self.remaining[amt..];
+        }
+    }
+
+    /// Reader that delivers its bytes, then waits until the worker's
     /// response appears on the shared output before reporting EOF.
     /// Makes the EOF shutdown deterministic: the unit is complete
     /// before shutdown starts, so the worker is between units when
     /// EOF lands and the response is always written.
     struct ResponseAwareReader {
-        input: &'static [u8],
+        input: Vec<u8>,
         delivered: bool,
         output: Arc<Mutex<Vec<u8>>>,
         marker: &'static [u8],
@@ -883,7 +981,7 @@ mod tests {
         fn fill_buf(&mut self) -> io::Result<&[u8]> {
             if !self.delivered {
                 self.delivered = true;
-                return Ok(self.input);
+                return Ok(&self.input);
             }
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
             loop {
@@ -903,7 +1001,7 @@ mod tests {
             }
         }
         fn consume(&mut self, amt: usize) {
-            self.input = &self.input[amt..];
+            self.input.drain(..amt);
         }
     }
 
@@ -975,10 +1073,48 @@ mod tests {
     }
 
     #[test]
-    fn unanswerable_request_id_is_a_transport_failure() {
+    fn malformed_cancel_params_are_ignored() {
+        // The strict CANCEL schema is enforced before any cancellation:
+        // extra members, non-string/non-integral request_id values,
+        // missing members, and non-object params never cancel (and a
+        // notification produces no response).
+        let mut session = Session::new();
+        session.state.lock().unwrap().pending.insert("s:a".to_owned());
+        for bad in [
+            json!({"request_id": "a", "extra": 1}),
+            json!({"request_id": 1.5}),
+            json!({"request_id": null}),
+            json!({"request_id": true}),
+            json!({"request_id": {}}),
+            json!({"request_id": ["a"]}),
+            json!({}),
+            json!({"other": "a"}),
+            json!([]),
+        ] {
+            let cancel = Request {
+                id: None,
+                method: schema::CANCEL_METHOD.into(),
+                params: bad.clone(),
+                batch_index: None,
+            };
+            session.apply_cancel(&cancel);
+            assert!(
+                session.state.lock().unwrap().cancelled.is_empty(),
+                "malformed cancel cancelled a request: {bad}"
+            );
+        }
+        // A well-formed cancel still applies after invalid ones, so the
+        // strict gate never poisons valid notifications.
+        session.apply_cancel(&cancel_request("a"));
+        assert!(session.state.lock().unwrap().cancelled.contains("s:a"));
+    }
+
+    #[test]
+    fn unanswerable_request_id_answers_32001_with_id_null() {
         // An id that alone makes every faithful response exceed the
-        // response-object ceiling can never be answered; the spec ties
-        // -32001 with id null to the frame-over-limit transport path.
+        // response-object ceiling can never be answered: the frame
+        // answers -32001 with id null and the service keeps serving
+        // (the id is unusable, not an oversized input frame).
         let huge = "I".repeat(super::super::framing::RESPONSE_OBJECT_LIMIT + 100);
         let huge_request = request(&huge, None);
         assert!(preflight_unanswerable_id(&huge_request));
@@ -1170,10 +1306,17 @@ mod tests {
     }
 
     #[test]
-    fn eof_shutdown_skips_queued_units() {
+    fn eof_shutdown_executes_queued_units_under_the_cancelled_token() {
+        // Units admitted before EOF are executed, never skipped: the
+        // worker keeps the already-cancelled token installed by
+        // shutdown, so quick work (system.describe) answers normally
+        // and SDK long work aborts factually.
         let (work_tx, work_rx) = std::sync::mpsc::channel::<WorkUnit>();
+        let token = Arc::new(iprange_livedb::CancellationToken::new());
+        token.cancel();
         let state = Arc::new(Mutex::new(SessionState {
             shutting_down: true,
+            token,
             ..SessionState::default()
         }));
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
@@ -1190,15 +1333,65 @@ mod tests {
 
         worker_loop(state, writer, in_flight.clone(), work_rx, events_tx);
 
-        assert!(
-            output.lock().unwrap().is_empty(),
-            "queued units must not respond after EOF"
-        );
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        for id in ["a", "b", "c"] {
+            assert!(
+                text.contains(&format!("\"id\":\"{id}\"")),
+                "queued unit {id} must answer after EOF: {text}"
+            );
+        }
         assert_eq!(
             in_flight.load(Ordering::Relaxed),
             0,
-            "queue capacity must be released for skipped units"
+            "queue capacity must be released for drained units"
         );
+    }
+
+    #[test]
+    fn queued_live_open_at_eof_reports_factual_cancellation() {
+        // A unit still queued when EOF lands executes under the
+        // cancelled token: SDK long work (a live reader open) aborts
+        // with the factual cancellation outcome instead of being
+        // skipped or running uncancelled.
+        let fixture = crate::rpc::handlers::reader::test_support::create_direct_v6(
+            "eof-queued-cancel",
+        );
+        let (work_tx, work_rx) = std::sync::mpsc::channel::<WorkUnit>();
+        let token = Arc::new(iprange_livedb::CancellationToken::new());
+        token.cancel();
+        let state = Arc::new(Mutex::new(SessionState {
+            shutting_down: true,
+            token,
+            ..SessionState::default()
+        }));
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
+        let in_flight = Arc::new(AtomicUsize::new(1));
+        let (events_tx, _events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+
+        let open = Request {
+            id: Some(RequestId::String("slow".into())),
+            method: "iprange.v1.reader.open".into(),
+            params: crate::rpc::handlers::reader::test_support::live_source(&fixture.path),
+            batch_index: None,
+        };
+        work_tx
+            .send(unit(vec![WorkEntry::Execute(open)], false))
+            .unwrap();
+        drop(work_tx);
+
+        worker_loop(state, writer, in_flight.clone(), work_rx, events_tx);
+
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let payload: Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(payload["id"], json!("slow"));
+        assert_eq!(
+            payload["error"]["data"]["code"],
+            json!("cancelled"),
+            "queued SDK work must end in a factual outcome: {text}"
+        );
+        assert_eq!(in_flight.load(Ordering::Relaxed), 0);
+        fixture.remove();
     }
 
     #[test]
@@ -1248,7 +1441,8 @@ mod tests {
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let reader = ResponseAwareReader {
             input:
-                b"{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n",
+                b"{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n"
+                    .to_vec(),
             delivered: false,
             output: output.clone(),
             marker: b"\"id\":\"1\"",
@@ -1257,5 +1451,82 @@ mod tests {
         session.run(reader, SharedVec(output.clone())).unwrap();
         let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
         assert!(text.contains("\"id\":\"1\""), "unexpected output: {text}");
+    }
+
+    #[test]
+    fn eof_immediately_after_one_request_answers_it_and_exits_zero() {
+        // The plain request-then-close transport pattern (the T1
+        // reproducer): the unit is admitted before EOF, shutdown must
+        // execute it under the cancelled token and flush the response
+        // frame instead of skipping it.
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = PlainEofReader {
+            remaining:
+                b"{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n",
+        };
+        let session = Session::new();
+        session.run(reader, SharedVec(output.clone())).unwrap();
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(text.contains("\"id\":\"1\""), "unexpected output: {text}");
+    }
+
+    #[test]
+    fn stdin_io_error_is_fatal_not_eof() {
+        // A real stdin read error must surface as a fatal
+        // input-transport event (non-zero exit) instead of the clean
+        // zero-exit EOF path.
+        let reader = ErrorAfterFrameReader {
+            remaining:
+                b"{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n",
+        };
+        let session = Session::new();
+        let err = session
+            .run(reader, SharedVec(Arc::new(Mutex::new(Vec::new()))))
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+    }
+
+    #[test]
+    fn eof_shutdown_closes_registered_live_readers() {
+        // Opening a live reader and then closing stdin must release the
+        // sidecar reader slot: shutdown closes every registered live
+        // reader (spec Shutdown). The strongest evidence is the sidecar
+        // slot itself: slot 0 lives at page 0 + slot 0 (offset 0x1000,
+        // 16 bytes) and a cleared slot is all zero.
+        let fixture = crate::rpc::handlers::reader::test_support::create_direct_v6(
+            "eof-closes-readers",
+        );
+        let frame = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"iprange.v1.reader.open\",\"params\":{}}}\n",
+            crate::rpc::handlers::reader::test_support::live_source(&fixture.path)
+        );
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        // Deliver the frame, wait for the open response, then EOF, so
+        // the reader is registered before shutdown starts.
+        let reader = ResponseAwareReader {
+            input: frame.into_bytes(),
+            delivered: false,
+            output: output.clone(),
+            marker: b"\"reader\":\"",
+        };
+        let session = Session::new();
+        session.run(reader, SharedVec(output.clone())).unwrap();
+
+        let sidecar = std::fs::read(fixture.sidecar()).unwrap();
+        assert!(
+            sidecar.len() >= 0x1010,
+            "sidecar too small: {} bytes",
+            sidecar.len()
+        );
+        assert!(
+            sidecar[0x1000..0x1010].iter().all(|&byte| byte == 0),
+            "live reader slot must be cleared at EOF shutdown"
+        );
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(
+            text.contains("\"method\":\"iprange.v1.reader.open\""),
+            "open must have succeeded before EOF: {text}"
+        );
+        fixture.remove();
     }
 }

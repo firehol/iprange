@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -1033,6 +1034,34 @@ def validate_explicit_work_dir(path):
     return real
 
 
+def case_work_dir(root, case, matrix):
+    """Allocate one unique per-case directory under an explicit root.
+
+    Fixture-producing cases would collide if every case wrote into the
+    same root directory (NameExists on the second publication), so each
+    case gets its own `<matrix>-<case>-<random>` subdirectory. The root
+    itself is left untouched and is never deleted; the default
+    temp-dir mode still allocates one fresh private directory per case.
+    """
+
+    def slug(text):
+        cleaned = "".join(char if char.isalnum() else "-" for char in text)
+        cleaned = "-".join(part for part in cleaned.split("-") if part)
+        return cleaned.lower() or "case"
+
+    matrix_slug = slug(matrix)
+    case_slug = slug(case["name"])
+    for _ in range(64):
+        candidate = os.path.join(
+            root, f"{matrix_slug}-{case_slug}-{uuid.uuid4().hex[:8]}")
+        try:
+            os.mkdir(candidate)
+        except FileExistsError:
+            continue
+        return candidate
+    raise ValueError(f"cannot allocate a unique case directory under {root}")
+
+
 def binary_record(path):
     return {
         "path": path,
@@ -1051,7 +1080,7 @@ def main():
                         choices=["all", "c", "rust", "go", "rust_to_go", "go_to_rust"])
     parser.add_argument("--cases", default=DEFAULT_CASE_DIR)
     parser.add_argument("--work-dir", metavar="DIR",
-                        help="absolute empty directory kept after the run")
+                        help="absolute empty root directory; each case runs in a unique kept subdirectory")
     parser.add_argument("--filter", metavar="NAME")
     parser.add_argument("--allow-skips", action="store_true",
                         help="permit reported capability or unavailable-matrix skips")
@@ -1123,12 +1152,13 @@ def main():
 
     def run_one(case, producer, consumer):
         consume_bin = binaries[consumer] if consumer else binaries[producer]
-        work = args.work_dir
+        matrix = producer if consumer is None else f"{producer}->{consumer}"
         owns_work = False
-        if work is None:
+        if args.work_dir is None:
             work = tempfile.mkdtemp(prefix="iprange-cli-")
             owns_work = True
-        matrix = producer if consumer is None else f"{producer}->{consumer}"
+        else:
+            work = case_work_dir(args.work_dir, case, matrix)
         label = f"{case['name']} [{matrix}]"
         runner = None
         try:

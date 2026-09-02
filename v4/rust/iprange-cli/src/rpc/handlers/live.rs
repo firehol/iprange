@@ -59,6 +59,11 @@ struct PublisherFacts {
     no_change: bool,
     staging_error: Option<Error>,
     commit: Option<Result<CommitResult, Error>>,
+    /// Factual live close of the ephemeral current-coverage reader
+    /// (absent for immutable sources). Filled by the retention runs
+    /// whose workflow closes the reader mid-flow; direct replacements
+    /// never open a source reader and leave it `None`.
+    source_close: Option<Value>,
 }
 
 /// Stage the requested metadata in a changed draft, commit it, and collect
@@ -104,6 +109,7 @@ fn consume_finished(
         no_change,
         staging_error,
         commit,
+        source_close: None,
     }
 }
 
@@ -123,6 +129,7 @@ fn publisher_value(
     let mut metadata_changed = facts.metadata_changed;
     let no_change = facts.no_change;
     let mut commit = facts.commit;
+    let source_close = facts.source_close;
     if let Some(error) = facts.staging_error {
         return Err(close_writer_facts(
             writer,
@@ -239,6 +246,9 @@ fn publisher_value(
     });
     if let Some(Ok(attempt)) = &commit {
         value["commit"] = lifecycle::commit_result(attempt)?;
+    }
+    if let Some(close) = source_close {
+        value["source_close"] = close;
     }
     Ok(value)
 }
@@ -851,10 +861,13 @@ fn run_first_seen_v4(
         let error = lifecycle::sdk_error(&error, "not_started");
         return Err(close_refresh_facts(reader, writer, error));
     }
-    if let Err(error) = close_current_reader(reader) {
-        drop(refresh);
-        return Err(close_writer_facts(writer, error));
-    }
+    let source_close = match close_current_reader(reader) {
+        Ok(close) => close,
+        Err(error) => {
+            drop(refresh);
+            return Err(close_writer_facts(writer, error));
+        }
+    };
     let outcome = match collector.as_deref_mut() {
         Some(collector) => match refresh.finish_input_with_removals_v4(collector) {
             Ok(finished) => Ok(consume_finished(finished, metadata)),
@@ -873,7 +886,9 @@ fn run_first_seen_v4(
             Err(error) => Err(lifecycle::sdk_error(&error, "not_started")),
         },
     };
-    outcome.map_err(|error| close_writer_facts(writer, error))
+    let mut facts = outcome.map_err(|error| close_writer_facts(writer, error))?;
+    facts.source_close = source_close;
+    Ok(facts)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -902,10 +917,13 @@ fn run_first_seen_v6(
         let error = lifecycle::sdk_error(&error, "not_started");
         return Err(close_refresh_facts(reader, writer, error));
     }
-    if let Err(error) = close_current_reader(reader) {
-        drop(refresh);
-        return Err(close_writer_facts(writer, error));
-    }
+    let source_close = match close_current_reader(reader) {
+        Ok(close) => close,
+        Err(error) => {
+            drop(refresh);
+            return Err(close_writer_facts(writer, error));
+        }
+    };
     let outcome = match collector.as_deref_mut() {
         Some(collector) => match refresh.finish_input_with_removals_v6(collector) {
             Ok(finished) => Ok(consume_finished(finished, metadata)),
@@ -924,7 +942,9 @@ fn run_first_seen_v6(
             Err(error) => Err(lifecycle::sdk_error(&error, "not_started")),
         },
     };
-    outcome.map_err(|error| close_writer_facts(writer, error))
+    let mut facts = outcome.map_err(|error| close_writer_facts(writer, error))?;
+    facts.source_close = source_close;
+    Ok(facts)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -953,15 +973,20 @@ fn run_last_seen_v4(
         let error = lifecycle::sdk_error(&error, "not_started");
         return Err(close_refresh_facts(reader, writer, error));
     }
-    if let Err(error) = close_current_reader(reader) {
-        drop(refresh);
-        return Err(close_writer_facts(writer, error));
-    }
+    let source_close = match close_current_reader(reader) {
+        Ok(close) => close,
+        Err(error) => {
+            drop(refresh);
+            return Err(close_writer_facts(writer, error));
+        }
+    };
     let outcome = match refresh.finish_input() {
         Ok(finished) => Ok(consume_finished(finished, metadata)),
         Err(error) => Err(lifecycle::sdk_error(&error, "not_started")),
     };
-    outcome.map_err(|error| close_writer_facts(writer, error))
+    let mut facts = outcome.map_err(|error| close_writer_facts(writer, error))?;
+    facts.source_close = source_close;
+    Ok(facts)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -990,15 +1015,20 @@ fn run_last_seen_v6(
         let error = lifecycle::sdk_error(&error, "not_started");
         return Err(close_refresh_facts(reader, writer, error));
     }
-    if let Err(error) = close_current_reader(reader) {
-        drop(refresh);
-        return Err(close_writer_facts(writer, error));
-    }
+    let source_close = match close_current_reader(reader) {
+        Ok(close) => close,
+        Err(error) => {
+            drop(refresh);
+            return Err(close_writer_facts(writer, error));
+        }
+    };
     let outcome = match refresh.finish_input() {
         Ok(finished) => Ok(consume_finished(finished, metadata)),
         Err(error) => Err(lifecycle::sdk_error(&error, "not_started")),
     };
-    outcome.map_err(|error| close_writer_facts(writer, error))
+    let mut facts = outcome.map_err(|error| close_writer_facts(writer, error))?;
+    facts.source_close = source_close;
+    Ok(facts)
 }
 
 fn named_feed_source_v4<'a>(
@@ -1053,11 +1083,12 @@ fn open_source_reader(
     }
 }
 
-/// Close the ephemeral current-coverage reader. The retention result
-/// schemas carry no `source_close` member, so a successful close fact
-/// is discarded after the lease is released.
-fn close_current_reader(reader: &mut ReaderValue) -> Result<(), HandlerError> {
-    reader::close_ephemeral_reader(reader).map(|_| ())
+/// Close the ephemeral current-coverage reader and return its factual
+/// live close result (`None` for immutable sources). The retention
+/// success result carries it as `source_close`; error paths merge it
+/// through `close_refresh_facts`.
+fn close_current_reader(reader: &mut ReaderValue) -> Result<Option<Value>, HandlerError> {
+    reader::close_ephemeral_reader(reader)
 }
 
 /// Close the refresh source reader and writer on an error path,
@@ -1343,7 +1374,10 @@ where
         }
     }
 
-    fn read_line(&mut self) -> Result<Option<String>, CsvFailure> {
+    /// Fill the one reusable line buffer with the next logical row and
+    /// return it as a validated UTF-8 borrow. The row is parsed and
+    /// consumed before the next call; no per-row allocation happens.
+    fn read_line(&mut self) -> Result<Option<&str>, CsvFailure> {
         self.line.clear();
         loop {
             let available = match self.reader.fill_buf() {
@@ -1375,35 +1409,43 @@ where
         if self.line.last() == Some(&b'\r') {
             self.line.pop();
         }
-        match String::from_utf8(std::mem::take(&mut self.line)) {
+        match std::str::from_utf8(&self.line) {
             Ok(text) => Ok(Some(text)),
             Err(_) => Err(CsvFailure::format("direct CSV input is not valid UTF-8")),
         }
     }
 
-    fn parse_record(&self, line: &str) -> Result<DirectRange<K>, CsvFailure> {
-        let mut columns = line.split(',').map(str::trim);
-        let expected = || CsvFailure::format("direct CSV row must have exactly 3 columns: from,to,value");
-        let from_text = columns.next().ok_or_else(expected)?;
-        let to_text = columns.next().ok_or_else(expected)?;
-        let value_text = columns.next().ok_or_else(expected)?;
-        if columns.next().is_some() {
-            return Err(expected());
-        }
-        let from = (self.parse_address)(from_text).map_err(CsvFailure::format)?;
-        let to = (self.parse_address)(to_text).map_err(CsvFailure::format)?;
-        if from > to {
-            return Err(CsvFailure::format("range start exceeds range end"));
-        }
-        let value = value_text
-            .parse::<u32>()
-            .map_err(|_| CsvFailure::format("value must be unsigned decimal 0 through 4294967295"))?;
-        Ok(DirectRange { from, to, value })
-    }
-
     fn take_failure(&mut self) -> Option<CsvFailure> {
         self.failure.take()
     }
+}
+
+/// Parse one `from,to,value` CSV row from a borrowed line. Free of
+/// `self` so the caller can reuse the source's line buffer in place.
+fn parse_record<K>(
+    parse_address: fn(&str) -> Result<K, String>,
+    line: &str,
+) -> Result<DirectRange<K>, CsvFailure>
+where
+    K: Copy + Ord,
+{
+    let mut columns = line.split(',').map(str::trim);
+    let expected = || CsvFailure::format("direct CSV row must have exactly 3 columns: from,to,value");
+    let from_text = columns.next().ok_or_else(expected)?;
+    let to_text = columns.next().ok_or_else(expected)?;
+    let value_text = columns.next().ok_or_else(expected)?;
+    if columns.next().is_some() {
+        return Err(expected());
+    }
+    let from = parse_address(from_text).map_err(CsvFailure::format)?;
+    let to = parse_address(to_text).map_err(CsvFailure::format)?;
+    if from > to {
+        return Err(CsvFailure::format("range start exceeds range end"));
+    }
+    let value = value_text
+        .parse::<u32>()
+        .map_err(|_| CsvFailure::format("value must be unsigned decimal 0 through 4294967295"))?;
+    Ok(DirectRange { from, to, value })
 }
 
 impl<K> RangeSource<DirectRange<K>> for DirectCsvSource<K>
@@ -1414,6 +1456,10 @@ where
         if self.finished {
             return Ok(None);
         }
+        // Copy the parse callback out so the row borrow from `read_line`
+        // never aliases `self`; the row is parsed in place and its record
+        // is pushed before the next line is read.
+        let parse_address = self.parse_address;
         self.batch.clear();
         while self.batch.len() < CSV_BATCH_CAPACITY {
             let line = match self.read_line() {
@@ -1432,7 +1478,7 @@ where
             if line.is_empty() {
                 continue;
             }
-            match self.parse_record(line) {
+            match parse_record(parse_address, line) {
                 Ok(record) => self.batch.push(record),
                 Err(failure) => {
                     self.finished = true;
@@ -1847,4 +1893,177 @@ fn bounded(result: Value) -> Result<Value, HandlerError> {
 
 fn invalid(message: impl Into<String>) -> HandlerError {
     HandlerError::invalid_params(message)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iprange_livedb::create_live;
+    use iprange_livedb::{AddressRange, StructureKind, ValueKind, ValueTag};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// One live IPv4 membership database with an exact named feed.
+    fn live_membership_with_feed(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-retention-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        create_live(
+            &path,
+            AddressFamily::Ipv4,
+            ValueKind::Membership,
+            StructureKind::None,
+            ValueTag::new(b"membership").unwrap(),
+            1,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let token = CancellationToken::new();
+        let budget = iprange_livedb::TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 10_000,
+            max_file_growth_pages: 10_000,
+            max_open_files: 2,
+        };
+        let mut writer = LiveWriter::open(&path, budget, &token).unwrap();
+        let ranges = [
+            AddressRange {
+                from: Ipv4Key(u32::from(std::net::Ipv4Addr::new(192, 0, 2, 1))),
+                to: Ipv4Key(u32::from(std::net::Ipv4Addr::new(192, 0, 2, 10))),
+            },
+            AddressRange {
+                from: Ipv4Key(u32::from(std::net::Ipv4Addr::new(198, 51, 100, 5))),
+                to: Ipv4Key(u32::from(std::net::Ipv4Addr::new(198, 51, 100, 5))),
+            },
+        ];
+        let mut draft = writer
+            .begin_create_feed(FeedName::new("coverage").unwrap(), &token)
+            .unwrap();
+        draft.add_ranges_v4_slice(&ranges).unwrap();
+        match draft.finish_input().unwrap() {
+            FinishedWorkflow::Changed(prepared) => {
+                prepared.commit().unwrap();
+            }
+            FinishedWorkflow::NoChange(_) => panic!("creating a feed changed nothing"),
+        }
+        writer.close().unwrap();
+        path
+    }
+
+    /// One empty live IPv4 direct database tagged `first_seen`.
+    fn live_first_seen_target(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-retention-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        create_live(
+            &path,
+            AddressFamily::Ipv4,
+            ValueKind::Direct,
+            StructureKind::None,
+            ValueTag::FIRST_SEEN,
+            1,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        path
+    }
+
+    fn refresh_params(
+        target: &std::path::Path,
+        source: &std::path::Path,
+        mode: &str,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "path": target.display().to_string(),
+            "current": {
+                "feed": "coverage",
+                "source": {"path": source.display().to_string(), "mode": mode},
+            },
+            "refresh_value": 42,
+            "metadata": {"mode": "keep"},
+            "writer_budget": {
+                "max_heap_bytes": "2097152",
+                "max_private_pages": "10000",
+                "max_growth_pages": "10000",
+                "max_open_files": 2,
+            },
+        })
+    }
+
+    fn remove_live(path: &std::path::Path) {
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(path.with_extension("readers")).ok();
+    }
+
+    #[test]
+    fn first_seen_refresh_with_live_source_carries_source_close_success_fact() {
+        let source = live_membership_with_feed("first-seen-src");
+        let target = live_first_seen_target("first-seen-dst");
+        let mut state = SessionState::default();
+        let result = first_seen_refresh(
+            &mut state,
+            refresh_params(&target, &source, "live"),
+        )
+        .unwrap();
+        assert_eq!(result["method"], "iprange.v1.retention.first_seen.refresh");
+        assert_eq!(result["source_close"]["outcome"], "closed");
+        remove_live(&target);
+        remove_live(&source);
+    }
+
+    #[test]
+    fn last_seen_refresh_with_live_source_carries_source_close_success_fact() {
+        let source = live_membership_with_feed("last-seen-src");
+        // The target tag must be exactly `last_seen` for the workflow.
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let target = std::env::temp_dir().join(format!(
+            "iprange-retention-last-seen-dst-{}-{unique}",
+            std::process::id()
+        ));
+        create_live(
+            &target,
+            AddressFamily::Ipv4,
+            ValueKind::Direct,
+            StructureKind::None,
+            ValueTag::LAST_SEEN,
+            1,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let mut state = SessionState::default();
+        let params = serde_json::json!({
+            "path": target.display().to_string(),
+            "current": {
+                "feed": "coverage",
+                "source": {"path": source.display().to_string(), "mode": "live"},
+            },
+            "refresh_value": 42,
+            "cutoff": 100,
+            "metadata": {"mode": "keep"},
+            "writer_budget": {
+                "max_heap_bytes": "2097152",
+                "max_private_pages": "10000",
+                "max_growth_pages": "10000",
+                "max_open_files": 2,
+            },
+        });
+        let result = last_seen_refresh(&mut state, params).unwrap();
+        assert_eq!(result["method"], "iprange.v1.retention.last_seen.refresh");
+        assert_eq!(result["source_close"]["outcome"], "closed");
+        remove_live(&target);
+        remove_live(&source);
+    }
 }

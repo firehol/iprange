@@ -1,11 +1,12 @@
 //! Connection-owned reader and cursor state for the read-only methods.
 
 use std::collections::HashMap;
+use std::io;
 
-use iprange_livedb::error::Result;
+use iprange_livedb::error::{Error, Result};
 use iprange_livedb::{
-    DatabaseInfo, DirectCursorV4, DirectCursorV6, FeedCursor, FeedRangeCursorV4, FeedRangeCursorV6,
-    ImmutableReader, Ipv4Key, Ipv6Key, LiveReader, MembershipQuery,
+    CloseOutcome, DatabaseInfo, DirectCursorV4, DirectCursorV6, FeedCursor, FeedRangeCursorV4,
+    FeedRangeCursorV6, ImmutableReader, Ipv4Key, Ipv6Key, LiveReader, MembershipQuery,
     NetworkEnrichmentV1CursorV4, NetworkEnrichmentV1CursorV6, NetworkEnrichmentV1View,
     RangeDirection, ReaderCloseResult,
 };
@@ -183,7 +184,6 @@ pub struct CursorValue {
     pub view: CursorView,
     pub reverse: bool,
     pub point: Option<CursorPoint>,
-    pub range_skip: u64,
     pub last_feed_index: Option<u32>,
     pub batch_size: usize,
     pub exhausted: bool,
@@ -198,4 +198,40 @@ pub struct ConnectionState {
     pub closed_readers: HashMap<String, ()>,
     pub cursors: HashMap<String, CursorValue>,
     pub closed_cursors: HashMap<String, ()>,
+}
+
+impl ConnectionState {
+    /// Transport-shutdown cleanup: drop every cursor checkpoint and
+    /// close each registered live reader in deterministic handle
+    /// order (immutable readers have no registration lease and need no
+    /// close). Returns one entry per live reader whose close failed
+    /// outright or finished incomplete, so the caller can report an
+    /// incomplete transport shutdown; closed tombstones are cleared
+    /// with the connection state.
+    pub fn close_all(&mut self) -> Vec<(String, Error)> {
+        self.cursors.clear();
+        self.closed_cursors.clear();
+        let mut readers: Vec<(String, ReaderValue)> = self.readers.drain().collect();
+        // HashMap iteration order is not deterministic; close in
+        // sorted handle order so shutdown never depends on hashing.
+        readers.sort_by(|left, right| left.0.cmp(&right.0));
+        let mut failures = Vec::new();
+        for (handle, mut reader) in readers {
+            match reader.close_live() {
+                Ok(Some(result)) if result.outcome != CloseOutcome::Closed || result.cause.is_some() => {
+                    let cause = result.cause.unwrap_or_else(|| {
+                        Error::Io(io::Error::new(
+                            io::ErrorKind::Other,
+                            "live reader close is incomplete",
+                        ))
+                    });
+                    failures.push((handle, cause));
+                }
+                Ok(_) => {}
+                Err(error) => failures.push((handle, error)),
+            }
+        }
+        self.closed_readers.clear();
+        failures
+    }
 }

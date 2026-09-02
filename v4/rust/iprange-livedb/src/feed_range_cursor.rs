@@ -178,6 +178,14 @@ impl<'a, K: IpKey> ProjectionCursor<'a, K> {
         })
     }
 
+    /// Reposition the projection at the interval containing `target` or,
+    /// when no interval contains it, the nearest interval in the cursor's
+    /// direction. Membership filtering applies from the repositioned point
+    /// onward; already-consumed state is discarded.
+    pub(crate) fn seek(&mut self, target: K) -> Result<()> {
+        self.state.seek(self.mapping, target)
+    }
+
     pub(crate) fn next_with<F>(&mut self, checkpoint: &mut F) -> Result<Option<AddressRange<K>>>
     where
         F: FnMut() -> Result<()>,
@@ -245,6 +253,15 @@ macro_rules! public_cursor {
                 })
             }
 
+            /// Reposition to the interval containing `target` or the nearest
+            /// interval in the cursor's direction (forward: at or after;
+            /// backward: at or before). Values already visited are never
+            /// revisited; subsequent `next_range` calls continue from the
+            /// repositioned interval.
+            pub fn seek(&mut self, target: $key) -> Result<()> {
+                self.inner.seek(target)
+            }
+
             /// Return the next coalesced interval belonging to this feed.
             pub fn next_range(&mut self) -> Result<Option<AddressRange<$key>>> {
                 self.inner.next_with(&mut || Ok(()))
@@ -269,6 +286,239 @@ public_cursor!(FeedRangeCursorV6, Ipv6Key);
 #[cfg(test)]
 mod tests {
     use super::cached_membership;
+    use crate::{
+        create_immutable_feed_v4, AddressRange, CancellationToken, FeedName, ImmutableFeedBudget,
+        ImmutableReader, Ipv4Key, PublicationPolicy, RangeDirection, SliceSource, ValueTag,
+    };
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn fixture_path(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        std::env::temp_dir().join(format!(
+            "iprange-feed-cursor-{label}-{}-{unique}",
+            std::process::id()
+        ))
+    }
+
+    fn crafted_ranges() -> Vec<AddressRange<Ipv4Key>> {
+        // [10,20] and [21,30] are adjacent and normalize into one run
+        // at publication; the other runs are separated by real gaps.
+        vec![
+            AddressRange {
+                from: Ipv4Key(10),
+                to: Ipv4Key(20),
+            },
+            AddressRange {
+                from: Ipv4Key(21),
+                to: Ipv4Key(30),
+            },
+            AddressRange {
+                from: Ipv4Key(35),
+                to: Ipv4Key(40),
+            },
+            AddressRange {
+                from: Ipv4Key(50),
+                to: Ipv4Key(50),
+            },
+        ]
+    }
+
+    fn open_feed(label: &str, ranges: &[AddressRange<Ipv4Key>]) -> (PathBuf, ImmutableReader) {
+        let path = fixture_path(label);
+        create_immutable_feed_v4(
+            &path,
+            ValueTag::new(b"feeds").unwrap(),
+            FeedName::new("feed-a").unwrap(),
+            None,
+            PublicationPolicy::FailIfExists,
+            &mut SliceSource::new(ranges),
+            &ImmutableFeedBudget::new(2 * 1024 * 1024, 10_000, 10_000, 3),
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let reader = ImmutableReader::open(&path).unwrap();
+        (path, reader)
+    }
+
+    #[test]
+    fn forward_seek_lands_on_containing_or_next_interval() {
+        let (path, reader) = open_feed("seek-forward", &crafted_ranges());
+        let mut cursor = reader
+            .feed_range_cursor_v4("feed-a", RangeDirection::Forward)
+            .unwrap();
+
+        // A fresh cursor starts at the first interval; the adjacent
+        // source records coalesce into one run.
+        assert_eq!(
+            cursor.next_range().unwrap(),
+            Some(AddressRange {
+                from: Ipv4Key(10),
+                to: Ipv4Key(30),
+            })
+        );
+
+        // Seek inside an interval returns that interval next.
+        cursor.seek(Ipv4Key(15)).unwrap();
+        assert_eq!(
+            cursor.next_range().unwrap(),
+            Some(AddressRange {
+                from: Ipv4Key(10),
+                to: Ipv4Key(30),
+            })
+        );
+
+        // Seek into the gap after a run lands on the next run.
+        cursor.seek(Ipv4Key(31)).unwrap();
+        assert_eq!(
+            cursor.next_range().unwrap(),
+            Some(AddressRange {
+                from: Ipv4Key(35),
+                to: Ipv4Key(40),
+            })
+        );
+
+        // Seek exactly at an interval start returns that interval.
+        cursor.seek(Ipv4Key(50)).unwrap();
+        assert_eq!(
+            cursor.next_range().unwrap(),
+            Some(AddressRange {
+                from: Ipv4Key(50),
+                to: Ipv4Key(50),
+            })
+        );
+
+        // Seek past the end finishes the cursor.
+        cursor.seek(Ipv4Key(51)).unwrap();
+        assert_eq!(cursor.next_range().unwrap(), None);
+
+        // Seek before the first interval restarts at the first interval.
+        cursor.seek(Ipv4Key(0)).unwrap();
+        assert_eq!(
+            cursor.next_range().unwrap(),
+            Some(AddressRange {
+                from: Ipv4Key(10),
+                to: Ipv4Key(30),
+            })
+        );
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn backward_seek_lands_on_containing_or_previous_interval() {
+        let (path, reader) = open_feed("seek-backward", &crafted_ranges());
+        let mut cursor = reader
+            .feed_range_cursor_v4("feed-a", RangeDirection::Backward)
+            .unwrap();
+
+        // A fresh backward cursor starts at the last interval.
+        assert_eq!(
+            cursor.next_range().unwrap(),
+            Some(AddressRange {
+                from: Ipv4Key(50),
+                to: Ipv4Key(50),
+            })
+        );
+        assert_eq!(
+            cursor.next_range().unwrap(),
+            Some(AddressRange {
+                from: Ipv4Key(35),
+                to: Ipv4Key(40),
+            })
+        );
+        assert_eq!(
+            cursor.next_range().unwrap(),
+            Some(AddressRange {
+                from: Ipv4Key(10),
+                to: Ipv4Key(30),
+            })
+        );
+        assert_eq!(cursor.next_range().unwrap(), None);
+
+        // Seek inside the trailing run returns the coalesced run.
+        cursor.seek(Ipv4Key(25)).unwrap();
+        assert_eq!(
+            cursor.next_range().unwrap(),
+            Some(AddressRange {
+                from: Ipv4Key(10),
+                to: Ipv4Key(30),
+            })
+        );
+
+        // Seek in the gap after a run lands on the run before it.
+        cursor.seek(Ipv4Key(49)).unwrap();
+        assert_eq!(
+            cursor.next_range().unwrap(),
+            Some(AddressRange {
+                from: Ipv4Key(35),
+                to: Ipv4Key(40),
+            })
+        );
+
+        // Seek past the end lands on the last interval.
+        cursor.seek(Ipv4Key(51)).unwrap();
+        assert_eq!(
+            cursor.next_range().unwrap(),
+            Some(AddressRange {
+                from: Ipv4Key(50),
+                to: Ipv4Key(50),
+            })
+        );
+
+        // Seek before the first interval finishes the cursor.
+        cursor.seek(Ipv4Key(9)).unwrap();
+        assert_eq!(cursor.next_range().unwrap(), None);
+
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn seek_reads_only_the_target_interval() {
+        // Thousands of intervals; seeking to the last one must perform
+        // one bounded tree lookup, never walk every preceding interval.
+        // A linear reopen-and-skip page would consume the whole prefix.
+        let ranges: Vec<AddressRange<Ipv4Key>> = (0..5000u32)
+            .map(|i| AddressRange {
+                from: Ipv4Key(1 + i * 4),
+                to: Ipv4Key(1 + i * 4 + 2),
+            })
+            .collect();
+        let (path, reader) = open_feed("seek-work", &ranges);
+        let mut cursor = reader
+            .feed_range_cursor_v4("feed-a", RangeDirection::Forward)
+            .unwrap();
+        let target = Ipv4Key(1 + 4999 * 4);
+        let ((), work) = crate::work::measure(|| {
+            cursor.seek(target).unwrap();
+            assert_eq!(
+                cursor.next_range().unwrap(),
+                Some(AddressRange {
+                    from: target,
+                    to: Ipv4Key(target.0 + 2),
+                })
+            );
+        });
+        // One lookup for the range-tree seek plus one for the
+        // membership-dictionary lookup; both are constant depth.
+        assert!(
+            work.tree_lookups <= 2,
+            "seek performed {} tree lookups, expected a bounded read",
+            work.tree_lookups
+        );
+        // One consumed tree range for the target record; a linear skip
+        // would have consumed all 5000 earlier ranges.
+        assert!(
+            work.ranges_consumed <= 3,
+            "seek consumed {} ranges, expected a bounded read",
+            work.ranges_consumed
+        );
+        fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn consecutive_membership_id_is_resolved_once() {

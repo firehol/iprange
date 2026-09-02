@@ -1,6 +1,9 @@
 //! Bounded feed and range cursor JSON-RPC handlers.
 
-use iprange_livedb::{AddressFamily, FeedName, Ipv4Key, Ipv6Key, RangeDirection, ValueKind};
+use iprange_livedb::{
+    AddressFamily, CancellationToken, DatabaseInfo, FeedName, Ipv4Key, Ipv6Key, RangeDirection,
+    ValueKind,
+};
 use serde_json::{json, Value};
 
 use super::super::dispatch::HandlerError;
@@ -230,21 +233,41 @@ pub fn ranges_next(state: &mut SessionState, params: Value) -> Result<Value, Han
         }));
     }
     let mut encoded = cursor_base(state, "iprange.v1.reader.ranges.next", "records")?;
+    // Captured before the reader borrow so the page loop can poll the
+    // transport cancellation token while the cursor holds the reader.
+    let cancellation = state.token.clone();
     let reader = super::reader::reader(state, &cursor.reader)?;
+    let info = sdk(reader.info())?;
+    // Feed views keep one cursor open for the whole page: the cursor is
+    // seeked to the checkpoint once (O(log n)) and iterated, instead of
+    // reopening and skipping from the start for every record (O(n^2)
+    // over the whole stream). The page cursor borrows the reader, so
+    // each next call re-opens and seeks; the checkpoint below makes the
+    // re-open exact and bounded.
+    let mut feed = match &cursor.view {
+        CursorView::Feed { name } => Some(open_feed_page(
+            reader,
+            info,
+            name,
+            range_direction(cursor.reverse),
+            cursor.point,
+        )?),
+        _ => None,
+    };
     let mut point = cursor.point;
-    let mut range_skip = cursor.range_skip;
     let mut records = Vec::new();
     let mut exhausted = false;
     while records.len() < cursor.batch_size {
+        check_cancelled(&cancellation)?;
         let before_point = point;
-        let before_skip = range_skip;
         if !next_record(
             reader,
+            info,
             &cursor.view,
             cursor.reverse,
             &mut point,
-            &mut range_skip,
             &mut records,
+            &mut feed,
         )? {
             exhausted = true;
             break;
@@ -255,7 +278,6 @@ pub fn ranges_next(state: &mut SessionState, params: Value) -> Result<Value, Han
         if !fits_next_item(encoded, &records, record) {
             records.pop();
             point = before_point;
-            range_skip = before_skip;
             if records.is_empty() {
                 close_cursor(state, &handle);
                 return Err(limit_error());
@@ -276,7 +298,6 @@ pub fn ranges_next(state: &mut SessionState, params: Value) -> Result<Value, Han
     });
     finish_cursor_result(state, &handle, result, exhausted, |active| {
         active.point = point;
-        active.range_skip = range_skip;
     })
 }
 
@@ -291,13 +312,13 @@ pub fn ranges_close(state: &mut SessionState, params: Value) -> Result<Value, Ha
 
 fn next_record(
     reader: &ReaderValue,
+    info: DatabaseInfo,
     view: &CursorView,
     reverse: bool,
     point: &mut Option<CursorPoint>,
-    range_skip: &mut u64,
     records: &mut Vec<Value>,
+    feed: &mut Option<PageFeedCursor<'_>>,
 ) -> Result<bool, HandlerError> {
-    let info = sdk(reader.info())?;
     let direction = range_direction(reverse);
     let family_matches = matches!(
         (*point, info.address_family),
@@ -328,7 +349,6 @@ fn next_record(
                 reverse,
                 point,
             );
-            *range_skip += 1;
         }
         (CursorView::Direct, false) => {
             let mut cursor = sdk(reader.direct_cursor_v6(direction)).map_err(view_error)?;
@@ -344,7 +364,6 @@ fn next_record(
                 reverse,
                 point,
             );
-            *range_skip += 1;
         }
         (CursorView::Structured, true) => {
             let mut cursor =
@@ -356,7 +375,6 @@ fn next_record(
             let feeds = super::reader::threat_feed_names(reader, &range.value)?;
             let value = super::convert::enrichment_view(&range.value, &feeds);
             push_v4(records, range.from, range.to, Some(value), reverse, point);
-            *range_skip += 1;
         }
         (CursorView::Structured, false) => {
             let mut cursor =
@@ -368,21 +386,18 @@ fn next_record(
             let feeds = super::reader::threat_feed_names(reader, &range.value)?;
             let value = super::convert::enrichment_view(&range.value, &feeds);
             push_v6(records, range.from, range.to, Some(value), reverse, point);
-            *range_skip += 1;
         }
-        (CursorView::Feed { name }, true) => {
-            let Some(range) = next_feed_v4(reader, name, direction, *range_skip)? else {
+        (CursorView::Feed { .. }, true) => {
+            let Some(range) = next_feed_page_v4(feed)? else {
                 return Ok(false);
             };
             push_v4(records, range.from, range.to, None, reverse, point);
-            *range_skip += 1;
         }
-        (CursorView::Feed { name }, false) => {
-            let Some(range) = next_feed_v6(reader, name, direction, *range_skip)? else {
+        (CursorView::Feed { .. }, false) => {
+            let Some(range) = next_feed_page_v6(feed)? else {
                 return Ok(false);
             };
             push_v6(records, range.from, range.to, None, reverse, point);
-            *range_skip += 1;
         }
     }
     Ok(true)
@@ -542,34 +557,87 @@ fn seek_structured_v4(
     }
 }
 
-fn next_feed_v4(
-    reader: &ReaderValue,
-    name: &str,
-    direction: RangeDirection,
-    skip: u64,
-) -> Result<Option<iprange_livedb::AddressRange<Ipv4Key>>, HandlerError> {
-    let mut cursor = sdk(reader.feed_range_cursor_v4(name, direction))?;
-    for _ in 0..skip {
-        if sdk(cursor.next_range())?.is_none() {
-            return Ok(None);
-        }
-    }
-    sdk(cursor.next_range())
+/// One feed cursor held open for one `ranges.next` page. Feed views
+/// reopen and seek the underlying SDK cursor once per page; the borrow
+/// of the reader ends when the page completes.
+enum PageFeedCursor<'a> {
+    V4(iprange_livedb::FeedRangeCursorV4<'a>),
+    V6(iprange_livedb::FeedRangeCursorV6<'a>),
 }
 
-fn next_feed_v6(
-    reader: &ReaderValue,
+fn open_feed_page<'a>(
+    reader: &'a ReaderValue,
+    info: DatabaseInfo,
     name: &str,
     direction: RangeDirection,
-    skip: u64,
-) -> Result<Option<iprange_livedb::AddressRange<Ipv6Key>>, HandlerError> {
-    let mut cursor = sdk(reader.feed_range_cursor_v6(name, direction))?;
-    for _ in 0..skip {
-        if sdk(cursor.next_range())?.is_none() {
-            return Ok(None);
-        }
+    point: Option<CursorPoint>,
+) -> Result<PageFeedCursor<'a>, HandlerError> {
+    if !matches!(
+        (point, info.address_family),
+        (None, _)
+            | (Some(CursorPoint::V4(_)), AddressFamily::Ipv4)
+            | (Some(CursorPoint::V6(_)), AddressFamily::Ipv6)
+    ) {
+        return Err(wrong_family());
     }
-    sdk(cursor.next_range())
+    let cursor = match info.address_family {
+        AddressFamily::Ipv4 => {
+            let mut cursor =
+                sdk(reader.feed_range_cursor_v4(name, direction)).map_err(view_error)?;
+            if let Some(CursorPoint::V4(value)) = point {
+                sdk(cursor.seek(Ipv4Key(value)))?
+            }
+            PageFeedCursor::V4(cursor)
+        }
+        AddressFamily::Ipv6 => {
+            let mut cursor =
+                sdk(reader.feed_range_cursor_v6(name, direction)).map_err(view_error)?;
+            if let Some(CursorPoint::V6(value)) = point {
+                sdk(cursor.seek(Ipv6Key::from_u128(value)))?
+            }
+            PageFeedCursor::V6(cursor)
+        }
+    };
+    Ok(cursor)
+}
+
+fn next_feed_page_v4(
+    feed: &mut Option<PageFeedCursor<'_>>,
+) -> Result<Option<iprange_livedb::AddressRange<Ipv4Key>>, HandlerError> {
+    match feed.as_mut() {
+        Some(PageFeedCursor::V4(cursor)) => sdk(cursor.next_range()),
+        _ => Err(HandlerError::new(
+            "handle_wrong_kind",
+            "not_started",
+            "feed page cursor does not match the reader family",
+        )),
+    }
+}
+
+fn next_feed_page_v6(
+    feed: &mut Option<PageFeedCursor<'_>>,
+) -> Result<Option<iprange_livedb::AddressRange<Ipv6Key>>, HandlerError> {
+    match feed.as_mut() {
+        Some(PageFeedCursor::V6(cursor)) => sdk(cursor.next_range()),
+        _ => Err(HandlerError::new(
+            "handle_wrong_kind",
+            "not_started",
+            "feed page cursor does not match the reader family",
+        )),
+    }
+}
+
+/// Stop a bounded cursor page factually when the transport cancelled
+/// the active request between records.
+fn check_cancelled(token: &CancellationToken) -> Result<(), HandlerError> {
+    if token.is_cancelled() {
+        return Err(HandlerError::new(
+            "cancelled",
+            "not_started",
+            "cursor read was cancelled",
+        ));
+    }
+    Ok(())
 }
 
 fn seek_structured_v6(
@@ -729,7 +797,6 @@ fn insert_cursor(
             view,
             reverse,
             point,
-            range_skip: 0,
             last_feed_index: None,
             batch_size,
             exhausted: false,
@@ -825,6 +892,13 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn immutable_membership(label: &str) -> PathBuf {
+        immutable_membership_ranges(label, &[AddressRange {
+            from: Ipv4Key(1),
+            to: Ipv4Key(9),
+        }])
+    }
+
+    fn immutable_membership_ranges(label: &str, ranges: &[AddressRange<Ipv4Key>]) -> PathBuf {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -833,22 +907,128 @@ mod tests {
             "iprange-cursor-{label}-{}-{unique}",
             std::process::id()
         ));
-        let ranges = [AddressRange {
-            from: Ipv4Key(1),
-            to: Ipv4Key(9),
-        }];
         create_immutable_feed_v4(
             &path,
             ValueTag::new(b"feeds").unwrap(),
             FeedName::new("feed-a").unwrap(),
             None,
             PublicationPolicy::FailIfExists,
-            &mut SliceSource::new(&ranges),
+            &mut SliceSource::new(ranges),
             &ImmutableFeedBudget::new(2 * 1024 * 1024, 10_000, 10_000, 3),
             &iprange_livedb::CancellationToken::new(),
         )
         .unwrap();
         path
+    }
+
+    fn open_immutable_feed(state: &mut SessionState, path: &PathBuf) -> String {
+        let opened = reader::open(
+            state,
+            serde_json::json!({
+                "source":{"path":path.display().to_string(),"mode":"immutable"}
+            }),
+        )
+        .unwrap();
+        opened["reader"].as_str().unwrap().to_owned()
+    }
+
+    /// Collect every record of one feed view cursor until `done`,
+    /// using the given batch size, as the exact JSON wire values.
+    fn collect_feed_pages(
+        state: &mut SessionState,
+        reader_handle: &str,
+        direction: &str,
+        batch_size: u64,
+    ) -> Vec<Value> {
+        let opened = ranges_open(
+            state,
+            serde_json::json!({
+                "reader": reader_handle,
+                "view": {"kind":"feed", "feed":"feed-a"},
+                "direction": direction,
+                "batch_size": batch_size,
+            }),
+        )
+        .unwrap();
+        let cursor = opened["cursor"].as_str().unwrap().to_owned();
+        let mut records = Vec::new();
+        loop {
+            let next = ranges_next(state, serde_json::json!({"cursor": cursor})).unwrap();
+            records.extend(next["records"].as_array().unwrap().iter().cloned());
+            if next["done"].as_bool().unwrap() {
+                break;
+            }
+        }
+        records
+    }
+
+    #[test]
+    fn feed_paging_matches_one_unbounded_page() {
+        // Thousands of canonical ranges with real gaps. The old paging
+        // implementation reopened the feed cursor and skipped from the
+        // start for every emitted record; the seek-based paging must
+        // return byte-identical records no matter how pages fall.
+        let ranges: Vec<AddressRange<Ipv4Key>> = (0..5000u32)
+            .map(|i| {
+                let from = 2 + i * 4;
+                AddressRange {
+                    from: Ipv4Key(from),
+                    to: Ipv4Key(from + u32::from(i % 3 == 0) + 1),
+                }
+            })
+            .collect();
+        let path = immutable_membership_ranges("feed-paging", &ranges);
+        for direction in ["forward", "reverse"] {
+            let mut state = SessionState::default();
+            let reader_handle = open_immutable_feed(&mut state, &path);
+            let unbounded = collect_feed_pages(&mut state, &reader_handle, direction, 4096);
+            let paged = collect_feed_pages(&mut state, &reader_handle, direction, 7);
+            assert!(
+                unbounded.len() > 1000,
+                "expected a large feed stream, got {} records",
+                unbounded.len()
+            );
+            assert_eq!(paged.len(), unbounded.len());
+            assert_eq!(
+                serde_json::to_string(&paged).unwrap(),
+                serde_json::to_string(&unbounded).unwrap(),
+                "{direction} paging diverged from the unbounded stream"
+            );
+            reader::close(&mut state, serde_json::json!({"reader": reader_handle})).unwrap();
+        }
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn cancelled_page_stops_factually_and_keeps_the_cursor() {
+        // A transport cancel between records stops the page with the
+        // documented `cancelled` product error and leaves the cursor
+        // checkpoint untouched, so a later page resumes exactly.
+        let path = immutable_membership("cancel");
+        let mut state = SessionState::default();
+        let reader_handle = open_immutable_feed(&mut state, &path);
+        let opened = ranges_open(
+            &mut state,
+            serde_json::json!({
+                "reader": reader_handle,
+                "view": {"kind":"feed", "feed":"feed-a"},
+                "direction":"forward",
+                "batch_size":4096
+            }),
+        )
+        .unwrap();
+        let cursor = opened["cursor"].as_str().unwrap().to_owned();
+        state.token.cancel();
+        let error = ranges_next(&mut state, serde_json::json!({"cursor": cursor})).unwrap_err();
+        assert_eq!((error.code, error.outcome), ("cancelled", "not_started"));
+        // A fresh active unit replaces the token; the paused cursor
+        // resumes from its stored checkpoint unchanged.
+        state.token = std::sync::Arc::new(iprange_livedb::CancellationToken::new());
+        let next = ranges_next(&mut state, serde_json::json!({"cursor": cursor})).unwrap();
+        assert!(next["records"].as_array().unwrap().len() == 1);
+        assert_eq!(next["records"][0]["from"], "0.0.0.1");
+        reader::close(&mut state, serde_json::json!({"reader": reader_handle})).unwrap();
+        fs::remove_file(path).unwrap();
     }
 
     #[test]

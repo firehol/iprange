@@ -60,6 +60,9 @@ bitmap words, allocator state, or file-backed mapping addresses.
 - A frame over the limit produces error `-32001` with `id: null` when stdout is
   writable, then the process closes. Bytes after the limit are discarded only
   as part of process shutdown; they are never parsed as another frame.
+- A request whose id alone cannot be echoed within the 65,000-byte
+  response-object limit receives a `-32001` response with `id: null` and does
+  not close the connection.
 - stdout contains JSON-RPC frames only. Diagnostics use stderr.
 
 ### Requests, batches, and notifications

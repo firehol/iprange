@@ -108,6 +108,30 @@ pub(crate) fn integral_text(n: &serde_json::Number) -> bool {
     !text.contains('.') && !text.contains('e') && !text.contains('E')
 }
 
+/// Strict cancel-notification params validation (the canonical CANCEL
+/// schema in v4/cli/schema/methods.py): params must be an object with
+/// exactly one member `request_id`, whose value is a string or an
+/// integral JSON number. An invalid cancel notification is ignored by
+/// the transport (it is a notification: it never cancels and produces
+/// no response), so `request_id` is only interpreted after this gate.
+pub(crate) fn valid_cancel_params(params: &Value) -> bool {
+    let object = match params.as_object() {
+        Some(object) => object,
+        None => return false,
+    };
+    if object.len() != 1 {
+        return false;
+    }
+    match object.get("request_id") {
+        Some(Value::String(_)) => true,
+        // The same integral-number acceptance as request ids:
+        // arbitrary_precision preserves the exact decimal text.
+        Some(Value::Number(n)) => n.is_i64() || n.is_u64() || integral_text(n),
+        Some(_) => false,
+        None => false,
+    }
+}
+
 /// The cancellation/queue key of a `cancel.request_id` number: the same
 /// canonical correlation key a request id of the same numeric text would
 /// produce, so arbitrary-precision ids cancel correctly.

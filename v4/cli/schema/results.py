@@ -15,6 +15,10 @@ Modeling rules (recorded in SOW-0028):
 - Plain SDK enums (state, status, outcome, location, policy, ...)
   convert to lowercase snake_case strings; their value sets are not
   re-listed here because iprange-jsonrpc-v1.md does not enumerate them.
+- Housekeeping and cleanup evidence members use the typed vocabularies
+  below wherever a result contains them (create/transition/residue/
+  resolution/publication results); the container-level housekeeping
+  state vocabulary is separate from the per-artifact one.
 - Enum variants that carry payloads (ReclaimResult) convert to an
   object with an explicit lowercase `kind` discriminator.
 - SDK `cause` is never a success field (spec: it becomes the error
@@ -43,7 +47,6 @@ HEX64 = {"type": "string", "hex": 128}
 BASE64 = {"type": "string", "base64": True}
 U16 = {"type": "integer", "min": 0, "max": 65535}
 OPAQUE = {"type": "object"}
-OPAQUE_LIST = {"type": "array", "items": OPAQUE}
 SIGNED32 = {"type": "integer", "min": -2147483648, "max": 2147483647}
 STRING = {"type": "string"}
 BOOL = {"type": "boolean"}
@@ -411,10 +414,14 @@ HOUSEKEEPING_ARTIFACT = {
                  "kind", "creation_security", "selected_envelope_sequence"],
     "additional": False,
 }
+# Container-level housekeeping state (Housekeeping enum): absent when
+# None, "crash_reappearance_possible", or "visible". This is NOT the
+# per-artifact HOUSEKEEPING_STATE vocabulary above.
+HOUSEKEEPING_CONTAINER_STATE = {"type": "string", "enum": ["crash_reappearance_possible", "visible"]}
 HOUSEKEEPING = {
     "type": "object",
     "properties": {
-        "state": HOUSEKEEPING_STATE,
+        "state": HOUSEKEEPING_CONTAINER_STATE,
         "artifacts": {"type": "array", "items": HOUSEKEEPING_ARTIFACT},
     },
     "required": ["artifacts"],
@@ -584,8 +591,8 @@ CREATE_RESULT = {
         "reader_capacity": C.U32,
         "state": STRING,
         "residue_possible": BOOL,
-        "housekeeping": OPAQUE,
-        "visible_housekeeping": OPAQUE_LIST,
+        "housekeeping": HOUSEKEEPING,
+        "visible_housekeeping": {"type": "array", "items": HOUSEKEEPING_ARTIFACT},
     },
     "required": ["address_family", "value_kind", "structure_kind", "value_tag",
                  "database_id", "commit_nonce", "sidecar_id", "main_basename",
@@ -612,8 +619,8 @@ LIVE_TRANSITION_RESULT = {
         "new_sidecar_identity": FILE_IDENTITY,
         "new_sidecar_location": STRING,
         "residue_possible": BOOL,
-        "housekeeping": OPAQUE,
-        "visible_housekeeping": OPAQUE_LIST,
+        "housekeeping": HOUSEKEEPING,
+        "visible_housekeeping": {"type": "array", "items": HOUSEKEEPING_ARTIFACT},
     },
     "required": ["operation", "status", "database_id", "transaction_id", "commit_nonce",
                  "directory_identity", "main_identity", "main_basename",
@@ -633,8 +640,8 @@ LIVE_RESIDUE_RESULT = {
         "main_identity": FILE_IDENTITY,
         "sidecar_identity": FILE_IDENTITY,
         "residue_possible": BOOL,
-        "housekeeping": OPAQUE,
-        "visible_housekeeping": OPAQUE_LIST,
+        "housekeeping": HOUSEKEEPING,
+        "visible_housekeeping": {"type": "array", "items": HOUSEKEEPING_ARTIFACT},
     },
     "required": ["status", "residue_possible", "housekeeping", "visible_housekeeping"],
     "additional": False,
@@ -650,8 +657,8 @@ COMMIT_RESOLUTION_RESULT = {
         "actual_main_identity": FILE_IDENTITY,
         "local_file_relation": STRING,
         "resolution": STRING,
-        "cleanup": OPAQUE,
-        "coordination_cleanup": OPAQUE,
+        "cleanup": CLEANUP,
+        "coordination_cleanup": COORDINATION_CLEANUP,
     },
     "required": ["attempted_database_id", "attempted_transaction_id",
                  "attempted_commit_nonce", "actual_directory_identity",
@@ -704,11 +711,11 @@ PUBLICATION_RESIDUE_REMOVAL = {
         "coordination_identity": FILE_IDENTITY,
         "main": OPAQUE,
         "later_coordination": OPAQUE,
-        "coordination_access_policy": STRING,
-        "cleanup": OPAQUE,
-        "coordination_cleanup": OPAQUE,
-        "housekeeping": OPAQUE,
-        "visible_housekeeping": OPAQUE_LIST,
+        "coordination_access_policy": ACCESS_POLICY,
+        "cleanup": CLEANUP,
+        "coordination_cleanup": COORDINATION_CLEANUP,
+        "housekeeping": HOUSEKEEPING,
+        "visible_housekeeping": {"type": "array", "items": HOUSEKEEPING_ARTIFACT},
         "handle": OPAQUE,
     },
     "required": ["directory_identity", "coordination_identity", "later_coordination",
@@ -1025,6 +1032,17 @@ _register("iprange.v1.current.publish", _result(
         "required": ["report", "publication"],
     }))
 _register("iprange.v1.direct.replace", _result(required_extra=(), body=_PUBLISHER_COMMON))
+# Feeds and retention refreshes open one live source reader that must
+# close before responding; the SDK supplies a factual close result for
+# live sources only (spec factual-close rule, iprange-jsonrpc-v1.md
+# "Responses and errors"). Immutable sources omit source_close.
+_FEED_SOURCE_COMMON = {
+    "type": "object",
+    "properties": dict(_PUBLISHER_COMMON["properties"], **{
+        "source_close": CLOSE_RESULT,
+    }),
+    "required": _PUBLISHER_COMMON["required"],
+}
 _FEED_CHANGE_COMMON = {
     "type": "object",
     "properties": {
@@ -1039,12 +1057,12 @@ _FEED_CHANGE_COMMON = {
 }
 for _m in ("iprange.v1.feeds.create", "iprange.v1.feeds.replace",
            "iprange.v1.feeds.import"):
-    _register(_m, _result(required_extra=(), body=_PUBLISHER_COMMON))
+    _register(_m, _result(required_extra=(), body=_FEED_SOURCE_COMMON))
 for _m in ("iprange.v1.feeds.delete", "iprange.v1.feeds.rename"):
     _register(_m, _result(required_extra=(), body=_FEED_CHANGE_COMMON))
 _register("iprange.v1.retention.first_seen.refresh", _result(required_extra=(), body={
     "type": "object",
-    "properties": dict(_PUBLISHER_COMMON["properties"], **{
+    "properties": dict(_FEED_SOURCE_COMMON["properties"], **{
         "removals": {
             "type": "object",
             "properties": {
@@ -1065,9 +1083,9 @@ _register("iprange.v1.retention.first_seen.refresh", _result(required_extra=(), 
             "additional": False,
         },
     }),
-    "required": _PUBLISHER_COMMON["required"],
+    "required": _FEED_SOURCE_COMMON["required"],
 }))
-_register("iprange.v1.retention.last_seen.refresh", _result(required_extra=(), body=_PUBLISHER_COMMON))
+_register("iprange.v1.retention.last_seen.refresh", _result(required_extra=(), body=_FEED_SOURCE_COMMON))
 _register("iprange.v1.history.project", _result(required_extra=(), body={
     "type": "object",
     "properties": dict(_PUBLISHER_COMMON["properties"], **{
@@ -1335,6 +1353,68 @@ def _self_test():
         pass
     else:
         raise AssertionError("invalid system.describe limits accepted")
+
+    # ---- typed housekeeping/cleanup results -------------------------
+    # Every generic-Opaque housekeeping/cleanup member of the lifecycle
+    # results is now the typed schema; fabrications must be rejected and
+    # the container-level housekeeping state vocabulary must stay
+    # distinct from the per-artifact one.
+
+    def golden_result(method):
+        import os
+        root = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "golden")
+        for name in os.listdir(root):
+            if not name.endswith(".json"):
+                continue
+            with open(os.path.join(root, name), encoding="utf-8") as stream:
+                data = json.load(stream)
+            for exchange in data.get("exchanges", []):
+                if exchange["request"]["method"] == method and "response" in exchange:
+                    return exchange["response"]["result"]
+        raise AssertionError(f"no golden result for {method!r}")
+
+    def rejects(method, mutation, label):
+        result = json.loads(json.dumps(golden_result(method)))
+        result.update(mutation)
+        try:
+            validate_result(method, result)
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError(f"invalid {label} accepted for {method}")
+
+    for method in ("iprange.v1.database.create", "iprange.v1.database.initialize_live",
+                   "iprange.v1.database.live_residue.resolve"):
+        rejects(method, {"housekeeping": {"banana": "jar"}}, "housekeeping fabrication")
+        rejects(method, {"housekeeping": {"artifacts": [{"banana": "jar"}]}},
+                "housekeeping artifact fabrication")
+        rejects(method, {"visible_housekeeping": [{"banana": "jar"}]},
+                "visible housekeeping artifact fabrication")
+        rejects(method, {"housekeeping": {"state": "move_pending", "artifacts": []}},
+                "artifact-level housekeeping state at container level")
+
+    result = json.loads(json.dumps(golden_result("iprange.v1.database.create")))
+    result["housekeeping"] = {"state": "visible", "artifacts": []}
+    validate_result("iprange.v1.database.create", result)
+    result["housekeeping"] = {"state": "crash_reappearance_possible", "artifacts": []}
+    validate_result("iprange.v1.database.create", result)
+
+    rejects("iprange.v1.commit.resolve", {"cleanup": {"banana": "jar"}},
+            "cleanup fabrication")
+    rejects("iprange.v1.commit.resolve", {"coordination_cleanup": {"banana": "jar"}},
+            "coordination cleanup fabrication")
+    rejects("iprange.v1.commit.resolve",
+            {"coordination_cleanup": {"kind": "not_a_kind"}},
+            "coordination cleanup kind fabrication")
+
+    rejects("iprange.v1.publication.residue.remove",
+            {"coordination_access_policy": "banana"},
+            "access policy fabrication")
+    rejects("iprange.v1.publication.residue.remove",
+            {"housekeeping": {"banana": "jar"}}, "housekeeping fabrication")
+    rejects("iprange.v1.publication.residue.remove",
+            {"visible_housekeeping": [{"banana": "jar"}]},
+            "visible housekeeping artifact fabrication")
 
 
 def validate_system_describe(result):

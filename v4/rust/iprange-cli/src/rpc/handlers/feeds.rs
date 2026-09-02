@@ -310,26 +310,32 @@ enum FeedChangeFacts {
     },
 }
 
-/// Merge the already-factual source close into a later publish-stage
-/// error; feeds success results keep the frozen `_PUBLISHER_COMMON`
-/// shape with no `source_close` member, so only errors carry it.
-fn with_source_close_on_error(
-    outcome: Result<Value, HandlerError>,
+/// Merge the already-factual source close into the wire result: a
+/// success result carries it as the optional `source_close` member
+/// when the source reader was live (absent for immutable sources); a
+/// later publish-stage error carries it in `details` (spec
+/// iprange-jsonrpc-v1.md, factual result conversion).
+fn with_source_close(
+    mut outcome: Result<Value, HandlerError>,
     source_close: Option<Value>,
 ) -> Result<Value, HandlerError> {
-    match outcome {
-        Ok(value) => Ok(value),
-        Err(mut error) => {
-            if let Some(close) = source_close {
+    if let Some(close) = source_close {
+        match &mut outcome {
+            Ok(value) => {
+                if let Some(members) = value.as_object_mut() {
+                    members.insert("source_close".into(), close);
+                }
+            }
+            Err(error) => {
                 let mut details = error.details.take().unwrap_or_else(|| json!({}));
                 if let Some(members) = details.as_object_mut() {
                     members.insert("source_close".into(), close);
                 }
                 error.details = Some(details);
             }
-            Err(error)
         }
     }
+    outcome
 }
 
 /// Consume a completed workflow: close the ephemeral source reader, apply
@@ -429,7 +435,7 @@ fn finish_workflow_facts(
                 }
                 Err(error) => Err(finish_writer_error(writer, error, &report)),
             };
-            with_source_close_on_error(outcome, source_close)
+            with_source_close(outcome, source_close)
         }
         FeedWorkflowFacts::Changed {
             report,
@@ -439,7 +445,7 @@ fn finish_workflow_facts(
         } => {
             let outcome =
                 finish_publisher(writer, method, Some(&report), metadata_logical_change, commit);
-            with_source_close_on_error(outcome, source_close)
+            with_source_close(outcome, source_close)
         }
         FeedWorkflowFacts::Failed {
             report,
@@ -697,4 +703,180 @@ fn require_existing_database(path: &Path) -> Result<(), HandlerError> {
 
 fn sdk<T>(result: iprange_livedb::Result<T>) -> Result<T, HandlerError> {
     result.map_err(reader::read_error)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use iprange_livedb::snapshot::{SnapshotBudget, SnapshotPublicationPolicy, SnapshotSourceMode};
+    use iprange_livedb::{create_live, snapshot_to, StructureKind, ValueKind, ValueTag};
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// One live IPv4 membership database in the temporary directory.
+    fn live_membership(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-feeds-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        create_live(
+            &path,
+            AddressFamily::Ipv4,
+            ValueKind::Membership,
+            StructureKind::None,
+            ValueTag::new(b"membership").unwrap(),
+            1,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        path
+    }
+
+    fn writer_budget() -> serde_json::Value {
+        serde_json::json!({
+            "max_heap_bytes": "2097152",
+            "max_private_pages": "10000",
+            "max_growth_pages": "10000",
+            "max_open_files": 2,
+        })
+    }
+
+    /// Add one exact named feed to a live membership database.
+    fn add_feed(path: &std::path::Path, name: &str, ranges: &[AddressRange<Ipv4Key>]) {
+        let token = CancellationToken::new();
+        let budget = iprange_livedb::TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 10_000,
+            max_file_growth_pages: 10_000,
+            max_open_files: 2,
+        };
+        let mut writer = LiveWriter::open(path, budget, &token).unwrap();
+        let mut draft = writer
+            .begin_create_feed(FeedName::new(name).unwrap(), &token)
+            .unwrap();
+        draft.add_ranges_v4_slice(ranges).unwrap();
+        match draft.finish_input().unwrap() {
+            FinishedWorkflow::Changed(prepared) => {
+                prepared.commit().unwrap();
+            }
+            FinishedWorkflow::NoChange(_) => panic!("creating a feed changed nothing"),
+        }
+        writer.close().unwrap();
+    }
+
+    fn source_ranges() -> Vec<AddressRange<Ipv4Key>> {
+        vec![
+            AddressRange { from: Ipv4Key(u32::from(std::net::Ipv4Addr::new(192, 0, 2, 1))), to: Ipv4Key(u32::from(std::net::Ipv4Addr::new(192, 0, 2, 10))) },
+            AddressRange { from: Ipv4Key(u32::from(std::net::Ipv4Addr::new(198, 51, 100, 1))), to: Ipv4Key(u32::from(std::net::Ipv4Addr::new(198, 51, 100, 1))) },
+        ]
+    }
+
+    /// The `current` member for one named-feed mutation.
+    fn current(source_path: &std::path::Path, mode: &str) -> serde_json::Value {
+        serde_json::json!({
+            "feed": "coverage",
+            "source": {"path": source_path.display().to_string(), "mode": mode},
+        })
+    }
+
+    fn immutable_snapshot(live: &std::path::Path) -> PathBuf {
+        let immutable = live.with_extension("immutable.iprange");
+        snapshot_to(
+            live,
+            SnapshotSourceMode::Live,
+            &immutable,
+            SnapshotPublicationPolicy::FailIfExists,
+            &SnapshotBudget::new(2 * 1024 * 1024, 10_000, 3),
+            &CancellationToken::new(),
+        )
+        .map_err(|failure| failure.cause.detail.to_string())
+        .unwrap();
+        immutable
+    }
+
+    #[test]
+    fn create_with_live_source_carries_source_close_success_fact() {
+        let source = live_membership("create-src");
+        add_feed(&source, "coverage", &source_ranges());
+        let target = live_membership("create-dst");
+        let mut state = SessionState::default();
+        let result = feeds_create(
+            &mut state,
+            serde_json::json!({
+                "path": target.display().to_string(),
+                "feed": "combined",
+                "current": current(&source, "live"),
+                "metadata": {"mode": "keep"},
+                "writer_budget": writer_budget(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["method"], "iprange.v1.feeds.create");
+        assert_eq!(result["metadata_logical_change"], "unchanged");
+        assert_eq!(result["source_close"]["outcome"], "closed");
+        std::fs::remove_file(&target).unwrap();
+        std::fs::remove_file(target.with_extension("readers")).ok();
+        std::fs::remove_file(&source).unwrap();
+        std::fs::remove_file(source.with_extension("readers")).ok();
+    }
+
+    #[test]
+    fn replace_no_change_with_live_source_carries_source_close_success_fact() {
+        let source = live_membership("replace-src");
+        add_feed(&source, "coverage", &source_ranges());
+        let target = live_membership("replace-dst");
+        // Seed the target feed with exactly the source content so the
+        // replacement workflow finishes as NoChange.
+        add_feed(&target, "combined", &source_ranges());
+        let mut state = SessionState::default();
+        let result = feeds_replace(
+            &mut state,
+            serde_json::json!({
+                "path": target.display().to_string(),
+                "feed": "combined",
+                "current": current(&source, "live"),
+                "metadata": {"mode": "keep"},
+                "writer_budget": writer_budget(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["method"], "iprange.v1.feeds.replace");
+        assert_eq!(result["metadata_logical_change"], "unchanged");
+        assert_eq!(result["source_close"]["outcome"], "closed");
+        std::fs::remove_file(&target).unwrap();
+        std::fs::remove_file(target.with_extension("readers")).ok();
+        std::fs::remove_file(&source).unwrap();
+        std::fs::remove_file(source.with_extension("readers")).ok();
+    }
+
+    #[test]
+    fn create_with_immutable_source_omits_source_close() {
+        let source = live_membership("immutable-src");
+        add_feed(&source, "coverage", &source_ranges());
+        let immutable = immutable_snapshot(&source);
+        let target = live_membership("immutable-dst");
+        let mut state = SessionState::default();
+        let result = feeds_create(
+            &mut state,
+            serde_json::json!({
+                "path": target.display().to_string(),
+                "feed": "combined",
+                "current": current(&immutable, "immutable"),
+                "metadata": {"mode": "keep"},
+                "writer_budget": writer_budget(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["method"], "iprange.v1.feeds.create");
+        assert!(result.get("source_close").is_none());
+        std::fs::remove_file(&target).unwrap();
+        std::fs::remove_file(target.with_extension("readers")).ok();
+        std::fs::remove_file(&source).unwrap();
+        std::fs::remove_file(source.with_extension("readers")).ok();
+        std::fs::remove_file(&immutable).unwrap();
+    }
 }

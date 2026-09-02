@@ -35,6 +35,9 @@ packaging/iprange.spec
 
 /.reasonix/
 
+# Python (v4/cli qualification suite) bytecode caches
+__pycache__/
+
 # Rust / Go workspaces
 v4/rust/target/
 v4/go/bin/

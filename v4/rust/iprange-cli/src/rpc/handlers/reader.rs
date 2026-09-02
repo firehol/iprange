@@ -206,9 +206,21 @@ pub fn metadata(state: &mut SessionState, params: Value) -> Result<Value, Handle
     let handle = object["reader"]
         .as_str()
         .ok_or_else(|| invalid("reader must be a string"))?;
-    let delivery = &object["delivery"];
+    let delivery = object["delivery"].clone();
+    let method = "iprange.v1.reader.metadata";
+    // Refuse an inline result that cannot fit the response-object
+    // ceiling BEFORE the metadata blob is materialized. The reader
+    // borrow is scoped to the mmap-only length lookup so the preflight
+    // can echo the real request id (final-review finding T2).
+    let length = {
+        let reader = reader(state, handle)?;
+        inline_metadata_length(reader, &delivery)?
+    };
+    if let Some(length) = length {
+        preflight_metadata_inline(state, method, length)?;
+    }
     let reader = reader(state, handle)?;
-    let result = metadata_result("iprange.v1.reader.metadata", reader, delivery)?;
+    let result = metadata_result(method, reader, &delivery)?;
     bounded_result(result)
 }
 
@@ -397,7 +409,13 @@ pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Valu
     let (path, mode) = source_value(&object["source"]).map_err(HandlerError::invalid_params)?;
     let mut reader = open_reader(&path, &mode, &state.token)?;
     let result = (|| -> Result<Value, HandlerError> {
-        metadata_result("iprange.v1.database.metadata.get", &reader, &object["delivery"])
+        let delivery = &object["delivery"];
+        // Inline preflight before the blob is materialized; the reader
+        // is owned here, so the request id remains reachable.
+        if let Some(length) = inline_metadata_length(&reader, delivery)? {
+            preflight_metadata_inline(state, "iprange.v1.database.metadata.get", length)?;
+        }
+        metadata_result("iprange.v1.database.metadata.get", &reader, delivery)
     })();
     match result {
         Ok(report) => finish_ephemeral_reader(&mut reader, report),
@@ -515,30 +533,67 @@ pub(crate) fn finish_ephemeral_reader(
     }
 }
 
-/// Close every ephemeral reader on an error path and merge the
-/// factual live-close results into the error details (`source_closes`
-/// in reader order). Immutable readers produce no close fact. This is
-/// the error-path counterpart of the success-path close tail: a product
-/// error must preserve the close result of every reader it opened
-/// (iprange-jsonrpc-v1.md, factual close results rule).
-pub(crate) fn close_on_error(readers: &mut [ReaderValue], mut error: HandlerError) -> HandlerError {
-    let mut closes = Vec::new();
-    for reader in readers.iter_mut() {
+/// One shared all-reader close sweep used by both the success-path
+/// close tail (`close_readers`) and the error-path close sweep
+/// (`close_on_error`). Every factual live close result is kept in
+/// reader order — successful closes and failed closes (whose
+/// `source_close` fact rides inside the close error) — together with
+/// the first close failure for the caller to report as the primary
+/// error. Immutable readers produce no close fact.
+pub(crate) struct ReaderCloseCollector {
+    closes: Vec<Value>,
+    first_error: Option<HandlerError>,
+}
+
+impl ReaderCloseCollector {
+    pub(crate) fn new() -> Self {
+        Self {
+            closes: Vec::new(),
+            first_error: None,
+        }
+    }
+
+    /// Close one reader and record its factual result.
+    pub(crate) fn push(&mut self, reader: &mut ReaderValue) {
         match close_ephemeral_reader(reader) {
-            Ok(Some(close)) => closes.push(close),
+            Ok(Some(close)) => self.closes.push(close),
             Ok(None) => {}
             Err(close_error) => {
                 // A failed close is still an SDK fact (double-fault):
                 // keep its source_close result with the primary error
                 // instead of dropping it.
-                if let Some(details) = close_error.details {
+                if let Some(details) = close_error.details.as_ref() {
                     if let Some(fact) = details.get("source_close").cloned() {
-                        closes.push(fact);
+                        self.closes.push(fact);
                     }
+                }
+                if self.first_error.is_none() {
+                    self.first_error = Some(close_error);
                 }
             }
         }
     }
+
+    /// Complete the sweep: every close fact in reader order plus the
+    /// first close failure, if any.
+    pub(crate) fn finish(mut self) -> (Vec<Value>, Option<HandlerError>) {
+        (std::mem::take(&mut self.closes), self.first_error.take())
+    }
+}
+
+/// Close every ephemeral reader on an error path and merge the
+/// factual live-close results into the error details (`source_closes`
+/// in reader order). Immutable readers produce no close fact. This is
+/// the error-path counterpart of the success-path close tail: a product
+/// error must preserve the close result of every reader it opened
+/// (iprange-jsonrpc-v1.md, factual close results rule). The caller's
+/// error stays the primary error; close failures only add facts.
+pub(crate) fn close_on_error(readers: &mut [ReaderValue], mut error: HandlerError) -> HandlerError {
+    let mut collector = ReaderCloseCollector::new();
+    for reader in readers.iter_mut() {
+        collector.push(reader);
+    }
+    let (closes, _) = collector.finish();
     if !closes.is_empty() {
         let mut details = error.details.take().unwrap_or_else(|| json!({}));
         if let Some(members) = details.as_object_mut() {
@@ -587,11 +642,75 @@ pub(crate) fn random_handle() -> Result<String, HandlerError> {
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
+/// Exact decompressed metadata length without materializing the blob:
+/// the SDK exposes the length from the mmap-only generation catalog,
+/// allocation-free, for both reader kinds.
+fn metadata_json_len(reader: &ReaderValue) -> Result<Option<u64>, HandlerError> {
+    match reader {
+        ReaderValue::Immutable(inner) => Ok(inner.metadata_json_len()),
+        ReaderValue::Live(inner) => inner.metadata_json_len().map_err(read_error),
+    }
+}
+
+/// Exact metadata length when the delivery is inline, `None` for file
+/// delivery or absent metadata; file delivery keeps its documented
+/// post-read output_limit/read_only_failure bound.
+fn inline_metadata_length(
+    reader: &ReaderValue,
+    delivery: &Value,
+) -> Result<Option<u64>, HandlerError> {
+    if delivery.get("mode").and_then(Value::as_str) != Some("inline") {
+        return Ok(None);
+    }
+    metadata_json_len(reader)
+}
+
+/// Refuse an inline metadata delivery whose worst-case base64 payload
+/// cannot fit the 65,000-byte response object, before the metadata
+/// blob is materialized. The padded base64 length is exact (RFC 4648);
+/// the shared preflight adds the real echoed request id and the
+/// envelope constants.
+fn preflight_metadata_inline(
+    state: &SessionState,
+    method: &str,
+    metadata_len: u64,
+) -> Result<(), HandlerError> {
+    let padded = metadata_len
+        .checked_add(2)
+        .map(|value| value / 3 * 4)
+        .ok_or_else(output_refusal)?;
+    // A payload alone at or above the ceiling can never fit even the
+    // smallest envelope; refuse without building the placeholder.
+    if padded >= super::super::framing::RESPONSE_OBJECT_LIMIT as u64 {
+        return Err(output_refusal());
+    }
+    let worst = json!({
+        "method": method,
+        "present": true,
+        "base64": "Z".repeat(padded as usize),
+    });
+    preflight_response(state, worst)
+}
+
+/// Adapter-side refusal of an inline result that cannot fit the
+/// response-object ceiling (same stable code, outcome, and message as
+/// the shared preflight).
+fn output_refusal() -> HandlerError {
+    HandlerError::new(
+        "output_limit",
+        "not_started",
+        "request refused: the complete inline result cannot fit the 65000-byte response object",
+    )
+}
+
 fn metadata_result(
     method: &str,
     reader: &ReaderValue,
     delivery: &Value,
 ) -> Result<Value, HandlerError> {
+    // Callers must run the inline preflight
+    // (`inline_metadata_length` + `preflight_metadata_inline`) before
+    // this materializes the metadata blob.
     let delivery = delivery
         .as_object()
         .ok_or_else(|| invalid("delivery must be an object"))?;
@@ -672,6 +791,57 @@ pub(crate) fn bounded_result(result: Value) -> Result<Value, HandlerError> {
         ));
     }
     Ok(result)
+}
+
+// ---------------------------------------------------------------------------
+// Response-ceiling preflight (complete-envelope bound before any work).
+// ---------------------------------------------------------------------------
+
+/// Longest portably representable decimal of a u64 and of the exact
+/// 129-bit address cardinality (binary-format-v4.md section 17);
+/// response-ceiling preflights use them to model any real count field.
+pub(crate) const WIDEST_U64: &str = "18446744073709551615";
+pub(crate) const WIDEST_129: &str = "680564733841876926926749214863536422911";
+
+/// Largest observable `{volume, file}` identity pair (two u64 decimals).
+pub(crate) fn widest_identity() -> Value {
+    json!({"volume": WIDEST_U64, "file": WIDEST_U64})
+}
+
+/// Largest observable live-close fact emitted by the adapter close
+/// owners (`close_incomplete` is longer than `closed`, and the longest
+/// coordination-cleanup kind is `retained_writer_close_required`).
+pub(crate) fn widest_close_fact() -> Value {
+    json!({
+        "outcome": "close_incomplete",
+        "cleanup": {},
+        "coordination_cleanup": {"kind": "retained_writer_close_required"},
+    })
+}
+
+/// Bound the complete response object of a method before any work runs.
+///
+/// The envelope carries the caller's real echoed request id and the
+/// caller's worst-case complete result object. A response whose real
+/// report passes this probe always fits the response-object ceiling; a
+/// request that cannot fit is refused with `output_limit`/`not_started`
+/// before any writer is opened or file is published, so a committed
+/// workflow is never relabeled as a read-only failure by the defensive
+/// post-hoc bound (iprange-jsonrpc-v1.md, response ceiling). A
+/// conservative byte margin covers any constant the template does not
+/// model; refusing slightly early is the honest direction to err.
+pub(crate) fn preflight_response(state: &SessionState, worst: Value) -> Result<(), HandlerError> {
+    let mut envelope = json!({"jsonrpc": "2.0", "result": worst});
+    if let Some(id) = &state.active_request_id {
+        envelope["id"] = id.as_json();
+    }
+    const PREFLIGHT_MARGIN: usize = 2048;
+    match super::super::schema::encode_response_object(&envelope) {
+        Ok(text) if text.len() <= super::super::framing::RESPONSE_OBJECT_LIMIT - PREFLIGHT_MARGIN => {
+            Ok(())
+        }
+        _ => Err(output_refusal()),
+    }
 }
 
 pub(crate) fn read_error(error: Error) -> HandlerError {
@@ -1153,6 +1323,66 @@ mod tests {
             ("handle_not_found", "not_started")
         );
         fixture.remove();
+    }
+
+    /// One live direct-v6 fixture whose generation carries `metadata`.
+    fn live_with_metadata(label: &str, metadata: &[u8]) -> test_support::DirectV6Live {
+        let fixture = test_support::create_direct_v6(label);
+        let token = CancellationToken::new();
+        let budget = iprange_livedb::TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 10_000,
+            max_file_growth_pages: 10_000,
+            max_open_files: 2,
+        };
+        let mut writer = iprange_livedb::LiveWriter::open(&fixture.path, budget, &token).unwrap();
+        writer.set_metadata_json(metadata, &token).unwrap();
+        writer.commit(&token).unwrap();
+        writer.close().unwrap();
+        fixture
+    }
+
+    #[test]
+    fn metadata_inline_preflights_before_materializing_oversized_blobs() {
+        // The padded base64 of 48,000 bytes is 64,000 characters:
+        // under the raw ceiling, but over the complete-envelope
+        // preflight bound once the method constants and envelope are
+        // added. The request must be refused with
+        // output_limit/not_started BEFORE the blob is materialized
+        // (final-review finding T2), never relabeled as a read-only
+        // failure of a read that did not happen.
+        let oversized = live_with_metadata("metadata-oversized", &vec![b'x'; 48_000]);
+        let mut state = SessionState::default();
+        let opened = open(&mut state, test_support::live_source(&oversized.path)).unwrap();
+        let handle = opened["reader"].as_str().unwrap().to_owned();
+        let error = metadata(
+            &mut state,
+            serde_json::json!({"reader": handle, "delivery": {"mode": "inline"}}),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome),
+            ("output_limit", "not_started")
+        );
+        oversized.remove();
+
+        // A small blob still delivers inline with the exact padded
+        // base64 and the real request id.
+        let small = live_with_metadata("metadata-small", b"hello metadata");
+        let mut state = SessionState::default();
+        let opened = open(&mut state, test_support::live_source(&small.path)).unwrap();
+        let handle = opened["reader"].as_str().unwrap().to_owned();
+        let delivered = metadata(
+            &mut state,
+            serde_json::json!({"reader": handle, "delivery": {"mode": "inline"}}),
+        )
+        .unwrap();
+        assert_eq!(delivered["present"], true);
+        assert_eq!(
+            delivered["base64"].as_str().unwrap(),
+            output::base64_padded(b"hello metadata")
+        );
+        small.remove();
     }
 
     #[test]

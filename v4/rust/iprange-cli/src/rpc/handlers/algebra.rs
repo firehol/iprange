@@ -37,6 +37,9 @@ use super::convert;
 use super::lifecycle;
 use super::live::close_writer_facts;
 use super::reader;
+use super::reader::{
+    preflight_response, widest_close_fact, widest_identity, WIDEST_129, WIDEST_U64,
+};
 use super::snapshot;
 use super::workflow::{close_writer, finish_publisher, finish_writer_error, logical_change, publish_changed, publish_no_change, workflow_failure, CommitDraft};
 use crate::io::export_writer::{
@@ -1229,40 +1232,6 @@ fn history_projection_report(report: &HistoryProjectionReport) -> Value {
     })
 }
 
-/// Bound the complete response object of a mutating method before any
-/// mutation runs. Every report scalar is either a fixed-width hex
-/// identity, a u64 decimal, or a Cardinality129 decimal; the template
-/// uses the longest encodings, the actual request-derived counts (real
-/// feed names, real source counts), full-size identities, complete
-/// cleanup/close shapes, and the echoed request id, so a response
-/// whose real report passes this template always fits the
-/// response-object ceiling. A request that cannot fit is refused with
-/// `output_limit` before any writer is opened or file is published: a
-/// committed workflow is never relabeled as a read-only failure by the
-/// defensive post-hoc bound (iprange-jsonrpc-v1.md, response ceiling).
-fn preflight_response(state: &SessionState, worst: Value) -> Result<(), HandlerError> {
-    let mut envelope = json!({"jsonrpc": "2.0", "result": worst});
-    if let Some(id) = &state.active_request_id {
-        envelope["id"] = id.as_json();
-    }
-    // A conservative byte margin covers any constant the template does
-    // not model (longest SDK code names, ledger counts in crash states);
-    // refusing slightly early is the honest direction to err.
-    const PREFLIGHT_MARGIN: usize = 2048;
-    match super::super::schema::encode_response_object(&envelope) {
-        Ok(text) if text.len() <= super::super::framing::RESPONSE_OBJECT_LIMIT - PREFLIGHT_MARGIN => {
-            Ok(())
-        }
-        _ => Err(HandlerError::new(
-            "output_limit",
-            "not_started",
-            "request refused: the complete inline result cannot fit the 65000-byte response object",
-        )),
-    }
-}
-
-const WIDEST_U64: &str = "18446744073709551615";
-const WIDEST_129: &str = "680564733841876926926749214863536422911";
 /// Longest portably representable basename: the SDK clamps basenames to
 /// 512 bytes (live_writer LocalBasename), and lossy UTF-8 conversion of
 /// a Windows UTF-16 basename can widen to at most twice that in
@@ -1271,18 +1240,6 @@ const WIDEST_BASENAME: usize = 1024;
 /// Longest SDK error-code name used on the wire (e.g.
 /// insufficient_resource_budget); 32 characters bounds every code.
 const WIDEST_CODE: usize = 32;
-
-fn widest_identity() -> Value {
-    json!({"volume": WIDEST_U64, "file": WIDEST_U64})
-}
-
-fn widest_close_fact() -> Value {
-    json!({
-        "outcome": "close_incomplete",
-        "cleanup": {},
-        "coordination_cleanup": {"kind": "retained_writer_close_required"},
-    })
-}
 
 /// Largest observable artifact: full-size identities, the platform-max
 /// basename, and worst-case housekeeping states; a maximal ledger of
@@ -2036,24 +1993,29 @@ fn open_temporary(path: &str, mode: &str, state: &SessionState) -> Result<Reader
 
 /// Close every ephemeral reader; success carries every factual live
 /// close result as `source_closes` in reader order (absent for
-/// immutable readers), while a close failure preserves the completed
-/// report in the error details.
+/// immutable readers). A close failure keeps EVERY close result
+/// (successful facts and failure facts) in the error details
+/// `source_closes`, preserves the completed report, and reports the
+/// first close failure as the primary error (iprange-jsonrpc-v1.md,
+/// factual close results rule).
 fn close_readers(readers: Vec<ReaderValue>, report: Value) -> Result<Value, HandlerError> {
-    let mut closes = Vec::new();
-    let mut first_error: Option<HandlerError> = None;
+    let mut collector = reader::ReaderCloseCollector::new();
     for mut reader in readers {
-        match reader::close_ephemeral_reader(&mut reader) {
-            Ok(Some(close)) => closes.push(close),
-            Ok(None) => {}
-            Err(error) => {
-                if first_error.is_none() {
-                    first_error = Some(error);
-                }
-            }
-        }
+        collector.push(&mut reader);
     }
+    let (closes, first_error) = collector.finish();
     match first_error {
-        Some(error) => Err(reader::preserve_completed_report(error, report)),
+        Some(error) => {
+            let mut error = error;
+            if !closes.is_empty() {
+                let mut details = error.details.take().unwrap_or_else(|| json!({}));
+                if let Some(members) = details.as_object_mut() {
+                    members.insert("source_closes".into(), Value::Array(closes));
+                }
+                error.details = Some(details);
+            }
+            Err(reader::preserve_completed_report(error, report))
+        }
         None => {
             let mut result = report;
             if !closes.is_empty() {
@@ -2222,6 +2184,58 @@ fn sdk<T>(result: iprange_livedb::Result<T>) -> Result<T, HandlerError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iprange_livedb::create_live;
+    use iprange_livedb::{
+        AddressFamily, AddressRange, FinishedWorkflow, Ipv4Key, StructureKind, ValueKind, ValueTag,
+    };
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// One live IPv4 membership database with one exact named feed.
+    fn live_membership_with_feed(label: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-algebra-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        create_live(
+            &path,
+            AddressFamily::Ipv4,
+            ValueKind::Membership,
+            StructureKind::None,
+            ValueTag::new(b"membership").unwrap(),
+            1,
+            &CancellationToken::new(),
+        )
+        .unwrap();
+        let token = CancellationToken::new();
+        let budget = iprange_livedb::TransactionBudget {
+            max_heap_bytes: 2 * 1024 * 1024,
+            max_private_pages: 10_000,
+            max_file_growth_pages: 10_000,
+            max_open_files: 2,
+        };
+        let mut writer = LiveWriter::open(&path, budget, &token).unwrap();
+        let ranges = [AddressRange {
+            from: Ipv4Key(u32::from(std::net::Ipv4Addr::new(192, 0, 2, 1))),
+            to: Ipv4Key(u32::from(std::net::Ipv4Addr::new(192, 0, 2, 10))),
+        }];
+        let mut draft = writer
+            .begin_create_feed(FeedName::new("coverage").unwrap(), &token)
+            .unwrap();
+        draft.add_ranges_v4_slice(&ranges).unwrap();
+        match draft.finish_input().unwrap() {
+            FinishedWorkflow::Changed(prepared) => {
+                prepared.commit().unwrap();
+            }
+            FinishedWorkflow::NoChange(_) => panic!("creating a feed changed nothing"),
+        }
+        writer.close().unwrap();
+        path
+    }
 
     fn window(feed: &str, cutoff: u32) -> HistoryWindow {
         HistoryWindow {
@@ -2267,5 +2281,37 @@ mod tests {
             }
             Ok(()) => panic!("oversized publish result must be refused pre-mutation"),
         }
+    }
+
+    #[test]
+    fn multi_reader_success_reports_every_source_close_in_reader_order() {
+        let first = live_membership_with_feed("count-first");
+        let second = live_membership_with_feed("count-second");
+        let mut state = SessionState::default();
+        let result = algebra_count(
+            &mut state,
+            serde_json::json!({
+                "sources": [
+                    {"source": {"path": first.display().to_string(), "mode": "live"},
+                     "membership_query_budget": {"max_heap_bytes": "1048576"}},
+                    {"source": {"path": second.display().to_string(), "mode": "live"},
+                     "membership_query_budget": {"max_heap_bytes": "1048576"}},
+                ],
+                "selection": {"mode": "all"},
+                "algebra_budget": {"max_heap_bytes": "1048576", "max_sources": 2},
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["method"], "iprange.v1.algebra.count");
+        let closes = result["source_closes"]
+            .as_array()
+            .expect("every opened live reader reports a close fact");
+        assert_eq!(closes.len(), 2);
+        assert_eq!(closes[0]["outcome"], "closed");
+        assert_eq!(closes[1]["outcome"], "closed");
+        std::fs::remove_file(&first).unwrap();
+        std::fs::remove_file(first.with_extension("readers")).ok();
+        std::fs::remove_file(&second).unwrap();
+        std::fs::remove_file(second.with_extension("readers")).ok();
     }
 }

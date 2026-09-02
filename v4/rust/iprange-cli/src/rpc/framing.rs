@@ -6,6 +6,8 @@
 //! - an unescaped CR or LF inside JSON is invalid;
 //! - hard frame ceiling 1,048,576 bytes before the line terminator;
 //! - a frame over the limit fails with -32001 and the process closes;
+//! - only `Ok([])` from the underlying reader means EOF; a real stdin
+//!   io error is a fatal input-transport event, never EOF;
 //! - the encoded response frame ceiling is the same; each response
 //!   object is capped at 65,000 bytes.
 
@@ -18,10 +20,18 @@ pub const RESPONSE_OBJECT_LIMIT: usize = 65_000;
 pub const BATCH_LIMIT: usize = 16;
 pub const QUEUED_LIMIT: usize = 16;
 
-/// A frame exceeded the input ceiling. The service replies -32001 with
-/// id null and closes; bytes after the limit are never parsed.
+/// A line-read failure.
+///
+/// `FrameTooLarge`: a frame exceeded the input ceiling; the service
+/// replies -32001 with id null and closes, and bytes after the limit
+/// are never parsed. `Io`: the underlying reader reported a real
+/// stdin failure; only `Ok([])` means EOF, so an io error is a fatal
+/// input-transport event, never a clean end of input.
 #[derive(Debug)]
-pub struct FrameTooLarge;
+pub enum LineReadError {
+    FrameTooLarge,
+    Io(io::Error),
+}
 
 /// Reads exactly one physical line, enforcing the input ceiling and
 /// stripping the LF (and one preceding CR for a CRLF terminator).
@@ -44,9 +54,11 @@ impl<R: BufRead> LineReader<R> {
     ///
     /// A final unterminated frame at EOF is accepted (the transport is
     /// closed by the client after its last complete interaction); a
-    /// line longer than INPUT_FRAME_LIMIT returns Err(FrameTooLarge)
-    /// once, and the caller must shut the service down.
-    pub fn read_line(&mut self) -> Result<Option<Vec<u8>>, FrameTooLarge> {
+    /// line longer than INPUT_FRAME_LIMIT returns
+    /// Err(LineReadError::FrameTooLarge) once, and the caller must shut
+    /// the service down. A real io::Error from the underlying reader
+    /// returns Err(LineReadError::Io); only Ok([]) is EOF.
+    pub fn read_line(&mut self) -> Result<Option<Vec<u8>>, LineReadError> {
         if self.eof {
             return Ok(None);
         }
@@ -71,7 +83,7 @@ impl<R: BufRead> LineReader<R> {
                             self.buf.pop();
                         }
                         if self.buf.len() > INPUT_FRAME_LIMIT {
-                            return Err(FrameTooLarge);
+                            return Err(LineReadError::FrameTooLarge);
                         }
                         return Ok(Some(std::mem::take(&mut self.buf)));
                     }
@@ -97,15 +109,15 @@ impl<R: BufRead> LineReader<R> {
                             let n = rest.len();
                             self.inner.consume(n);
                         }
-                        return Err(FrameTooLarge);
+                        return Err(LineReadError::FrameTooLarge);
                     }
                     self.buf.extend_from_slice(b);
                     let n = b.len();
                     self.inner.consume(n);
                 }
-                Err(_) => {
+                Err(error) => {
                     self.eof = true;
-                    return Ok(None);
+                    return Err(LineReadError::Io(error));
                 }
             }
         }
@@ -155,7 +167,10 @@ mod tests {
         let mut data = body.clone();
         data.push(b'\n');
         let mut reader = LineReader::new(Cursor::new(data));
-        assert!(reader.read_line().is_err());
+        assert!(matches!(
+            reader.read_line(),
+            Err(LineReadError::FrameTooLarge)
+        ));
         assert!(reader.read_line().unwrap().is_none());
     }
 
@@ -183,7 +198,39 @@ mod tests {
         let mut data = vec![b'x'; INPUT_FRAME_LIMIT + 1];
         data.push(b'\n');
         let mut reader = LineReader::new(Cursor::new(data));
-        assert!(reader.read_line().is_err());
+        assert!(matches!(
+            reader.read_line(),
+            Err(LineReadError::FrameTooLarge)
+        ));
         assert!(reader.read_line().unwrap().is_none());
+    }
+
+    /// Reader whose fill_buf fails like stdin on a broken pipe.
+    struct FailingReader;
+
+    impl std::io::Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "stdin broken"))
+        }
+    }
+
+    impl std::io::BufRead for FailingReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "stdin broken"))
+        }
+        fn consume(&mut self, _amt: usize) {}
+    }
+
+    #[test]
+    fn io_error_is_fatal_not_eof() {
+        // Only Ok([]) means EOF; a real io error must surface as an
+        // input-transport failure instead of a clean end of input.
+        let mut reader = LineReader::new(FailingReader);
+        match reader.read_line() {
+            Err(LineReadError::Io(error)) => {
+                assert_eq!(error.kind(), io::ErrorKind::BrokenPipe);
+            }
+            other => panic!("expected a fatal io error, got {other:?}"),
+        }
     }
 }

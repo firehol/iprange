@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 
 use iprange_livedb::publication::PublicationPolicy;
 use iprange_livedb::Cardinality129;
+use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use crate::rpc::dispatch::HandlerError;
@@ -216,8 +217,12 @@ impl ExportWriter {
                 // (same order as the metadata/removals publication path).
                 fs::hard_link(&self.temporary, &self.destination)
                     .map_err(|error| file_error(error, "publish export output"))?;
-                fs::remove_file(&self.temporary)
-                    .map_err(|error| file_error(error, "remove export temporary"))?;
+                // The destination name now exists with the complete
+                // content; a failure to remove the private temporary no
+                // longer changes that, so the durable state is unknown.
+                fs::remove_file(&self.temporary).map_err(|error| {
+                    self.publication_failure(error, "remove export temporary", false)
+                })?;
             }
             PublicationPolicy::ReplaceExisting | PublicationPolicy::ReplaceExistingNoRollback => {
                 // rename(2) and MoveFileExW(REPLACE_EXISTING) replace
@@ -231,7 +236,11 @@ impl ExportWriter {
             .parent()
             .filter(|value| !value.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
-        sync_directory(parent)?;
+        // The destination is visible; a directory-sync failure means the
+        // namespace entry's durability is unproven (outcome_unknown).
+        sync_directory(parent).map_err(|error| {
+            self.publication_failure(error, "sync export output directory", true)
+        })?;
         let digest = self.digest.clone().finalize();
         Ok(ExportFacts {
             path: self.destination.to_string_lossy().into_owned(),
@@ -240,6 +249,49 @@ impl ExportWriter {
             addresses: self.addresses,
             bytes: self.bytes,
         })
+    }
+
+    /// Adapter publication failure once the destination name is
+    /// visible: the exported bytes are published, but the durable state
+    /// of the publication is unknown, so the outcome is
+    /// `outcome_unknown` and the error carries the adapter-owned
+    /// publication evidence (iprange-jsonrpc-v1.md: an unknown
+    /// publication maps to outcome_unknown). Failures before the
+    /// destination appears keep `not_started` (or the pre-existing
+    /// `name_exists`).
+    fn publication_failure(
+        &self,
+        error: std::io::Error,
+        stage: &str,
+        temporary_removed: bool,
+    ) -> HandlerError {
+        HandlerError {
+            code: "io",
+            outcome: "outcome_unknown",
+            message: format!("{stage}: {error}"),
+            details: Some(json!({
+                "publication": {
+                    "outcome": "outcome_unknown",
+                    "publication_policy": policy_name(self.policy),
+                    "path": self.destination.to_string_lossy(),
+                    "stage": stage,
+                    "destination_visible": true,
+                    "temporary_removed": temporary_removed,
+                    "rows": self.rows.to_string(),
+                    "bytes": self.bytes.to_string(),
+                    "addresses": self.addresses.to_string(),
+                    "sha256": hex_digest(&self.digest.clone().finalize()),
+                }
+            })),
+        }
+    }
+}
+
+fn policy_name(policy: PublicationPolicy) -> &'static str {
+    match policy {
+        PublicationPolicy::FailIfExists => "fail_if_exists",
+        PublicationPolicy::ReplaceExisting => "replace_existing",
+        PublicationPolicy::ReplaceExistingNoRollback => "replace_existing_no_rollback",
     }
 }
 
@@ -268,12 +320,10 @@ fn file_error(error: std::io::Error, operation: &str) -> HandlerError {
     }
 }
 
-fn sync_directory(parent: &Path) -> Result<(), HandlerError> {
+fn sync_directory(parent: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| file_error(error, "sync export output directory"))?;
+        File::open(parent)?.sync_all()?;
     }
     #[cfg(not(unix))]
     let _ = parent;
@@ -345,23 +395,26 @@ pub(crate) fn write_csv_field(output: &mut String, value: &str) {
 }
 
 /// JSON string literal with standard escaping, written straight into a
-/// reusable line buffer (mirrors serde_json string output).
+/// reusable line buffer (byte-identical with serde_json string output:
+/// quotes and backslashes double to two bytes, control bytes escape to
+/// `\b \f \n \r \t` or `\u00xx`, and every other character passes
+/// through as its exact UTF-8 encoding).
 pub(crate) fn push_json_string(output: &mut String, value: &str) {
     use std::fmt::Write as _;
     output.push('"');
-    for byte in value.bytes() {
-        match byte {
-            b'"' => output.push_str("\\\""),
-            b'\\' => output.push_str("\\\\"),
-            0x08 => output.push_str("\\b"),
-            0x0c => output.push_str("\\f"),
-            b'\n' => output.push_str("\\n"),
-            b'\r' => output.push_str("\\r"),
-            b'\t' => output.push_str("\\t"),
-            0x00..=0x1f => {
-                let _ = write!(output, "\\u{byte:04x}");
+    for character in value.chars() {
+        match character {
+            '"' => output.push_str("\\\""),
+            '\\' => output.push_str("\\\\"),
+            '\x08' => output.push_str("\\b"),
+            '\x0c' => output.push_str("\\f"),
+            '\n' => output.push_str("\\n"),
+            '\r' => output.push_str("\\r"),
+            '\t' => output.push_str("\\t"),
+            character if (character as u32) < 0x20 => {
+                let _ = write!(output, "\\u{:04x}", character as u32);
             }
-            _ => output.push(char::from(byte)),
+            _ => output.push(character),
         }
     }
     output.push('"');
@@ -792,6 +845,103 @@ mod tests {
         assert_eq!(facts.addresses, Cardinality129::from_u64(2));
         assert_eq!(facts.sha256, hex_digest(&Sha256::digest(expected)));
         assert!(!directory.join(format!(".{}.export.tmp", "")).exists());
+        fs::remove_dir_all(&directory).unwrap();
+    }
+
+    #[test]
+    fn push_json_string_matches_serde_json_and_is_utf8_safe() {
+        // The old byte loop mapped bytes >= 0x80 through
+        // char::from(byte), Latin-1-mangling every multi-byte UTF-8
+        // character (final-review finding T4). The encoder must be
+        // byte-identical with serde_json string output: valid UTF-8
+        // for non-ASCII inputs and unchanged for ASCII inputs.
+        for input in [
+            "feed-a",
+            "42",
+            "",
+            "a\"b\\c",
+            "line\nfeed\tTab\r",
+            "\u{1}\u{1f}",
+            "greek: αβγ δ",
+            "emoji: 😀🚀",
+            "中文字符 and \"quotes\"",
+            "\u{7f}",
+            "café au lait — naïve",
+        ] {
+            let mut line = String::new();
+            push_json_string(&mut line, input);
+            let expected =
+                serde_json::to_string(&serde_json::Value::String(input.to_owned())).unwrap();
+            assert_eq!(line, expected, "push_json_string diverged for {input:?}");
+        }
+    }
+
+    #[test]
+    fn publication_failure_carries_durable_state_evidence() {
+        // Once the destination name is visible, a publication-stage
+        // failure reports outcome_unknown with the adapter-owned
+        // evidence: path, policy, stage, and the exact exported facts
+        // (final-review finding T3).
+        let directory = std::env::temp_dir().join(format!(
+            "iprange-publication-evidence-{}-{:?}",
+            std::process::id(),
+            std::time::SystemTime::now()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let destination = directory.join("out.net");
+        let budget = ExportBudget {
+            max_rows: 10,
+            max_output_bytes: 1024,
+            max_open_files: 1,
+        };
+        let mut writer =
+            ExportWriter::create(&destination, PublicationPolicy::FailIfExists, &budget).unwrap();
+        writer
+            .write_line("192.0.2.10", Cardinality129::from_u64(1))
+            .unwrap();
+        writer
+            .write_line("192.0.2.11", Cardinality129::from_u64(1))
+            .unwrap();
+
+        let error = writer.publication_failure(
+            std::io::Error::new(std::io::ErrorKind::Other, "simulated sync failure"),
+            "sync export output directory",
+            true,
+        );
+        assert_eq!((error.code, error.outcome), ("io", "outcome_unknown"));
+        assert!(error.message.contains("sync export output directory"));
+        let publication = error.details.unwrap();
+        assert_eq!(publication["publication"]["outcome"], "outcome_unknown");
+        assert_eq!(
+            publication["publication"]["publication_policy"],
+            "fail_if_exists"
+        );
+        assert_eq!(
+            publication["publication"]["path"],
+            destination.to_string_lossy().to_string()
+        );
+        assert_eq!(publication["publication"]["stage"], "sync export output directory");
+        assert_eq!(publication["publication"]["destination_visible"], true);
+        assert_eq!(publication["publication"]["temporary_removed"], true);
+        assert_eq!(publication["publication"]["rows"], "2");
+        assert_eq!(publication["publication"]["bytes"], "22");
+        assert_eq!(publication["publication"]["addresses"], "2");
+        let expected = hex_digest(&Sha256::digest(b"192.0.2.10\n192.0.2.11\n"));
+        assert_eq!(publication["publication"]["sha256"], expected);
+
+        // The temporary-removal stage reports the temporary as still
+        // present so the caller can find the residue.
+        let kept = writer.publication_failure(
+            std::io::Error::new(std::io::ErrorKind::Other, "simulated removal failure"),
+            "remove export temporary",
+            false,
+        );
+        assert_eq!(kept.outcome, "outcome_unknown");
+        assert_eq!(
+            kept.details.unwrap()["publication"]["temporary_removed"],
+            false
+        );
+        drop(writer);
         fs::remove_dir_all(&directory).unwrap();
     }
 }

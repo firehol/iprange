@@ -116,6 +116,9 @@ pub struct TextInputSource<K> {
     active_path: Option<String>,
     active: Option<ActiveInput>,
     options: TextInputOptions,
+    /// Reusable text-line buffer: one allocation serves every line of
+    /// every text input instead of a fresh Vec per line.
+    line_buf: Vec<u8>,
     batch: Vec<AddressRange<K>>,
     finished: bool,
     last_error: Option<&'static str>,
@@ -138,7 +141,9 @@ enum ParsedLine {
 }
 
 enum Step {
-    TextLine(Vec<u8>),
+    /// One text line; the bytes live in the source's reusable line
+    /// buffer, so producing a line never allocates.
+    TextLine,
     TextFinished,
     BinaryRecord(ParsedRange),
     BinaryEnd,
@@ -210,6 +215,7 @@ impl<K: InputKey> TextInputSource<K> {
             active_path: None,
             active: None,
             options,
+            line_buf: Vec::new(),
             batch: Vec::with_capacity(BATCH_CAPACITY),
             finished: false,
             last_error: None,
@@ -479,8 +485,8 @@ impl<K: InputKey> TextInputSource<K> {
                 Err(error) => return Err(input_sdk_error(self.remember(error))),
             };
             match step {
-                Step::TextLine(line) => {
-                    let parsed = parse_text_line(&line, self.options)
+                Step::TextLine => {
+                    let parsed = parse_text_line(&self.line_buf, self.options)
                         .map_err(|message| self.format_error(message))
                         .map_err(input_sdk_error)?;
                     self.consume_parsed(parsed)
@@ -528,9 +534,10 @@ impl<K: InputKey> TextInputSource<K> {
     fn read_step(&mut self) -> Result<Step, InputError> {
         match self.active.as_mut() {
             Some(ActiveInput::Text { reader, .. }) => {
-                let mut line = Vec::new();
-                if read_limited_line(reader, self.options.max_line_bytes, &mut line)?.is_some() {
-                    Ok(Step::TextLine(line))
+                if read_limited_line(reader, self.options.max_line_bytes, &mut self.line_buf)?
+                    .is_some()
+                {
+                    Ok(Step::TextLine)
                 } else {
                     Ok(Step::TextFinished)
                 }
