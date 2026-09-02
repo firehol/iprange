@@ -2095,3 +2095,61 @@ round-7 fixes at the new HEAD.
   handlers,fileio}`, importing only the public Go module, in the same
   family order as the Rust port, with C-authoritative expectations
   only (never Rust-produced expected answers).
+
+### 2026-09-02 (continued) — milestone 3 starts (delivery step 4: pure-Go product executable)
+
+- Scope: `v4/go/cmd/iprange` + reusable non-exported packages under
+  `v4/go/internal/cli/` mirroring the Rust responsibilities: `legacy`
+  (grammar, parse, IPSet algebra, DNS, formatting, binary v1/v2,
+  diagnostics, help/version), `rpc` (JSON-RPC 2.0 framing, session,
+  dispatcher, cancellation), `handlers` (method-family adapters over
+  the public Go SDK only), `fileio` (streaming legacy-compatible text
+  input and atomic bounded output; never reads/writes v4 database
+  bytes). Imports only the public Go module; never
+  `v4/go/internal/{reader,writer,...}`.
+- Family order (fixed delivery order step 4, "same family order" as
+  the Rust port): options/usage grammar first, then family/ipset
+  algebra, parse, ops modes, print, binary, dns; then the JSON-RPC
+  transport with handlers in the step-2 order (read-only, immutable
+  publication/export, live workflows, destructive recovery/
+  maintenance).
+- Authority: only independently modeled or C-authoritative
+  expectations (C source, wiki, tests.d, iprange-jsonrpc-v1.md);
+  Rust output is never the oracle for Go. The Rust implementation is
+  a structural reference for the responsibility split only.
+- Qualification: `nice go build ./cmd/iprange`; Go unit tests;
+  tests.d legacy suite through `IPRANGE_BIN=$PWD/v4/go/cmd/iprange/
+  iprange`; v4/cli runner `--go` plus `rust_to_go` and `go_to_rust`
+  matrices; golden/sensitivity for the Go transport; Go mmap-trace
+  gate; five own-model adversarial reviews then glm-5.3-responses
+  final review before milestone-3 closure.
+- Workers: five parallel own-model workers port the legacy families
+  over the lead-provided foundation (options/usage/family/ipset/
+  run-dispatch), each with a disjoint write scope; the lead integrates
+  seams, then the same for the JSON-RPC families.
+
+### 2026-09-02 (continued) — milestone 3 legacy surface complete (Go product executable)
+
+- The pure-Go legacy surface is implemented under `v4/go/internal/cli/
+  legacy/` (7,565 production+test lines) over the lead foundation
+  (family, ipset, options, usage, run dispatch) plus six parallel
+  worker families: ipv6 (Beauvoir), parse (Franklin), ops (Curie),
+  print (Kuhn), binary (Bacon), dns (Nash). Seams integrated by the
+  lead: LoadedSet ownership in parse.go, DNS error gating through
+  `(*DnsError).silentGated()`, unified `Sub128` in family.go, print
+  delta fields, C-exact IPv4 netmask diagnostics, `writeUint128`
+  quotient feedback (loop-body shadowing bug), and the missing
+  compare-row comma after name2 (C `iprange_csv_write_compare_row`,
+  src/iprange.c:52).
+- Qualification at current HEAD: `nice go build ./cmd/iprange` and
+  `nice go vet ./...` pass; `nice go test ./... -count=1` all pass;
+  `env IPRANGE_BIN=/tmp/iprange-go nice ./run-tests.sh` → **100/100
+  tests.d pass** (0.6s user) with the Go binary against the C oracle
+  suite. DNS differential vs glibc and Rust: pool diagnostics byte-
+  identical; the Rust reference hangs on a second DNS-using file
+  (rc=124, reproduced) while the Go drain implements the C behavior
+  and pins it with a regression test.
+- Next: the JSON-RPC transport (rpc) and handler families in step-2
+  order, then fileio for the export family, using only the public Go
+  module; `v4/go/internal/cli/rpc/rpc.go` is currently the
+  not-implemented stub.
