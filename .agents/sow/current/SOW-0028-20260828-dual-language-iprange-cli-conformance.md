@@ -1390,6 +1390,35 @@ Open decisions:
   cancellation remain options for a later milestone; tracked in
   Followup below.
 
+### 2026-09-02 (continued) — round 13: milestone-1 closure and legacy-surface start
+
+- Milestone 1 (the Rust JSON-RPC service) closes: all gates green at
+  a6640a9d (Rust 50 suites / 730 tests, 0 failures; `-D warnings`
+  source graph 491 sources; runner 31 cases / 15 oracle checks;
+  golden 53; sensitivity 14 modes; schema self-tests; Go SDK suite;
+  mmap storage/runtime/architecture gates; SOW audit clean). The five
+  own-model delta reviewers (wire, coverage, SDK-ownership,
+  performance, close-facts) PASSed a6640a9d; the
+  glm-5.3-responses whole-milestone reviewer PASSed the same
+  revision, conditional on a record-only close-out commit, which
+  landed at b26d8431 (round-12 record + dated Validation re-run
+  entry; no v4/ code in that commit). Pushed to origin/master.
+- Remaining milestone-1 scope clean-up: none. The runner batch-step
+  coverage opportunity (Pauli P3 note) and the per-unit
+  token collateral-cancellation observation (glm P3 note) are
+  tracked non-blocking follow-ups in Followup below.
+- Delivery-order step 3 starts: implement and qualify the complete
+  Rust legacy surface against the C oracle. Scope: 6,932 lines of C
+  (src/iprange.c + ipset{,6}_*.c), 101 test directories in tests.d/
+  as the primary oracle (run-tests.sh through IPRANGE_BIN), and the
+  13 wiki pages as the documented surface (Home, merge, common,
+  exclude, diff, intersect, count-unique, compare, reduce,
+  ipset-reduce, input-formats, output-formats, dns-resolution,
+  ipv6). No C execution or dynamic linking: Rust reimplements the
+  grammar, expansion, DNS, modes, formatting, binary formats,
+  diagnostics, probes, help/version, and exit codes in
+  v4/rust/iprange-cli/src/legacy/ (currently a stub).
+
 ### 2026-09-01 (continued) — complete handler registry
 
 - All 32 remaining v1 methods implemented by three parallel workers and
