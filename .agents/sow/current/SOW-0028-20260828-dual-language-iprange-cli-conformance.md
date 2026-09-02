@@ -2649,5 +2649,15 @@ round-7 fixes at the new HEAD.
     now gitignored so the worktree stays clean for build provenance.
 - Re-validation after corrections: Go suite, v4work, vet, gofmt,
   matrices, golden, sensitivity, C-oracle, mmap trace - all PASS
-  (detailed results in the close-out entry above; the binary pair
-  from 82828999 remains the exact code identity and was re-probed).
+  (detailed results in the close-out entry above).
+- Exact-HEAD binary record (after the final production-source
+  correction in a4dd504c): fresh pair rebuilt at a4dd504c with
+  vcs.modified=false — product SHA-256
+  6cce9deb74ceef67471853fb6afd74f5cffda0f6e874a42e826e8e93a826167a,
+  worker SHA-256
+  e9ca6ff4d162d86a9f5362c544d422f7b839c28d8031c42200b80e9ab2bf411a.
+  The earlier 82828999 pair (hashes above) was exact for its wave;
+  a4dd504c changed only asOptionalString null-strictness (an
+  already-unreachable-by-validation helper), so the pairs are
+  behaviorally equivalent on every public request. The a4dd504c
+  pair is the exact identity for milestone-3 close-out.
