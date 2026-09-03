@@ -2880,3 +2880,48 @@ round-7 fixes at the new HEAD.
   directions.
 - The user-mandated glm-5.3-responses whole-milestone re-review on
   this exact HEAD is the last gate; the re-close record follows it.
+
+### 2026-09-03 — milestone-3 re-closed: glm-5.3-responses whole-milestone review PASS
+
+- The user-mandated glm-5.3-responses whole-milestone re-review of the
+  exact final code ran in two rounds at HEAD d956d8f2 (working tree
+  committed; tree clean):
+  - Round 1 FAIL with three findings, all fixed in d956d8f2: P1 — Go
+    normalized a request id literal -0 to 0 for the response echo but
+    the cancel correlation key kept the raw text, so a same-batch
+    cancel of a -0 sibling missed on Go while Rust cancelled it; fixed
+    with one canonicalIntegralText used by both the request-id echo
+    and numberCancelKey, plus unit tests
+    (TestRequestIDMinusZeroEchoedAsZero,
+    TestSameBatchCancelOmitsMinusZeroSibling,
+    TestNumberCancelKeyNormalizesMinusZero) and a live cross-binary
+    probe (both binaries now omit the cancelled -0 sibling). P2 — two
+    remaining stale mixed 31/31 claims (SOW 2298-2302 and 2422-2426)
+    now carry the explicit false-positive annotation. P3 — the
+    runner's generic source-close check now reads history.project
+    params.last_seen as the database source it is.
+  - Round 2 PASS at exact HEAD d956d8f2 with byte-identical fresh
+    rebuild and all gates re-verified (matrices go/rust 33/33 oracle
+    23, mixed 10 executed / 23 skipped oracle 8 per direction,
+    /bin/false exit 1 both directions, go plain+v4work suites, vet
+    both modes, gofmt, golden 53, sensitivity 14, tests.d 100/100,
+    mmap trace).
+- Exact-HEAD binary identity for the re-close (built from clean
+  d956d8f2, vcs.modified=false): product (v4/go/cmd/iprange) SHA-256
+  8a30e703e5988da698954bb0c47e1d8364010f6b81f6b3c0d68ec00eea334de6;
+  worker (v4/go/cmd/iprange-v4-worker) SHA-256
+  7033f26bfd459b555d6a610538fe1cab2347bbc2c84154adc26254e5ee335eee.
+  The Rust binary is v4/rust/target/release/iprange built from
+  d96797e0 (release build 2026-09-02, no Rust source change in this
+  wave).
+- Final reviewer consensus for milestone 3 (delivery step 4, the
+  pure-Go JSON-RPC product executable): five own-model adversarial
+  reviewers (Rust parity, Go idioms, performance, wire integrity,
+  API/docs) all PASS on the exact final code, and the glm-5.3-responses
+  whole-milestone review PASS at exact HEAD d956d8f2. Milestone 3 is
+  re-closed with the cross-language matrices running real producer and
+  consumer services in both directions.
+- Milestone 4 (delivery step 5) proceeds with the expanded scope above
+  (crash harness, mechanically derived file-kind ledger, resource
+  record, complete six-step publisher workflow, mixed-live
+  coordination), then delivery steps 6-7.
