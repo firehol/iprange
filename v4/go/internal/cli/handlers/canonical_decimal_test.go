@@ -288,13 +288,6 @@ func mustJSON(t *testing.T, v any) []byte {
 // in a value tag is refused before any durable mutation (Rust
 // lifecycle.rs validate_value_tag; spec value-tag input shape).
 func TestValueTagNullRejected(t *testing.T) {
-	base := map[string]any{
-		"path":            "/tmp/probe",
-		"family":          "ipv4",
-		"value_kind":      "direct",
-		"structure_kind":  "none",
-		"reader_capacity": 1,
-	}
 	for _, member := range []string{"text", "hex"} {
 		params, err := json.Marshal(map[string]any{
 			"path": "/tmp/probe", "family": "ipv4", "value_kind": "direct",
@@ -308,7 +301,6 @@ func TestValueTagNullRejected(t *testing.T) {
 			t.Fatalf("value_tag.%s=null must be refused", member)
 		}
 	}
-	_ = base
 	// The canonical empty forms still pass validation.
 	for _, tag := range []map[string]any{{"text": ""}, {"hex": ""}} {
 		params, err := json.Marshal(map[string]any{

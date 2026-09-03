@@ -1959,6 +1959,108 @@
         "code": "output_limit",
         "outcome": "not_started"
       }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.reader.open",
+      "params": {
+        "source": {
+          "path": "$WORK/histdb.iprange",
+          "mode": "live"
+        }
+      },
+      "expect_result": {
+        "reader": {
+          "$ignore": true
+        },
+        "info": {
+          "address_family": "ipv4",
+          "value_kind": "membership",
+          "structure_kind": "none",
+          "value_tag": {
+            "hex": "6d656d62657273686970"
+          },
+          "database_id": {
+            "$ignore": true
+          },
+          "transaction_id": "3",
+          "commit_nonce": {
+            "$ignore": true
+          },
+          "page_count": {
+            "$ignore": true
+          },
+          "range_record_count": "1",
+          "active_feed_count": "1",
+          "meta_selection": "proven_current"
+        }
+      },
+      "capture": [
+        "reader"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.reader.ranges.open",
+      "params": {
+        "reader": "$CAPTURE/reader",
+        "view": {
+          "kind": "feed",
+          "feed": "gamma"
+        },
+        "direction": "forward",
+        "batch_size": 1
+      },
+      "expect_result": {
+        "cursor": {
+          "$ignore": true
+        }
+      },
+      "capture": [
+        "cursor"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.reader.ranges.next",
+      "params": {
+        "cursor": "$CAPTURE/cursor"
+      },
+      "expect_result": {
+        "records": [
+          {
+            "from": "192.0.2.0",
+            "to": "192.0.2.19"
+          }
+        ],
+        "done": false
+      }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.reader.ranges.next",
+      "params": {
+        "cursor": "$CAPTURE/cursor"
+      },
+      "expect_result": {
+        "records": [],
+        "done": true
+      }
+    },
+    {
+      "kind": "rpc",
+      "method": "iprange.v1.reader.close",
+      "params": {
+        "reader": "$CAPTURE/reader"
+      },
+      "expect_result": {
+        "closed": true,
+        "source_close": {
+          "outcome": "closed",
+          "cleanup": {},
+          "coordination_cleanup": {}
+        }
+      }
     }
   ]
 }

@@ -5,6 +5,17 @@ Standard-library Python client that drives real executables through the
 released legacy CLI and the ``--jsonrpc`` stdio protocol.  The runner owns
 strict client framing, declarative cases, deterministic fixtures, an
 independent scalar interval oracle, and a machine-readable provenance report.
+
+Cross-language matrices (``rust_to_go``, ``go_to_rust``) are real
+two-binary proofs: every executed case routes its production steps
+(create/publish/mutate/resolve) to the producer binary and its observation
+steps (open/query/export/validate/transform) to the consumer binary, in
+separate service processes that share only the per-case work directory.
+A case that cannot exercise both actors is skipped with its reason, so a
+mixed-direction PASS always means both binaries actually served; a mixed
+direction that executes no both-actor case fails as a matrix.  Per-case
+report entries record the SHA-256 and executed-step count of each actor
+binary.
 """
 
 import argparse
@@ -30,6 +41,93 @@ DEFAULT_CASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cas
 
 WORK_PLACEHOLDER = "$WORK/"
 CAPTURE_PLACEHOLDER = "$CAPTURE/"
+
+# Cross-language matrix actor model.  A mixed matrix (rust_to_go,
+# go_to_rust) runs every case through two real product services that share
+# only the per-case work directory: the producer service executes the steps
+# that create, mutate, publish, or resolve persistent artifacts, and the
+# consumer service executes the steps that open, query, export, validate, or
+# transform them.  Single-language matrices route every step to the one
+# selected binary.  The split is a property of the method, not of the case.
+PRODUCER_METHODS = frozenset({
+    "iprange.v1.algebra.publish",
+    "iprange.v1.commit.resolve",
+    "iprange.v1.current.publish",
+    "iprange.v1.database.create",
+    "iprange.v1.database.create.resolve",
+    "iprange.v1.database.initialize_live",
+    "iprange.v1.database.live_residue.resolve",
+    "iprange.v1.database.live_transition.resolve",
+    "iprange.v1.database.metadata.replace",
+    "iprange.v1.database.reclaim",
+    "iprange.v1.database.reset_live",
+    "iprange.v1.direct.replace",
+    "iprange.v1.feeds.create",
+    "iprange.v1.feeds.delete",
+    "iprange.v1.feeds.import",
+    "iprange.v1.feeds.rename",
+    "iprange.v1.feeds.replace",
+    "iprange.v1.history.project",
+    "iprange.v1.maintenance.remove",
+    "iprange.v1.publication.residue.remove",
+    "iprange.v1.publication.resolve",
+    "iprange.v1.recover",
+    "iprange.v1.retention.first_seen.refresh",
+    "iprange.v1.retention.last_seen.refresh",
+    "iprange.v1.snapshot",
+})
+CONSUMER_METHODS = frozenset({
+    "iprange.v1.algebra.compare",
+    "iprange.v1.algebra.count",
+    "iprange.v1.cancel",
+    "iprange.v1.database.info",
+    "iprange.v1.database.metadata.get",
+    "iprange.v1.export",
+    "iprange.v1.publication.inspect",
+    "iprange.v1.join.direct",
+    "iprange.v1.join.membership",
+    "iprange.v1.maintenance.list",
+    "iprange.v1.query.cardinalities",
+    "iprange.v1.query.matching_feeds",
+    "iprange.v1.query.overlaps",
+    "iprange.v1.reader.close",
+    "iprange.v1.reader.feeds.close",
+    "iprange.v1.reader.feeds.next",
+    "iprange.v1.reader.feeds.open",
+    "iprange.v1.reader.info",
+    "iprange.v1.reader.lookup",
+    "iprange.v1.reader.matching_feeds",
+    "iprange.v1.reader.metadata",
+    "iprange.v1.reader.open",
+    "iprange.v1.reader.ranges.close",
+    "iprange.v1.reader.ranges.next",
+    "iprange.v1.reader.ranges.open",
+    "iprange.v1.recovery.inspect",
+    "iprange.v1.system.describe",
+    "iprange.v1.validate",
+})
+ALL_ACTORS = ("producer", "consumer")
+
+
+def method_actor(method):
+    """Return the service role that executes a JSON-RPC method."""
+    if method in PRODUCER_METHODS:
+        return "producer"
+    if method in CONSUMER_METHODS:
+        return "consumer"
+    raise ValueError(f"method {method!r} has no actor classification")
+
+
+def actor_requirements(case):
+    """Set of services a case needs: producer for artifact mutations,
+    consumer for observation/derivation (and for legacy CLI steps)."""
+    actors = set()
+    for step in case.get("steps", []):
+        if step.get("kind") == "rpc":
+            actors.add(method_actor(step["method"]))
+        else:
+            actors.add("consumer")
+    return actors
 
 # Keep subprocess setup deterministic while retaining locale, sanitizer, and
 # platform variables needed by portable qualification runs.
@@ -89,14 +187,22 @@ def safe_work_path(work_dir, relative, *, must_exist=False):
 class CaseRunner:
     """One case, one consumer service, and one private work directory."""
 
-    def __init__(self, binary, case, work_dir, implementation, fixture_tool=None):
+    def __init__(self, binary, case, work_dir, implementation, fixture_tool=None,
+                 producer_binary=None, consumer_binary=None):
         self.binary = binary
         self.fixture_tool = fixture_tool
         self.case = case
         self.work_dir = os.path.realpath(work_dir)
         self.implementation = implementation
-        self.captures = {}
-        self.service = None
+        self.mixed = producer_binary is not None or consumer_binary is not None
+        self.actor_binaries = {
+            "producer": producer_binary if self.mixed else binary,
+            "consumer": consumer_binary if self.mixed else binary,
+        }
+        self.captures = {}          # capture name -> (owning actor, value)
+        self.services = {}          # actor -> JsonRpcService (mixed mode)
+        self.actor_steps = {}       # actor -> executed step count
+        self.service = None         # single-actor mode; also sensitivity-gate hook
         self.service_argv = [binary, "--jsonrpc"]
         self.cursors = {}
         self.readers = {}
@@ -150,7 +256,7 @@ class CaseRunner:
                 raise ValueError(f"fixture {fixture['path']!r}: no source")
 
     # ---- substitutions --------------------------------------------
-    def substitute(self, value):
+    def substitute(self, value, actor="consumer"):
         if isinstance(value, str):
             if value.startswith(WORK_PLACEHOLDER):
                 return safe_work_path(self.work_dir, value[len(WORK_PLACEHOLDER):])
@@ -158,12 +264,19 @@ class CaseRunner:
                 name = value[len(CAPTURE_PLACEHOLDER):]
                 if name not in self.captures:
                     raise ValueError(f"unresolved capture {name!r}")
-                return self.captures[name]
+                owner, stored = self.captures[name]
+                if owner != actor:
+                    raise AssertionError(
+                        f"case {self.case['name']!r}: capture {name!r} was produced "
+                        f"by the {owner} service and cannot cross to the {actor} "
+                        f"service (only filesystem paths cross actors; handles and "
+                        f"result objects are connection-local)")
+                return stored
             return value
         if isinstance(value, list):
-            return [self.substitute(item) for item in value]
+            return [self.substitute(item, actor) for item in value]
         if isinstance(value, dict):
-            return {key: self.substitute(item) for key, item in value.items()}
+            return {key: self.substitute(item, actor) for key, item in value.items()}
         return value
 
     # ---- expectations ---------------------------------------------
@@ -195,7 +308,8 @@ class CaseRunner:
     # ---- rpc steps ------------------------------------------------
     def run_rpc_step(self, step):
         method = step["method"]
-        params = self.substitute(step["params"])
+        actor = method_actor(method)
+        params = self.substitute(step["params"], actor)
         if not methods.known(method):
             raise AssertionError(f"case {self.case['name']!r}: unknown method {method}")
         try:
@@ -204,12 +318,14 @@ class CaseRunner:
             raise AssertionError(
                 f"case {self.case['name']!r}: invalid request params: {exc}") from exc
 
+        service = self.service_for(actor)
+        self.actor_steps[actor] = self.actor_steps.get(actor, 0) + 1
         if step.get("notification"):
-            self.service.notify(method, params)
+            service.notify(method, params)
             return
 
         request_id = f"case-{self.case['name']}"
-        response = self.service.call(request_id, method, params)
+        response = service.call(request_id, method, params)
         if "error" in response:
             self.check_expected_error(step, method, response["error"])
             capture_root = {
@@ -217,7 +333,7 @@ class CaseRunner:
                 "message": response["error"].get("message"),
                 "data": response["error"].get("data"),
             }
-            self.process_captures(step.get("capture", []), capture_root)
+            self.process_captures(step.get("capture", []), capture_root, actor)
             for assertion in step.get("assert_files", []):
                 self.assert_file(assertion)
             return
@@ -243,7 +359,7 @@ class CaseRunner:
                 if not self.matches_expected(exp, got):
                     raise AssertionError(
                         f"case {self.case['name']!r}: result.{key} expected {exp!r}, got {got!r}")
-        self.process_captures(step.get("capture", []), result)
+        self.process_captures(step.get("capture", []), result, actor)
         for assertion in step.get("assert_files", []):
             self.assert_file(assertion)
 
@@ -271,7 +387,7 @@ class CaseRunner:
                 f"case {self.case['name']!r}: expected outcome {expected['outcome']!r}, "
                 f"got {data.get('outcome')!r}")
 
-    def process_captures(self, pointers, root):
+    def process_captures(self, pointers, root, actor):
         for pointer in pointers:
             value = root
             for part in pointer.split("."):
@@ -279,7 +395,7 @@ class CaseRunner:
                     raise AssertionError(
                         f"case {self.case['name']!r}: capture {pointer!r} not found")
                 value = value[part]
-            self.captures[pointer] = value
+            self.captures[pointer] = (actor, value)
 
     def check_output_result(self, method, params, result):
         """Verify response output facts against the requested local artifact."""
@@ -315,6 +431,11 @@ class CaseRunner:
         # complete SnapshotResult without close facts; the public SDK
         # supplies no close result for it.
         if method == "iprange.v1.snapshot":
+            return
+        # reader.open returns a reader handle that owns the source lifetime
+        # (spec: result is method/reader/info); the live close facts arrive
+        # on a later iprange.v1.reader.close.
+        if method == "iprange.v1.reader.open":
             return
         sources = {}
         top = params.get("source") if isinstance(params.get("source"), dict) else None
@@ -660,7 +781,11 @@ class CaseRunner:
 
     # ---- legacy steps ---------------------------------------------
     def run_legacy_step(self, step):
-        argv = self.substitute(step["argv"])
+        # Legacy CLI steps are point-in-time commands over work-dir files;
+        # in a mixed matrix they belong to the consumer service binary.
+        actor = "consumer"
+        argv = self.substitute(step["argv"], actor)
+        self.actor_steps[actor] = self.actor_steps.get(actor, 0) + 1
         stdin_data = None
         if "stdin_fixture" in step:
             fixture = safe_work_path(self.work_dir, step["stdin_fixture"], must_exist=True)
@@ -716,6 +841,38 @@ class CaseRunner:
                 raise AssertionError(
                     f"case {self.case['name']!r}: {assertion['path']} differs from "
                     f"{assertion['equals_fixture']}")
+
+    # ---- services -------------------------------------------------
+    def service_for(self, actor):
+        """Return (creating on first use) the service process for an actor.
+
+        Single-actor mode keeps one connection and honors callers that
+        pre-set ``service`` (the sensitivity gate installs a fake server
+        there).  Mixed mode runs one real product service per actor; the
+        services are separate processes that share only the work directory.
+        """
+
+        if not self.mixed:
+            if self.service is None:
+                self.service = JsonRpcService(
+                    [self.binary, "--jsonrpc"], self.implementation,
+                    cwd=self.work_dir)
+            return self.service
+        service = self.services.get(actor)
+        if service is None:
+            service = JsonRpcService(
+                [self.actor_binaries[actor], "--jsonrpc"],
+                f"{self.implementation}:{actor}", cwd=self.work_dir)
+            self.services[actor] = service
+        return service
+
+    def close_services(self):
+        if self.service is not None:
+            self.service.close()
+            self.service = None
+        for service in self.services.values():
+            service.close()
+        self.services = {}
 
     # ---- full case -------------------------------------------------
     def run(self):
@@ -1174,7 +1331,7 @@ def main():
     except ValidationError as exc:
         parser.error(f"invalid capability advertisement: {exc}")
     report = {
-        "schema": "iprange-cli-report-v2",
+        "schema": "iprange-cli-report-v3",
         "command": sys.argv,
         "platform": {
             "system": platform_module.system(),
@@ -1200,8 +1357,24 @@ def main():
         print(f"SKIP {name} [{matrix}]: {reason}")
 
     def run_one(case, producer, consumer):
+        """Run one case through real product services and record its result.
+
+        Mixed matrices route production steps to the producer binary and
+        observation steps to the consumer binary in separate service
+        processes sharing the work directory.  A case that cannot exercise
+        both actors is skipped with its reason, so a mixed-direction PASS
+        always means both binaries actually served.
+        """
+
         consume_bin = binaries[consumer] if consumer else binaries[producer]
         matrix = producer if consumer is None else f"{producer}->{consumer}"
+        mixed = consumer is not None
+        needed = actor_requirements(case)
+        if mixed and needed != set(ALL_ACTORS):
+            missing = "producer" if "producer" not in needed else "consumer"
+            record_skip(case["name"], matrix,
+                        f"not cross-producer: case has no {missing} step")
+            return "skip"
         owns_work = False
         if args.work_dir is None:
             work = tempfile.mkdtemp(prefix="iprange-cli-")
@@ -1211,17 +1384,33 @@ def main():
         label = f"{case['name']} [{matrix}]"
         runner = None
         try:
-            runner = CaseRunner(consume_bin, case, work, producer, fixture_tool)
-            if any(step["kind"] == "rpc" for step in case["steps"]):
-                runner.service = JsonRpcService(runner.service_argv, producer, cwd=runner.work_dir)
+            runner = CaseRunner(
+                consume_bin, case, work, matrix, fixture_tool,
+                producer_binary=binaries[producer] if mixed else None,
+                consumer_binary=binaries[consumer] if mixed else None)
             runner.run()
             report["passed"] += 1
             report["oracle_checks"] += runner.oracle_checks
-            report["cases"].append({
+            entry = {
                 "name": case["name"], "matrix": matrix, "status": "PASS",
                 "oracle_checks": runner.oracle_checks,
-            })
+            }
+            if mixed:
+                # Actor identity is pinned once at startup by
+                # describe_capabilities (cache keyed on path+sha256); the
+                # per-case entry reuses that hash instead of re-reading the
+                # binaries from disk on every executed case.
+                entry["actors"] = {
+                    actor: {
+                        "sha256": capabilities[
+                            producer if actor == "producer" else consumer]["sha256"],
+                        "steps": runner.actor_steps.get(actor, 0),
+                    }
+                    for actor in ALL_ACTORS
+                }
+            report["cases"].append(entry)
             print(f"PASS {label} (oracle={runner.oracle_checks})")
+            return "pass"
         except (AssertionError, ValueError, ValidationError, OSError) as exc:
             report["failed"] += 1
             report["cases"].append({
@@ -1229,9 +1418,10 @@ def main():
                 "error": str(exc),
             })
             print(f"FAIL {label}: {exc}")
+            return "fail"
         finally:
-            if runner is not None and runner.service is not None:
-                runner.service.close()
+            if runner is not None:
+                runner.close_services()
             if owns_work:
                 shutil.rmtree(work, ignore_errors=True)
 
@@ -1256,13 +1446,35 @@ def main():
             record_skip("matrix", direction, "mixed producer requires --fixture-tool")
             continue
         capability_key = consumer if consumer is not None else producer
+        executed = 0
         for case in use_cases:
-            required = case.get("requires")
-            if required and required not in capabilities[capability_key]["methods"]:
+            if not mixed and not capabilities[capability_key]["available"]:
+                # Legacy CLI-only binaries (C iprange) expose no --jsonrpc
+                # surface; every JSON-RPC case is inapplicable and skips.
+                # A broken binary in a mixed matrix must instead fail the
+                # case (the /bin/false sensitivity), so this skip only
+                # applies to single-language matrices.
                 record_skip(case["name"], direction,
-                            f"requires unadvertised method {required}")
+                            "binary has no jsonrpc capability")
                 continue
-            run_one(case, producer, consumer)
+            required = case.get("requires")
+            if required:
+                required_key = producer if method_actor(required) == "producer" else consumer
+                required_key = required_key if mixed else capability_key
+                if required not in capabilities[required_key]["methods"]:
+                    record_skip(case["name"], direction,
+                                f"requires unadvertised method {required}")
+                    continue
+            executed += (run_one(case, producer, consumer) != "skip")
+        if mixed and executed == 0:
+            message = ("matrix executed no cross-producer case "
+                       "(every case is single-actor or fixture-tool-produced)")
+            report["failed"] += 1
+            report["cases"].append({
+                "name": "matrix", "matrix": direction, "status": "FAIL",
+                "error": message,
+            })
+            print(f"FAIL {direction}: {message}")
 
     print(
         f"\n{report['passed']} passed, {report['failed']} failed, "

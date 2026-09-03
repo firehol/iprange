@@ -40,9 +40,17 @@ Implementation status (2026-09-01):
   wire-contract findings (cursor start/family/IPv6 preflight, 65 KB
   response envelope, batch busy framing, live reader mode, strict Python
   schemas, runner/golden integrity). The recorded decisions above and the
-  parallel fix batches implement them. Remaining: re-review, then Rust
-  legacy CLI surface vs the C oracle, then the pure-Go implementation in
-  the fixed delivery order.
+  parallel fix batches implement them.
+- All delivery steps 1-4 are implemented: the Rust JSON-RPC transport and
+  read-only families, publish/lifecycle/export/snapshot families, the Rust
+  legacy CLI surface vs the C oracle, and the pure-Go JSON-RPC product
+  executable (v4/go/cmd/iprange). Milestone 3 closed at 92b5e6f9 and
+  a71b2010 starts milestone 4; milestone-3 closure was reopened on
+  2026-09-03 because the
+  cross-language matrices ran only one binary per case (see the reopened
+  closure record below) and the current re-close wave reworks the runner
+  actor model, re-runs the exact-final-code review rounds, and then
+  proceeds to milestone 4 (delivery step 5).
 
 ## Requirements
 
@@ -2466,7 +2474,9 @@ round-7 fixes at the new HEAD.
     delegating.
 - Re-validation at the final tree (fresh fixtures /tmp/m3f3-*,
   binary rebuilt from the working tree) — all green: matrices
-  go/rust_to_go/go_to_rust 31/31 each (oracle 15 each), golden 53
+  go/rust_to_go/go_to_rust 31/31 each (oracle 15 each) — this mixed
+  31/31 claim is a false positive (each case ran only the consumer
+  binary; see the 2026-09-03 reopen record below) — golden 53
   exchanges, sensitivity 14 modes, Go suite 22 packages plus root,
   v4work suite, legacy C-oracle 100/100, mmap trace PASS, vet/gofmt
   clean.
@@ -2603,8 +2613,10 @@ round-7 fixes at the new HEAD.
     revision, SHA-256
     28f97d6c15fb7efc51caa0afed19b31498f3f096a6b49a92aeced34717a1b961.
   - Matrices: go 31/31 (oracle 15), rust_to_go 31/31 (oracle 15),
-    go_to_rust 31/31 (oracle 15), 0 skips; fresh work dirs
-    /tmp/m3f6-* and /tmp/m3f7-* (pre-commit tree) and /tmp/m3f8-go
+    go_to_rust 31/31 (oracle 15), 0 skips — the mixed 31/31 claim is
+    a false positive (each case ran only the consumer binary); see
+    the 2026-09-03 reopen record — fresh work dirs /tmp/m3f6-* and
+    /tmp/m3f7-* (pre-commit tree) and /tmp/m3f8-go
     (exact 82828999 binary).
   - Golden 53 exchanges PASS; sensitivity 14 modes PASS; Go suite 22
     packages + root PASS; v4work PASS; legacy C-oracle 100/100 PASS
@@ -2681,40 +2693,66 @@ round-7 fixes at the new HEAD.
   5151992e.
 - Remaining SOW steps (delivery step 6: consolidated benchmark
   harness and measured ceilings; step 7: platform/artifact/docs/
-  skill/final gates) form the next milestone and continue in this
-  SOW.
+  skill/final gates) continue after delivery step 5 in this SOW; the
+  immediate next milestone (4) is delivery step 5, started at
+  a71b2010 below.
 
 ### 2026-09-03 — milestone 4 starts (delivery step 5: cross-language, crash, resource, and publisher-workflow proof)
 
-- Step-5 scope per the plan and acceptance criteria:
+- Step-5 scope per the plan and acceptance criteria (expanded
+  2026-09-03 to the full update-ipsets integration set that the
+  design spec assigns to the SDK surface and to the coordination
+  cases the earlier scope omitted):
   - Crash/cancellation proof at the product interface: kill the
     producer mid-workflow (publish/commit/finish/export/validate) and
     prove with both consumers in both directions that the outcome is
     truthful — no partial replacement, no false success after unknown
     outcome, no unrelated rollback, bounded residue, reopen succeeds.
-    The runner today has cancellation cases but no producer-crash
-    simulation (run.py:826 kill is cleanup-only).
+    The crash harness is a separate external script that drives the
+    normal JSON-RPC client over the product interface only; it adds no
+    production test methods or hooks. It proves process-level
+    interruption and subsequent resolution; exact internal crash-point
+    coverage stays with the SDK crash gates.
   - Cross-language file-kind coverage audit: every persistent file
     kind created by each producer and opened/queried/exported/
-    validated/transformed by both consumers (the go_to_rust and
-    rust_to_go matrices cover the case list; a kind ledger must prove
-    completeness).
+    validated/transformed by both consumers. The kind ledger is
+    mechanically derived from the executed both-actor case steps
+    (producer mutation methods per case -> artifact kinds they create;
+    consumer methods per case -> kinds they open/transform); it is not
+    a manually maintained table.
+  - Complete publisher-workflow proof: the full six-step
+    update-ipsets production sequence composed only through JSON-RPC
+    and filesystem actions in both language directions — (1) current
+    feed -> immutable published v4 file; (2) first-seen and
+    last-seen refresh of the same coverage; (3) serialized named-feed
+    replacement in the membership database with prior-feed preservation
+    on failure; (4) history projection of every configured window from
+    one last-seen scan; (5) one-scan overlap aggregation, both provider
+    joins (direct and membership), and global-name algebra with
+    result publication; (6) snapshot of the live database plus
+    validation, recovery, and cleanup. Per-feed failure isolation is
+    proven: one failed feed does not roll back unrelated feeds that
+    already committed successfully.
   - Resource proof at the product interface: bounded response frames,
     bounded cursor batches, bounded reader/cursor counts, no
     file-sized heap state in the adapters (the 65 KB ceiling and
     trace gates exist; a step-5 resource record consolidates them).
-  - Publisher-workflow proof: the complete publisher workflow
-    composed only through JSON-RPC and filesystem actions in both
-    language directions (current-feed publication, first/last-seen
-    refresh, multi-feed updates, snapshot, validation, recovery,
-    cleanup).
-- Cross-language/legacy correctness gates already green at milestone
-  3 close and remain the baseline: matrices 31/31 x3, golden 53,
-  sensitivity 14, tests.d 100/100, mmap trace.
-- Next actions: (1) crash harness as a runner mode or adversarial
-  script reusing the case definitions; (2) file-kind ledger; (3)
-  resource record; (4) publisher workflow script; (5) five-reviewer
-  + glm final rounds before step-5 close.
+  - Simultaneous mixed live coordination in both directions: a Rust
+    live reader and a Go live reader pinned on the same committed
+    generation while a Go (and then a Rust) writer commits updates,
+    proving live slot coordination, generation pinning, and reclamation
+    across language boundaries.
+- Cross-language/legacy correctness gates were green at milestone 3
+  close: golden 53, sensitivity 14, tests.d 100/100, mmap trace. The
+  matrix baseline was reworked on 2026-09-03 after the cross-language
+  matrices proved to be false positives; the current actor-semantics
+  baseline is go/rust 33/33 (oracle 23) and mixed 10 executed /
+  23 skipped per direction (oracle 8) — see the reopen record.
+- Next actions: (1) crash harness as a separate external runner
+  script reusing the case definitions and the normal JSON-RPC client;
+  (2) mechanically derived file-kind ledger; (3) resource record;
+  (4) six-step publisher workflow script; (5) mixed-live coordination
+  cases; (6) five-reviewer + glm final rounds before step-5 close.
 
 ### 2026-09-03 — milestone-3 closure reopened: cross-language matrix false positive (reviewer sol P1)
 
@@ -2732,16 +2770,110 @@ round-7 fixes at the new HEAD.
     binary, in separate service processes sharing only the work
     directory.
   - Steps are assigned to actors by method class (production methods
-    -> producer; observation methods -> consumer). A case with no
-    producer steps fails in mixed mode. Cross-actor handle captures
-    are rejected (only filesystem paths may cross).
+    -> producer; observation methods -> consumer). A case that cannot
+    exercise both actors is recorded as a skip with its precise reason
+    ("not cross-producer: case has no producer step" / "... no consumer
+    step"), so every mixed-direction PASS means both binaries served.
+    Cross-actor handle/result captures are rejected (only filesystem
+    paths may cross); a mixed direction that executes no both-actor
+    case at all fails with "matrix executed no cross-producer case".
   - The mixed matrices FAIL when either actor binary cannot serve
-    (sensitivity: /bin/false as either actor must fail the matrix).
-  - The report records the SHA-256 of each actor binary per case.
-  - Fixture-only cases (artifact built by the separate fixture tool,
-    not by a product binary) are recorded as skips in mixed mode with
-    the reason "fixture-tool-produced artifact; not cross-language"
-    until they get genuine producer creation steps.
+    (sensitivity: /bin/false as either actor exits 1 with case FAILs).
+  - The report records the SHA-256 and executed-step count of each
+    actor binary per executed case (report schema v3).
+  - Single-language matrices skip JSON-RPC cases when the binary is a
+    legacy CLI-only executable (C iprange has no --jsonrpc surface);
+    inside a mixed matrix an unavailable binary can never be hidden:
+    the mixed matrix exits 1, with its executable cases failing and
+    required-method cases skipping as "requires unadvertised method"
+    (verified with /bin/false as either actor, both directions).
 - The milestone-3 closure record is withdrawn pending the reworked
   matrices, the exact-final-code five-reviewer round, and the glm
   re-review.
+
+### 2026-09-03 — milestone-3 re-close wave: runner actor rework implemented
+
+- v4/cli/run.py now runs a real producer service and a real consumer
+  service for every mixed-matrix case (separate `--jsonrpc`
+  subprocesses sharing only the per-case work directory). Actor
+  routing is a method-class map (PRODUCER_METHODS /
+  CONSUMER_METHODS in run.py); captures are actor-scoped and a
+  cross-actor reference is an assertion error; cases are
+  pre-classified so mixed PASS requires both actors to have executed
+  steps. The report schema is v3 and records per-actor SHA-256 and
+  step counts. Matrix runs on the exact pre-rework binaries:
+  - `go` 33/33 (oracle 23), `rust` 33/33 (oracle 23);
+  - `rust_to_go` 10 PASS / 23 SKIP (oracle 8), `go_to_rust` 10 PASS /
+    23 SKIP (oracle 8) - every PASS executes producer steps on the
+    producer binary and consumer steps on the consumer binary;
+  - `c` 33 SKIP (legacy CLI-only binary, needs --allow-skips);
+  - `/bin/false` as either actor in a mixed matrix: exit 1 with case
+    FAILs (sensitivity verified both directions).
+- Two new cases prove producer-created artifacts are read by the other
+  language: `mixed.direct-created` (producer database.create +
+  direct.replace, consumer live reader.open/lookup/ranges/close) and
+  `mixed.membership-created` (producer database.create + feeds.create
+  from the shared fixture, consumer live reader.open/lookup/
+  matching_feeds/ranges/close). Snapshot, publication,
+  database.metadata, join.direct, history.project, live.lifecycle,
+  maintenance, and validate.recover also run both binaries per
+  direction. The runner's `check_source_close` now exempts
+  `reader.open` (the reader handle owns the source lifetime; live
+  close facts ride `reader.close`, per iprange-jsonrpc-v1.md).
+- Re-validation at this wave (exact binaries from the withdrawn
+  close-out): go/rust 33/33, mixed 10/10 executed, golden 53,
+  sensitivity 14, C legacy tests.d 100/100, mmap trace: all PASS.
+- Still required before re-closing milestone 3: the exact-final-code
+  five-reviewer round, the glm-5.3-responses whole-milestone re-review
+  on that exact HEAD, then one lifecycle commit and push.
+
+### 2026-09-03 — milestone-3 re-close wave: exact-final-code five-reviewer round PASS
+
+- Round basis: the exact final code of this wave — the runner actor
+  rework (v4/cli/run.py), the two producer-created mixed cases, the
+  history.project consumer tail, and the product fixes (-0 numeric id
+  echo normalization in schema.go, rustjson bytes.Buffer encoder,
+  dead test scaffolding removal), plus README and SOW record
+  corrections. All five own-model adversarial reviewers re-reviewed
+  this exact content in their scopes:
+  - Gauss (Rust parity): first-round FAIL — P2: history.project was
+    classified CONSUMER although it is a LiveWriter mutation (Rust
+    authority algebra.rs:877-923 opens LiveWriter and commits); P3:
+    Go echoed a client id literal -0 while Rust normalized it to 0.
+    Fixes: history.project moved to PRODUCER_METHODS and the case now
+    ends with genuine consumer steps (live reader.open of the
+    producer-projected histdb, gamma ranges, reader.close with
+    source_close; the 400-window second projection is refused
+    output_limit/not_started, so the DB stays at transaction 3 with
+    the single gamma interval 192.0.2.0-19); validID normalizes -0 to
+    0 and both binaries now echo id 0 byte-identically. Confirmed
+    PASS.
+  - Avicenna (Go idioms): PASS; two P3 cosmetics (dead base map in
+    TestValueTagNullRejected, strings.Builder+String() copy in the
+    encoder) both fixed. Confirmed PASS.
+  - Aristotle (performance): first-round FAIL — P3: the mixed PASS
+    path re-hashed both actor binaries on every executed case
+    (~600 MB redundant disk reads per full run). Fixed: per-case
+    SHA-256 now reuses the startup describe_capabilities hash.
+    Encoder copy also removed (bytes.Buffer). Confirmed PASS.
+  - Gibbs (wire integrity): PASS. P3 observations only: disconnect-
+    cancellation message text differs between binaries (unpinned
+    human-diagnostic class, code/outcome identical); reader.open
+    live-close facts ride reader.close with no current corpus gap.
+  - Locke (records): first-round FAIL with six record-precision items
+    (stale 31/31 baseline and close-out claims, milestone-3 close
+    commit identity, unavailable-actor wording, next-milestone
+    cross-reference); all fixed and the 82828999 close-out bullet
+    annotated as false positive. Confirmed PASS.
+- Gate list at this wave (all under nice): go test ./... and
+  -tags v4work PASS; go vet both modes PASS; gofmt clean; cargo test
+  --all-features 851 passed / 0 failed (856 listed); Rust source
+  graph PASS; legacy tests.d 100/100; mmap trace PASS; golden 53
+  exchanges PASS; sensitivity gate 14 modes PASS; matrices go/rust
+  33/33 (oracle 23), rust_to_go and go_to_rust 10 executed /
+  23 skipped per direction (oracle 8), every PASS with both actor
+  binaries serving (per-actor SHA-256 and step counts in report v3);
+  /bin/false as either actor exits 1 with case FAILs in both
+  directions.
+- The user-mandated glm-5.3-responses whole-milestone re-review on
+  this exact HEAD is the last gate; the re-close record follows it.

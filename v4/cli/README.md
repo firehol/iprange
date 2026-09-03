@@ -63,9 +63,18 @@ nice python3 v4/cli/run.py --matrix go_to_rust --rust "$RUST_IPRANGE" --go "$GO_
   --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w
 ```
 
-`--allow-skips` is required for the C single-language surface that the
-v4 product binaries do not implement. The `work-dir` must already
-exist.
+The mixed matrices (`rust_to_go`, `go_to_rust`) are two-binary
+cross-language proofs: each executed case routes its production steps
+(create, publish, feed/direct mutations, resolution) to the producer
+binary and its observation steps (open, query, export, validate,
+transform) to the consumer binary, in separate `--jsonrpc` processes
+sharing only the per-case work directory. A case that cannot exercise
+both actors is skipped with its reason, so a mixed PASS means both
+binaries genuinely served; the JSON report records the SHA-256 and
+executed-step count of each actor per case. `--allow-skips` is
+required for skipped cases (fixture-only and single-actor cases in the
+mixed matrices, and the whole C single-language surface, which the v4
+product binaries do not implement). The `work-dir` must already exist.
 
 Other gates:
 
@@ -74,7 +83,10 @@ nice python3 v4/cli/check_golden.py        # 53 golden wire exchanges
 nice python3 v4/cli/sensitivity_gate.py    # 14 broken-server modes
 ```
 
-- `cases/` — the declarative method-family cases (31 files).
+- `cases/` — the declarative method-family cases (33 files),
+  including producer-created cross-language cases (`mixed.direct-created`,
+  `mixed.membership-created`) whose artifact is built by one product
+  binary and read live by the other.
 - `golden/` — complete request/response exchanges generated from the
   Rust binary and validated against the strict Python schemas.
 - `schema/` — the machine authority: framing, methods, results, and

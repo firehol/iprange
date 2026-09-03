@@ -195,6 +195,11 @@ func validID(raw json.RawMessage) (*RequestId, bool) {
 		if !integralText(t) {
 			return nil, false
 		}
+		// serde_json normalizes the literal -0 to 0 when it echoes a
+		// numeric id; echo the same bytes for byte-identical ids.
+		if bytes.Equal(t, []byte("-0")) {
+			t = []byte("0")
+		}
 		id := RequestIdFromNumber(string(t))
 		return &id, true
 	}

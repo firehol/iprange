@@ -1,10 +1,10 @@
 package rpc
 
 import (
+	"bytes"
 	"encoding/json"
 	"sort"
 	"strconv"
-	"strings"
 )
 
 // Marshal serializes v with the exact serde_json escaping rules of the
@@ -16,11 +16,11 @@ import (
 // for response envelopes, echoed request ids, and generated JSONL
 // rows.
 func Marshal(v any) ([]byte, error) {
-	var builder strings.Builder
-	if err := writeValue(&builder, v); err != nil {
+	var buffer bytes.Buffer
+	if err := writeValue(&buffer, v); err != nil {
 		return nil, err
 	}
-	return []byte(builder.String()), nil
+	return buffer.Bytes(), nil
 }
 
 // MarshalJSONL is the handler-facing row encoder for generated JSONL
@@ -29,7 +29,7 @@ func MarshalJSONL(v any) ([]byte, error) {
 	return Marshal(v)
 }
 
-func writeValue(builder *strings.Builder, v any) error {
+func writeValue(builder *bytes.Buffer, v any) error {
 	switch value := v.(type) {
 	case nil:
 		builder.WriteString("null")
@@ -138,7 +138,7 @@ func writeValue(builder *strings.Builder, v any) error {
 }
 
 // writeString emits one JSON string with the serde_json escape set.
-func writeString(builder *strings.Builder, text string) {
+func writeString(builder *bytes.Buffer, text string) {
 	builder.WriteByte('"')
 	for _, r := range text {
 		switch r {
