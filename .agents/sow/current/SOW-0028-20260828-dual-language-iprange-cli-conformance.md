@@ -3149,8 +3149,9 @@ round-7 fixes at the new HEAD.
 
 ### 2026-09-03 — milestone 4 implementation plan (recorded before implementation)
 
-Exploration summary (three own-model subagents, 2026-09-03): the
-runner `v4/cli/run.py` already executes per-step declared actors on
+Exploration summary (three parallel investigation passes,
+2026-09-03): the runner `v4/cli/run.py` already executes per-step
+declared actors on
 persistent per-actor JSON-RPC services with captures, `assert_files`,
 strict protocol/counter checks and report schema v3 (per-actor
 sha256+step counts); it has no mid-case process control, so the
@@ -3241,10 +3242,9 @@ Implementation plan (each item minimal-complete, all validation under
    with the exact internal crash-point inventory left to the SDK
    crash gates already recorded.
 6. W6 close-out: full matrix and gate battery under `nice`, five
-   own-model reviewers in their scopes, glm-5.3-responses
-   whole-milestone review, SOW records (including the mechanical
-   ledger counts and the updated mixed-matrix counts), one lifecycle
-   commit, push.
+   reviewers in their scopes, an independent whole-milestone review,
+   SOW records (including the mechanical ledger counts and the
+   updated mixed-matrix counts), one lifecycle commit, push.
 
 Validation plan and expected cost (recorded before running): the
 full gate battery is Go+Rust product builds (~1-3 wall-minutes under
@@ -3255,3 +3255,193 @@ wall-minutes), and the crash harness (~1-2 wall-minutes). Total
 worst case under `nice` ~15-25 wall-minutes with bounded memory; each
 wave runs only its own validation until green, and the full battery
 runs once per gate.
+
+### 2026-09-04 — milestone 4 (delivery step 5) implementation wave
+
+Implemented in five parallel waves, each validated under `nice`
+before the next started (commits 31552397, 64f81e74, 9674b96c,
+f0e242ad):
+
+- W1 runner evidence (v4/cli/run.py, v4/cli/README.md): after every
+  executed rpc or legacy step the runner inventories the work
+  directory and classifies each file against the spec kind table
+  (`v4_main`, `live_sidecar` `<main>.readers`, `publication_reservation`
+  `.iprange-reservation-*.tmp`, `authorized_scratch`
+  `.iprange-scratch-*.tmp`, `adapter_output`, `metadata_delivery`,
+  `unknown`; transients that vanish inside a step never count). The
+  report gains two additive fields: the mechanical `file_kinds`
+  ledger (kind -> methods that created it / opened it, aggregated
+  over executed steps only) and `frame_sizes` (per-method max
+  request/response wire bytes measured by the JSON-RPC client). The
+  ledger is byte-identical between the Rust and Go matrices and has
+  zero `unknown` files.
+- W2 resource proof (v4/cli/cases/resource.limits.json,
+  v4/cli/resource-record.md): a 134-step consumer case proving at the
+  product boundary, in both languages: the complete 9-member
+  `system.describe` limits report (1 MiB frames, 65,000-byte response
+  object, batches/queued 16, reader/cursor 64, lookup 4,096, cursor
+  records 4,096); `output_limit`/`read_only_failure` for a legal
+  4,096-address lookup whose inline result cannot fit 65,000 bytes;
+  reader capacity exhaustion at the 65th open and cursor capacity
+  exhaustion at the 65th cursor (both return
+  `server_busy`/`not_started`, verified identical in Rust and Go).
+  A 17-element batch is rejected by both products at the frame layer
+  with transport -32600 before queue admission, so the queued
+  >16-in-flight `server_busy` race is not assertable through the
+  serial runner; the record documents that as step-6 territory.
+- W3 six-step publisher workflow (v4/cli/cases/workflow.publisher.json,
+  53 steps, both actors; passes go, rust, rust_to_go, go_to_rust):
+  (1) current feed -> immutable published file with consumer
+  read-back; (2) first-seen and last-seen refresh with consumer
+  lookup of the refreshed values; (3) named-feed replacement with
+  per-feed failure isolation - a deliberate failed `feeds.replace`
+  (missing source path, `invalid_path`/`not_started` in both
+  binaries) commits nothing; feed A keeps its NEW committed content
+  and feed B keeps its OLD content (verified by consumer lookups and
+  by the unchanged transaction id); (4) two history windows with
+  distinct cutoffs projected from one last-seen scan and read back
+  through both binaries; (5) one-scan aggregation
+  (`query.overlaps`), both joins (`join.direct` against the
+  producer-built live DB, `join.membership`), and `algebra.publish`
+  over the same membership fixture, with the same range/address
+  counters asserted identically across methods (4 ranges / 41
+  addresses in overlaps, join left side, join membership side and
+  algebra source), plus consumer open of the published algebra
+  output; (6) live snapshot + resolve + consumer read-back,
+  `validate` (0 findings), `recovery.inspect`, `database.reclaim`
+  and `maintenance.list` (0 real entries at that point).
+- W4 mixed-live coordination (v4/cli/cases/mixed.live-coordination.json,
+  10 steps, both actors; passes all four matrices): a live direct DB
+  (created at generation 1) has its reader pinned by the CONSUMER
+  binary; the PRODUCER binary commits two replacements
+  (generations 2 and 3) while the reader stays pinned; the pinned
+  reader still reads generation 1 (zero ranges, no partial
+  replacement) while the producer's fresh `database.info` view shows
+  generation 3; the reader closes with full live `source_close`
+  facts; `database.reclaim` then proves the retired generations
+  become reclamation-eligible. rust_to_go proves a Go pinned reader
+  under a Rust writer; go_to_rust proves a Rust pinned reader under
+  a Go writer. Empirical constraints recorded: database.create
+  already produces a live DB (born-live, `.readers` sidecar present;
+  `initialize_live` on it is `wrong_state`) and the runner carries
+  one capture slot per result path, so two simultaneously held
+  reader handles cannot both be closed by case steps; the case uses
+  reader_capacity 2 and exercises the second slot via
+  `database.info`'s transient open during pinning.
+- W5 crash harness (v4/cli/crash_harness.py, report schema
+  iprange-cli-crash-report-v1): an external gate script that drives
+  the normal JSON-RPC client (reuses run.JsonRpcService and fixture
+  building; adds no production method or hook). It SIGKILLs the
+  producer process group at a durable engine marker mid
+  `current.publish` (reservation file with valid IPR4RSV1 state-1
+  block) and mid `database.initialize_live` (new `<main>.readers`
+  sidecar on an immutable fixture input), then on a fresh producer
+  resolves truthfully: `publication.resolve` completes the
+  interrupted publication with the reservation as sole authority
+  (`publication: "published"`, destination content desired,
+  destination SHA-512 equals the attempt output SHA-512); live
+  transition residue resolves with `database.live_residue.resolve`
+  (`status: "completed"`, `kind: "canonical"`,
+  `residue_possible: false`); pre-resolution residue bounded
+  (reservation=1, publication_temp=1; post-resolution 0/0/0);
+  consumer reopens succeed after resolution (no half-published file
+  ever opens; before resolution the destination is truthfully
+  not_started). 6/6 scenarios pass in both directions; the negative
+  control (consumer=/bin/false) fails 6/6; zero leftover processes.
+  Exact internal crash-point coverage remains with the SDK crash
+  gates as the SOW states.
+
+Gate battery at HEAD f0e242ad (all under `nice`; evidence in
+v4/cli/evidence/): rust 37/37 (oracle 37), go 37/37 (oracle 37),
+rust_to_go and go_to_rust 13 executed / 24 skipped (oracle 22) per
+direction, 0 failed; golden 53; sensitivity 14; go plain + v4work
+suites PASS; tests.d 100/100 with the Go product; go mmap trace PASS;
+rust mmap storage (343 sources) and runtime PASS; crash harness 6/6.
+The earlier mixed counts (10 executed / 23 skipped, then 11 / 23)
+are superseded by the current corpus: 37 case files, 13 both-actor.
+Product source identity AT THIS REVISION: v4/go diff empty since
+d956d8f2 and the `-buildvcs=false` qualification builds reproduced
+the milestone-3 close-out hashes byte-for-byte (product 4f8fb7b8...,
+worker 16236608...); the Rust product binary is unchanged. The
+reviewer fix wave (recorded below) later changed one Go handler, so
+the final product identity supersedes this paragraph.
+
+### 2026-09-04 — milestone 4 reviewer rounds and fixes
+
+Round 1 (five reviewers, exact tree f0e242ad) found two P1s plus
+P2/P3s; the disposition fix wave is commits 58a772b4 and 3408c64c
+plus the final label-derivation fix in this wave.
+
+- Gauss (Rust parity) round 1 FAIL: P1 — Go `recover` error details
+  omitted the `scratch`/`output` members when absent while Rust
+  always emits them as null (Rust recovery.rs:263-271 and 310-317
+  vs Go recovery.go:893-902 and 940-946). Fix commit 3408c64c: Go
+  emits the full member set via recoveryScratchValueOrNil and
+  privateOutputAttemptValueOrNil; live probes on both binaries
+  confirm identical 7-member details ("cleanup",
+  "coordination_cleanup", "housekeeping", "output", "report",
+  "scratch", "visible_housekeeping") with "scratch": null for both
+  failure paths. Regression guard: the case schema and the runner
+  now enforce an exact `expect_error.details` member set (cases.py
+  "details" property; run.py check_expected_error set-equality),
+  and validate.recover.json pins the 7-member set with
+  "scratch": null and "output" present. Rounds 2 and 3: PASS.
+- Avicenna (Go idioms / Python harness) round 1 PASS with three
+  P3s, all fixed: the dormant runner `_self_test` is now wired into
+  main() next to oracle._self_test(); KillableJsonRpcService
+  delegates to the shared JsonRpcService through a new
+  `start_new_session` kwarg (one spawn-wiring authority); failed-
+  scenario work bases are registered up front so failures are
+  cleaned up too. Rounds 2 and 3: PASS.
+- Aristotle (performance) round 1 PASS; measured the final battery:
+  4-matrix ~3.9 s, crash positive ~12-13 s, negative ~8 s, total
+  step-5 gate ~33 s under `nice`; ledger inventory, frame tracking
+  and member-set checks are O(small) with no measured impact.
+  Rounds 2 and 3: PASS.
+- Gibbs (wire integrity) round 1 PASS with six P3 observations;
+  dispositions: windows_housekeeping is recorded as probe-only and
+  moved to NOT PROVEN in resource-record.md; the -32001 over-limit
+  close path and the >16-in-flight queue race are recorded as NOT
+  PROVEN (step-6 territory); commit_nonce stays `$ignore` (random
+  per creation, equality property verified); frame_sizes are
+  documented as run-specific maxima. Rounds 2 and 3: PASS; round-3
+  P3 documented: the harness targets the rust/go product pair, and
+  a same-implementation pair (two Go products) would collide work
+  bases and fail loudly (out of contract, no false-positive risk).
+- Locke (API/docs/records) round 1 FAIL: P1 — the crash harness
+  never swapped binaries; the per-iteration tuples closed over the
+  fixed argparse values, so the committed crash.json "go->rust"
+  entries were mislabeled rust->go re-runs. Fix in commit
+  58a772b4 (swapped binaries per iteration) and in this wave
+  (direction labels are now derived from each binary's
+  system.describe `implementation` probe, with a probe-failure
+  fallback label for the /bin/false negative control; any argv
+  order yields truthful labels). Evidence regenerated at the final
+  revision: crash.json 6/6 in both real directions with zero
+  leftover processes; crash-negative.json 6/6 fail with honest
+  fallback labels. P2s: README case count corrected 38->37; the
+  evidence README identity updated to the fix-wave Go product
+  (below); this review-record entry closes the missing fix-wave
+  record. P3s: resource-record.md lists the maintenance.remove
+  real-nonce and -32001 items as NOT PROVEN; the negative-control
+  wording corrected; plan wording neutralized; the capability
+  probe now runs under the scenario deadline with a widened
+  exception set so a silent-but-alive broken binary cannot hang
+  the harness. Rounds 2 and 3: PASS.
+
+Final product identity after the fix wave (supersedes the
+pre-review paragraph): v4/go changed at 3408c64c (recover
+error-details parity); qualification build `nice go -C v4/go build
+-buildvcs=false -o ... ./cmd/iprange` (go1.26.4 linux/amd64):
+product SHA-256
+1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9,
+worker unchanged
+16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e.
+The Rust product binary is unchanged. Gate battery at the
+final fix revision (all under `nice`; evidence in v4/cli/evidence/):
+rust 37/37 (oracle 37), go 37/37 (oracle 37), rust_to_go and
+go_to_rust 13 executed / 24 skipped (oracle 22) per direction,
+0 failed; golden 53; sensitivity 14; go plain + v4work suites PASS;
+tests.d 100/100; go mmap trace PASS; rust mmap storage (343
+sources) and runtime PASS; crash harness 6/6 in both real
+directions with zero leftover processes; negative control 6/6 fail.

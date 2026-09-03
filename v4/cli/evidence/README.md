@@ -5,9 +5,11 @@ Produced 2026-09-04 on the Linux workstation (x86_64) with:
 - Rust product: `v4/rust/target/release/iprange` (product source unchanged
   in this milestone; same binary as the milestone-3 close-out).
 - Go product: qualification build `nice go -C v4/go build -buildvcs=false -o ... ./cmd/iprange`
-  (go1.26.4 linux/amd64, no embedded vcs revision; byte-stable for the
-  identical v4/go source since `d956d8f2`):
-  - product SHA-256 `4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa`
+  (go1.26.4 linux/amd64, no embedded vcs revision) at product-source
+  revision 3408c64c (v4/go last changed at 3408c64c: the recover
+  error-details member-set parity fix; identical v4/go source before
+  that since `d956d8f2`):
+  - product SHA-256 `1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9`
   - worker SHA-256 `16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e`
 - Fixture tool: `v4/rust/target/release/examples/v4-fixture`.
 
@@ -32,9 +34,10 @@ All commands ran under `nice`.
   and mid-`database.initialize_live` SIGKILL, truthful resolution,
   bounded residue, clean reopen), zero leftover processes. Each
   scenario records its own producer/consumer binary paths.
-- `crash-negative.json` — the same harness with the consumer replaced
-  by `/bin/false`: 6/6 scenarios fail (every scenario exercises both
-  binaries), proving a broken consumer is never masked.
+- `crash-negative.json` — the same harness with one slot replaced by
+  `/bin/false`: 6/6 scenarios fail in both directions, proving a
+  broken product binary (consumer in rust→go, producer in go→rust)
+  is never masked.
 
 ## Other gates at the same revision (evidence in the SOW record)
 

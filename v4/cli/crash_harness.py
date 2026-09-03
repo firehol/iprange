@@ -72,6 +72,7 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import run  # noqa: E402  (normal JSON-RPC client; import is side-effect free)
+from schema import frame
 
 # Durable artifact names (binary-format-v4.md sections 15, 15A, 20.1).
 RESERVATION_PREFIX = ".iprange-reservation-"
@@ -923,6 +924,36 @@ def no_leftover_processes():
     return leftover
 
 
+def product_implementation(binary, fallback):
+    """Probe one product binary's declared implementation name.
+
+    A binary that cannot answer the capability probe (for example the
+    /bin/false negative control) is labeled with the caller's
+    fallback name; its scenarios fail anyway, so the label is only
+    descriptive.  The probe runs under the same deadline as the
+    scenarios so a silent-but-alive binary cannot hang the harness.
+    """
+
+    try:
+        service = run.JsonRpcService([binary, "--jsonrpc"], "probe")
+        try:
+            outcome, _seen_ms, thread = call_with_worker(
+                service, "implementation-probe",
+                "iprange.v1.system.describe", {},
+                POLL_DEADLINE_SECONDS, lambda: False)
+            thread.join(timeout=1)
+            response = outcome.get("response")
+            impl = response.get("result", {}).get("implementation")
+            if impl in ("rust", "go"):
+                return impl
+        finally:
+            service.close()
+    except (AssertionError, AttributeError, OSError, TypeError,
+            ValueError, frame.FrameError):
+        pass
+    return fallback
+
+
 def executable(value, label):
     """Validate one absolute executable path (run.py parity)."""
 
@@ -976,9 +1007,13 @@ def main():
 
     failed = 0
     work_dirs = []
-    for producer_name, consumer_name, producer_bin, consumer_bin in (
-            ("rust", "go", producer, consumer),
-            ("go", "rust", consumer, producer)):
+    producer_impl = product_implementation(producer, "producer")
+    consumer_impl = product_implementation(consumer, "consumer")
+    pairs = (
+        (producer_impl, consumer_impl, producer, consumer),
+        (consumer_impl, producer_impl, consumer, producer),
+    )
+    for producer_name, consumer_name, producer_bin, consumer_bin in pairs:
         direction = f"{producer_name}->{consumer_name}"
         work_base = os.path.join(
             args.work_dir, f"{producer_name}-{consumer_name}")
