@@ -55,9 +55,13 @@ Implementation status (2026-09-01):
   passed before the d956d8f2 production fix) and the global method-
   class actor routing as insufficient for milestone-4 transformations.
   The explicit-actor decision (1A) was adopted: every rpc case step
-  declares actor producer|consumer; the current wave migrates all case
-  files, re-runs the five-scope review on the final functional tree,
-  and proceeds to milestone 4 (delivery step 5).
+  declares actor producer|consumer. The explicit-actor wave is
+  committed (fb6f5d8c) with the five-scope rerun and glm-5.3-responses
+  confirmation PASS; a third gate review removed the last routing
+  fallback (single-authority model, sensitivity steps declare actors)
+  and corrected the binary/review identity records. Milestone 3 is
+  re-closed; milestone 4 (delivery step 5) proceeds with the expanded
+  scope recorded below.
 
 ## Requirements
 
@@ -3051,15 +3055,27 @@ round-7 fixes at the new HEAD.
   actor exits 1 with 11 case FAILs; golden 53; sensitivity 14; go
   plain + v4work suites, vet both modes, gofmt clean; tests.d
   100/100; mmap trace PASS; rust 851 passed / 0 failed.
-- Milestone-3 closure evidence is consistent: the functional repair
-  (actor-semantics matrices), the exact-final-code five-scope rerun,
-  and the glm-5.3-responses whole-milestone confirmation all target
-  the same committed revision. Final lifecycle commit for the
-  explicit-actor wave and its records:
-  fb6f5d8c831410565b7df7a528de40a1e56a686e. Worktree clean at that
-  revision; v4/go is unchanged from d956d8f2, so the close-out
-  product identity remains product SHA-256
-  8a30e703e5988da698954bb0c47e1d8364010f6b81f6b3c0d68ec00eea334de6
-  and worker SHA-256
-  7033f26bfd459b555d6a610538fe1cab2347bbc2c84154adc26254e5ee335eee
-  (both embed clean d956d8f2, the last product-source revision).
+- Review identity (precise): the five-scope rerun reviewed the staged
+  explicit-actor tree over ccdda588 whose exact content is commit
+  fb6f5d8c831410565b7df7a528de40a1e56a686e (the wave commit). The
+  glm-5.3-responses whole-milestone round FAILed on that staged tree
+  (records/lifecycle P2s), and PASSed at
+  65fc9b75ad5b212f3e0995df993fe96ecd265664, the record-only delta
+  that named fb6f5d8c as the final lifecycle commit. The third gate
+  review (named reviewer sol) then required: (1) the removal of the
+  method-class fallback so the declared actor is the single routing
+  authority, (2) sensitivity steps to declare actors, (3) precise
+  binary identity, (4) stale status correction - each addressed by
+  the final correction wave recorded below, which also runs one final
+  exact-tree review on its committed revision.
+- Binary identity (precise): the close-out binaries are now
+  qualification builds with -buildvcs=false (no embedded revision),
+  so their bytes are stable for the identical v4/go source regardless
+  of lifecycle HEAD. Source identity proof: git diff d956d8f2..HEAD
+  -- v4/go is empty (v4/go has not changed since the last
+  product-source revision d956d8f2); the earlier recorded hashes
+  (product 8a30e703..., worker 7033f26b...) were builds that embed
+  vcs.revision d956d8f2, and a rebuild at any later lifecycle commit
+  embeds that commit's revision and therefore hashes differently -
+  those hashes remain valid for their exact builds, but they are not
+  the close-out identity.

@@ -8,14 +8,15 @@ independent scalar interval oracle, and a machine-readable provenance report.
 
 Cross-language matrices (``rust_to_go``, ``go_to_rust``) are real
 two-binary proofs: every rpc step declares the service role that executes
-it (``actor: producer|consumer`` in the case schema), and in a mixed
-matrix the producer steps run on the producer binary while the consumer
-steps run on the consumer binary, in separate service processes that share
-only the per-case work directory.  The declared actor is the single
-routing authority; method names never imply a role, so transformations
+it (``actor: producer|consumer``, required by the case schema; a step
+without one is a runner defect), and in a mixed matrix the producer
+steps run on the producer binary while the consumer steps run on the
+consumer binary, in separate service processes that share only the
+per-case work directory.  The declared actor is the single routing
+authority; method names never imply a role, so transformations
 (snapshot, recover, history projection, algebra publication) can run on
-either side.  Single-language matrices run both roles on the one selected
-executable.  A case that cannot exercise both actors is skipped with its
+either side.  Single-language matrices run both roles on the one
+selected executable.  A case that cannot exercise both actors is skipped with its
 reason, so a mixed-direction PASS always means both binaries actually
 served; a mixed direction that executes no both-actor case fails as a
 matrix.  Per-case report entries record the SHA-256 and executed-step
@@ -50,91 +51,24 @@ CAPTURE_PLACEHOLDER = "$CAPTURE/"
 # go_to_rust) runs every case through two real product services that share
 # only the per-case work directory: the producer service executes artifact
 # creation/mutation steps, the consumer service executes observation and
-# transformation steps.  Every rpc case step declares its actor explicitly
-# (schema/cases.py); these method-class sets are ONLY the fallback for
-# tool-built step dicts that bypass the case schema (sensitivity gate).
-# The declared actor is the single routing authority; the split is a
-# property of the step, not of the method.
-PRODUCER_METHODS = frozenset({
-    "iprange.v1.algebra.publish",
-    "iprange.v1.commit.resolve",
-    "iprange.v1.current.publish",
-    "iprange.v1.database.create",
-    "iprange.v1.database.create.resolve",
-    "iprange.v1.database.initialize_live",
-    "iprange.v1.database.live_residue.resolve",
-    "iprange.v1.database.live_transition.resolve",
-    "iprange.v1.database.metadata.replace",
-    "iprange.v1.database.reclaim",
-    "iprange.v1.database.reset_live",
-    "iprange.v1.direct.replace",
-    "iprange.v1.feeds.create",
-    "iprange.v1.feeds.delete",
-    "iprange.v1.feeds.import",
-    "iprange.v1.feeds.rename",
-    "iprange.v1.feeds.replace",
-    "iprange.v1.history.project",
-    "iprange.v1.maintenance.remove",
-    "iprange.v1.publication.residue.remove",
-    "iprange.v1.publication.resolve",
-    "iprange.v1.recover",
-    "iprange.v1.retention.first_seen.refresh",
-    "iprange.v1.retention.last_seen.refresh",
-    "iprange.v1.snapshot",
-})
-CONSUMER_METHODS = frozenset({
-    "iprange.v1.algebra.compare",
-    "iprange.v1.algebra.count",
-    "iprange.v1.cancel",
-    "iprange.v1.database.info",
-    "iprange.v1.database.metadata.get",
-    "iprange.v1.export",
-    "iprange.v1.publication.inspect",
-    "iprange.v1.join.direct",
-    "iprange.v1.join.membership",
-    "iprange.v1.maintenance.list",
-    "iprange.v1.query.cardinalities",
-    "iprange.v1.query.matching_feeds",
-    "iprange.v1.query.overlaps",
-    "iprange.v1.reader.close",
-    "iprange.v1.reader.feeds.close",
-    "iprange.v1.reader.feeds.next",
-    "iprange.v1.reader.feeds.open",
-    "iprange.v1.reader.info",
-    "iprange.v1.reader.lookup",
-    "iprange.v1.reader.matching_feeds",
-    "iprange.v1.reader.metadata",
-    "iprange.v1.reader.open",
-    "iprange.v1.reader.ranges.close",
-    "iprange.v1.reader.ranges.next",
-    "iprange.v1.reader.ranges.open",
-    "iprange.v1.recovery.inspect",
-    "iprange.v1.system.describe",
-    "iprange.v1.validate",
-})
+# transformation steps.  Every rpc step declares its actor explicitly
+# (schema/cases.py requires it), and that declared actor is the single
+# routing authority: the split is a property of the step, never of the
+# method name.
 ALL_ACTORS = ("producer", "consumer")
 
 
-def method_actor(method):
-    """Return the service role that executes a JSON-RPC method."""
-    if method in PRODUCER_METHODS:
-        return "producer"
-    if method in CONSUMER_METHODS:
-        return "consumer"
-    raise ValueError(f"method {method!r} has no actor classification")
-
-
 def declared_actor(step):
-    """Return the declared actor of an rpc step.
+    """Return the declared service role of an rpc step.
 
-    The case schema requires ``actor`` on every rpc step; the
-    method-class fallback exists only for tool-built step dicts that
-    bypass the schema (sensitivity gate).
+    ``actor`` is required: no method-name fallback exists, so a step
+    that omits it is a runner defect, not a routing decision.
     """
 
     actor = step.get("actor")
     if actor is None:
-        actor = method_actor(step["method"])
+        raise ValueError(
+            f"rpc step for method {step.get('method')!r} declares no actor")
     return actor
 
 
