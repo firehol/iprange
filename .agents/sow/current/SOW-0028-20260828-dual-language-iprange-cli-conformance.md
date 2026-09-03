@@ -2813,7 +2813,9 @@ round-7 fixes at the new HEAD.
   service for every mixed-matrix case (separate `--jsonrpc`
   subprocesses sharing only the per-case work directory). Actor
   routing is a method-class map (PRODUCER_METHODS /
-  CONSUMER_METHODS in run.py); captures are actor-scoped and a
+  CONSUMER_METHODS in run.py) — superseded (Decision 1A, second
+  gate; single-authority declared-actor model, third gate); captures
+  are actor-scoped and a
   cross-actor reference is an assertion error; cases are
   pre-classified so mixed PASS requires both actors to have executed
   steps. The report schema is v3 and records per-actor SHA-256 and
@@ -2968,8 +2970,10 @@ round-7 fixes at the new HEAD.
   language matrices run both roles on the same executable; mixed
   matrices run them on the two real binaries. Only filesystem paths
   may cross actors; handles stay actor-local in mixed mode. The
-  method-name map remains only as a fallback for tool-built step
-  dicts that bypass the case schema (sensitivity gate).
+  method-name map was kept only as a fallback for tool-built step
+  dicts that bypass the case schema (sensitivity gate) — superseded
+  by the third gate review below, which removed every fallback and
+  made the declared actor the single authority.
 - Implementation of the decision:
   - v4/cli/schema/cases.py: rpc steps require `actor` (enum
     producer|consumer).
@@ -3079,3 +3083,59 @@ round-7 fixes at the new HEAD.
   embeds that commit's revision and therefore hashes differently -
   those hashes remain valid for their exact builds, but they are not
   the close-out identity.
+
+### 2026-09-03 — third gate review wave: single-authority actor model, final exact-tree review PASS
+
+- The named reviewer's four findings and their corrections:
+  1. P2 two routing authorities: run.py fell back to the method-name
+     classification when a step omitted actor, and the sensitivity
+     gate's synthetic steps used that bypass. Correction: deleted
+     PRODUCER_METHODS, CONSUMER_METHODS, and method_actor() from
+     run.py; declared_actor() now requires step["actor"] and raises
+     on absence; all 9 synthetic sensitivity steps declare
+     "actor": "consumer" (commit 65479dc2). No routing authority
+     other than the declared actor exists anywhere in v4/.
+  2. P2 recorded binary identity: go build embeds the current
+     commit's vcs.revision, so any lifecycle commit changes binary
+     hashes even with unchanged Go source; the close-out record must
+     not describe later builds as byte-identical. Correction: the
+     close-out identity is now the qualification build
+     `nice go -C v4/go build -buildvcs=false -o ... ./cmd/iprange`
+     (and ./cmd/iprange-v4-worker) with go1.26.4 linux/amd64, which
+     embeds no vcs metadata and is byte-stable for identical v4/go
+     source (rebuild reproduced the exact product SHA-256). Close-out
+     identity: product
+     4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa,
+     worker
+     16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e.
+     Source identity proof: git diff d956d8f2..HEAD -- v4/go is empty
+     (the last product-source revision is d956d8f2). The earlier
+     hashes (8a30e703..., 7033f26b...) remain valid only for their
+     exact vcs-embedded builds and are not the close-out identity.
+  3. P2 exact-final-review claim: the five-scope rerun reviewed the
+     staged tree whose content is commit fb6f5d8c; glm FAILed on
+     that staged tree (records/lifecycle) and PASSed at 65fc9b75,
+     the record-only commit that named fb6f5d8c. The third-gate
+     corrections were reviewed at their own committed revision
+     65479dc2 by the same five reviewers (verdicts below) and by the
+     glm-5.3-responses whole-milestone confirmation below.
+  4. P3 stale status: the Status block now states the explicit-actor
+     wave and the third-gate corrections are finished and milestone 3
+     is re-closed.
+- Final exact-tree review verdicts at commit 65479dc2 (tree clean;
+  v4/go diff empty since d956d8f2): Gauss (Rust parity) PASS,
+  Avicenna (Go idioms) PASS, Aristotle (performance) PASS, Gibbs
+  (wire integrity) PASS, Locke (API/docs/records) PASS. P3s fixed in
+  this record: close-out hashes + build command recorded (above),
+  supersede annotations on the Decision-1A fallback sentence and the
+  method-class routing claim in the re-close wave record.
+- Gate evidence at 65479dc2 with the qualification binaries (all
+  under nice): go 34/34 (oracle 23), rust 34/34 (oracle 23), c 34
+  skipped, rust_to_go and go_to_rust 11 executed / 23 skipped
+  (oracle 8), /bin/false as either actor exits 1 with 11 case FAILs
+  (no capability-masking skips), golden 53, sensitivity 14, go plain
+  + v4work suites, vet both modes, gofmt clean.
+- glm-5.3-responses confirmation on the same committed revision is
+  recorded below; with it, milestone-3 closure evidence (functional
+  repair, exact-final-code five-scope rerun, glm whole-milestone
+  confirmation, binary identity) all targets one committed revision.
