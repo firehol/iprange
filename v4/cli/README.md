@@ -84,14 +84,21 @@ nice python3 v4/cli/check_golden.py        # 53 golden wire exchanges
 nice python3 v4/cli/sensitivity_gate.py    # 14 broken-server modes
 ```
 
-- `cases/` — the declarative method-family cases (34 files). Every
+- `cases/` — the declarative method-family cases (38 files). Every
   rpc step declares its service role explicitly (`actor: producer` for
   artifact creation/mutation, `actor: consumer` for observation and
   transformation), so a transformation can run on either binary in a
   mixed matrix. Producer-created cross-language cases:
   `mixed.direct-created`, `mixed.membership-created`,
   `mixed.transform-created` (the consumer binary snapshots a database
-  the producer built and reads it back).
+  the producer built and reads it back),
+  `mixed.live-coordination` (a live reader in one binary stays pinned
+  on its generation while the other binary commits, then reclamation
+  is proven after close), and `workflow.publisher` (the full
+  update-ipsets six-step production sequence with interleaved
+  cross-binary verification and per-feed failure isolation).
+  `resource.limits` proves the product-boundary ceilings (response
+  object limit, reader/cursor capacity, system limits report).
 - `golden/` — complete request/response exchanges generated from the
   Rust binary and validated against the strict Python schemas.
 - `schema/` — the machine authority: framing, methods, results, and
@@ -126,6 +133,33 @@ table:
   every request and response frame (LF terminator included, one
   physical line per frame; the same unit for both directions) and
   reports the per-method maximum request and response size.
+
+### Step-5 product-interface gates
+
+- `resource-record.md` — the delivery-step-5 resource record: the
+  documented frame/response-object/batch/reader/cursor ceilings, the
+  `resource.limits` case evidence, and the adapter memory evidence.
+- `crash_harness.py` — process-level interruption proof at the product
+  interface: drives the normal JSON-RPC client (reusing `run.py`'s
+  service and fixture code — no production test hook), kills the
+  producer at a durable engine marker mid-`current.publish` and
+  mid-`database.initialize_live`, then proves with both consumer
+  binaries in both directions that resolution is truthful, residue is
+  bounded, and reopen succeeds:
+
+```bash
+RUST_IPRANGE=$PWD/v4/rust/target/release/iprange
+GO_IPRANGE=/tmp/iprange-go
+FIXTURE_TOOL=$PWD/v4/rust/target/release/examples/v4-fixture
+nice python3 v4/cli/crash_harness.py --producer "$RUST_IPRANGE" --consumer "$GO_IPRANGE" \
+  --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w-crash --json-report /tmp/crash-report.json
+nice python3 v4/cli/crash_harness.py --producer "$GO_IPRANGE" --consumer "$RUST_IPRANGE" \
+  --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w-crash --json-report /tmp/crash-report.json
+```
+
+  The first command runs the harness in both directions
+  (producer=rust then producer=go) in one invocation; the report
+  schema is `iprange-cli-crash-report-v1`.
 
 ## Known limitations
 
