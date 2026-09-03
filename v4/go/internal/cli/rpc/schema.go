@@ -33,7 +33,9 @@ const (
 
 // RequestId is an exact JSON string or an integral JSON number. The
 // raw text is preserved so every integral literal the client sends is
-// echoed byte-for-byte.
+// echoed byte-for-byte, except the literal -0, which is echoed as 0 to
+// match the Rust serde_json normalization (both the response echo and
+// the cancellation correlation key use the same canonical form).
 type RequestId struct {
 	// IsString selects the string form; otherwise the id is a number.
 	IsString bool
@@ -154,13 +156,30 @@ func validCancelParams(params json.RawMessage) bool {
 	return isIntegralNumberRaw(raw)
 }
 
+// canonicalIntegralText returns the canonical text of an integral JSON
+// number. serde_json normalizes the literal -0 to 0, so both the
+// request-id echo and the cancel correlation key must use this same
+// canonical text for same-batch cancellation to be byte-parity with the
+// Rust binary.
+func canonicalIntegralText(raw json.RawMessage) (string, bool) {
+	t := bytes.TrimSpace(raw)
+	if !integralText(t) {
+		return "", false
+	}
+	if bytes.Equal(t, []byte("-0")) {
+		t = []byte("0")
+	}
+	return string(t), true
+}
+
 // numberCancelKey maps the `cancel.request_id` number to its
 // canonical key, or returns ok==false for a non-integral value.
 func numberCancelKey(raw json.RawMessage) (string, bool) {
-	if !isIntegralNumberRaw(raw) {
+	text, ok := canonicalIntegralText(raw)
+	if !ok {
 		return "", false
 	}
-	return "n:" + string(bytes.TrimSpace(raw)), true
+	return "n:" + text, true
 }
 
 // isIntegralNumberRaw reports whether the raw JSON value is an
@@ -192,15 +211,11 @@ func validID(raw json.RawMessage) (*RequestId, bool) {
 		return &id, true
 	}
 	if t[0] == '-' || (t[0] >= '0' && t[0] <= '9') {
-		if !integralText(t) {
+		text, ok := canonicalIntegralText(t)
+		if !ok {
 			return nil, false
 		}
-		// serde_json normalizes the literal -0 to 0 when it echoes a
-		// numeric id; echo the same bytes for byte-identical ids.
-		if bytes.Equal(t, []byte("-0")) {
-			t = []byte("0")
-		}
-		id := RequestIdFromNumber(string(t))
+		id := RequestIdFromNumber(text)
 		return &id, true
 	}
 	return nil, false

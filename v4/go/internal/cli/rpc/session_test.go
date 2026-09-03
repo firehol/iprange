@@ -137,6 +137,53 @@ func TestEmptyBatchRejected(t *testing.T) {
 	}
 }
 
+func TestRequestIDMinusZeroEchoedAsZero(t *testing.T) {
+	// serde_json parity: the numeric literal -0 is echoed as 0.
+	out, err := runService(t,
+		`{"jsonrpc":"2.0","id":-0,"method":"iprange.v1.system.describe","params":{}}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	if !strings.Contains(out, `"id":0`) || strings.Contains(out, `-0`) {
+		t.Fatalf("output = %q, want an id of 0 with no -0 literal", out)
+	}
+}
+
+func TestSameBatchCancelOmitsMinusZeroSibling(t *testing.T) {
+	// A cancel targeting request_id -0 must correlate with the pending
+	// numeric id -0 (canonical key n:0) so the sibling is omitted, exactly
+	// like Rust serde_json-normalized cancellation.
+	out, err := runService(t,
+		`[{"jsonrpc":"2.0","id":-0,"method":"iprange.v1.system.describe","params":{}},`+
+			`{"jsonrpc":"2.0","method":"iprange.v1.cancel","params":{"request_id":-0}},`+
+			`{"jsonrpc":"2.0","id":2,"method":"iprange.v1.system.describe","params":{}}]`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := lines(out)
+	if len(got) != 1 {
+		t.Fatalf("got %d lines, want 1", len(got))
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal([]byte(got[0]), &arr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(arr) != 1 || arr[0]["id"] != float64(2) {
+		t.Fatalf("cancelled -0 sibling must be omitted, got %v", arr)
+	}
+}
+
+func TestNumberCancelKeyNormalizesMinusZero(t *testing.T) {
+	key, ok := numberCancelKey(json.RawMessage(`-0`))
+	if !ok || key != "n:0" {
+		t.Fatalf("numberCancelKey(-0) = %q, %v; want %q, true", key, ok, "n:0")
+	}
+	key, ok = numberCancelKey(json.RawMessage(`0`))
+	if !ok || key != "n:0" {
+		t.Fatalf("numberCancelKey(0) = %q, %v; want %q, true", key, ok, "n:0")
+	}
+}
+
 func TestSameBatchCancelOmitsEarlierSibling(t *testing.T) {
 	out, err := runService(t,
 		`[{"jsonrpc":"2.0","id":"1","method":"iprange.v1.system.describe","params":{}},`+

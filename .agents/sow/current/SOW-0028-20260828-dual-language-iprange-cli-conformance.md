@@ -2298,7 +2298,8 @@ round-7 fixes at the new HEAD.
   `--matrix go`: 31/31 PASS, 15 oracle checks;
   `--matrix rust_to_go`: 31/31 PASS; `--matrix go_to_rust`: 31/31
   PASS (all with `--allow-skips` for unshipped single-language C
-  surface).
+  surface) — the mixed 31/31 claim is a false positive (each case ran
+  only the consumer binary); see the 2026-09-03 reopen record.
 - Static gates: `v4/cli/check_golden.py` 53 exchanges PASS;
   `v4/cli/sensitivity_gate.py` 14 modes PASS.
 - Go suites at this HEAD: `nice go -C v4/go test ./... -count=1`
@@ -2419,7 +2420,9 @@ round-7 fixes at the new HEAD.
 - Re-validation at the final tree (matrix dirs /tmp/cli-m3v1-3,
   fresh per matrix) — all green:
   - Matrix go 31/31, rust_to_go 31/31, go_to_rust 31/31 (fresh
-    fixtures per matrix; oracle 15 in matrix go).
+    fixtures per matrix; oracle 15 in matrix go) — the mixed 31/31
+    claim is a false positive (each case ran only the consumer
+    binary); see the 2026-09-03 reopen record.
   - check_golden.py 53 exchanges PASS; sensitivity_gate.py 14 modes
     PASS.
   - Go suite 22 packages PASS; `-tags v4work` PASS; go vet clean;

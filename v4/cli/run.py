@@ -446,12 +446,11 @@ class CaseRunner:
                   if current is not None and isinstance(current.get("source"), dict) else None)
         if nested is not None:
             sources["params.current.source"] = nested
+        # history.project carries the last-seen database directly in
+        # params.last_seen ({path, mode}); it is one more live source.
         last_seen = params.get("last_seen") if isinstance(params.get("last_seen"), dict) else None
-        projection = (last_seen.get("source")
-                      if last_seen is not None and isinstance(last_seen.get("source"), dict)
-                      else None)
-        if projection is not None:
-            sources["params.last_seen.source"] = projection
+        if last_seen is not None:
+            sources["params.last_seen"] = last_seen
         # history.project reports the live close facts as source_closes
         # (reader order); the other live-source families use source_close.
         close_member = "source_closes" if method == "iprange.v1.history.project" else "source_close"
