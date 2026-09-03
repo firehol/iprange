@@ -3516,3 +3516,18 @@ directions with zero leftover processes; negative control 6/6 fail.
   maintenance.remove, windows_housekeeping kind) is the next
   milestone in this SOW; SOW-0030 remains the engine performance
   tracker.
+
+### 2026-09-04 — milestone 5 starts (delivery step 6: consolidated benchmark harness and measured ceilings)
+
+- Step-6 scope: the consolidated benchmark harness announced in the
+  plan (`v4/cli/benchmarks/` reserved) with workload manifests for
+  the update-ipsets surface and measured Go-vs-Rust ceilings at the
+  product interface, plus the step-5 NOT-PROVEN items that need a
+  pipelining client or raw frames (>16-in-flight `server_busy`
+  race, -32001 over-limit close path, real-nonce
+  `maintenance.remove`, `windows_housekeeping` kind). Ceiling
+  methodology and acceptance will be recorded in the step-6
+  implementation plan before any implementation starts, following
+  the SOW-0027 performance-gate lessons (matched, alternating,
+  same-host samples; measured ceilings per the user's 1.3x CPU /
+  peak-RSS acceptance contract).
