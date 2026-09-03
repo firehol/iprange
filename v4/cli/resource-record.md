@@ -34,5 +34,5 @@ Go matrix, fresh work dir, under `/usr/bin/time -v`: peak RSS **29,692 kB** (Pyt
 
 ## PROVEN vs deferred
 
-PROVEN: advertised limits; `output_limit` on oversized inline results; reader/cursor 64+1 capacity (`server_busy`); frame-layer batch bound 1..16; bounded adapter memory by design and gates.
-DEFERRED to step 6: latency/throughput, engine raw RSS ceilings, memory profiles, and the >16-in-flight `server_busy` race (needs a pipelining client, not expressible in the declarative suite).
+PROVEN: advertised limits; `output_limit` on oversized inline results; reader/cursor 64+1 capacity (`server_busy`); frame-layer batch bound 1..16; bounded adapter memory by design and gates; `maintenance.list` reports the `scratch`/`reservation`/`publication_temp` kinds on Linux and the fourth kind (`windows_housekeeping`) is live-probed `os_unsupported`/`read_only_failure` on Linux in both products (not committed as a case step because the kind is platform-bound by design).
+NOT PROVEN here: the >16-in-flight `server_busy` race (needs a pipelining client, not expressible in the declarative suite); the -32001 over-limit-frame close path (the declarative runner refuses to send >1 MiB frames, so the claim rests on `system.describe` and the product constants); `maintenance.remove` against a real reservation nonce handle (nonce names are runtime-random and the declarative capture model cannot hold one; the suite proves the `invalid_argument` refusal only). These remain step-6 benchmark/qualification territory together with latency/throughput and engine RSS ceilings.

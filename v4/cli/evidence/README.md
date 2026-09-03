@@ -27,10 +27,14 @@ All commands ran under `nice`.
   `frame_sizes` maxima.
 - `crash.json` — `iprange-cli-crash-report-v1` from
   `v4/cli/crash_harness.py` in both directions (producer=rust with
-  consumer=go, producer=go with consumer=rust): 6/6 scenarios pass
-  (mid-`current.publish` and mid-`database.initialize_live` SIGKILL,
-  truthful resolution, bounded residue, clean reopen), zero leftover
-  processes.
+  consumer=go, producer=go with consumer=rust; the harness swaps the
+  binaries per direction): 6/6 scenarios pass (mid-`current.publish`
+  and mid-`database.initialize_live` SIGKILL, truthful resolution,
+  bounded residue, clean reopen), zero leftover processes. Each
+  scenario records its own producer/consumer binary paths.
+- `crash-negative.json` — the same harness with the consumer replaced
+  by `/bin/false`: 6/6 scenarios fail (every scenario exercises both
+  binaries), proving a broken consumer is never masked.
 
 ## Other gates at the same revision (evidence in the SOW record)
 

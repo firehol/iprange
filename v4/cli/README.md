@@ -84,7 +84,7 @@ nice python3 v4/cli/check_golden.py        # 53 golden wire exchanges
 nice python3 v4/cli/sensitivity_gate.py    # 14 broken-server modes
 ```
 
-- `cases/` — the declarative method-family cases (38 files). Every
+- `cases/` — the declarative method-family cases (37 files). Every
   rpc step declares its service role explicitly (`actor: producer` for
   artifact creation/mutation, `actor: consumer` for observation and
   transformation), so a transformation can run on either binary in a

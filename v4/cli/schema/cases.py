@@ -82,6 +82,11 @@ _EXPECT_ERROR = {
         "properties": {
             "code": {"type": "string", "min_len": 1},
             "outcome": {"type": "string", "min_len": 1},
+            # Exact error-details member set plus value expectations
+            # ($ignore supported).  The member set is enforced by the
+            # runner: absent members fail, so absent-vs-null parity
+            # regressions are caught by the corpus.
+            "details": {"type": "object"},
         },
         "required": ["code"],
         "additional": False,

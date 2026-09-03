@@ -168,29 +168,9 @@ class KillableJsonRpcService(run.JsonRpcService):
     """
 
     def __init__(self, argv, implementation, *, cwd=None):
-        self.argv = list(argv)
-        self.implementation = implementation
-        self.proc = subprocess.Popen(
-            self.argv,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=child_environment(),
-            cwd=cwd,
-            start_new_session=True,
-        )
+        super().__init__(argv, implementation, cwd=cwd,
+                         start_new_session=True)
         record_spawn(self.proc)
-        self.lock = threading.Lock()
-        self.stderr_tail = []
-
-        def _drain():
-            for raw in self.proc.stderr:
-                self.stderr_tail.append(raw.decode("utf-8", "replace"))
-                if len(self.stderr_tail) > 20:
-                    self.stderr_tail.pop(0)
-
-        self.drainer = threading.Thread(target=_drain, daemon=True)
-        self.drainer.start()
 
     def kill_process_group(self):
         """SIGKILL exactly the process group this service spawned."""
@@ -996,20 +976,26 @@ def main():
 
     failed = 0
     work_dirs = []
-    for producer_name, consumer_name in (("rust", "go"), ("go", "rust")):
+    for producer_name, consumer_name, producer_bin, consumer_bin in (
+            ("rust", "go", producer, consumer),
+            ("go", "rust", consumer, producer)):
         direction = f"{producer_name}->{consumer_name}"
+        work_base = os.path.join(
+            args.work_dir, f"{producer_name}-{consumer_name}")
         for name, runner in (
-                ("A1", lambda report: scenario_a1(
-                    direction, producer, consumer, args.work_dir, report)),
-                ("A2", lambda report: scenario_a2(
-                    direction, producer, consumer, args.work_dir, report)),
-                ("B", lambda report: scenario_b(
-                    direction, producer, consumer, args.work_dir,
-                    fixture_tool, report))):
+                ("A1", lambda report, w=work_base, p=producer_bin,
+                 c=consumer_bin: scenario_a1(
+                     direction, p, c, w, report)),
+                ("A2", lambda report, w=work_base, p=producer_bin,
+                 c=consumer_bin: scenario_a2(
+                     direction, p, c, w, report)),
+                ("B", lambda report, w=work_base, p=producer_bin,
+                 c=consumer_bin: scenario_b(
+                     direction, p, c, w, fixture_tool, report))):
             scenario_report = {
                 "scenario": f"{name}.{direction}",
-                "producer": f"{producer_name}:{producer}",
-                "consumer": f"{consumer_name}:{consumer}",
+                "producer": f"{producer_name}:{producer_bin}",
+                "consumer": f"{consumer_name}:{consumer_bin}",
                 "marker_seen_ms": None,
                 "kill_method": "SIGKILL process group at durable marker",
                 "destination_state": None,
@@ -1021,9 +1007,9 @@ def main():
                 "assertions": [],
                 "failures": [],
             }
-            work = None
+            work_dirs.append(work_base)
             try:
-                work = runner(scenario_report)
+                runner(scenario_report)
                 scenario_report["pass"] = True
                 print(f"PASS {scenario_report['scenario']}")
             except (ScenarioFailure, AssertionError, OSError,
@@ -1032,8 +1018,6 @@ def main():
                 scenario_report["failures"].append(str(exc))
                 print(f"FAIL {scenario_report['scenario']}: {exc}")
             report["scenarios"].append(scenario_report)
-            if work is not None:
-                work_dirs.append(work)
 
     leftover = no_leftover_processes()
     report["leftover_processes"] = leftover

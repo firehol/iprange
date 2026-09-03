@@ -527,6 +527,22 @@ class CaseRunner:
             raise AssertionError(
                 f"case {self.case['name']!r}: expected outcome {expected['outcome']!r}, "
                 f"got {data.get('outcome')!r}")
+        if "details" in expected:
+            details = data.get("details")
+            if not isinstance(details, dict):
+                raise AssertionError(
+                    f"case {self.case['name']!r}: expected error details, "
+                    f"got {details!r}")
+            if set(expected["details"]) != set(details):
+                raise AssertionError(
+                    f"case {self.case['name']!r}: error details member set mismatch: "
+                    f"expected {sorted(expected['details'])}, "
+                    f"got {sorted(details)}")
+            for name, value in expected["details"].items():
+                if not self.matches_expected(value, details[name]):
+                    raise AssertionError(
+                        f"case {self.case['name']!r}: error details {name!r} "
+                        f"mismatch: expected {value!r}, got {details[name]!r}")
 
     def process_captures(self, pointers, root, actor):
         for pointer in pointers:
@@ -1032,7 +1048,8 @@ class CaseRunner:
 class JsonRpcService:
     """Strict JSON-RPC stdio client over one persistent subprocess."""
 
-    def __init__(self, argv, implementation, *, cwd=None):
+    def __init__(self, argv, implementation, *, cwd=None,
+                 start_new_session=False):
         self.argv = list(argv)
         self.implementation = implementation
         self.proc = subprocess.Popen(
@@ -1042,6 +1059,7 @@ class JsonRpcService:
             stderr=subprocess.PIPE,
             env=child_environment(),
             cwd=cwd,
+            start_new_session=start_new_session,
         )
         self.lock = threading.Lock()
         self.stderr_tail = []
@@ -1482,6 +1500,7 @@ def main():
 
     try:
         oracle._self_test()
+        _self_test()
         use_cases = load_cases(args.cases)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         parser.error(str(exc))

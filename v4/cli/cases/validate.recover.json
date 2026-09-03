@@ -1,82 +1,228 @@
 {
-  "schema": "iprange-cli-case-v1",
+  "fixtures": [
+    {
+      "path": "membership.iprange",
+      "source": {
+        "generator": "v4_fixture",
+        "seed": 1
+      }
+    }
+  ],
   "name": "validate.recover",
   "requires": "iprange.v1.validate",
-  "fixtures": [
-    {"path": "membership.iprange", "source": {"generator": "v4_fixture", "seed": 1}}
-  ],
+  "schema": "iprange-cli-case-v1",
   "steps": [
-    {"kind": "rpc", "method": "iprange.v1.validate",
-    "actor": "consumer",
-     "params": {"path": "$WORK/membership.iprange",
-                "mode": {"kind": "immutable_current"},
-                "validation_budget": {"max_heap_bytes": "16777216", "max_open_files": 4,
-                                      "max_scratch_bytes": "0", "max_scratch_files": 0},
-                "findings_output": {"path": "$WORK/findings.jsonl", "format": "jsonl",
-                                    "publication_policy": "fail_if_exists",
-                                    "result_budget": {"max_rows": "64",
-                                                      "max_output_bytes": "65536",
-                                                      "max_open_files": 3}}},
-     "expect_result": {
-       "result": {
-         "file_identity": {"$ignore": true},
-         "generation": {
-           "address_family": "ipv4", "commit_nonce": {"$ignore": true},
-           "database_id": {"$ignore": true}, "page_count": "10",
-           "structure_kind": "none", "transaction_id": "3",
-           "value_kind": "membership",
-           "value_tag": {"hex": "6d656d62657273686970"}
-         },
-         "progress": {
-           "bounded_possible_span_addresses": "0", "checked_unique_pages": "8",
-           "finding_count": "0", "has_unbounded_unknown": false,
-           "untraversable_subgraphs": "0"
-         },
-         "valid": true
-       },
-       "findings": {"path": {"$ignore": true}, "bytes": "0", "rows": "0",
-                    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
-     },
-     "assert_files": [
-       {"path": "findings.jsonl", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
-     ]},
-    {"kind": "rpc", "method": "iprange.v1.recovery.inspect",
-    "actor": "consumer",
-     "params": {"path": "$WORK/membership.iprange", "mode": "immutable",
-                "validation_budget": {"max_heap_bytes": "16777216", "max_open_files": 4,
-                                      "max_scratch_bytes": "0", "max_scratch_files": 0}},
-     "expect_result": {
-       "source_identity": {"$ignore": true},
-       "progress": {
-         "bounded_possible_span_addresses": "0", "checked_unique_pages": "0",
-         "finding_count": "0", "has_unbounded_unknown": false,
-         "untraversable_subgraphs": "0"
-       },
-       "candidates": [
-         {"label": "newest", "meta_page": 1, "transaction_id": "3",
-          "database_id": {"$ignore": true}, "commit_nonce": {"$ignore": true},
-          "source_identity": {"$ignore": true}}
-       ]
-     }},
-    {"kind": "rpc", "method": "iprange.v1.recover",
-    "actor": "producer",
-     "params": {"source_path": "$WORK/membership.iprange", "source_mode": "immutable",
-                "candidate": {
-                  "label": "newest", "meta_page": 1,
-                  "database_id": "00000000000000000000000000000000",
-                  "commit_nonce": "00000000000000000000000000000000",
-                  "transaction_id": "3",
-                  "source_identity": {"volume": "1", "file": "1"}
-                },
-                "destination": "$WORK/recovered.iprange",
-                "recovery_budget": {"max_heap_bytes": "16777216", "max_output_pages": "20000",
-                                    "max_open_files": 4, "max_scratch_bytes": "0",
-                                    "max_scratch_files": 0},
-                "report_output": {"path": "$WORK/recovery.jsonl", "format": "jsonl",
-                                  "publication_policy": "fail_if_exists",
-                                  "result_budget": {"max_rows": "64",
-                                                    "max_output_bytes": "65536",
-                                                    "max_open_files": 3}}},
-     "expect_error": {"code": "recovery_candidate_changed", "outcome": "not_published"}}
+    {
+      "actor": "consumer",
+      "assert_files": [
+        {
+          "path": "findings.jsonl",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      ],
+      "expect_result": {
+        "findings": {
+          "bytes": "0",
+          "path": {
+            "$ignore": true
+          },
+          "rows": "0",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "result": {
+          "file_identity": {
+            "$ignore": true
+          },
+          "generation": {
+            "address_family": "ipv4",
+            "commit_nonce": {
+              "$ignore": true
+            },
+            "database_id": {
+              "$ignore": true
+            },
+            "page_count": "10",
+            "structure_kind": "none",
+            "transaction_id": "3",
+            "value_kind": "membership",
+            "value_tag": {
+              "hex": "6d656d62657273686970"
+            }
+          },
+          "progress": {
+            "bounded_possible_span_addresses": "0",
+            "checked_unique_pages": "8",
+            "finding_count": "0",
+            "has_unbounded_unknown": false,
+            "untraversable_subgraphs": "0"
+          },
+          "valid": true
+        }
+      },
+      "kind": "rpc",
+      "method": "iprange.v1.validate",
+      "params": {
+        "findings_output": {
+          "format": "jsonl",
+          "path": "$WORK/findings.jsonl",
+          "publication_policy": "fail_if_exists",
+          "result_budget": {
+            "max_open_files": 3,
+            "max_output_bytes": "65536",
+            "max_rows": "64"
+          }
+        },
+        "mode": {
+          "kind": "immutable_current"
+        },
+        "path": "$WORK/membership.iprange",
+        "validation_budget": {
+          "max_heap_bytes": "16777216",
+          "max_open_files": 4,
+          "max_scratch_bytes": "0",
+          "max_scratch_files": 0
+        }
+      }
+    },
+    {
+      "actor": "consumer",
+      "expect_result": {
+        "candidates": [
+          {
+            "commit_nonce": {
+              "$ignore": true
+            },
+            "database_id": {
+              "$ignore": true
+            },
+            "label": "newest",
+            "meta_page": 1,
+            "source_identity": {
+              "$ignore": true
+            },
+            "transaction_id": "3"
+          }
+        ],
+        "progress": {
+          "bounded_possible_span_addresses": "0",
+          "checked_unique_pages": "0",
+          "finding_count": "0",
+          "has_unbounded_unknown": false,
+          "untraversable_subgraphs": "0"
+        },
+        "source_identity": {
+          "$ignore": true
+        }
+      },
+      "kind": "rpc",
+      "method": "iprange.v1.recovery.inspect",
+      "params": {
+        "mode": "immutable",
+        "path": "$WORK/membership.iprange",
+        "validation_budget": {
+          "max_heap_bytes": "16777216",
+          "max_open_files": 4,
+          "max_scratch_bytes": "0",
+          "max_scratch_files": 0
+        }
+      }
+    },
+    {
+      "actor": "producer",
+      "expect_error": {
+        "code": "recovery_candidate_changed",
+        "details": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "housekeeping": {
+            "artifacts": []
+          },
+          "output": {
+            "$ignore": true
+          },
+          "report": {
+            "bounded_possible_span_addresses": "0",
+            "catalog_entries": {
+              "accepted": "0",
+              "examined": "0",
+              "rejected": "0"
+            },
+            "has_unbounded_unknown": false,
+            "membership_entries": {
+              "accepted": "0",
+              "examined": "0",
+              "rejected": "0"
+            },
+            "metadata_chunks": {
+              "accepted": "0",
+              "examined": "0",
+              "rejected": "0"
+            },
+            "pages": {
+              "accepted": "0",
+              "examined": "0",
+              "io_unreadable": "0",
+              "rejected": "0"
+            },
+            "ranges": {
+              "accepted": "0",
+              "examined": "0",
+              "rejected": "0"
+            },
+            "rejected_addresses": "0",
+            "retirement_records": {
+              "accepted": "0",
+              "examined": "0",
+              "rejected": "0"
+            },
+            "structure_entries": {
+              "accepted": "0",
+              "examined": "0",
+              "rejected": "0"
+            },
+            "unknown_envelopes": "0",
+            "verified_addresses": "0"
+          },
+          "scratch": null,
+          "visible_housekeeping": []
+        },
+        "outcome": "not_published"
+      },
+      "kind": "rpc",
+      "method": "iprange.v1.recover",
+      "params": {
+        "candidate": {
+          "commit_nonce": "00000000000000000000000000000000",
+          "database_id": "00000000000000000000000000000000",
+          "label": "newest",
+          "meta_page": 1,
+          "source_identity": {
+            "file": "1",
+            "volume": "1"
+          },
+          "transaction_id": "3"
+        },
+        "destination": "$WORK/recovered.iprange",
+        "recovery_budget": {
+          "max_heap_bytes": "16777216",
+          "max_open_files": 4,
+          "max_output_pages": "20000",
+          "max_scratch_bytes": "0",
+          "max_scratch_files": 0
+        },
+        "report_output": {
+          "format": "jsonl",
+          "path": "$WORK/recovery.jsonl",
+          "publication_policy": "fail_if_exists",
+          "result_budget": {
+            "max_open_files": 3,
+            "max_output_bytes": "65536",
+            "max_rows": "64"
+          }
+        },
+        "source_mode": "immutable",
+        "source_path": "$WORK/membership.iprange"
+      }
+    }
   ]
 }
