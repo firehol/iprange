@@ -60,8 +60,15 @@ Implementation status (2026-09-01):
   confirmation PASS; a third gate review removed the last routing
   fallback (single-authority model, sensitivity steps declare actors)
   and corrected the binary/review identity records. Milestone 3 is
-  re-closed; milestone 4 (delivery step 5) proceeds with the expanded
-  scope recorded below.
+  re-closed. Milestone 4 (delivery step 5) is closed at 37721d8b:
+  the six-step publisher workflow, per-feed failure isolation,
+  cross-language mixed live coordination, the mechanical file-kind
+  ledger, the product-interface resource proof, and the
+  process-level crash harness are all qualified in both language
+  directions (records below), with the five-scope review and the
+  glm-5.3-responses whole-milestone review PASS at the exact final
+  tree. Delivery step 6 (consolidated benchmark harness and measured
+  ceilings) is the next milestone, recorded below.
 
 ## Requirements
 
@@ -3453,3 +3460,59 @@ go_to_rust 13 executed / 24 skipped (oracle 22) per direction,
 tests.d 100/100; go mmap trace PASS; rust mmap storage (343
 sources) and runtime PASS; crash harness 6/6 in both real
 directions with zero leftover processes; negative control 6/6 fail.
+
+### 2026-09-04 — milestone 4 close (delivery step 5 complete)
+
+- Final functional and evidence revision: 37721d8b (product source:
+  v4/go at 3408c64c, v4/rust unchanged). Final record-only HEAD for
+  this milestone: the commit carrying this entry (a record commit
+  cannot name its own SHA; the commit identity is the durable
+  record). Tree clean; all milestone-4 evidence committed.
+- Whole-milestone review chain at the exact final tree: five-scope
+  adversarial review rounds 1-3 (Rust parity, Go idioms/runner
+  quality, performance, wire integrity, API/docs/records) all PASS
+  at 37721d8b after the round-1 P1 fix wave; glm-5.3-responses
+  whole-milestone review PASS at 37721d8b with no remaining
+  findings (four P3 hardening items fixed in 37721d8b itself).
+- Outcome: milestone 4 (delivery step 5) is complete. Qualified at
+  the product interface in both language directions: the complete
+  six-step update-ipsets publisher workflow (current feed publish,
+  first/last-seen refresh, serialized named-feed replacement with
+  per-feed failure isolation, multi-window history projection,
+  one-scan aggregation with both joins and algebra publication,
+  snapshot/validate/recover/cleanup) composed only through JSON-RPC
+  and filesystem actions; mixed live coordination (a live reader in
+  one binary pinned on its generation while the other binary
+  commits, generation advance under pin, close facts, reclamation
+  after close); the mechanical file-kind ledger (derived from
+  executed steps, identical across languages, zero unknown); the
+  resource proof (documented ceilings, output_limit, 64+1 reader
+  and cursor capacity, limits report equality); and the process
+  level crash harness (SIGKILL at durable engine markers for
+  current.publish and database.initialize_live, truthful
+  resolution, bounded residue, clean reopen, zero leftover
+  processes, negative control fails 6/6). The recover error-details
+  member-set parity defect found by the review (Go omitting
+  scratch/output when absent) was fixed and pinned by a corpus
+  assertion.
+- Gate battery at the final revision (all under `nice`; evidence in
+  v4/cli/evidence/): rust 37/37 (oracle 37), go 37/37 (oracle 37),
+  rust_to_go and go_to_rust 13 executed / 24 skipped (oracle 22)
+  per direction, 0 failed; golden 53; sensitivity 14; go plain +
+  v4work suites PASS; vet + gofmt clean; tests.d 100/100 with the
+  Go product; go mmap trace PASS; rust mmap storage (343 sources)
+  and runtime PASS; crash harness 6/6 plus 6/6 negative; measured
+  step-5 gate cost ~33 wall-seconds.
+- Product identity: Go qualification build (-buildvcs=false,
+  go1.26.4 linux/amd64) product
+  1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9
+  at product source 3408c64c; worker
+  16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e;
+  Rust product c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8
+  (unchanged source); fixture tool d615488f038fa59deea87e0ce3340b780380fe0f2122e8e1ad65edeb25d861f1.
+- Follow-up: delivery step 6 (consolidated benchmark harness and
+  measured ceilings; the NOT-PROVEN step-5 items: >16-in-flight
+  server_busy race, -32001 over-limit close path, real-nonce
+  maintenance.remove, windows_housekeeping kind) is the next
+  milestone in this SOW; SOW-0030 remains the engine performance
+  tracker.
