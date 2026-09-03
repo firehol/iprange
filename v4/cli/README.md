@@ -101,6 +101,32 @@ nice python3 v4/cli/sensitivity_gate.py    # 14 broken-server modes
   empty; also update the `cases/` bullet above and the matrix counts
   when a new case is added).
 
+### Mechanical file-kind ledger and frame sizes
+
+Every run report carries two additive evidence fields derived
+mechanically from the executed steps — never a manually maintained
+table:
+
+- `file_kinds`: after each executed rpc step (success and
+  expected-error) and each executed legacy step, the runner
+  inventories the per-case work directory (fixture inputs excluded)
+  and classifies every file it finds: v4 database main files plus
+  snapshot/recovery destinations (`v4_main`); `.readers` live
+  sidecars; `.iprange-reservation-*.tmp` publication reservations;
+  `.iprange-scratch-*.tmp` authorized scratch; declared adapter
+  outputs (csv/jsonl/netset/ipset/ranges/legacy_binary via `output`,
+  `findings_output`, `report_output`, `removals_output`, and
+  `export.destination`); metadata delivery files (`delivery.path`);
+  anything else as `unknown`. A file that first appears by the end of
+  a step is `created_by` that step's method; a file that already
+  existed and whose path the step params reference is `opened_by`
+  that method. Files that appear and disappear inside one step are
+  transient and are not counted.
+- `frame_sizes`: the JSON-RPC client measures the raw wire bytes of
+  every request and response frame (LF terminator included, one
+  physical line per frame; the same unit for both directions) and
+  reports the per-method maximum request and response size.
+
 ## Known limitations
 
 - The Go binary currently reports `product_version "0.0.0"` to match

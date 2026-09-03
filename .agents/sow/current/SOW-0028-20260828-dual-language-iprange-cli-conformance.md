@@ -3146,3 +3146,112 @@ round-7 fixes at the new HEAD.
 - Close-out binary identity (qualification build, go1.26.4 linux/amd64, -buildvcs=false, rebuild byte-stable): product 4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa; worker 16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e. Rust binary: v4/rust/target/release/iprange built from d96797e0 (no Rust source change in any re-close wave).
 - Review chain (all on the final functional content 65479dc2): five-scope exact-tree rerun PASS (Gauss, Avicenna, Aristotle, Gibbs, Locke; P3s fixed), glm-5.3-responses whole-milestone confirmation PASS (single-authority routing, sensitivity declarations, qualification identity, five-reviewer verdicts, gate evidence all verified; the only FAIL items of that round were the absence of this record and the unnamed final HEAD, both resolved by this entry).
 - Status: milestone 3 (pure-Go JSON-RPC product executable) is re-closed with real two-binary cross-language matrices; milestone 4 (delivery step 5) proceeds per the expanded scope recorded above. All earlier stale claims are annotated; no fallback routing exists in v4/.
+
+### 2026-09-03 — milestone 4 implementation plan (recorded before implementation)
+
+Exploration summary (three own-model subagents, 2026-09-03): the
+runner `v4/cli/run.py` already executes per-step declared actors on
+persistent per-actor JSON-RPC services with captures, `assert_files`,
+strict protocol/counter checks and report schema v3 (per-actor
+sha256+step counts); it has no mid-case process control, so the
+crash proof needs a separate external harness. Both product binaries
+advertise the identical 52-method surface including the live
+coordination methods; the runner can interleave producer and consumer
+steps on one DB, and deterministic transaction ids make cross-binary
+generation equality assertable. The case corpus (34 files) proves the
+six steps only piecemeal: the full six-step composition, per-feed
+failure isolation, multi-window projection, one-scan counter
+equality, successful recover, real maintenance entries, live reader
+pinning across commits, and resource-limit boundary behaviors are not
+yet covered.
+
+Implementation plan (each item minimal-complete, all validation under
+`nice`, each wave validates before the next starts):
+
+1. W1 runner evidence (v4/cli/run.py, v4/cli/README.md):
+   - Mechanical file-kind ledger: after each executed rpc step the
+     runner inventories the work directory and classifies every
+     observed file against the spec kind table (v4 main file, live
+     sidecar `<main>.readers`, publication reservation
+     `.iprange-reservation-*.tmp`, authorized scratch
+     `.iprange-scratch-*.tmp`, adapter outputs jsonl/csv/netset,
+     metadata delivery file); the report gains two additive fields:
+     `file_kinds` (kind -> methods that created it and methods that
+     opened/transformed it, derived from executed case steps plus the
+     observed inventory) and `frame_sizes` (max request/response
+     bytes per method measured by the JSON-RPC client).
+   - No schema change to the case format; additive report fields only.
+2. W2 resource proof (new case `v4/cli/cases/resource.limits.json`,
+   new record `v4/cli/resource-record.md`, README anchor): proves at
+   the product boundary, in both single-language matrices, the
+   documented ceilings — response object `output_limit` beyond the
+   65,000-byte ceiling, `server_busy` at 17 queued requests, reader
+   capacity exhaustion at the 65th open immutable reader, cursor
+   capacity exhaustion at the 65th open cursor, and one
+   `system.describe` limits report equal in both binaries. The record
+   consolidates these observations with the existing 1 MiB frame
+   caps, 4,096 lookup/cursor-page limits, the 65 KB
+   response-object ceiling, the mmap trace gate, and the adapter
+   memory evidence (bounded RSS, no file-sized heap state).
+3. W3 six-step publisher workflow (new case
+   `v4/cli/cases/workflow.publisher.json`, two actors so both mixed
+   directions execute it): composes the full update-ipsets sequence
+   through JSON-RPC and filesystem actions — (1) `current.publish`
+   from a text fixture plus consumer open/lookup of the published
+   file; (2) `retention.first_seen.refresh` and
+   `retention.last_seen.refresh` plus consumer lookup of refreshed
+   content; (3) `feeds.replace` twice with one deliberate failure in
+   between, proving per-feed failure isolation and prior-feed
+   preservation via consumer reader lookups (one failed feed does not
+   roll back unrelated feeds already committed); (4) `history.project`
+   of at least two window cutoffs from one last-seen scan plus
+   consumer ranges read-back of both windows; (5) one-scan
+   aggregation `query.overlaps`, both joins (`join.direct`,
+   `join.membership`) and `algebra.publish` over the same source with
+   cross-method counter/cardinality equality and consumer open of the
+   published algebra output; (6) `snapshot` + `publication.resolve`,
+   `validate`, `recovery.inspect`, `maintenance.list` with real
+   entries, `database.reclaim`, and residue cleanup.
+4. W4 mixed-live coordination (new case
+   `v4/cli/cases/mixed.live-coordination.json`, two actors): producer
+   creates and initializes a live DB; consumer opens a live reader
+   and producer opens a second live reader on the same source; both
+   assert the same pinned generation (`info.transaction_id` +
+   `commit_nonce`, deterministic); producer commits two updates while
+   both readers are pinned; both pinned readers still read the pinned
+   generation (no partial replacement); both readers close; producer
+   `database.reclaim` then proves the retired generations become
+   reclamation-eligible. Runs in both mixed directions (Rust writer +
+   Go reader, Go writer + Rust reader).
+5. W5 crash harness (new external script `v4/cli/crash_harness.py`,
+   README anchor): a separate gate script that drives the normal
+   JSON-RPC frame client (reuses `run.py`'s `JsonRpcService` and
+   fixture building; adds no production method or hook). It sends a
+   producer workflow request, waits for the engine's durable
+   side-effect marker for that operation (publication reservation
+   file for `current.publish`; live sidecar/transition state for live
+   commits), kills the producer process group mid-operation, then on
+   a fresh producer process resolves the outcome with the documented
+   resolvers and asserts: no partial replacement (a consumer reads
+   the previous content), no false success (resolution reports the
+   truthful outcome), bounded residue (`maintenance.list` /
+   `publication.inspect` bounded), and reopen succeeds. Proven for
+   `current.publish` and one live commit operation, both directions
+   (producer Rust with consumer Go; producer Go with consumer Rust),
+   with the exact internal crash-point inventory left to the SDK
+   crash gates already recorded.
+6. W6 close-out: full matrix and gate battery under `nice`, five
+   own-model reviewers in their scopes, glm-5.3-responses
+   whole-milestone review, SOW records (including the mechanical
+   ledger counts and the updated mixed-matrix counts), one lifecycle
+   commit, push.
+
+Validation plan and expected cost (recorded before running): the
+full gate battery is Go+Rust product builds (~1-3 wall-minutes under
+`nice`), four matrices (rust, go, rust_to_go, go_to_rust) on the
+extended corpus (~2-5 wall-minutes each with the new two-actor
+cases), golden 53 + sensitivity 14 + tests.d + mmap trace (~1-2
+wall-minutes), and the crash harness (~1-2 wall-minutes). Total
+worst case under `nice` ~15-25 wall-minutes with bounded memory; each
+wave runs only its own validation until green, and the full battery
+runs once per gate.

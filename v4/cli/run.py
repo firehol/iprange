@@ -47,6 +47,55 @@ DEFAULT_CASE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "cas
 WORK_PLACEHOLDER = "$WORK/"
 CAPTURE_PLACEHOLDER = "$CAPTURE/"
 
+# ---- mechanical file-kind ledger ---------------------------------
+# Persistent artifact kinds driven by the v4 binary-format spec and by
+# the method param schemas.  Name-based kinds match engine artifacts
+# that are never declared in case params; declared-path kinds come from
+# the step params (and case fixtures) of the executed cases.
+KIND_V4_MAIN = "v4_main"                            # v4 database main file
+KIND_LIVE_SIDECAR = "live_sidecar"                  # <main-basename>.readers
+KIND_PUBLICATION_RESERVATION = "publication_reservation"  # .iprange-reservation-*.tmp
+KIND_AUTHORIZED_SCRATCH = "authorized_scratch"      # .iprange-scratch-*.tmp
+KIND_ADAPTER_OUTPUT = "adapter_output"              # csv/jsonl/netset/ipset/ranges...
+KIND_METADATA_DELIVERY = "metadata_delivery"        # delivery.path metadata files
+KIND_UNKNOWN = "unknown"
+
+LIVE_SIDECAR_SUFFIX = ".readers"
+LIVE_SIDECAR_RESET_SUFFIX = ".readers.reset"
+RESERVATION_PREFIX = ".iprange-reservation-"
+SCRATCH_PREFIX = ".iprange-scratch-"
+PRIVATE_TMP_SUFFIX = ".tmp"
+
+# Parameter keys whose subtree carries filesystem paths, and the
+# artifact kind the spec assigns to each slot.  Object keys recurse, so
+# ``source.path`` inherits the v4_main kind of ``source`` and
+# ``delivery.path`` inherits metadata_delivery from ``delivery``.
+DECLARED_ADAPTER_OUTPUT_KEYS = frozenset(
+    {"output", "findings_output", "report_output", "removals_output"})
+DECLARED_METADATA_DELIVERY_KEYS = frozenset({"delivery"})
+DECLARED_V4_MAIN_KEYS = frozenset({
+    "path", "paths", "source_path", "directory", "source", "current",
+    "last_seen", "input", "direct", "metadata", "candidate",
+})
+
+# Per-method peak wire-frame sizes observed by every JsonRpcService
+# client in this process (one physical line per frame; the byte counts
+# include the LF terminator for both directions).
+FRAME_SIZES = {}
+
+
+def record_frame_size(method, request_bytes, response_bytes=None):
+    """Merge one measured exchange into the process frame-size table."""
+
+    entry = FRAME_SIZES.setdefault(method, {})
+    current = entry.get("max_request_bytes", 0)
+    if request_bytes > current:
+        entry["max_request_bytes"] = request_bytes
+    if response_bytes is not None:
+        current = entry.get("max_response_bytes", 0)
+        if response_bytes > current:
+            entry["max_response_bytes"] = response_bytes
+
 # Cross-language matrix actor model.  A mixed matrix (rust_to_go,
 # go_to_rust) runs every case through two real product services that share
 # only the per-case work directory: the producer service executes artifact
@@ -164,12 +213,20 @@ class CaseRunner:
         self.fixture_intervals = {}
         self.pending_lookup = []
         self.oracle_checks = 0
+        # Mechanical file-kind ledger: kind -> created_by/opened_by
+        # method -> count, derived from executed steps plus the observed
+        # work-dir inventory (fixture inputs are never inventoried).
+        self.file_kinds = {}
+        # Absolute real paths of runner- or fixture-tool-created inputs;
+        # they are excluded from every inventory snapshot.
+        self._fixture_inputs = set()
 
     # ---- fixtures -------------------------------------------------
     def build_fixtures(self):
         for fixture in self.case.get("fixtures", []):
             path = safe_work_path(self.work_dir, fixture["path"])
             os.makedirs(os.path.dirname(path), exist_ok=True)
+            self._fixture_inputs.add(os.path.realpath(path))
             source = fixture["source"]
             if "text" in source:
                 write_text(path, source["text"])
@@ -185,6 +242,7 @@ class CaseRunner:
                     self.fixture_intervals[os.path.realpath(path)] = intervals
             elif "csv_db" in source:
                 csv_path = os.path.join(self.work_dir, f"{fixture['path']}.csv")
+                self._fixture_inputs.add(os.path.realpath(csv_path))
                 write_text(csv_path, source["csv_db"])
                 csv_kind = source.get("csv_kind", "direct")
                 if csv_kind not in ("direct", "membership"):
@@ -208,6 +266,131 @@ class CaseRunner:
                 generate_fixture(path, source, self.fixture_tool)
             else:  # case validation makes this unreachable
                 raise ValueError(f"fixture {fixture['path']!r}: no source")
+
+    # ---- mechanical file-kind ledger ------------------------------
+    def inventory(self):
+        """Snapshot of every non-fixture file under the per-case work dir.
+
+        Fixture inputs (declared in the case) are inputs, not artifacts,
+        so they never enter the ledger.  Directories are ignored; only
+        files are inventoried.
+        """
+
+        found = set()
+        for root, dirs, names in os.walk(self.work_dir):
+            for name in names:
+                candidate = os.path.join(root, name)
+                if os.path.realpath(candidate) in self._fixture_inputs:
+                    continue
+                found.add(candidate)
+        return found
+
+    def declared_paths(self, step):
+        """Map every work-dir file path referenced by a step's params to
+        its spec artifact kind.
+
+        Resolution is lexical-first: ``$WORK/<rel>`` param values resolve
+        under the work dir; any other string whose absolute form lands
+        inside the work dir also counts (the ledger only ever reports
+        work-dir files).  ``destination`` is the adapter output only for
+        export; current.publish, algebra.publish, snapshot, and recover
+        destinations are v4 main files.
+        """
+
+        method = step["method"]
+        declared = {}
+
+        def resolve(value):
+            if isinstance(value, str) and value.startswith(WORK_PLACEHOLDER):
+                return safe_work_path(self.work_dir, value[len(WORK_PLACEHOLDER):])
+            if isinstance(value, str) and not value.startswith(CAPTURE_PLACEHOLDER):
+                absolute = os.path.abspath(value)
+                real = os.path.realpath(absolute)
+                if os.path.commonpath((real, self.work_dir)) == self.work_dir:
+                    return absolute
+            return None
+
+        def visit(value, kind_hint):
+            if isinstance(value, str):
+                located = resolve(value)
+                if located is not None:
+                    declared[located] = kind_hint
+                return
+            if isinstance(value, list):
+                for item in value:
+                    visit(item, kind_hint)
+                return
+            if not isinstance(value, dict):
+                return
+            for key, sub in value.items():
+                if key == "destination":
+                    kind = (KIND_ADAPTER_OUTPUT
+                            if method == "iprange.v1.export" else KIND_V4_MAIN)
+                elif key in DECLARED_ADAPTER_OUTPUT_KEYS:
+                    kind = KIND_ADAPTER_OUTPUT
+                elif key in DECLARED_METADATA_DELIVERY_KEYS:
+                    kind = KIND_METADATA_DELIVERY
+                elif key in DECLARED_V4_MAIN_KEYS and kind_hint == KIND_V4_MAIN:
+                    # A v4-main slot under an adapter/delivery parent keeps
+                    # the parent kind (output.path is the output file, not a
+                    # database main file); otherwise the subtree is v4 main.
+                    visit(sub, KIND_V4_MAIN)
+                    continue
+                else:
+                    kind = kind_hint
+                visit(sub, kind)
+
+        visit(step.get("params", {}), KIND_V4_MAIN)
+        return declared
+
+    @staticmethod
+    def name_kind(basename):
+        """Name-derived kind for engine artifacts never declared in params."""
+
+        if basename.endswith(LIVE_SIDECAR_SUFFIX) or basename.endswith(LIVE_SIDECAR_RESET_SUFFIX):
+            return KIND_LIVE_SIDECAR
+        if basename.startswith(RESERVATION_PREFIX) and basename.endswith(PRIVATE_TMP_SUFFIX):
+            return KIND_PUBLICATION_RESERVATION
+        if basename.startswith(SCRATCH_PREFIX) and basename.endswith(PRIVATE_TMP_SUFFIX):
+            return KIND_AUTHORIZED_SCRATCH
+        return None
+
+    @staticmethod
+    def _ledger_increment(bucket, side, method):
+        counts = bucket[side]
+        counts[method] = counts.get(method, 0) + 1
+
+    def record_ledger(self, before, step):
+        """Merge one executed step's inventory delta into the ledger.
+
+        A file that appears by the end of the step is ``created_by`` that
+        step's method; a file that already existed and whose path the step
+        params reference is ``opened_by`` that method.  Files that appear
+        and disappear inside one step are transient and never counted.
+        Legacy CLI steps are recorded under the literal method name
+        "legacy" (they are point-in-time commands, not JSON-RPC methods).
+        """
+
+        method = step.get("method", "legacy")
+        declared = self.declared_paths(step)
+        after = self.inventory()
+        for path in after - before:
+            basename = os.path.basename(path)
+            kind = self.name_kind(basename)
+            if kind is None:
+                kind = declared.get(path, KIND_UNKNOWN)
+            bucket = self.file_kinds.setdefault(
+                kind, {"created_by": {}, "opened_by": {}})
+            self._ledger_increment(bucket, "created_by", method)
+        opened = {}
+        for path, kind in declared.items():
+            if path in before:
+                opened.setdefault(kind, set()).add(path)
+        for kind, paths in opened.items():
+            bucket = self.file_kinds.setdefault(
+                kind, {"created_by": {}, "opened_by": {}})
+            for _ in paths:
+                self._ledger_increment(bucket, "opened_by", method)
 
     # ---- substitutions --------------------------------------------
     def substitute(self, value, actor="consumer"):
@@ -264,6 +447,7 @@ class CaseRunner:
         method = step["method"]
         actor = declared_actor(step)
         params = self.substitute(step["params"], actor)
+        before = self.inventory()
         if not methods.known(method):
             raise AssertionError(f"case {self.case['name']!r}: unknown method {method}")
         try:
@@ -276,6 +460,7 @@ class CaseRunner:
         self.actor_steps[actor] = self.actor_steps.get(actor, 0) + 1
         if step.get("notification"):
             service.notify(method, params)
+            self.record_ledger(before, step)
             return
 
         request_id = f"case-{self.case['name']}"
@@ -290,6 +475,7 @@ class CaseRunner:
             self.process_captures(step.get("capture", []), capture_root, actor)
             for assertion in step.get("assert_files", []):
                 self.assert_file(assertion)
+            self.record_ledger(before, step)
             return
 
         result = response["result"]
@@ -316,6 +502,7 @@ class CaseRunner:
         self.process_captures(step.get("capture", []), result, actor)
         for assertion in step.get("assert_files", []):
             self.assert_file(assertion)
+        self.record_ledger(before, step)
 
     def check_expected_error(self, step, method, error):
         expected = step.get("expect_error")
@@ -738,6 +925,7 @@ class CaseRunner:
         # in a mixed matrix they belong to the consumer service binary.
         actor = "consumer"
         argv = self.substitute(step["argv"], actor)
+        before = self.inventory()
         self.actor_steps[actor] = self.actor_steps.get(actor, 0) + 1
         stdin_data = None
         if "stdin_fixture" in step:
@@ -764,6 +952,7 @@ class CaseRunner:
         self.match_stream("stderr", proc.stderr, step["stderr"])
         for assertion in step.get("assert_files", []):
             self.assert_file(assertion)
+        self.record_ledger(before, step)
 
     def match_stream(self, name, data, expectation):
         try:
@@ -870,10 +1059,14 @@ class JsonRpcService:
         with self.lock:
             request = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
             wire = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
-            if len(wire.encode("utf-8")) > frame.INPUT_FRAME_LIMIT:
+            wire_bytes = wire.encode("utf-8")
+            # Raw wire bytes of the request frame, including the LF
+            # terminator (the transport is one physical line per frame).
+            request_bytes = len(wire_bytes) + 1
+            if len(wire_bytes) > frame.INPUT_FRAME_LIMIT:
                 raise AssertionError("client request frame over limit")
             try:
-                self.proc.stdin.write(wire.encode("utf-8") + b"\n")
+                self.proc.stdin.write(wire_bytes + b"\n")
                 self.proc.stdin.flush()
             except (BrokenPipeError, OSError) as exc:
                 raise AssertionError(
@@ -882,6 +1075,9 @@ class JsonRpcService:
             if not line:
                 raise AssertionError(
                     f"service closed stdout; stderr={''.join(self.stderr_tail[-5:])}")
+            # Raw response frame as read, LF terminator included; same
+            # unit as the request frame.
+            record_frame_size(method, request_bytes, len(line))
             try:
                 return self.decode_response_line(line, request_id)
             except (frame.FrameError, UnicodeDecodeError) as exc:
@@ -899,14 +1095,19 @@ class JsonRpcService:
         with self.lock:
             request = {"jsonrpc": "2.0", "method": method, "params": params}
             wire = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
-            if len(wire.encode("utf-8")) > frame.INPUT_FRAME_LIMIT:
+            wire_bytes = wire.encode("utf-8")
+            request_bytes = len(wire_bytes) + 1
+            if len(wire_bytes) > frame.INPUT_FRAME_LIMIT:
                 raise AssertionError("client notification frame over limit")
             try:
-                self.proc.stdin.write(wire.encode("utf-8") + b"\n")
+                self.proc.stdin.write(wire_bytes + b"\n")
                 self.proc.stdin.flush()
             except (BrokenPipeError, OSError) as exc:
                 raise AssertionError(
                     f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
+            # A notification has no response frame; only the request side
+            # contributes to the per-method frame-size record.
+            record_frame_size(method, request_bytes)
 
     def decode_response_line(self, line, request_id):
         if not line.endswith(b"\n"):
@@ -1228,6 +1429,16 @@ def binary_record(path):
     }
 
 
+def merge_kind_ledger(target, ledger):
+    """Merge one case's mechanical file-kind ledger into the report root."""
+
+    for kind, counts in ledger.items():
+        bucket = target.setdefault(kind, {"created_by": {}, "opened_by": {}})
+        for side in ("created_by", "opened_by"):
+            for method, count in counts[side].items():
+                bucket[side][method] = bucket[side].get(method, 0) + count
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--c", dest="c_binary", metavar="PATH")
@@ -1300,6 +1511,10 @@ def main():
         "failed": 0,
         "skipped": 0,
         "oracle_checks": 0,
+        # Additive evidence fields: mechanical file-kind ledger and
+        # per-method peak wire-frame sizes (see README).
+        "file_kinds": {},
+        "frame_sizes": {},
     }
 
     def record_skip(name, matrix, reason):
@@ -1376,6 +1591,7 @@ def main():
         finally:
             if runner is not None:
                 runner.close_services()
+                merge_kind_ledger(report["file_kinds"], runner.file_kinds)
             if owns_work:
                 shutil.rmtree(work, ignore_errors=True)
 
@@ -1441,6 +1657,8 @@ def main():
                 "error": message,
             })
             print(f"FAIL {direction}: {message}")
+
+    report["frame_sizes"] = dict(FRAME_SIZES)
 
     print(
         f"\n{report['passed']} passed, {report['failed']} failed, "
