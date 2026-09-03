@@ -1,0 +1,408 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "mixed.live-coordination",
+  "requires": "iprange.v1.database.reclaim",
+  "fixtures": [
+    {
+      "path": "gen_a.csv",
+      "source": {
+        "text": "from,to,value\n192.0.2.10,192.0.2.14,10\n198.51.100.30,198.51.100.31,30\n"
+      }
+    },
+    {
+      "path": "gen_b.csv",
+      "source": {
+        "text": "from,to,value\n192.0.2.10,192.0.2.14,55\n198.51.100.30,198.51.100.31,60\n"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "kind": "rpc",
+      "actor": "producer",
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/live.iprange",
+        "family": "ipv4",
+        "value_kind": "direct",
+        "structure_kind": "none",
+        "value_tag": {
+          "text": "direct"
+        },
+        "reader_capacity": 2
+      },
+      "expect_result": {
+        "address_family": "ipv4",
+        "value_kind": "direct",
+        "structure_kind": "none",
+        "value_tag": {
+          "hex": "646972656374"
+        },
+        "database_id": {
+          "$ignore": true
+        },
+        "commit_nonce": {
+          "$ignore": true
+        },
+        "sidecar_id": {
+          "$ignore": true
+        },
+        "main_basename": "live.iprange",
+        "reader_capacity": 2,
+        "state": "created",
+        "residue_possible": false,
+        "housekeeping": {
+          "artifacts": []
+        },
+        "visible_housekeeping": [],
+        "directory_identity": {
+          "$ignore": true
+        },
+        "main_identity": {
+          "$ignore": true
+        },
+        "sidecar_identity": {
+          "$ignore": true
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "actor": "consumer",
+      "method": "iprange.v1.reader.open",
+      "params": {
+        "source": {
+          "path": "$WORK/live.iprange",
+          "mode": "live"
+        }
+      },
+      "expect_result": {
+        "reader": {
+          "$ignore": true
+        },
+        "info": {
+          "address_family": "ipv4",
+          "value_kind": "direct",
+          "structure_kind": "none",
+          "value_tag": {
+            "hex": "646972656374"
+          },
+          "database_id": {
+            "$ignore": true
+          },
+          "transaction_id": "1",
+          "commit_nonce": {
+            "$ignore": true
+          },
+          "page_count": "2",
+          "range_record_count": "0",
+          "active_feed_count": "0",
+          "meta_selection": "proven_current"
+        }
+      },
+      "capture": [
+        "reader"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "actor": "producer",
+      "method": "iprange.v1.direct.replace",
+      "params": {
+        "path": "$WORK/live.iprange",
+        "input": {
+          "path": "$WORK/gen_a.csv",
+          "max_line_bytes": 1024
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "expect_result": {
+        "report": {
+          "workflow": "direct_replacement",
+          "logical_change": "changed",
+          "input_record_count": "2",
+          "input_normalized_interval_count": "2",
+          "before_range_record_count": "0",
+          "after_range_record_count": "2",
+          "input_addresses": "7",
+          "before_addresses": "0",
+          "after_addresses": "7",
+          "unchanged_value_addresses": "0",
+          "changed_value_addresses": "0",
+          "added_addresses": "7",
+          "removed_addresses": "0",
+          "source_feed_count": "0",
+          "matched_feed_count": "0",
+          "created_feed_count": "0",
+          "source_distinct_membership_count": "0",
+          "translated_membership_count": "0"
+        },
+        "metadata_logical_change": "unchanged",
+        "commit": {
+          "attempted_database_id": {
+            "$ignore": true
+          },
+          "directory_identity": {
+            "$ignore": true
+          },
+          "main_identity": {
+            "$ignore": true
+          },
+          "attempted_transaction_id": "2",
+          "attempted_commit_nonce": {
+            "$ignore": true
+          },
+          "durability": "committed",
+          "cleanup": {},
+          "coordination_cleanup": {}
+        },
+        "writer_close": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "outcome": "closed"
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "actor": "producer",
+      "method": "iprange.v1.direct.replace",
+      "params": {
+        "path": "$WORK/live.iprange",
+        "input": {
+          "path": "$WORK/gen_b.csv",
+          "max_line_bytes": 1024
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "expect_result": {
+        "report": {
+          "workflow": "direct_replacement",
+          "logical_change": "changed",
+          "input_record_count": "2",
+          "input_normalized_interval_count": "2",
+          "before_range_record_count": "2",
+          "after_range_record_count": "2",
+          "input_addresses": "7",
+          "before_addresses": "7",
+          "after_addresses": "7",
+          "unchanged_value_addresses": "0",
+          "changed_value_addresses": "7",
+          "added_addresses": "0",
+          "removed_addresses": "0",
+          "source_feed_count": "0",
+          "matched_feed_count": "0",
+          "created_feed_count": "0",
+          "source_distinct_membership_count": "0",
+          "translated_membership_count": "0"
+        },
+        "metadata_logical_change": "unchanged",
+        "commit": {
+          "attempted_database_id": {
+            "$ignore": true
+          },
+          "directory_identity": {
+            "$ignore": true
+          },
+          "main_identity": {
+            "$ignore": true
+          },
+          "attempted_transaction_id": "3",
+          "attempted_commit_nonce": {
+            "$ignore": true
+          },
+          "durability": "committed",
+          "cleanup": {},
+          "coordination_cleanup": {}
+        },
+        "writer_close": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "outcome": "closed"
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "actor": "consumer",
+      "method": "iprange.v1.reader.lookup",
+      "params": {
+        "reader": "$CAPTURE/reader",
+        "addresses": [
+          "192.0.2.12",
+          "198.51.100.31",
+          "192.0.2.9",
+          "203.0.113.1"
+        ]
+      },
+      "expect_result": {
+        "matches": [
+          {
+            "address": "192.0.2.12",
+            "present": false
+          },
+          {
+            "address": "198.51.100.31",
+            "present": false
+          },
+          {
+            "address": "192.0.2.9",
+            "present": false
+          },
+          {
+            "address": "203.0.113.1",
+            "present": false
+          }
+        ]
+      }
+    },
+    {
+      "kind": "rpc",
+      "actor": "consumer",
+      "method": "iprange.v1.reader.ranges.open",
+      "params": {
+        "reader": "$CAPTURE/reader",
+        "view": {
+          "kind": "direct"
+        },
+        "direction": "forward",
+        "batch_size": 4
+      },
+      "expect_result": {
+        "cursor": {
+          "$ignore": true
+        }
+      },
+      "capture": [
+        "cursor"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "actor": "consumer",
+      "method": "iprange.v1.reader.ranges.next",
+      "params": {
+        "cursor": "$CAPTURE/cursor"
+      },
+      "expect_result": {
+        "records": [],
+        "done": true
+      }
+    },
+    {
+      "kind": "rpc",
+      "actor": "producer",
+      "method": "iprange.v1.database.info",
+      "params": {
+        "source": {
+          "path": "$WORK/live.iprange",
+          "mode": "live"
+        }
+      },
+      "expect_result": {
+        "info": {
+          "address_family": "ipv4",
+          "value_kind": "direct",
+          "structure_kind": "none",
+          "value_tag": {
+            "hex": "646972656374"
+          },
+          "database_id": {
+            "$ignore": true
+          },
+          "transaction_id": "3",
+          "commit_nonce": {
+            "$ignore": true
+          },
+          "page_count": "9",
+          "range_record_count": "2",
+          "active_feed_count": "0",
+          "meta_selection": "proven_current"
+        },
+        "source_close": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "outcome": "closed"
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "actor": "consumer",
+      "method": "iprange.v1.reader.close",
+      "params": {
+        "reader": "$CAPTURE/reader"
+      },
+      "expect_result": {
+        "closed": true,
+        "source_close": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "outcome": "closed"
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "actor": "producer",
+      "method": "iprange.v1.database.reclaim",
+      "params": {
+        "path": "$WORK/live.iprange",
+        "max_transactions": "64",
+        "max_pages": "64",
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "expect_result": {
+        "reclamation": {
+          "kind": "commit",
+          "transaction_count": "1",
+          "page_count": "1",
+          "commit": {
+            "attempted_database_id": {
+              "$ignore": true
+            },
+            "directory_identity": {
+              "$ignore": true
+            },
+            "main_identity": {
+              "$ignore": true
+            },
+            "attempted_transaction_id": "4",
+            "attempted_commit_nonce": {
+              "$ignore": true
+            },
+            "durability": "committed",
+            "cleanup": {},
+            "coordination_cleanup": {}
+          }
+        },
+        "writer_close": {
+          "cleanup": {},
+          "coordination_cleanup": {},
+          "outcome": "closed"
+        }
+      }
+    }
+  ]
+}

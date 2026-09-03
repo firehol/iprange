@@ -1,0 +1,2507 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "workflow.publisher",
+ "requires": "iprange.v1.current.publish",
+ "fixtures": [
+  {
+   "path": "feed.txt",
+   "source": {
+    "text": "192.0.2.0-192.0.2.20\n198.51.100.30-198.51.100.39\n"
+   }
+  },
+  {
+   "path": "first_seen.csv",
+   "source": {
+    "text": "from,to,value\n192.0.2.0,192.0.2.19,10\n198.51.100.0,198.51.100.9,20\n"
+   }
+  },
+  {
+   "path": "last_seen.csv",
+   "source": {
+    "text": "from,to,value\n192.0.2.0,192.0.2.19,1000\n198.51.100.0,198.51.100.9,10\n"
+   }
+  },
+  {
+   "path": "genesis.txt",
+   "source": {
+    "text": "192.0.2.10-192.0.2.25\n203.0.113.0-203.0.113.7\n"
+   }
+  },
+  {
+   "path": "membership.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 1
+   }
+  },
+  {
+   "path": "membership2.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 1
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/feed.txt"
+     ],
+     "family": "ipv4",
+     "fix_network": true,
+     "default_prefix": 32,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
+    },
+    "feed": "pubfeed",
+    "value_tag": {
+     "text": "pubtag"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "published"
+    },
+    "destination": "$WORK/published.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "expect_result": {
+    "report": {
+     "input_record_count": "2",
+     "normalized_interval_count": "2",
+     "addresses": "31"
+    },
+    "publication": {
+     "attempt": {
+      "commit_nonce": {
+       "$ignore": true
+      },
+      "creation_security": {
+       "commitment": "c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8",
+       "kind": 1
+      },
+      "database_id": {
+       "$ignore": true
+      },
+      "destination_basename": "cHVibGlzaGVkLmlwcmFuZ2U=",
+      "destination_basename_encoding": 1,
+      "directory_identity": {
+       "$ignore": true
+      },
+      "output_byte_length": "40960",
+      "output_identity": {
+       "$ignore": true
+      },
+      "output_sha512": {
+       "$ignore": true
+      },
+      "publication_attempt_id": {
+       "$ignore": true
+      },
+      "publication_policy": "fail_if_exists",
+      "reservation_identity": {
+       "$ignore": true
+      },
+      "transaction_id": "1"
+     },
+     "main_namespace_may_have_been_attempted": true,
+     "publication": "published",
+     "destination_content": "desired",
+     "later_canonical": "none",
+     "main_access_policy": "creator_only",
+     "coordination_access_policy": "absent",
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "housekeeping": {
+      "artifacts": []
+     },
+     "visible_housekeeping": []
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.publication.resolve",
+   "params": {
+    "path": "$WORK/published.iprange",
+    "resolution_mode": "complete"
+   },
+   "expect_error": {
+    "code": "unresolvable",
+    "outcome": "not_started"
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.publication.residue.remove",
+   "params": {
+    "handle": {
+     "kind": "publication_residue",
+     "handle": "00112233445566778899aabbccddeeff"
+    }
+   },
+   "expect_error": {
+    "code": "handle_not_found",
+    "outcome": "not_started"
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.open",
+   "params": {
+    "source": {
+     "path": "$WORK/published.iprange",
+     "mode": "immutable"
+    }
+   },
+   "expect_result": {
+    "reader": {
+     "$ignore": true
+    },
+    "info": {
+     "address_family": "ipv4",
+     "value_kind": "membership",
+     "structure_kind": "none",
+     "value_tag": {
+      "hex": "707562746167"
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "transaction_id": "1",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "page_count": {
+      "$ignore": true
+     },
+     "range_record_count": "2",
+     "active_feed_count": "1",
+     "meta_selection": "proven_current"
+    }
+   },
+   "capture": [
+    "reader"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.lookup",
+   "params": {
+    "reader": "$CAPTURE/reader",
+    "addresses": [
+     "192.0.2.0",
+     "192.0.2.20",
+     "192.0.2.21",
+     "198.51.100.35",
+     "198.51.100.40",
+     "203.0.113.1"
+    ]
+   },
+   "expect_result": {
+    "matches": [
+     {
+      "address": "192.0.2.0",
+      "present": true,
+      "feeds": [
+       "pubfeed"
+      ]
+     },
+     {
+      "address": "192.0.2.20",
+      "present": true,
+      "feeds": [
+       "pubfeed"
+      ]
+     },
+     {
+      "address": "192.0.2.21",
+      "present": false
+     },
+     {
+      "address": "198.51.100.35",
+      "present": true,
+      "feeds": [
+       "pubfeed"
+      ]
+     },
+     {
+      "address": "198.51.100.40",
+      "present": false
+     },
+     {
+      "address": "203.0.113.1",
+      "present": false
+     }
+    ]
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.close",
+   "params": {
+    "reader": "$CAPTURE/reader"
+   },
+   "expect_result": {
+    "closed": true
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "path": "$WORK/first_seen.iprange",
+    "family": "ipv4",
+    "value_kind": "direct",
+    "structure_kind": "none",
+    "value_tag": {
+     "text": "first_seen"
+    },
+    "reader_capacity": 8
+   },
+   "expect_result": {
+    "address_family": "ipv4",
+    "value_kind": "direct",
+    "structure_kind": "none",
+    "value_tag": {
+     "hex": "66697273745f7365656e"
+    },
+    "database_id": {
+     "$ignore": true
+    },
+    "commit_nonce": {
+     "$ignore": true
+    },
+    "sidecar_id": {
+     "$ignore": true
+    },
+    "main_basename": "first_seen.iprange",
+    "reader_capacity": 8,
+    "state": "created",
+    "residue_possible": false,
+    "housekeeping": {
+     "artifacts": []
+    },
+    "visible_housekeeping": [],
+    "directory_identity": {
+     "$ignore": true
+    },
+    "main_identity": {
+     "$ignore": true
+    },
+    "sidecar_identity": {
+     "$ignore": true
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.direct.replace",
+   "params": {
+    "path": "$WORK/first_seen.iprange",
+    "input": {
+     "path": "$WORK/first_seen.csv",
+     "max_line_bytes": 1024
+    },
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "expect_result": {
+    "report": {
+     "workflow": "direct_replacement",
+     "logical_change": "changed",
+     "input_record_count": "2",
+     "input_normalized_interval_count": "2",
+     "before_range_record_count": "0",
+     "after_range_record_count": "2",
+     "input_addresses": "30",
+     "before_addresses": "0",
+     "after_addresses": "30",
+     "unchanged_value_addresses": "0",
+     "changed_value_addresses": "0",
+     "added_addresses": "30",
+     "removed_addresses": "0",
+     "source_feed_count": "0",
+     "matched_feed_count": "0",
+     "created_feed_count": "0",
+     "source_distinct_membership_count": "0",
+     "translated_membership_count": "0"
+    },
+    "metadata_logical_change": "unchanged",
+    "commit": {
+     "attempted_database_id": {
+      "$ignore": true
+     },
+     "directory_identity": {
+      "$ignore": true
+     },
+     "main_identity": {
+      "$ignore": true
+     },
+     "attempted_commit_nonce": {
+      "$ignore": true
+     },
+     "durability": "committed",
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "attempted_transaction_id": "2"
+    },
+    "writer_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.retention.first_seen.refresh",
+   "params": {
+    "path": "$WORK/first_seen.iprange",
+    "current": {
+     "source": {
+      "path": "$WORK/published.iprange",
+      "mode": "immutable"
+     },
+     "feed": "pubfeed"
+    },
+    "refresh_value": 123456,
+    "removals_output": {
+     "path": "$WORK/removals.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_rows": "64",
+      "max_output_bytes": "65536",
+      "max_open_files": 3
+     }
+    },
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "expect_result": {
+    "report": {
+     "workflow": "first_seen_refresh",
+     "logical_change": "changed",
+     "input_record_count": "2",
+     "input_normalized_interval_count": "2",
+     "before_range_record_count": "2",
+     "after_range_record_count": "3",
+     "input_addresses": "31",
+     "before_addresses": "30",
+     "after_addresses": "31",
+     "unchanged_value_addresses": "20",
+     "changed_value_addresses": "0",
+     "added_addresses": "11",
+     "removed_addresses": "10",
+     "source_feed_count": "0",
+     "matched_feed_count": "0",
+     "created_feed_count": "0",
+     "source_distinct_membership_count": "0",
+     "translated_membership_count": "0"
+    },
+    "metadata_logical_change": "unchanged",
+    "commit": {
+     "attempted_database_id": {
+      "$ignore": true
+     },
+     "directory_identity": {
+      "$ignore": true
+     },
+     "main_identity": {
+      "$ignore": true
+     },
+     "attempted_commit_nonce": {
+      "$ignore": true
+     },
+     "durability": "committed",
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "attempted_transaction_id": "3"
+    },
+    "removals": {
+     "publication": {
+      "publication": "published",
+      "destination_content": "created"
+     },
+     "output": {
+      "path": {
+       "$ignore": true
+      },
+      "bytes": "97",
+      "rows": "1",
+      "sha256": "0aaaef9d7a88b7f42fb6f53c8cd45f7842ba84b730d01f28ae67298c22751ecd"
+     }
+    },
+    "writer_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   },
+   "assert_files": [
+    {
+     "path": "removals.jsonl",
+     "sha256": "0aaaef9d7a88b7f42fb6f53c8cd45f7842ba84b730d01f28ae67298c22751ecd"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "path": "$WORK/last_seen.iprange",
+    "family": "ipv4",
+    "value_kind": "direct",
+    "structure_kind": "none",
+    "value_tag": {
+     "text": "last_seen"
+    },
+    "reader_capacity": 8
+   },
+   "expect_result": {
+    "address_family": "ipv4",
+    "value_kind": "direct",
+    "structure_kind": "none",
+    "value_tag": {
+     "hex": "6c6173745f7365656e"
+    },
+    "database_id": {
+     "$ignore": true
+    },
+    "commit_nonce": {
+     "$ignore": true
+    },
+    "sidecar_id": {
+     "$ignore": true
+    },
+    "main_basename": "last_seen.iprange",
+    "reader_capacity": 8,
+    "state": "created",
+    "residue_possible": false,
+    "housekeeping": {
+     "artifacts": []
+    },
+    "visible_housekeeping": [],
+    "directory_identity": {
+     "$ignore": true
+    },
+    "main_identity": {
+     "$ignore": true
+    },
+    "sidecar_identity": {
+     "$ignore": true
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.direct.replace",
+   "params": {
+    "path": "$WORK/last_seen.iprange",
+    "input": {
+     "path": "$WORK/last_seen.csv",
+     "max_line_bytes": 1024
+    },
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "expect_result": {
+    "report": {
+     "workflow": "direct_replacement",
+     "logical_change": "changed",
+     "input_record_count": "2",
+     "input_normalized_interval_count": "2",
+     "before_range_record_count": "0",
+     "after_range_record_count": "2",
+     "input_addresses": "30",
+     "before_addresses": "0",
+     "after_addresses": "30",
+     "unchanged_value_addresses": "0",
+     "changed_value_addresses": "0",
+     "added_addresses": "30",
+     "removed_addresses": "0",
+     "source_feed_count": "0",
+     "matched_feed_count": "0",
+     "created_feed_count": "0",
+     "source_distinct_membership_count": "0",
+     "translated_membership_count": "0"
+    },
+    "metadata_logical_change": "unchanged",
+    "commit": {
+     "attempted_database_id": {
+      "$ignore": true
+     },
+     "directory_identity": {
+      "$ignore": true
+     },
+     "main_identity": {
+      "$ignore": true
+     },
+     "attempted_commit_nonce": {
+      "$ignore": true
+     },
+     "durability": "committed",
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "attempted_transaction_id": "2"
+    },
+    "writer_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.retention.last_seen.refresh",
+   "params": {
+    "path": "$WORK/last_seen.iprange",
+    "current": {
+     "source": {
+      "path": "$WORK/published.iprange",
+      "mode": "immutable"
+     },
+     "feed": "pubfeed"
+    },
+    "refresh_value": 100,
+    "cutoff": 50,
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "expect_result": {
+    "report": {
+     "workflow": "last_seen_refresh",
+     "logical_change": "changed",
+     "input_record_count": "2",
+     "input_normalized_interval_count": "2",
+     "before_range_record_count": "2",
+     "after_range_record_count": "3",
+     "input_addresses": "31",
+     "before_addresses": "30",
+     "after_addresses": "31",
+     "unchanged_value_addresses": "20",
+     "changed_value_addresses": "0",
+     "added_addresses": "11",
+     "removed_addresses": "10",
+     "source_feed_count": "0",
+     "matched_feed_count": "0",
+     "created_feed_count": "0",
+     "source_distinct_membership_count": "0",
+     "translated_membership_count": "0"
+    },
+    "metadata_logical_change": "unchanged",
+    "commit": {
+     "attempted_database_id": {
+      "$ignore": true
+     },
+     "directory_identity": {
+      "$ignore": true
+     },
+     "main_identity": {
+      "$ignore": true
+     },
+     "attempted_commit_nonce": {
+      "$ignore": true
+     },
+     "durability": "committed",
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "attempted_transaction_id": "3"
+    },
+    "writer_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.open",
+   "params": {
+    "source": {
+     "path": "$WORK/first_seen.iprange",
+     "mode": "live"
+    }
+   },
+   "expect_result": {
+    "reader": {
+     "$ignore": true
+    },
+    "info": {
+     "address_family": "ipv4",
+     "value_kind": "direct",
+     "structure_kind": "none",
+     "value_tag": {
+      "hex": "66697273745f7365656e"
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "transaction_id": "3",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "page_count": {
+      "$ignore": true
+     },
+     "range_record_count": "3",
+     "active_feed_count": "0",
+     "meta_selection": "proven_current"
+    }
+   },
+   "capture": [
+    "reader"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.lookup",
+   "params": {
+    "reader": "$CAPTURE/reader",
+    "addresses": [
+     "192.0.2.10",
+     "192.0.2.20",
+     "192.0.2.21",
+     "198.51.100.35",
+     "198.51.100.0",
+     "198.51.100.9",
+     "198.51.100.31"
+    ]
+   },
+   "expect_result": {
+    "matches": [
+     {
+      "address": "192.0.2.10",
+      "present": true,
+      "value": 10
+     },
+     {
+      "address": "192.0.2.20",
+      "present": true,
+      "value": 123456
+     },
+     {
+      "address": "192.0.2.21",
+      "present": false
+     },
+     {
+      "address": "198.51.100.35",
+      "present": true,
+      "value": 123456
+     },
+     {
+      "address": "198.51.100.0",
+      "present": false
+     },
+     {
+      "address": "198.51.100.9",
+      "present": false
+     },
+     {
+      "address": "198.51.100.31",
+      "present": true,
+      "value": 123456
+     }
+    ]
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.close",
+   "params": {
+    "reader": "$CAPTURE/reader"
+   },
+   "expect_result": {
+    "closed": true,
+    "source_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.open",
+   "params": {
+    "source": {
+     "path": "$WORK/last_seen.iprange",
+     "mode": "live"
+    }
+   },
+   "expect_result": {
+    "reader": {
+     "$ignore": true
+    },
+    "info": {
+     "address_family": "ipv4",
+     "value_kind": "direct",
+     "structure_kind": "none",
+     "value_tag": {
+      "hex": "6c6173745f7365656e"
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "transaction_id": "3",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "page_count": {
+      "$ignore": true
+     },
+     "range_record_count": "3",
+     "active_feed_count": "0",
+     "meta_selection": "proven_current"
+    }
+   },
+   "capture": [
+    "reader"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.lookup",
+   "params": {
+    "reader": "$CAPTURE/reader",
+    "addresses": [
+     "192.0.2.10",
+     "192.0.2.19",
+     "192.0.2.20",
+     "192.0.2.21",
+     "198.51.100.35",
+     "198.51.100.0",
+     "198.51.100.30"
+    ]
+   },
+   "expect_result": {
+    "matches": [
+     {
+      "address": "192.0.2.10",
+      "present": true,
+      "value": 1000
+     },
+     {
+      "address": "192.0.2.19",
+      "present": true,
+      "value": 1000
+     },
+     {
+      "address": "192.0.2.20",
+      "present": true,
+      "value": 100
+     },
+     {
+      "address": "192.0.2.21",
+      "present": false
+     },
+     {
+      "address": "198.51.100.35",
+      "present": true,
+      "value": 100
+     },
+     {
+      "address": "198.51.100.0",
+      "present": false
+     },
+     {
+      "address": "198.51.100.30",
+      "present": true,
+      "value": 100
+     }
+    ]
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.close",
+   "params": {
+    "reader": "$CAPTURE/reader"
+   },
+   "expect_result": {
+    "closed": true,
+    "source_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "path": "$WORK/feeddb.iprange",
+    "family": "ipv4",
+    "value_kind": "membership",
+    "structure_kind": "none",
+    "value_tag": {
+     "text": "membership"
+    },
+    "reader_capacity": 8
+   },
+   "expect_result": {
+    "address_family": "ipv4",
+    "value_kind": "membership",
+    "structure_kind": "none",
+    "value_tag": {
+     "hex": "6d656d62657273686970"
+    },
+    "database_id": {
+     "$ignore": true
+    },
+    "commit_nonce": {
+     "$ignore": true
+    },
+    "sidecar_id": {
+     "$ignore": true
+    },
+    "main_basename": "feeddb.iprange",
+    "reader_capacity": 8,
+    "state": "created",
+    "residue_possible": false,
+    "housekeeping": {
+     "artifacts": []
+    },
+    "visible_housekeeping": [],
+    "directory_identity": {
+     "$ignore": true
+    },
+    "main_identity": {
+     "$ignore": true
+    },
+    "sidecar_identity": {
+     "$ignore": true
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.feeds.create",
+   "params": {
+    "path": "$WORK/feeddb.iprange",
+    "feed": "alice",
+    "current": {
+     "source": {
+      "path": "$WORK/membership.iprange",
+      "mode": "immutable"
+     },
+     "feed": "alpha"
+    },
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "expect_result": {
+    "report": {
+     "workflow": "create_feed",
+     "logical_change": "changed",
+     "input_record_count": "2",
+     "input_normalized_interval_count": "2",
+     "before_range_record_count": "0",
+     "after_range_record_count": "2",
+     "input_addresses": "31",
+     "before_addresses": "0",
+     "after_addresses": "31",
+     "unchanged_value_addresses": "0",
+     "changed_value_addresses": "0",
+     "added_addresses": "31",
+     "removed_addresses": "0",
+     "source_feed_count": "0",
+     "matched_feed_count": "0",
+     "created_feed_count": "0",
+     "source_distinct_membership_count": "0",
+     "translated_membership_count": "0"
+    },
+    "metadata_logical_change": "unchanged",
+    "commit": {
+     "attempted_database_id": {
+      "$ignore": true
+     },
+     "directory_identity": {
+      "$ignore": true
+     },
+     "main_identity": {
+      "$ignore": true
+     },
+     "attempted_commit_nonce": {
+      "$ignore": true
+     },
+     "durability": "committed",
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "attempted_transaction_id": "2"
+    },
+    "writer_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.feeds.create",
+   "params": {
+    "path": "$WORK/feeddb.iprange",
+    "feed": "bravo",
+    "current": {
+     "source": {
+      "path": "$WORK/membership.iprange",
+      "mode": "immutable"
+     },
+     "feed": "beta"
+    },
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "expect_result": {
+    "report": {
+     "workflow": "create_feed",
+     "logical_change": "changed",
+     "input_record_count": "2",
+     "input_normalized_interval_count": "2",
+     "before_range_record_count": "0",
+     "after_range_record_count": "2",
+     "input_addresses": "21",
+     "before_addresses": "0",
+     "after_addresses": "21",
+     "unchanged_value_addresses": "0",
+     "changed_value_addresses": "0",
+     "added_addresses": "21",
+     "removed_addresses": "0",
+     "source_feed_count": "0",
+     "matched_feed_count": "0",
+     "created_feed_count": "0",
+     "source_distinct_membership_count": "0",
+     "translated_membership_count": "0"
+    },
+    "metadata_logical_change": "unchanged",
+    "commit": {
+     "attempted_database_id": {
+      "$ignore": true
+     },
+     "directory_identity": {
+      "$ignore": true
+     },
+     "main_identity": {
+      "$ignore": true
+     },
+     "attempted_commit_nonce": {
+      "$ignore": true
+     },
+     "durability": "committed",
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "attempted_transaction_id": "3"
+    },
+    "writer_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/genesis.txt"
+     ],
+     "family": "ipv4",
+     "fix_network": true,
+     "default_prefix": 32,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
+    },
+    "feed": "genesis",
+    "value_tag": {
+     "text": "genesis"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "genesis"
+    },
+    "destination": "$WORK/genesis.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "expect_result": {
+    "report": {
+     "input_record_count": "2",
+     "normalized_interval_count": "2",
+     "addresses": "24"
+    },
+    "publication": {
+     "attempt": {
+      "commit_nonce": {
+       "$ignore": true
+      },
+      "creation_security": {
+       "commitment": "c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8",
+       "kind": 1
+      },
+      "database_id": {
+       "$ignore": true
+      },
+      "destination_basename": "Z2VuZXNpcy5pcHJhbmdl",
+      "destination_basename_encoding": 1,
+      "directory_identity": {
+       "$ignore": true
+      },
+      "output_byte_length": "40960",
+      "output_identity": {
+       "$ignore": true
+      },
+      "output_sha512": {
+       "$ignore": true
+      },
+      "publication_attempt_id": {
+       "$ignore": true
+      },
+      "publication_policy": "fail_if_exists",
+      "reservation_identity": {
+       "$ignore": true
+      },
+      "transaction_id": "1"
+     },
+     "main_namespace_may_have_been_attempted": true,
+     "publication": "published",
+     "destination_content": "desired",
+     "later_canonical": "none",
+     "main_access_policy": "creator_only",
+     "coordination_access_policy": "absent",
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "housekeeping": {
+      "artifacts": []
+     },
+     "visible_housekeeping": []
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.feeds.replace",
+   "params": {
+    "path": "$WORK/feeddb.iprange",
+    "feed": "alice",
+    "current": {
+     "source": {
+      "path": "$WORK/genesis.iprange",
+      "mode": "immutable"
+     },
+     "feed": "genesis"
+    },
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "expect_result": {
+    "report": {
+     "workflow": "replace_feed",
+     "logical_change": "changed",
+     "input_record_count": "2",
+     "input_normalized_interval_count": "2",
+     "before_range_record_count": "2",
+     "after_range_record_count": "2",
+     "input_addresses": "24",
+     "before_addresses": "31",
+     "after_addresses": "24",
+     "unchanged_value_addresses": "11",
+     "changed_value_addresses": "0",
+     "added_addresses": "13",
+     "removed_addresses": "20",
+     "source_feed_count": "0",
+     "matched_feed_count": "0",
+     "created_feed_count": "0",
+     "source_distinct_membership_count": "0",
+     "translated_membership_count": "0"
+    },
+    "metadata_logical_change": "unchanged",
+    "commit": {
+     "attempted_database_id": {
+      "$ignore": true
+     },
+     "directory_identity": {
+      "$ignore": true
+     },
+     "main_identity": {
+      "$ignore": true
+     },
+     "attempted_commit_nonce": {
+      "$ignore": true
+     },
+     "durability": "committed",
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "attempted_transaction_id": "4"
+    },
+    "writer_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.feeds.replace",
+   "params": {
+    "path": "$WORK/feeddb.iprange",
+    "feed": "bravo",
+    "current": {
+     "source": {
+      "path": "$WORK/missing.iprange",
+      "mode": "immutable"
+     },
+     "feed": "genesis"
+    },
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "expect_error": {
+    "code": "invalid_path",
+    "outcome": "not_started"
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.open",
+   "params": {
+    "source": {
+     "path": "$WORK/feeddb.iprange",
+     "mode": "live"
+    }
+   },
+   "expect_result": {
+    "reader": {
+     "$ignore": true
+    },
+    "info": {
+     "address_family": "ipv4",
+     "value_kind": "membership",
+     "structure_kind": "none",
+     "value_tag": {
+      "hex": "6d656d62657273686970"
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "transaction_id": "4",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "page_count": {
+      "$ignore": true
+     },
+     "range_record_count": "4",
+     "active_feed_count": "2",
+     "meta_selection": "proven_current"
+    }
+   },
+   "capture": [
+    "reader"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.lookup",
+   "params": {
+    "reader": "$CAPTURE/reader",
+    "addresses": [
+     "192.0.2.10",
+     "192.0.2.25",
+     "192.0.2.26",
+     "198.51.100.35",
+     "198.51.100.15",
+     "203.0.113.5",
+     "198.51.100.30",
+     "198.51.100.19",
+     "192.0.2.20"
+    ]
+   },
+   "expect_result": {
+    "matches": [
+     {
+      "address": "192.0.2.10",
+      "present": true,
+      "feeds": [
+       "alice",
+       "bravo"
+      ]
+     },
+     {
+      "address": "192.0.2.25",
+      "present": true,
+      "feeds": [
+       "alice"
+      ]
+     },
+     {
+      "address": "192.0.2.26",
+      "present": false
+     },
+     {
+      "address": "198.51.100.35",
+      "present": false
+     },
+     {
+      "address": "198.51.100.15",
+      "present": true,
+      "feeds": [
+       "bravo"
+      ]
+     },
+     {
+      "address": "203.0.113.5",
+      "present": true,
+      "feeds": [
+       "alice"
+      ]
+     },
+     {
+      "address": "198.51.100.30",
+      "present": false
+     },
+     {
+      "address": "198.51.100.19",
+      "present": true,
+      "feeds": [
+       "bravo"
+      ]
+     },
+     {
+      "address": "192.0.2.20",
+      "present": true,
+      "feeds": [
+       "alice",
+       "bravo"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.close",
+   "params": {
+    "reader": "$CAPTURE/reader"
+   },
+   "expect_result": {
+    "closed": true,
+    "source_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.history.project",
+   "params": {
+    "path": "$WORK/feeddb.iprange",
+    "last_seen": {
+     "path": "$WORK/last_seen.iprange",
+     "mode": "live"
+    },
+    "windows": [
+     {
+      "feed": "alice",
+      "cutoff": 999
+     },
+     {
+      "feed": "bravo",
+      "cutoff": 50
+     }
+    ],
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "expect_result": {
+    "report": {
+     "logical_change": "changed",
+     "source_range_count": "3",
+     "source_addresses": "31",
+     "created_feed_count": "0",
+     "before_interval_count": "3",
+     "after_interval_count": "2",
+     "before_addresses": "34",
+     "after_addresses": "31",
+     "unchanged_addresses": "11",
+     "added_addresses": "20",
+     "removed_addresses": "23",
+     "windows": [
+      {
+       "feed_name": "alice",
+       "cutoff": 999,
+       "created": false,
+       "before_interval_count": "2",
+       "after_interval_count": "1",
+       "before_addresses": "24",
+       "after_addresses": "20",
+       "unchanged_addresses": "10",
+       "added_addresses": "10",
+       "removed_addresses": "14"
+      },
+      {
+       "feed_name": "bravo",
+       "cutoff": 50,
+       "created": false,
+       "before_interval_count": "2",
+       "after_interval_count": "2",
+       "before_addresses": "21",
+       "after_addresses": "31",
+       "unchanged_addresses": "11",
+       "added_addresses": "20",
+       "removed_addresses": "10"
+      }
+     ]
+    },
+    "metadata_logical_change": "unchanged",
+    "commit": {
+     "attempted_database_id": {
+      "$ignore": true
+     },
+     "directory_identity": {
+      "$ignore": true
+     },
+     "main_identity": {
+      "$ignore": true
+     },
+     "attempted_commit_nonce": {
+      "$ignore": true
+     },
+     "durability": "committed",
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "attempted_transaction_id": "5"
+    },
+    "writer_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    },
+    "source_closes": [
+     {
+      "cleanup": {},
+      "coordination_cleanup": {},
+      "outcome": "closed"
+     }
+    ]
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.open",
+   "params": {
+    "source": {
+     "path": "$WORK/feeddb.iprange",
+     "mode": "live"
+    }
+   },
+   "expect_result": {
+    "reader": {
+     "$ignore": true
+    },
+    "info": {
+     "address_family": "ipv4",
+     "value_kind": "membership",
+     "structure_kind": "none",
+     "value_tag": {
+      "hex": "6d656d62657273686970"
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "transaction_id": "5",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "page_count": {
+      "$ignore": true
+     },
+     "range_record_count": "3",
+     "active_feed_count": "2",
+     "meta_selection": "proven_current"
+    }
+   },
+   "capture": [
+    "reader"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.ranges.open",
+   "params": {
+    "reader": "$CAPTURE/reader",
+    "view": {
+     "kind": "feed",
+     "feed": "alice"
+    },
+    "direction": "forward",
+    "batch_size": 4
+   },
+   "expect_result": {
+    "cursor": {
+     "$ignore": true
+    }
+   },
+   "capture": [
+    "cursor"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.ranges.next",
+   "params": {
+    "cursor": "$CAPTURE/cursor"
+   },
+   "expect_result": {
+    "records": [
+     {
+      "from": "192.0.2.0",
+      "to": "192.0.2.19"
+     }
+    ],
+    "done": true
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.ranges.next",
+   "params": {
+    "cursor": "$CAPTURE/cursor"
+   },
+   "expect_error": {
+    "code": "cursor_closed",
+    "outcome": "not_started"
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.ranges.open",
+   "params": {
+    "reader": "$CAPTURE/reader",
+    "view": {
+     "kind": "feed",
+     "feed": "bravo"
+    },
+    "direction": "forward",
+    "batch_size": 4
+   },
+   "expect_result": {
+    "cursor": {
+     "$ignore": true
+    }
+   },
+   "capture": [
+    "cursor"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.ranges.next",
+   "params": {
+    "cursor": "$CAPTURE/cursor"
+   },
+   "expect_result": {
+    "records": [
+     {
+      "from": "192.0.2.0",
+      "to": "192.0.2.20"
+     },
+     {
+      "from": "198.51.100.30",
+      "to": "198.51.100.39"
+     }
+    ],
+    "done": true
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.ranges.next",
+   "params": {
+    "cursor": "$CAPTURE/cursor"
+   },
+   "expect_error": {
+    "code": "cursor_closed",
+    "outcome": "not_started"
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.lookup",
+   "params": {
+    "reader": "$CAPTURE/reader",
+    "addresses": [
+     "192.0.2.10",
+     "192.0.2.15",
+     "192.0.2.20",
+     "192.0.2.25",
+     "203.0.113.5",
+     "198.51.100.15",
+     "198.51.100.35"
+    ]
+   },
+   "expect_result": {
+    "matches": [
+     {
+      "address": "192.0.2.10",
+      "present": true,
+      "feeds": [
+       "alice",
+       "bravo"
+      ]
+     },
+     {
+      "address": "192.0.2.15",
+      "present": true,
+      "feeds": [
+       "alice",
+       "bravo"
+      ]
+     },
+     {
+      "address": "192.0.2.20",
+      "present": true,
+      "feeds": [
+       "bravo"
+      ]
+     },
+     {
+      "address": "192.0.2.25",
+      "present": false
+     },
+     {
+      "address": "203.0.113.5",
+      "present": false
+     },
+     {
+      "address": "198.51.100.15",
+      "present": false
+     },
+     {
+      "address": "198.51.100.35",
+      "present": true,
+      "feeds": [
+       "bravo"
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.close",
+   "params": {
+    "reader": "$CAPTURE/reader"
+   },
+   "expect_result": {
+    "closed": true,
+    "source_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.query.overlaps",
+   "params": {
+    "source": {
+     "path": "$WORK/membership.iprange",
+     "mode": "immutable"
+    },
+    "selection": {
+     "mode": "all"
+    },
+    "membership_query_budget": {
+     "max_heap_bytes": "1048576"
+    },
+    "mode": {
+     "kind": "all_pairs"
+    },
+    "output": {
+     "path": "$WORK/overlaps.csv",
+     "format": "csv",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_rows": "64",
+      "max_output_bytes": "65536",
+      "max_open_files": 3
+     }
+    }
+   },
+   "expect_result": {
+    "output": {
+     "path": {
+      "$ignore": true
+     },
+     "bytes": "35",
+     "rows": "1",
+     "sha256": "b682b77ee2080e3de8b9cb54f26cb965b025c45090a61f1a3ae4bcff615c6168"
+    },
+    "report": {
+     "scanned_range_count": "4",
+     "scanned_addresses": "41",
+     "feed_result_count": "2",
+     "pair_result_count": "1"
+    }
+   },
+   "assert_files": [
+    {
+     "path": "overlaps.csv",
+     "sha256": "b682b77ee2080e3de8b9cb54f26cb965b025c45090a61f1a3ae4bcff615c6168"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.join.direct",
+   "params": {
+    "membership": {
+     "source": {
+      "path": "$WORK/membership.iprange",
+      "mode": "immutable"
+     },
+     "selection": {
+      "mode": "all"
+     },
+     "membership_query_budget": {
+      "max_heap_bytes": "1048576"
+     }
+    },
+    "direct": {
+     "path": "$WORK/last_seen.iprange",
+     "mode": "live"
+    },
+    "output": {
+     "path": "$WORK/join.jsonl",
+     "format": "jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_rows": "64",
+      "max_output_bytes": "65536",
+      "max_open_files": 3
+     }
+    },
+    "max_result_cells": "64"
+   },
+   "expect_result": {
+    "output": {
+     "path": {
+      "$ignore": true
+     },
+     "bytes": "264",
+     "rows": "5",
+     "sha256": "dbbc0dba739576f079ac892b3705efef549289d0e6c207cd438a9caba9582697"
+    },
+    "report": {
+     "membership_range_count": "4",
+     "direct_ranges_visited": "3",
+     "joined_segment_count": "5",
+     "selected_addresses": "41",
+     "mapped_addresses": "31",
+     "unmapped_addresses": "10",
+     "result_cell_count": "5"
+    },
+    "source_closes": [
+     {
+      "cleanup": {},
+      "coordination_cleanup": {},
+      "outcome": "closed"
+     }
+    ]
+   },
+   "assert_files": [
+    {
+     "path": "join.jsonl",
+     "sha256": "dbbc0dba739576f079ac892b3705efef549289d0e6c207cd438a9caba9582697"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.join.membership",
+   "params": {
+    "left": {
+     "source": {
+      "path": "$WORK/membership.iprange",
+      "mode": "immutable"
+     },
+     "selection": {
+      "mode": "all"
+     },
+     "membership_query_budget": {
+      "max_heap_bytes": "1048576"
+     }
+    },
+    "right": {
+     "source": {
+      "path": "$WORK/membership2.iprange",
+      "mode": "immutable"
+     },
+     "selection": {
+      "mode": "named",
+      "feeds": [
+       "beta"
+      ]
+     },
+     "membership_query_budget": {
+      "max_heap_bytes": "1048576"
+     }
+    },
+    "output": {
+     "path": "$WORK/jmemb.jsonl",
+     "format": "jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_rows": "64",
+      "max_output_bytes": "65536",
+      "max_open_files": 3
+     }
+    }
+   },
+   "expect_result": {
+    "output": {
+     "path": {
+      "$ignore": true
+     },
+     "bytes": "325",
+     "rows": "5",
+     "sha256": "99f3c362224134b43426119a97a66aa8948607704a8578df75a86d5d352fe41b"
+    },
+    "report": {
+     "left_range_count": "4",
+     "right_range_count": "4",
+     "joined_segment_count": "4",
+     "left_addresses": "41",
+     "right_addresses": "21",
+     "overlap_addresses": "21",
+     "left_uncovered_addresses": "20",
+     "right_uncovered_addresses": "0",
+     "cross_result_count": "2",
+     "uncovered_result_count": "3"
+    }
+   },
+   "assert_files": [
+    {
+     "path": "jmemb.jsonl",
+     "sha256": "99f3c362224134b43426119a97a66aa8948607704a8578df75a86d5d352fe41b"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.algebra.publish",
+   "params": {
+    "sources": [
+     {
+      "source": {
+       "path": "$WORK/membership.iprange",
+       "mode": "immutable"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      }
+     }
+    ],
+    "operation": {
+     "kind": "union",
+     "selection": {
+      "mode": "all"
+     }
+    },
+    "output_mode": {
+     "kind": "flat",
+     "feed": "merged"
+    },
+    "value_tag": {
+     "text": "algebra"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "algebra-publish"
+    },
+    "destination": "$WORK/algebra-out.iprange",
+    "publication_policy": "fail_if_exists",
+    "algebra_budget": {
+     "max_heap_bytes": "1048576",
+     "max_sources": 1
+    },
+    "algebra_output_budget": {
+     "max_output_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "expect_result": {
+    "report": {
+     "source_count": "1",
+     "source_range_count": "4",
+     "joined_segment_count": "4",
+     "output_feed_count": "1",
+     "output_range_count": "3",
+     "output_addresses": "41"
+    },
+    "publication": {
+     "attempt": {
+      "commit_nonce": {
+       "$ignore": true
+      },
+      "creation_security": {
+       "commitment": "c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8",
+       "kind": 1
+      },
+      "database_id": {
+       "$ignore": true
+      },
+      "destination_basename": "YWxnZWJyYS1vdXQuaXByYW5nZQ==",
+      "destination_basename_encoding": 1,
+      "directory_identity": {
+       "$ignore": true
+      },
+      "output_byte_length": "40960",
+      "output_identity": {
+       "$ignore": true
+      },
+      "output_sha512": {
+       "$ignore": true
+      },
+      "publication_attempt_id": {
+       "$ignore": true
+      },
+      "publication_policy": "fail_if_exists",
+      "reservation_identity": {
+       "$ignore": true
+      },
+      "transaction_id": "1"
+     },
+     "main_namespace_may_have_been_attempted": true,
+     "publication": "published",
+     "destination_content": "desired",
+     "later_canonical": "none",
+     "main_access_policy": "creator_only",
+     "coordination_access_policy": "absent",
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "housekeeping": {
+      "artifacts": []
+     },
+     "visible_housekeeping": []
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.open",
+   "params": {
+    "source": {
+     "path": "$WORK/algebra-out.iprange",
+     "mode": "immutable"
+    }
+   },
+   "expect_result": {
+    "reader": {
+     "$ignore": true
+    },
+    "info": {
+     "address_family": "ipv4",
+     "value_kind": "membership",
+     "structure_kind": "none",
+     "value_tag": {
+      "hex": "616c6765627261"
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "transaction_id": "1",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "page_count": {
+      "$ignore": true
+     },
+     "range_record_count": "3",
+     "active_feed_count": "1",
+     "meta_selection": "proven_current"
+    }
+   },
+   "capture": [
+    "reader"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.lookup",
+   "params": {
+    "reader": "$CAPTURE/reader",
+    "addresses": [
+     "192.0.2.20",
+     "192.0.2.21",
+     "198.51.100.15",
+     "198.51.100.25",
+     "198.51.100.35",
+     "203.0.113.5"
+    ]
+   },
+   "expect_result": {
+    "matches": [
+     {
+      "address": "192.0.2.20",
+      "present": true,
+      "feeds": [
+       "merged"
+      ]
+     },
+     {
+      "address": "192.0.2.21",
+      "present": false
+     },
+     {
+      "address": "198.51.100.15",
+      "present": true,
+      "feeds": [
+       "merged"
+      ]
+     },
+     {
+      "address": "198.51.100.25",
+      "present": false
+     },
+     {
+      "address": "198.51.100.35",
+      "present": true,
+      "feeds": [
+       "merged"
+      ]
+     },
+     {
+      "address": "203.0.113.5",
+      "present": false
+     }
+    ]
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.close",
+   "params": {
+    "reader": "$CAPTURE/reader"
+   },
+   "expect_result": {
+    "closed": true
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.snapshot",
+   "params": {
+    "source": {
+     "path": "$WORK/feeddb.iprange",
+     "mode": "live"
+    },
+    "destination": "$WORK/snap.iprange",
+    "publication_policy": "fail_if_exists",
+    "snapshot_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "512",
+     "max_open_files": 32
+    }
+   },
+   "expect_result": {
+    "publication": {
+     "publication": "published",
+     "destination_content": "desired",
+     "attempt": {
+      "publication_policy": "fail_if_exists",
+      "database_id": {
+       "$ignore": true
+      },
+      "transaction_id": "5"
+     },
+     "cleanup": {
+      "$ignore": true
+     }
+    }
+   },
+   "capture": [
+    "publication"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.publication.resolve",
+   "params": {
+    "path": "$WORK/snap.iprange",
+    "resolution_mode": "complete",
+    "publication_result": "$CAPTURE/publication"
+   },
+   "expect_result": {
+    "publication": {
+     "publication": "published",
+     "destination_content": "desired",
+     "later_canonical": "none",
+     "attempt": {
+      "publication_attempt_id": {
+       "$ignore": true
+      },
+      "database_id": {
+       "$ignore": true
+      },
+      "transaction_id": "5"
+     },
+     "cleanup": {
+      "$ignore": true
+     },
+     "coordination_cleanup": {
+      "$ignore": true
+     }
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.open",
+   "params": {
+    "source": {
+     "path": "$WORK/snap.iprange",
+     "mode": "immutable"
+    }
+   },
+   "expect_result": {
+    "reader": {
+     "$ignore": true
+    },
+    "info": {
+     "address_family": "ipv4",
+     "value_kind": "membership",
+     "structure_kind": "none",
+     "value_tag": {
+      "hex": "6d656d62657273686970"
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "transaction_id": "5",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "page_count": "9",
+     "range_record_count": "3",
+     "active_feed_count": "2",
+     "meta_selection": "proven_current"
+    }
+   },
+   "capture": [
+    "reader"
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.lookup",
+   "params": {
+    "reader": "$CAPTURE/reader",
+    "addresses": [
+     "192.0.2.10",
+     "192.0.2.25",
+     "203.0.113.5",
+     "198.51.100.15"
+    ]
+   },
+   "expect_result": {
+    "matches": [
+     {
+      "address": "192.0.2.10",
+      "present": true,
+      "feeds": [
+       "alice",
+       "bravo"
+      ]
+     },
+     {
+      "address": "192.0.2.25",
+      "present": false
+     },
+     {
+      "address": "203.0.113.5",
+      "present": false
+     },
+     {
+      "address": "198.51.100.15",
+      "present": false
+     }
+    ]
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.close",
+   "params": {
+    "reader": "$CAPTURE/reader"
+   },
+   "expect_result": {
+    "closed": true
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.validate",
+   "params": {
+    "path": "$WORK/snap.iprange",
+    "mode": {
+     "kind": "immutable_current"
+    },
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_scratch_bytes": "0",
+     "max_scratch_files": 0
+    },
+    "findings_output": {
+     "path": "$WORK/findings.jsonl",
+     "format": "jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_rows": "64",
+      "max_output_bytes": "65536",
+      "max_open_files": 3
+     }
+    }
+   },
+   "expect_result": {
+    "result": {
+     "file_identity": {
+      "$ignore": true
+     },
+     "generation": {
+      "address_family": "ipv4",
+      "commit_nonce": {
+       "$ignore": true
+      },
+      "database_id": {
+       "$ignore": true
+      },
+      "page_count": "9",
+      "structure_kind": "none",
+      "transaction_id": "5",
+      "value_kind": "membership",
+      "value_tag": {
+       "hex": "6d656d62657273686970"
+      }
+     },
+     "progress": {
+      "bounded_possible_span_addresses": "0",
+      "checked_unique_pages": "7",
+      "finding_count": "0",
+      "has_unbounded_unknown": false,
+      "untraversable_subgraphs": "0"
+     },
+     "valid": true
+    },
+    "findings": {
+     "path": {
+      "$ignore": true
+     },
+     "bytes": "0",
+     "rows": "0",
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+   },
+   "assert_files": [
+    {
+     "path": "findings.jsonl",
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.recovery.inspect",
+   "params": {
+    "path": "$WORK/snap.iprange",
+    "mode": "immutable",
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_scratch_bytes": "0",
+     "max_scratch_files": 0
+    }
+   },
+   "expect_result": {
+    "source_identity": {
+     "$ignore": true
+    },
+    "progress": {
+     "bounded_possible_span_addresses": "0",
+     "checked_unique_pages": "0",
+     "finding_count": "0",
+     "has_unbounded_unknown": false,
+     "untraversable_subgraphs": "0"
+    },
+    "candidates": [
+     {
+      "label": "newest",
+      "meta_page": 1,
+      "transaction_id": "5",
+      "database_id": {
+       "$ignore": true
+      },
+      "commit_nonce": {
+       "$ignore": true
+      },
+      "source_identity": {
+       "$ignore": true
+      }
+     }
+    ]
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.database.reclaim",
+   "params": {
+    "path": "$WORK/last_seen.iprange",
+    "max_transactions": "64",
+    "max_pages": "64",
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "expect_result": {
+    "reclamation": {
+     "kind": "commit",
+     "transaction_count": "1",
+     "page_count": "1",
+     "commit": {
+      "attempted_database_id": {
+       "$ignore": true
+      },
+      "directory_identity": {
+       "$ignore": true
+      },
+      "main_identity": {
+       "$ignore": true
+      },
+      "attempted_commit_nonce": {
+       "$ignore": true
+      },
+      "durability": "committed",
+      "cleanup": {},
+      "coordination_cleanup": {},
+      "attempted_transaction_id": "4"
+     }
+    },
+    "writer_close": {
+     "cleanup": {},
+     "coordination_cleanup": {},
+     "outcome": "closed"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.maintenance.list",
+   "params": {
+    "directory": "$WORK/.",
+    "kinds": [
+     "scratch",
+     "reservation",
+     "publication_temp"
+    ],
+    "max_entries": 64,
+    "output": {
+     "path": "$WORK/entries.jsonl",
+     "format": "jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_rows": "64",
+      "max_output_bytes": "65536",
+      "max_open_files": 3
+     }
+    }
+   },
+   "expect_result": {
+    "output": {
+     "path": {
+      "$ignore": true
+     },
+     "bytes": "0",
+     "rows": "0",
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "reports": [
+     {
+      "kind": "scratch",
+      "entries": "0"
+     },
+     {
+      "kind": "reservation",
+      "entries": "0"
+     },
+     {
+      "kind": "publication_temp",
+      "entries": "0"
+     }
+    ]
+   },
+   "assert_files": [
+    {
+     "path": "entries.jsonl",
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+   ]
+  }
+ ]
+}
