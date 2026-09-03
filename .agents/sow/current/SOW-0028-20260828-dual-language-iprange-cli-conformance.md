@@ -3006,7 +3006,7 @@ round-7 fixes at the new HEAD.
 - Five-scope rerun verdicts (all five own-model reviewers re-reviewed
   the final functional tree in their scopes):
   - Gauss (Rust parity): PASS. Verified the d956d8f2
-    canonicalIntegralText/umberCancelKey parity against Rust
+    canonicalIntegralText/numberCancelKey parity against Rust
     schema.rs:133-144 and session.rs:348-365, the declared-actor
     routing against Rust method semantics (snapshot declared consumer
     only in mixed.transform-created; Rust snapshot.rs:80-111 opens the
@@ -3051,7 +3051,15 @@ round-7 fixes at the new HEAD.
   actor exits 1 with 11 case FAILs; golden 53; sensitivity 14; go
   plain + v4work suites, vet both modes, gofmt clean; tests.d
   100/100; mmap trace PASS; rust 851 passed / 0 failed.
-- Milestone-3 closure evidence is now consistent: the functional
-  repair (actor-semantics matrices), the exact-final-code five-scope
-  rerun, and the glm-5.3-responses whole-milestone confirmation all
-  target the same committed revision recorded below.
+- Milestone-3 closure evidence is consistent: the functional repair
+  (actor-semantics matrices), the exact-final-code five-scope rerun,
+  and the glm-5.3-responses whole-milestone confirmation all target
+  the same committed revision. Final lifecycle commit for the
+  explicit-actor wave and its records:
+  fb6f5d8c831410565b7df7a528de40a1e56a686e. Worktree clean at that
+  revision; v4/go is unchanged from d956d8f2, so the close-out
+  product identity remains product SHA-256
+  8a30e703e5988da698954bb0c47e1d8364010f6b81f6b3c0d68ec00eea334de6
+  and worker SHA-256
+  7033f26bfd459b555d6a610538fe1cab2347bbc2c84154adc26254e5ee335eee
+  (both embed clean d956d8f2, the last product-source revision).
