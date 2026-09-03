@@ -3211,19 +3211,27 @@ Implementation plan (each item minimal-complete, all validation under
    `join.membership`) and `algebra.publish` over the same source with
    cross-method counter/cardinality equality and consumer open of the
    published algebra output; (6) `snapshot` + `publication.resolve`,
-   `validate`, `recovery.inspect`, `maintenance.list` with real
-   entries, `database.reclaim`, and residue cleanup.
+   `validate`, `recovery.inspect`, `maintenance.list`,
+   `database.reclaim`, and residue cleanup. Superseded detail: the
+   plan's "maintenance.list with real entries" became a zero-residue
+   assertion in the delivered case (all publish/journal artifacts are
+   cleaned up by the preceding steps); real retained reservation
+   entries are proved by the W5 crash harness instead.
 4. W4 mixed-live coordination (new case
    `v4/cli/cases/mixed.live-coordination.json`, two actors): producer
-   creates and initializes a live DB; consumer opens a live reader
-   and producer opens a second live reader on the same source; both
-   assert the same pinned generation (`info.transaction_id` +
-   `commit_nonce`, deterministic); producer commits two updates while
-   both readers are pinned; both pinned readers still read the pinned
-   generation (no partial replacement); both readers close; producer
+   creates a live DB; consumer opens a live reader pinned on the
+   committed generation; producer commits two updates while the
+   reader is pinned; the pinned reader still reads the pinned
+   generation (no partial replacement); the reader closes; producer
    `database.reclaim` then proves the retired generations become
    reclamation-eligible. Runs in both mixed directions (Rust writer +
-   Go reader, Go writer + Rust reader).
+   Go reader, Go writer + Rust reader). Superseded detail: the plan's
+   "producer opens a second live reader" is not expressible when both
+   readers are opened through one capture slot per result path (the
+   runner keeps one handle per path); the delivered case pins one
+   cross-binary reader and exercises the second live slot through the
+   producer's transient `database.info` open, as recorded in the
+   implementation wave.
 5. W5 crash harness (new external script `v4/cli/crash_harness.py`,
    README anchor): a separate gate script that drives the normal
    JSON-RPC frame client (reuses `run.py`'s `JsonRpcService` and

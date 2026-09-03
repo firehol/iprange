@@ -13,14 +13,14 @@ Latency/throughput and raw engine RSS ceilings are step-6 benchmark territory.
 
 ## New case evidence: `v4/cli/cases/resource.limits.json`
 
-Consumer-only, 134 steps, shared seed-0 direct fixture; passes in the `rust` and `go` matrices; mixed matrices skip it as "not cross-producer" (`run.py:1542-1547`).
+Consumer-only, 134 steps, shared seed-0 direct fixture; passes in the `rust` and `go` matrices; mixed matrices skip it as "not cross-producer" (`run.py` run_one: capability split by actor set).
 
 1. `system.describe` asserts the complete 9-member `limits` object.
 2. `output_limit`: legal 4,096-address `reader.lookup` (lookup batch ceiling) whose inline result cannot fit 65,000 bytes; both products answer `output_limit` / `read_only_failure` (envelope -32010).
 3. Reader capacity: 64 `reader.open` on one connection succeed; the 65th fails `server_busy` / `not_started` in both products.
 4. Cursor capacity: 64 `reader.ranges.open` on one reader succeed; the 65th fails `server_busy` / `not_started` in both products.
-5. Batch-of-17 `server_busy` is not asserted: the schema sends one object per step and `expect_error` covers product errors only; empirically both products reject a 17-element batch frame with transport -32600 before queue admission, and the runner serializes requests one at a time (`run.py:1059-1061`). The queued bound is a product constant (Rust `framing.rs:21`; Go `framing.go:34`, `session.go:542`). PROVEN: capacity `server_busy`, frame-layer batch bound 1..16. NOT PROVEN here: the >16-in-flight `server_busy` race.
-6. Capture model (one value per result-member path, `run.py:532-542`) names only the last handle per family, so closing all 64 handles individually is not asserted; capacity is per-connection, so the 64+1 boundary is fully proven. The runner terminates the per-case product process at case end (`run.py:1012-1024`).
+5. Batch-of-17 `server_busy` is not asserted: the schema sends one object per step and `expect_error` covers product errors only; empirically both products reject a 17-element batch frame with transport -32600 before queue admission, and the runner serializes requests one at a time (`run.py` JsonRpcService.call requests under one lock). The queued bound is a product constant (Rust `framing.rs:21`; Go `framing.go:34`, `session.go:542`). PROVEN: capacity `server_busy`, frame-layer batch bound 1..16. NOT PROVEN here: the >16-in-flight `server_busy` race.
+6. Capture model (one value per result-member path, `run.py` process_captures) names only the last handle per family, so closing all 64 handles individually is not asserted; capacity is per-connection, so the 64+1 boundary is fully proven. The runner terminates the per-case product process at case end (`run.py` close_services).
 
 ## Ceiling enforcement and adapter memory
 

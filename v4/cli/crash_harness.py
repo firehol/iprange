@@ -1000,7 +1000,10 @@ def main():
             "python": platform.python_version(),
         },
         "binaries": {"producer": producer, "consumer": consumer,
-                     "fixture_tool": fixture_tool},
+                     "fixture_tool": fixture_tool,
+                     "producer_sha256": sha256_file(producer),
+                     "consumer_sha256": sha256_file(consumer),
+                     "fixture_tool_sha256": sha256_file(fixture_tool)},
         "scenarios": [],
         "leftover_processes": [],
     }
