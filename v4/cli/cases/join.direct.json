@@ -10,6 +10,7 @@
   ],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.database.create",
+    "actor": "producer",
      "params": {"path": "$WORK/zerodb.iprange", "family": "ipv4", "value_kind": "direct",
                 "structure_kind": "none", "value_tag": {"text": "zerotag"}, "reader_capacity": 8},
      "expect_result": {
@@ -23,6 +24,7 @@
        "sidecar_identity": {"$ignore": true}
      }},
     {"kind": "rpc", "method": "iprange.v1.direct.replace",
+    "actor": "producer",
      "params": {"path": "$WORK/zerodb.iprange",
                 "input": {"path": "$WORK/zerodb.csv", "max_line_bytes": 1024},
                 "metadata": {"mode": "keep"},
@@ -49,6 +51,7 @@
        "writer_close": {"cleanup": {}, "coordination_cleanup": {}, "outcome": "closed"}
      }},
     {"kind": "rpc", "method": "iprange.v1.join.direct",
+    "actor": "consumer",
      "params": {
        "membership": {"source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
                       "selection": {"mode": "all"},

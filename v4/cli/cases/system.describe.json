@@ -4,6 +4,7 @@
   "fixtures": [],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.system.describe", "params": {},
+    "actor": "consumer",
      "expect_result": {
        "method": "iprange.v1.system.describe",
        "product": "iprange",

@@ -6,6 +6,7 @@
   ],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.database.info",
+    "actor": "consumer",
      "params": {"source": {"path": "$WORK/direct.iprange", "mode": "immutable"}},
      "expect_result": {"info": {
        "address_family": "ipv4", "value_kind": "direct", "structure_kind": "none",
@@ -15,6 +16,7 @@
        "active_feed_count": "0", "meta_selection": "proven_current"
      }}},
     {"kind": "rpc", "method": "iprange.v1.database.metadata.get",
+    "actor": "consumer",
      "params": {"source": {"path": "$WORK/direct.iprange", "mode": "immutable"},
                 "delivery": {"mode": "file", "path": "$WORK/metadata.json",
                               "publication_policy": "fail_if_exists",

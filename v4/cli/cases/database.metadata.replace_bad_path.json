@@ -5,6 +5,7 @@
   "steps": [
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.database.metadata.replace",
       "params": {
         "path": "$WORK/missing-db.iprange",

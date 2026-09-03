@@ -13,6 +13,7 @@
  "steps": [
   {
    "kind": "rpc",
+   "actor": "producer",
    "method": "iprange.v1.database.create",
    "params": {
     "path": "$WORK/meta.iprange",
@@ -33,6 +34,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "producer",
    "method": "iprange.v1.database.metadata.replace",
    "params": {
     "path": "$WORK/meta.iprange",
@@ -68,6 +70,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "consumer",
    "method": "iprange.v1.database.metadata.get",
    "params": {
     "source": {

@@ -5,6 +5,7 @@
   "steps": [
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.database.create",
       "params": {
         "path": "$WORK/no-such-dir/db.iprange",

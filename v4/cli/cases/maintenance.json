@@ -7,6 +7,7 @@
   ],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.maintenance.list",
+    "actor": "consumer",
      "params": {"directory": "$WORK/keeps",
                 "kinds": ["scratch", "reservation", "publication_temp"],
                 "max_entries": 64,
@@ -27,10 +28,12 @@
        {"path": "entries.jsonl", "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"}
      ]},
     {"kind": "rpc", "method": "iprange.v1.maintenance.remove",
+    "actor": "producer",
      "params": {"entry": {"kind": "scratch", "basename": "foreign",
                           "identity": {"handle": "00112233445566778899aabbccddeeff"}}},
      "expect_error": {"code": "invalid_argument", "outcome": "not_started"}},
     {"kind": "rpc", "method": "iprange.v1.database.create",
+    "actor": "producer",
      "params": {"path": "$WORK/reclaim.iprange", "family": "ipv4", "value_kind": "direct",
                 "structure_kind": "none", "value_tag": {"text": "first_seen"},
                 "reader_capacity": 8},
@@ -45,6 +48,7 @@
        "sidecar_identity": {"$ignore": true}
      }},
     {"kind": "rpc", "method": "iprange.v1.database.reclaim",
+    "actor": "producer",
      "params": {"path": "$WORK/reclaim.iprange", "max_transactions": "64",
                 "max_pages": "64",
                 "writer_budget": {"max_heap_bytes": "16777216", "max_private_pages": "20000",

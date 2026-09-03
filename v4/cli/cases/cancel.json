@@ -6,6 +6,7 @@
   "steps": [
     {
       "kind": "rpc",
+      "actor": "consumer",
       "method": "iprange.v1.cancel",
       "params": {
         "request_id": "cancel-unknown-request-0001"
@@ -14,6 +15,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "consumer",
       "method": "iprange.v1.system.describe",
       "params": {},
       "expect_result": {
@@ -22,6 +24,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "consumer",
       "method": "iprange.v1.cancel",
       "params": {
         "request_id": "case-cancel.unknown_id"
@@ -30,6 +33,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "consumer",
       "method": "iprange.v1.system.describe",
       "params": {},
       "expect_result": {

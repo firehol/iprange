@@ -14,6 +14,7 @@
  "steps": [
   {
    "kind": "rpc",
+   "actor": "consumer",
    "method": "iprange.v1.reader.open",
    "params": {
     "source": {
@@ -30,6 +31,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "consumer",
    "method": "iprange.v1.reader.info",
    "params": {
     "reader": "$CAPTURE/reader"
@@ -50,6 +52,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "consumer",
    "method": "iprange.v1.reader.close",
    "params": {
     "reader": "$CAPTURE/reader"

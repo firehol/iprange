@@ -14,6 +14,7 @@
   "steps": [
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.database.create",
       "params": {
         "path": "$WORK/credb.iprange",
@@ -80,6 +81,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.database.initialize_live",
       "params": {
         "path": "$WORK/membership.iprange",
@@ -119,6 +121,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "consumer",
       "method": "iprange.v1.database.info",
       "params": {
         "source": {
@@ -157,6 +160,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.feeds.create",
       "params": {
         "path": "$WORK/credb.iprange",
@@ -242,6 +246,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.commit.resolve",
       "params": {
         "path": "$WORK/credb.iprange",
@@ -264,6 +269,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.database.create.resolve",
       "params": {
         "path": "$WORK/credb.iprange",
@@ -294,6 +300,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.database.reset_live",
       "params": {
         "path": "$WORK/credb.iprange",

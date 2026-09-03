@@ -8,6 +8,7 @@
   ],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.algebra.count",
+    "actor": "consumer",
      "params": {
        "sources": [
          {"source": {"path": "$WORK/membership.iprange", "mode": "immutable"},

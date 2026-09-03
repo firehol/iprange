@@ -6,6 +6,7 @@
   ],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.reader.open",
+    "actor": "consumer",
      "params": {"source": {"path": "$WORK/membership.iprange", "mode": "immutable"}},
      "expect_result": {"reader": {"$ignore": true}, "info": {
        "address_family": "ipv4", "value_kind": "membership", "structure_kind": "none",
@@ -16,24 +17,31 @@
        "meta_selection": "proven_current"
      }}, "capture": ["reader"]},
     {"kind": "rpc", "method": "iprange.v1.reader.feeds.open",
+    "actor": "consumer",
      "params": {"reader": "$CAPTURE/reader", "batch_size": 1},
      "expect_result": {"cursor": {"$ignore": true}}, "capture": ["cursor"]},
     {"kind": "rpc", "method": "iprange.v1.reader.feeds.next",
+    "actor": "consumer",
      "params": {"cursor": "$CAPTURE/cursor"},
      "expect_result": {"feeds": [{"name": "alpha"}], "done": false}},
     {"kind": "rpc", "method": "iprange.v1.reader.feeds.next",
+    "actor": "consumer",
      "params": {"cursor": "$CAPTURE/cursor"},
      "expect_result": {"feeds": [{"name": "beta"}], "done": false}},
     {"kind": "rpc", "method": "iprange.v1.reader.feeds.next",
+    "actor": "consumer",
      "params": {"cursor": "$CAPTURE/cursor"},
      "expect_result": {"feeds": [], "done": true}},
     {"kind": "rpc", "method": "iprange.v1.reader.feeds.next",
+    "actor": "consumer",
      "params": {"cursor": "$CAPTURE/cursor"},
      "expect_error": {"code": "cursor_closed", "outcome": "not_started"}},
     {"kind": "rpc", "method": "iprange.v1.reader.feeds.close",
+    "actor": "consumer",
      "params": {"cursor": "$CAPTURE/cursor"},
      "expect_error": {"code": "cursor_closed", "outcome": "not_started"}},
     {"kind": "rpc", "method": "iprange.v1.reader.lookup",
+    "actor": "consumer",
      "params": {"reader": "$CAPTURE/reader", "addresses": [
        "192.0.2.5", "192.0.2.15", "198.51.100.15", "198.51.100.35"
      ]},
@@ -44,24 +52,29 @@
        {"address": "198.51.100.35", "present": true, "feeds": ["alpha"]}
      ]}},
     {"kind": "rpc", "method": "iprange.v1.reader.matching_feeds",
+    "actor": "consumer",
      "params": {"reader": "$CAPTURE/reader", "address": "192.0.2.15"},
      "expect_result": {"address": "192.0.2.15", "feeds": ["alpha", "beta"],
                         "matching_feed_count": "2"}},
     {"kind": "rpc", "method": "iprange.v1.reader.ranges.open",
+    "actor": "consumer",
      "params": {"reader": "$CAPTURE/reader",
                 "view": {"kind": "feed", "feed": "alpha"},
                 "direction": "forward", "batch_size": 2},
      "expect_result": {"cursor": {"$ignore": true}}, "capture": ["cursor"]},
     {"kind": "rpc", "method": "iprange.v1.reader.ranges.next",
+    "actor": "consumer",
      "params": {"cursor": "$CAPTURE/cursor"},
      "expect_result": {"records": [
        {"from": "192.0.2.0", "to": "192.0.2.20"},
        {"from": "198.51.100.30", "to": "198.51.100.39"}
      ], "done": false}},
     {"kind": "rpc", "method": "iprange.v1.reader.ranges.next",
+    "actor": "consumer",
      "params": {"cursor": "$CAPTURE/cursor"},
      "expect_result": {"records": [], "done": true}},
     {"kind": "rpc", "method": "iprange.v1.reader.close",
+    "actor": "consumer",
      "params": {"reader": "$CAPTURE/reader"}, "expect_result": {"closed": true}}
   ]
 }

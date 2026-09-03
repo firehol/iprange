@@ -1,0 +1,151 @@
+{
+  "schema": "iprange-cli-case-v1",
+  "name": "mixed.transform-created",
+  "requires": "iprange.v1.snapshot",
+  "fixtures": [
+    {
+      "path": "direct.csv",
+      "source": {
+        "text": "from,to,value\n192.0.2.10,192.0.2.14,10\n198.51.100.30,198.51.100.31,30\n"
+      }
+    }
+  ],
+  "steps": [
+    {
+      "kind": "rpc",
+      "actor": "producer",
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/db.iprange",
+        "family": "ipv4",
+        "value_kind": "direct",
+        "structure_kind": "none",
+        "value_tag": {
+          "text": "direct"
+        },
+        "reader_capacity": 8
+      }
+    },
+    {
+      "kind": "rpc",
+      "actor": "producer",
+      "method": "iprange.v1.direct.replace",
+      "params": {
+        "path": "$WORK/db.iprange",
+        "input": {
+          "path": "$WORK/direct.csv",
+          "max_line_bytes": 1024
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "actor": "consumer",
+      "method": "iprange.v1.snapshot",
+      "params": {
+        "source": {
+          "path": "$WORK/db.iprange",
+          "mode": "live"
+        },
+        "destination": "$WORK/snap.iprange",
+        "publication_policy": "fail_if_exists",
+        "snapshot_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "512",
+          "max_open_files": 32
+        }
+      }
+    },
+    {
+      "kind": "rpc",
+      "actor": "consumer",
+      "method": "iprange.v1.reader.open",
+      "params": {
+        "source": {
+          "path": "$WORK/snap.iprange",
+          "mode": "immutable"
+        }
+      },
+      "expect_result": {
+        "reader": {
+          "$ignore": true
+        },
+        "info": {
+          "address_family": "ipv4",
+          "value_kind": "direct",
+          "structure_kind": "none",
+          "value_tag": {
+            "hex": "646972656374"
+          },
+          "database_id": {
+            "$ignore": true
+          },
+          "transaction_id": "2",
+          "commit_nonce": {
+            "$ignore": true
+          },
+          "page_count": {
+            "$ignore": true
+          },
+          "range_record_count": "2",
+          "active_feed_count": "0",
+          "meta_selection": "proven_current"
+        }
+      },
+      "capture": [
+        "reader"
+      ]
+    },
+    {
+      "kind": "rpc",
+      "actor": "consumer",
+      "method": "iprange.v1.reader.lookup",
+      "params": {
+        "reader": "$CAPTURE/reader",
+        "addresses": [
+          "192.0.2.12",
+          "198.51.100.31",
+          "198.51.100.32"
+        ]
+      },
+      "expect_result": {
+        "matches": [
+          {
+            "address": "192.0.2.12",
+            "present": true,
+            "value": 10
+          },
+          {
+            "address": "198.51.100.31",
+            "present": true,
+            "value": 30
+          },
+          {
+            "address": "198.51.100.32",
+            "present": false
+          }
+        ]
+      }
+    },
+    {
+      "kind": "rpc",
+      "actor": "consumer",
+      "method": "iprange.v1.reader.close",
+      "params": {
+        "reader": "$CAPTURE/reader"
+      },
+      "expect_result": {
+        "closed": true
+      }
+    }
+  ]
+}

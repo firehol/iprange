@@ -14,6 +14,7 @@
  "steps": [
   {
    "kind": "rpc",
+   "actor": "producer",
    "method": "iprange.v1.database.initialize_live",
    "params": {
     "path": "$WORK/direct.iprange",
@@ -46,6 +47,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "producer",
    "method": "iprange.v1.database.live_transition.resolve",
    "params": {
     "path": "$WORK/direct.iprange",
@@ -83,6 +85,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "producer",
    "method": "iprange.v1.database.live_residue.resolve",
    "params": {
     "path": "$WORK/direct.iprange",
@@ -99,6 +102,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "producer",
    "method": "iprange.v1.database.reset_live",
    "params": {
     "path": "$WORK/direct.iprange",

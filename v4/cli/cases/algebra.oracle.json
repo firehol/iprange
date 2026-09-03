@@ -14,6 +14,7 @@
  "steps": [
   {
    "kind": "rpc",
+   "actor": "consumer",
    "method": "iprange.v1.algebra.count",
    "params": {
     "sources": [
@@ -50,6 +51,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "consumer",
    "method": "iprange.v1.algebra.compare",
    "params": {
     "sources": [

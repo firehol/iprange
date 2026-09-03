@@ -8,6 +8,7 @@
   ],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.join.membership",
+    "actor": "consumer",
      "params": {
        "left": {"source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
                 "selection": {"mode": "all"},

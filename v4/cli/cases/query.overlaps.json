@@ -7,6 +7,7 @@
   ],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.query.overlaps",
+    "actor": "consumer",
      "params": {
        "source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
        "selection": {"mode": "all"},

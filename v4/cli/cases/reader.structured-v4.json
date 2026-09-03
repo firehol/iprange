@@ -6,6 +6,7 @@
   ],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.reader.open",
+    "actor": "consumer",
      "params": {"source": {"path": "$WORK/structured.iprange", "mode": "immutable"}},
      "expect_result": {"reader": {"$ignore": true}, "info": {
        "address_family": "ipv4", "value_kind": "structured",
@@ -17,6 +18,7 @@
        "meta_selection": "proven_current"
      }}, "capture": ["reader"]},
     {"kind": "rpc", "method": "iprange.v1.reader.lookup",
+    "actor": "consumer",
      "params": {"reader": "$CAPTURE/reader", "addresses": [
        "192.0.2.10", "192.0.2.25", "192.0.2.45", "192.0.2.100"
      ]},
@@ -34,14 +36,17 @@
         "threat_feeds": ["threat-a"]}
      ]}},
     {"kind": "rpc", "method": "iprange.v1.reader.matching_feeds",
+    "actor": "consumer",
      "params": {"reader": "$CAPTURE/reader", "address": "192.0.2.10"},
      "expect_result": {"address": "192.0.2.10", "feeds": ["threat-a"],
                         "matching_feed_count": "1"}},
     {"kind": "rpc", "method": "iprange.v1.reader.ranges.open",
+    "actor": "consumer",
      "params": {"reader": "$CAPTURE/reader", "view": {"kind": "structured"},
                 "direction": "forward", "batch_size": 5},
      "expect_result": {"cursor": {"$ignore": true}}, "capture": ["cursor"]},
     {"kind": "rpc", "method": "iprange.v1.reader.ranges.next",
+    "actor": "consumer",
      "params": {"cursor": "$CAPTURE/cursor"},
      "expect_result": {"records": [
        {"from": "192.0.2.0", "to": "192.0.2.19", "value": {
@@ -61,6 +66,7 @@
          "threat_feeds": ["threat-a"]}}
      ], "done": true}},
     {"kind": "rpc", "method": "iprange.v1.reader.close",
+    "actor": "consumer",
      "params": {"reader": "$CAPTURE/reader"}, "expect_result": {"closed": true}}
   ]
 }

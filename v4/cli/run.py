@@ -7,15 +7,19 @@ strict client framing, declarative cases, deterministic fixtures, an
 independent scalar interval oracle, and a machine-readable provenance report.
 
 Cross-language matrices (``rust_to_go``, ``go_to_rust``) are real
-two-binary proofs: every executed case routes its production steps
-(create/publish/mutate/resolve) to the producer binary and its observation
-steps (open/query/export/validate/transform) to the consumer binary, in
-separate service processes that share only the per-case work directory.
-A case that cannot exercise both actors is skipped with its reason, so a
-mixed-direction PASS always means both binaries actually served; a mixed
-direction that executes no both-actor case fails as a matrix.  Per-case
-report entries record the SHA-256 and executed-step count of each actor
-binary.
+two-binary proofs: every rpc step declares the service role that executes
+it (``actor: producer|consumer`` in the case schema), and in a mixed
+matrix the producer steps run on the producer binary while the consumer
+steps run on the consumer binary, in separate service processes that share
+only the per-case work directory.  The declared actor is the single
+routing authority; method names never imply a role, so transformations
+(snapshot, recover, history projection, algebra publication) can run on
+either side.  Single-language matrices run both roles on the one selected
+executable.  A case that cannot exercise both actors is skipped with its
+reason, so a mixed-direction PASS always means both binaries actually
+served; a mixed direction that executes no both-actor case fails as a
+matrix.  Per-case report entries record the SHA-256 and executed-step
+count of each actor binary.
 """
 
 import argparse
@@ -44,11 +48,13 @@ CAPTURE_PLACEHOLDER = "$CAPTURE/"
 
 # Cross-language matrix actor model.  A mixed matrix (rust_to_go,
 # go_to_rust) runs every case through two real product services that share
-# only the per-case work directory: the producer service executes the steps
-# that create, mutate, publish, or resolve persistent artifacts, and the
-# consumer service executes the steps that open, query, export, validate, or
-# transform them.  Single-language matrices route every step to the one
-# selected binary.  The split is a property of the method, not of the case.
+# only the per-case work directory: the producer service executes artifact
+# creation/mutation steps, the consumer service executes observation and
+# transformation steps.  Every rpc case step declares its actor explicitly
+# (schema/cases.py); these method-class sets are ONLY the fallback for
+# tool-built step dicts that bypass the case schema (sensitivity gate).
+# The declared actor is the single routing authority; the split is a
+# property of the step, not of the method.
 PRODUCER_METHODS = frozenset({
     "iprange.v1.algebra.publish",
     "iprange.v1.commit.resolve",
@@ -118,13 +124,27 @@ def method_actor(method):
     raise ValueError(f"method {method!r} has no actor classification")
 
 
+def declared_actor(step):
+    """Return the declared actor of an rpc step.
+
+    The case schema requires ``actor`` on every rpc step; the
+    method-class fallback exists only for tool-built step dicts that
+    bypass the schema (sensitivity gate).
+    """
+
+    actor = step.get("actor")
+    if actor is None:
+        actor = method_actor(step["method"])
+    return actor
+
+
 def actor_requirements(case):
-    """Set of services a case needs: producer for artifact mutations,
-    consumer for observation/derivation (and for legacy CLI steps)."""
+    """Set of services a case needs: the declared actor of every rpc
+    step, plus the consumer service for legacy CLI steps."""
     actors = set()
     for step in case.get("steps", []):
         if step.get("kind") == "rpc":
-            actors.add(method_actor(step["method"]))
+            actors.add(declared_actor(step))
         else:
             actors.add("consumer")
     return actors
@@ -265,7 +285,7 @@ class CaseRunner:
                 if name not in self.captures:
                     raise ValueError(f"unresolved capture {name!r}")
                 owner, stored = self.captures[name]
-                if owner != actor:
+                if self.mixed and owner != actor:
                     raise AssertionError(
                         f"case {self.case['name']!r}: capture {name!r} was produced "
                         f"by the {owner} service and cannot cross to the {actor} "
@@ -308,7 +328,7 @@ class CaseRunner:
     # ---- rpc steps ------------------------------------------------
     def run_rpc_step(self, step):
         method = step["method"]
-        actor = method_actor(method)
+        actor = declared_actor(step)
         params = self.substitute(step["params"], actor)
         if not methods.known(method):
             raise AssertionError(f"case {self.case['name']!r}: unknown method {method}")
@@ -1358,10 +1378,11 @@ def main():
     def run_one(case, producer, consumer):
         """Run one case through real product services and record its result.
 
-        Mixed matrices route production steps to the producer binary and
-        observation steps to the consumer binary in separate service
-        processes sharing the work directory.  A case that cannot exercise
-        both actors is skipped with its reason, so a mixed-direction PASS
+        Mixed matrices execute each rpc step on the service of its declared
+        actor (producer or consumer) in separate service processes sharing
+        the work directory; only filesystem paths may cross actors.  A case
+        that cannot exercise both actors is skipped with its reason, so a
+        mixed-direction PASS
         always means both binaries actually served.
         """
 
@@ -1458,9 +1479,21 @@ def main():
                 continue
             required = case.get("requires")
             if required:
-                required_key = producer if method_actor(required) == "producer" else consumer
-                required_key = required_key if mixed else capability_key
-                if required not in capabilities[required_key]["methods"]:
+                if mixed:
+                    # Either declared actor may run the required method on
+                    # its own binary, so both product binaries must
+                    # advertise it.
+                    keys = (producer, consumer)
+                else:
+                    keys = (capability_key,)
+                keys = [key for key in keys if key is not None]
+                # An unavailable actor binary must fail the case, not be
+                # hidden by a capability skip (the /bin/false sensitivity);
+                # only a binary that successfully advertises a method set
+                # can prove the method is absent.
+                if any(capabilities[key]["available"]
+                       and required not in capabilities[key]["methods"]
+                       for key in keys):
                     record_skip(case["name"], direction,
                                 f"requires unadvertised method {required}")
                     continue

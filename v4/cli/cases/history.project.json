@@ -20,6 +20,7 @@
   "steps": [
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.database.create",
       "params": {
         "path": "$WORK/histdb.iprange",
@@ -68,6 +69,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.feeds.create",
       "params": {
         "path": "$WORK/histdb.iprange",
@@ -138,6 +140,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.database.create",
       "params": {
         "path": "$WORK/last_seen.iprange",
@@ -186,6 +189,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.direct.replace",
       "params": {
         "path": "$WORK/last_seen.iprange",
@@ -252,6 +256,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.history.project",
       "params": {
         "path": "$WORK/histdb.iprange",
@@ -336,6 +341,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "producer",
       "method": "iprange.v1.history.project",
       "params": {
         "path": "$WORK/histdb.iprange",
@@ -1962,6 +1968,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "consumer",
       "method": "iprange.v1.reader.open",
       "params": {
         "source": {
@@ -2001,6 +2008,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "consumer",
       "method": "iprange.v1.reader.ranges.open",
       "params": {
         "reader": "$CAPTURE/reader",
@@ -2022,6 +2030,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "consumer",
       "method": "iprange.v1.reader.ranges.next",
       "params": {
         "cursor": "$CAPTURE/cursor"
@@ -2038,6 +2047,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "consumer",
       "method": "iprange.v1.reader.ranges.next",
       "params": {
         "cursor": "$CAPTURE/cursor"
@@ -2049,6 +2059,7 @@
     },
     {
       "kind": "rpc",
+      "actor": "consumer",
       "method": "iprange.v1.reader.close",
       "params": {
         "reader": "$CAPTURE/reader"

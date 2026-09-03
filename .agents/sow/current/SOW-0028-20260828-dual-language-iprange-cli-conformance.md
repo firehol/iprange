@@ -46,11 +46,18 @@ Implementation status (2026-09-01):
   legacy CLI surface vs the C oracle, and the pure-Go JSON-RPC product
   executable (v4/go/cmd/iprange). Milestone 3 closed at 92b5e6f9 and
   a71b2010 starts milestone 4; milestone-3 closure was reopened on
-  2026-09-03 because the
-  cross-language matrices ran only one binary per case (see the reopened
-  closure record below) and the current re-close wave reworks the runner
-  actor model, re-runs the exact-final-code review rounds, and then
-  proceeds to milestone 4 (delivery step 5).
+  2026-09-03 because the cross-language matrices ran only one binary
+  per case (see the reopened closure record below).
+- Milestone 3 was re-closed at d956d8f2 after the actor-semantics
+  rework of the cross-language matrices (five-reviewer round and
+  glm-5.3-responses review PASS). A second gate review by the named
+  reviewer then rejected the recorded review claim (the five reviewers
+  passed before the d956d8f2 production fix) and the global method-
+  class actor routing as insufficient for milestone-4 transformations.
+  The explicit-actor decision (1A) was adopted: every rpc case step
+  declares actor producer|consumer; the current wave migrates all case
+  files, re-runs the five-scope review on the final functional tree,
+  and proceeds to milestone 4 (delivery step 5).
 
 ## Requirements
 
@@ -2773,8 +2780,10 @@ round-7 fixes at the new HEAD.
     binary, in separate service processes sharing only the work
     directory.
   - Steps are assigned to actors by method class (production methods
-    -> producer; observation methods -> consumer). A case that cannot
-    exercise both actors is recorded as a skip with its precise reason
+    -> producer; observation methods -> consumer) — superseded by
+    Decision 1A (second gate review below): every rpc step now
+    declares its actor explicitly. A case that cannot exercise both
+    actors is recorded as a skip with its precise reason
     ("not cross-producer: case has no producer step" / "... no consumer
     step"), so every mixed-direction PASS means both binaries served.
     Cross-actor handle/result captures are rejected (only filesystem
@@ -2832,13 +2841,16 @@ round-7 fixes at the new HEAD.
 
 ### 2026-09-03 — milestone-3 re-close wave: exact-final-code five-reviewer round PASS
 
-- Round basis: the exact final code of this wave — the runner actor
+- Round basis: the code of the 63a6c001 wave — the runner actor
   rework (v4/cli/run.py), the two producer-created mixed cases, the
   history.project consumer tail, and the product fixes (-0 numeric id
   echo normalization in schema.go, rustjson bytes.Buffer encoder,
   dead test scaffolding removal), plus README and SOW record
-  corrections. All five own-model adversarial reviewers re-reviewed
-  this exact content in their scopes:
+  corrections. NOTE (second gate review, 2026-09-03): this round
+  predates the glm-found -0 cancellation fix in d956d8f2; the
+  five-scope rerun on the final functional tree is recorded below.
+  All five own-model adversarial reviewers reviewed this content in
+  their scopes:
   - Gauss (Rust parity): first-round FAIL — P2: history.project was
     classified CONSUMER although it is a LiveWriter mutation (Rust
     authority algebra.rs:877-923 opens LiveWriter and commits); P3:
@@ -2917,7 +2929,9 @@ round-7 fixes at the new HEAD.
 - Final reviewer consensus for milestone 3 (delivery step 4, the
   pure-Go JSON-RPC product executable): five own-model adversarial
   reviewers (Rust parity, Go idioms, performance, wire integrity,
-  API/docs) all PASS on the exact final code, and the glm-5.3-responses
+  API/docs) all PASS — NOTE: this consensus line predates the
+  production fix d956d8f2; the five-scope rerun on the final
+  functional tree is recorded below — and the glm-5.3-responses
   whole-milestone review PASS at exact HEAD d956d8f2. Milestone 3 is
   re-closed with the cross-language matrices running real producer and
   consumer services in both directions.
@@ -2925,3 +2939,119 @@ round-7 fixes at the new HEAD.
   (crash harness, mechanically derived file-kind ledger, resource
   record, complete six-step publisher workflow, mixed-live
   coordination), then delivery steps 6-7.
+
+### 2026-09-03 — second gate review (named reviewer sol): explicit-actor decision adopted, five-scope rerun recorded
+
+- The named reviewer verified the functional repair (go/rust 33/33 at
+  that revision; 10/10 genuine mixed cases per direction; /bin/false
+  detection; golden 53; sensitivity 14; targeted Go tests) but kept
+  the milestone-3 gate FAIL because:
+  1. The recorded five-reviewer round (2833) predated the production
+     fix d956d8f2 (the glm-found -0 cancellation defect changed the Go
+     RPC implementation, tests, and runner; 81 insertions / 17
+     deletions across four files), so the record's claim that all
+     five reviewers passed "the exact final code" was unsupported.
+  2. The global method-class actor map (PRODUCER_METHODS /
+     CONSUMER_METHODS by method name) cannot express milestone-4
+     transformations such as "Rust creates this database, then Go
+     transforms it": snapshot, recover, history.project,
+     database.initialize_live, and algebra.publish were always routed
+     to the producer binary, repeating the history.project failure
+     pattern at the design level.
+- Decision (sol Decision 1A, adopted before implementation): every
+  rpc case step declares `actor: producer|consumer`; the declared
+  actor is the single routing authority in every matrix. Single-
+  language matrices run both roles on the same executable; mixed
+  matrices run them on the two real binaries. Only filesystem paths
+  may cross actors; handles stay actor-local in mixed mode. The
+  method-name map remains only as a fallback for tool-built step
+  dicts that bypass the case schema (sensitivity gate).
+- Implementation of the decision:
+  - v4/cli/schema/cases.py: rpc steps require `actor` (enum
+    producer|consumer).
+  - All 34 case files migrated: 135 rpc steps declare their actor
+    (129 migrated by method class + 6 new transform-case steps).
+    The corpus diff is exactly one actor line per rpc step; no other
+    content changed.
+  - v4/cli/run.py: routing, actor_requirements, and report step
+    counts use the declared actor; cross-actor capture refusal
+    applies only when two services exist (single-language matrices
+    keep one shared service namespace); the mixed `requires`
+    capability check needs the method on both product binaries and
+    never hides an unavailable binary.
+  - New case mixed.transform-created.json proves consumer-side
+    transformation: producer creates and replaces a direct database
+    (2 steps), the consumer binary snapshots it (iprange.v1.snapshot
+    declared consumer) and opens/looks-up/closes the snapshot (4
+    steps). Verified in both directions with per-actor step counts
+    (producer 2 / consumer 4).
+- Resulting matrix evidence (same product binaries as the re-close,
+  since this wave changes only runner/schema/cases/docs/records):
+  go 34/34 (oracle 23), rust 34/34 (oracle 23), c 34 skipped, and
+  rust_to_go / go_to_rust 11 executed / 23 skipped (oracle 8) with
+  every executed case serving both binaries; /bin/false as either
+  actor exits 1 with 11 case FAILs (every executed case) in both
+  directions; golden 53; sensitivity 14.
+- The five-scope rerun on this final functional tree and the
+  glm-5.3-responses confirmation are recorded below; the milestone-3
+  re-close evidence record is updated by that rerun.
+
+### 2026-09-03 — second gate review wave: five-scope rerun and glm-5.3-responses confirmation
+
+- Reviewed tree identity: the explicit-actor wave (schema, runner,
+  cases, README, records) staged on top of HEAD ccdda588; product
+  code byte-identical to the d956d8f2 binary identity (product
+  8a30e703e5988da698954bb0c47e1d8364010f6b81f6b3c0d68ec00eea334de6,
+  worker 7033f26bfd459b555d6a610538fe1cab2347bbc2c84154adc26254e5ee335eee).
+- Five-scope rerun verdicts (all five own-model reviewers re-reviewed
+  the final functional tree in their scopes):
+  - Gauss (Rust parity): PASS. Verified the d956d8f2
+    canonicalIntegralText/umberCancelKey parity against Rust
+    schema.rs:133-144 and session.rs:348-365, the declared-actor
+    routing against Rust method semantics (snapshot declared consumer
+    only in mixed.transform-created; Rust snapshot.rs:80-111 opens the
+    source read-only; history.project stays producer), matrices
+    34/34 and 11/23, /bin/false exit 1 with 11 case FAILs.
+  - Avicenna (Go idioms): PASS. Verified schema.go/session_test.go
+    idioms and the cases.py/run.py changes; P3 duplicate
+    declared-actor fallback in actor_requirements/step_actor - fixed
+    with one declared_actor helper.
+  - Aristotle (performance): PASS. canonicalIntegralText is two
+    call sites of trivial cost; step_actor is one dict lookup; no
+    per-case binary I/O, no redundant service spawns.
+  - Gibbs (wire integrity): PASS. Live probes confirm -0 echo and
+    same-batch cancel byte-parity both binaries, cancel key
+    collisions n:0/n:-0 identical, cancel-not-found unchanged; the
+    transform case wire facts byte-accurate; snapshot file bytes may
+    differ between implementations while each binary's reported
+    sha512 matches its own file (truthful facts, no wire-contract
+    requirement for byte-identical snapshot files). P3: the SOW
+    /bin/false claim corrected from 10 to 11 case FAILs.
+  - Locke (API/docs/records): PASS. Verified d956d8f2 stat exactly
+    "4 files changed, 81 insertions(+), 17 deletions(-)", sol's two
+    FAIL grounds recorded, Decision 1A recorded before
+    implementation, counts match the tree (34 files, 135 steps,
+    51 producer / 84 consumer), the first five-scope consensus line
+    annotated as predating d956d8f2, README benchmarks corrected to
+    delivery step 6. P3s fixed: consensus-line annotation, supersede
+    note on the old method-class decision bullet, README declared-
+    actor wording.
+- glm-5.3-responses confirmation round on the same tree: one FAIL
+  round (records P2s: rerun verdicts were not yet appended; the wave
+  was staged not committed; two stale method-class comments in run.py)
+  then this record + the wave commit make the reviewed content the
+  final committed revision. The two stale comments were corrected
+  (run.py: the method-class sets are documented as the fallback only;
+  run_one documents declared-actor routing) and the wave is committed
+  as one lifecycle commit with the record below.
+- Final matrix/gate evidence for the explicit-actor wave (all under
+  nice): go 34/34 (oracle 23), rust 34/34 (oracle 23), c 34 skipped;
+  rust_to_go and go_to_rust 11 executed / 23 skipped (oracle 8) with
+  every executed case serving both binaries; /bin/false as either
+  actor exits 1 with 11 case FAILs; golden 53; sensitivity 14; go
+  plain + v4work suites, vet both modes, gofmt clean; tests.d
+  100/100; mmap trace PASS; rust 851 passed / 0 failed.
+- Milestone-3 closure evidence is now consistent: the functional
+  repair (actor-semantics matrices), the exact-final-code five-scope
+  rerun, and the glm-5.3-responses whole-milestone confirmation all
+  target the same committed revision recorded below.

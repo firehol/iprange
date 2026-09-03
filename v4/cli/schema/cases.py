@@ -50,13 +50,20 @@ _STREAM_EXPECTATION = {
 def _rpc_step(expectation):
     properties = {
         "kind": {"type": "string", "enum": ["rpc"]},
+        # The service role that executes this step: producer for artifact
+        # creation/mutation/publication, consumer for observation and
+        # transformation.  Single-language matrices run both roles on the
+        # same executable; mixed matrices run them on the two real
+        # binaries.  The declared actor is the single routing authority;
+        # method names do not imply a role.
+        "actor": {"type": "string", "enum": ["producer", "consumer"]},
         "method": {"type": "string", "min_len": 1},
         "params": {"type": "object"},
         "capture": {"type": "array", "items": {"type": "string", "min_len": 1}, "max": 16},
         "assert_files": {"type": "array", "items": _ASSERT_FILE, "max": 64},
         "notification": {"type": "boolean"},
     }
-    required = ["kind", "method", "params"]
+    required = ["kind", "actor", "method", "params"]
     if expectation is not None:
         properties.update(expectation)
         required.extend(expectation)

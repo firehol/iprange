@@ -7,6 +7,7 @@
   ],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.query.matching_feeds",
+    "actor": "consumer",
      "params": {
        "source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
        "addresses": ["192.0.2.15", "198.51.100.15", "198.51.100.35", "203.0.113.1"],

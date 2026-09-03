@@ -64,14 +64,15 @@ nice python3 v4/cli/run.py --matrix go_to_rust --rust "$RUST_IPRANGE" --go "$GO_
 ```
 
 The mixed matrices (`rust_to_go`, `go_to_rust`) are two-binary
-cross-language proofs: each executed case routes its production steps
-(create, publish, feed/direct mutations, resolution) to the producer
-binary and its observation steps (open, query, export, validate,
-transform) to the consumer binary, in separate `--jsonrpc` processes
-sharing only the per-case work directory. A case that cannot exercise
-both actors is skipped with its reason, so a mixed PASS means both
-binaries genuinely served; the JSON report records the SHA-256 and
-executed-step count of each actor per case. `--allow-skips` is
+cross-language proofs: every rpc step declares the service role that
+runs it (`actor: producer` for artifact creation/mutation,
+`actor: consumer` for observation and transformation), and a mixed
+case executes its producer steps on the producer binary and its
+consumer steps on the consumer binary, in separate `--jsonrpc`
+processes sharing only the per-case work directory. A case that
+cannot exercise both actors is skipped with its reason, so a mixed
+PASS means both binaries genuinely served; the JSON report records
+the SHA-256 and executed-step count of each actor per case. `--allow-skips` is
 required for skipped cases (fixture-only and single-actor cases in the
 mixed matrices, and the whole C single-language surface, which the v4
 product binaries do not implement). The `work-dir` must already exist.
@@ -83,16 +84,22 @@ nice python3 v4/cli/check_golden.py        # 53 golden wire exchanges
 nice python3 v4/cli/sensitivity_gate.py    # 14 broken-server modes
 ```
 
-- `cases/` — the declarative method-family cases (33 files),
-  including producer-created cross-language cases (`mixed.direct-created`,
-  `mixed.membership-created`) whose artifact is built by one product
-  binary and read live by the other.
+- `cases/` — the declarative method-family cases (34 files). Every
+  rpc step declares its service role explicitly (`actor: producer` for
+  artifact creation/mutation, `actor: consumer` for observation and
+  transformation), so a transformation can run on either binary in a
+  mixed matrix. Producer-created cross-language cases:
+  `mixed.direct-created`, `mixed.membership-created`,
+  `mixed.transform-created` (the consumer binary snapshots a database
+  the producer built and reads it back).
 - `golden/` — complete request/response exchanges generated from the
   Rust binary and validated against the strict Python schemas.
 - `schema/` — the machine authority: framing, methods, results, and
   the scalar interval oracle. It imports no SDK.
 - `benchmarks/` — reserved for the consolidated workload manifests
-  and `bench.py` harness of SOW-0028 step 5 (currently empty).
+  and `bench.py` harness of SOW-0028 delivery step 6 (currently
+  empty; also update the `cases/` bullet above and the matrix counts
+  when a new case is added).
 
 ## Known limitations
 

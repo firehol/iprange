@@ -7,6 +7,7 @@
   ],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.database.create",
+    "actor": "producer",
      "params": {"path": "$WORK/feeddb.iprange", "family": "ipv4", "value_kind": "membership",
                 "structure_kind": "none", "value_tag": {"text": "membership"},
                 "reader_capacity": 8},
@@ -21,6 +22,7 @@
        "sidecar_identity": {"$ignore": true}
      }},
     {"kind": "rpc", "method": "iprange.v1.feeds.create",
+    "actor": "producer",
      "params": {"path": "$WORK/feeddb.iprange", "feed": "gamma",
                 "current": {"source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
                             "feed": "alpha"},
@@ -48,6 +50,7 @@
        "writer_close": {"cleanup": {}, "coordination_cleanup": {}, "outcome": "closed"}
      }},
     {"kind": "rpc", "method": "iprange.v1.feeds.replace",
+    "actor": "producer",
      "params": {"path": "$WORK/feeddb.iprange", "feed": "gamma",
                 "current": {"source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
                             "feed": "beta"},
@@ -75,6 +78,7 @@
        "writer_close": {"cleanup": {}, "coordination_cleanup": {}, "outcome": "closed"}
      }},
     {"kind": "rpc", "method": "iprange.v1.feeds.rename",
+    "actor": "producer",
      "params": {"path": "$WORK/feeddb.iprange", "old_feed": "gamma", "new_feed": "delta",
                 "metadata": {"mode": "replace_utf8", "text": "renamed"},
                 "writer_budget": {"max_heap_bytes": "16777216", "max_private_pages": "20000",
@@ -90,6 +94,7 @@
        "writer_close": {"cleanup": {}, "coordination_cleanup": {}, "outcome": "closed"}
      }},
     {"kind": "rpc", "method": "iprange.v1.feeds.delete",
+    "actor": "producer",
      "params": {"path": "$WORK/feeddb.iprange", "feed": "delta",
                 "metadata": {"mode": "keep"},
                 "writer_budget": {"max_heap_bytes": "16777216", "max_private_pages": "20000",
@@ -105,6 +110,7 @@
        "writer_close": {"cleanup": {}, "coordination_cleanup": {}, "outcome": "closed"}
      }},
     {"kind": "rpc", "method": "iprange.v1.feeds.import",
+    "actor": "producer",
      "params": {"path": "$WORK/feeddb.iprange",
                 "source": {"path": "$WORK/membership.iprange", "mode": "immutable"},
                 "metadata": {"mode": "keep"},

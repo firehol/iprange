@@ -13,6 +13,7 @@
  "steps": [
   {
    "kind": "rpc",
+   "actor": "producer",
    "method": "iprange.v1.current.publish",
    "params": {
     "input": {
@@ -103,6 +104,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "consumer",
    "method": "iprange.v1.publication.inspect",
    "params": {
     "path": "$WORK/published.iprange"
@@ -118,6 +120,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "producer",
    "method": "iprange.v1.publication.resolve",
    "params": {
     "path": "$WORK/published.iprange",
@@ -130,6 +133,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "producer",
    "method": "iprange.v1.publication.residue.remove",
    "params": {
     "handle": {

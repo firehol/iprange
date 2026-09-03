@@ -4,6 +4,7 @@
   "fixtures": [],
   "steps": [
     {"kind": "rpc", "method": "iprange.v1.reader.open",
+    "actor": "consumer",
      "params": {"source": {"path": "$WORK/missing.iprange", "mode": "immutable"}},
      "expect_error": {"code": "invalid_path", "outcome": "not_started"}}
   ]

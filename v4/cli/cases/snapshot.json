@@ -14,6 +14,7 @@
  "steps": [
   {
    "kind": "rpc",
+   "actor": "producer",
    "method": "iprange.v1.snapshot",
    "params": {
     "source": {
@@ -54,6 +55,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "producer",
    "method": "iprange.v1.publication.resolve",
    "params": {
     "path": "$WORK/snap.iprange",
@@ -84,6 +86,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "consumer",
    "method": "iprange.v1.reader.open",
    "params": {
     "source": {
@@ -102,6 +105,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "consumer",
    "method": "iprange.v1.reader.lookup",
    "params": {
     "reader": "$CAPTURE/reader",
@@ -124,6 +128,7 @@
   },
   {
    "kind": "rpc",
+   "actor": "consumer",
    "method": "iprange.v1.reader.close",
    "params": {
     "reader": "$CAPTURE/reader"
