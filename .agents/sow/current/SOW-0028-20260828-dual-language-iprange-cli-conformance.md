@@ -2715,3 +2715,33 @@ round-7 fixes at the new HEAD.
   script reusing the case definitions; (2) file-kind ledger; (3)
   resource record; (4) publisher workflow script; (5) five-reviewer
   + glm final rounds before step-5 close.
+
+### 2026-09-03 — milestone-3 closure reopened: cross-language matrix false positive (reviewer sol P1)
+
+- The named reviewer (sol) proved the rust_to_go / go_to_rust
+  matrices are false positives: run.py starts exactly one service per
+  case with the consumer binary (run.py:1202-1216); the producer
+  label is stored but never spawned; csv_db/generator fixtures come
+  from the separate v4-fixture tool. Empirical reproduction:
+  `rust_to_go` with `/bin/false` as the Rust binary passes 31/31.
+- Decision (recorded before implementation): rework the runner with
+  explicit producer/consumer actors per step.
+  - Each matrix case runs real producer steps (artifact creation,
+    publication, feed mutations) on the producer binary and consumer
+    steps (open, query, export, validate, transform) on the consumer
+    binary, in separate service processes sharing only the work
+    directory.
+  - Steps are assigned to actors by method class (production methods
+    -> producer; observation methods -> consumer). A case with no
+    producer steps fails in mixed mode. Cross-actor handle captures
+    are rejected (only filesystem paths may cross).
+  - The mixed matrices FAIL when either actor binary cannot serve
+    (sensitivity: /bin/false as either actor must fail the matrix).
+  - The report records the SHA-256 of each actor binary per case.
+  - Fixture-only cases (artifact built by the separate fixture tool,
+    not by a product binary) are recorded as skips in mixed mode with
+    the reason "fixture-tool-produced artifact; not cross-language"
+    until they get genuine producer creation steps.
+- The milestone-3 closure record is withdrawn pending the reworked
+  matrices, the exact-final-code five-reviewer round, and the glm
+  re-review.
