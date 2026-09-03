@@ -3139,3 +3139,10 @@ round-7 fixes at the new HEAD.
   recorded below; with it, milestone-3 closure evidence (functional
   repair, exact-final-code five-scope rerun, glm whole-milestone
   confirmation, binary identity) all targets one committed revision.
+
+### 2026-09-03 — milestone-3 re-close: final record (third gate wave complete)
+
+- Final functional commit: 65479dc219bcc3fb8db7c5194cd75a49f202e771 (single-authority actor model, all case files, runner and qualification changes). Final record-only HEAD for this wave: the commit carrying this entry (this record), which is the only delta after 65479dc2 beside the records named below. Tree clean; v4/go unchanged since d956d8f2 (git diff d956d8f2..HEAD -- v4/go empty).
+- Close-out binary identity (qualification build, go1.26.4 linux/amd64, -buildvcs=false, rebuild byte-stable): product 4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa; worker 16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e. Rust binary: v4/rust/target/release/iprange built from d96797e0 (no Rust source change in any re-close wave).
+- Review chain (all on the final functional content 65479dc2): five-scope exact-tree rerun PASS (Gauss, Avicenna, Aristotle, Gibbs, Locke; P3s fixed), glm-5.3-responses whole-milestone confirmation PASS (single-authority routing, sensitivity declarations, qualification identity, five-reviewer verdicts, gate evidence all verified; the only FAIL items of that round were the absence of this record and the unnamed final HEAD, both resolved by this entry).
+- Status: milestone 3 (pure-Go JSON-RPC product executable) is re-closed with real two-binary cross-language matrices; milestone 4 (delivery step 5) proceeds per the expanded scope recorded above. All earlier stale claims are annotated; no fallback routing exists in v4/.
