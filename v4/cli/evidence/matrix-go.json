@@ -1,0 +1,700 @@
+{
+  "binaries": {
+    "go": {
+      "available": true,
+      "methods": [
+        "iprange.v1.algebra.compare",
+        "iprange.v1.algebra.count",
+        "iprange.v1.algebra.publish",
+        "iprange.v1.commit.resolve",
+        "iprange.v1.current.publish",
+        "iprange.v1.database.create",
+        "iprange.v1.database.create.resolve",
+        "iprange.v1.database.info",
+        "iprange.v1.database.initialize_live",
+        "iprange.v1.database.live_residue.resolve",
+        "iprange.v1.database.live_transition.resolve",
+        "iprange.v1.database.metadata.get",
+        "iprange.v1.database.metadata.replace",
+        "iprange.v1.database.reclaim",
+        "iprange.v1.database.reset_live",
+        "iprange.v1.direct.replace",
+        "iprange.v1.export",
+        "iprange.v1.feeds.create",
+        "iprange.v1.feeds.delete",
+        "iprange.v1.feeds.import",
+        "iprange.v1.feeds.rename",
+        "iprange.v1.feeds.replace",
+        "iprange.v1.history.project",
+        "iprange.v1.join.direct",
+        "iprange.v1.join.membership",
+        "iprange.v1.maintenance.list",
+        "iprange.v1.maintenance.remove",
+        "iprange.v1.publication.inspect",
+        "iprange.v1.publication.residue.remove",
+        "iprange.v1.publication.resolve",
+        "iprange.v1.query.cardinalities",
+        "iprange.v1.query.matching_feeds",
+        "iprange.v1.query.overlaps",
+        "iprange.v1.reader.close",
+        "iprange.v1.reader.feeds.close",
+        "iprange.v1.reader.feeds.next",
+        "iprange.v1.reader.feeds.open",
+        "iprange.v1.reader.info",
+        "iprange.v1.reader.lookup",
+        "iprange.v1.reader.matching_feeds",
+        "iprange.v1.reader.metadata",
+        "iprange.v1.reader.open",
+        "iprange.v1.reader.ranges.close",
+        "iprange.v1.reader.ranges.next",
+        "iprange.v1.reader.ranges.open",
+        "iprange.v1.recover",
+        "iprange.v1.recovery.inspect",
+        "iprange.v1.retention.first_seen.refresh",
+        "iprange.v1.retention.last_seen.refresh",
+        "iprange.v1.snapshot",
+        "iprange.v1.system.describe",
+        "iprange.v1.validate"
+      ],
+      "path": "/tmp/iprange-qual/iprange",
+      "result": {
+        "api_version": "1",
+        "export_formats": [
+          "netset",
+          "ipset",
+          "ranges",
+          "csv",
+          "jsonl",
+          "legacy_binary"
+        ],
+        "families": [
+          "ipv4",
+          "ipv6"
+        ],
+        "fault_worker": {
+          "available": true,
+          "protocol": "1"
+        },
+        "format": "iprange-v4-phase1-unsigned",
+        "implementation": "go",
+        "jsonrpc_version": "2.0",
+        "limits": {
+          "batch_requests": 16,
+          "cursor_handles": 64,
+          "cursor_records": 4096,
+          "input_frame_bytes": "1048576",
+          "lookup_addresses": 4096,
+          "output_frame_bytes": "1048576",
+          "queued_requests": 16,
+          "reader_handles": 64,
+          "response_object_bytes": "65000"
+        },
+        "method": "iprange.v1.system.describe",
+        "methods": [
+          "iprange.v1.algebra.compare",
+          "iprange.v1.algebra.count",
+          "iprange.v1.algebra.publish",
+          "iprange.v1.commit.resolve",
+          "iprange.v1.current.publish",
+          "iprange.v1.database.create",
+          "iprange.v1.database.create.resolve",
+          "iprange.v1.database.info",
+          "iprange.v1.database.initialize_live",
+          "iprange.v1.database.live_residue.resolve",
+          "iprange.v1.database.live_transition.resolve",
+          "iprange.v1.database.metadata.get",
+          "iprange.v1.database.metadata.replace",
+          "iprange.v1.database.reclaim",
+          "iprange.v1.database.reset_live",
+          "iprange.v1.direct.replace",
+          "iprange.v1.export",
+          "iprange.v1.feeds.create",
+          "iprange.v1.feeds.delete",
+          "iprange.v1.feeds.import",
+          "iprange.v1.feeds.rename",
+          "iprange.v1.feeds.replace",
+          "iprange.v1.history.project",
+          "iprange.v1.join.direct",
+          "iprange.v1.join.membership",
+          "iprange.v1.maintenance.list",
+          "iprange.v1.maintenance.remove",
+          "iprange.v1.publication.inspect",
+          "iprange.v1.publication.residue.remove",
+          "iprange.v1.publication.resolve",
+          "iprange.v1.query.cardinalities",
+          "iprange.v1.query.matching_feeds",
+          "iprange.v1.query.overlaps",
+          "iprange.v1.reader.close",
+          "iprange.v1.reader.feeds.close",
+          "iprange.v1.reader.feeds.next",
+          "iprange.v1.reader.feeds.open",
+          "iprange.v1.reader.info",
+          "iprange.v1.reader.lookup",
+          "iprange.v1.reader.matching_feeds",
+          "iprange.v1.reader.metadata",
+          "iprange.v1.reader.open",
+          "iprange.v1.reader.ranges.close",
+          "iprange.v1.reader.ranges.next",
+          "iprange.v1.reader.ranges.open",
+          "iprange.v1.recover",
+          "iprange.v1.recovery.inspect",
+          "iprange.v1.retention.first_seen.refresh",
+          "iprange.v1.retention.last_seen.refresh",
+          "iprange.v1.snapshot",
+          "iprange.v1.system.describe",
+          "iprange.v1.validate"
+        ],
+        "platform": "linux",
+        "platform_result_fields": [],
+        "product": "iprange",
+        "product_version": "0.0.0"
+      },
+      "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa"
+    }
+  },
+  "cases": [
+    {
+      "matrix": "go",
+      "name": "algebra.compare",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "algebra.count",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "algebra.oracle",
+      "oracle_checks": 2,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "algebra.publish",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "cancel.unknown_id",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "database.create_bad_directory",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "database.info-metadata-v4",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "database.metadata",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "database.metadata.replace_bad_path",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "direct.retention",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "export.netset",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "feeds.lifecycle",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "history.project",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "join.direct",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "join.membership",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "live.lifecycle",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "live.transition",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "maintenance",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "mixed.direct-created",
+      "oracle_checks": 4,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "mixed.live-coordination",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "mixed.membership-created",
+      "oracle_checks": 4,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "mixed.transform-created",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "publication",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "query.cardinalities",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "query.matching_feeds",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "query.overlaps",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "reader.direct-v4",
+      "oracle_checks": 5,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "reader.info",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "reader.lookup_bad_handle",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "reader.membership-v4",
+      "oracle_checks": 4,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "reader.open_missing",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "reader.structured-v4",
+      "oracle_checks": 4,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "resource.limits",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "snapshot",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "system.describe",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "validate.recover",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "go",
+      "name": "workflow.publisher",
+      "oracle_checks": 14,
+      "status": "PASS"
+    }
+  ],
+  "command": [
+    "v4/cli/run.py",
+    "--matrix",
+    "go",
+    "--go",
+    "/tmp/iprange-qual/iprange",
+    "--fixture-tool",
+    "/home/costa/src/firehol/iprange/v4/rust/target/release/examples/v4-fixture",
+    "--work-dir",
+    "/tmp/w6-go",
+    "--json-report",
+    "/home/costa/src/firehol/iprange/v4/cli/evidence/matrix-go.json",
+    "--allow-skips"
+  ],
+  "environment_allowlist": [
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "ASAN_OPTIONS",
+    "LSAN_OPTIONS",
+    "MSAN_OPTIONS",
+    "TSAN_OPTIONS",
+    "UBSAN_OPTIONS",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "USERPROFILE",
+    "PROCESSOR_ARCHITECTURE",
+    "PROCESSOR_IDENTIFIER"
+  ],
+  "failed": 0,
+  "file_kinds": {
+    "adapter_output": {
+      "created_by": {
+        "iprange.v1.export": 1,
+        "iprange.v1.join.direct": 2,
+        "iprange.v1.join.membership": 2,
+        "iprange.v1.maintenance.list": 2,
+        "iprange.v1.query.cardinalities": 1,
+        "iprange.v1.query.matching_feeds": 1,
+        "iprange.v1.query.overlaps": 2,
+        "iprange.v1.retention.first_seen.refresh": 2,
+        "iprange.v1.validate": 2
+      },
+      "opened_by": {}
+    },
+    "live_sidecar": {
+      "created_by": {
+        "iprange.v1.database.create": 16,
+        "iprange.v1.database.initialize_live": 2
+      },
+      "opened_by": {}
+    },
+    "metadata_delivery": {
+      "created_by": {
+        "iprange.v1.database.metadata.get": 1
+      },
+      "opened_by": {}
+    },
+    "v4_main": {
+      "created_by": {
+        "iprange.v1.algebra.publish": 2,
+        "iprange.v1.current.publish": 3,
+        "iprange.v1.database.create": 16,
+        "iprange.v1.snapshot": 3
+      },
+      "opened_by": {
+        "iprange.v1.commit.resolve": 1,
+        "iprange.v1.database.create.resolve": 1,
+        "iprange.v1.database.info": 1,
+        "iprange.v1.database.metadata.get": 1,
+        "iprange.v1.database.metadata.replace": 1,
+        "iprange.v1.database.reclaim": 4,
+        "iprange.v1.database.reset_live": 1,
+        "iprange.v1.direct.replace": 10,
+        "iprange.v1.feeds.create": 6,
+        "iprange.v1.feeds.delete": 1,
+        "iprange.v1.feeds.import": 1,
+        "iprange.v1.feeds.rename": 1,
+        "iprange.v1.feeds.replace": 4,
+        "iprange.v1.history.project": 6,
+        "iprange.v1.join.direct": 2,
+        "iprange.v1.publication.inspect": 1,
+        "iprange.v1.publication.resolve": 4,
+        "iprange.v1.reader.open": 13,
+        "iprange.v1.recovery.inspect": 1,
+        "iprange.v1.retention.first_seen.refresh": 3,
+        "iprange.v1.retention.last_seen.refresh": 3,
+        "iprange.v1.snapshot": 2,
+        "iprange.v1.validate": 1
+      }
+    }
+  },
+  "fixture_tool": {
+    "path": "/home/costa/src/firehol/iprange/v4/rust/target/release/examples/v4-fixture",
+    "sha256": "d615488f038fa59deea87e0ce3340b780380fe0f2122e8e1ad65edeb25d861f1"
+  },
+  "frame_sizes": {
+    "iprange.v1.algebra.compare": {
+      "max_request_bytes": 410,
+      "max_response_bytes": 338
+    },
+    "iprange.v1.algebra.count": {
+      "max_request_bytes": 543,
+      "max_response_bytes": 210
+    },
+    "iprange.v1.algebra.publish": {
+      "max_request_bytes": 733,
+      "max_response_bytes": 1350
+    },
+    "iprange.v1.cancel": {
+      "max_request_bytes": 101
+    },
+    "iprange.v1.commit.resolve": {
+      "max_request_bytes": 513,
+      "max_response_bytes": 474
+    },
+    "iprange.v1.current.publish": {
+      "max_request_bytes": 674,
+      "max_response_bytes": 1276
+    },
+    "iprange.v1.database.create": {
+      "max_request_bytes": 308,
+      "max_response_bytes": 704
+    },
+    "iprange.v1.database.create.resolve": {
+      "max_request_bytes": 797,
+      "max_response_bytes": 203
+    },
+    "iprange.v1.database.info": {
+      "max_request_bytes": 206,
+      "max_response_bytes": 514
+    },
+    "iprange.v1.database.initialize_live": {
+      "max_request_bytes": 189,
+      "max_response_bytes": 668
+    },
+    "iprange.v1.database.live_residue.resolve": {
+      "max_request_bytes": 201,
+      "max_response_bytes": 456
+    },
+    "iprange.v1.database.live_transition.resolve": {
+      "max_request_bytes": 731,
+      "max_response_bytes": 673
+    },
+    "iprange.v1.database.metadata.get": {
+      "max_request_bytes": 396,
+      "max_response_bytes": 309
+    },
+    "iprange.v1.database.metadata.replace": {
+      "max_request_bytes": 378,
+      "max_response_bytes": 547
+    },
+    "iprange.v1.database.reclaim": {
+      "max_request_bytes": 334,
+      "max_response_bytes": 590
+    },
+    "iprange.v1.database.reset_live": {
+      "max_request_bytes": 207,
+      "max_response_bytes": 752
+    },
+    "iprange.v1.direct.replace": {
+      "max_request_bytes": 439,
+      "max_response_bytes": 1071
+    },
+    "iprange.v1.export": {
+      "max_request_bytes": 424,
+      "max_response_bytes": 327
+    },
+    "iprange.v1.feeds.create": {
+      "max_request_bytes": 480,
+      "max_response_bytes": 1131
+    },
+    "iprange.v1.feeds.delete": {
+      "max_request_bytes": 317,
+      "max_response_bytes": 543
+    },
+    "iprange.v1.feeds.import": {
+      "max_request_bytes": 399,
+      "max_response_bytes": 1063
+    },
+    "iprange.v1.feeds.rename": {
+      "max_request_bytes": 365,
+      "max_response_bytes": 541
+    },
+    "iprange.v1.feeds.replace": {
+      "max_request_bytes": 473,
+      "max_response_bytes": 1065
+    },
+    "iprange.v1.history.project": {
+      "max_request_bytes": 11611,
+      "max_response_bytes": 1383
+    },
+    "iprange.v1.join.direct": {
+      "max_request_bytes": 617,
+      "max_response_bytes": 541
+    },
+    "iprange.v1.join.membership": {
+      "max_request_bytes": 710,
+      "max_response_bytes": 546
+    },
+    "iprange.v1.maintenance.list": {
+      "max_request_bytes": 436,
+      "max_response_bytes": 398
+    },
+    "iprange.v1.maintenance.remove": {
+      "max_request_bytes": 199,
+      "max_response_bytes": 165
+    },
+    "iprange.v1.publication.inspect": {
+      "max_request_bytes": 157,
+      "max_response_bytes": 193
+    },
+    "iprange.v1.publication.residue.remove": {
+      "max_request_bytes": 193,
+      "max_response_bytes": 202
+    },
+    "iprange.v1.publication.resolve": {
+      "max_request_bytes": 1287,
+      "max_response_bytes": 1187
+    },
+    "iprange.v1.query.cardinalities": {
+      "max_request_bytes": 500,
+      "max_response_bytes": 394
+    },
+    "iprange.v1.query.matching_feeds": {
+      "max_request_bytes": 490,
+      "max_response_bytes": 308
+    },
+    "iprange.v1.query.overlaps": {
+      "max_request_bytes": 515,
+      "max_response_bytes": 382
+    },
+    "iprange.v1.reader.close": {
+      "max_request_bytes": 145,
+      "max_response_bytes": 190
+    },
+    "iprange.v1.reader.feeds.close": {
+      "max_request_bytes": 147,
+      "max_response_bytes": 168
+    },
+    "iprange.v1.reader.feeds.next": {
+      "max_request_bytes": 146,
+      "max_response_bytes": 168
+    },
+    "iprange.v1.reader.feeds.open": {
+      "max_request_bytes": 161,
+      "max_response_bytes": 199
+    },
+    "iprange.v1.reader.info": {
+      "max_request_bytes": 131,
+      "max_response_bytes": 421
+    },
+    "iprange.v1.reader.lookup": {
+      "max_request_bytes": 53175,
+      "max_response_bytes": 678
+    },
+    "iprange.v1.reader.matching_feeds": {
+      "max_request_bytes": 177,
+      "max_response_bytes": 180
+    },
+    "iprange.v1.reader.metadata": {
+      "max_request_bytes": 169,
+      "max_response_bytes": 155
+    },
+    "iprange.v1.reader.open": {
+      "max_request_bytes": 209,
+      "max_response_bytes": 504
+    },
+    "iprange.v1.reader.ranges.close": {
+      "max_request_bytes": 144,
+      "max_response_bytes": 164
+    },
+    "iprange.v1.reader.ranges.next": {
+      "max_request_bytes": 151,
+      "max_response_bytes": 893
+    },
+    "iprange.v1.reader.ranges.open": {
+      "max_request_bytes": 231,
+      "max_response_bytes": 193
+    },
+    "iprange.v1.recover": {
+      "max_request_bytes": 829,
+      "max_response_bytes": 1342
+    },
+    "iprange.v1.recovery.inspect": {
+      "max_request_bytes": 299,
+      "max_response_bytes": 537
+    },
+    "iprange.v1.retention.first_seen.refresh": {
+      "max_request_bytes": 683,
+      "max_response_bytes": 1350
+    },
+    "iprange.v1.retention.last_seen.refresh": {
+      "max_request_bytes": 486,
+      "max_response_bytes": 1084
+    },
+    "iprange.v1.snapshot": {
+      "max_request_bytes": 395,
+      "max_response_bytes": 1181
+    },
+    "iprange.v1.system.describe": {
+      "max_request_bytes": 98,
+      "max_response_bytes": 2275
+    },
+    "iprange.v1.validate": {
+      "max_request_bytes": 527,
+      "max_response_bytes": 774
+    }
+  },
+  "oracle_checks": 37,
+  "passed": 37,
+  "platform": {
+    "machine": "x86_64",
+    "python": "3.14.7",
+    "release": "7.1.9-1-MANJARO",
+    "system": "Linux"
+  },
+  "schema": "iprange-cli-report-v3",
+  "skipped": 0
+}

@@ -1,0 +1,904 @@
+{
+  "binaries": {
+    "go": {
+      "available": true,
+      "methods": [
+        "iprange.v1.algebra.compare",
+        "iprange.v1.algebra.count",
+        "iprange.v1.algebra.publish",
+        "iprange.v1.commit.resolve",
+        "iprange.v1.current.publish",
+        "iprange.v1.database.create",
+        "iprange.v1.database.create.resolve",
+        "iprange.v1.database.info",
+        "iprange.v1.database.initialize_live",
+        "iprange.v1.database.live_residue.resolve",
+        "iprange.v1.database.live_transition.resolve",
+        "iprange.v1.database.metadata.get",
+        "iprange.v1.database.metadata.replace",
+        "iprange.v1.database.reclaim",
+        "iprange.v1.database.reset_live",
+        "iprange.v1.direct.replace",
+        "iprange.v1.export",
+        "iprange.v1.feeds.create",
+        "iprange.v1.feeds.delete",
+        "iprange.v1.feeds.import",
+        "iprange.v1.feeds.rename",
+        "iprange.v1.feeds.replace",
+        "iprange.v1.history.project",
+        "iprange.v1.join.direct",
+        "iprange.v1.join.membership",
+        "iprange.v1.maintenance.list",
+        "iprange.v1.maintenance.remove",
+        "iprange.v1.publication.inspect",
+        "iprange.v1.publication.residue.remove",
+        "iprange.v1.publication.resolve",
+        "iprange.v1.query.cardinalities",
+        "iprange.v1.query.matching_feeds",
+        "iprange.v1.query.overlaps",
+        "iprange.v1.reader.close",
+        "iprange.v1.reader.feeds.close",
+        "iprange.v1.reader.feeds.next",
+        "iprange.v1.reader.feeds.open",
+        "iprange.v1.reader.info",
+        "iprange.v1.reader.lookup",
+        "iprange.v1.reader.matching_feeds",
+        "iprange.v1.reader.metadata",
+        "iprange.v1.reader.open",
+        "iprange.v1.reader.ranges.close",
+        "iprange.v1.reader.ranges.next",
+        "iprange.v1.reader.ranges.open",
+        "iprange.v1.recover",
+        "iprange.v1.recovery.inspect",
+        "iprange.v1.retention.first_seen.refresh",
+        "iprange.v1.retention.last_seen.refresh",
+        "iprange.v1.snapshot",
+        "iprange.v1.system.describe",
+        "iprange.v1.validate"
+      ],
+      "path": "/tmp/iprange-qual/iprange",
+      "result": {
+        "api_version": "1",
+        "export_formats": [
+          "netset",
+          "ipset",
+          "ranges",
+          "csv",
+          "jsonl",
+          "legacy_binary"
+        ],
+        "families": [
+          "ipv4",
+          "ipv6"
+        ],
+        "fault_worker": {
+          "available": true,
+          "protocol": "1"
+        },
+        "format": "iprange-v4-phase1-unsigned",
+        "implementation": "go",
+        "jsonrpc_version": "2.0",
+        "limits": {
+          "batch_requests": 16,
+          "cursor_handles": 64,
+          "cursor_records": 4096,
+          "input_frame_bytes": "1048576",
+          "lookup_addresses": 4096,
+          "output_frame_bytes": "1048576",
+          "queued_requests": 16,
+          "reader_handles": 64,
+          "response_object_bytes": "65000"
+        },
+        "method": "iprange.v1.system.describe",
+        "methods": [
+          "iprange.v1.algebra.compare",
+          "iprange.v1.algebra.count",
+          "iprange.v1.algebra.publish",
+          "iprange.v1.commit.resolve",
+          "iprange.v1.current.publish",
+          "iprange.v1.database.create",
+          "iprange.v1.database.create.resolve",
+          "iprange.v1.database.info",
+          "iprange.v1.database.initialize_live",
+          "iprange.v1.database.live_residue.resolve",
+          "iprange.v1.database.live_transition.resolve",
+          "iprange.v1.database.metadata.get",
+          "iprange.v1.database.metadata.replace",
+          "iprange.v1.database.reclaim",
+          "iprange.v1.database.reset_live",
+          "iprange.v1.direct.replace",
+          "iprange.v1.export",
+          "iprange.v1.feeds.create",
+          "iprange.v1.feeds.delete",
+          "iprange.v1.feeds.import",
+          "iprange.v1.feeds.rename",
+          "iprange.v1.feeds.replace",
+          "iprange.v1.history.project",
+          "iprange.v1.join.direct",
+          "iprange.v1.join.membership",
+          "iprange.v1.maintenance.list",
+          "iprange.v1.maintenance.remove",
+          "iprange.v1.publication.inspect",
+          "iprange.v1.publication.residue.remove",
+          "iprange.v1.publication.resolve",
+          "iprange.v1.query.cardinalities",
+          "iprange.v1.query.matching_feeds",
+          "iprange.v1.query.overlaps",
+          "iprange.v1.reader.close",
+          "iprange.v1.reader.feeds.close",
+          "iprange.v1.reader.feeds.next",
+          "iprange.v1.reader.feeds.open",
+          "iprange.v1.reader.info",
+          "iprange.v1.reader.lookup",
+          "iprange.v1.reader.matching_feeds",
+          "iprange.v1.reader.metadata",
+          "iprange.v1.reader.open",
+          "iprange.v1.reader.ranges.close",
+          "iprange.v1.reader.ranges.next",
+          "iprange.v1.reader.ranges.open",
+          "iprange.v1.recover",
+          "iprange.v1.recovery.inspect",
+          "iprange.v1.retention.first_seen.refresh",
+          "iprange.v1.retention.last_seen.refresh",
+          "iprange.v1.snapshot",
+          "iprange.v1.system.describe",
+          "iprange.v1.validate"
+        ],
+        "platform": "linux",
+        "platform_result_fields": [],
+        "product": "iprange",
+        "product_version": "0.0.0"
+      },
+      "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa"
+    },
+    "rust": {
+      "available": true,
+      "methods": [
+        "iprange.v1.algebra.compare",
+        "iprange.v1.algebra.count",
+        "iprange.v1.algebra.publish",
+        "iprange.v1.commit.resolve",
+        "iprange.v1.current.publish",
+        "iprange.v1.database.create",
+        "iprange.v1.database.create.resolve",
+        "iprange.v1.database.info",
+        "iprange.v1.database.initialize_live",
+        "iprange.v1.database.live_residue.resolve",
+        "iprange.v1.database.live_transition.resolve",
+        "iprange.v1.database.metadata.get",
+        "iprange.v1.database.metadata.replace",
+        "iprange.v1.database.reclaim",
+        "iprange.v1.database.reset_live",
+        "iprange.v1.direct.replace",
+        "iprange.v1.export",
+        "iprange.v1.feeds.create",
+        "iprange.v1.feeds.delete",
+        "iprange.v1.feeds.import",
+        "iprange.v1.feeds.rename",
+        "iprange.v1.feeds.replace",
+        "iprange.v1.history.project",
+        "iprange.v1.join.direct",
+        "iprange.v1.join.membership",
+        "iprange.v1.maintenance.list",
+        "iprange.v1.maintenance.remove",
+        "iprange.v1.publication.inspect",
+        "iprange.v1.publication.residue.remove",
+        "iprange.v1.publication.resolve",
+        "iprange.v1.query.cardinalities",
+        "iprange.v1.query.matching_feeds",
+        "iprange.v1.query.overlaps",
+        "iprange.v1.reader.close",
+        "iprange.v1.reader.feeds.close",
+        "iprange.v1.reader.feeds.next",
+        "iprange.v1.reader.feeds.open",
+        "iprange.v1.reader.info",
+        "iprange.v1.reader.lookup",
+        "iprange.v1.reader.matching_feeds",
+        "iprange.v1.reader.metadata",
+        "iprange.v1.reader.open",
+        "iprange.v1.reader.ranges.close",
+        "iprange.v1.reader.ranges.next",
+        "iprange.v1.reader.ranges.open",
+        "iprange.v1.recover",
+        "iprange.v1.recovery.inspect",
+        "iprange.v1.retention.first_seen.refresh",
+        "iprange.v1.retention.last_seen.refresh",
+        "iprange.v1.snapshot",
+        "iprange.v1.system.describe",
+        "iprange.v1.validate"
+      ],
+      "path": "/home/costa/src/firehol/iprange/v4/rust/target/release/iprange",
+      "result": {
+        "api_version": "1",
+        "export_formats": [
+          "netset",
+          "ipset",
+          "ranges",
+          "csv",
+          "jsonl",
+          "legacy_binary"
+        ],
+        "families": [
+          "ipv4",
+          "ipv6"
+        ],
+        "fault_worker": {
+          "available": true,
+          "protocol": "1"
+        },
+        "format": "iprange-v4-phase1-unsigned",
+        "implementation": "rust",
+        "jsonrpc_version": "2.0",
+        "limits": {
+          "batch_requests": 16,
+          "cursor_handles": 64,
+          "cursor_records": 4096,
+          "input_frame_bytes": "1048576",
+          "lookup_addresses": 4096,
+          "output_frame_bytes": "1048576",
+          "queued_requests": 16,
+          "reader_handles": 64,
+          "response_object_bytes": "65000"
+        },
+        "method": "iprange.v1.system.describe",
+        "methods": [
+          "iprange.v1.algebra.compare",
+          "iprange.v1.algebra.count",
+          "iprange.v1.algebra.publish",
+          "iprange.v1.commit.resolve",
+          "iprange.v1.current.publish",
+          "iprange.v1.database.create",
+          "iprange.v1.database.create.resolve",
+          "iprange.v1.database.info",
+          "iprange.v1.database.initialize_live",
+          "iprange.v1.database.live_residue.resolve",
+          "iprange.v1.database.live_transition.resolve",
+          "iprange.v1.database.metadata.get",
+          "iprange.v1.database.metadata.replace",
+          "iprange.v1.database.reclaim",
+          "iprange.v1.database.reset_live",
+          "iprange.v1.direct.replace",
+          "iprange.v1.export",
+          "iprange.v1.feeds.create",
+          "iprange.v1.feeds.delete",
+          "iprange.v1.feeds.import",
+          "iprange.v1.feeds.rename",
+          "iprange.v1.feeds.replace",
+          "iprange.v1.history.project",
+          "iprange.v1.join.direct",
+          "iprange.v1.join.membership",
+          "iprange.v1.maintenance.list",
+          "iprange.v1.maintenance.remove",
+          "iprange.v1.publication.inspect",
+          "iprange.v1.publication.residue.remove",
+          "iprange.v1.publication.resolve",
+          "iprange.v1.query.cardinalities",
+          "iprange.v1.query.matching_feeds",
+          "iprange.v1.query.overlaps",
+          "iprange.v1.reader.close",
+          "iprange.v1.reader.feeds.close",
+          "iprange.v1.reader.feeds.next",
+          "iprange.v1.reader.feeds.open",
+          "iprange.v1.reader.info",
+          "iprange.v1.reader.lookup",
+          "iprange.v1.reader.matching_feeds",
+          "iprange.v1.reader.metadata",
+          "iprange.v1.reader.open",
+          "iprange.v1.reader.ranges.close",
+          "iprange.v1.reader.ranges.next",
+          "iprange.v1.reader.ranges.open",
+          "iprange.v1.recover",
+          "iprange.v1.recovery.inspect",
+          "iprange.v1.retention.first_seen.refresh",
+          "iprange.v1.retention.last_seen.refresh",
+          "iprange.v1.snapshot",
+          "iprange.v1.system.describe",
+          "iprange.v1.validate"
+        ],
+        "platform": "linux",
+        "platform_result_fields": [],
+        "product": "iprange",
+        "product_version": "0.0.0"
+      },
+      "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8"
+    }
+  },
+  "cases": [
+    {
+      "matrix": "rust->go",
+      "name": "algebra.compare",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "algebra.count",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "algebra.oracle",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "algebra.publish",
+      "reason": "not cross-producer: case has no consumer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "cancel.unknown_id",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "database.create_bad_directory",
+      "reason": "not cross-producer: case has no consumer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "database.info-metadata-v4",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 1
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
+      "matrix": "rust->go",
+      "name": "database.metadata",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "database.metadata.replace_bad_path",
+      "reason": "not cross-producer: case has no consumer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "direct.retention",
+      "reason": "not cross-producer: case has no consumer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "export.netset",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "feeds.lifecycle",
+      "reason": "not cross-producer: case has no consumer step",
+      "status": "SKIP"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 5
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 6
+        }
+      },
+      "matrix": "rust->go",
+      "name": "history.project",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 1
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
+      "matrix": "rust->go",
+      "name": "join.direct",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "join.membership",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 1
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 6
+        }
+      },
+      "matrix": "rust->go",
+      "name": "live.lifecycle",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "live.transition",
+      "reason": "not cross-producer: case has no consumer step",
+      "status": "SKIP"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 1
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 3
+        }
+      },
+      "matrix": "rust->go",
+      "name": "maintenance",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 7
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
+      "matrix": "rust->go",
+      "name": "mixed.direct-created",
+      "oracle_checks": 4,
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 5
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 5
+        }
+      },
+      "matrix": "rust->go",
+      "name": "mixed.live-coordination",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 7
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
+      "matrix": "rust->go",
+      "name": "mixed.membership-created",
+      "oracle_checks": 4,
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 4
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
+      "matrix": "rust->go",
+      "name": "mixed.transform-created",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 1
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 3
+        }
+      },
+      "matrix": "rust->go",
+      "name": "publication",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "query.cardinalities",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "query.matching_feeds",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "query.overlaps",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "reader.direct-v4",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "reader.info",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "reader.lookup_bad_handle",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "reader.membership-v4",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "reader.open_missing",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "reader.structured-v4",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "resource.limits",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 3
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
+      "matrix": "rust->go",
+      "name": "snapshot",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "system.describe",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 2
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        }
+      },
+      "matrix": "rust->go",
+      "name": "validate.recover",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "sha256": "4f8fb7b82fe4bcba7c7d039e77be1672c28c89cc110d641e3bffc76e799c86fa",
+          "steps": 33
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 20
+        }
+      },
+      "matrix": "rust->go",
+      "name": "workflow.publisher",
+      "oracle_checks": 14,
+      "status": "PASS"
+    }
+  ],
+  "command": [
+    "v4/cli/run.py",
+    "--matrix",
+    "rust_to_go",
+    "--rust",
+    "/home/costa/src/firehol/iprange/v4/rust/target/release/iprange",
+    "--go",
+    "/tmp/iprange-qual/iprange",
+    "--fixture-tool",
+    "/home/costa/src/firehol/iprange/v4/rust/target/release/examples/v4-fixture",
+    "--work-dir",
+    "/tmp/w6-rtg",
+    "--json-report",
+    "/home/costa/src/firehol/iprange/v4/cli/evidence/matrix-rust_to_go.json",
+    "--allow-skips"
+  ],
+  "environment_allowlist": [
+    "PATH",
+    "LANG",
+    "LC_ALL",
+    "LC_CTYPE",
+    "TZ",
+    "ASAN_OPTIONS",
+    "LSAN_OPTIONS",
+    "MSAN_OPTIONS",
+    "TSAN_OPTIONS",
+    "UBSAN_OPTIONS",
+    "SYSTEMROOT",
+    "SYSTEMDRIVE",
+    "USERPROFILE",
+    "PROCESSOR_ARCHITECTURE",
+    "PROCESSOR_IDENTIFIER"
+  ],
+  "failed": 0,
+  "file_kinds": {
+    "adapter_output": {
+      "created_by": {
+        "iprange.v1.join.direct": 2,
+        "iprange.v1.join.membership": 1,
+        "iprange.v1.maintenance.list": 2,
+        "iprange.v1.query.overlaps": 1,
+        "iprange.v1.retention.first_seen.refresh": 1,
+        "iprange.v1.validate": 2
+      },
+      "opened_by": {}
+    },
+    "live_sidecar": {
+      "created_by": {
+        "iprange.v1.database.create": 13,
+        "iprange.v1.database.initialize_live": 1
+      },
+      "opened_by": {}
+    },
+    "v4_main": {
+      "created_by": {
+        "iprange.v1.algebra.publish": 1,
+        "iprange.v1.current.publish": 3,
+        "iprange.v1.database.create": 13,
+        "iprange.v1.snapshot": 3
+      },
+      "opened_by": {
+        "iprange.v1.commit.resolve": 1,
+        "iprange.v1.database.create.resolve": 1,
+        "iprange.v1.database.info": 1,
+        "iprange.v1.database.metadata.get": 1,
+        "iprange.v1.database.metadata.replace": 1,
+        "iprange.v1.database.reclaim": 3,
+        "iprange.v1.database.reset_live": 1,
+        "iprange.v1.direct.replace": 8,
+        "iprange.v1.feeds.create": 5,
+        "iprange.v1.feeds.replace": 3,
+        "iprange.v1.history.project": 6,
+        "iprange.v1.join.direct": 2,
+        "iprange.v1.publication.inspect": 1,
+        "iprange.v1.publication.resolve": 4,
+        "iprange.v1.reader.open": 13,
+        "iprange.v1.recovery.inspect": 1,
+        "iprange.v1.retention.first_seen.refresh": 2,
+        "iprange.v1.retention.last_seen.refresh": 2,
+        "iprange.v1.snapshot": 2,
+        "iprange.v1.validate": 1
+      }
+    }
+  },
+  "fixture_tool": {
+    "path": "/home/costa/src/firehol/iprange/v4/rust/target/release/examples/v4-fixture",
+    "sha256": "d615488f038fa59deea87e0ce3340b780380fe0f2122e8e1ad65edeb25d861f1"
+  },
+  "frame_sizes": {
+    "iprange.v1.algebra.publish": {
+      "max_request_bytes": 745,
+      "max_response_bytes": 1350
+    },
+    "iprange.v1.commit.resolve": {
+      "max_request_bytes": 519,
+      "max_response_bytes": 474
+    },
+    "iprange.v1.current.publish": {
+      "max_request_bytes": 686,
+      "max_response_bytes": 1276
+    },
+    "iprange.v1.database.create": {
+      "max_request_bytes": 314,
+      "max_response_bytes": 704
+    },
+    "iprange.v1.database.create.resolve": {
+      "max_request_bytes": 803,
+      "max_response_bytes": 192
+    },
+    "iprange.v1.database.info": {
+      "max_request_bytes": 201,
+      "max_response_bytes": 514
+    },
+    "iprange.v1.database.initialize_live": {
+      "max_request_bytes": 195,
+      "max_response_bytes": 668
+    },
+    "iprange.v1.database.metadata.get": {
+      "max_request_bytes": 226,
+      "max_response_bytes": 217
+    },
+    "iprange.v1.database.metadata.replace": {
+      "max_request_bytes": 344,
+      "max_response_bytes": 547
+    },
+    "iprange.v1.database.reclaim": {
+      "max_request_bytes": 340,
+      "max_response_bytes": 590
+    },
+    "iprange.v1.database.reset_live": {
+      "max_request_bytes": 210,
+      "max_response_bytes": 750
+    },
+    "iprange.v1.direct.replace": {
+      "max_request_bytes": 428,
+      "max_response_bytes": 1071
+    },
+    "iprange.v1.feeds.create": {
+      "max_request_bytes": 492,
+      "max_response_bytes": 1131
+    },
+    "iprange.v1.feeds.replace": {
+      "max_request_bytes": 462,
+      "max_response_bytes": 1065
+    },
+    "iprange.v1.history.project": {
+      "max_request_bytes": 11623,
+      "max_response_bytes": 1383
+    },
+    "iprange.v1.join.direct": {
+      "max_request_bytes": 635,
+      "max_response_bytes": 547
+    },
+    "iprange.v1.join.membership": {
+      "max_request_bytes": 728,
+      "max_response_bytes": 552
+    },
+    "iprange.v1.maintenance.list": {
+      "max_request_bytes": 448,
+      "max_response_bytes": 404
+    },
+    "iprange.v1.maintenance.remove": {
+      "max_request_bytes": 199,
+      "max_response_bytes": 165
+    },
+    "iprange.v1.publication.inspect": {
+      "max_request_bytes": 163,
+      "max_response_bytes": 193
+    },
+    "iprange.v1.publication.residue.remove": {
+      "max_request_bytes": 193,
+      "max_response_bytes": 202
+    },
+    "iprange.v1.publication.resolve": {
+      "max_request_bytes": 1293,
+      "max_response_bytes": 1187
+    },
+    "iprange.v1.query.overlaps": {
+      "max_request_bytes": 527,
+      "max_response_bytes": 388
+    },
+    "iprange.v1.reader.close": {
+      "max_request_bytes": 145,
+      "max_response_bytes": 190
+    },
+    "iprange.v1.reader.lookup": {
+      "max_request_bytes": 284,
+      "max_response_bytes": 608
+    },
+    "iprange.v1.reader.matching_feeds": {
+      "max_request_bytes": 177,
+      "max_response_bytes": 177
+    },
+    "iprange.v1.reader.open": {
+      "max_request_bytes": 215,
+      "max_response_bytes": 491
+    },
+    "iprange.v1.reader.ranges.next": {
+      "max_request_bytes": 151,
+      "max_response_bytes": 217
+    },
+    "iprange.v1.reader.ranges.open": {
+      "max_request_bytes": 226,
+      "max_response_bytes": 151
+    },
+    "iprange.v1.recover": {
+      "max_request_bytes": 847,
+      "max_response_bytes": 1336
+    },
+    "iprange.v1.recovery.inspect": {
+      "max_request_bytes": 305,
+      "max_response_bytes": 537
+    },
+    "iprange.v1.retention.first_seen.refresh": {
+      "max_request_bytes": 701,
+      "max_response_bytes": 1356
+    },
+    "iprange.v1.retention.last_seen.refresh": {
+      "max_request_bytes": 498,
+      "max_response_bytes": 1084
+    },
+    "iprange.v1.snapshot": {
+      "max_request_bytes": 407,
+      "max_response_bytes": 1181
+    },
+    "iprange.v1.system.describe": {
+      "max_request_bytes": 92,
+      "max_response_bytes": 2271
+    },
+    "iprange.v1.validate": {
+      "max_request_bytes": 539,
+      "max_response_bytes": 780
+    }
+  },
+  "oracle_checks": 22,
+  "passed": 13,
+  "platform": {
+    "machine": "x86_64",
+    "python": "3.14.7",
+    "release": "7.1.9-1-MANJARO",
+    "system": "Linux"
+  },
+  "schema": "iprange-cli-report-v3",
+  "skipped": 24
+}
