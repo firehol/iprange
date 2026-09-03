@@ -894,11 +894,9 @@ func Recover(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerErr
 		code := sdkCodeOf(result.Publication.Cause)
 		details := map[string]any{
 			"report":        recoveryReportValue(&result.Report),
+			"scratch":       recoveryScratchValueOrNil(result.Scratch),
 			"publication":   publication,
 			"report_output": outputFactsValue(facts),
-		}
-		if result.Scratch != nil {
-			details["scratch"] = recoveryScratchValue(result.Scratch)
 		}
 		return nil, &rpc.HandlerError{
 			Code: code, Outcome: publicationStatusOutcome(result.Publication.Publication),
@@ -915,6 +913,17 @@ func Recover(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerErr
 		value["scratch"] = recoveryScratchValue(result.Scratch)
 	}
 	return boundedResult(value)
+}
+
+// recoveryScratchValueOrNil converts the optional authorized-scratch
+// identity of one recovery preparation failure (Rust Option projection:
+// null when no scratch authority was granted, the scratch facts
+// otherwise).
+func recoveryScratchValueOrNil(scratch *iprangedb.RecoveryScratchAttempt) any {
+	if scratch == nil {
+		return nil
+	}
+	return recoveryScratchValue(scratch)
 }
 
 // recoverySinkFunc adapts one envelope callback to the recovery sink.
@@ -935,16 +944,12 @@ func recoveryFailureError(failure *iprangedb.RecoveryPreparationFailure) *rpc.Ha
 	}
 	details := map[string]any{
 		"report":               recoveryReportValue(&failure.Report),
+		"scratch":              recoveryScratchValueOrNil(failure.Scratch),
+		"output":               privateOutputAttemptValueOrNil(failure.Output),
 		"cleanup":              CleanupArtifactsJSON(failure.Cleanup),
 		"coordination_cleanup": CoordinationCleanupJSON(failure.CoordinationCleanup),
 		"housekeeping":         HousekeepingJSON(failure.Housekeeping, failure.VisibleHousekeeping),
 		"visible_housekeeping": VisibleHousekeepingJSON(failure.VisibleHousekeeping),
-	}
-	if failure.Scratch != nil {
-		details["scratch"] = recoveryScratchValue(failure.Scratch)
-	}
-	if failure.Output != nil {
-		details["output"] = privateOutputAttemptValue(failure.Output)
 	}
 	return &rpc.HandlerError{
 		Code: sdkCodeOf(failure.Cause), Outcome: outcome,
