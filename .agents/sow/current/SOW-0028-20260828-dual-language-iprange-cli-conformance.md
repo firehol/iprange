@@ -79,14 +79,14 @@ Implementation status (2026-09-01):
   durability at a CRC-valid header marker, the publisher workflow's
   downstream aggregation/join/algebra consume the workflow-built
   live feed DB, and the resource record keeps its NOT-PROVEN items
-  explicit. Milestone 4 is in the closing fix wave of this reopen:
-  every recorded framework/case/gate repair is implemented and green
-  at the current revision, and the re-close still requires the
-  five-scope final review and the glm-5.3-responses whole-milestone
-  review at the exact final tree. The re-close record will be
-  appended below only after both pass. Delivery step 6 (consolidated
-  benchmark harness and measured ceilings) is the next milestone,
-  recorded below.
+  explicit. Milestone 4 was re-closed at d6c9990b after the
+  targeted delta review (one own-model reviewer, harness/gate/record
+  scope: PASS at b4f882ca with one P3, wired into the runner at
+  d6c9990b) and the glm-5.3-responses whole-milestone re-review
+  (PASS at d6c9990b, full battery re-run from fresh builds, no
+  findings); both records are appended in the reopen section below.
+  Delivery step 6 (consolidated benchmark harness and measured
+  ceilings) is the next milestone, recorded below.
 
 ## Requirements
 
@@ -3559,7 +3559,7 @@ record supersede every "final" or "complete" claim of this section.
   is the next milestone in this SOW; SOW-0030 remains the engine
   performance tracker.
 
-### 2026-09-04 — milestone 4 reopened by the external gap review; framework fix wave (final reviews pending)
+### 2026-09-04 — milestone 4 reopened by the external gap review; framework fix waves and re-close
 
 An external adversarial review of the milestone-4 close (revision
 c10cad04) returned FAIL with six verified findings.  Each finding was
@@ -3738,15 +3738,53 @@ regenerated in v4/cli/evidence/):
   sensitivity (<1 s); well inside the resource budget.
 - Product identity: unchanged by this wave (the fixes are external
   framework, cases, and records; no product source changed).
-- Outcome: milestone 4 (delivery step 5) remains in progress.  The
-  five-scope review and the glm-5.3-responses whole-milestone review
-  are pending at this revision; the re-close record with both
-  verdicts will be appended below at the exact final tree only after
-  they pass.  The four resource NOT-PROVEN items remain explicitly
-  owned by delivery step 6 (together with the benchmark harness),
-  exactly as recorded in the milestone-5 start section.
+- Outcome: milestone 4 (delivery step 5) is re-closed at d6c9990b.
+  Final review records (appended below in this section): one
+  own-model delta reviewer (Avicenna, harness/gate/record scope)
+  PASSed the functional wave at b4f882ca with one P3 — the
+  capture-pointer rejection self-test was not wired into any gate;
+  run.py now runs the case-schema self-test before every matrix
+  (d6c9990b).  The glm-5.3-responses whole-milestone re-review
+  PASSed d6c9990b with no findings after re-running the full battery
+  from fresh qualification builds (matrices 38/38 and 14/24 per
+  mixed direction, crash 10/10 plus the /bin/false negative control,
+  kind gate on committed and fresh evidence plus adversarial
+  controls, golden 53, sensitivity 14, Go plain/v4work suites, vet,
+  gofmt, legacy 100/100, mmap gates).  The four resource NOT-PROVEN
+  items remain explicitly owned by delivery step 6 (together with
+  the benchmark harness), exactly as recorded in the milestone-5
+  start section.
 
-### 2026-09-04 — milestone 5 scope recorded (delivery step 6: consolidated benchmark harness and measured ceilings; starts after milestone 4 re-closes)
+#### Final review records (appended after both reviews passed at the exact final tree)
+
+- Delta review (own-model reviewer Avicenna, external-qualification
+  harness/gate/record scope) at b4f882ca: PASS.  Verified the
+  anchored pointer grammar and its accepted/rejected sets, the
+  kind-gate PASS-only lineage and doctored-report rejection tests,
+  the mixed-live producer-reader observation steps in all four
+  matrices, and the absence of any anticipatory re-close claim in
+  the SOW at that revision.  One P3: the pointer-grammar negative
+  self-test was not wired into any gate; fixed by d6c9990b, which
+  runs `case_schema._self_test()` before every matrix.
+- Whole-milestone review (glm-5.3-responses) at d6c9990b: PASS, no
+  P1/P2/P3 findings.  The reviewer re-ran the battery from freshly
+  rebuilt qualification binaries (Go product
+  1612646fdb.../worker 16236608... with `-buildvcs=false`, Rust
+  product c1386637..., fixture d615488f...): rust/go matrices
+  38/38 (oracle 37), both mixed matrices 14 executed / 24 skipped
+  (oracle 22), crash battery 10/10 both directions with zero
+  leftover processes plus the /bin/false negative control failing
+  10/10, kind gate PASS on committed and fresh evidence with
+  adversarial all-failed/leftover/root-only controls all failing,
+  golden 53, sensitivity 14, Go plain and v4work suites, vet and
+  gofmt clean, legacy C-oracle 100/100, and all mmap gates; it
+  also confirmed the four NOT-PROVEN resource items stay explicit
+  and owned by delivery step 6.  Commit messages carry no
+  tool/personal attribution and `git diff --check` is clean.
+- Milestone 4 (delivery step 5) is re-closed at d6c9990b; the
+  superseded close record above remains historical evidence only.
+
+### 2026-09-04 — milestone 5 scope recorded (delivery step 6: consolidated benchmark harness and measured ceilings)
 
 - Step-6 scope: the consolidated benchmark harness announced in the
   plan (`v4/cli/benchmarks/` reserved) with workload manifests for
