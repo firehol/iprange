@@ -3549,11 +3549,12 @@ record supersede every "final" or "complete" claim of this section.
   Rust product c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8
   (unchanged source); fixture tool d615488f038fa59deea87e0ce3340b780380fe0f2122e8e1ad65edeb25d861f1.
 - Follow-up: delivery step 6 (consolidated benchmark harness and
-  measured ceilings; the NOT-PROVEN step-5 items: >16-in-flight
-  server_busy race, -32001 over-limit close path, real-nonce
-  maintenance.remove, windows_housekeeping kind) is the next
-  milestone in this SOW; SOW-0030 remains the engine performance
-  tracker.
+  measured ceilings; the remaining NOT-PROVEN step-5 items:
+  >16-in-flight server_busy race, -32001 over-limit close path,
+  reservation-nonce maintenance.remove, windows_housekeeping kind;
+  scratch-nonce maintenance.remove is proven by crash scenario C)
+  is the next milestone in this SOW; SOW-0030 remains the engine
+  performance tracker.
 
 ### 2026-09-04 — milestone 4 reopened by the external gap review, fix wave, and re-close
 
@@ -3673,8 +3674,9 @@ Re-close evidence at the final revision of this wave (all under
 - Crash harness: 10/10 scenarios pass in both directions (A1, A2,
   A3, B, C; rust-to-go and go-to-rust), zero leftover processes;
   the negative control (consumer=/bin/false) fails 10/10 with no
-  false pass.  crash.json and crash-negative.json carry the
-  per-scenario kind evidence.
+  false pass.  crash.json carries the per-scenario kind evidence;
+  the negative-control scenarios record empty kind lists because
+  they fail before the artifact inventory runs.
 - Kind-universe gate (`nice python3 v4/cli/check_kind_coverage.py
   --matrix ... --crash ...`): PASS; every required kind has
   observed evidence (v4_main, live_sidecar,
@@ -3702,10 +3704,13 @@ Re-close evidence at the final revision of this wave (all under
 - Step-6 scope: the consolidated benchmark harness announced in the
   plan (`v4/cli/benchmarks/` reserved) with workload manifests for
   the update-ipsets surface and measured Go-vs-Rust ceilings at the
-  product interface, plus the step-5 NOT-PROVEN items that need a
-  pipelining client or raw frames (>16-in-flight `server_busy`
-  race, -32001 over-limit close path, real-nonce
-  `maintenance.remove`, `windows_housekeeping` kind). Ceiling
+  product interface, plus the remaining step-5 NOT-PROVEN items
+  (the >16-in-flight `server_busy` race needs a pipelining client,
+  the -32001 over-limit close path needs raw oversized frames,
+  `maintenance.remove` against a real reservation nonce handle,
+  and the `windows_housekeeping` kind; removal against real
+  abandoned-scratch attempt IDs is already proven by crash
+  scenario C). Ceiling
   methodology and acceptance will be recorded in the step-6
   implementation plan before any implementation starts, following
   the SOW-0027 performance-gate lessons (matched, alternating,

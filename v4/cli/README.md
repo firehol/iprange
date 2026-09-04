@@ -58,9 +58,9 @@ nice python3 v4/cli/run.py --matrix rust --rust "$RUST_IPRANGE" \
 nice python3 v4/cli/run.py --matrix go --go "$GO_IPRANGE" \
   --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w
 nice python3 v4/cli/run.py --matrix rust_to_go --rust "$RUST_IPRANGE" --go "$GO_IPRANGE" \
-  --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w
+  --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w --allow-skips
 nice python3 v4/cli/run.py --matrix go_to_rust --rust "$RUST_IPRANGE" --go "$GO_IPRANGE" \
-  --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w
+  --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w --allow-skips
 ```
 
 The mixed matrices (`rust_to_go`, `go_to_rust`) are two-binary

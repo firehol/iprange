@@ -701,9 +701,13 @@ def scenario_a2(direction, producer, consumer, work_dir, scenario_report):
             len(residue["reservation"]) == 1,
             f"exactly one reservation must remain, got {residue['reservation']}",
             scenario_report)
+        recorded_sha512 = reservation_output_sha512(work)
+        assert_truthful(
+            recorded_sha512 is not None,
+            "the retained reservation must carry the output digest",
+            scenario_report)
         dest_state = classify_destination(
-            dest, prior_sha256, prior_sha512,
-            reservation_output_sha512(work))
+            dest, prior_sha256, prior_sha512, recorded_sha512)
         assert_truthful(
             dest_state in ("absent", "prior_complete", "attempt_complete"),
             "destination must be absent, prior, or match the "
@@ -737,19 +741,21 @@ def scenario_a2(direction, producer, consumer, work_dir, scenario_report):
 SCRATCH_MAGIC = b"IPR4SCR1"
 
 
+_CRC32C_POLY = 0x82F63B78
+_CRC32C_TABLE = []
+for _index in range(256):
+    _value = _index
+    for _ in range(8):
+        _value = (_value >> 1) ^ _CRC32C_POLY if _value & 1 else _value >> 1
+    _CRC32C_TABLE.append(_value)
+
+
 def crc32c(data):
     """CRC-32C (reflected Castagnoli), the exact v4 checksum."""
 
-    poly = 0x82F63B78
-    table = []
-    for index in range(256):
-        value = index
-        for _ in range(8):
-            value = (value >> 1) ^ poly if value & 1 else value >> 1
-        table.append(value)
     crc = 0xFFFFFFFF
     for byte in data:
-        crc = (crc >> 8) ^ table[(crc ^ byte) & 0xFF]
+        crc = (crc >> 8) ^ _CRC32C_TABLE[(crc ^ byte) & 0xFF]
     return crc ^ 0xFFFFFFFF
 
 
@@ -819,8 +825,8 @@ def recover_scratch_params(source, dest, scratch_dir, candidate):
 
     The heap value is calibrated so the recovery page tables spill to
     authorized scratch (durable within the operation) while the fixed
-    structures still fit; a larger heap completes without scratch and a
-    smaller one aborts before the tables are built.
+    structures still fit.  The scenario fails if either product does
+    not reach the durable scratch marker at this heap.
     """
 
     return {

@@ -38,6 +38,8 @@ def matrix_evidence(path):
     evidence = {}
     cases = report.get("cases", [])
     for case in cases:
+        if case.get("status") != "PASS":
+            continue
         for rel, facts in case.get("file_kinds", {}).items():
             bucket = evidence.setdefault(facts["kind"], set())
             bucket.update(facts.get("created_by", []))
