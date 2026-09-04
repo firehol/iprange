@@ -1453,9 +1453,9 @@
     "--fixture-tool",
     "/tmp/qualsvc/rust/v4-fixture",
     "--work-dir",
-    "/tmp/qualsvc/ev3/rust",
+    "/tmp/qualsvc/ev4/rust",
     "--json-report",
-    "/tmp/qualsvc/ev3/matrix-rust.json"
+    "/tmp/qualsvc/ev4/matrix-rust.json"
   ],
   "environment_allowlist": [
     "PATH",

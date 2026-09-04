@@ -16,8 +16,10 @@ Evidence integrity rules:
 
 - The four matrix reports (``rust``, ``go``, ``rust_to_go``,
   ``go_to_rust``) and at least one positive crash report must all be
-  supplied; the gate derives each report's identity from its top-level
-  ``matrix`` field and every case entry's ``matrix`` value.
+  supplied; each report must carry a top-level ``matrix`` identity,
+  and that label is only cross-checked against the executed-actor
+  pair of every PASS case (the per-case ``matrix`` values recorded by
+  the runner are never read by the gate).
 - Only PASS-case per-case ``file_kinds`` lineage is consumed (the
   report-root aggregate merges partial ledgers even for FAIL cases and
   is never trusted).
@@ -119,7 +121,8 @@ def matrix_evidence(path):
             continue
         implementations = {}
         for actor in ALL_ACTORS:
-            implementation = (actors.get(actor) or {}).get("implementation")
+            entry = actors.get(actor) or {}
+            implementation = entry.get("implementation")
             if implementation not in ("rust", "go"):
                 problems.append(
                     f"matrix {path}: PASS case {case_name!r} actor {actor!r} "
@@ -127,6 +130,28 @@ def matrix_evidence(path):
                 implementations[actor] = "?"
             else:
                 implementations[actor] = implementation
+            # The actor's recorded SHA-256 must name a binary the same
+            # report describes, and that binary must declare the same
+            # implementation: identity is anchored in the executed
+            # binary, never in self-consistent forged fields.
+            sha = entry.get("sha256")
+            declared = None
+            if isinstance(report.get("binaries"), dict) and isinstance(sha, str):
+                for record in report["binaries"].values():
+                    if isinstance(record, dict) and record.get("sha256") == sha:
+                        declared = (record.get("result") or {}).get(
+                            "implementation")
+                        break
+            if declared is None:
+                problems.append(
+                    f"matrix {path}: PASS case {case_name!r} actor {actor!r} "
+                    f"sha256 {sha!r} does not name any binary record of "
+                    f"the same report")
+            elif implementation in ("rust", "go") and declared != implementation:
+                problems.append(
+                    f"matrix {path}: PASS case {case_name!r} actor {actor!r} "
+                    f"sha256 names a binary that declares implementation "
+                    f"{declared!r}, not {implementation!r}")
         # Label/identity probe: the observed actor-language pair must match
         # the pair the matrix label claims.  A clone relabeled to another
         # matrix keeps its executed binaries' implementations, so the pair
@@ -308,13 +333,24 @@ def _self_test():
                 "leftover_processes": leftover or [],
                 "failed": failed}
 
+    BINARIES = {
+        "rust": {"path": "/tmp/rust-iprange", "sha256": "1" * 64,
+                 "methods": [], "available": True,
+                 "result": {"implementation": "rust"}},
+        "go": {"path": "/tmp/go-iprange", "sha256": "2" * 64,
+               "methods": [], "available": True,
+               "result": {"implementation": "go"}},
+    }
+
     def green_report(matrix):
         """One PASS case whose per-case ledger shows the four matrix
         kinds created and opened by this matrix's actors; the crash
         battery supplies the three crash-only kinds.  The case records
-        the executed actor implementations (both binaries for a mixed
-        matrix, the one binary for a single-language matrix), so
-        language attribution never depends on the top-level label."""
+        the executed actor implementations and SHA-256 values (both
+        binaries for a mixed matrix, the one binary for a
+        single-language matrix), anchored in the report's binaries
+        block, so language attribution never depends on the top-level
+        label."""
         ledger = {}
         for i, kind in enumerate([
                 "v4_main", "live_sidecar", "adapter_output",
@@ -325,21 +361,24 @@ def _self_test():
                 "opened_by": ["consumer.iprange.v1.selftest"],
             }
         expected = ACTOR_LANGUAGES[matrix]
-        return matrix_report(matrix, [{
+        actor_sha = {"rust": "1" * 64, "go": "2" * 64}
+        report = matrix_report(matrix, [{
             "name": "doctored", "matrix": matrix, "status": "PASS",
             "actors": {
                 "producer": {
-                    "sha256": "0" * 64,
+                    "sha256": actor_sha[expected["producer"]],
                     "implementation": expected["producer"],
                     "steps": 1,
                 },
                 "consumer": {
-                    "sha256": "0" * 64,
+                    "sha256": actor_sha[expected["consumer"]],
                     "implementation": expected["consumer"],
                     "steps": 1,
                 },
             },
             "file_kinds": ledger}], failed=0)
+        report["binaries"] = BINARIES
+        return report
 
     with tempfile.TemporaryDirectory() as work:
         green = {}
@@ -430,6 +469,28 @@ def _self_test():
         assign(one_dir_path, crash_report(["rust"], ["go"]))
         problems, _c, _s = assess(four, [one_dir_path])
         assert problems and any("both language directions" in p
+                                for p in problems)
+
+        # 7b. An actor SHA-256 that names no binary record of the same
+        #     report fails (forged identity without an anchor).
+        forged = green_report("rust")
+        forged["cases"][0]["actors"]["producer"]["sha256"] = "f" * 64
+        forged_path = os.path.join(work, "forged-sha.json")
+        assign(forged_path, forged)
+        problems, _c, _s = assess(
+            [forged_path] + four[1:], [crash_path])
+        assert problems and any("does not name any binary record" in p
+                                for p in problems)
+
+        # 7c. An actor SHA-256 naming a binary record whose declared
+        #     implementation contradicts the actor fails.
+        swapped = green_report("rust")
+        swapped["cases"][0]["actors"]["producer"]["sha256"] = "2" * 64
+        swapped_path = os.path.join(work, "swapped-sha.json")
+        assign(swapped_path, swapped)
+        problems, _c, _s = assess(
+            [swapped_path] + four[1:], [crash_path])
+        assert problems and any("declares implementation" in p
                                 for p in problems)
 
         # 8. The previous false-positive classes still fail: all-failed

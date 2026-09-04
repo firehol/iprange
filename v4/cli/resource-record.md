@@ -72,13 +72,15 @@ validation host):
    `os_unsupported`/`read_only_failure` (Linux negative recorded by
    the same script).
 
-The Windows qualification additionally found and fixed one Go
-adapter defect: `v4/go/internal/cli/fileio/export_writer.go` removed
-its private temporary while the file was still open, which fails on
-Windows (Go files do not share DELETE); the writer now closes the
-temporary before publication/removal (also on Abort and the Finish
-cleanup path).  The Linux Go qualification binary changed hash to
-`cb0523cb…` as a result; behavior on Linux is unchanged.
+The Windows qualification additionally found and fixed two Go
+adapter defects of the same class: `v4/go/internal/cli/fileio/
+export_writer.go` and `v4/go/internal/cli/handlers/live.go` (the
+first-seen refresh removal-output collector, on every abort path and
+the publish-failure cleanup) removed their private temporaries while
+the files were still open, which fails on Windows (Go files do not
+share DELETE); both writers now close the temporary before
+publication/removal.  The Linux Go qualification binary changed hash
+to `f9c7d50e…` as a result; behavior on Linux is unchanged.
 
 Deferred to delivery step 6: latency/throughput and engine RSS
 ceilings only.

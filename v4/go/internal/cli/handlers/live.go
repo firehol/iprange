@@ -1451,8 +1451,12 @@ func removalPublicationFacts(publication, destinationContent string) map[string]
 }
 
 // discard explicitly removes the private temporary; removal failures
-// are reported, never absorbed.
+// are reported, never absorbed.  The file is closed first: Windows
+// refuses to remove a file whose handle is still open (Go files do
+// not share DELETE), and the success path of publishInner already
+// closed it, so a second close is harmless.
 func (c *removalCollector) discard() *rpc.HandlerError {
+	_ = c.file.Close()
 	err := os.Remove(c.temporary)
 	switch {
 	case err == nil:
@@ -1471,7 +1475,11 @@ func (c *removalCollector) publish() (map[string]any, *rpc.HandlerError) {
 	value, herr := c.publishInner()
 	if herr != nil {
 		// The private temporary is removed explicitly on publication
-		// failure; a failed removal is reported with the error.
+		// failure; a failed removal is reported with the error.  The
+		// file is closed first: publishInner closes it only on the
+		// success path, and Windows refuses to remove a file whose
+		// handle is still open.
+		_ = c.file.Close()
 		if derr := os.Remove(c.temporary); derr != nil && !errors.Is(derr, os.ErrNotExist) {
 			details := map[string]any{
 				"cleanup_failure": map[string]any{"error": derr.Error(), "path": c.temporary},

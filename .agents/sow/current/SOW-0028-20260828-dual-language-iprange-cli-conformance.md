@@ -3938,7 +3938,9 @@ evidence.
 
 User decisions D1-A / D2-A / D3-B and the two mandatory repairs are
 recorded above.  This wave implements them at the external-qualification
-surface only; neither product tree (`v4/rust`, `v4/go`) changes.
+surface; the Rust product source is unchanged and the two in-scope Go
+adapter fixes (export-writer and removal-output temporary cleanup on
+Windows) are recorded below.
 
 1. **Crash scenarios D, E, F** (`v4/cli/crash_harness.py`): the
    recorded crash scope names publish/commit/finish/export/validate.
@@ -4042,25 +4044,30 @@ staged at `/tmp/qualsvc/`, evidence in `v4/cli/evidence/`):
   kind-gate doctored self-test PASS; committed evidence contains no
   personal paths.
 
-One product defect found and fixed by the Windows qualification (in
-scope: SOW-0028 adapter defects): `v4/go/internal/cli/fileio/
-export_writer.go` removed its private temporary while the file handle
-was still open, which fails on Windows (Go files do not share
-DELETE).  The writer now closes the temporary before publication and
-removal (also on Abort and the Finish cleanup path); the Linux Go
-qualification binary hash changed to `cb0523cb…` (worker unchanged),
-and the full Go suite passes in both build modes.  Rust product
-source is unchanged (`c1386637…`).
+Two product defects of the same class were found and fixed by the
+Windows qualification (in scope: SOW-0028 adapter defects).  Go files
+do not share DELETE, so removing a still-open temporary fails on
+Windows; the affected writers now close their temporary before
+publication and removal:
+- `v4/go/internal/cli/fileio/export_writer.go` — the export/findings/
+  maintenance-list output writer (publication, Abort, and Finish
+  cleanup paths);
+- `v4/go/internal/cli/handlers/live.go` — the first-seen refresh
+  removal-output collector (discard on every abort path and the
+  publish-failure cleanup).
+The Linux Go qualification binary hash changed to `f9c7d50e…`
+(worker unchanged), and the full Go suite passes in both build modes.
+Rust product source is unchanged (`c1386637…`).
 
 Recorded identities at this wave: Linux Go product
-`cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac`,
+`f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461`,
 worker
 `16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e`,
 Rust product
 `c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8`,
 fixture `d615488f038fa59deea87e0ce3340b780380fe0f2122e8e1ad65edeb25d861f1`;
 Windows Go product
-`252cd032c9ded4c9216a5680fd87099e37e7b5506eff32139c108b66f387696a`,
+`20b9244d47154476cc5932c9cfc504c12b285cefb5eaea23e370858cbb3c686c`,
 Windows Rust product
 `5e91d9048f210958d78d935f403cfd41ac6ad587c5b8af8c22c0ba2d352524e8`.
 

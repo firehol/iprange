@@ -2,7 +2,7 @@
   "binaries": {
     "go": {
       "path": "C:/Temp/qualsvc-win/go/iprange.exe",
-      "sha256": "252cd032c9ded4c9216a5680fd87099e37e7b5506eff32139c108b66f387696a"
+      "sha256": "20b9244d47154476cc5932c9cfc504c12b285cefb5eaea23e370858cbb3c686c"
     },
     "rust": {
       "path": "C:/Temp/qualsvc-win/rust/iprange.exe",
@@ -11,7 +11,7 @@
   },
   "candidate": {
     "directory": "C:/temp/whqual/candidates",
-    "envelope": ".iprange-gcauth-f3524ab77ab77cff4a95cfd441ae16f6-f30bb425.tmp",
+    "envelope": ".iprange-gcauth-e207277d0625dc0cbd5de517905524bf-9af8a59e.tmp",
     "marker": "MARKER.txt"
   },
   "command": [
@@ -38,7 +38,7 @@
           }
         ],
         "row_checked": {
-          "basename_decoded": ".iprange-gcauth-f3524ab77ab77cff4a95cfd441ae16f6-f30bb425.tmp",
+          "basename_decoded": ".iprange-gcauth-e207277d0625dc0cbd5de517905524bf-9af8a59e.tmp",
           "basename_encoding": 2,
           "basename_ok": true,
           "candidate_kind": "envelope",
@@ -47,8 +47,8 @@
         },
         "rows": [
           {
-            "attempt_id": "f3524ab77ab77cff4a95cfd441ae16f6",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQBmADMANQAyADQAYQBiADcANwBhAGIANwA3AGMAZgBmADQAYQA5ADUAYwBmAGQANAA0ADEAYQBlADEANgBmADYALQBmADMAMABiAGIANAAyADUALgB0AG0AcAA=",
+            "attempt_id": "e207277d0625dc0cbd5de517905524bf",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQBlADIAMAA3ADIANwA3AGQAMAA2ADIANQBkAGMAMABjAGIAZAA1AGQAZQA1ADEANwA5ADAANQA1ADIANABiAGYALQA5AGEAZgA4AGEANQA5AGUALgB0AG0AcAA=",
             "basename_encoding": 2,
             "candidate_kind": "envelope",
             "directory": "C:/temp/whqual/candidates",
@@ -57,11 +57,11 @@
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "2251799814121694",
+              "file": "2533274790832350",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
-            "ordinal": 4077630501,
+            "ordinal": 2599986590,
             "problem": {
               "code": "cleanup_conflict",
               "detail": "GC authority envelope has the wrong length"
@@ -103,7 +103,7 @@
           }
         ],
         "row_checked": {
-          "basename_decoded": ".iprange-gcauth-f3524ab77ab77cff4a95cfd441ae16f6-f30bb425.tmp",
+          "basename_decoded": ".iprange-gcauth-e207277d0625dc0cbd5de517905524bf-9af8a59e.tmp",
           "basename_encoding": 2,
           "basename_ok": true,
           "candidate_kind": "envelope",
@@ -112,8 +112,8 @@
         },
         "rows": [
           {
-            "attempt_id": "f3524ab77ab77cff4a95cfd441ae16f6",
-            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQBmADMANQAyADQAYQBiADcANwBhAGIANwA3AGMAZgBmADQAYQA5ADUAYwBmAGQANAA0ADEAYQBlADEANgBmADYALQBmADMAMABiAGIANAAyADUALgB0AG0AcAA=",
+            "attempt_id": "e207277d0625dc0cbd5de517905524bf",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQBlADIAMAA3ADIANwA3AGQAMAA2ADIANQBkAGMAMABjAGIAZAA1AGQAZQA1ADEANwA5ADAANQA1ADIANABiAGYALQA5AGEAZgA4AGEANQA5AGUALgB0AG0AcAA=",
             "basename_encoding": 2,
             "candidate_kind": "envelope",
             "directory": "C:/temp/whqual/candidates",
@@ -122,11 +122,11 @@
               "volume": "8264173776665448027"
             },
             "identity": {
-              "file": "2251799814121694",
+              "file": "2533274790832350",
               "volume": "8264173776665448027"
             },
             "kind": "windows_housekeeping",
-            "ordinal": 4077630501,
+            "ordinal": 2599986590,
             "problem": {
               "code": "cleanup_conflict",
               "detail": "GC authority envelope has the wrong length"

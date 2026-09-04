@@ -15,18 +15,20 @@ for SOW-0028 qualification only):
   pair (go1.26.4 linux/amd64, no embedded vcs revision) staged as
   `/tmp/qualsvc/go/{iprange,iprange-v4-worker}`:
   - product SHA-256
-    `cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac`
-    (changed from the previous revision by the SOW-0028 adapter fix in
-    `v4/go/internal/cli/fileio/export_writer.go`: the export writer now
-    closes its private temporary file before removing it, so
-    Windows can remove the temporary — see `resource-record.md`);
+    `f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461`
+    (changed from the previous revision by the two SOW-0028 adapter
+    fixes of the same class — `v4/go/internal/cli/fileio/
+    export_writer.go` and `v4/go/internal/cli/handlers/live.go`: both
+    writers now close their private temporary files before removing
+    them, so Windows can remove the temporary — see
+    `resource-record.md`);
   - worker SHA-256
     `16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e`
     (unchanged).
 - Windows qualification binaries (built on `costa-win11` at the same
   product-source revision, staged under `C:/Temp/qualsvc-win/`):
   - Go product SHA-256
-    `252cd032c9ded4c9216a5680fd87099e37e7b5506eff32139c108b66f387696a`;
+    `20b9244d47154476cc5932c9cfc504c12b285cefb5eaea23e370858cbb3c686c`;
   - Rust product SHA-256
     `5e91d9048f210958d78d935f403cfd41ac6ad587c5b8af8c22c0ba2d352524e8`.
 
@@ -34,8 +36,8 @@ The external gap review of 2026-09-04 requested the D1-A crash scope,
 the D2-A resource proofs (including the Windows-housekeeping kind),
 the D3-B recovery wording, and the kind-gate provenance repair; this
 evidence set is regenerated at that fix wave (external framework,
-cases, and records only — the single Go adapter fix above is the only
-product-source change).  All Linux commands ran under `nice` with work
+cases, and records only — the two Go adapter fixes above are the only
+product-source changes, both found by the Windows qualification).  All Linux commands ran under `nice` with work
 dirs under `/tmp/qualsvc/ev3/`.
 
 ## Files

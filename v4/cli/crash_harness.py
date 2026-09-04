@@ -462,7 +462,8 @@ def reservation_output_sha512(work_dir):
             return None
 
 
-def probe_consumer_open(consumer, work, dest, scenario_report, expect_refusal):
+def probe_consumer_open(consumer, work, dest, scenario_report,
+                        expect_refusal, require_open=False):
     """Design step 6: consumer reader.open on the crash-left destination.
 
     With an absent destination the open must truthfully refuse
@@ -470,7 +471,9 @@ def probe_consumer_open(consumer, work, dest, scenario_report, expect_refusal):
     opens.  With an existing complete destination the open succeeds and
     the reader is closed again immediately, because an open immutable
     reader holds the destination lifetime lock and would block the
-    producer's resolver.
+    producer's resolver.  ``require_open`` makes success mandatory: a
+    scenario (E/F source reopen) that documents "the consumer still
+    opens the intact source" fails when the existing source refuses.
     """
 
     consumer_service = HarnessJsonRpcService(
@@ -494,6 +497,10 @@ def probe_consumer_open(consumer, work, dest, scenario_report, expect_refusal):
             }
             return
         if error:
+            assert_truthful(
+                not require_open,
+                f"an existing source must open, got {reader_open}",
+                scenario_report)
             assert_truthful(
                 error.get("code") == "invalid_path"
                 and error.get("outcome") == "not_started",
@@ -1724,9 +1731,10 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
             scenario_report["residue_bounded"]["orphans_after_retry"] = (
                 export_temp_basenames(work))
 
-            # The consumer still opens the intact immutable source.
+            # The consumer still opens the intact immutable source
+            # (mandatory: an existing source must never refuse).
             probe_consumer_open(consumer, work, source, scenario_report,
-                                False)
+                                False, require_open=True)
         finally:
             resolver.close()
     finally:
@@ -1873,17 +1881,24 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
                 f"count={ref_count} rows={ref_rows}), got "
                 f"valid={fresh_valid} count={fresh_count} rows={fresh_rows}",
                 scenario_report)
+            assert_truthful(
+                sha256_file(fresh_path) == sha256_file(ref_path),
+                "fresh validate findings must be byte-identical to the "
+                "reference findings (same deterministic damage)",
+                scenario_report)
             scenario_report["resolve_outcome"] = {
                 "fresh_validate_reported_same": True,
+                "findings_content_sha256_identical": True,
                 "reference_finding_count": ref_count,
                 "fresh_finding_count": fresh_count,
                 "fresh_rows": fresh_rows,
             }
 
             # The consumer still opens the damaged main: the committed
-            # generation stays readable.
+            # generation stays readable (mandatory: an existing source
+            # must never refuse).
             probe_consumer_open(consumer, work, source, scenario_report,
-                                False)
+                                False, require_open=True)
         finally:
             resolver.close()
     finally:

@@ -2,7 +2,7 @@
   "binaries": {
     "go": {
       "path": "/tmp/qualsvc/go/iprange",
-      "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac"
+      "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461"
     },
     "rust": {
       "path": "/tmp/qualsvc/rust/iprange",
@@ -15,9 +15,9 @@
     "rust=/tmp/qualsvc/rust/iprange",
     "go=/tmp/qualsvc/go/iprange",
     "--work-dir",
-    "/tmp/qualsvc/ev3/res",
+    "/tmp/qualsvc/ev4/res",
     "--json-report",
-    "/tmp/qualsvc/ev3/resource.json"
+    "/tmp/qualsvc/ev4/resource.json"
   ],
   "failed": 0,
   "leftover_processes": [],
@@ -32,7 +32,7 @@
       "binary": "go",
       "binary_path": "/tmp/qualsvc/go/iprange",
       "busy_ids": [],
-      "elapsed_ms": 1130.7,
+      "elapsed_ms": 1119.3,
       "exit_code": 0,
       "export_code": "result",
       "export_ids": [
@@ -44,11 +44,11 @@
             "bytes": "12472986",
             "format": "ranges",
             "identity": {
-              "file": "235296236",
+              "file": "235296851",
               "volume": "66307"
             },
             "method": "iprange.v1.export",
-            "path": "/tmp/qualsvc/ev3/res/resource-804060c7/a-go/slow.txt",
+            "path": "/tmp/qualsvc/ev4/res/resource-77ae7426/a-go/slow.txt",
             "rows": "500000",
             "sha256": "4d5094acbc4cb0b9f24a34665f366aa73e4772132fba75ffb626de397e48a505"
           }
@@ -79,19 +79,19 @@
         "20"
       ],
       "pass": true,
-      "pid": 764527,
+      "pid": 806629,
       "proof": "a",
       "responses": 20,
-      "source_sha256": "37e94a242e45b2369e3669ea0b0911511e9006c41d61361682aa5d22def360e6"
+      "source_sha256": "76ab4ad67236679606f6d91528967e900d0c2702c5ff2a5397f5d9e47ef9d9cc"
     },
     {
       "binary": "go",
       "binary_path": "/tmp/qualsvc/go/iprange",
-      "elapsed_ms": 7.5,
+      "elapsed_ms": 7.3,
       "exit_code": 0,
       "failures": [],
       "pass": true,
-      "pid": 764550,
+      "pid": 806659,
       "proof": "b",
       "response": {
         "error": {
@@ -106,10 +106,10 @@
     {
       "binary": "go",
       "binary_path": "/tmp/qualsvc/go/iprange",
-      "elapsed_ms": 24.6,
+      "elapsed_ms": 24.4,
       "failures": [],
       "listed_rows": 1,
-      "marker_seen_ms": 7.642507553100586,
+      "marker_seen_ms": 7.907629013061523,
       "output_byte_length": "114688",
       "pass": true,
       "phase": "prepared",
@@ -122,7 +122,7 @@
       },
       "proof": "c",
       "publish_temp_after": [
-        ".iprange-publish-631e40910d1aafdee379adf0f6febfe3.tmp"
+        ".iprange-publish-fff7343882902712f5711c4ce67c5aa7.tmp"
       ],
       "remove": "ok",
       "reports": [
@@ -141,7 +141,7 @@
         "19",
         "20"
       ],
-      "elapsed_ms": 810.9,
+      "elapsed_ms": 816.7,
       "exit_code": 0,
       "export_code": -32010,
       "export_ids": [
@@ -180,19 +180,19 @@
         "17"
       ],
       "pass": true,
-      "pid": 764631,
+      "pid": 806702,
       "proof": "a",
       "responses": 20,
-      "source_sha256": "c6e09efec943993eebf9af48f4dc6b14ce259fb101ce70f54ba65500be35fcf8"
+      "source_sha256": "0fb7f07d131fc3dfa2bd4e3f84fb97bb157806390e3b621a9240f41ec25730fe"
     },
     {
       "binary": "rust",
       "binary_path": "/tmp/qualsvc/rust/iprange",
-      "elapsed_ms": 3.7,
+      "elapsed_ms": 4.0,
       "exit_code": 0,
       "failures": [],
       "pass": true,
-      "pid": 764635,
+      "pid": 806706,
       "proof": "b",
       "response": {
         "error": {
@@ -207,10 +207,10 @@
     {
       "binary": "rust",
       "binary_path": "/tmp/qualsvc/rust/iprange",
-      "elapsed_ms": 18.0,
+      "elapsed_ms": 20.8,
       "failures": [],
       "listed_rows": 1,
-      "marker_seen_ms": 4.410028457641602,
+      "marker_seen_ms": 4.663228988647461,
       "output_byte_length": "114688",
       "pass": true,
       "phase": "prepared",
@@ -223,7 +223,7 @@
       },
       "proof": "c",
       "publish_temp_after": [
-        ".iprange-publish-526090ebc52d3139dc3b43ef1e5eb2e5.tmp"
+        ".iprange-publish-c9289c8ae12c37950683b925e8ca0c81.tmp"
       ],
       "remove": "ok",
       "reports": [

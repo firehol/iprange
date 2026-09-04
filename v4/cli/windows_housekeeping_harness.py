@@ -377,7 +377,9 @@ def main():
     report["failed"] = failed
 
     if args.json_report:
-        with open(args.json_report, "w", encoding="utf-8") as stream:
+        # newline="" keeps the committed report LF-only on every
+        # platform (Windows text mode would otherwise write CRLF).
+        with open(args.json_report, "w", encoding="utf-8", newline="") as stream:
             json.dump(report, stream, indent=2, sort_keys=True)
             stream.write("\n")
 

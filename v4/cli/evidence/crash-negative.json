@@ -16,9 +16,9 @@
     "--fixture-tool",
     "/tmp/qualsvc/rust/v4-fixture",
     "--work-dir",
-    "/tmp/qualsvc/ev3/crash-neg",
+    "/tmp/qualsvc/ev5/crash-neg",
     "--json-report",
-    "/tmp/qualsvc/ev3/crash-negative.json"
+    "/tmp/qualsvc/ev5/crash-negative.json"
   ],
   "failed": 16,
   "leftover_processes": [],
