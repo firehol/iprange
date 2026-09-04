@@ -56,7 +56,7 @@
         "iprange.v1.system.describe",
         "iprange.v1.validate"
       ],
-      "path": "/tmp/iprange-qual/iprange",
+      "path": "/tmp/iprange-go",
       "result": {
         "api_version": "1",
         "export_formats": [
@@ -149,7 +149,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9"
+      "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb"
     },
     "rust": {
       "available": true,
@@ -349,12 +349,31 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 1
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
+        }
+      },
+      "file_kinds": {
+        "meta.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.database.metadata.replace",
+            "consumer.iprange.v1.database.metadata.get"
+          ]
+        },
+        "meta.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
         }
       },
       "matrix": "rust->go",
@@ -389,12 +408,51 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 5
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 6
+        }
+      },
+      "file_kinds": {
+        "histdb.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.feeds.create",
+            "producer.iprange.v1.history.project",
+            "producer.iprange.v1.history.project",
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "histdb.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "last_seen.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.history.project",
+            "producer.iprange.v1.history.project"
+          ]
+        },
+        "last_seen.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
         }
       },
       "matrix": "rust->go",
@@ -405,12 +463,38 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 1
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
+        }
+      },
+      "file_kinds": {
+        "join.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.join.direct"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "zerodb.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "consumer.iprange.v1.join.direct"
+          ]
+        },
+        "zerodb.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
         }
       },
       "matrix": "rust->go",
@@ -427,12 +511,40 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 1
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 6
+        }
+      },
+      "file_kinds": {
+        "credb.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.feeds.create",
+            "producer.iprange.v1.commit.resolve",
+            "producer.iprange.v1.database.create.resolve",
+            "producer.iprange.v1.database.reset_live"
+          ]
+        },
+        "credb.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "membership.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.initialize_live"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
         }
       },
       "matrix": "rust->go",
@@ -449,12 +561,37 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 1
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 3
+        }
+      },
+      "file_kinds": {
+        "entries.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.maintenance.list"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "reclaim.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.database.reclaim"
+          ]
+        },
+        "reclaim.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
         }
       },
       "matrix": "rust->go",
@@ -465,12 +602,31 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 7
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
+        }
+      },
+      "file_kinds": {
+        "created.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "created.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
         }
       },
       "matrix": "rust->go",
@@ -481,12 +637,38 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 5
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
-          "steps": 5
+          "steps": 10
+        }
+      },
+      "file_kinds": {
+        "live.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.reader.open",
+            "producer.iprange.v1.reader.open",
+            "producer.iprange.v1.database.reclaim",
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.database.info",
+            "producer.iprange.v1.database.reclaim",
+            "producer.iprange.v1.database.reclaim",
+            "producer.iprange.v1.database.reclaim"
+          ]
+        },
+        "live.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
         }
       },
       "matrix": "rust->go",
@@ -497,12 +679,31 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 7
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
+        }
+      },
+      "file_kinds": {
+        "created-membership.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.feeds.create",
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "created-membership.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
         }
       },
       "matrix": "rust->go",
@@ -513,12 +714,40 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 4
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
+        }
+      },
+      "file_kinds": {
+        "db.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "consumer.iprange.v1.snapshot"
+          ]
+        },
+        "db.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "snap.iprange": {
+          "created_by": [
+            "consumer.iprange.v1.snapshot"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.reader.open"
+          ]
         }
       },
       "matrix": "rust->go",
@@ -529,12 +758,24 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 1
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 3
+        }
+      },
+      "file_kinds": {
+        "published.iprange": {
+          "created_by": [
+            "producer.iprange.v1.current.publish"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.publication.inspect",
+            "producer.iprange.v1.publication.resolve"
+          ]
         }
       },
       "matrix": "rust->go",
@@ -597,6 +838,47 @@
       "status": "SKIP"
     },
     {
+      "actors": {
+        "consumer": {
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
+          "steps": 4
+        },
+        "producer": {
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
+      "file_kinds": {
+        "findings.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.validate"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "recovered.iprange": {
+          "created_by": [
+            "producer.iprange.v1.recover"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "recovery.jsonl": {
+          "created_by": [
+            "producer.iprange.v1.recover"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        }
+      },
+      "matrix": "rust->go",
+      "name": "recover.successful",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
       "matrix": "rust->go",
       "name": "resource.limits",
       "reason": "not cross-producer: case has no producer step",
@@ -605,12 +887,24 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 3
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
+        }
+      },
+      "file_kinds": {
+        "snap.iprange": {
+          "created_by": [
+            "producer.iprange.v1.snapshot"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.publication.resolve",
+            "consumer.iprange.v1.reader.open"
+          ]
         }
       },
       "matrix": "rust->go",
@@ -627,12 +921,21 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 2
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 1
+        }
+      },
+      "file_kinds": {
+        "findings.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.validate"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
         }
       },
       "matrix": "rust->go",
@@ -643,12 +946,164 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb",
           "steps": 33
         },
         "producer": {
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 20
+        }
+      },
+      "file_kinds": {
+        "algebra-out.iprange": {
+          "created_by": [
+            "producer.iprange.v1.algebra.publish"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "entries.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.maintenance.list"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "feeddb.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.feeds.create",
+            "producer.iprange.v1.feeds.create",
+            "producer.iprange.v1.feeds.replace",
+            "producer.iprange.v1.feeds.replace",
+            "consumer.iprange.v1.reader.open",
+            "producer.iprange.v1.history.project",
+            "consumer.iprange.v1.reader.open",
+            "consumer.iprange.v1.query.overlaps",
+            "consumer.iprange.v1.join.direct",
+            "consumer.iprange.v1.join.membership",
+            "producer.iprange.v1.algebra.publish",
+            "producer.iprange.v1.snapshot"
+          ]
+        },
+        "feeddb.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "findings.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.validate"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "first_seen.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.retention.first_seen.refresh",
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "first_seen.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "genesis.iprange": {
+          "created_by": [
+            "producer.iprange.v1.current.publish"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.feeds.replace"
+          ]
+        },
+        "jmemb.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.join.membership"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "join.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.join.direct"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "last_seen.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.retention.last_seen.refresh",
+            "consumer.iprange.v1.reader.open",
+            "producer.iprange.v1.history.project",
+            "consumer.iprange.v1.join.direct",
+            "producer.iprange.v1.database.reclaim"
+          ]
+        },
+        "last_seen.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "overlaps.csv": {
+          "created_by": [
+            "consumer.iprange.v1.query.overlaps"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "published.iprange": {
+          "created_by": [
+            "producer.iprange.v1.current.publish"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.publication.resolve",
+            "consumer.iprange.v1.reader.open",
+            "producer.iprange.v1.retention.first_seen.refresh",
+            "producer.iprange.v1.retention.last_seen.refresh"
+          ]
+        },
+        "removals.jsonl": {
+          "created_by": [
+            "producer.iprange.v1.retention.first_seen.refresh"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "snap.iprange": {
+          "created_by": [
+            "producer.iprange.v1.snapshot"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.publication.resolve",
+            "consumer.iprange.v1.reader.open",
+            "consumer.iprange.v1.validate",
+            "consumer.iprange.v1.recovery.inspect"
+          ]
         }
       },
       "matrix": "rust->go",
@@ -664,14 +1119,13 @@
     "--rust",
     "/home/costa/src/firehol/iprange/v4/rust/target/release/iprange",
     "--go",
-    "/tmp/iprange-qual/iprange",
+    "/tmp/iprange-go",
     "--fixture-tool",
     "/home/costa/src/firehol/iprange/v4/rust/target/release/examples/v4-fixture",
     "--work-dir",
-    "/tmp/w6c-rtg",
+    "/tmp/solwave/bat/rust_to_go",
     "--json-report",
-    "/home/costa/src/firehol/iprange/v4/cli/evidence/matrix-rust_to_go.json",
-    "--allow-skips"
+    "/tmp/solwave/bat/matrix-rust_to_go.json"
   ],
   "environment_allowlist": [
     "PATH",
@@ -698,8 +1152,9 @@
         "iprange.v1.join.membership": 1,
         "iprange.v1.maintenance.list": 2,
         "iprange.v1.query.overlaps": 1,
+        "iprange.v1.recover": 1,
         "iprange.v1.retention.first_seen.refresh": 1,
-        "iprange.v1.validate": 2
+        "iprange.v1.validate": 3
       },
       "opened_by": {}
     },
@@ -715,24 +1170,28 @@
         "iprange.v1.algebra.publish": 1,
         "iprange.v1.current.publish": 3,
         "iprange.v1.database.create": 13,
+        "iprange.v1.recover": 1,
         "iprange.v1.snapshot": 3
       },
       "opened_by": {
+        "iprange.v1.algebra.publish": 1,
         "iprange.v1.commit.resolve": 1,
         "iprange.v1.database.create.resolve": 1,
         "iprange.v1.database.info": 1,
         "iprange.v1.database.metadata.get": 1,
         "iprange.v1.database.metadata.replace": 1,
-        "iprange.v1.database.reclaim": 3,
+        "iprange.v1.database.reclaim": 6,
         "iprange.v1.database.reset_live": 1,
         "iprange.v1.direct.replace": 8,
         "iprange.v1.feeds.create": 5,
         "iprange.v1.feeds.replace": 3,
         "iprange.v1.history.project": 6,
-        "iprange.v1.join.direct": 2,
+        "iprange.v1.join.direct": 3,
+        "iprange.v1.join.membership": 1,
         "iprange.v1.publication.inspect": 1,
         "iprange.v1.publication.resolve": 4,
-        "iprange.v1.reader.open": 13,
+        "iprange.v1.query.overlaps": 1,
+        "iprange.v1.reader.open": 15,
         "iprange.v1.recovery.inspect": 1,
         "iprange.v1.retention.first_seen.refresh": 2,
         "iprange.v1.retention.last_seen.refresh": 2,
@@ -747,83 +1206,83 @@
   },
   "frame_sizes": {
     "iprange.v1.algebra.publish": {
-      "max_request_bytes": 747,
-      "max_response_bytes": 1350
+      "max_request_bytes": 768,
+      "max_response_bytes": 1428
     },
     "iprange.v1.commit.resolve": {
-      "max_request_bytes": 520,
+      "max_request_bytes": 535,
       "max_response_bytes": 474
     },
     "iprange.v1.current.publish": {
-      "max_request_bytes": 688,
+      "max_request_bytes": 718,
       "max_response_bytes": 1276
     },
     "iprange.v1.database.create": {
-      "max_request_bytes": 315,
+      "max_request_bytes": 330,
       "max_response_bytes": 704
     },
     "iprange.v1.database.create.resolve": {
-      "max_request_bytes": 804,
+      "max_request_bytes": 819,
       "max_response_bytes": 192
     },
     "iprange.v1.database.info": {
-      "max_request_bytes": 202,
+      "max_request_bytes": 217,
       "max_response_bytes": 514
     },
     "iprange.v1.database.initialize_live": {
-      "max_request_bytes": 196,
+      "max_request_bytes": 211,
       "max_response_bytes": 668
     },
     "iprange.v1.database.metadata.get": {
-      "max_request_bytes": 227,
+      "max_request_bytes": 242,
       "max_response_bytes": 217
     },
     "iprange.v1.database.metadata.replace": {
-      "max_request_bytes": 345,
+      "max_request_bytes": 360,
       "max_response_bytes": 547
     },
     "iprange.v1.database.reclaim": {
-      "max_request_bytes": 341,
+      "max_request_bytes": 356,
       "max_response_bytes": 590
     },
     "iprange.v1.database.reset_live": {
-      "max_request_bytes": 211,
+      "max_request_bytes": 226,
       "max_response_bytes": 750
     },
     "iprange.v1.direct.replace": {
-      "max_request_bytes": 430,
+      "max_request_bytes": 460,
       "max_response_bytes": 1071
     },
     "iprange.v1.feeds.create": {
-      "max_request_bytes": 494,
+      "max_request_bytes": 524,
       "max_response_bytes": 1131
     },
     "iprange.v1.feeds.replace": {
-      "max_request_bytes": 464,
+      "max_request_bytes": 494,
       "max_response_bytes": 1065
     },
     "iprange.v1.history.project": {
-      "max_request_bytes": 11625,
+      "max_request_bytes": 11655,
       "max_response_bytes": 1383
     },
     "iprange.v1.join.direct": {
-      "max_request_bytes": 638,
-      "max_response_bytes": 548
+      "max_request_bytes": 674,
+      "max_response_bytes": 622
     },
     "iprange.v1.join.membership": {
-      "max_request_bytes": 731,
-      "max_response_bytes": 553
+      "max_request_bytes": 767,
+      "max_response_bytes": 647
     },
     "iprange.v1.maintenance.list": {
-      "max_request_bytes": 450,
-      "max_response_bytes": 405
+      "max_request_bytes": 480,
+      "max_response_bytes": 420
     },
     "iprange.v1.maintenance.remove": {
       "max_request_bytes": 199,
       "max_response_bytes": 165
     },
     "iprange.v1.publication.inspect": {
-      "max_request_bytes": 164,
+      "max_request_bytes": 179,
       "max_response_bytes": 193
     },
     "iprange.v1.publication.residue.remove": {
@@ -831,12 +1290,12 @@
       "max_response_bytes": 202
     },
     "iprange.v1.publication.resolve": {
-      "max_request_bytes": 1294,
+      "max_request_bytes": 1309,
       "max_response_bytes": 1187
     },
     "iprange.v1.query.overlaps": {
-      "max_request_bytes": 529,
-      "max_response_bytes": 389
+      "max_request_bytes": 550,
+      "max_response_bytes": 479
     },
     "iprange.v1.reader.close": {
       "max_request_bytes": 145,
@@ -851,7 +1310,7 @@
       "max_response_bytes": 177
     },
     "iprange.v1.reader.open": {
-      "max_request_bytes": 216,
+      "max_request_bytes": 231,
       "max_response_bytes": 491
     },
     "iprange.v1.reader.ranges.next": {
@@ -863,23 +1322,23 @@
       "max_response_bytes": 151
     },
     "iprange.v1.recover": {
-      "max_request_bytes": 850,
-      "max_response_bytes": 1336
+      "max_request_bytes": 912,
+      "max_response_bytes": 1801
     },
     "iprange.v1.recovery.inspect": {
-      "max_request_bytes": 306,
+      "max_request_bytes": 322,
       "max_response_bytes": 537
     },
     "iprange.v1.retention.first_seen.refresh": {
-      "max_request_bytes": 704,
-      "max_response_bytes": 1357
+      "max_request_bytes": 749,
+      "max_response_bytes": 1372
     },
     "iprange.v1.retention.last_seen.refresh": {
-      "max_request_bytes": 500,
+      "max_request_bytes": 530,
       "max_response_bytes": 1084
     },
     "iprange.v1.snapshot": {
-      "max_request_bytes": 409,
+      "max_request_bytes": 439,
       "max_response_bytes": 1181
     },
     "iprange.v1.system.describe": {
@@ -887,12 +1346,12 @@
       "max_response_bytes": 2271
     },
     "iprange.v1.validate": {
-      "max_request_bytes": 541,
-      "max_response_bytes": 781
+      "max_request_bytes": 574,
+      "max_response_bytes": 796
     }
   },
   "oracle_checks": 22,
-  "passed": 13,
+  "passed": 14,
   "platform": {
     "machine": "x86_64",
     "python": "3.14.7",

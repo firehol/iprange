@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import platform as platform_module
+import re
 import shutil
 import subprocess
 import sys
@@ -217,6 +218,10 @@ class CaseRunner:
         # method -> count, derived from executed steps plus the observed
         # work-dir inventory (fixture inputs are never inventoried).
         self.file_kinds = {}
+        # Per-case lineage: path -> kind -> created_by/opened_by lists of
+        # "actor.method" strings, preserved in the case report entry so
+        # the root aggregate never loses the case/actor/path evidence.
+        self.file_kinds_paths = {}
         # Absolute real paths of runner- or fixture-tool-created inputs;
         # they are excluded from every inventory snapshot.
         self._fixture_inputs = set()
@@ -237,7 +242,11 @@ class CaseRunner:
                 import base64
                 data = base64.b64decode(source["base64"], validate=True)
                 write_bytes(path, data)
-                intervals = parse_interval_text(data.decode("utf-8", "strict"))
+                try:
+                    intervals = parse_interval_text(data.decode("utf-8", "strict"))
+                except UnicodeDecodeError:
+                    # Binary fixtures (damaged v4 pages) have no interval text.
+                    intervals = None
                 if intervals is not None:
                     self.fixture_intervals[os.path.realpath(path)] = intervals
             elif "csv_db" in source:
@@ -369,9 +378,12 @@ class CaseRunner:
         and disappear inside one step are transient and never counted.
         Legacy CLI steps are recorded under the literal method name
         "legacy" (they are point-in-time commands, not JSON-RPC methods).
+        The per-path lineage keeps the acting service role with every
+        method (producer or consumer; "legacy" for CLI steps).
         """
 
         method = step.get("method", "legacy")
+        actor = step.get("actor", "legacy")
         declared = self.declared_paths(step)
         after = self.inventory()
         for path in after - before:
@@ -382,6 +394,9 @@ class CaseRunner:
             bucket = self.file_kinds.setdefault(
                 kind, {"created_by": {}, "opened_by": {}})
             self._ledger_increment(bucket, "created_by", method)
+            entry = self.file_kinds_paths.setdefault(path, {
+                "kind": kind, "created_by": [], "opened_by": []})
+            entry["created_by"].append(f"{actor}.{method}")
         opened = {}
         for path, kind in declared.items():
             if path in before:
@@ -391,6 +406,10 @@ class CaseRunner:
                 kind, {"created_by": {}, "opened_by": {}})
             for _ in paths:
                 self._ledger_increment(bucket, "opened_by", method)
+            for item in paths:
+                entry = self.file_kinds_paths.setdefault(item, {
+                    "kind": kind, "created_by": [], "opened_by": []})
+                entry["opened_by"].append(f"{actor}.{method}")
 
     # ---- substitutions --------------------------------------------
     def substitute(self, value, actor="consumer"):
@@ -544,15 +563,39 @@ class CaseRunner:
                         f"case {self.case['name']!r}: error details {name!r} "
                         f"mismatch: expected {value!r}, got {details[name]!r}")
 
-    def process_captures(self, pointers, root, actor):
-        for pointer in pointers:
-            value = root
-            for part in pointer.split("."):
+    def capture_value(self, pointer, root):
+        """Resolve a capture pointer inside a result object.
+
+        A pointer is a dotted chain of member names with optional
+        ``[index]`` list steps, e.g. ``result.candidates[0]``.  The
+        index syntax is the only way to name a list element (recovery
+        candidates); every other step descends a dict.
+        """
+        value = root
+        for part in re.findall(r"[^.\[\]]+|\[\d+\]", pointer):
+            if part.startswith("["):
+                index = int(part[1:-1])
+                if not isinstance(value, list) or index >= len(value):
+                    raise AssertionError(
+                        f"case {self.case['name']!r}: capture {pointer!r} "
+                        f"index {index} out of range")
+                value = value[index]
+            else:
                 if not isinstance(value, dict) or part not in value:
                     raise AssertionError(
                         f"case {self.case['name']!r}: capture {pointer!r} not found")
                 value = value[part]
-            self.captures[pointer] = (actor, value)
+        return value
+
+    def process_captures(self, specs, root, actor):
+        for spec in specs:
+            if isinstance(spec, dict):
+                name = spec["name"]
+                pointer = spec["path"]
+            else:
+                name = pointer = spec
+            value = self.capture_value(pointer, root)
+            self.captures[name] = (actor, value)
 
     def check_output_result(self, method, params, result):
         """Verify response output facts against the requested local artifact."""
@@ -1582,6 +1625,17 @@ def main():
             entry = {
                 "name": case["name"], "matrix": matrix, "status": "PASS",
                 "oracle_checks": runner.oracle_checks,
+                # Per-case mechanical lineage: relative artifact path ->
+                # kind and the acting "actor.method" lists, so the kind
+                # universe can be verified case-by-case and the root
+                # aggregate never loses producer/consumer identity.
+                "file_kinds": {
+                    os.path.relpath(path, work): {
+                        "kind": facts["kind"],
+                        "created_by": facts["created_by"],
+                        "opened_by": facts["opened_by"],
+                    }
+                    for path, facts in sorted(runner.file_kinds_paths.items())},
             }
             if mixed:
                 # Actor identity is pinned once at startup by

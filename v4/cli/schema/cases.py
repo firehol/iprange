@@ -59,7 +59,25 @@ def _rpc_step(expectation):
         "actor": {"type": "string", "enum": ["producer", "consumer"]},
         "method": {"type": "string", "min_len": 1},
         "params": {"type": "object"},
-        "capture": {"type": "array", "items": {"type": "string", "min_len": 1}, "max": 16},
+        "capture": {
+            "type": "array",
+            "items": {
+                "type": "one_of",
+                "options": [
+                    {"type": "string", "min_len": 1},
+                    {
+                        "type": "object",
+                        "properties": {
+                            "name": {"type": "string", "min_len": 1},
+                            "path": {"type": "string", "min_len": 1},
+                        },
+                        "required": ["name", "path"],
+                        "additional": False,
+                    },
+                ],
+            },
+            "max": 16,
+        },
         "assert_files": {"type": "array", "items": _ASSERT_FILE, "max": 64},
         "notification": {"type": "boolean"},
     }
@@ -200,9 +218,13 @@ def _relative_work_path(value, path):
 
 
 def _valid_pointer(value, path):
-    parts = value.split(".")
-    if not parts or any(not part for part in parts):
-        raise ValidationError(f"{path}", "capture pointer must contain nonempty dot-separated members")
+    """A capture pointer is a dotted chain of member names with optional
+    ``[index]`` list steps (e.g. ``candidates[0]``); every listed part
+    must be nonempty."""
+    import re
+    parts = re.findall(r"[^.\[\]]+|\[\d+\]", value)
+    if not parts or not any(not part.startswith("[") for part in parts):
+        raise ValidationError(f"{path}", "capture pointer must contain member names")
 
 
 def validate_case(case):
@@ -256,8 +278,15 @@ def validate_case(case):
                 "iprange.v1.cancel is a notification and requires \"notification\": true",
             )
 
-        for pointer_index, pointer in enumerate(step.get("capture", [])):
+        captures = []
+        for pointer_index, spec in enumerate(step.get("capture", [])):
+            if isinstance(spec, dict):
+                capture_name = spec["name"]
+                pointer = spec["path"]
+            else:
+                capture_name = pointer = spec
             _valid_pointer(pointer, f"steps[{index}].capture[{pointer_index}]")
+            captures.append(capture_name)
         for value in _walk_strings(step["params"]):
             if value.startswith("$CAPTURE/") and value[len("$CAPTURE/"):] not in available_captures:
                 raise ValidationError(
@@ -277,7 +306,13 @@ def validate_case(case):
                     assertion["equals_fixture"],
                     f"steps[{index}].assert_files[{assertion_index}].equals_fixture",
                 )
-        available_captures.update(step.get("capture", []))
+        duplicates = sorted({name for name in captures if captures.count(name) > 1})
+        if duplicates:
+            raise ValidationError(
+                f"steps[{index}].capture",
+                f"capture names must be unique within one step: {duplicates}",
+            )
+        available_captures.update(captures)
 
     for assertion_index, assertion in enumerate(case.get("assertions", {}).get("files", [])):
         _relative_work_path(

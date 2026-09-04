@@ -82,9 +82,11 @@ Other gates:
 ```bash
 nice python3 v4/cli/check_golden.py        # 53 golden wire exchanges
 nice python3 v4/cli/sensitivity_gate.py    # 14 broken-server modes
+nice python3 v4/cli/check_kind_coverage.py --matrix ... --crash ...
+                                           # artifact-kind universe gate
 ```
 
-- `cases/` — the declarative method-family cases (37 files). Every
+- `cases/` — the declarative method-family cases (38 files). Every
   rpc step declares its service role explicitly (`actor: producer` for
   artifact creation/mutation, `actor: consumer` for observation and
   transformation), so a transformation can run on either binary in a
@@ -92,13 +94,22 @@ nice python3 v4/cli/sensitivity_gate.py    # 14 broken-server modes
   `mixed.direct-created`, `mixed.membership-created`,
   `mixed.transform-created` (the consumer binary snapshots a database
   the producer built and reads it back),
-  `mixed.live-coordination` (a live reader in one binary stays pinned
-  on its generation while the other binary commits, then reclamation
-  is proven after close), and `workflow.publisher` (the full
+  `mixed.live-coordination` (a consumer AND a producer reader pinned
+  on generation 1 while the other binary commits twice; reclamation
+  returns `no_change` while any reader pins and commits only after
+  the last reader closes), `workflow.publisher` (the full
   update-ipsets six-step production sequence with interleaved
-  cross-binary verification and per-feed failure isolation).
+  cross-binary verification, per-feed failure isolation, and the
+  downstream aggregation/join/algebra steps consuming the
+  workflow-built live feed DB), and `recover.successful` (validate a
+  damaged file, capture the exact `recovery.inspect` candidate,
+  recover, and read the preserved content back through the other
+  binary).
   `resource.limits` proves the product-boundary ceilings (response
   object limit, reader/cursor capacity, system limits report).
+  Capture specs may alias handles (`{"name", "path"}` items; `[N]`
+  list steps), so two handles on one result path coexist under
+  distinct names.
 - `golden/` — complete request/response exchanges generated from the
   Rust binary and validated against the strict Python schemas.
 - `schema/` — the machine authority: framing, methods, results, and
@@ -133,6 +144,11 @@ table:
   every request and response frame (LF terminator included, one
   physical line per frame; the same unit for both directions) and
   reports the per-method maximum request and response size.
+- Every PASS case entry also carries the per-case `file_kinds`
+  lineage (relative artifact path -> kind and the acting
+  `actor.method` created_by/opened_by lists); `check_kind_coverage.py`
+  fails the evidence battery when a required kind has zero observed
+  evidence across the matrix and crash reports.
 
 ### Step-5 product-interface gates
 
@@ -142,10 +158,14 @@ table:
 - `crash_harness.py` — process-level interruption proof at the product
   interface: drives the normal JSON-RPC client (reusing `run.py`'s
   service and fixture code — no production test hook), kills the
-  producer at a durable engine marker mid-`current.publish` and
-  mid-`database.initialize_live`, then proves with both consumer
-  binaries in both directions that resolution is truthful, residue is
-  bounded, and reopen succeeds:
+  producer at a durable engine marker — the reservation block
+  mid-`current.publish`, the creating-state sidecar
+  mid-`database.initialize_live`, and the CRC-valid authorized-scratch
+  header mid-`recover` — then proves with both consumer binaries in
+  both directions that resolution is truthful, residue is bounded,
+  and reopen succeeds. Scenario A3 is the foreign-destination
+  negative control: a poisoned destination must classify `foreign`
+  against the reservation digest.
 
 ```bash
 RUST_IPRANGE=$PWD/v4/rust/target/release/iprange

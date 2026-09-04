@@ -60,12 +60,27 @@ Implementation status (2026-09-01):
   confirmation PASS; a third gate review removed the last routing
   fallback (single-authority model, sensitivity steps declare actors)
   and corrected the binary/review identity records. Milestone 3 is
-  re-closed. Milestone 4 (delivery step 5) is closed at 37721d8b:
-  the six-step publisher workflow, per-feed failure isolation,
-  cross-language mixed live coordination, the mechanical file-kind
-  ledger, the product-interface resource proof, and the
-  process-level crash harness are all qualified in both language
-  directions (records below), with the five-scope review and the
+  re-closed. Milestone 4 (delivery step 5) was closed at 37721d8b and
+  reopened on 2026-09-04 by an external gap review (six recorded
+  findings: successful recovery untested, weakened mixed-live
+  reclamation proof, file-kind ledger without per-case lineage and a
+  missing-kind gate, crash scenario A2 accepting a foreign
+  destination, disconnected downstream workflow steps, and an
+  overclaimed resource proof). The fix wave re-qualified the
+  milestone (records below): successful recovery is covered by the
+  new recover.successful case with captured inspect candidates,
+  mixed live coordination now pins a Rust and a Go reader
+  simultaneously and proves reclamation waits for the last close
+  (aliased captures), the ledger keeps per-case path/actor lineage
+  and `v4/cli/check_kind_coverage.py` fails the battery when a
+  required kind was never observed, crash A2 compares the
+  reservation digest (with the new A3 foreign-destination negative
+  control) and the new C scenario proves authorized-scratch
+  durability at a CRC-valid header marker, the publisher workflow's
+  downstream aggregation/join/algebra consume the workflow-built
+  live feed DB, and the resource record keeps its NOT-PROVEN items
+  explicit. Milestone 4 is re-closed at the final revision of this
+  fix wave (records below), with the five-scope review and the
   glm-5.3-responses whole-milestone review PASS at the exact final
   tree. Delivery step 6 (consolidated benchmark harness and measured
   ceilings) is the next milestone, recorded below.
@@ -3289,7 +3304,15 @@ f0e242ad):
   over executed steps only) and `frame_sizes` (per-method max
   request/response wire bytes measured by the JSON-RPC client). The
   ledger is byte-identical between the Rust and Go matrices and has
-  zero `unknown` files.
+  zero `unknown` files. Every PASS case entry also carries its
+  per-case `file_kinds` lineage (relative artifact path -> kind and
+  the acting "actor.method" created_by/opened_by lists), so the
+  producer/consumer identity survives the root aggregation. The
+  kind-universe completeness gate (`v4/cli/check_kind_coverage.py`)
+  reads every matrix report and the crash report and fails the
+  evidence battery when any required artifact kind (`v4_main`,
+  `live_sidecar`, `publication_reservation`, `authorized_scratch`,
+  `adapter_output`, `metadata_delivery`) was never observed.
 - W2 resource proof (v4/cli/cases/resource.limits.json,
   v4/cli/resource-record.md): a 134-step consumer case proving at the
   product boundary, in both languages: the complete 9-member
@@ -3318,11 +3341,14 @@ f0e242ad):
   through both binaries; (5) one-scan aggregation
   (`query.overlaps`), both joins (`join.direct` against the
   producer-built live DB, `join.membership`), and `algebra.publish`
-  over the same membership fixture, with the same range/address
-  counters asserted identically across methods (4 ranges / 41
-  addresses in overlaps, join left side, join membership side and
-  algebra source), plus consumer open of the published algebra
-  output; (6) live snapshot + resolve + consumer read-back,
+  over the workflow-built live feed DB (the named-feed database of
+  step 3), with the same range/address counters asserted identically
+  across methods (3 ranges / 31 addresses in overlaps, join left
+  side, join membership side and algebra source), plus consumer open
+  of the published algebra output; the downstream steps consume the
+  artifacts this workflow produced (no fixture substitution for the
+  aggregation/algebra surface); (6) live snapshot + resolve +
+  consumer read-back,
   `validate` (0 findings), `recovery.inspect`, `database.reclaim`
   and `maintenance.list` (0 real entries at that point).
 - W4 mixed-live coordination (v4/cli/cases/mixed.live-coordination.json,
@@ -3361,10 +3387,18 @@ f0e242ad):
   (reservation=1, publication_temp=1; post-resolution 0/0/0);
   consumer reopens succeed after resolution (no half-published file
   ever opens; before resolution the destination is truthfully
-  not_started). 6/6 scenarios pass in both directions; the negative
-  control (consumer=/bin/false) fails 6/6; zero leftover processes.
-  Exact internal crash-point coverage remains with the SDK crash
-  gates as the SOW states.
+  not_started). The review wave (recorded below) added scenario A3
+  (foreign-destination negative control: after the kill the
+  destination is poisoned with a valid-but-unrelated v4 fixture and
+  must classify `foreign` against the reservation digest) and
+  scenario C (recover killed at the authorized-scratch marker: the
+  durable marker is the CRC-valid 128-byte ownership header, the
+  fresh producer lists and removes the abandoned scratch by attempt
+  ID, and the never-published recovery destination stays closed).
+  The final battery passes 10/10 scenarios in both directions; the
+  negative control (consumer=/bin/false) fails 10/10; zero leftover
+  processes. Exact internal crash-point coverage remains with the
+  SDK crash gates as the SOW states.
 
 Gate battery at HEAD f0e242ad (all under `nice`; evidence in
 v4/cli/evidence/): rust 37/37 (oracle 37), go 37/37 (oracle 37),
@@ -3461,7 +3495,11 @@ tests.d 100/100; go mmap trace PASS; rust mmap storage (343
 sources) and runtime PASS; crash harness 6/6 in both real
 directions with zero leftover processes; negative control 6/6 fail.
 
-### 2026-09-04 — milestone 4 close (delivery step 5 complete)
+### 2026-09-04 — milestone 4 close (delivery step 5 complete) [superseded by the reopen record below]
+
+Superseded annotation: the external gap review recorded below
+reopened this close on 2026-09-04; the fix wave and the re-close
+record supersede every "final" or "complete" claim of this section.
 
 - Final functional and evidence revision: 37721d8b (product source:
   v4/go at 3408c64c, v4/rust unchanged). Final record-only HEAD for
@@ -3516,6 +3554,148 @@ directions with zero leftover processes; negative control 6/6 fail.
   maintenance.remove, windows_housekeeping kind) is the next
   milestone in this SOW; SOW-0030 remains the engine performance
   tracker.
+
+### 2026-09-04 — milestone 4 reopened by the external gap review, fix wave, and re-close
+
+An external adversarial review of the milestone-4 close (revision
+c10cad04) returned FAIL with six verified findings.  Each finding was
+confirmed against the committed evidence before the fix wave; none
+was accepted on authority.
+
+1. P1 — Successful recovery is not tested.  The delivered workflow
+   stopped at `recovery.inspect`, and the only `recover` invocation
+   used fabricated identities and expected the
+   `recovery_candidate_changed` failure (validate.recover.json);
+   the SOW still claimed successful recovery was qualified.
+   Dispose: new case `v4/cli/cases/recover.successful.json` (both
+   actors, passes all four matrices) validates a truncated final-page
+   v4 file (`valid=false`, findings 2, one unbounded unknown
+   subgraph), captures the exact inspect candidate through the new
+   aliased capture syntax (`{"name": "candidate", "path":
+   "candidates[0]"}`), recovers with the captured candidate
+   (publication "published"; deterministic recovery report:
+   catalog 4 accepted, ranges 4, membership 3, 41 verified
+   addresses, 1 io-unreadable page), and the consumer reopens the
+   recovered file and reads back the preserved membership content
+   (feeds "alpha" on 192.0.2.0 and 198.51.100.35).
+2. P1 — The mixed-live reclamation contract was weakened.  The
+   delivered case pinned one consumer reader and reclaimed only
+   after its close; the SOW recorded the reduction (one capture slot
+   per result path) as an implementation constraint, which is not a
+   product decision.  Dispose: the runner and case schema now accept
+   aliased captures (items may be `{"name", "path"}`; pointers
+   support `[index]` list steps).  mixed.live-coordination.json now
+   opens a consumer AND a producer reader on generation 1,
+   `database.reclaim` returns `no_change` while both are pinned
+   (before and after two producer commits to generations 2 and 3),
+   both pinned readers still observe generation 1, closing the
+   consumer reader alone does not enable reclamation (the producer
+   reader still pins), and only after the last reader closes does
+   reclamation commit (transaction 4, 1 page).  Verified
+   independently on both product binaries before the case was
+   written.
+3. P1 — The file-kind ledger cannot prove its acceptance claim.
+   Case ledgers were merged into a root aggregate (losing case,
+   actor, path, and producer/consumer lineage), transient files were
+   invisible by design, no completeness gate compared observed kinds
+   against the required universe, and the mixed evidence never
+   observed reservations or authorized scratch.  Dispose: every PASS
+   case entry now carries its per-case `file_kinds` lineage
+   (relative path -> kind, `actor.method` created_by/opened_by
+   lists); the new `v4/cli/check_kind_coverage.py` gate reads all
+   matrix reports and the crash report and fails the battery when
+   any required kind (`v4_main`, `live_sidecar`,
+   `publication_reservation`, `authorized_scratch`,
+   `adapter_output`, `metadata_delivery`) has zero observed
+   evidence; retained reservations (crash A1/A2/A3) and abandoned
+   scratch (crash C) now contribute per-scenario kind evidence.
+4. P1 — Crash scenario A2 accepted any foreign file as the completed
+   attempt.  `classify_destination` treated every existing
+   non-prior file as `attempt_complete` without comparing the
+   reservation digest; an adversarial probe with arbitrary foreign
+   bytes reproduced the defect (the committed A2 evidence had
+   coincidentally observed `prior_complete`).  Dispose:
+   `classify_destination` now takes the reservation-recorded output
+   SHA-512 and returns `foreign` for any non-prior digest mismatch;
+   the A2 call site was also fixed to read the reservation from the
+   per-scenario work directory (it previously passed the shared
+   base directory, so the digest was never actually compared); new
+   scenario A3 poisons the crash-left destination with a
+   valid-but-unrelated v4 fixture and requires the `foreign`
+   classification as a negative control.
+5. P2 — The "complete workflow" was partly disconnected.  The
+   aggregation, membership join, and algebra steps consumed a
+   fixture-created membership file instead of the membership
+   database the workflow itself built.  Dispose: steps 37-40 of
+   workflow.publisher.json now consume the workflow-built live feed
+   DB (`feeddb.iprange`); every exported counter (overlaps 3 ranges
+   / 31 addresses / 1 pair; join.direct 31 mapped / 0 unmapped;
+   join.membership 3 left ranges / 11 overlap; algebra union 2
+   output ranges / 31 addresses) was re-derived from the connected
+   workflow and asserted identically in Go and Rust; the
+   aggregation/algebra surface no longer uses any fixture.
+6. P2 — The resource qualification was explicitly incomplete while
+   the close record claimed the resource proof complete.
+   Dispose: the resource record keeps its four NOT-PROVEN items
+   explicit (queued >16-in-flight `server_busy` race, -32001
+   over-limit close path, real-reservation-nonce
+   `maintenance.remove`, `windows_housekeeping` kind) and the
+   milestone-4 close record below does not claim them; the C
+   scenario additionally proves `maintenance.remove` against a real
+   abandoned-scratch attempt ID (list -> remove -> durable absent),
+   which moves the scratch half of the maintenance-removal contract
+   from NOT PROVEN to proven; the reservation-nonce half remains
+   step-6 territory.
+
+Supporting framework fixes in the same wave:
+
+- The base64 fixture branch tolerates binary blobs (a damaged v4
+  fixture is embedded in the recovery case; it was previously
+  decoded as UTF-8 text unconditionally).
+- The crash harness waits for the scratch durability marker: a
+  scratch file counts as durable only with its complete 128-byte
+  ownership header, whose CRC-32C (computed over the whole header
+  with the CRC field zeroed, standard reflected Castagnoli check
+  value 0xe3069283) validates; a kill at a partial header would
+  leave an unremovable lookalike, which is not the tested contract.
+- Capture names must be unique within one step; aliases make
+  multi-handle cases expressible.
+
+Re-close evidence at the final revision of this wave (all under
+`nice`; evidence regenerated in v4/cli/evidence/):
+
+- Matrices: rust 38/38 (oracle 37), go 38/38 (oracle 37),
+  rust_to_go and go_to_rust 14 executed / 24 skipped (oracle 22)
+  per direction, 0 failed.  The corpus is 38 case files: the
+  milestone-3 surface plus resource.limits, workflow.publisher
+  (connected), mixed.live-coordination (dual pinned readers), and
+  recover.successful.
+- Crash harness: 10/10 scenarios pass in both directions (A1, A2,
+  A3, B, C; rust-to-go and go-to-rust), zero leftover processes;
+  the negative control (consumer=/bin/false) fails 10/10 with no
+  false pass.  crash.json and crash-negative.json carry the
+  per-scenario kind evidence.
+- Kind-universe gate (`nice python3 v4/cli/check_kind_coverage.py
+  --matrix ... --crash ...`): PASS; every required kind has
+  observed evidence (v4_main, live_sidecar,
+  publication_reservation, authorized_scratch, adapter_output,
+  metadata_delivery).
+- Golden corpus 53 PASS; sensitivity gate 14 modes PASS;
+  `nice go -C v4/go test ./...` and `-tags v4work` PASS; go vet
+  clean; gofmt clean; `env IPRANGE_BIN=<go product>
+  nice ./run-tests.sh` 100/100 PASS; go mmap trace PASS; rust mmap
+  storage (343 sources) and runtime PASS; schema module self-tests
+  and the runner self-test PASS.  Measured step-5 gate cost stays
+  within the resource budget (~1.5-2 min wall including the crash
+  battery under `nice`).
+- Product identity: unchanged by this wave (the fixes are external
+  framework, cases, and records; no product source changed).
+- Outcome: milestone 4 (delivery step 5) is re-closed at the final
+  revision of this wave with the five-scope review and the
+  glm-5.3-responses whole-milestone review PASS recorded below at
+  the exact final tree.  The four resource NOT-PROVEN items remain
+  explicitly owned by delivery step 6 (together with the benchmark
+  harness), exactly as recorded in the milestone-5 start section.
 
 ### 2026-09-04 — milestone 5 starts (delivery step 6: consolidated benchmark harness and measured ceilings)
 

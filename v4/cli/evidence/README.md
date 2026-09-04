@@ -13,31 +13,47 @@ Produced 2026-09-04 on the Linux workstation (x86_64) with:
   - worker SHA-256 `16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e`
 - Fixture tool: `v4/rust/target/release/examples/v4-fixture`.
 
+The external gap review reopened the milestone-4 close on 2026-09-04;
+this evidence set is regenerated at the fix-wave revision (external
+framework, cases, and records only - no product source changed).
+
 All commands ran under `nice`.
 
 ## Files
 
 - `matrix-rust.json`, `matrix-go.json` — single-language matrices,
-  37 case files (34 milestone-3 cases plus `resource.limits`,
-  `workflow.publisher`, `mixed.live-coordination`): 37 passed,
-  0 failed in both languages; oracle checks 37.
+  38 case files (the milestone-3 surface plus `resource.limits`,
+  `workflow.publisher` with its downstream steps connected to the
+  workflow-built live feed DB, `mixed.live-coordination` with two
+  simultaneously pinned readers, and `recover.successful`): 38
+  passed, 0 failed in both languages; oracle checks 37.
 - `matrix-rust_to_go.json`, `matrix-go_to_rust.json` — two-binary
-  cross-language matrices: 13 executed (both-actor cases), 24 skipped
-  (single-actor cases), 0 failed, oracle checks 22, in both directions.
-  Every report carries the per-actor binary SHA-256 and executed-step
-  counts, the mechanical `file_kinds` ledger and the per-method
-  `frame_sizes` maxima.
+  cross-language matrices: 14 executed (both-actor cases), 24
+  skipped (single-actor cases), 0 failed, oracle checks 22, in both
+  directions.  Every report carries the per-actor binary SHA-256 and
+  executed-step counts, the mechanical `file_kinds` ledger (root
+  aggregate), the per-case `file_kinds` lineage (relative path ->
+  kind with `actor.method` created_by/opened_by lists) and the
+  per-method `frame_sizes` maxima.
 - `crash.json` — `iprange-cli-crash-report-v1` from
   `v4/cli/crash_harness.py` in both directions (producer=rust with
-  consumer=go, producer=go with consumer=rust; the harness swaps the
-  binaries per direction): 6/6 scenarios pass (mid-`current.publish`
-  and mid-`database.initialize_live` SIGKILL, truthful resolution,
-  bounded residue, clean reopen), zero leftover processes. Each
-  scenario records its own producer/consumer binary paths.
-- `crash-negative.json` — the same harness with one slot replaced by
-  `/bin/false`: 6/6 scenarios fail in both directions, proving a
-  broken product binary (consumer in rust→go, producer in go→rust)
-  is never masked.
+  consumer=go, producer=go with consumer=rust): 10/10 scenarios pass
+  (A1/A2 publication interruption, A3 foreign-destination negative
+  control, B live-transition interruption, C recovery interruption
+  at the CRC-valid authorized-scratch marker; truthful resolution,
+  bounded residue, clean reopen, zero leftover processes).  Each
+  scenario records its producer/consumer binary paths and the
+  artifact kinds it observed.
+- `crash-negative.json` — the same harness with the consumer slot
+  replaced by `/bin/false`: 10/10 scenarios fail in both directions,
+  proving a broken product binary is never masked.
+- The artifact-kind gate re-reads all of the above:
+  `nice python3 v4/cli/check_kind_coverage.py --matrix matrix-rust.json
+  --matrix matrix-go.json --matrix matrix-rust_to_go.json --matrix
+  matrix-go_to_rust.json --crash crash.json` → PASS (every required
+  kind - `v4_main`, `live_sidecar`, `publication_reservation`,
+  `authorized_scratch`, `adapter_output`, `metadata_delivery` - has
+  observed evidence).
 
 ## Other gates at the same revision (evidence in the SOW record)
 

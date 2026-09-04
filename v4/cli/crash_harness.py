@@ -77,6 +77,7 @@ from schema import frame
 # Durable artifact names (binary-format-v4.md sections 15, 15A, 20.1).
 RESERVATION_PREFIX = ".iprange-reservation-"
 PUBLISH_TEMP_PREFIX = ".iprange-publish-"
+SCRATCH_PREFIX = ".iprange-scratch-"
 PRIVATE_TMP_SUFFIX = ".tmp"
 LIVE_SIDECAR_SUFFIX = ".readers"
 RESERVATION_MAGIC = b"IPR4RSV1"
@@ -301,15 +302,25 @@ def publish_params(feed, dest, policy):
     }
 
 
-def classify_destination(dest, prior_sha256, prior_sha512):
-    """Classify a crash-left destination: absent, prior, or attempt."""
+def classify_destination(dest, prior_sha256, prior_sha512, expected_sha512):
+    """Classify a crash-left destination.
+
+    Returns "absent" when the destination does not exist, "prior_complete"
+    when it is byte-identical to the pre-crash file, "attempt_complete"
+    when it carries the reservation-recorded output digest, and
+    "foreign" for any other existing file - the reservation is the sole
+    authority on what the interrupted attempt wrote, so a digest
+    mismatch is a scenario failure, never a completed attempt.
+    """
 
     if not os.path.isfile(dest):
         return "absent"
     if (sha256_file(dest) == prior_sha256
             and sha512_file(dest) == prior_sha512):
         return "prior_complete"
-    return "attempt_complete"
+    if expected_sha512 is not None and sha512_file(dest) == expected_sha512:
+        return "attempt_complete"
+    return "foreign"
 
 
 def assert_truthful(condition, message, scenario_report):
@@ -690,11 +701,13 @@ def scenario_a2(direction, producer, consumer, work_dir, scenario_report):
             len(residue["reservation"]) == 1,
             f"exactly one reservation must remain, got {residue['reservation']}",
             scenario_report)
-        dest_state = classify_destination(dest, prior_sha256, prior_sha512)
+        dest_state = classify_destination(
+            dest, prior_sha256, prior_sha512,
+            reservation_output_sha512(work))
         assert_truthful(
             dest_state in ("absent", "prior_complete", "attempt_complete"),
-            "destination must be absent, prior, or the complete attempt "
-            f"output (atomic namespace publication), got {dest_state}",
+            "destination must be absent, prior, or match the "
+            f"reservation-recorded output digest, got {dest_state!r}",
             scenario_report)
         scenario_report["destination_state"] = {
             "class": dest_state,
@@ -721,6 +734,112 @@ def scenario_a2(direction, producer, consumer, work_dir, scenario_report):
     return work
 
 
+SCRATCH_MAGIC = b"IPR4SCR1"
+
+
+def crc32c(data):
+    """CRC-32C (reflected Castagnoli), the exact v4 checksum."""
+
+    poly = 0x82F63B78
+    table = []
+    for index in range(256):
+        value = index
+        for _ in range(8):
+            value = (value >> 1) ^ poly if value & 1 else value >> 1
+        table.append(value)
+    crc = 0xFFFFFFFF
+    for byte in data:
+        crc = (crc >> 8) ^ table[(crc ^ byte) & 0xFF]
+    return crc ^ 0xFFFFFFFF
+
+
+def scratch_header_authentic(path):
+    """True when a scratch file carries its complete CRC-valid header.
+
+    binary-format-v4.md section 20.3: the 128-byte ownership header is
+    complete only when its CRC-32C field (last 4 bytes, computed over
+    the whole header with the field zeroed) validates.  An
+    unauthenticated partial header can never be removed by the engine
+    API, so the crash marker must wait for the durable complete
+    header: a kill before it would leave a lookalike that truthfully
+    refuses removal.
+    """
+
+    try:
+        with open(path, "rb") as stream:
+            head = stream.read(128)
+    except OSError:
+        return False
+    if len(head) < 128 or head[:8] != SCRATCH_MAGIC:
+        return False
+    if int.from_bytes(head[8:10], "little") != 1:
+        return False
+    if int.from_bytes(head[10:12], "little") != 128:
+        return False
+    stored = int.from_bytes(head[124:128], "little")
+    return crc32c(head[:124] + b"\x00" * 4) == stored
+
+
+def scratch_attempt_seen(scratch_dir):
+    """Poll callback: True when an authorized scratch file is durable.
+
+    The file must carry its complete authenticated ownership header:
+    a partial header would leave an unremovable lookalike after the
+    kill, which is not the durable-marker contract being tested.
+    """
+
+    if not os.path.isdir(scratch_dir):
+        return False
+    return any(
+        name.startswith(SCRATCH_PREFIX)
+        and scratch_header_authentic(os.path.join(scratch_dir, name))
+        for name in os.listdir(scratch_dir))
+
+
+def scratch_basenames(scratch_dir):
+    """Authorized scratch basenames under one directory (sorted)."""
+
+    if not os.path.isdir(scratch_dir):
+        return []
+    return sorted(
+        name for name in os.listdir(scratch_dir)
+        if name.startswith(SCRATCH_PREFIX)
+        and name.endswith(PRIVATE_TMP_SUFFIX))
+
+
+def scratch_attempt_id(basename):
+    """The scratch-attempt ID embedded in one scratch basename."""
+
+    body = basename[len(SCRATCH_PREFIX):-len(PRIVATE_TMP_SUFFIX)]
+    return body.rsplit("-", 1)[0]
+
+
+def recover_scratch_params(source, dest, scratch_dir, candidate):
+    """recover params with authorized scratch enabled.
+
+    The heap value is calibrated so the recovery page tables spill to
+    authorized scratch (durable within the operation) while the fixed
+    structures still fit; a larger heap completes without scratch and a
+    smaller one aborts before the tables are built.
+    """
+
+    return {
+        "source_mode": "immutable", "source_path": source,
+        "candidate": candidate, "destination": dest,
+        "recovery_budget": {"max_heap_bytes": "524288", "max_open_files": 4,
+                            "max_output_pages": "20000",
+                            "max_scratch_bytes": "536870912",
+                            "max_scratch_files": 8,
+                            "scratch_directory": scratch_dir},
+        "report_output": {"format": "jsonl", "path": os.path.join(
+            os.path.dirname(dest), "recovery.jsonl"),
+            "publication_policy": "fail_if_exists",
+            "result_budget": {"max_open_files": 3,
+                              "max_output_bytes": "67108864",
+                              "max_rows": "64"}},
+    }
+
+
 def sidecar_creating_state_seen(sidecar):
     """Poll callback: True when the sidecar has a valid creating header."""
 
@@ -733,6 +852,100 @@ def sidecar_creating_state_seen(sidecar):
                 and int.from_bytes(head[12:16], "little") == 0)
     except OSError:
         return False
+
+
+def scenario_a3(direction, producer, consumer, work_dir, fixture_tool,
+                scenario_report):
+    """Negative control: a foreign destination must classify as foreign.
+
+    Scenario A2 classifies a crash-left destination as absent, prior,
+    or the reservation-recorded attempt output.  This scenario poisons
+    the destination with a valid-but-unrelated v4 file after the kill
+    and proves the classifier returns ``foreign`` (the reservation is
+    the sole authority on what the interrupted attempt wrote; any
+    other bytes are a scenario failure, never a completed
+    publication).
+    """
+
+    work = os.path.join(work_dir, f"a3-{direction}-{uuid.uuid4().hex[:8]}")
+    os.makedirs(work)
+    prior_feed = os.path.join(work, "prior.txt")
+    write_interval_feed(prior_feed, PRIOR_FEED_LINE_COUNT)
+    dest = os.path.join(work, "published.iprange")
+    prior_params = publish_params(prior_feed, dest, "fail_if_exists")
+
+    builder = HarnessJsonRpcService(
+        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work)
+    try:
+        built = builder.call("1", "iprange.v1.current.publish", prior_params)
+        assert_truthful(
+            "error" not in built,
+            f"prior publish must succeed, got {built}", scenario_report)
+    finally:
+        builder.close()
+    prior_sha256 = sha256_file(dest)
+    prior_sha512 = sha512_file(dest)
+
+    feed = os.path.join(work, "feed.txt")
+    write_interval_feed(feed, FEED_LINE_COUNT)
+    replace_params = publish_params(feed, dest, "replace_existing")
+
+    producer_service = KillableJsonRpcService(
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+    try:
+        outcome, seen_ms, thread = call_with_worker(
+            producer_service, "9", "iprange.v1.current.publish",
+            replace_params, POLL_DEADLINE_SECONDS,
+            seen=lambda: reservation_seen(work, RESERVATION_MAGIC))
+        if seen_ms is None:
+            raise ScenarioFailure(
+                "durable reservation marker was not observed; "
+                f"worker outcome={outcome}")
+        scenario_report["marker_seen_ms"] = round(seen_ms, 1)
+        producer_service.kill_process_group()
+        thread.join(timeout=5)
+        residue = private_artifact_names(work)
+        assert_truthful(
+            len(residue["reservation"]) == 1,
+            f"exactly one reservation must remain, got {residue['reservation']}",
+            scenario_report)
+
+        # Poison the destination with a valid-but-unrelated v4 file
+        # (a never-published fixture database).  The classifier must
+        # reject it: the reservation digest is the only authority.
+        foreign = os.path.join(work, "foreign.iprange")
+        made = subprocess.run(
+            [fixture_tool, "direct-v4", foreign], capture_output=True,
+            timeout=300, env=child_environment())
+        if made.returncode != 0:
+            detail = made.stderr.decode("utf-8", "replace").strip()
+            raise ScenarioFailure(
+                f"v4-fixture direct-v4 failed with exit {made.returncode}: "
+                f"{detail}")
+        shutil.copyfile(foreign, dest)
+        dest_state = classify_destination(
+            dest, prior_sha256, prior_sha512,
+            reservation_output_sha512(work))
+        assert_truthful(
+            dest_state == "foreign",
+            "a destination that is neither prior nor the reservation "
+            f"output must classify foreign, got {dest_state!r}",
+            scenario_report)
+        scenario_report["destination_state"] = {
+            "class": dest_state,
+            "exists": os.path.isfile(dest),
+            "reservation_basename": residue["reservation"],
+            "publish_temp_basenames": residue["publish_temp"],
+        }
+
+        # The consumer treats the poisoned destination as its own
+        # (invalid) content: the probe reads it through the real
+        # consumer binary, which fails the /bin/false negative control.
+        probe_consumer_open(consumer, work, dest, scenario_report, False)
+    finally:
+        producer_service.kill_process_group()
+        producer_service.close()
+    return work
 
 
 def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
@@ -905,6 +1118,183 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
     return work
 
 
+
+def scenario_c(direction, producer, consumer, work_dir, scenario_report):
+    """Crash recover at the authorized-scratch marker.
+
+    Scenario A1/A2 prove interruption of the destination publication;
+    this scenario proves the other authorized external artifact:
+    recovery graph-safety scratch.  A recovery of a damaged large
+    database with a constrained heap spills its page tables to
+    authorized ``.iprange-scratch-<attempt>-<ordinal>.tmp`` files;
+    the harness kills the producer while that durable marker is live.
+    A fresh producer lists the abandoned scratch through
+    ``maintenance.list`` (where the attempt ID is the authority),
+    removes it, and the consumer still truthfully refuses to open the
+    never-published destination.
+    """
+
+    work = os.path.join(work_dir, f"c-{direction}-{uuid.uuid4().hex[:8]}")
+    os.makedirs(work)
+    scratch_dir = os.path.join(work, "scratch")
+    os.makedirs(scratch_dir)
+    feed = os.path.join(work, "feed.txt")
+    write_interval_feed(feed, FEED_LINE_COUNT)
+    source = os.path.join(work, "big.iprange")
+    params = publish_params(feed, source, "fail_if_exists")
+
+    builder = HarnessJsonRpcService(
+        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work)
+    try:
+        built = builder.call("1", "iprange.v1.current.publish", params)
+        assert_truthful(
+            "error" not in built,
+            f"big publish must succeed, got {built}", scenario_report)
+    finally:
+        builder.close()
+    # Damage the immutable main by cutting its final page; recovery is
+    # the only way to salvage the committed generation.
+    with open(source, "r+b") as stream:
+        stream.truncate(os.path.getsize(source) - 4096)
+
+    producer_service = KillableJsonRpcService(
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+    try:
+        inspect = producer_service.call(
+            "2", "iprange.v1.recovery.inspect",
+            {"mode": "immutable", "path": source,
+             "validation_budget": {"max_heap_bytes": "16777216",
+                                   "max_open_files": 4,
+                                   "max_scratch_bytes": "0",
+                                   "max_scratch_files": 0}})
+        assert_truthful(
+            "error" not in inspect,
+            f"recovery.inspect must succeed, got {inspect}",
+            scenario_report)
+        candidates = inspect["result"]["candidates"]
+        assert_truthful(
+            len(candidates) == 1,
+            f"exactly one recovery candidate expected, got {len(candidates)}",
+            scenario_report)
+        dest = os.path.join(work, "recovered.iprange")
+        outcome, seen_ms, thread = call_with_worker(
+            producer_service, "3", "iprange.v1.recover",
+            recover_scratch_params(source, dest, scratch_dir,
+                                   candidates[0]),
+            POLL_DEADLINE_SECONDS,
+            seen=lambda: scratch_attempt_seen(scratch_dir))
+        if seen_ms is None:
+            raise ScenarioFailure(
+                "authorized-scratch marker was not observed; "
+                f"worker outcome={outcome}")
+        scenario_report["marker_seen_ms"] = round(seen_ms, 1)
+        producer_service.kill_process_group()
+        thread.join(timeout=5)
+        scenario_report["kill_method"] = (
+            "SIGKILL process group at authorized-scratch marker")
+
+        on_disk = scratch_basenames(scratch_dir)
+        assert_truthful(
+            1 <= len(on_disk) <= 8,
+            f"abandoned scratch must be bounded by max_scratch_files, "
+            f"got {len(on_disk)} files: {on_disk}", scenario_report)
+        assert_truthful(
+            not os.path.isfile(dest),
+            "the recovery destination must never appear before the kill",
+            scenario_report)
+        residue = private_artifact_names(work)
+        scenario_report["destination_state"] = {
+            "class": "scratch_residue",
+            "scratch_basenames": on_disk,
+            "publish_temp_basenames": residue["publish_temp"],
+            "reservation_basenames": residue["reservation"],
+        }
+
+        resolver = HarnessJsonRpcService(
+            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work)
+        try:
+            # The fresh process lists exactly the on-disk abandoned
+            # scratch; the attempt ID embedded in the basename is the
+            # listed authority.
+            list_path = os.path.join(work, "scratch-list.jsonl")
+            reports, error = maintenance_reports(
+                resolver, scratch_dir, list_path, ["scratch"])
+            assert_truthful(
+                error is None,
+                f"maintenance.list scratch must succeed, got {error}",
+                scenario_report)
+            rows = []
+            if os.path.isfile(list_path):
+                with open(list_path, encoding="utf-8") as stream:
+                    for line in stream:
+                        line = line.strip()
+                        if line:
+                            rows.append(json.loads(line))
+            listed_ids = sorted(row["attempt_id"] for row in rows)
+            disk_ids = sorted(scratch_attempt_id(n) for n in on_disk)
+            assert_truthful(
+                count_kind(reports, "scratch") == len(on_disk)
+                and listed_ids == disk_ids,
+                "maintenance.list must report exactly the on-disk "
+                f"abandoned scratch: reports={reports} rows={rows} "
+                f"disk={on_disk}", scenario_report)
+            scenario_report["residue_bounded"] = {
+                "scratch_listed": len(rows),
+                "attempt_ids": listed_ids,
+                "reports": reports,
+            }
+
+            # Removal returns the directory to empty; a second list
+            # proves durable absence.
+            for row in rows:
+                removed = resolver.call(
+                    "4", "iprange.v1.maintenance.remove", {"entry": row})
+                assert_truthful(
+                    "error" not in removed,
+                    f"maintenance.remove must succeed, got {removed}",
+                    scenario_report)
+            assert_truthful(
+                scratch_basenames(scratch_dir) == [],
+                "removal must delete every abandoned scratch file",
+                scenario_report)
+
+            # The recovery output reservation/temp residue (if the kill
+            # landed after the output phase began) is bounded and also
+            # listable through the normal maintenance kinds.
+            work_residue = private_artifact_names(work)
+            residue_reports, error = maintenance_reports(
+                resolver, work, os.path.join(work, "residue-list.jsonl"),
+                ["publication_temp", "reservation"])
+            assert_truthful(
+                error is None,
+                f"maintenance.list residue must succeed, got {error}",
+                scenario_report)
+            assert_truthful(
+                count_kind(residue_reports, "publication_temp")
+                == len(work_residue["publish_temp"])
+                and count_kind(residue_reports, "reservation")
+                == len(work_residue["reservation"]),
+                "maintenance residue counts must match the on-disk "
+                f"residue: reports={residue_reports} disk={work_residue}",
+                scenario_report)
+            scenario_report["residue_bounded"]["publication_temp"] = (
+                len(work_residue["publish_temp"]))
+            scenario_report["residue_bounded"]["reservation"] = (
+                len(work_residue["reservation"]))
+
+            # The consumer still truthfully refuses the never-published
+            # destination after the residue is gone.
+            if os.path.isfile(list_path):
+                os.remove(list_path)
+            probe_consumer_open(consumer, work, dest, scenario_report, True)
+        finally:
+            resolver.close()
+    finally:
+        producer_service.kill_process_group()
+        producer_service.close()
+    return work
+
+
 def no_leftover_processes():
     """Return every owned product PID that is still alive.
 
@@ -962,6 +1352,38 @@ def executable(value, label):
     if not os.path.isfile(value) or not os.access(value, os.X_OK):
         raise SystemExit(f"{label} is not an absolute executable file: {value}")
     return os.path.realpath(value)
+
+
+
+
+def observed_kinds(scenario_report):
+    """Mechanical artifact-kind evidence recorded by one crash scenario.
+
+    The gate battery derives the kind-universe coverage from these
+    per-scenario lists together with the declarative matrices' file
+    ledgers: publication crashes observe the retained reservation and
+    private publication output, the live-transition crash observes the
+    sidecar, and the recovery crash observes authorized scratch.
+    """
+
+    kinds = []
+    state = scenario_report.get("destination_state") or {}
+    if state.get("reservation_basenames"):
+        kinds.append("publication_reservation")
+    if state.get("reservation_basename"):
+        kinds.append("publication_reservation")
+    if state.get("publish_temp_basenames"):
+        kinds.append("publication_temp")
+    if state.get("scratch_basenames"):
+        kinds.append("authorized_scratch")
+    if state.get("class") in (
+            "absent_after_crash", "attempt_complete_after_crash",
+            "scratch_residue") or state.get("exists"):
+        kinds.append("v4_main")
+    if state.get("class") == "main_unchanged_sidecar_present":
+        kinds.append("live_sidecar")
+        kinds.append("v4_main")
+    return sorted(set(kinds))
 
 
 def main():
@@ -1027,9 +1449,15 @@ def main():
                 ("A2", lambda report, w=work_base, p=producer_bin,
                  c=consumer_bin: scenario_a2(
                      direction, p, c, w, report)),
+                ("A3", lambda report, w=work_base, p=producer_bin,
+                 c=consumer_bin: scenario_a3(
+                     direction, p, c, w, fixture_tool, report)),
                 ("B", lambda report, w=work_base, p=producer_bin,
                  c=consumer_bin: scenario_b(
-                     direction, p, c, w, fixture_tool, report))):
+                     direction, p, c, w, fixture_tool, report)),
+                ("C", lambda report, w=work_base, p=producer_bin,
+                 c=consumer_bin: scenario_c(
+                     direction, p, c, w, report))):
             scenario_report = {
                 "scenario": f"{name}.{direction}",
                 "producer": f"{producer_name}:{producer_bin}",
@@ -1044,11 +1472,13 @@ def main():
                 "pass": False,
                 "assertions": [],
                 "failures": [],
+                "kinds": [],
             }
             work_dirs.append(work_base)
             try:
                 runner(scenario_report)
                 scenario_report["pass"] = True
+                scenario_report["kinds"] = observed_kinds(scenario_report)
                 print(f"PASS {scenario_report['scenario']}")
             except (ScenarioFailure, AssertionError, OSError,
                     ValueError) as exc:

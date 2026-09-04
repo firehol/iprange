@@ -56,7 +56,7 @@
         "iprange.v1.system.describe",
         "iprange.v1.validate"
       ],
-      "path": "/tmp/iprange-qual/iprange",
+      "path": "/tmp/iprange-go",
       "result": {
         "api_version": "1",
         "export_formats": [
@@ -149,227 +149,975 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9"
+      "sha256": "13db6deb31945fe95fb82293e207c5e8d2d5034109ce86b4d7ee797a00e51ceb"
+    },
+    "rust": {
+      "available": true,
+      "methods": [
+        "iprange.v1.algebra.compare",
+        "iprange.v1.algebra.count",
+        "iprange.v1.algebra.publish",
+        "iprange.v1.commit.resolve",
+        "iprange.v1.current.publish",
+        "iprange.v1.database.create",
+        "iprange.v1.database.create.resolve",
+        "iprange.v1.database.info",
+        "iprange.v1.database.initialize_live",
+        "iprange.v1.database.live_residue.resolve",
+        "iprange.v1.database.live_transition.resolve",
+        "iprange.v1.database.metadata.get",
+        "iprange.v1.database.metadata.replace",
+        "iprange.v1.database.reclaim",
+        "iprange.v1.database.reset_live",
+        "iprange.v1.direct.replace",
+        "iprange.v1.export",
+        "iprange.v1.feeds.create",
+        "iprange.v1.feeds.delete",
+        "iprange.v1.feeds.import",
+        "iprange.v1.feeds.rename",
+        "iprange.v1.feeds.replace",
+        "iprange.v1.history.project",
+        "iprange.v1.join.direct",
+        "iprange.v1.join.membership",
+        "iprange.v1.maintenance.list",
+        "iprange.v1.maintenance.remove",
+        "iprange.v1.publication.inspect",
+        "iprange.v1.publication.residue.remove",
+        "iprange.v1.publication.resolve",
+        "iprange.v1.query.cardinalities",
+        "iprange.v1.query.matching_feeds",
+        "iprange.v1.query.overlaps",
+        "iprange.v1.reader.close",
+        "iprange.v1.reader.feeds.close",
+        "iprange.v1.reader.feeds.next",
+        "iprange.v1.reader.feeds.open",
+        "iprange.v1.reader.info",
+        "iprange.v1.reader.lookup",
+        "iprange.v1.reader.matching_feeds",
+        "iprange.v1.reader.metadata",
+        "iprange.v1.reader.open",
+        "iprange.v1.reader.ranges.close",
+        "iprange.v1.reader.ranges.next",
+        "iprange.v1.reader.ranges.open",
+        "iprange.v1.recover",
+        "iprange.v1.recovery.inspect",
+        "iprange.v1.retention.first_seen.refresh",
+        "iprange.v1.retention.last_seen.refresh",
+        "iprange.v1.snapshot",
+        "iprange.v1.system.describe",
+        "iprange.v1.validate"
+      ],
+      "path": "/home/costa/src/firehol/iprange/v4/rust/target/release/iprange",
+      "result": {
+        "api_version": "1",
+        "export_formats": [
+          "netset",
+          "ipset",
+          "ranges",
+          "csv",
+          "jsonl",
+          "legacy_binary"
+        ],
+        "families": [
+          "ipv4",
+          "ipv6"
+        ],
+        "fault_worker": {
+          "available": true,
+          "protocol": "1"
+        },
+        "format": "iprange-v4-phase1-unsigned",
+        "implementation": "rust",
+        "jsonrpc_version": "2.0",
+        "limits": {
+          "batch_requests": 16,
+          "cursor_handles": 64,
+          "cursor_records": 4096,
+          "input_frame_bytes": "1048576",
+          "lookup_addresses": 4096,
+          "output_frame_bytes": "1048576",
+          "queued_requests": 16,
+          "reader_handles": 64,
+          "response_object_bytes": "65000"
+        },
+        "method": "iprange.v1.system.describe",
+        "methods": [
+          "iprange.v1.algebra.compare",
+          "iprange.v1.algebra.count",
+          "iprange.v1.algebra.publish",
+          "iprange.v1.commit.resolve",
+          "iprange.v1.current.publish",
+          "iprange.v1.database.create",
+          "iprange.v1.database.create.resolve",
+          "iprange.v1.database.info",
+          "iprange.v1.database.initialize_live",
+          "iprange.v1.database.live_residue.resolve",
+          "iprange.v1.database.live_transition.resolve",
+          "iprange.v1.database.metadata.get",
+          "iprange.v1.database.metadata.replace",
+          "iprange.v1.database.reclaim",
+          "iprange.v1.database.reset_live",
+          "iprange.v1.direct.replace",
+          "iprange.v1.export",
+          "iprange.v1.feeds.create",
+          "iprange.v1.feeds.delete",
+          "iprange.v1.feeds.import",
+          "iprange.v1.feeds.rename",
+          "iprange.v1.feeds.replace",
+          "iprange.v1.history.project",
+          "iprange.v1.join.direct",
+          "iprange.v1.join.membership",
+          "iprange.v1.maintenance.list",
+          "iprange.v1.maintenance.remove",
+          "iprange.v1.publication.inspect",
+          "iprange.v1.publication.residue.remove",
+          "iprange.v1.publication.resolve",
+          "iprange.v1.query.cardinalities",
+          "iprange.v1.query.matching_feeds",
+          "iprange.v1.query.overlaps",
+          "iprange.v1.reader.close",
+          "iprange.v1.reader.feeds.close",
+          "iprange.v1.reader.feeds.next",
+          "iprange.v1.reader.feeds.open",
+          "iprange.v1.reader.info",
+          "iprange.v1.reader.lookup",
+          "iprange.v1.reader.matching_feeds",
+          "iprange.v1.reader.metadata",
+          "iprange.v1.reader.open",
+          "iprange.v1.reader.ranges.close",
+          "iprange.v1.reader.ranges.next",
+          "iprange.v1.reader.ranges.open",
+          "iprange.v1.recover",
+          "iprange.v1.recovery.inspect",
+          "iprange.v1.retention.first_seen.refresh",
+          "iprange.v1.retention.last_seen.refresh",
+          "iprange.v1.snapshot",
+          "iprange.v1.system.describe",
+          "iprange.v1.validate"
+        ],
+        "platform": "linux",
+        "platform_result_fields": [],
+        "product": "iprange",
+        "product_version": "0.0.0"
+      },
+      "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8"
     }
   },
   "cases": [
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "algebra.compare",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "algebra.count",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "algebra.oracle",
       "oracle_checks": 2,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "algebra-out.iprange": {
+          "created_by": [
+            "producer.iprange.v1.algebra.publish"
+          ],
+          "kind": "v4_main",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "algebra.publish",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "cancel.unknown_id",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "database.create_bad_directory",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "metadata.json": {
+          "created_by": [
+            "consumer.iprange.v1.database.metadata.get"
+          ],
+          "kind": "metadata_delivery",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "database.info-metadata-v4",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "meta.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.database.metadata.replace",
+            "consumer.iprange.v1.database.metadata.get"
+          ]
+        },
+        "meta.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "database.metadata",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "database.metadata.replace_bad_path",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "first_seen.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.retention.first_seen.refresh"
+          ]
+        },
+        "first_seen.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "last_seen.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.retention.last_seen.refresh",
+            "producer.iprange.v1.database.reclaim"
+          ]
+        },
+        "last_seen.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "removals.jsonl": {
+          "created_by": [
+            "producer.iprange.v1.retention.first_seen.refresh"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "direct.retention",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "out.netset": {
+          "created_by": [
+            "consumer.iprange.v1.export"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "export.netset",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "feeddb.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.feeds.create",
+            "producer.iprange.v1.feeds.replace",
+            "producer.iprange.v1.feeds.rename",
+            "producer.iprange.v1.feeds.delete",
+            "producer.iprange.v1.feeds.import"
+          ]
+        },
+        "feeddb.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "feeds.lifecycle",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "histdb.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.feeds.create",
+            "producer.iprange.v1.history.project",
+            "producer.iprange.v1.history.project",
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "histdb.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "last_seen.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.history.project",
+            "producer.iprange.v1.history.project"
+          ]
+        },
+        "last_seen.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "history.project",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "join.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.join.direct"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "zerodb.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "consumer.iprange.v1.join.direct"
+          ]
+        },
+        "zerodb.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "join.direct",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "join.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.join.membership"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "join.membership",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "credb.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.feeds.create",
+            "producer.iprange.v1.commit.resolve",
+            "producer.iprange.v1.database.create.resolve",
+            "producer.iprange.v1.database.reset_live"
+          ]
+        },
+        "credb.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "membership.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.initialize_live"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "live.lifecycle",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "direct.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.initialize_live"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "live.transition",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "entries.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.maintenance.list"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "reclaim.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.database.reclaim"
+          ]
+        },
+        "reclaim.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "maintenance",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "created.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "created.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "mixed.direct-created",
       "oracle_checks": 4,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "live.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.reader.open",
+            "producer.iprange.v1.reader.open",
+            "producer.iprange.v1.database.reclaim",
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.database.info",
+            "producer.iprange.v1.database.reclaim",
+            "producer.iprange.v1.database.reclaim",
+            "producer.iprange.v1.database.reclaim"
+          ]
+        },
+        "live.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "mixed.live-coordination",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "created-membership.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.feeds.create",
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "created-membership.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "mixed.membership-created",
       "oracle_checks": 4,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "db.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "consumer.iprange.v1.snapshot"
+          ]
+        },
+        "db.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "snap.iprange": {
+          "created_by": [
+            "consumer.iprange.v1.snapshot"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.reader.open"
+          ]
+        }
+      },
       "matrix": "go",
       "name": "mixed.transform-created",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "published.iprange": {
+          "created_by": [
+            "producer.iprange.v1.current.publish"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.publication.inspect",
+            "producer.iprange.v1.publication.resolve"
+          ]
+        }
+      },
       "matrix": "go",
       "name": "publication",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "cardinalities.csv": {
+          "created_by": [
+            "consumer.iprange.v1.query.cardinalities"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "query.cardinalities",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "matching.csv": {
+          "created_by": [
+            "consumer.iprange.v1.query.matching_feeds"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "query.matching_feeds",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "overlaps.csv": {
+          "created_by": [
+            "consumer.iprange.v1.query.overlaps"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "query.overlaps",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "reader.direct-v4",
       "oracle_checks": 5,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "reader.info",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "reader.lookup_bad_handle",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "reader.membership-v4",
       "oracle_checks": 4,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "reader.open_missing",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "reader.structured-v4",
       "oracle_checks": 4,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "findings.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.validate"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "recovered.iprange": {
+          "created_by": [
+            "producer.iprange.v1.recover"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "recovery.jsonl": {
+          "created_by": [
+            "producer.iprange.v1.recover"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        }
+      },
+      "matrix": "go",
+      "name": "recover.successful",
+      "oracle_checks": 0,
+      "status": "PASS"
+    },
+    {
+      "file_kinds": {},
       "matrix": "go",
       "name": "resource.limits",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "snap.iprange": {
+          "created_by": [
+            "producer.iprange.v1.snapshot"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.publication.resolve",
+            "consumer.iprange.v1.reader.open"
+          ]
+        }
+      },
       "matrix": "go",
       "name": "snapshot",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {},
       "matrix": "go",
       "name": "system.describe",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "findings.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.validate"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        }
+      },
       "matrix": "go",
       "name": "validate.recover",
       "oracle_checks": 0,
       "status": "PASS"
     },
     {
+      "file_kinds": {
+        "algebra-out.iprange": {
+          "created_by": [
+            "producer.iprange.v1.algebra.publish"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "entries.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.maintenance.list"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "feeddb.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.feeds.create",
+            "producer.iprange.v1.feeds.create",
+            "producer.iprange.v1.feeds.replace",
+            "producer.iprange.v1.feeds.replace",
+            "consumer.iprange.v1.reader.open",
+            "producer.iprange.v1.history.project",
+            "consumer.iprange.v1.reader.open",
+            "consumer.iprange.v1.query.overlaps",
+            "consumer.iprange.v1.join.direct",
+            "consumer.iprange.v1.join.membership",
+            "producer.iprange.v1.algebra.publish",
+            "producer.iprange.v1.snapshot"
+          ]
+        },
+        "feeddb.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "findings.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.validate"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "first_seen.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.retention.first_seen.refresh",
+            "consumer.iprange.v1.reader.open"
+          ]
+        },
+        "first_seen.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "genesis.iprange": {
+          "created_by": [
+            "producer.iprange.v1.current.publish"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.feeds.replace"
+          ]
+        },
+        "jmemb.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.join.membership"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "join.jsonl": {
+          "created_by": [
+            "consumer.iprange.v1.join.direct"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "last_seen.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.direct.replace",
+            "producer.iprange.v1.retention.last_seen.refresh",
+            "consumer.iprange.v1.reader.open",
+            "producer.iprange.v1.history.project",
+            "consumer.iprange.v1.join.direct",
+            "producer.iprange.v1.database.reclaim"
+          ]
+        },
+        "last_seen.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": []
+        },
+        "overlaps.csv": {
+          "created_by": [
+            "consumer.iprange.v1.query.overlaps"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "published.iprange": {
+          "created_by": [
+            "producer.iprange.v1.current.publish"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.publication.resolve",
+            "consumer.iprange.v1.reader.open",
+            "producer.iprange.v1.retention.first_seen.refresh",
+            "producer.iprange.v1.retention.last_seen.refresh"
+          ]
+        },
+        "removals.jsonl": {
+          "created_by": [
+            "producer.iprange.v1.retention.first_seen.refresh"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
+        },
+        "snap.iprange": {
+          "created_by": [
+            "producer.iprange.v1.snapshot"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.publication.resolve",
+            "consumer.iprange.v1.reader.open",
+            "consumer.iprange.v1.validate",
+            "consumer.iprange.v1.recovery.inspect"
+          ]
+        }
+      },
       "matrix": "go",
       "name": "workflow.publisher",
       "oracle_checks": 14,
@@ -380,15 +1128,16 @@
     "v4/cli/run.py",
     "--matrix",
     "go",
+    "--rust",
+    "/home/costa/src/firehol/iprange/v4/rust/target/release/iprange",
     "--go",
-    "/tmp/iprange-qual/iprange",
+    "/tmp/iprange-go",
     "--fixture-tool",
     "/home/costa/src/firehol/iprange/v4/rust/target/release/examples/v4-fixture",
     "--work-dir",
-    "/tmp/w6c-go",
+    "/tmp/solwave/bat/go",
     "--json-report",
-    "/home/costa/src/firehol/iprange/v4/cli/evidence/matrix-go.json",
-    "--allow-skips"
+    "/tmp/solwave/bat/matrix-go.json"
   ],
   "environment_allowlist": [
     "PATH",
@@ -418,8 +1167,9 @@
         "iprange.v1.query.cardinalities": 1,
         "iprange.v1.query.matching_feeds": 1,
         "iprange.v1.query.overlaps": 2,
+        "iprange.v1.recover": 1,
         "iprange.v1.retention.first_seen.refresh": 2,
-        "iprange.v1.validate": 2
+        "iprange.v1.validate": 3
       },
       "opened_by": {}
     },
@@ -441,15 +1191,17 @@
         "iprange.v1.algebra.publish": 2,
         "iprange.v1.current.publish": 3,
         "iprange.v1.database.create": 16,
+        "iprange.v1.recover": 1,
         "iprange.v1.snapshot": 3
       },
       "opened_by": {
+        "iprange.v1.algebra.publish": 1,
         "iprange.v1.commit.resolve": 1,
         "iprange.v1.database.create.resolve": 1,
         "iprange.v1.database.info": 1,
         "iprange.v1.database.metadata.get": 1,
         "iprange.v1.database.metadata.replace": 1,
-        "iprange.v1.database.reclaim": 4,
+        "iprange.v1.database.reclaim": 7,
         "iprange.v1.database.reset_live": 1,
         "iprange.v1.direct.replace": 10,
         "iprange.v1.feeds.create": 6,
@@ -458,10 +1210,12 @@
         "iprange.v1.feeds.rename": 1,
         "iprange.v1.feeds.replace": 4,
         "iprange.v1.history.project": 6,
-        "iprange.v1.join.direct": 2,
+        "iprange.v1.join.direct": 3,
+        "iprange.v1.join.membership": 1,
         "iprange.v1.publication.inspect": 1,
         "iprange.v1.publication.resolve": 4,
-        "iprange.v1.reader.open": 13,
+        "iprange.v1.query.overlaps": 1,
+        "iprange.v1.reader.open": 15,
         "iprange.v1.recovery.inspect": 1,
         "iprange.v1.retention.first_seen.refresh": 3,
         "iprange.v1.retention.last_seen.refresh": 3,
@@ -476,118 +1230,118 @@
   },
   "frame_sizes": {
     "iprange.v1.algebra.compare": {
-      "max_request_bytes": 411,
+      "max_request_bytes": 419,
       "max_response_bytes": 338
     },
     "iprange.v1.algebra.count": {
-      "max_request_bytes": 545,
+      "max_request_bytes": 561,
       "max_response_bytes": 210
     },
     "iprange.v1.algebra.publish": {
-      "max_request_bytes": 735,
-      "max_response_bytes": 1350
+      "max_request_bytes": 742,
+      "max_response_bytes": 1428
     },
     "iprange.v1.cancel": {
       "max_request_bytes": 101
     },
     "iprange.v1.commit.resolve": {
-      "max_request_bytes": 514,
+      "max_request_bytes": 522,
       "max_response_bytes": 474
     },
     "iprange.v1.current.publish": {
-      "max_request_bytes": 676,
+      "max_request_bytes": 692,
       "max_response_bytes": 1276
     },
     "iprange.v1.database.create": {
-      "max_request_bytes": 309,
+      "max_request_bytes": 317,
       "max_response_bytes": 704
     },
     "iprange.v1.database.create.resolve": {
-      "max_request_bytes": 798,
+      "max_request_bytes": 806,
       "max_response_bytes": 203
     },
     "iprange.v1.database.info": {
-      "max_request_bytes": 207,
+      "max_request_bytes": 215,
       "max_response_bytes": 514
     },
     "iprange.v1.database.initialize_live": {
-      "max_request_bytes": 190,
+      "max_request_bytes": 198,
       "max_response_bytes": 668
     },
     "iprange.v1.database.live_residue.resolve": {
-      "max_request_bytes": 202,
+      "max_request_bytes": 210,
       "max_response_bytes": 456
     },
     "iprange.v1.database.live_transition.resolve": {
-      "max_request_bytes": 732,
+      "max_request_bytes": 740,
       "max_response_bytes": 673
     },
     "iprange.v1.database.metadata.get": {
-      "max_request_bytes": 398,
-      "max_response_bytes": 310
+      "max_request_bytes": 414,
+      "max_response_bytes": 318
     },
     "iprange.v1.database.metadata.replace": {
-      "max_request_bytes": 379,
+      "max_request_bytes": 387,
       "max_response_bytes": 547
     },
     "iprange.v1.database.reclaim": {
-      "max_request_bytes": 335,
+      "max_request_bytes": 343,
       "max_response_bytes": 590
     },
     "iprange.v1.database.reset_live": {
-      "max_request_bytes": 208,
+      "max_request_bytes": 216,
       "max_response_bytes": 752
     },
     "iprange.v1.direct.replace": {
-      "max_request_bytes": 441,
+      "max_request_bytes": 457,
       "max_response_bytes": 1071
     },
     "iprange.v1.export": {
-      "max_request_bytes": 426,
-      "max_response_bytes": 328
+      "max_request_bytes": 442,
+      "max_response_bytes": 336
     },
     "iprange.v1.feeds.create": {
-      "max_request_bytes": 482,
+      "max_request_bytes": 498,
       "max_response_bytes": 1131
     },
     "iprange.v1.feeds.delete": {
-      "max_request_bytes": 318,
+      "max_request_bytes": 326,
       "max_response_bytes": 543
     },
     "iprange.v1.feeds.import": {
-      "max_request_bytes": 401,
+      "max_request_bytes": 417,
       "max_response_bytes": 1063
     },
     "iprange.v1.feeds.rename": {
-      "max_request_bytes": 366,
+      "max_request_bytes": 374,
       "max_response_bytes": 541
     },
     "iprange.v1.feeds.replace": {
-      "max_request_bytes": 475,
+      "max_request_bytes": 491,
       "max_response_bytes": 1065
     },
     "iprange.v1.history.project": {
-      "max_request_bytes": 11613,
+      "max_request_bytes": 11629,
       "max_response_bytes": 1383
     },
     "iprange.v1.join.direct": {
-      "max_request_bytes": 620,
-      "max_response_bytes": 542
+      "max_request_bytes": 635,
+      "max_response_bytes": 609
     },
     "iprange.v1.join.membership": {
-      "max_request_bytes": 713,
-      "max_response_bytes": 547
+      "max_request_bytes": 728,
+      "max_response_bytes": 634
     },
     "iprange.v1.maintenance.list": {
-      "max_request_bytes": 438,
-      "max_response_bytes": 399
+      "max_request_bytes": 454,
+      "max_response_bytes": 407
     },
     "iprange.v1.maintenance.remove": {
       "max_request_bytes": 199,
       "max_response_bytes": 165
     },
     "iprange.v1.publication.inspect": {
-      "max_request_bytes": 158,
+      "max_request_bytes": 166,
       "max_response_bytes": 193
     },
     "iprange.v1.publication.residue.remove": {
@@ -595,20 +1349,20 @@
       "max_response_bytes": 202
     },
     "iprange.v1.publication.resolve": {
-      "max_request_bytes": 1288,
+      "max_request_bytes": 1296,
       "max_response_bytes": 1187
     },
     "iprange.v1.query.cardinalities": {
-      "max_request_bytes": 502,
-      "max_response_bytes": 395
+      "max_request_bytes": 518,
+      "max_response_bytes": 403
     },
     "iprange.v1.query.matching_feeds": {
-      "max_request_bytes": 492,
-      "max_response_bytes": 309
+      "max_request_bytes": 508,
+      "max_response_bytes": 317
     },
     "iprange.v1.query.overlaps": {
-      "max_request_bytes": 517,
-      "max_response_bytes": 383
+      "max_request_bytes": 524,
+      "max_response_bytes": 466
     },
     "iprange.v1.reader.close": {
       "max_request_bytes": 145,
@@ -643,7 +1397,7 @@
       "max_response_bytes": 155
     },
     "iprange.v1.reader.open": {
-      "max_request_bytes": 210,
+      "max_request_bytes": 218,
       "max_response_bytes": 504
     },
     "iprange.v1.reader.ranges.close": {
@@ -659,23 +1413,23 @@
       "max_response_bytes": 193
     },
     "iprange.v1.recover": {
-      "max_request_bytes": 832,
-      "max_response_bytes": 1357
+      "max_request_bytes": 873,
+      "max_response_bytes": 1801
     },
     "iprange.v1.recovery.inspect": {
-      "max_request_bytes": 300,
+      "max_request_bytes": 309,
       "max_response_bytes": 537
     },
     "iprange.v1.retention.first_seen.refresh": {
-      "max_request_bytes": 686,
-      "max_response_bytes": 1351
+      "max_request_bytes": 710,
+      "max_response_bytes": 1359
     },
     "iprange.v1.retention.last_seen.refresh": {
-      "max_request_bytes": 488,
+      "max_request_bytes": 504,
       "max_response_bytes": 1084
     },
     "iprange.v1.snapshot": {
-      "max_request_bytes": 397,
+      "max_request_bytes": 413,
       "max_response_bytes": 1181
     },
     "iprange.v1.system.describe": {
@@ -683,12 +1437,12 @@
       "max_response_bytes": 2275
     },
     "iprange.v1.validate": {
-      "max_request_bytes": 529,
-      "max_response_bytes": 775
+      "max_request_bytes": 548,
+      "max_response_bytes": 783
     }
   },
   "oracle_checks": 37,
-  "passed": 37,
+  "passed": 38,
   "platform": {
     "machine": "x86_64",
     "python": "3.14.7",

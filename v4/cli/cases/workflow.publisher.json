@@ -1740,8 +1740,8 @@
    "method": "iprange.v1.query.overlaps",
    "params": {
     "source": {
-     "path": "$WORK/membership.iprange",
-     "mode": "immutable"
+     "path": "$WORK/feeddb.iprange",
+     "mode": "live"
     },
     "selection": {
      "mode": "all"
@@ -1768,13 +1768,13 @@
      "path": {
       "$ignore": true
      },
-     "bytes": "35",
+     "bytes": "36",
      "rows": "1",
-     "sha256": "b682b77ee2080e3de8b9cb54f26cb965b025c45090a61f1a3ae4bcff615c6168"
+     "sha256": "09588bc9894db2636f717d1ba369b4ba0d6e98331332d6620e3061448292345e"
     },
     "report": {
-     "scanned_range_count": "4",
-     "scanned_addresses": "41",
+     "scanned_range_count": "3",
+     "scanned_addresses": "31",
      "feed_result_count": "2",
      "pair_result_count": "1"
     }
@@ -1782,7 +1782,7 @@
    "assert_files": [
     {
      "path": "overlaps.csv",
-     "sha256": "b682b77ee2080e3de8b9cb54f26cb965b025c45090a61f1a3ae4bcff615c6168"
+     "sha256": "09588bc9894db2636f717d1ba369b4ba0d6e98331332d6620e3061448292345e"
     }
    ]
   },
@@ -1793,8 +1793,8 @@
    "params": {
     "membership": {
      "source": {
-      "path": "$WORK/membership.iprange",
-      "mode": "immutable"
+      "path": "$WORK/feeddb.iprange",
+      "mode": "live"
      },
      "selection": {
       "mode": "all"
@@ -1824,20 +1824,25 @@
      "path": {
       "$ignore": true
      },
-     "bytes": "264",
-     "rows": "5",
-     "sha256": "dbbc0dba739576f079ac892b3705efef549289d0e6c207cd438a9caba9582697"
+     "bytes": "161",
+     "rows": "3",
+     "sha256": "bc94e426903e968baebaf48210a97e29a6ae767ff19b8a4ae37a48596d06f251"
     },
     "report": {
-     "membership_range_count": "4",
+     "membership_range_count": "3",
      "direct_ranges_visited": "3",
-     "joined_segment_count": "5",
-     "selected_addresses": "41",
+     "joined_segment_count": "3",
+     "selected_addresses": "31",
      "mapped_addresses": "31",
-     "unmapped_addresses": "10",
-     "result_cell_count": "5"
+     "unmapped_addresses": "0",
+     "result_cell_count": "3"
     },
     "source_closes": [
+     {
+      "cleanup": {},
+      "coordination_cleanup": {},
+      "outcome": "closed"
+     },
      {
       "cleanup": {},
       "coordination_cleanup": {},
@@ -1848,7 +1853,7 @@
    "assert_files": [
     {
      "path": "join.jsonl",
-     "sha256": "dbbc0dba739576f079ac892b3705efef549289d0e6c207cd438a9caba9582697"
+     "sha256": "bc94e426903e968baebaf48210a97e29a6ae767ff19b8a4ae37a48596d06f251"
     }
    ]
   },
@@ -1859,8 +1864,8 @@
    "params": {
     "left": {
      "source": {
-      "path": "$WORK/membership.iprange",
-      "mode": "immutable"
+      "path": "$WORK/feeddb.iprange",
+      "mode": "live"
      },
      "selection": {
       "mode": "all"
@@ -1900,27 +1905,34 @@
      "path": {
       "$ignore": true
      },
-     "bytes": "325",
+     "bytes": "329",
      "rows": "5",
-     "sha256": "99f3c362224134b43426119a97a66aa8948607704a8578df75a86d5d352fe41b"
+     "sha256": "b970ba8b68eeb61ea42f9722b925a0bd80e04f6b435762463e66cf5cb96ea6bf"
     },
     "report": {
-     "left_range_count": "4",
+     "left_range_count": "3",
      "right_range_count": "4",
-     "joined_segment_count": "4",
-     "left_addresses": "41",
+     "joined_segment_count": "5",
+     "left_addresses": "31",
      "right_addresses": "21",
-     "overlap_addresses": "21",
+     "overlap_addresses": "11",
      "left_uncovered_addresses": "20",
-     "right_uncovered_addresses": "0",
+     "right_uncovered_addresses": "10",
      "cross_result_count": "2",
      "uncovered_result_count": "3"
-    }
+    },
+    "source_closes": [
+     {
+      "cleanup": {},
+      "coordination_cleanup": {},
+      "outcome": "closed"
+     }
+    ]
    },
    "assert_files": [
     {
      "path": "jmemb.jsonl",
-     "sha256": "99f3c362224134b43426119a97a66aa8948607704a8578df75a86d5d352fe41b"
+     "sha256": "b970ba8b68eeb61ea42f9722b925a0bd80e04f6b435762463e66cf5cb96ea6bf"
     }
    ]
   },
@@ -1932,8 +1944,8 @@
     "sources": [
      {
       "source": {
-       "path": "$WORK/membership.iprange",
-       "mode": "immutable"
+       "path": "$WORK/feeddb.iprange",
+       "mode": "live"
       },
       "scope": {
        "mode": "all"
@@ -1974,57 +1986,62 @@
    "expect_result": {
     "report": {
      "source_count": "1",
-     "source_range_count": "4",
-     "joined_segment_count": "4",
+     "source_range_count": "3",
+     "joined_segment_count": "3",
      "output_feed_count": "1",
-     "output_range_count": "3",
-     "output_addresses": "41"
+     "output_range_count": "2",
+     "output_addresses": "31"
     },
     "publication": {
+     "publication": "published",
+     "destination_content": "desired",
      "attempt": {
+      "publication_policy": "fail_if_exists",
+      "transaction_id": "1",
+      "output_byte_length": "40960",
+      "destination_basename": "YWxnZWJyYS1vdXQuaXByYW5nZQ==",
+      "destination_basename_encoding": 1,
+      "creation_security": {
+       "$ignore": true
+      },
       "commit_nonce": {
        "$ignore": true
       },
-      "creation_security": {
-       "commitment": "c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8",
-       "kind": 1
-      },
       "database_id": {
-       "$ignore": true
-      },
-      "destination_basename": "YWxnZWJyYS1vdXQuaXByYW5nZQ==",
-      "destination_basename_encoding": 1,
-      "directory_identity": {
-       "$ignore": true
-      },
-      "output_byte_length": "40960",
-      "output_identity": {
-       "$ignore": true
-      },
-      "output_sha512": {
        "$ignore": true
       },
       "publication_attempt_id": {
        "$ignore": true
       },
-      "publication_policy": "fail_if_exists",
+      "output_sha512": {
+       "$ignore": true
+      },
       "reservation_identity": {
        "$ignore": true
       },
-      "transaction_id": "1"
+      "output_identity": {
+       "$ignore": true
+      },
+      "directory_identity": {
+       "$ignore": true
+      }
      },
-     "main_namespace_may_have_been_attempted": true,
-     "publication": "published",
-     "destination_content": "desired",
+     "cleanup": {
+      "$ignore": true
+     },
+     "coordination_access_policy": "absent",
+     "coordination_cleanup": {
+      "$ignore": true
+     },
+     "housekeeping": {
+      "$ignore": true
+     },
      "later_canonical": "none",
      "main_access_policy": "creator_only",
-     "coordination_access_policy": "absent",
-     "cleanup": {},
-     "coordination_cleanup": {},
-     "housekeeping": {
-      "artifacts": []
-     },
-     "visible_housekeeping": []
+     "main_namespace_may_have_been_attempted": true,
+     "visible_housekeeping": {
+      "$ignore": true
+     }
     }
    }
   },
@@ -2038,6 +2055,9 @@
      "mode": "immutable"
     }
    },
+   "capture": [
+    "reader"
+   ],
    "expect_result": {
     "reader": {
      "$ignore": true
@@ -2059,14 +2079,11 @@
      "page_count": {
       "$ignore": true
      },
-     "range_record_count": "3",
+     "range_record_count": "2",
      "active_feed_count": "1",
      "meta_selection": "proven_current"
     }
-   },
-   "capture": [
-    "reader"
-   ]
+   }
   },
   {
    "kind": "rpc",
@@ -2098,10 +2115,7 @@
      },
      {
       "address": "198.51.100.15",
-      "present": true,
-      "feeds": [
-       "merged"
-      ]
+      "present": false
      },
      {
       "address": "198.51.100.25",
