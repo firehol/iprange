@@ -105,8 +105,9 @@ nice python3 v4/cli/check_kind_coverage.py --matrix ... --crash ...
   downstream aggregation/join/algebra steps consuming the
   workflow-built live feed DB), and `recover.successful` (validate a
   damaged file, capture the exact `recovery.inspect` candidate,
-  recover, and read the preserved content back through the other
-  binary).
+  recover, read the preserved content back through the other binary,
+  and validate the recovered file (valid=true, zero findings) with
+  the other binary).
   `resource.limits` proves the product-boundary ceilings (response
   object limit, reader/cursor capacity, system limits report).
   Capture specs may alias handles (`{"name", "path"}` items; `[N]`
@@ -158,14 +159,23 @@ table:
 - Every PASS case entry also carries the per-case `file_kinds`
   lineage (relative artifact path -> kind and the acting
   `actor.method` created_by/opened_by lists); `check_kind_coverage.py`
-  fails the evidence battery when a required kind has zero observed
-  evidence across the matrix and crash reports. The gate consumes
-  PASS-case lineage only (the report-root aggregate merges partial
-  ledgers even for FAIL cases and is never trusted), rejects any
-  matrix report with `failed != 0` and any crash report with
+  enforces the cross-language file-kind contract on the matrix and
+  crash reports: it requires all four matrix reports (rust, go,
+  rust_to_go, go_to_rust — each report carries a top-level `matrix`
+  identity) plus a positive crash report whose PASS scenarios span
+  both language directions; every required kind must be created by
+  both product languages and, whenever any service opens the kind,
+  opened by both languages too; PASS evidence containing any kind
+  outside the required universe (v4_main, live_sidecar,
+  publication_reservation, publication_temp, authorized_scratch,
+  adapter_output, metadata_delivery) fails the gate. The gate
+  consumes PASS-case lineage only (the report-root aggregate merges
+  partial ledgers even for FAIL cases and is never trusted), rejects
+  any matrix report with `failed != 0` and any crash report with
   `failed != 0` or leftover product processes, and counts only crash
   scenarios whose `"pass"` is true. Its committed self-test
-  exercises doctored all-failed and leftover-process reports.
+  exercises doctored missing-matrix, unknown-kind, one-language,
+  single-direction, all-failed, and leftover-process reports.
 
 ### Step-5 product-interface gates
 
@@ -182,7 +192,10 @@ table:
   both directions that resolution is truthful, residue is bounded,
   and reopen succeeds. Scenario A3 is the foreign-destination
   negative control: a poisoned destination must classify `foreign`
-  against the reservation digest.
+  against the reservation digest.  Committed evidence is produced
+  from binary copies staged under `/tmp/qualsvc/` (version-matched
+  product/worker pairs), so the recorded argv carries no personal
+  paths; see `evidence/README.md`.
 
 ```bash
 RUST_IPRANGE=$PWD/v4/rust/target/release/iprange

@@ -58,11 +58,13 @@ KIND_PUBLICATION_RESERVATION = "publication_reservation"  # .iprange-reservation
 KIND_AUTHORIZED_SCRATCH = "authorized_scratch"      # .iprange-scratch-*.tmp
 KIND_ADAPTER_OUTPUT = "adapter_output"              # csv/jsonl/netset/ipset/ranges...
 KIND_METADATA_DELIVERY = "metadata_delivery"        # delivery.path metadata files
+KIND_PUBLICATION_TEMP = "publication_temp"          # .iprange-publish-*.tmp
 KIND_UNKNOWN = "unknown"
 
 LIVE_SIDECAR_SUFFIX = ".readers"
 LIVE_SIDECAR_RESET_SUFFIX = ".readers.reset"
 RESERVATION_PREFIX = ".iprange-reservation-"
+PUBLISH_TEMP_PREFIX = ".iprange-publish-"
 SCRATCH_PREFIX = ".iprange-scratch-"
 PRIVATE_TMP_SUFFIX = ".tmp"
 
@@ -359,6 +361,8 @@ class CaseRunner:
             return KIND_LIVE_SIDECAR
         if basename.startswith(RESERVATION_PREFIX) and basename.endswith(PRIVATE_TMP_SUFFIX):
             return KIND_PUBLICATION_RESERVATION
+        if basename.startswith(PUBLISH_TEMP_PREFIX) and basename.endswith(PRIVATE_TMP_SUFFIX):
+            return KIND_PUBLICATION_TEMP
         if basename.startswith(SCRATCH_PREFIX) and basename.endswith(PRIVATE_TMP_SUFFIX):
             return KIND_AUTHORIZED_SCRATCH
         return None
@@ -1573,6 +1577,7 @@ def main():
         "environment_allowlist": list(ENV_ALLOWLIST),
         "binaries": {key: dict(value) for key, value in capabilities.items()},
         "fixture_tool": binary_record(fixture_tool) if fixture_tool else None,
+        "matrix": args.matrix,
         "cases": [],
         "passed": 0,
         "failed": 0,

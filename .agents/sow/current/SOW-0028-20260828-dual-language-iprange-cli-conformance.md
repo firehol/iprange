@@ -80,13 +80,19 @@ Implementation status (2026-09-01):
   downstream aggregation/join/algebra consume the workflow-built
   live feed DB, and the resource record keeps its NOT-PROVEN items
   explicit. Milestone 4 was re-closed at d6c9990b after the
-  targeted delta review (one own-model reviewer, harness/gate/record
-  scope: PASS at b4f882ca with one P3, wired into the runner at
-  d6c9990b) and the glm-5.3-responses whole-milestone re-review
-  (PASS at d6c9990b, full battery re-run from fresh builds, no
-  findings); both records are appended in the reopen section below.
-  Delivery step 6 (consolidated benchmark harness and measured
-  ceilings) is the next milestone, recorded below.
+  targeted delta review and the glm-5.3-responses whole-milestone
+  re-review (records in the reopen section below), and was reopened
+  again on 2026-09-04 by a second external gap review with five
+  verified findings (kind-gate contract under-enforcement, crash
+  scope per the recorded plan, resource deferral without a user
+  decision, workflow recovery composition, and review identity plus
+  personal paths in the evidence).  Four of the five are fixed in
+  the third fix wave recorded below; the three scope items
+  (additional crash scenarios, the four resource NOT-PROVEN items,
+  in-workflow recovery) are recorded as numbered user decisions and
+  block the re-close.  Delivery step 6 (consolidated benchmark
+  harness and measured ceilings) is the next milestone, recorded
+  below.
 
 ## Requirements
 
@@ -3738,51 +3744,135 @@ regenerated in v4/cli/evidence/):
   sensitivity (<1 s); well inside the resource budget.
 - Product identity: unchanged by this wave (the fixes are external
   framework, cases, and records; no product source changed).
-- Outcome: milestone 4 (delivery step 5) is re-closed at d6c9990b.
-  Final review records (appended below in this section): one
-  own-model delta reviewer (Avicenna, harness/gate/record scope)
-  PASSed the functional wave at b4f882ca with one P3 — the
-  capture-pointer rejection self-test was not wired into any gate;
-  run.py now runs the case-schema self-test before every matrix
-  (d6c9990b).  The glm-5.3-responses whole-milestone re-review
-  PASSed d6c9990b with no findings after re-running the full battery
-  from fresh qualification builds (matrices 38/38 and 14/24 per
-  mixed direction, crash 10/10 plus the /bin/false negative control,
-  kind gate on committed and fresh evidence plus adversarial
-  controls, golden 53, sensitivity 14, Go plain/v4work suites, vet,
-  gofmt, legacy 100/100, mmap gates).  The four resource NOT-PROVEN
-  items remain explicitly owned by delivery step 6 (together with
-  the benchmark harness), exactly as recorded in the milestone-5
-  start section.
+- Outcome: the re-close records below are superseded by the second
+  external gap review (third fix wave, also below): milestone 4
+  (delivery step 5) is in progress again pending the three numbered
+  user decisions at the end of this section.
 
-#### Final review records (appended after both reviews passed at the exact final tree)
+#### Final review records (from the second fix wave; superseded by the third wave below)
 
 - Delta review (own-model reviewer Avicenna, external-qualification
-  harness/gate/record scope) at b4f882ca: PASS.  Verified the
-  anchored pointer grammar and its accepted/rejected sets, the
-  kind-gate PASS-only lineage and doctored-report rejection tests,
-  the mixed-live producer-reader observation steps in all four
-  matrices, and the absence of any anticipatory re-close claim in
-  the SOW at that revision.  One P3: the pointer-grammar negative
-  self-test was not wired into any gate; fixed by d6c9990b, which
-  runs `case_schema._self_test()` before every matrix.
-- Whole-milestone review (glm-5.3-responses) at d6c9990b: PASS, no
-  P1/P2/P3 findings.  The reviewer re-ran the battery from freshly
-  rebuilt qualification binaries (Go product
-  1612646fdb.../worker 16236608... with `-buildvcs=false`, Rust
-  product c1386637..., fixture d615488f...): rust/go matrices
-  38/38 (oracle 37), both mixed matrices 14 executed / 24 skipped
-  (oracle 22), crash battery 10/10 both directions with zero
-  leftover processes plus the /bin/false negative control failing
-  10/10, kind gate PASS on committed and fresh evidence with
-  adversarial all-failed/leftover/root-only controls all failing,
-  golden 53, sensitivity 14, Go plain and v4work suites, vet and
-  gofmt clean, legacy C-oracle 100/100, and all mmap gates; it
-  also confirmed the four NOT-PROVEN resource items stay explicit
-  and owned by delivery step 6.  Commit messages carry no
-  tool/personal attribution and `git diff --check` is clean.
-- Milestone 4 (delivery step 5) is re-closed at d6c9990b; the
-  superseded close record above remains historical evidence only.
+  harness/gate/record scope) at b4f882ca: PASS with one P3 (wired
+  into the runner at d6c9990b); glm-5.3-responses whole-milestone
+  re-review at d6c9990b: PASS with no findings (full battery re-run
+  from fresh qualification builds).  Both verdicts were superseded
+  when the second external gap review invalidated the re-close
+  (per project-final-review skill: any later commit invalidates the
+  verdict); the review records remain as historical evidence of the
+  second fix wave only.
+
+### 2026-09-04 (continued) — third fix wave (second external gap review; four fixed, three user decisions pending)
+
+The second external gap review returned five verified findings at
+345e4565.  Verification and dispositions:
+
+1. P1 — The kind-universe gate under-enforced the recorded
+   cross-language file-kind contract.  The gate read only
+   `created_by`, accepted any subset of reports, required one global
+   occurrence per kind, accepted unknown kinds, and omitted
+   `publication_temp` (a production maintenance kind per
+   `iprange-jsonrpc-v1.md`).  Reproducers confirmed: the Rust matrix
+   plus crash alone passed, and injecting `kind: "unknown"` into
+   every PASS case passed.  Dispose (implemented in this wave):
+   `v4/cli/check_kind_coverage.py` now requires all four matrix
+   reports (each report carries a top-level `matrix` identity) and a
+   positive crash report whose PASS scenarios span both language
+   directions; every required kind must be created by both product
+   languages and, whenever any service opens the kind, opened by
+   both languages too (crash scenarios attribute creation to the
+   producer language and consumption to the consumer language;
+   outbound-only kinds — adapter outputs and metadata deliveries —
+   are never opened by any service); PASS evidence containing any
+   kind outside the required universe, which now includes
+   `publication_temp` (also classified by the runner ledger), fails
+   the gate; the doctored-report self-test covers missing matrix,
+   missing matrix identity, unknown kind, one-language creation,
+   one-language opens, single-direction crash, all-failed, and
+   leftover-process cases.  Committed evidence passes the new gate.
+2. P2 — The recorded crash scope enumerates interruptions during
+   publish/commit/finish/export/validate; the harness currently
+   proves publish (`current.publish`), live-transition
+   (`database.initialize_live`), and recovery (`recover`).  Fixing
+   this requires either three new product-interface interruption
+   scenarios (commit/finish combined, export, validate) or an
+   explicit user re-scope; recorded as decision D1 below.
+3. P2 — Moving the four NOT-PROVEN resource items to delivery step 6
+   was never approved by the user.  Recorded as decision D2 below;
+   until decided, the milestone-5 start section must not claim them.
+4. P2 — Recovery composition: `workflow.publisher` performs
+   `recovery.inspect` only)Skip, and `recover.successful` did not
+   validate the recovered output.  Dispose (implemented): a new
+   final step in `recover.successful` validates the recovered file
+   with the consumer binary (`valid=true`, zero findings, exact
+   generation and progress facts pinned).  Whether the publisher
+   workflow must contain a full damaged-file recovery cycle is
+   recorded as decision D3 below.
+5. P2 — Review identity and privacy.  The re-close reviewed
+   d6c9990b while the record commit 345e4565 followed (invalidated
+   per the project-final-review skill), and the committed evidence
+   carried the user's personal home path in every argv record
+   (contradicting the SOW's sensitive-data gate).  Dispose
+   (implemented): the re-close records above are marked superseded;
+   this wave commits everything before any final review, and the
+   final reviews will run at the exact final tree with no later
+   commits; the evidence was regenerated from binary copies staged
+   under `/tmp/qualsvc/` (version-matched product/worker pairs
+   recorded in `v4/cli/evidence/README.md`), so the committed
+   reports contain no personal paths (verified: zero matches for
+   the home directory in all six evidence files).
+
+Third-wave evidence at this revision (all under `nice`, binaries
+staged at `/tmp/qualsvc/`): rust/go matrices 38/38 (oracle 37),
+mixed 14 executed / 24 skipped per direction (oracle 22), crash
+10/10 both directions plus the `/bin/false` negative control failing
+10/10, kind gate PASS under the strengthened contract, golden 53,
+sensitivity 14, all schema module self-tests and the runner
+self-test PASS (the latter exercised by the four matrix runs).
+Product source unchanged; no personal paths in the committed
+evidence.
+
+#### User decisions pending (third fix wave)
+
+- D1 — Crash interruption scope.  The milestone-4 plan records
+  product-interface interruption during publish/commit/finish/
+  export/validate.  The harness proves publish, live-transition, and
+  recovery interruption.  Options: A) implement three additional
+  product-interface scenarios now (commit/finish at a
+  durable sidecar marker, export at a partial-output marker, and
+  validate at the worker scratch marker) — full recorded scope,
+  more harness surface; B) approve the current set as the
+  representative product-interface proof, with the SDK crash gates
+  (writer commit, publication attempts/reservations, live
+  lifecycle, worker client, in both languages) covering the exact
+  internal crash points per the plan's own sentence — smaller,
+  already-green wave.  Recommendation: A (matches the recorded
+  plan; sol's finding is concrete).
+- D2 — The four resource NOT-PROVEN items (the >16-in-flight
+  `server_busy` race, the -32001 over-limit close path,
+  `maintenance.remove` against a real reservation nonce,
+  `windows_housekeeping` kind).  Options: A) implement all four in
+  this wave, including the Windows-kind proof on the Windows
+  validation host (requires access authorization); B) implement the
+  three Linux-provable items in this wave (a pipelining-client
+  harness mode, a raw oversized-frame harness mode, and a
+  reservation-nonce `maintenance.remove` crash scenario) and defer
+  only `windows_housekeeping` to delivery step 6; C) approve the
+  existing deferral of all four to delivery step 6.  Recommendation:
+  B (mechanically provable items get proven; the Windows-kind item
+  is platform-bound and needs the Windows host).
+- D3 — Publisher-workflow recovery composition.  Options: A) make
+  the workflow perform a full damaged-file recovery cycle
+  (deterministic truncation of its own snapshot via a new
+  test-only filesystem action, then inspect/recover/validate/cleanup
+  inside the workflow) — the strongest reading of step 6
+  "validation, recovery, and cleanup", at the cost of a new runner
+  action; B) keep `recovery.inspect` (no candidates) in the
+  workflow — the truthful outcome for a healthy snapshot, since the
+  `recover` RPC requires a candidate object — and rely on the now
+  validate-closed `recover.successful` for the successful path.
+  Recommendation: B (minimal-complete; recover.successful now
+  validates the recovered output end to end and the workflow's
+  snapshot is healthy by construction).
 
 ### 2026-09-04 — milestone 5 scope recorded (delivery step 6: consolidated benchmark harness and measured ceilings)
 

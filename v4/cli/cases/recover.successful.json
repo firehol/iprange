@@ -330,6 +330,72 @@
    "expect_result": {
     "closed": true
    }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.validate",
+   "params": {
+    "path": "$WORK/recovered.iprange",
+    "mode": {
+     "kind": "immutable_current"
+    },
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_scratch_bytes": "0",
+     "max_scratch_files": 0
+    },
+    "findings_output": {
+     "format": "jsonl",
+     "path": "$WORK/recovered-findings.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    }
+   },
+   "expect_result": {
+    "result": {
+     "file_identity": {
+      "$ignore": true
+     },
+     "generation": {
+      "address_family": "ipv4",
+      "commit_nonce": {
+       "$ignore": true
+      },
+      "database_id": {
+       "$ignore": true
+      },
+      "page_count": "9",
+      "structure_kind": "none",
+      "transaction_id": "1",
+      "value_kind": "membership",
+      "value_tag": {
+       "hex": "6d656d62657273686970"
+      }
+     },
+     "progress": {
+      "bounded_possible_span_addresses": "0",
+      "checked_unique_pages": "7",
+      "finding_count": "0",
+      "has_unbounded_unknown": false,
+      "untraversable_subgraphs": "0"
+     },
+     "valid": true
+    },
+    "findings": {
+     "path": {
+      "$ignore": true
+     },
+     "bytes": "0",
+     "rows": "0",
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+   }
   }
  ]
 }
