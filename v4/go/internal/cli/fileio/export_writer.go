@@ -146,14 +146,20 @@ func (w *ExportWriter) WriteChunk(bytes []byte, rows uint64, addresses AddressCo
 func (w *ExportWriter) Finish() (*ExportFacts, *rpc.HandlerError) {
 	facts, herr := w.publish()
 	// Always remove the temporary when publication did not consume it.
+	// Windows cannot remove a file with an open handle, so the file is
+	// closed first (publish closes it before removal; the error paths
+	// above it may still hold it open).
+	_ = w.raw.Close()
 	_ = os.Remove(w.temporary)
 	return facts, herr
 }
 
 // Abort removes the unpublished temporary file (every error path leaves
-// the destination namespace clean).
+// the destination namespace clean).  The file is closed first: Windows
+// refuses to remove a file whose handle is still open.
 func (w *ExportWriter) Abort() {
 	if !w.published {
+		_ = w.raw.Close()
 		_ = os.Remove(w.temporary)
 	}
 }
@@ -197,6 +203,13 @@ func (w *ExportWriter) publish() (*ExportFacts, *rpc.HandlerError) {
 	}
 	if err := w.raw.Sync(); err != nil {
 		return nil, fileError(err, "sync export output")
+	}
+	// The private temporary is no longer needed: close it before
+	// publication.  Windows cannot remove (or, with some share modes,
+	// link away) a file whose handle is still open, and no row is
+	// written after this point.
+	if err := w.raw.Close(); err != nil {
+		return nil, fileError(err, "close export temporary")
 	}
 	if w.policy == iprangedb.PolicyFailIfExists {
 		// Hard-link publication is the portable no-replacement atom:

@@ -25,11 +25,18 @@ Evidence integrity rules:
   ``failed != 0`` or leftover product processes, and any crash report
   whose PASS scenarios do not span both language directions
   (Rust as producer/Go as consumer and vice versa) are rejected.
-- Language attribution: in a single-language matrix both actors are
-  that language; in a mixed matrix the producer is the producer
-  binary's implementation and the consumer the consumer's.  Crash
-  scenarios attribute creation to the producer language and
-  consumption to the consumer language.
+- Language attribution comes from the executed binaries' own
+  declared identity: every PASS case must carry an ``actors`` map in
+  which each actor entry records the ``implementation`` ("rust"|"go")
+  of the binary that served that role, as declared by that binary's
+  ``system.describe`` capability result.  The report-level ``matrix``
+  label is never trusted for attribution; it is only cross-checked
+  against the observed actor implementations, so a report cloned from
+  another matrix and relabeled fails with a label/identity mismatch.
+  Crash scenarios attribute creation to the producer language and
+  consumption to the consumer language, using the harness's probed
+  implementation labels (the executed identity of the scenario
+  binaries).
 
 Exit status 0 when every required kind has both-language evidence and
 no report problem exists; 1 otherwise.
@@ -51,6 +58,10 @@ REQUIRED_KINDS = [
     "metadata_delivery",
 ]
 REQUIRED_MATRICES = ("rust", "go", "rust_to_go", "go_to_rust")
+ALL_ACTORS = ("producer", "consumer")
+# Matrix label -> the actor-language pair that the executed binaries must
+# have produced.  Used only as the consistency probe against per-case
+# actor implementations, never for attribution.
 ACTOR_LANGUAGES = {
     "rust": {"producer": "rust", "consumer": "rust"},
     "go": {"producer": "go", "consumer": "go"},
@@ -66,6 +77,13 @@ def matrix_evidence(path):
     PASS-case per-case ledgers are consulted; the report root
     aggregate is ignored because the runner merges partial ledgers
     into it even when a case FAILs.
+
+    Language attribution is executed-actor based: each PASS case must
+    carry an ``actors`` map whose producer/consumer entries record the
+    ``implementation`` of the binary that actually served that role
+    (product-declared via ``system.describe``).  The top-level
+    ``matrix`` label is never used for attribution; it is only
+    cross-checked against the observed actor implementations.
     """
 
     with open(path, encoding="utf-8") as stream:
@@ -84,20 +102,51 @@ def matrix_evidence(path):
     if leftover:
         problems.append(
             f"matrix {path}: report records leftover product processes: {leftover}")
+    expected = ACTOR_LANGUAGES[matrix]
     evidence = {}
     cases = report.get("cases", [])
-    languages = ACTOR_LANGUAGES[matrix]
     for case in cases:
         if case.get("status") != "PASS":
             continue
+        case_name = case.get("name", "<unnamed>")
+        actors = case.get("actors")
+        if (not isinstance(actors, dict)
+                or "producer" not in actors
+                or "consumer" not in actors):
+            problems.append(
+                f"matrix {path}: PASS case {case_name!r} has no complete "
+                f"per-case actors map (needs producer and consumer entries)")
+            continue
+        implementations = {}
+        for actor in ALL_ACTORS:
+            implementation = (actors.get(actor) or {}).get("implementation")
+            if implementation not in ("rust", "go"):
+                problems.append(
+                    f"matrix {path}: PASS case {case_name!r} actor {actor!r} "
+                    f"implementation {implementation!r} is not rust or go")
+                implementations[actor] = "?"
+            else:
+                implementations[actor] = implementation
+        # Label/identity probe: the observed actor-language pair must match
+        # the pair the matrix label claims.  A clone relabeled to another
+        # matrix keeps its executed binaries' implementations, so the pair
+        # no longer matches its label.
+        observed = (implementations.get("producer"), implementations.get("consumer"))
+        if observed[0] in ("rust", "go") and observed[1] in ("rust", "go"):
+            if observed != (expected["producer"], expected["consumer"]):
+                problems.append(
+                    f"matrix {path}: PASS case {case_name!r} label/identity "
+                    f"mismatch: executed actor languages {observed} do not "
+                    f"match matrix label {matrix!r} "
+                    f"({expected['producer']}->{expected['consumer']})")
         for _rel, facts in case.get("file_kinds", {}).items():
             bucket = evidence.setdefault(facts["kind"], {"created": set(), "opened": set()})
             for entry in facts.get("created_by", []):
                 actor = entry.split(".", 1)[0]
-                bucket["created"].add(languages.get(actor, "?"))
+                bucket["created"].add(implementations.get(actor, "?"))
             for entry in facts.get("opened_by", []):
                 actor = entry.split(".", 1)[0]
-                bucket["opened"].add(languages.get(actor, "?"))
+                bucket["opened"].add(implementations.get(actor, "?"))
     return matrix, evidence, len(cases), problems
 
 
@@ -262,7 +311,10 @@ def _self_test():
     def green_report(matrix):
         """One PASS case whose per-case ledger shows the four matrix
         kinds created and opened by this matrix's actors; the crash
-        battery supplies the three crash-only kinds."""
+        battery supplies the three crash-only kinds.  The case records
+        the executed actor implementations (both binaries for a mixed
+        matrix, the one binary for a single-language matrix), so
+        language attribution never depends on the top-level label."""
         ledger = {}
         for i, kind in enumerate([
                 "v4_main", "live_sidecar", "adapter_output",
@@ -272,8 +324,21 @@ def _self_test():
                 "created_by": ["producer.iprange.v1.selftest"],
                 "opened_by": ["consumer.iprange.v1.selftest"],
             }
+        expected = ACTOR_LANGUAGES[matrix]
         return matrix_report(matrix, [{
             "name": "doctored", "matrix": matrix, "status": "PASS",
+            "actors": {
+                "producer": {
+                    "sha256": "0" * 64,
+                    "implementation": expected["producer"],
+                    "steps": 1,
+                },
+                "consumer": {
+                    "sha256": "0" * 64,
+                    "implementation": expected["consumer"],
+                    "steps": 1,
+                },
+            },
             "file_kinds": ledger}], failed=0)
 
     with tempfile.TemporaryDirectory() as work:
@@ -393,6 +458,46 @@ def _self_test():
             ["rust", "go"], ["go", "rust"], leftover=["iprange"]))
         problems, _c, _s = assess(four, [leftover_path])
         assert problems and any("leftover" in p for p in problems)
+
+        # 9. Clone-relabel attack: a rust report (executed actors
+        #    rust/rust) with only its top-level matrix changed to "go"
+        #    keeps its executed identity locked to rust, so the label no
+        #    longer matches and the gate fails with a label/identity
+        #    mismatch.
+        clone = green_report("rust")
+        clone["matrix"] = "go"
+        clone_path = os.path.join(work, "clone-relabel.json")
+        assign(clone_path, clone)
+        problems, _c, _s = assess(
+            [green["rust"], clone_path, green["rust_to_go"],
+             green["go_to_rust"]], [crash_path])
+        assert problems and any("identity mismatch" in p for p in problems), (
+            f"clone-relabel did not fail with identity mismatch: {problems}")
+
+        # 10. A PASS case without a per-case actors map is a report
+        #     defect: attribution cannot be proven and the gate fails.
+        no_actors = green_report("go")
+        del no_actors["cases"][0]["actors"]
+        no_actors_path = os.path.join(work, "no-actors.json")
+        assign(no_actors_path, no_actors)
+        problems, _c, _s = assess(
+            [green["rust"], no_actors_path, green["rust_to_go"],
+             green["go_to_rust"]], [crash_path])
+        assert problems and any("actors map" in p for p in problems), (
+            f"missing actors did not fail the gate: {problems}")
+
+        # 11. An actor implementation outside {"rust", "go"} is a report
+        #     defect: the serving binary's declared identity is not a
+        #     product language.
+        bad_impl = green_report("rust")
+        bad_impl["cases"][0]["actors"]["producer"]["implementation"] = "c"
+        bad_impl_path = os.path.join(work, "bad-impl.json")
+        assign(bad_impl_path, bad_impl)
+        problems, _c, _s = assess(
+            [bad_impl_path, green["go"], green["rust_to_go"],
+             green["go_to_rust"]], [crash_path])
+        assert problems and any("not rust or go" in p for p in problems), (
+            f"bad implementation did not fail the gate: {problems}")
 
 
 if __name__ == "__main__":

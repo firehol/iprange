@@ -13,40 +13,44 @@ production test method, hook, or environment variable.  Exact internal
 crash-point coverage is owned by the SDK crash gates; this harness
 covers the product interface.
 
-Design (verified empirically against both product binaries before this
-file was written; the exact outcome values below are the observed
-wire values):
+Design (verified empirically against both product binaries; the exact
+outcome values below are the observed wire values, one line per
+scenario):
 
-- Scenario A1 -- ``current.publish`` (fail_if_exists) killed once the
-  publication reservation ``.iprange-reservation-<id>.tmp`` carries a
-  valid state-1 block: the destination main does not exist after the
-  kill (no partial replacement), and the reservation plus the private
-  publication output ``.iprange-publish-<id>.tmp`` are the bounded
-  residue.  A fresh producer resolves with the retained reservation as
-  the sole authority: ``publication.resolve`` completes the interrupted
-  publication and reports ``publication == "published"`` and
-  ``destination_content == "desired"``; the final destination is the
-  exact complete output recorded in the reservation (SHA-512 match).
-  The consumer binary cannot open the absent destination before
-  resolution (``invalid_path``/``not_started``) and reads the complete
-  file after resolution.
-- Scenario A2 -- ``current.publish`` (replace_existing) over an
-  existing immutable main, killed at the same durable marker: the
-  destination is byte-identical to the prior file, absent, or the
-  complete new output recorded in the reservation (atomic namespace
-  publication; a partial file is impossible).  ``inspect`` truthfully
-  reconstructs the attempt from the retained reservation, ``resolve``
-  completes it, residue is bounded and then absent.
-- Scenario B -- ``database.initialize_live`` on an immutable v4
-  fixture, killed as soon as the canonical ``<main>.readers`` sidecar
-  exists with its valid creating-state (0) header.  The main is
-  unchanged after the kill; the sidecar is the only residue.  Both
-  ``database.info`` modes truthfully refuse before resolution
-  (``wrong_state``); ``database.live_residue.resolve`` (the resultless
-  resolver; the in-memory transition result was lost with the killed
-  process) advances the state-0 sidecar to ready and reports
-  ``status == "completed"``, ``kind == "canonical"`` and
-  ``residue_possible == false``; a live reader reopens successfully.
+- Scenario A1 -- ``current.publish`` (fail_if_exists) killed at the
+  reservation marker: the destination is absent or the exact complete
+  reservation-recorded output; a fresh producer resolves with the
+  retained reservation as the sole authority and the consumer reads
+  the complete file.
+- Scenario A2 -- ``current.publish`` (replace_existing) killed at the
+  same marker: the destination is prior, absent, or the complete
+  recorded output; ``inspect`` reconstructs the attempt and
+  ``resolve`` completes it, then residue is bounded and absent.
+- Scenario A3 -- negative control: a foreign destination planted
+  after the kill classifies as ``foreign`` (the reservation is the
+  sole authority; other bytes are never a completed publication).
+- Scenario B -- ``database.initialize_live`` killed at the state-0
+  sidecar marker: the main is unchanged, both ``database.info`` modes
+  truthfully refuse (``wrong_state``), the resultless
+  ``live_residue.resolve`` completes the transition and a live reader
+  reopens on the resolved generation.
+- Scenario C -- ``recover`` killed at the authorized-scratch marker:
+  ``maintenance.list`` reports exactly the on-disk abandoned scratch,
+  ``maintenance.remove`` returns the directory to empty, and the
+  never-published destination still truthfully refuses.
+- Scenario D -- ``direct.replace`` on a live database killed at the
+  resize marker: the interrupted commit never becomes the generation
+  (``database.info`` live keeps T0/R0, an immutable open truthfully
+  refuses, zero maintenance residue, a consumer live reader sees T0)
+  and a fresh producer commits T0+1 with one record.
+- Scenario E -- ``export`` killed at the partial-output marker: the
+  destination is absent, the ``<id>.export.tmp`` orphan is the bounded
+  residue (never a managed maintenance kind), the source is
+  byte-identical, and a retry lands byte-identical to the reference.
+- Scenario F -- ``validate`` killed at the findings-output marker:
+  the findings destination is absent, one ``<id>.export.tmp`` orphan
+  remains, the damaged main is byte-identical, a fresh validate
+  reports the same findings and the committed generation still opens.
 
 Every scenario runs in both directions (producer Rust with consumer Go,
 producer Go with consumer Rust).  The report (schema
@@ -98,6 +102,14 @@ POLL_DEADLINE_SECONDS = 30.0
 # before the destination rename.
 FEED_LINE_COUNT = 1_500_000
 PRIOR_FEED_LINE_COUNT = 200_000
+
+# Per-scenario feed sizes: A/B/C reuse FEED_LINE_COUNT; the live-replace
+# crash (D) uses a 200 000-row direct CSV and the export/validate
+# crashes (E/F) use a 500 000-range text feed, each calibrated so the
+# durable marker window is wide enough on both product binaries.
+EXPORT_FEED_LINE_COUNT = 500_000
+DIRECT_FEED_LINE_COUNT = 200_000
+EXPORT_TEMP_SUFFIX = ".export.tmp"
 
 # Every product process this harness spawns is recorded here so the
 # final leftover check can match exactly our own PIDs (never a
@@ -300,6 +312,87 @@ def publish_params(feed, dest, policy):
                                   "max_workspace_pages": "20000",
                                   "max_open_files": 3},
     }
+
+
+def write_direct_csv_feed(path, line_count):
+    """Write a deterministic direct-CSV feed (from,to,value header).
+
+    Ranges start at 10.0.0.0 with 64-address spacing and value 1;
+    ranges never overlap, so the normalized record count equals the
+    line count (the exact generator verified for crash scenario D on
+    both product binaries).
+    """
+
+    with open(path, "w", encoding="utf-8", newline="") as stream:
+        stream.write("from,to,value\n")
+        base = 0x0A000000  # 10.0.0.0
+        for index in range(line_count):
+            lo = base + index * 64
+            stream.write(
+                f"10.{(lo >> 24) & 255}.{(lo >> 16) & 255}.{(lo >> 8) & 255},"
+                f"10.{(lo >> 24) & 255}.{(lo >> 16) & 255}."
+                f"{((lo >> 8) & 255) + 63},1\n")
+
+
+def direct_replace_params(path, feed):
+    """direct.replace params replacing one live database from one CSV."""
+
+    return {
+        "path": path,
+        "input": {"path": feed, "max_line_bytes": 1024},
+        "metadata": {"mode": "keep"},
+        "writer_budget": {"max_heap_bytes": "16777216",
+                          "max_private_pages": "20000",
+                          "max_growth_pages": "20000",
+                          "max_open_files": 4},
+    }
+
+
+def export_params(source, dest):
+    """iprange.v1.export params: full selection to one text file."""
+
+    return {
+        "source": {"path": source, "mode": "immutable"},
+        "view": {"kind": "selection", "selection": {"mode": "all"}},
+        "format": "ranges",
+        "destination": dest, "publication_policy": "fail_if_exists",
+        "result_budget": {"max_rows": "10000000",
+                          "max_output_bytes": "10737418240",
+                          "max_open_files": 32},
+    }
+
+
+def validate_params(path, findings_out):
+    """iprange.v1.validate params with one jsonl findings output."""
+
+    return {
+        "path": path, "mode": {"kind": "immutable_current"},
+        "validation_budget": {"max_heap_bytes": "16777216",
+                              "max_open_files": 4,
+                              "max_scratch_bytes": "0",
+                              "max_scratch_files": 0},
+        "findings_output": {"format": "jsonl", "path": findings_out,
+                            "publication_policy": "fail_if_exists",
+                            "result_budget": {"max_open_files": 3,
+                                              "max_output_bytes": "65536",
+                                              "max_rows": "64"}},
+    }
+
+
+def export_temp_basenames(work_dir):
+    """Export/validate partial-output temp basenames (sorted)."""
+
+    if not os.path.isdir(work_dir):
+        return []
+    return sorted(
+        name for name in os.listdir(work_dir)
+        if name.endswith(EXPORT_TEMP_SUFFIX))
+
+
+def decimal_u64(value):
+    """Wire decimal u64 (string or number) as an int."""
+
+    return int(value)
 
 
 def classify_destination(dest, prior_sha256, prior_sha512, expected_sha512):
@@ -1301,6 +1394,504 @@ def scenario_c(direction, producer, consumer, work_dir, scenario_report):
     return work
 
 
+def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
+               scenario_report):
+    """Crash direct.replace (commit/finish) at the live resize marker.
+
+    Scenario B interrupts the immutable-to-live transition; this
+    scenario interrupts the commit of a full replacement on a live
+    database.  ``database.initialize_live`` completes on the
+    ``direct-v4`` fixture, then one ``direct.replace`` of a
+    200 000-range CSV is killed as soon as the main file grows past
+    its pre-replace size.  The interrupted commit must never become
+    the generation: ``database.info`` live still reports the committed
+    T0/R0, an immutable ``database.info`` truthfully refuses
+    (``wrong_state``/``read_only_failure``), no managed maintenance
+    residue exists (commit/finish leaves no private maintenance
+    artifacts), and a consumer live reader observes T0.  A fresh
+    producer then commits a one-record replacement (T0+1), proving
+    the live dataset still resolves.
+    """
+
+    work = os.path.join(work_dir, f"d-{direction}-{uuid.uuid4().hex[:8]}")
+    os.makedirs(work)
+    main = os.path.join(work, "db.iprange")
+    feed = os.path.join(work, "big.csv")
+    write_direct_csv_feed(feed, DIRECT_FEED_LINE_COUNT)
+    fixture = subprocess.run(
+        [fixture_tool, "direct-v4", main], capture_output=True, timeout=300,
+        env=child_environment())
+    if fixture.returncode != 0:
+        detail = fixture.stderr.decode("utf-8", "replace").strip()
+        raise ScenarioFailure(
+            f"v4-fixture direct-v4 failed with exit {fixture.returncode}: "
+            f"{detail}")
+
+    producer_service = KillableJsonRpcService(
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+    try:
+        initialized = producer_service.call(
+            "1", "iprange.v1.database.initialize_live",
+            {"path": main, "reader_capacity": 8})
+        assert_truthful(
+            "error" not in initialized,
+            f"initialize_live must succeed, got {initialized}",
+            scenario_report)
+        info0 = producer_service.call(
+            "2", "iprange.v1.database.info",
+            {"source": {"path": main, "mode": "live"}})
+        assert_truthful(
+            "error" not in info0,
+            f"database.info live must succeed, got {info0}",
+            scenario_report)
+        info_facts = info0["result"]["info"]
+        t0 = info_facts.get("transaction_id")
+        r0 = info_facts.get("range_record_count")
+        assert_truthful(
+            t0 is not None and r0 is not None,
+            f"database.info must report T0 and range count, got "
+            f"{info_facts}", scenario_report)
+        size_before = os.path.getsize(main)
+
+        outcome, seen_ms, thread = call_with_worker(
+            producer_service, "3", "iprange.v1.direct.replace",
+            direct_replace_params(main, feed), POLL_DEADLINE_SECONDS,
+            seen=lambda: os.path.isfile(main)
+            and os.path.getsize(main) > size_before)
+        if seen_ms is None:
+            raise ScenarioFailure(
+                "live resize marker was not observed; "
+                f"worker outcome={outcome}")
+        scenario_report["marker_seen_ms"] = round(seen_ms, 1)
+        producer_service.kill_process_group()
+        thread.join(timeout=5)
+        scenario_report["kill_method"] = (
+            "SIGKILL process group at live replace resize marker")
+        scenario_report["destination_state"] = {
+            "class": "live_dataset_with_uncommitted_write",
+            "main_size_before": size_before,
+            "main_size_after": os.path.getsize(main),
+        }
+
+        resolver = HarnessJsonRpcService(
+            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work)
+        try:
+            info_live = resolver.call(
+                "4", "iprange.v1.database.info",
+                {"source": {"path": main, "mode": "live"}})
+            assert_truthful(
+                "error" not in info_live,
+                f"database.info live must succeed on a fresh producer, "
+                f"got {info_live}", scenario_report)
+            live_facts = info_live["result"]["info"]
+            assert_truthful(
+                live_facts.get("transaction_id") == t0
+                and live_facts.get("range_record_count") == r0,
+                "an interrupted commit must never become the generation: "
+                f"expected T0={t0} R0={r0}, got "
+                f"{live_facts.get('transaction_id')}/"
+                f"{live_facts.get('range_record_count')}", scenario_report)
+
+            info_immutable = resolver.call(
+                "5", "iprange.v1.database.info",
+                {"source": {"path": main, "mode": "immutable"}})
+            immutable_error = info_immutable.get("error", {}).get("data", {})
+            assert_truthful(
+                immutable_error.get("code") == "wrong_state"
+                and immutable_error.get("outcome") == "read_only_failure",
+                "immutable database.info must truthfully refuse a live "
+                f"database, got {info_immutable}", scenario_report)
+            scenario_report["inspect_outcome"] = {
+                "database_info_live": {
+                    "transaction_id": live_facts.get("transaction_id"),
+                    "range_record_count":
+                        live_facts.get("range_record_count")},
+                "database_info_immutable": {
+                    "code": immutable_error.get("code"),
+                    "outcome": immutable_error.get("outcome")},
+            }
+
+            reports, error = maintenance_reports(
+                resolver, work, os.path.join(work, "pre.jsonl"),
+                ["scratch", "reservation", "publication_temp"])
+            assert_truthful(
+                error is None and count_kind(reports, "scratch") == 0
+                and count_kind(reports, "reservation") == 0
+                and count_kind(reports, "publication_temp") == 0,
+                f"commit/finish must leave no managed maintenance "
+                f"residue, got reports={reports} error={error}",
+                scenario_report)
+            scenario_report["residue_bounded"] = {
+                "maintenance_list_pre": reports}
+
+            consumer_service = HarnessJsonRpcService(
+                [consumer, "--jsonrpc"], f"consumer-{direction}", cwd=work)
+            try:
+                open_live = consumer_service.call(
+                    "6", "iprange.v1.reader.open",
+                    {"source": {"path": main, "mode": "live"}})
+                assert_truthful(
+                    "error" not in open_live,
+                    f"consumer live reader must open, got {open_live}",
+                    scenario_report)
+                reopen_info = open_live["result"].get("info", {})
+                assert_truthful(
+                    reopen_info.get("transaction_id") == t0,
+                    "consumer live reader must observe the committed T0, "
+                    f"got {reopen_info.get('transaction_id')}",
+                    scenario_report)
+                consumer_service.call(
+                    "7", "iprange.v1.reader.close",
+                    {"reader": open_live["result"]["reader"]})
+                scenario_report["reopen_outcome"] = {
+                    "consumer_live_reader_transaction_id":
+                        reopen_info.get("transaction_id")}
+            finally:
+                consumer_service.close()
+
+            # A fresh producer commits a one-record replacement: the
+            # interrupted attempt left no authority behind, so the next
+            # commit is T0+1 with exactly the one new record.  On the
+            # Go product the killed producer's worker closes the sidecar
+            # asynchronously, so the first attempt may truthfully refuse
+            # writer_busy while the dead process's writer lease is still
+            # being released; retry with a bounded window (the commit
+            # assertion below stays strict).
+            small = os.path.join(work, "small.csv")
+            with open(small, "w", encoding="utf-8", newline="") as stream:
+                stream.write("from,to,value\n")
+                stream.write("192.0.2.10,192.0.2.14,10\n")
+            replaced = None
+            transient_busy = 0
+            for attempt_index in range(10):
+                attempted = resolver.call(
+                    f"8-{attempt_index}", "iprange.v1.direct.replace",
+                    direct_replace_params(main, small))
+                error = attempted.get("error", {}).get("data", {})
+                if error and error.get("code") == "writer_busy":
+                    transient_busy += 1
+                    time.sleep(0.25)
+                    continue
+                replaced = attempted
+                break
+            assert_truthful(
+                replaced is not None and "error" not in replaced
+                and replaced["result"].get("commit", {}).get(
+                    "attempted_transaction_id") is not None,
+                f"fresh replace must commit, got {replaced}",
+                scenario_report)
+            info_after = resolver.call(
+                "9", "iprange.v1.database.info",
+                {"source": {"path": main, "mode": "live"}})
+            assert_truthful(
+                "error" not in info_after,
+                f"database.info live must succeed after the commit, got "
+                f"{info_after}", scenario_report)
+            after_facts = info_after["result"]["info"]
+            assert_truthful(
+                decimal_u64(after_facts.get("transaction_id"))
+                == decimal_u64(t0) + 1
+                and decimal_u64(after_facts.get("range_record_count")) == 1,
+                "fresh replace must land as T0+1 with one record, got "
+                f"{after_facts.get('transaction_id')}/"
+                f"{after_facts.get('range_record_count')}", scenario_report)
+            scenario_report["resolve_outcome"] = {
+                "database_info_live_post_kill": {
+                    "transaction_id": live_facts.get("transaction_id"),
+                    "range_record_count":
+                        live_facts.get("range_record_count")},
+                "transient_writer_busy_attempts": transient_busy,
+                "fresh_replace_commit": {
+                    "attempted_transaction_id": replaced["result"][
+                        "commit"].get("attempted_transaction_id"),
+                    "transaction_id_after":
+                        after_facts.get("transaction_id"),
+                    "range_record_count_after":
+                        after_facts.get("range_record_count")},
+            }
+        finally:
+            resolver.close()
+    finally:
+        producer_service.kill_process_group()
+        producer_service.close()
+    return work
+
+
+def scenario_e(direction, producer, consumer, work_dir, scenario_report):
+    """Crash export at the partial-output marker.
+
+    ``current.publish`` builds one 500 000-range immutable main; a
+    completed reference export fixes the exact destination bytes, then
+    the same export is killed as soon as its private
+    ``<id>.export.tmp`` partial output appears.  The destination is
+    absent after the kill; the export temp is the bounded residue (an
+    output scratch, not a managed maintenance kind), and the source
+    main is byte-identical.  A fresh producer retries the same export
+    and lands byte-identical to the reference -- the orphaned temp
+    never blocks -- and the consumer still opens the intact source.
+    """
+
+    work = os.path.join(work_dir, f"e-{direction}-{uuid.uuid4().hex[:8]}")
+    os.makedirs(work)
+    feed = os.path.join(work, "feed.txt")
+    write_interval_feed(feed, EXPORT_FEED_LINE_COUNT)
+    source = os.path.join(work, "big.iprange")
+    params = publish_params(feed, source, "fail_if_exists")
+
+    builder = HarnessJsonRpcService(
+        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work)
+    try:
+        built = builder.call("1", "iprange.v1.current.publish", params)
+        assert_truthful(
+            "error" not in built,
+            f"big publish must succeed, got {built}", scenario_report)
+    finally:
+        builder.close()
+
+    # Reference export: the exact complete destination bytes.
+    ref_path = os.path.join(work, "ref.txt")
+    ref_service = HarnessJsonRpcService(
+        [producer, "--jsonrpc"], f"ref-{direction}", cwd=work)
+    try:
+        reference = ref_service.call(
+            "2", "iprange.v1.export", export_params(source, ref_path))
+        assert_truthful(
+            "error" not in reference,
+            f"reference export must succeed, got {reference}",
+            scenario_report)
+    finally:
+        ref_service.close()
+    ref_sha = sha256_file(ref_path)
+    source_sha = sha256_file(source)
+
+    dest = os.path.join(work, "out.txt")
+    producer_service = KillableJsonRpcService(
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+    try:
+        outcome, seen_ms, thread = call_with_worker(
+            producer_service, "3", "iprange.v1.export",
+            export_params(source, dest), POLL_DEADLINE_SECONDS,
+            seen=lambda: bool(export_temp_basenames(work)))
+        if seen_ms is None:
+            raise ScenarioFailure(
+                "export partial-output marker was not observed; "
+                f"worker outcome={outcome}")
+        scenario_report["marker_seen_ms"] = round(seen_ms, 1)
+        producer_service.kill_process_group()
+        thread.join(timeout=5)
+        scenario_report["kill_method"] = (
+            "SIGKILL process group at export partial-output marker")
+
+        orphans = export_temp_basenames(work)
+        assert_truthful(
+            not os.path.isfile(dest),
+            "export destination must be absent after the kill",
+            scenario_report)
+        assert_truthful(
+            len(orphans) >= 1,
+            f"at least one export temp must remain as the bounded "
+            f"residue, got {orphans}", scenario_report)
+        assert_truthful(
+            sha256_file(source) == source_sha,
+            "the immutable source must be unchanged by the interrupted "
+            "export", scenario_report)
+        scenario_report["destination_state"] = {
+            "class": "export_partial_output",
+            "dest_absent_after_crash": True,
+            "export_temp_basenames": orphans,
+        }
+        scenario_report["residue_bounded"] = {
+            "export_temp_orphans": orphans,
+        }
+
+        resolver = HarnessJsonRpcService(
+            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work)
+        try:
+            retried = resolver.call(
+                "4", "iprange.v1.export", export_params(source, dest))
+            assert_truthful(
+                "error" not in retried,
+                f"export retry must complete, got {retried}",
+                scenario_report)
+            assert_truthful(
+                os.path.isfile(dest) and sha256_file(dest) == ref_sha,
+                "retried export must land byte-identical to the "
+                "reference", scenario_report)
+            scenario_report["resolve_outcome"] = {
+                "retry_export_completed": True,
+                "sha256_match": True,
+            }
+            scenario_report["residue_bounded"]["orphans_after_retry"] = (
+                export_temp_basenames(work))
+
+            # The consumer still opens the intact immutable source.
+            probe_consumer_open(consumer, work, source, scenario_report,
+                                False)
+        finally:
+            resolver.close()
+    finally:
+        producer_service.kill_process_group()
+        producer_service.close()
+    return work
+
+
+def scenario_f(direction, producer, consumer, work_dir, scenario_report):
+    """Crash validate at the findings-output marker.
+
+    One 500 000-range immutable main is damaged by flipping one byte
+    at offset 8192; a reference validate reports valid=false with
+    exactly 3 findings (verified identical for both product binaries
+    on this deterministic damage).  The same validate is killed as
+    soon as its private ``<id>.export.tmp`` findings-output temp
+    appears: the findings destination is absent after the kill, one
+    temp orphan is the bounded residue, and the damaged main is
+    byte-identical.  A fresh validate reports the same truthful
+    findings and the consumer still opens the damaged main (the
+    committed generation stays readable).
+    """
+
+    work = os.path.join(work_dir, f"f-{direction}-{uuid.uuid4().hex[:8]}")
+    os.makedirs(work)
+    feed = os.path.join(work, "feed.txt")
+    write_interval_feed(feed, EXPORT_FEED_LINE_COUNT)
+    source = os.path.join(work, "big.iprange")
+    params = publish_params(feed, source, "fail_if_exists")
+
+    builder = HarnessJsonRpcService(
+        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work)
+    try:
+        built = builder.call("1", "iprange.v1.current.publish", params)
+        assert_truthful(
+            "error" not in built,
+            f"big publish must succeed, got {built}", scenario_report)
+    finally:
+        builder.close()
+    # Deterministic early damage: flip one byte of the first data page.
+    with open(source, "r+b") as stream:
+        stream.seek(8192)
+        byte = stream.read(1)
+        stream.seek(8192)
+        stream.write(bytes([byte[0] ^ 0xFF]))
+    damaged_sha = sha256_file(source)
+
+    ref_path = os.path.join(work, "ref-findings.jsonl")
+    ref_service = HarnessJsonRpcService(
+        [producer, "--jsonrpc"], f"ref-{direction}", cwd=work)
+    try:
+        reference = ref_service.call(
+            "2", "iprange.v1.validate", validate_params(source, ref_path))
+        assert_truthful(
+            "error" not in reference,
+            f"reference validate must succeed, got {reference}",
+            scenario_report)
+    finally:
+        ref_service.close()
+    ref_result = reference["result"]["result"]
+    ref_findings = reference["result"].get("findings", {})
+    ref_valid = ref_result.get("valid")
+    ref_count = ref_result.get("progress", {}).get("finding_count")
+    ref_rows = ref_findings.get("rows")
+    assert_truthful(
+        ref_valid is False
+        and decimal_u64(ref_count) == 3 and decimal_u64(ref_rows) == 3,
+        f"reference validate must find exactly 3 findings on the "
+        f"deterministic damage, got valid={ref_valid} "
+        f"finding_count={ref_count} rows={ref_rows}", scenario_report)
+    scenario_report["inspect_outcome"] = {
+        "reference_validate": {
+            "valid": ref_valid,
+            "finding_count": ref_count,
+            "rows": ref_rows,
+        },
+    }
+
+    findings_out = os.path.join(work, "f.jsonl")
+    producer_service = KillableJsonRpcService(
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+    try:
+        outcome, seen_ms, thread = call_with_worker(
+            producer_service, "3", "iprange.v1.validate",
+            validate_params(source, findings_out), POLL_DEADLINE_SECONDS,
+            seen=lambda: bool(export_temp_basenames(work)))
+        if seen_ms is None:
+            raise ScenarioFailure(
+                "validate findings-output marker was not observed; "
+                f"worker outcome={outcome}")
+        scenario_report["marker_seen_ms"] = round(seen_ms, 1)
+        producer_service.kill_process_group()
+        thread.join(timeout=5)
+        scenario_report["kill_method"] = (
+            "SIGKILL process group at validate findings-output marker")
+
+        orphans = export_temp_basenames(work)
+        assert_truthful(
+            not os.path.isfile(findings_out),
+            "findings destination must be absent after the kill",
+            scenario_report)
+        assert_truthful(
+            len(orphans) == 1,
+            f"exactly one findings-output temp must remain as the bounded "
+            f"residue, got {orphans}", scenario_report)
+        assert_truthful(
+            sha256_file(source) == damaged_sha,
+            "the damaged main must be byte-identical after the kill",
+            scenario_report)
+        scenario_report["destination_state"] = {
+            "class": "validate_findings_aborted",
+            "main_sha256_unchanged": True,
+            "findings_temp_basenames": orphans,
+        }
+        scenario_report["residue_bounded"] = {
+            "findings_dest_absent": True,
+            "export_temp_orphans": orphans,
+            "main_sha256_unchanged": True,
+        }
+
+        resolver = HarnessJsonRpcService(
+            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work)
+        try:
+            fresh_path = os.path.join(work, "fresh-findings.jsonl")
+            fresh = resolver.call(
+                "4", "iprange.v1.validate",
+                validate_params(source, fresh_path))
+            assert_truthful(
+                "error" not in fresh,
+                f"fresh validate must succeed, got {fresh}",
+                scenario_report)
+            fresh_result = fresh["result"]["result"]
+            fresh_findings = fresh["result"].get("findings", {})
+            fresh_valid = fresh_result.get("valid")
+            fresh_count = fresh_result.get("progress", {}).get(
+                "finding_count")
+            fresh_rows = fresh_findings.get("rows")
+            assert_truthful(
+                fresh_valid is False
+                and decimal_u64(fresh_count) == decimal_u64(ref_count)
+                and decimal_u64(fresh_rows) == decimal_u64(ref_rows),
+                "fresh validate must report the same truthful findings "
+                f"as the reference (valid={ref_valid} "
+                f"count={ref_count} rows={ref_rows}), got "
+                f"valid={fresh_valid} count={fresh_count} rows={fresh_rows}",
+                scenario_report)
+            scenario_report["resolve_outcome"] = {
+                "fresh_validate_reported_same": True,
+                "reference_finding_count": ref_count,
+                "fresh_finding_count": fresh_count,
+                "fresh_rows": fresh_rows,
+            }
+
+            # The consumer still opens the damaged main: the committed
+            # generation stays readable.
+            probe_consumer_open(consumer, work, source, scenario_report,
+                                False)
+        finally:
+            resolver.close()
+    finally:
+        producer_service.kill_process_group()
+        producer_service.close()
+    return work
+
+
 def no_leftover_processes():
     """Return every owned product PID that is still alive.
 
@@ -1389,6 +1980,14 @@ def observed_kinds(scenario_report):
     if state.get("class") == "main_unchanged_sidecar_present":
         kinds.append("live_sidecar")
         kinds.append("v4_main")
+    if state.get("class") == "live_dataset_with_uncommitted_write":
+        kinds.append("live_sidecar")
+        kinds.append("v4_main")
+    if state.get("class") == "export_partial_output":
+        kinds.append("adapter_output")
+        kinds.append("v4_main")
+    if state.get("class") == "validate_findings_aborted":
+        kinds.append("v4_main")
     return sorted(set(kinds))
 
 
@@ -1464,6 +2063,15 @@ def main():
                      direction, p, c, w, fixture_tool, report)),
                 ("C", lambda report, w=work_base, p=producer_bin,
                  c=consumer_bin: scenario_c(
+                     direction, p, c, w, report)),
+                ("D", lambda report, w=work_base, p=producer_bin,
+                 c=consumer_bin: scenario_d(
+                     direction, p, c, w, fixture_tool, report)),
+                ("E", lambda report, w=work_base, p=producer_bin,
+                 c=consumer_bin: scenario_e(
+                     direction, p, c, w, report)),
+                ("F", lambda report, w=work_base, p=producer_bin,
+                 c=consumer_bin: scenario_f(
                      direction, p, c, w, report))):
             scenario_report = {
                 "scenario": f"{name}.{direction}",

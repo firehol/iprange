@@ -2,8 +2,8 @@
 
 ## Standing Review Rules (user-mandated, read after every compaction)
 
-0. When the user asks to use the swarm, read and follow
-   `/home/costa/.codex/SWARM.md` in whole; never skim it.
+0. When the user asks to use the swarm, read and follow the user's
+   swarm rules file in whole (`~/.codex/SWARM.md`); never skim it.
 1. Prefer workers and reviewers in the lead assistant's own model.
 2. Use `glm-5.3-responses` for the final review of the whole milestone.
 3. Parallelize with the lead's own model as much as possible (the more
@@ -89,10 +89,20 @@ Implementation status (2026-09-01):
   personal paths in the evidence).  Four of the five are fixed in
   the third fix wave recorded below; the three scope items
   (additional crash scenarios, the four resource NOT-PROVEN items,
-  in-workflow recovery) are recorded as numbered user decisions and
-  block the re-close.  Delivery step 6 (consolidated benchmark
-  harness and measured ceilings) is the next milestone, recorded
-  below.
+  in-workflow recovery) were resolved by the user on 2026-09-04 as
+  D1-A, D2-A, and D3-B (recorded in the decision section below),
+  together with the two remaining repairs (kind-gate provenance and
+  the personal path in the SOW itself).  The fourth fix wave
+  (recorded below) implements the three new crash scenarios
+  (commit/finish, export, validate), the four resource proofs at the
+  product interface (pipelined `server_busy`, the -32001 over-limit
+  close path, `maintenance.remove` against a real reservation nonce,
+  and the `windows_housekeeping` kind on the Windows validation
+  host), the truthful in-workflow recovery wording for D3-B with a
+  zero-residue maintenance assertion, and the executed-actor
+  provenance repair of the kind gate.  Delivery step 6 (consolidated
+  benchmark harness and measured ceilings) is the next milestone,
+  recorded below.
 
 ## Requirements
 
@@ -3831,7 +3841,7 @@ self-test PASS (the latter exercised by the four matrix runs).
 Product source unchanged; no personal paths in the committed
 evidence.
 
-#### User decisions pending (third fix wave)
+#### User decisions (third fix wave) — resolved 2026-09-04
 
 - D1 — Crash interruption scope.  The milestone-4 plan records
   product-interface interruption during publish/commit/finish/
@@ -3847,6 +3857,12 @@ evidence.
   internal crash points per the plan's own sentence — smaller,
   already-green wave.  Recommendation: A (matches the recorded
   plan; sol's finding is concrete).
+
+  **Decision (user, 2026-09-04): A — implement all three additional
+  product-interface scenarios (commit/finish, export, validate) in
+  this wave.**  The user also authorized running tests with `nice`
+  and required the scenarios to be deterministic at durable markers
+  (never wall-clock assertions).
 - D2 — The four resource NOT-PROVEN items (the >16-in-flight
   `server_busy` race, the -32001 over-limit close path,
   `maintenance.remove` against a real reservation nonce,
@@ -3860,6 +3876,13 @@ evidence.
   existing deferral of all four to delivery step 6.  Recommendation:
   B (mechanically provable items get proven; the Windows-kind item
   is platform-bound and needs the Windows host).
+
+  **Decision (user, 2026-09-04): A — prove all four resource items
+  now, including the Windows-kind proof on `costa-win11`.**
+  `costa-win11` access is authorized restricted to SOW-0028 Windows
+  qualification (compile the two product binaries at the qualified
+  revision and run the housekeeping proof); the host is used only
+  for that purpose.
 - D3 — Publisher-workflow recovery composition.  Options: A) make
   the workflow perform a full damaged-file recovery cycle
   (deterministic truncation of its own snapshot via a new
@@ -3874,20 +3897,172 @@ evidence.
   validates the recovered output end to end and the workflow's
   snapshot is healthy by construction).
 
+  **Decision (user, 2026-09-04): B — keep successful recovery as a
+  separate damaged-file path.**  The healthy publisher workflow
+  keeps snapshot → validate → inspect (truthfully finding no
+  recovery candidate); the damaged-file path is inspect → recover →
+  reopen/query → validate, covered by `recover.successful`.  This
+  SOW wording distinguishes the two paths and `recover.successful`
+  additionally asserts truthful cleanup facts (zero scratch,
+  reservation, and publication_temp residue after a completed
+  recovery).
+
+  Plus two mandatory repairs from the same review, also approved:
+  (1) the kind gate must derive language attribution from the
+  executed actors' declared identities (per-case hashes and
+  `system.describe` implementation), never from the top-level
+  matrix label; (2) the personal home path in this SOW file must be
+  removed (done in this wave).
+
 ### 2026-09-04 — milestone 5 scope recorded (delivery step 6: consolidated benchmark harness and measured ceilings)
 
 - Step-6 scope: the consolidated benchmark harness announced in the
   plan (`v4/cli/benchmarks/` reserved) with workload manifests for
   the update-ipsets surface and measured Go-vs-Rust ceilings at the
-  product interface, plus the remaining step-5 NOT-PROVEN items
-  (the >16-in-flight `server_busy` race needs a pipelining client,
-  the -32001 over-limit close path needs raw oversized frames,
+  product interface.  The four resource items formerly deferred to
+  step 6 were proven in the fourth fix wave of step 5 (below):
+  the >16-in-flight `server_busy` race (pipelining-client proof),
+  the -32001 over-limit close path (raw oversized frame),
   `maintenance.remove` against a real reservation nonce handle,
-  and the `windows_housekeeping` kind; removal against real
-  abandoned-scratch attempt IDs is already proven by crash
-  scenario C). Ceiling
+  and the `windows_housekeeping` kind (Windows-host proof; removal
+  against real abandoned-scratch attempt IDs was already proven by
+  crash scenario C).  Ceiling
   methodology and acceptance will be recorded in the step-6
   implementation plan before any implementation starts, following
   the SOW-0027 performance-gate lessons (matched, alternating,
   same-host samples; measured ceilings per the user's 1.3x CPU /
   peak-RSS acceptance contract).
+
+
+### 2026-09-04 (continued) — fourth fix wave: D1-A crash scope, D2-A resource proofs, D3-B recovery wording, and kind-gate provenance
+
+User decisions D1-A / D2-A / D3-B and the two mandatory repairs are
+recorded above.  This wave implements them at the external-qualification
+surface only; neither product tree (`v4/rust`, `v4/go`) changes.
+
+1. **Crash scenarios D, E, F** (`v4/cli/crash_harness.py`): the
+   recorded crash scope names publish/commit/finish/export/validate.
+   A1-A3 cover publish, B covers the live transition, C covers
+   recovery; the wave adds:
+   - D — commit/finish: `direct.replace` on a live database killed
+     at the durable main-growth marker.  A fresh process truthfully
+     reports the pre-crash committed transaction in `database.info`
+     live (the interrupted write never became a generation), the
+     immutable mode truthfully refuses, a consumer live reader
+     observes the pre-crash transaction, a fresh replace commits the
+     next transaction, and no scratch/reservation/publication_temp
+     maintenance residue exists.
+   - E — export: export of a 500,000-range immutable database killed
+     at the partial-output `.export.tmp` marker.  The destination is
+     absent after the kill, the export temp is the bounded residue,
+     a fresh export to the same destination completes and matches
+     the pre-crash reference bytes, and the orphan never blocks new
+     exports.
+   - F — validate: validation of a byte-damaged database killed at
+     the findings-output `.export.tmp` marker.  The findings output
+     stays absent, the main file is byte-identical, a fresh
+     validation reports the same `valid=false` finding set, and a
+     consumer reader still opens the damaged main truthfully.
+   Every scenario runs in both language directions, uses only
+   durable markers (no wall-clock assertions), and reports the
+   observed marker latency as evidence.
+2. **Resource proofs** (`v4/cli/resource_harness.py`): three
+   product-interface proofs run for both binaries — (a) one slow
+   export plus 19 pipelined `system.describe` frames on one stdin
+   blob: exactly three answers carry transport error -32002
+   (`server_busy`) and the remaining seventeen succeed, proving the
+   >16-in-flight queue bound; (b) one >1 MiB frame: exactly one
+   -32001 response with a null id, then EOF, then a clean exit,
+   proving the over-limit close path; (c) `maintenance.remove`
+   against the real reservation nonce of a publish killed at the
+   reservation marker: the list row built from the raw reservation
+   (policy, phase, output and previous identities and digests)
+   removes the reservation durably.
+3. **`windows_housekeeping` proof** (`v4/cli/windows_housekeeping_harness.py`):
+   on the Windows validation host `costa-win11` (access authorized
+   by the user for SOW-0028 qualification only), both product
+   binaries are built at the qualified revision and the script
+   proves `maintenance.list` kind `windows_housekeeping` succeeds on
+   Windows, reports `entries 0` on an empty directory-te and lists a
+   synthesized canonical GC-envelope candidate
+   (`.iprange-gcauth-<attempt>-<ordinal>.tmp`) with its authenticated
+   directory identity; on non-Windows platforms the same script
+   records the truthful `os_unsupported`/`read_only_failure`
+   negative.
+4. **D3-B records and `recover.successful`**: the healthy publisher
+   workflow keeps snapshot → validate → inspect (no candidate,
+   truthful for a healthy snapshot); the damaged-file path is
+   inspect → recover → reopen/query → validate.  `recover.successful`
+   gains a final `maintenance.list` step proving zero
+   scratch/reservation/publication_temp residue after a completed
+   recovery (truthful cleanup facts).
+5. **Kind-gate provenance** (`v4/cli/run.py`,
+   `v4/cli/check_kind_coverage.py`): every PASS matrix case now
+   records per-actor `sha256` and `implementation`
+   (`system.describe` result) regardless of matrix kind; the gate
+   derives language attribution exclusively from those executed
+   identities and fails a report whose top-level matrix label
+   contradicts the executed actor pair, a PASS case without actors,
+   or an implementation outside rust/go.  The doctored-report
+   self-test covers the clone-and-relabel attack (a `rust` report
+   relabeled `go` must fail), missing actors, and unknown
+   implementations.
+6. **Privacy**: the personal home path in this SOW file is removed
+   (line 6 now names the swarm-rules file without an absolute home
+   path), and all regenerated evidence stays free of personal paths
+   (verified: zero matches for the home directory).
+
+Validation results for this wave (all under `nice`, Linux binaries
+staged at `/tmp/qualsvc/`, evidence in `v4/cli/evidence/`):
+
+- Matrices: rust 38/38 (oracle 37), go 38/38 (oracle 37), rust_to_go
+  14 executed / 24 skipped (oracle 22), go_to_rust 14 / 24 (oracle
+  22); every PASS case records the executed-actor SHA-256 and
+  `system.describe` implementation, and the kind gate passes under
+  the provenance rule.
+- Crash battery: 16/16 PASS (A1/A2/A3/B/C/D/E/F x rust->go and
+  go->rust), zero leftover processes; negative control 0/16 PASS
+  (16 FAIL, exit 1) exactly as designed.  Wall time ~3 min (the
+  deterministic feed writes and the two 500,000-range export windows
+  per direction dominate).
+- Resource harness: 6/6 PASS (proofs a/b/c x both binaries; Rust
+  answers exactly 3 pipelined `server_busy` refusals behind one slow
+  export, Go serializes and answers all 20 — the Go negative is
+  recorded truthfully, since Go never queues beyond the documented
+  bound).
+- Windows housekeeping: on `costa-win11` (Microsoft Windows 11,
+  AMD64) both Windows-built product binaries PASS the
+  `windows_housekeeping` listing proof (0 entries on an empty
+  directory, exactly one listed GC-envelope candidate with UTF-16LE
+  basename encoding and authenticated directory identity on the
+  candidate directory); on Linux both products truthfully refuse
+  `os_unsupported`/`read_only_failure` (recorded by the same
+  script).
+- Gates: golden 53, sensitivity 14, all schema self-tests and the
+  kind-gate doctored self-test PASS; committed evidence contains no
+  personal paths.
+
+One product defect found and fixed by the Windows qualification (in
+scope: SOW-0028 adapter defects): `v4/go/internal/cli/fileio/
+export_writer.go` removed its private temporary while the file handle
+was still open, which fails on Windows (Go files do not share
+DELETE).  The writer now closes the temporary before publication and
+removal (also on Abort and the Finish cleanup path); the Linux Go
+qualification binary hash changed to `cb0523cb…` (worker unchanged),
+and the full Go suite passes in both build modes.  Rust product
+source is unchanged (`c1386637…`).
+
+Recorded identities at this wave: Linux Go product
+`cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac`,
+worker
+`16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e`,
+Rust product
+`c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8`,
+fixture `d615488f038fa59deea87e0ce3340b780380fe0f2122e8e1ad65edeb25d861f1`;
+Windows Go product
+`252cd032c9ded4c9216a5680fd87099e37e7b5506eff32139c108b66f387696a`,
+Windows Rust product
+`5e91d9048f210958d78d935f403cfd41ac6ad587c5b8af8c22c0ba2d352524e8`.
+
+Evidence and closing records are appended after the final reviews at
+the exact final revision.

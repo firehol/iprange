@@ -158,24 +158,31 @@ table:
   reports the per-method maximum request and response size.
 - Every PASS case entry also carries the per-case `file_kinds`
   lineage (relative artifact path -> kind and the acting
-  `actor.method` created_by/opened_by lists); `check_kind_coverage.py`
-  enforces the cross-language file-kind contract on the matrix and
-  crash reports: it requires all four matrix reports (rust, go,
-  rust_to_go, go_to_rust — each report carries a top-level `matrix`
-  identity) plus a positive crash report whose PASS scenarios span
-  both language directions; every required kind must be created by
-  both product languages and, whenever any service opens the kind,
-  opened by both languages too; PASS evidence containing any kind
-  outside the required universe (v4_main, live_sidecar,
-  publication_reservation, publication_temp, authorized_scratch,
-  adapter_output, metadata_delivery) fails the gate. The gate
-  consumes PASS-case lineage only (the report-root aggregate merges
-  partial ledgers even for FAIL cases and is never trusted), rejects
-  any matrix report with `failed != 0` and any crash report with
-  `failed != 0` or leftover product processes, and counts only crash
-  scenarios whose `"pass"` is true. Its committed self-test
-  exercises doctored missing-matrix, unknown-kind, one-language,
-  single-direction, all-failed, and leftover-process reports.
+  `actor.method` created_by/opened_by lists) and the executed-actor
+  identity (per-actor SHA-256, product-declared `implementation`
+  from `system.describe`, and executed-step count);
+  `check_kind_coverage.py` enforces the cross-language file-kind
+  contract on the matrix and crash reports: it requires all four
+  matrix reports (rust, go, rust_to_go, go_to_rust) plus a positive
+  crash report whose PASS scenarios span both language directions;
+  language attribution comes exclusively from the per-case executed
+  actor identities (the top-level `matrix` label is only
+  cross-checked against the executed pair, never trusted — a report
+  relabeled without re-running fails the gate); every required kind
+  must be created by both product languages and, whenever any
+  service opens the kind, opened by both languages too; PASS
+  evidence containing any kind outside the required universe
+  (v4_main, live_sidecar, publication_reservation, publication_temp,
+  authorized_scratch, adapter_output, metadata_delivery) fails the
+  gate. The gate consumes PASS-case lineage only (the report-root
+  aggregate merges partial ledgers even for FAIL cases and is never
+  trusted), rejects any matrix report with `failed != 0` and any
+  crash report with `failed != 0` or leftover product processes, and
+  counts only crash scenarios whose `"pass"` is true. Its committed
+  self-test exercises doctored missing-matrix, unknown-kind,
+  one-language, single-direction, all-failed, leftover-process,
+  clone-and-relabel, missing-actors, and foreign-implementation
+  reports.
 
 ### Step-5 product-interface gates
 
@@ -185,17 +192,36 @@ table:
 - `crash_harness.py` — process-level interruption proof at the product
   interface: drives the normal JSON-RPC client (reusing `run.py`'s
   service and fixture code — no production test hook), kills the
-  producer at a durable engine marker — the reservation block
-  mid-`current.publish`, the creating-state sidecar
-  mid-`database.initialize_live`, and the CRC-valid authorized-scratch
-  header mid-`recover` — then proves with both consumer binaries in
-  both directions that resolution is truthful, residue is bounded,
-  and reopen succeeds. Scenario A3 is the foreign-destination
-  negative control: a poisoned destination must classify `foreign`
-  against the reservation digest.  Committed evidence is produced
-  from binary copies staged under `/tmp/qualsvc/` (version-matched
-  product/worker pairs), so the recorded argv carries no personal
-  paths; see `evidence/README.md`.
+  producer at a durable engine marker, then proves with both consumer
+  binaries in both directions that resolution is truthful, residue is
+  bounded, and reopen succeeds.  Eight scenarios cover the recorded
+  crash scope (publish/commit/finish/export/validate): A1/A2
+  `current.publish` interruption at the reservation block (A3 is the
+  foreign-destination negative control against the reservation
+  digest), B `database.initialize_live` at the creating-state sidecar,
+  C `recover` at the CRC-valid authorized-scratch header, D
+  `direct.replace` (commit/finish) at the live resize marker, E
+  `export` at the partial-output `.export.tmp` marker, F `validate`
+  at the findings-output marker.  16 scenarios run per invocation
+  (8 x both directions); all markers are durable on-disk states, never
+  wall-clock assertions.  Committed evidence is produced from binary
+  copies staged under `/tmp/qualsvc/` (version-matched product/worker
+  pairs), so the recorded argv carries no personal paths; see
+  `evidence/README.md`.
+- `resource_harness.py` — the three Linux product-interface resource
+  proofs (evidence `evidence/resource.json`): the >16-in-flight
+  `server_busy` pipelining proof, the -32001 over-limit-frame close
+  path, and `maintenance.remove` against a real reservation nonce of
+  a publish killed at the reservation marker — all for both product
+  binaries.
+- `windows_housekeeping_harness.py` — the platform-bound
+  `windows_housekeeping` maintenance-kind proof: on Windows it lists
+  the kind successfully (0 entries on an empty directory, exactly the
+  synthesized GC-envelope candidate on the candidate directory); on
+  other platforms it records the truthful
+  `os_unsupported`/`read_only_failure` negative.  Committed Windows
+  evidence: `evidence/windows-housekeeping.json` (produced on
+  `costa-win11`).
 
 ```bash
 RUST_IPRANGE=$PWD/v4/rust/target/release/iprange

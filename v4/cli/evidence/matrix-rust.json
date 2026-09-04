@@ -1,156 +1,5 @@
 {
   "binaries": {
-    "go": {
-      "available": true,
-      "methods": [
-        "iprange.v1.algebra.compare",
-        "iprange.v1.algebra.count",
-        "iprange.v1.algebra.publish",
-        "iprange.v1.commit.resolve",
-        "iprange.v1.current.publish",
-        "iprange.v1.database.create",
-        "iprange.v1.database.create.resolve",
-        "iprange.v1.database.info",
-        "iprange.v1.database.initialize_live",
-        "iprange.v1.database.live_residue.resolve",
-        "iprange.v1.database.live_transition.resolve",
-        "iprange.v1.database.metadata.get",
-        "iprange.v1.database.metadata.replace",
-        "iprange.v1.database.reclaim",
-        "iprange.v1.database.reset_live",
-        "iprange.v1.direct.replace",
-        "iprange.v1.export",
-        "iprange.v1.feeds.create",
-        "iprange.v1.feeds.delete",
-        "iprange.v1.feeds.import",
-        "iprange.v1.feeds.rename",
-        "iprange.v1.feeds.replace",
-        "iprange.v1.history.project",
-        "iprange.v1.join.direct",
-        "iprange.v1.join.membership",
-        "iprange.v1.maintenance.list",
-        "iprange.v1.maintenance.remove",
-        "iprange.v1.publication.inspect",
-        "iprange.v1.publication.residue.remove",
-        "iprange.v1.publication.resolve",
-        "iprange.v1.query.cardinalities",
-        "iprange.v1.query.matching_feeds",
-        "iprange.v1.query.overlaps",
-        "iprange.v1.reader.close",
-        "iprange.v1.reader.feeds.close",
-        "iprange.v1.reader.feeds.next",
-        "iprange.v1.reader.feeds.open",
-        "iprange.v1.reader.info",
-        "iprange.v1.reader.lookup",
-        "iprange.v1.reader.matching_feeds",
-        "iprange.v1.reader.metadata",
-        "iprange.v1.reader.open",
-        "iprange.v1.reader.ranges.close",
-        "iprange.v1.reader.ranges.next",
-        "iprange.v1.reader.ranges.open",
-        "iprange.v1.recover",
-        "iprange.v1.recovery.inspect",
-        "iprange.v1.retention.first_seen.refresh",
-        "iprange.v1.retention.last_seen.refresh",
-        "iprange.v1.snapshot",
-        "iprange.v1.system.describe",
-        "iprange.v1.validate"
-      ],
-      "path": "/tmp/qualsvc/go/iprange",
-      "result": {
-        "api_version": "1",
-        "export_formats": [
-          "netset",
-          "ipset",
-          "ranges",
-          "csv",
-          "jsonl",
-          "legacy_binary"
-        ],
-        "families": [
-          "ipv4",
-          "ipv6"
-        ],
-        "fault_worker": {
-          "available": true,
-          "protocol": "1"
-        },
-        "format": "iprange-v4-phase1-unsigned",
-        "implementation": "go",
-        "jsonrpc_version": "2.0",
-        "limits": {
-          "batch_requests": 16,
-          "cursor_handles": 64,
-          "cursor_records": 4096,
-          "input_frame_bytes": "1048576",
-          "lookup_addresses": 4096,
-          "output_frame_bytes": "1048576",
-          "queued_requests": 16,
-          "reader_handles": 64,
-          "response_object_bytes": "65000"
-        },
-        "method": "iprange.v1.system.describe",
-        "methods": [
-          "iprange.v1.algebra.compare",
-          "iprange.v1.algebra.count",
-          "iprange.v1.algebra.publish",
-          "iprange.v1.commit.resolve",
-          "iprange.v1.current.publish",
-          "iprange.v1.database.create",
-          "iprange.v1.database.create.resolve",
-          "iprange.v1.database.info",
-          "iprange.v1.database.initialize_live",
-          "iprange.v1.database.live_residue.resolve",
-          "iprange.v1.database.live_transition.resolve",
-          "iprange.v1.database.metadata.get",
-          "iprange.v1.database.metadata.replace",
-          "iprange.v1.database.reclaim",
-          "iprange.v1.database.reset_live",
-          "iprange.v1.direct.replace",
-          "iprange.v1.export",
-          "iprange.v1.feeds.create",
-          "iprange.v1.feeds.delete",
-          "iprange.v1.feeds.import",
-          "iprange.v1.feeds.rename",
-          "iprange.v1.feeds.replace",
-          "iprange.v1.history.project",
-          "iprange.v1.join.direct",
-          "iprange.v1.join.membership",
-          "iprange.v1.maintenance.list",
-          "iprange.v1.maintenance.remove",
-          "iprange.v1.publication.inspect",
-          "iprange.v1.publication.residue.remove",
-          "iprange.v1.publication.resolve",
-          "iprange.v1.query.cardinalities",
-          "iprange.v1.query.matching_feeds",
-          "iprange.v1.query.overlaps",
-          "iprange.v1.reader.close",
-          "iprange.v1.reader.feeds.close",
-          "iprange.v1.reader.feeds.next",
-          "iprange.v1.reader.feeds.open",
-          "iprange.v1.reader.info",
-          "iprange.v1.reader.lookup",
-          "iprange.v1.reader.matching_feeds",
-          "iprange.v1.reader.metadata",
-          "iprange.v1.reader.open",
-          "iprange.v1.reader.ranges.close",
-          "iprange.v1.reader.ranges.next",
-          "iprange.v1.reader.ranges.open",
-          "iprange.v1.recover",
-          "iprange.v1.recovery.inspect",
-          "iprange.v1.retention.first_seen.refresh",
-          "iprange.v1.retention.last_seen.refresh",
-          "iprange.v1.snapshot",
-          "iprange.v1.system.describe",
-          "iprange.v1.validate"
-        ],
-        "platform": "linux",
-        "platform_result_fields": [],
-        "product": "iprange",
-        "product_version": "0.0.0"
-      },
-      "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9"
-    },
     "rust": {
       "available": true,
       "methods": [
@@ -305,6 +154,18 @@
   },
   "cases": [
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "algebra.compare",
@@ -312,6 +173,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "algebra.count",
@@ -319,6 +192,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "algebra.oracle",
@@ -326,6 +211,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        }
+      },
       "file_kinds": {
         "algebra-out.iprange": {
           "created_by": [
@@ -341,6 +238,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 4
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "cancel.unknown_id",
@@ -348,6 +257,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "database.create_bad_directory",
@@ -355,6 +276,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {
         "metadata.json": {
           "created_by": [
@@ -370,6 +303,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
       "file_kinds": {
         "meta.iprange": {
           "created_by": [
@@ -395,6 +340,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "database.metadata.replace_bad_path",
@@ -402,6 +359,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 7
+        }
+      },
       "file_kinds": {
         "first_seen.iprange": {
           "created_by": [
@@ -452,6 +421,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {
         "out.netset": {
           "created_by": [
@@ -467,6 +448,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 6
+        }
+      },
       "file_kinds": {
         "feeddb.iprange": {
           "created_by": [
@@ -495,6 +488,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 5
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 6
+        }
+      },
       "file_kinds": {
         "histdb.iprange": {
           "created_by": [
@@ -540,6 +545,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
       "file_kinds": {
         "join.jsonl": {
           "created_by": [
@@ -572,6 +589,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {
         "join.jsonl": {
           "created_by": [
@@ -587,6 +616,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 6
+        }
+      },
       "file_kinds": {
         "credb.iprange": {
           "created_by": [
@@ -621,6 +662,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 4
+        }
+      },
       "file_kinds": {
         "direct.iprange.readers": {
           "created_by": [
@@ -636,6 +689,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 3
+        }
+      },
       "file_kinds": {
         "entries.jsonl": {
           "created_by": [
@@ -667,6 +732,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 7
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
       "file_kinds": {
         "created.iprange": {
           "created_by": [
@@ -692,6 +769,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 5
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 13
+        }
+      },
       "file_kinds": {
         "live.iprange": {
           "created_by": [
@@ -724,6 +813,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 7
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
       "file_kinds": {
         "created-membership.iprange": {
           "created_by": [
@@ -749,6 +850,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 4
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
       "file_kinds": {
         "db.iprange": {
           "created_by": [
@@ -783,6 +896,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 3
+        }
+      },
       "file_kinds": {
         "published.iprange": {
           "created_by": [
@@ -801,6 +926,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {
         "cardinalities.csv": {
           "created_by": [
@@ -816,6 +953,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {
         "matching.csv": {
           "created_by": [
@@ -831,6 +980,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {
         "overlaps.csv": {
           "created_by": [
@@ -846,6 +1007,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 11
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "reader.direct-v4",
@@ -853,6 +1026,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 3
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "reader.info",
@@ -860,6 +1045,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "reader.lookup_bad_handle",
@@ -867,6 +1064,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 13
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "reader.membership-v4",
@@ -874,6 +1083,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "reader.open_missing",
@@ -881,6 +1102,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 6
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "reader.structured-v4",
@@ -888,6 +1121,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 5
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 3
+        }
+      },
       "file_kinds": {
         "findings.jsonl": {
           "created_by": [
@@ -919,6 +1164,13 @@
           ],
           "kind": "adapter_output",
           "opened_by": []
+        },
+        "residue.jsonl": {
+          "created_by": [
+            "producer.iprange.v1.maintenance.list"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
         }
       },
       "matrix": "rust",
@@ -927,6 +1179,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 134
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "resource.limits",
@@ -934,6 +1198,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 3
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        }
+      },
       "file_kinds": {
         "snap.iprange": {
           "created_by": [
@@ -952,6 +1228,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 0
+        }
+      },
       "file_kinds": {},
       "matrix": "rust",
       "name": "system.describe",
@@ -959,6 +1247,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 2
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 1
+        }
+      },
       "file_kinds": {
         "findings.jsonl": {
           "created_by": [
@@ -974,6 +1274,18 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 33
+        },
+        "producer": {
+          "implementation": "rust",
+          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "steps": 20
+        }
+      },
       "file_kinds": {
         "algebra-out.iprange": {
           "created_by": [
@@ -1138,15 +1450,12 @@
     "rust",
     "--rust",
     "/tmp/qualsvc/rust/iprange",
-    "--go",
-    "/tmp/qualsvc/go/iprange",
     "--fixture-tool",
     "/tmp/qualsvc/rust/v4-fixture",
     "--work-dir",
-    "/tmp/qualsvc/ev2/rust",
-    "--allow-skips",
+    "/tmp/qualsvc/ev3/rust",
     "--json-report",
-    "/tmp/qualsvc/ev2/matrix-rust.json"
+    "/tmp/qualsvc/ev3/matrix-rust.json"
   ],
   "environment_allowlist": [
     "PATH",
@@ -1172,7 +1481,7 @@
         "iprange.v1.export": 1,
         "iprange.v1.join.direct": 2,
         "iprange.v1.join.membership": 2,
-        "iprange.v1.maintenance.list": 2,
+        "iprange.v1.maintenance.list": 3,
         "iprange.v1.query.cardinalities": 1,
         "iprange.v1.query.matching_feeds": 1,
         "iprange.v1.query.overlaps": 2,
@@ -1342,7 +1651,7 @@
       "max_response_bytes": 638
     },
     "iprange.v1.maintenance.list": {
-      "max_request_bytes": 462,
+      "max_request_bytes": 468,
       "max_response_bytes": 411
     },
     "iprange.v1.maintenance.remove": {

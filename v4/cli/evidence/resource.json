@@ -1,0 +1,239 @@
+{
+  "binaries": {
+    "go": {
+      "path": "/tmp/qualsvc/go/iprange",
+      "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac"
+    },
+    "rust": {
+      "path": "/tmp/qualsvc/rust/iprange",
+      "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8"
+    }
+  },
+  "command": [
+    "v4/cli/resource_harness.py",
+    "--binaries",
+    "rust=/tmp/qualsvc/rust/iprange",
+    "go=/tmp/qualsvc/go/iprange",
+    "--work-dir",
+    "/tmp/qualsvc/ev3/res",
+    "--json-report",
+    "/tmp/qualsvc/ev3/resource.json"
+  ],
+  "failed": 0,
+  "leftover_processes": [],
+  "platform": {
+    "machine": "x86_64",
+    "python": "3.14.7",
+    "release": "7.1.9-1-MANJARO",
+    "system": "Linux"
+  },
+  "proofs": [
+    {
+      "binary": "go",
+      "binary_path": "/tmp/qualsvc/go/iprange",
+      "busy_ids": [],
+      "elapsed_ms": 1130.7,
+      "exit_code": 0,
+      "export_code": "result",
+      "export_ids": [
+        {
+          "id": "1",
+          "jsonrpc": "2.0",
+          "result": {
+            "addresses": "128000000",
+            "bytes": "12472986",
+            "format": "ranges",
+            "identity": {
+              "file": "235296236",
+              "volume": "66307"
+            },
+            "method": "iprange.v1.export",
+            "path": "/tmp/qualsvc/ev3/res/resource-804060c7/a-go/slow.txt",
+            "rows": "500000",
+            "sha256": "4d5094acbc4cb0b9f24a34665f366aa73e4772132fba75ffb626de397e48a505"
+          }
+        }
+      ],
+      "failures": [],
+      "feed_lines": 500000,
+      "killed": false,
+      "ok_ids": [
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17",
+        "18",
+        "19",
+        "20"
+      ],
+      "pass": true,
+      "pid": 764527,
+      "proof": "a",
+      "responses": 20,
+      "source_sha256": "37e94a242e45b2369e3669ea0b0911511e9006c41d61361682aa5d22def360e6"
+    },
+    {
+      "binary": "go",
+      "binary_path": "/tmp/qualsvc/go/iprange",
+      "elapsed_ms": 7.5,
+      "exit_code": 0,
+      "failures": [],
+      "pass": true,
+      "pid": 764550,
+      "proof": "b",
+      "response": {
+        "error": {
+          "code": -32001,
+          "message": "frame over input limit"
+        },
+        "id": null,
+        "jsonrpc": "2.0"
+      },
+      "response_lines": 1
+    },
+    {
+      "binary": "go",
+      "binary_path": "/tmp/qualsvc/go/iprange",
+      "elapsed_ms": 24.6,
+      "failures": [],
+      "listed_rows": 1,
+      "marker_seen_ms": 7.642507553100586,
+      "output_byte_length": "114688",
+      "pass": true,
+      "phase": "prepared",
+      "policy": 1,
+      "previous_digest_sha512": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "previous_flags": 0,
+      "previous_identity": {
+        "file": "0",
+        "volume": "0"
+      },
+      "proof": "c",
+      "publish_temp_after": [
+        ".iprange-publish-631e40910d1aafdee379adf0f6febfe3.tmp"
+      ],
+      "remove": "ok",
+      "reports": [
+        {
+          "entries": "1",
+          "kind": "reservation"
+        }
+      ],
+      "reservation_after": []
+    },
+    {
+      "binary": "rust",
+      "binary_path": "/tmp/qualsvc/rust/iprange",
+      "busy_ids": [
+        "18",
+        "19",
+        "20"
+      ],
+      "elapsed_ms": 810.9,
+      "exit_code": 0,
+      "export_code": -32010,
+      "export_ids": [
+        {
+          "error": {
+            "code": -32010,
+            "data": {
+              "code": "cancelled",
+              "outcome": "read_only_failure"
+            },
+            "message": "operation was cancelled"
+          },
+          "id": "1",
+          "jsonrpc": "2.0"
+        }
+      ],
+      "failures": [],
+      "feed_lines": 500000,
+      "killed": false,
+      "ok_ids": [
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14",
+        "15",
+        "16",
+        "17"
+      ],
+      "pass": true,
+      "pid": 764631,
+      "proof": "a",
+      "responses": 20,
+      "source_sha256": "c6e09efec943993eebf9af48f4dc6b14ce259fb101ce70f54ba65500be35fcf8"
+    },
+    {
+      "binary": "rust",
+      "binary_path": "/tmp/qualsvc/rust/iprange",
+      "elapsed_ms": 3.7,
+      "exit_code": 0,
+      "failures": [],
+      "pass": true,
+      "pid": 764635,
+      "proof": "b",
+      "response": {
+        "error": {
+          "code": -32001,
+          "message": "frame over input limit"
+        },
+        "id": null,
+        "jsonrpc": "2.0"
+      },
+      "response_lines": 1
+    },
+    {
+      "binary": "rust",
+      "binary_path": "/tmp/qualsvc/rust/iprange",
+      "elapsed_ms": 18.0,
+      "failures": [],
+      "listed_rows": 1,
+      "marker_seen_ms": 4.410028457641602,
+      "output_byte_length": "114688",
+      "pass": true,
+      "phase": "prepared",
+      "policy": 1,
+      "previous_digest_sha512": "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+      "previous_flags": 0,
+      "previous_identity": {
+        "file": "0",
+        "volume": "0"
+      },
+      "proof": "c",
+      "publish_temp_after": [
+        ".iprange-publish-526090ebc52d3139dc3b43ef1e5eb2e5.tmp"
+      ],
+      "remove": "ok",
+      "reports": [
+        {
+          "entries": "1",
+          "kind": "reservation"
+        }
+      ],
+      "reservation_after": []
+    }
+  ],
+  "schema": "iprange-cli-resource-report-v1"
+}

@@ -19,8 +19,10 @@ either side.  Single-language matrices run both roles on the one
 selected executable.  A case that cannot exercise both actors is skipped with its
 reason, so a mixed-direction PASS always means both binaries actually
 served; a mixed direction that executes no both-actor case fails as a
-matrix.  Per-case report entries record the SHA-256 and executed-step
-count of each actor binary.
+matrix.  Per-case PASS entries record each actor binary's SHA-256,
+product-declared implementation ("rust"|"go"), and executed-step count,
+so language attribution derives from the executed binaries themselves,
+never from the report-level matrix label.
 """
 
 import argparse
@@ -1630,8 +1632,6 @@ def main():
                 producer_binary=binaries[producer] if mixed else None,
                 consumer_binary=binaries[consumer] if mixed else None)
             runner.run()
-            report["passed"] += 1
-            report["oracle_checks"] += runner.oracle_checks
             entry = {
                 "name": case["name"], "matrix": matrix, "status": "PASS",
                 "oracle_checks": runner.oracle_checks,
@@ -1652,14 +1652,31 @@ def main():
                 # describe_capabilities (cache keyed on path+sha256); the
                 # per-case entry reuses that hash instead of re-reading the
                 # binaries from disk on every executed case.
-                entry["actors"] = {
-                    actor: {
-                        "sha256": capabilities[
-                            producer if actor == "producer" else consumer]["sha256"],
-                        "steps": runner.actor_steps.get(actor, 0),
-                    }
-                    for actor in ALL_ACTORS
+                actor_keys = {"producer": producer, "consumer": consumer}
+            else:
+                # Single-language matrices run both roles on the one
+                # selected executable, so both actors carry its record.
+                actor_keys = {"producer": producer, "consumer": producer}
+            # Every PASS case records the serving binary's own declared
+            # implementation, so language attribution never depends on the
+            # report-level matrix label (a relabeled clone cannot fake a
+            # language it did not execute).  A binary that served a case
+            # without a declared implementation fails the case.
+            entry["actors"] = {}
+            for actor, key in actor_keys.items():
+                capability = capabilities[key]
+                implementation = capability.get("result", {}).get("implementation")
+                if implementation not in ("rust", "go"):
+                    raise ValueError(
+                        f"binary {key!r} served the case but declared no "
+                        f"rust/go implementation")
+                entry["actors"][actor] = {
+                    "sha256": capability["sha256"],
+                    "implementation": implementation,
+                    "steps": runner.actor_steps.get(actor, 0),
                 }
+            report["passed"] += 1
+            report["oracle_checks"] += runner.oracle_checks
             report["cases"].append(entry)
             print(f"PASS {label} (oracle={runner.oracle_checks})")
             return "pass"

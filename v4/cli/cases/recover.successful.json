@@ -396,6 +396,60 @@
      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
    }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.maintenance.list",
+   "params": {
+    "directory": "$WORK/.",
+    "kinds": [
+     "scratch",
+     "reservation",
+     "publication_temp"
+    ],
+    "max_entries": 4096,
+    "output": {
+     "path": "$WORK/residue.jsonl",
+     "format": "jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_rows": "4096",
+      "max_output_bytes": "1048576",
+      "max_open_files": 3
+     }
+    }
+   },
+   "expect_result": {
+    "output": {
+     "path": {
+      "$ignore": true
+     },
+     "bytes": "0",
+     "rows": "0",
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "reports": [
+     {
+      "kind": "scratch",
+      "entries": "0"
+     },
+     {
+      "kind": "reservation",
+      "entries": "0"
+     },
+     {
+      "kind": "publication_temp",
+      "entries": "0"
+     }
+    ]
+   },
+   "assert_files": [
+    {
+     "path": "residue.jsonl",
+     "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+   ]
   }
  ]
 }

@@ -35,4 +35,50 @@ Go matrix, fresh work dir, under `/usr/bin/time -v`: peak RSS **29,692 kB** (Pyt
 ## PROVEN vs deferred
 
 PROVEN: advertised limits; `output_limit` on oversized inline results; reader/cursor 64+1 capacity (`server_busy`); frame-layer batch bound 1..16; bounded adapter memory by design and gates; `maintenance.list` reports the `scratch`/`reservation`/`publication_temp` kinds on Linux (case-backed); `maintenance.remove` against a real abandoned-scratch attempt ID (crash scenario C: list -> remove -> durable absent, both product languages).
-NOT PROVEN here: the >16-in-flight `server_busy` race (needs a pipelining client, not expressible in the declarative suite); the -32001 over-limit-frame close path (the declarative runner refuses to send >1 MiB frames, so the claim rests on `system.describe` and the product constants); `maintenance.remove` against a real reservation nonce handle (nonce names are runtime-random; the suite proves the `invalid_argument` refusal only); the `windows_housekeeping` maintenance kind (platform-bound by design; probe-only observation of `os_unsupported`/`read_only_failure` on Linux in both products, not committed as a case step). These remain step-6 benchmark/qualification territory together with latency/throughput and engine RSS ceilings.
+
+The four former NOT-PROVEN items are now proven at the product
+interface by `resource_harness.py` (evidence `evidence/resource.json`)
+and `windows_housekeeping_harness.py` (evidence
+`evidence/windows-housekeeping.json`, executed on the Windows
+validation host):
+
+1. The >16-in-flight `server_busy` race — one slow 500,000-range
+   export pipelined with 19 `system.describe` frames on one stdin
+   blob: the Rust product answers exactly 3 describes with
+   transport -32002 behind the single in-flight export and the
+   remaining 16 with results (the 16-deep queue bound); the Go
+   product executes the pipelined frames serially and answers all
+   20 (it never queues beyond the bound, so the refusal is
+   unreachable through this path — recorded truthfully as the Go
+   negative).
+2. The -32001 over-limit-frame close path — one >1 MiB frame yields
+   exactly one -32001 response with a null id, then EOF, then a
+   clean exit 0 in both products.
+3. `maintenance.remove` against a real reservation nonce — a publish
+   killed at the reservation marker, one `maintenance.list`
+   reservation row, the removal entry rebuilt from the raw
+   reservation bytes (policy, phase, output and previous identities
+   and digests), `maintenance.remove` returns ok and the
+   reservation is durably absent in both products.
+4. The `windows_housekeeping` maintenance kind — on `costa-win11`
+   (Microsoft Windows 11) both Windows-built product binaries list
+   the kind successfully: 0 entries on an empty directory and
+   exactly one GC-envelope candidate
+   (`.iprange-gcauth-<attempt>-<ordinal>.tmp`, kind
+   `windows_housekeeping`, `candidate_kind: envelope`, UTF-16LE
+   basename encoding, exact basename, authenticated directory
+   identity) on a candidate directory; on non-Windows platforms
+   both products truthfully refuse with
+   `os_unsupported`/`read_only_failure` (Linux negative recorded by
+   the same script).
+
+The Windows qualification additionally found and fixed one Go
+adapter defect: `v4/go/internal/cli/fileio/export_writer.go` removed
+its private temporary while the file was still open, which fails on
+Windows (Go files do not share DELETE); the writer now closes the
+temporary before publication/removal (also on Abort and the Finish
+cleanup path).  The Linux Go qualification binary changed hash to
+`cb0523cb…` as a result; behavior on Linux is unchanged.
+
+Deferred to delivery step 6: latency/throughput and engine RSS
+ceilings only.

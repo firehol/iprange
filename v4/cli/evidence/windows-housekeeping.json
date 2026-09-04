@@ -1,0 +1,171 @@
+{
+  "binaries": {
+    "go": {
+      "path": "C:/Temp/qualsvc-win/go/iprange.exe",
+      "sha256": "252cd032c9ded4c9216a5680fd87099e37e7b5506eff32139c108b66f387696a"
+    },
+    "rust": {
+      "path": "C:/Temp/qualsvc-win/rust/iprange.exe",
+      "sha256": "5e91d9048f210958d78d935f403cfd41ac6ad587c5b8af8c22c0ba2d352524e8"
+    }
+  },
+  "candidate": {
+    "directory": "C:/temp/whqual/candidates",
+    "envelope": ".iprange-gcauth-f3524ab77ab77cff4a95cfd441ae16f6-f30bb425.tmp",
+    "marker": "MARKER.txt"
+  },
+  "command": [
+    "windows_housekeeping_harness.py",
+    "--binaries",
+    "rust=C:/temp/qualsvc-win/rust/iprange.exe",
+    "go=C:/temp/qualsvc-win/go/iprange.exe",
+    "--work-dir",
+    "C:/temp/whqual",
+    "--json-report",
+    "C:/temp/whqual-report.json"
+  ],
+  "failed": 0,
+  "outcomes": [
+    {
+      "binary": "go",
+      "candidates_dir": {
+        "entries": "1",
+        "error": null,
+        "reports": [
+          {
+            "entries": "1",
+            "kind": "windows_housekeeping"
+          }
+        ],
+        "row_checked": {
+          "basename_decoded": ".iprange-gcauth-f3524ab77ab77cff4a95cfd441ae16f6-f30bb425.tmp",
+          "basename_encoding": 2,
+          "basename_ok": true,
+          "candidate_kind": "envelope",
+          "directory_identity": true,
+          "kind": "windows_housekeeping"
+        },
+        "rows": [
+          {
+            "attempt_id": "f3524ab77ab77cff4a95cfd441ae16f6",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQBmADMANQAyADQAYQBiADcANwBhAGIANwA3AGMAZgBmADQAYQA5ADUAYwBmAGQANAA0ADEAYQBlADEANgBmADYALQBmADMAMABiAGIANAAyADUALgB0AG0AcAA=",
+            "basename_encoding": 2,
+            "candidate_kind": "envelope",
+            "directory": "C:/temp/whqual/candidates",
+            "directory_identity": {
+              "file": "1407374883989720",
+              "volume": "8264173776665448027"
+            },
+            "identity": {
+              "file": "2251799814121694",
+              "volume": "8264173776665448027"
+            },
+            "kind": "windows_housekeeping",
+            "ordinal": 4077630501,
+            "problem": {
+              "code": "cleanup_conflict",
+              "detail": "GC authority envelope has the wrong length"
+            }
+          }
+        ]
+      },
+      "empty_dir": {
+        "entries": "0",
+        "error": null,
+        "reports": [
+          {
+            "entries": "0",
+            "kind": "windows_housekeeping"
+          }
+        ],
+        "row_checked": {
+          "basename_decoded": null,
+          "basename_ok": false,
+          "candidate_kind": null,
+          "directory_identity": false,
+          "kind": null
+        },
+        "rows": []
+      },
+      "failures": [],
+      "pass": true,
+      "path": "C:/Temp/qualsvc-win/go/iprange.exe"
+    },
+    {
+      "binary": "rust",
+      "candidates_dir": {
+        "entries": "1",
+        "error": null,
+        "reports": [
+          {
+            "entries": "1",
+            "kind": "windows_housekeeping"
+          }
+        ],
+        "row_checked": {
+          "basename_decoded": ".iprange-gcauth-f3524ab77ab77cff4a95cfd441ae16f6-f30bb425.tmp",
+          "basename_encoding": 2,
+          "basename_ok": true,
+          "candidate_kind": "envelope",
+          "directory_identity": true,
+          "kind": "windows_housekeeping"
+        },
+        "rows": [
+          {
+            "attempt_id": "f3524ab77ab77cff4a95cfd441ae16f6",
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQBmADMANQAyADQAYQBiADcANwBhAGIANwA3AGMAZgBmADQAYQA5ADUAYwBmAGQANAA0ADEAYQBlADEANgBmADYALQBmADMAMABiAGIANAAyADUALgB0AG0AcAA=",
+            "basename_encoding": 2,
+            "candidate_kind": "envelope",
+            "directory": "C:/temp/whqual/candidates",
+            "directory_identity": {
+              "file": "1407374883989720",
+              "volume": "8264173776665448027"
+            },
+            "identity": {
+              "file": "2251799814121694",
+              "volume": "8264173776665448027"
+            },
+            "kind": "windows_housekeeping",
+            "ordinal": 4077630501,
+            "problem": {
+              "code": "cleanup_conflict",
+              "detail": "GC authority envelope has the wrong length"
+            }
+          }
+        ]
+      },
+      "empty_dir": {
+        "entries": "0",
+        "error": null,
+        "reports": [
+          {
+            "entries": "0",
+            "kind": "windows_housekeeping"
+          }
+        ],
+        "row_checked": {
+          "basename_decoded": null,
+          "basename_ok": false,
+          "candidate_kind": null,
+          "directory_identity": false,
+          "kind": null
+        },
+        "rows": []
+      },
+      "failures": [],
+      "pass": true,
+      "path": "C:/Temp/qualsvc-win/rust/iprange.exe"
+    }
+  ],
+  "platform": {
+    "machine": "AMD64",
+    "python": "3.14.6",
+    "release": "11",
+    "system": "Windows"
+  },
+  "schema": "iprange-cli-windows-housekeeping-report-v1",
+  "skipped": false,
+  "skipped_reason": null,
+  "windows_qualified": true,
+  "work_dir": "C:/temp/whqual"
+}

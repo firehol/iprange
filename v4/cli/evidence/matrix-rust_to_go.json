@@ -149,7 +149,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9"
+      "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac"
     },
     "rust": {
       "available": true,
@@ -349,10 +349,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 1
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
         }
@@ -408,10 +410,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 5
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 6
         }
@@ -463,10 +467,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 1
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
         }
@@ -511,10 +517,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 1
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 6
         }
@@ -561,10 +569,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 1
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 3
         }
@@ -602,10 +612,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 7
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
         }
@@ -637,10 +649,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 5
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 13
         }
@@ -679,10 +693,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 7
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
         }
@@ -714,10 +730,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 4
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
         }
@@ -758,10 +776,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 1
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 3
         }
@@ -840,12 +860,14 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 5
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
-          "steps": 2
+          "steps": 3
         }
       },
       "file_kinds": {
@@ -879,6 +901,13 @@
           ],
           "kind": "adapter_output",
           "opened_by": []
+        },
+        "residue.jsonl": {
+          "created_by": [
+            "producer.iprange.v1.maintenance.list"
+          ],
+          "kind": "adapter_output",
+          "opened_by": []
         }
       },
       "matrix": "rust->go",
@@ -895,10 +924,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 3
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 2
         }
@@ -929,10 +960,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 2
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 1
         }
@@ -954,10 +987,12 @@
     {
       "actors": {
         "consumer": {
-          "sha256": "1612646fdbfc54e4c9fe99378806dcc271a2f852c634d4f149d6220bf63b07b9",
+          "implementation": "go",
+          "sha256": "cb0523cb4acc03d937e6ef97bf1b8c6aa5d1f7d9dd88f9bbb950012a9a1130ac",
           "steps": 33
         },
         "producer": {
+          "implementation": "rust",
           "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
           "steps": 20
         }
@@ -1131,10 +1166,10 @@
     "--fixture-tool",
     "/tmp/qualsvc/rust/v4-fixture",
     "--work-dir",
-    "/tmp/qualsvc/ev2/rust_to_go",
-    "--allow-skips",
+    "/tmp/qualsvc/ev3/rust_to_go",
     "--json-report",
-    "/tmp/qualsvc/ev2/matrix-rust_to_go.json"
+    "/tmp/qualsvc/ev3/matrix-rust_to_go.json",
+    "--allow-skips"
   ],
   "environment_allowlist": [
     "PATH",
@@ -1159,7 +1194,7 @@
       "created_by": {
         "iprange.v1.join.direct": 2,
         "iprange.v1.join.membership": 1,
-        "iprange.v1.maintenance.list": 2,
+        "iprange.v1.maintenance.list": 3,
         "iprange.v1.query.overlaps": 1,
         "iprange.v1.recover": 1,
         "iprange.v1.retention.first_seen.refresh": 1,
@@ -1283,7 +1318,7 @@
       "max_response_bytes": 647
     },
     "iprange.v1.maintenance.list": {
-      "max_request_bytes": 480,
+      "max_request_bytes": 486,
       "max_response_bytes": 420
     },
     "iprange.v1.maintenance.remove": {
