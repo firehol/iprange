@@ -121,10 +121,10 @@ nice python3 v4/cli/check_kind_coverage.py --matrix ... --crash ...
   `candidates[0]]` are rejected by case validation and by the runner.
   Every `schema/` module ships a `_self_test()` (run it through a
   normal import, e.g. `nice python3 -c "from schema import cases as
-  c; c._self_test()"`), and `run.py` runs its own and the oracle's
-  self-tests before any matrix. The kind-coverage gate ships its own
-  doctored-report self-test that runs before its CLI
-  (`nice python3 check_kind_coverage.py --help`).
+  c; c._self_test()"`), and `run.py` runs its own, the oracle's, and
+  the case-schema self-tests before any matrix. The kind-coverage
+  gate ships its own doctored-report self-test that runs before its
+  CLI (`nice python3 check_kind_coverage.py --help`).
 - `benchmarks/` — reserved for the consolidated workload manifests
   and `bench.py` harness of SOW-0028 delivery step 6 (currently
   empty; also update the `cases/` bullet above and the matrix counts

@@ -3702,7 +3702,9 @@ f04a3dc9; findings verified before implementation):
    `candidates[0]`.  Dispose: `schema/cases.py` now defines one
    anchored pointer grammar (`member` chains with optional `[index]`
    steps) shared by case validation and the runner resolver, with
-   `_self_test()` covering the accepted and rejected pointer sets.
+   `_self_test()` covering the accepted and rejected pointer sets;
+   run.py now runs the case-schema self-test before every matrix, so
+   the negative pointer cases are wired into the gate, not dormant.
 
 Fix-wave evidence at this revision (all under `nice`; evidence
 regenerated in v4/cli/evidence/):

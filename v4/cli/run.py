@@ -1547,6 +1547,7 @@ def main():
 
     try:
         oracle._self_test()
+        case_schema._self_test()
         _self_test()
         use_cases = load_cases(args.cases)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
