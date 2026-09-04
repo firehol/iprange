@@ -12,6 +12,7 @@ notification, so a notification step must use that method (frame.py contract).
 """
 
 import os
+import re
 from pathlib import PureWindowsPath
 
 from .engine import ValidationError, validate
@@ -217,14 +218,37 @@ def _relative_work_path(value, path):
         raise ValidationError(f"{path}", "work-directory path must stay inside $WORK")
 
 
+# Anchored capture-pointer grammar: a member chain where each member
+# may carry zero or more ``[index]`` list steps (``a[0].b[1][2]``).
+# Members are any nonempty run of characters that are not ``.``, ``[``,
+# or ``]``; indexes are decimal digits only.  The anchoring rejects
+# trailing/bad brackets (``candidates[0]]``), leading or trailing dots,
+# empty members, and pointers that start with an index step.
+_POINTER_RE = re.compile(
+    r"^[^.\]\[]+(?:\[\d+\])*(?:\.[^.\]\[]+(?:\[\d+\])*)*$")
+
+
+def pointer_parts(value):
+    """Split a capture pointer into its member and ``[index]`` parts.
+
+    Returns the part list for a pointer that matches the anchored
+    grammar, or None for any malformed pointer.
+    """
+    if _POINTER_RE.match(value) is None:
+        return None
+    return re.findall(r"[^.\[\]]+|\[\d+\]", value)
+
+
 def _valid_pointer(value, path):
     """A capture pointer is a dotted chain of member names with optional
-    ``[index]`` list steps (e.g. ``candidates[0]``); every listed part
-    must be nonempty."""
-    import re
-    parts = re.findall(r"[^.\[\]]+|\[\d+\]", value)
-    if not parts or not any(not part.startswith("[") for part in parts):
-        raise ValidationError(f"{path}", "capture pointer must contain member names")
+    ``[index]`` list steps (e.g. ``candidates[0]``); the grammar is
+    anchored, so malformed pointers are rejected instead of being
+    silently truncated."""
+    if pointer_parts(value) is None:
+        raise ValidationError(
+            f"{path}",
+            "capture pointer must be a member chain with optional "
+            "\"[index]\" steps (e.g. \"candidates[0]\")")
 
 
 def validate_case(case):
@@ -356,3 +380,78 @@ def validate_rpc_request(method, params):
 def validate_rpc_result(method, result):
     from . import results
     results.validate_result(method, result)
+
+
+def _self_test():
+    """Exercise the capture-pointer grammar without a service."""
+
+    import json
+
+    accepted = (
+        "result",
+        "candidates[0]",
+        "result.candidates[0]",
+        "a[0][1].b.c[0]",
+        "output.generation",
+    )
+    rejected = (
+        "candidates[0]]",
+        "[0]",
+        ".candidates",
+        "candidates.",
+        "candidates..x",
+        "candidates[]",
+        "candidates[a]",
+        "a[0].",
+        "a.[0]",
+        "a[0]..b",
+        "",
+    )
+    for pointer in accepted:
+        assert pointer_parts(pointer) is not None, pointer
+        _valid_pointer(pointer, "self-test")
+    for pointer in rejected:
+        if pointer:
+            assert pointer_parts(pointer) is None, pointer
+            try:
+                _valid_pointer(pointer, "self-test")
+            except ValidationError:
+                pass
+            else:
+                raise AssertionError(f"accepted malformed pointer {pointer!r}")
+        else:
+            assert pointer_parts(pointer) is None, pointer
+    assert pointer_parts("result.candidates[0]") == [
+        "result", "candidates", "[0]"]
+    assert pointer_parts("a[0][1].b") == ["a", "[0]", "[1]", "b"]
+
+    # The full case-schema path must reject a malformed pointer in a
+    # capture spec and accept a well-formed one.
+    base = {
+        "schema": "iprange-cli-case-v1",
+        "name": "self-test-pointer",
+        "fixtures": [],
+        "steps": [{
+            "kind": "rpc",
+            "actor": "producer",
+            "method": "iprange.v1.database.create",
+            "params": {"path": "$WORK/x.iprange"},
+        }],
+    }
+    good = json.loads(json.dumps(base))
+    good["steps"][0]["capture"] = ["candidates[0]"]
+    validate_case(good)
+    for bad_pointer in rejected[:-1]:
+        bad = json.loads(json.dumps(base))
+        bad["steps"][0]["capture"] = [bad_pointer]
+        try:
+            validate_case(bad)
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError(
+                f"case schema accepted malformed pointer {bad_pointer!r}")
+
+
+if __name__ == "__main__":
+    _self_test()

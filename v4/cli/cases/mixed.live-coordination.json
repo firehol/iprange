@@ -436,6 +436,76 @@
   },
   {
    "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.reader.lookup",
+   "params": {
+    "reader": "$CAPTURE/readerB",
+    "addresses": [
+     "192.0.2.12",
+     "198.51.100.31",
+     "192.0.2.9",
+     "203.0.113.1"
+    ]
+   },
+   "expect_result": {
+    "matches": [
+     {
+      "address": "192.0.2.12",
+      "present": false
+     },
+     {
+      "address": "198.51.100.31",
+      "present": false
+     },
+     {
+      "address": "192.0.2.9",
+      "present": false
+     },
+     {
+      "address": "203.0.113.1",
+      "present": false
+     }
+    ]
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.reader.ranges.open",
+   "params": {
+    "reader": "$CAPTURE/readerB",
+    "view": {
+     "kind": "direct"
+    },
+    "direction": "forward",
+    "batch_size": 4
+   },
+   "expect_result": {
+    "cursor": {
+     "$ignore": true
+    }
+   },
+   "capture": [
+    {
+     "name": "cursorB",
+     "path": "cursor"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.reader.ranges.next",
+   "params": {
+    "cursor": "$CAPTURE/cursorB"
+   },
+   "expect_result": {
+    "records": [],
+    "done": true
+   }
+  },
+  {
+   "kind": "rpc",
    "actor": "consumer",
    "method": "iprange.v1.reader.close",
    "params": {

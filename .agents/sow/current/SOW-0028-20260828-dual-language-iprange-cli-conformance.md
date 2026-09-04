@@ -79,11 +79,14 @@ Implementation status (2026-09-01):
   durability at a CRC-valid header marker, the publisher workflow's
   downstream aggregation/join/algebra consume the workflow-built
   live feed DB, and the resource record keeps its NOT-PROVEN items
-  explicit. Milestone 4 is re-closed at the final revision of this
-  fix wave (records below), with the five-scope review and the
-  glm-5.3-responses whole-milestone review PASS at the exact final
-  tree. Delivery step 6 (consolidated benchmark harness and measured
-  ceilings) is the next milestone, recorded below.
+  explicit. Milestone 4 is in the closing fix wave of this reopen:
+  every recorded framework/case/gate repair is implemented and green
+  at the current revision, and the re-close still requires the
+  five-scope final review and the glm-5.3-responses whole-milestone
+  review at the exact final tree. The re-close record will be
+  appended below only after both pass. Delivery step 6 (consolidated
+  benchmark harness and measured ceilings) is the next milestone,
+  recorded below.
 
 ## Requirements
 
@@ -3556,7 +3559,7 @@ record supersede every "final" or "complete" claim of this section.
   is the next milestone in this SOW; SOW-0030 remains the engine
   performance tracker.
 
-### 2026-09-04 — milestone 4 reopened by the external gap review, fix wave, and re-close
+### 2026-09-04 — milestone 4 reopened by the external gap review; framework fix wave (final reviews pending)
 
 An external adversarial review of the milestone-4 close (revision
 c10cad04) returned FAIL with six verified findings.  Each finding was
@@ -3662,8 +3665,47 @@ Supporting framework fixes in the same wave:
 - Capture names must be unique within one step; aliases make
   multi-handle cases expressible.
 
-Re-close evidence at the final revision of this wave (all under
-`nice`; evidence regenerated in v4/cli/evidence/):
+Second fix wave of the same reopen (glm-5.3-responses gap review at
+f04a3dc9; findings verified before implementation):
+
+1. P2 — The re-close record was anticipatory: the Status section and
+   the reopen record claimed the five-scope review and the
+   glm-5.3-responses whole-milestone review PASS "recorded below"
+   although no review records existed after the reopen.  Dispose:
+   the records now state milestone 4 remains in progress until both
+   reviews pass at the exact final tree; the real verdicts will be
+   appended only after they exist.
+2. P2 — The kind-universe gate accepted failed evidence.  The gate
+   consumed the report-root aggregate although the runner merges
+   partial ledgers even for FAIL cases, and it consumed crash
+   scenario kinds without checking `"pass"`.  An all-failed doctored
+   battery passed the gate.  Dispose:
+   `v4/cli/check_kind_coverage.py` now consumes PASS-case per-case
+   lineage only, rejects matrix reports with `failed != 0` and crash
+   reports with `failed != 0` or leftover product processes, and
+   counts only crash scenarios whose `"pass"` is true; the crash
+   report schema now carries the `failed` count; the gate ships a
+   committed doctored-report self-test (all-failed matrix, all-failed
+   crash, leftover processes, root-aggregate-only, and green
+   PASS-lineage cases) that runs before its CLI.
+3. P2 — The mixed-live record overclaimed "both pinned readers still
+   observe generation 1": only the consumer reader was queried after
+   the two commits; the producer reader was closed without any
+   post-commit read.  Dispose:
+   `v4/cli/cases/mixed.live-coordination.json` now reads the pinned
+   producer reader after the commits (lookup with the same four
+   addresses plus a direct-range scan, both expecting the empty
+   generation-1 view) before any reader closes; the case passes all
+   four matrices.
+4. P3 — Capture-pointer validation was not anchored:
+   `candidates[0]]` passed schema validation and resolved as
+   `candidates[0]`.  Dispose: `schema/cases.py` now defines one
+   anchored pointer grammar (`member` chains with optional `[index]`
+   steps) shared by case validation and the runner resolver, with
+   `_self_test()` covering the accepted and rejected pointer sets.
+
+Fix-wave evidence at this revision (all under `nice`; evidence
+regenerated in v4/cli/evidence/):
 
 - Matrices: rust 38/38 (oracle 37), go 38/38 (oracle 37),
   rust_to_go and go_to_rust 14 executed / 24 skipped (oracle 22)
@@ -3682,24 +3724,27 @@ Re-close evidence at the final revision of this wave (all under
   observed evidence (v4_main, live_sidecar,
   publication_reservation, authorized_scratch, adapter_output,
   metadata_delivery).
-- Golden corpus 53 PASS; sensitivity gate 14 modes PASS;
-  `nice go -C v4/go test ./...` and `-tags v4work` PASS; go vet
-  clean; gofmt clean; `env IPRANGE_BIN=<go product>
-  nice ./run-tests.sh` 100/100 PASS; go mmap trace PASS; rust mmap
-  storage (343 sources) and runtime PASS; schema module self-tests
-  and the runner self-test PASS.  Measured step-5 gate cost stays
-  within the resource budget (~1.5-2 min wall including the crash
-  battery under `nice`).
+- Golden corpus 53 PASS (38 case files validated by the anchored
+  schema); sensitivity gate 14 modes PASS; every schema module
+  self-test PASS (`schema/common,engine,frame,methods,oracle,results,
+  cases` via normal import; `run.py` also runs its own and the
+  oracle self-tests before every matrix); the kind-coverage gate
+  self-test PASS; the runner self-test PASS (exercised by the four
+  matrix runs above).  Data-only steps under
+  `nice`: four matrices (~2.7 s wall for rust+go together), crash
+  battery both directions + negative control (~35 s), golden (~2 s),
+  sensitivity (<1 s); well inside the resource budget.
 - Product identity: unchanged by this wave (the fixes are external
   framework, cases, and records; no product source changed).
-- Outcome: milestone 4 (delivery step 5) is re-closed at the final
-  revision of this wave with the five-scope review and the
-  glm-5.3-responses whole-milestone review PASS recorded below at
-  the exact final tree.  The four resource NOT-PROVEN items remain
-  explicitly owned by delivery step 6 (together with the benchmark
-  harness), exactly as recorded in the milestone-5 start section.
+- Outcome: milestone 4 (delivery step 5) remains in progress.  The
+  five-scope review and the glm-5.3-responses whole-milestone review
+  are pending at this revision; the re-close record with both
+  verdicts will be appended below at the exact final tree only after
+  they pass.  The four resource NOT-PROVEN items remain explicitly
+  owned by delivery step 6 (together with the benchmark harness),
+  exactly as recorded in the milestone-5 start section.
 
-### 2026-09-04 — milestone 5 starts (delivery step 6: consolidated benchmark harness and measured ceilings)
+### 2026-09-04 — milestone 5 scope recorded (delivery step 6: consolidated benchmark harness and measured ceilings; starts after milestone 4 re-closes)
 
 - Step-6 scope: the consolidated benchmark harness announced in the
   plan (`v4/cli/benchmarks/` reserved) with workload manifests for

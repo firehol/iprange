@@ -95,9 +95,11 @@ nice python3 v4/cli/check_kind_coverage.py --matrix ... --crash ...
   `mixed.transform-created` (the consumer binary snapshots a database
   the producer built and reads it back),
   `mixed.live-coordination` (a consumer AND a producer reader pinned
-  on generation 1 while the other binary commits twice; reclamation
-  returns `no_change` while any reader pins and commits only after
-  the last reader closes), `workflow.publisher` (the full
+  on generation 1 while the other binary commits twice; both pinned
+  readers look up and range-scan after the commits and still observe
+  the generation-1 empty view, reclamation returns `no_change` while
+  any reader pins and commits only after the last reader closes),
+  `workflow.publisher` (the full
   update-ipsets six-step production sequence with interleaved
   cross-binary verification, per-feed failure isolation, and the
   downstream aggregation/join/algebra steps consuming the
@@ -112,8 +114,17 @@ nice python3 v4/cli/check_kind_coverage.py --matrix ... --crash ...
   distinct names.
 - `golden/` — complete request/response exchanges generated from the
   Rust binary and validated against the strict Python schemas.
-- `schema/` — the machine authority: framing, methods, results, and
-  the scalar interval oracle. It imports no SDK.
+- `schema/` — the machine authority: framing, methods, results, case
+  validation, and the scalar interval oracle. It imports no SDK.
+  Capture pointers use an anchored grammar (`member` chains with
+  optional `[index]` list steps); malformed pointers such as
+  `candidates[0]]` are rejected by case validation and by the runner.
+  Every `schema/` module ships a `_self_test()` (run it through a
+  normal import, e.g. `nice python3 -c "from schema import cases as
+  c; c._self_test()"`), and `run.py` runs its own and the oracle's
+  self-tests before any matrix. The kind-coverage gate ships its own
+  doctored-report self-test that runs before its CLI
+  (`nice python3 check_kind_coverage.py --help`).
 - `benchmarks/` — reserved for the consolidated workload manifests
   and `bench.py` harness of SOW-0028 delivery step 6 (currently
   empty; also update the `cases/` bullet above and the matrix counts
@@ -148,7 +159,13 @@ table:
   lineage (relative artifact path -> kind and the acting
   `actor.method` created_by/opened_by lists); `check_kind_coverage.py`
   fails the evidence battery when a required kind has zero observed
-  evidence across the matrix and crash reports.
+  evidence across the matrix and crash reports. The gate consumes
+  PASS-case lineage only (the report-root aggregate merges partial
+  ledgers even for FAIL cases and is never trusted), rejects any
+  matrix report with `failed != 0` and any crash report with
+  `failed != 0` or leftover product processes, and counts only crash
+  scenarios whose `"pass"` is true. Its committed self-test
+  exercises doctored all-failed and leftover-process reports.
 
 ### Step-5 product-interface gates
 

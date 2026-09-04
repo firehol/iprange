@@ -28,7 +28,6 @@ import hashlib
 import json
 import os
 import platform as platform_module
-import re
 import shutil
 import subprocess
 import sys
@@ -571,8 +570,13 @@ class CaseRunner:
         index syntax is the only way to name a list element (recovery
         candidates); every other step descends a dict.
         """
+        parts = case_schema.pointer_parts(pointer)
+        if parts is None:
+            raise AssertionError(
+                f"case {self.case['name']!r}: capture {pointer!r} "
+                "is not a valid member chain")
         value = root
-        for part in re.findall(r"[^.\[\]]+|\[\d+\]", pointer):
+        for part in parts:
             if part.startswith("["):
                 index = int(part[1:-1])
                 if not isinstance(value, list) or index >= len(value):

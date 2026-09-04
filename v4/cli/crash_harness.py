@@ -1434,6 +1434,7 @@ def main():
                      "fixture_tool_sha256": sha256_file(fixture_tool)},
         "scenarios": [],
         "leftover_processes": [],
+        "failed": 0,
     }
 
     failed = 0
@@ -1498,6 +1499,7 @@ def main():
     if leftover:
         failed += 1
         print(f"FAIL leftover product processes: {leftover}")
+    report["failed"] = failed
 
     if not args.keep_work:
         for work in work_dirs:
