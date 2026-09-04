@@ -762,8 +762,8 @@ def crc32c(data):
 def scratch_header_authentic(path):
     """True when a scratch file carries its complete CRC-valid header.
 
-    binary-format-v4.md section 20.3: the 128-byte ownership header is
-    complete only when its CRC-32C field (last 4 bytes, computed over
+    binary-format-v4.md section 14.4 (authorized scratch): the
+    128-byte ownership header is complete only when its CRC-32C field (last 4 bytes, computed over
     the whole header with the field zeroed) validates.  An
     unauthenticated partial header can never be removed by the engine
     API, so the crash marker must wait for the durable complete
