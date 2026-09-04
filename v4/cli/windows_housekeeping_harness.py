@@ -6,25 +6,56 @@ Milestone-4 (delivery step 5) resource gate.  The
 (it exists to garbage-collect Windows filesystem names that cannot be
 removed while a handle is open, ``gc_name.rs`` envelope/inert naming);
 the declarative suite therefore cannot commit a case for it.  This
-script qualifies it at the normal JSON-RPC product interface.
+script qualifies it at the normal JSON-RPC product interface, on the
+authorized Windows validation host.
 
-The script synthesizes one GC-envelope candidate file exactly like
-the product's own names (``.iprange-gcauth-<32 lower hex>-<8 lower
-hex>.tmp``, per ``v4/rust/iprange-livedb/src/publication/gc_name.rs``)
-plus an ordinary marker file, and probes ``maintenance.list`` with
-kinds ["windows_housekeeping"] over an empty directory and over the
-candidate directory, for both product binaries.
+The harness proves the native retirement path twice, at two different
+boundaries:
 
-- On Windows, both probes must succeed: the empty directory reports 0
-  entries, the candidate directory reports >= 1 entry whose JSONL row
-  carries kind ``windows_housekeeping``, candidate_kind ``envelope``,
-  a directory identity, and the exact GC basename (base64-encoded on
-  the wire; the harness decodes it and compares).
-- On any other platform the run records the truthful negative -- both
-  products answer ``os_unsupported``/``read_only_failure`` for this
-  kind when it is unavailable -- and exits 0 with a ``skipped``
-  record naming the platform.  This makes the same script the Linux
-  negative control.
+1. Native refresh exercise: it opens a live reader on a populated live
+   database (pinning the current main file), runs
+   ``iprange.v1.retention.first_seen.refresh`` with a
+   ``removals_output``, and proves the refresh completes, publishes
+   the exact removal log, and leaves no private ``.removals.tmp``
+   residue.  This is the native coverage of the Go removalCollector
+   Windows cleanup fix.
+
+2. Deterministic GC pair proof: product-created Windows GC envelopes
+   are timing-dependent (the retirement machinery deletes the pair
+   when the operation finishes), so the harness cannot rely on a
+   leftover envelope appearing at the product boundary.  Instead it
+   crafts one format-valid 8192-byte authenticated GC envelope plus
+   its inert payload twin (``gc_envelope_windows.py`` mirrors the
+   committed codec in ``gc_codec.go``/``gc_codec.rs``: magic, record
+   size, version, kinds, identity payloads, name commitments, the
+   creator-only security commitment, and the per-block CRC-32C), with
+   the exact creator-only protected DACL the product installs
+   (``security_windows.go buildDescriptor``).  It then proves
+   ``maintenance.list`` kind ``windows_housekeeping`` lists the pair
+   with a valid authenticated directory identity and
+   ``maintenance.remove`` removes it with the listed row passed
+   unchanged, with durable absence afterwards.  This is a product
+   artifact, not a test hook: both products validate it through their
+   ordinary GC codec and creator-only security checks.
+
+On any non-Windows platform the run records the truthful negative --
+both products answer ``os_unsupported``/``read_only_failure`` for
+this kind -- and exits 0 with a ``skipped`` record naming the
+platform.  This makes the same script the Linux negative control
+(the negative is recorded over the same refresh-built directory, so
+the refusal is proven on a real artifact directory).
+
+Per-binary evidence records auditable identities instead of trusting
+the caller's ``rust=``/``go=`` labels: the binary absolute path, its
+SHA-256, and one ``system.describe`` call whose ``implementation``
+member must claim the expected language.
+
+On any non-Windows platform the run records the truthful negative --
+both products answer ``os_unsupported``/``read_only_failure`` for
+this kind -- and exits 0 with a ``skipped`` record naming the
+platform.  This makes the same script the Linux negative control
+(the negative is recorded over the same refresh-built directory, so
+the refusal is proven on a real artifact directory).
 
 Reuses ``HarnessJsonRpcService`` from ``crash_harness.py`` (import
 side-effect free).  Report schema:
@@ -37,12 +68,16 @@ import hashlib
 import json
 import os
 import platform
+import shutil
 import sys
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from crash_harness import HarnessJsonRpcService  # noqa: E402
+from crash_harness import (  # noqa: E402  (side-effect free)
+    HarnessJsonRpcService,
+    write_direct_csv_feed,
+)
 
 # Exact product GC-envelope naming (gc_name.rs): ENVELOPE_PREFIX,
 # separator b"-", SUFFIX b".tmp"; attempt 16 bytes, ordinal 4 bytes,
@@ -51,6 +86,19 @@ GC_ENVELOPE_PREFIX = ".iprange-gcauth-"
 GC_SUFFIX = ".tmp"
 MARKER_NAME = "MARKER.txt"
 MARKER_TEXT = "windows_housekeeping harness marker\n"
+
+# Live refresh flow sizes: the target live database gets
+# TARGET_CSV_ROWS direct records; the coverage source (an immutable
+# feed database named "alpha") covers the first COVERAGE_TEXT_ROWS of
+# those ranges, so the refresh removes the remaining addresses and
+# the removals collector publishes at least one row.  REFRESH_VALUE
+# is the first-seen timestamp the refresh stamps.
+TARGET_CSV_ROWS = 200
+COVERAGE_TEXT_ROWS = 150
+REFRESH_VALUE = 123456
+
+WRITER_BUDGET = {"max_heap_bytes": "16777216", "max_private_pages": "20000",
+                 "max_growth_pages": "20000", "max_open_files": 4}
 
 
 def sha256_file(path):
@@ -63,11 +111,39 @@ def sha256_file(path):
     return digest.hexdigest()
 
 
-def gc_candidate_name():
-    """One synthesized GC envelope basename (lowercase hex parts)."""
+def envelope_basenames(directory):
+    """Sorted GC envelope basenames present in one directory.
 
-    return (f"{GC_ENVELOPE_PREFIX}{os.urandom(16).hex()}-"
-            f"{os.urandom(4).hex()}{GC_SUFFIX}")
+    Only exact product-shaped envelope names count
+    (``.iprange-gcauth-<attempt>-<ordinal>.tmp``); every other file
+    (live database, sidecar, removals output, the harness marker) is
+    deliberately ignored, which is what makes the
+    entries == len(rows) check a selectivity proof.
+    """
+
+    if not os.path.isdir(directory):
+        return []
+    return sorted(
+        name for name in os.listdir(directory)
+        if name.startswith(GC_ENVELOPE_PREFIX) and name.endswith(GC_SUFFIX))
+
+
+def write_overlap_text_feed(path, count):
+    """One immutable text feed covering the first ``count`` direct rows.
+
+    The ranges replicate ``write_direct_csv_feed`` rows 0..count so
+    the coverage source overlaps the target live database exactly:
+    refresh keeps the first ``count`` records and removes the rest.
+    """
+
+    import ipaddress
+
+    with open(path, "w", encoding="utf-8", newline="") as stream:
+        for index in range(count):
+            low = 0x0A000000 + index * 64
+            high = low + 63
+            stream.write(f"{ipaddress.IPv4Address(low)}-"
+                         f"{ipaddress.IPv4Address(high)}\n")
 
 
 def parse_binaries(value):
@@ -88,13 +164,32 @@ def parse_binaries(value):
 
 
 def executable(value, label):
-    """Validate one absolute executable path (run.py parity)."""
+    """Validate one absolute executable path (run.py parity).
+
+    The returned path is the caller-supplied absolute path, not
+    ``os.path.realpath``: MSYS2/Cygwin Python normalizes a native
+    Windows path such as ``C:\\Temp\\x.exe`` to the broken
+    ``/:\\Temp\\x.exe``, which then fails every later open.  The
+    path is already absolute and file-verified, so no normalization is
+    needed.
+    """
 
     if not os.path.isabs(value):
         raise SystemExit(f"{label} is not an absolute executable file: {value}")
     if not os.path.isfile(value) or not os.access(value, os.X_OK):
         raise SystemExit(f"{label} is not an absolute executable file: {value}")
-    return os.path.realpath(value)
+    return value
+
+
+def describe_identity(service):
+    """One system.describe call; returns (implementation, result)."""
+
+    response = service.call("describe", "iprange.v1.system.describe", {})
+    if "error" in response:
+        raise AssertionError(
+            f"system.describe failed: {json.dumps(response['error'])[:300]}")
+    result = response.get("result") or {}
+    return result.get("implementation"), result
 
 
 def maintenance_list(service, directory, out_path):
@@ -145,8 +240,9 @@ def decoded_basename(row):
 
     The wire ``basename_encoding`` names the byte encoding the product
     used (namespace unix.rs kind 1 = UTF-8, namespace windows.rs kind
-    2 = UTF-16LE); the ASCII candidate names this harness synthesizes
-    must decode to the same string under either encoding.
+    2 = UTF-16LE); on Windows the kind only lists UTF-16LE names, and
+    the decoded name must equal one real envelope file in the scanned
+    directory.
     """
 
     encoded = row.get("basename")
@@ -164,54 +260,272 @@ def decoded_basename(row):
     return raw.decode("utf-8", "replace")
 
 
-def probe_directory(service, directory, out_path, candidate_name,
-                    report_mode):
-    """One maintenance.list probe over one directory.
+def run_refresh_envelope_flow(service, live_dir, label):
+    """Drive each product through the native envelope-creating flow.
 
-    Returns (outcome, pass_bool, failures) where outcome records the
-    raw error/reports/rows plus the checked facts.
+    Steps (every request and response is recorded verbatim for the
+    evidence trail):
+
+    1. ``database.create`` -- the target live database;
+    2. ``direct.replace`` -- populate it with TARGET_CSV_ROWS records;
+    3. ``reader.open`` (mode live) -- pins the current main file so
+       the next commit's Windows retirement cannot rename it away;
+    4. ``current.publish`` -- the immutable coverage source (feed
+       "alpha") covering COVERAGE_TEXT_ROWS ranges;
+    5. ``retention.first_seen.refresh`` with a ``removals_output`` --
+       commits a new live generation; on Windows the retirement of
+       the pinned previous main goes through the GC machinery and
+       leaves a real 8192-byte envelope beside the database.
+
+    The reader is intentionally left open; the caller closes it only
+    after listing.  Returns a dict with ``steps`` (request id,
+    method, params, response), ``reader`` (the open reader handle or
+    None), ``step_error`` (the method whose RPC answer was an error,
+    or None), ``envelopes`` (basenames found), and ``files`` (the
+    directory listing).
     """
 
-    reports, error_data, rows = maintenance_list(
-        service, directory, out_path)
-    outcome = {
-        "error": error_data,
-        "reports": reports,
-        "rows": rows,
-        "entries": kind_entries(reports),
-        "row_checked": None,
+    flow = {"steps": [], "reader": None, "step_error": None,
+            "envelopes": [], "files": []}
+    os.makedirs(live_dir, exist_ok=True)
+    with open(os.path.join(live_dir, MARKER_NAME), "w",
+              encoding="utf-8", newline="") as stream:
+        stream.write(MARKER_TEXT)
+
+    db_path = os.path.join(live_dir, "live.iprange")
+    cov_path = os.path.join(live_dir, "coverage.iprange")
+    csv_path = os.path.join(live_dir, "gen_a.csv")
+    cov_feed = os.path.join(live_dir, "coverage.txt")
+    write_direct_csv_feed(csv_path, TARGET_CSV_ROWS)
+    write_overlap_text_feed(cov_feed, COVERAGE_TEXT_ROWS)
+
+    steps = [
+        ("create", "iprange.v1.database.create", {
+            "path": db_path, "family": "ipv4", "value_kind": "direct",
+            "structure_kind": "none", "value_tag": {"text": "first_seen"},
+            "reader_capacity": 8}),
+        ("replace", "iprange.v1.direct.replace", {
+            "path": db_path,
+            "input": {"path": csv_path, "max_line_bytes": 1024},
+            "metadata": {"mode": "replace_utf8", "text": "first-seen-data"},
+            "writer_budget": WRITER_BUDGET}),
+        ("reader.open", "iprange.v1.reader.open", {
+            "source": {"path": db_path, "mode": "live"}}),
+        ("publish", "iprange.v1.current.publish", {
+            "input": {"paths": [cov_feed], "family": "ipv4",
+                      "fix_network": True, "default_prefix": 32,
+                      "dns": {"threads": 1, "silent": True},
+                      "expand_at_paths": False, "max_line_bytes": 1024,
+                      "max_expanded_paths": 4},
+            "feed": "alpha", "value_tag": {"text": "coverage"},
+            "metadata": {"mode": "replace_utf8", "text": "coverage"},
+            "destination": cov_path, "publication_policy": "fail_if_exists",
+            "immutable_feed_budget": {"max_heap_bytes": "16777216",
+                                      "max_output_pages": "20000",
+                                      "max_workspace_pages": "20000",
+                                      "max_open_files": 3}}),
+        ("refresh", "iprange.v1.retention.first_seen.refresh", {
+            "path": db_path,
+            "current": {"source": {"path": cov_path, "mode": "immutable"},
+                        "feed": "alpha"},
+            "refresh_value": REFRESH_VALUE,
+            "removals_output": {"path": os.path.join(live_dir,
+                                                     "removals.jsonl"),
+                                "publication_policy": "fail_if_exists",
+                                "result_budget": {"max_rows": "4096",
+                                                  "max_output_bytes":
+                                                  "1048576",
+                                                  "max_open_files": 3}},
+            "metadata": {"mode": "keep"},
+            "writer_budget": WRITER_BUDGET}),
+    ]
+
+    for rid, method, params in steps:
+        response = service.call(rid, method, params)
+        flow["steps"].append({"request_id": rid, "method": method,
+                              "params": params, "response": response})
+        if "error" in response:
+            flow["step_error"] = method
+            break
+        if method == "iprange.v1.reader.open":
+            flow["reader"] = response["result"]["reader"]
+
+    flow["envelopes"] = envelope_basenames(live_dir)
+    flow["files"] = sorted(os.listdir(live_dir))
+    return flow
+
+
+def synthesize_gc_pair(directory):
+    """One format-valid Windows GC pair for the deterministic proof.
+
+    ``gc_envelope_windows`` mirrors the committed envelope codec
+    (binary-format-v4.md 14.4.1, ``gc_codec.go``/``gc_codec.rs``) and
+    the Windows creator-only security machine
+    (``security_windows.go buildDescriptor``).  The pair is:
+
+    - ``.iprange-gcauth-<attempt-hex>-<ordinal:08x>.tmp``: the
+      8,192-byte authenticated authority envelope, two identical
+      sequence-1 blocks, artifact kind 1 (private output) which fixes
+      the source component to the attempt-derived publish name
+      ``.iprange-publish-<attempt-hex>.tmp`` (``gc_source.go
+      gcNameMatches``), committed with the creator-only security
+      commitment the products prove against the live envelope DACL;
+    - ``.iprange-gc-<attempt-hex>-<ordinal:08x>.tmp``: the inert
+      payload twin, created with the same protected creator-only DACL;
+      its local identity (volume serial + low file reference) is the
+      envelope-committed artifact identity, which is exactly the
+      state the products classify as ``Inert`` (source absent, inert
+      exact) -- a clean, conflict-free housekeeping row.
+
+    Returns the synthesis facts: names, attempt, ordinal, identities
+    (encoded wire payloads), the envelope SHA-256, and the marker
+    used for the inert payload content.
+    """
+
+    import struct
+
+    import gc_envelope_windows as gce
+
+    os.makedirs(directory, exist_ok=True)
+    attempt = os.urandom(16)
+    if attempt == b"\x00" * 16:
+        attempt = attempt[:-1] + b"\x01"
+    ordinal = 1
+    source_name = ".iprange-publish-" + attempt.hex() + ".tmp"
+    envelope_name = gce.gc_name(gce.GC_ENVELOPE_PREFIX, attempt, ordinal)
+    inert_name = gce.gc_name(gce.GC_INERT_PREFIX, attempt, ordinal)
+    inert_path = os.path.join(directory, inert_name)
+    envelope_path = os.path.join(directory, envelope_name)
+
+    # The inert payload is the retired artifact: one regular file with
+    # the product's creator-only protected DACL.
+    gce.create_protected_file(inert_path)
+    with open(inert_path, "wb") as stream:
+        stream.write(MARKER_TEXT.encode("utf-8"))
+    artifact_identity = gce.file_identity(inert_path)
+
+    # The envelope file itself carries the same protected creator-only
+    # DACL; the embedded security commitment is derived from the
+    # envelope's own live descriptor, exactly like the products prove
+    # it (gcVerifyRecord).
+    gce.create_protected_file(envelope_path)
+    commitment = gce.creator_only_commitment_of(envelope_path)
+
+    dir_volume, dir_inode = gce.file_identity(directory)
+    art_volume, art_inode = artifact_identity
+    dir_payload = (struct.pack("<Q", dir_volume) + struct.pack("<Q", dir_inode)
+                   + b"\x00" * 16)
+    art_payload = (struct.pack("<Q", art_volume) + struct.pack("<Q", art_inode)
+                   + b"\x00" * 16)
+    data = gce.envelope_bytes(attempt, ordinal, source_name, dir_payload,
+                              art_payload, commitment)
+    with open(envelope_path, "wb") as stream:
+        stream.write(data)
+
+    return {
+        "attempt": attempt.hex(),
+        "ordinal": ordinal,
+        "source_name": source_name,
+        "envelope_name": envelope_name,
+        "inert_name": inert_name,
+        "directory_identity": {
+            "kind": 2,
+            "volume": dir_volume,
+            "inode": dir_inode,
+            "payload": dir_payload.hex(),
+        },
+        "artifact_identity": {
+            "kind": 2,
+            "volume": art_volume,
+            "inode": art_inode,
+            "payload": art_payload.hex(),
+        },
+        "envelope_sha256": sha256_file(envelope_path),
+        "commitment_matches": (
+            gce.creator_only_commitment_of(envelope_path) == commitment),
     }
-    if error_data:
-        outcome["negative_matched"] = (
-            error_data.get("code") == "os_unsupported"
-            and error_data.get("outcome") == "read_only_failure")
-        if report_mode == "windows":
-            return outcome, False, [
-                f"maintenance.list failed on Windows: {error_data!r}"]
-        return outcome, True, []
-    if report_mode == "linux-negative":
-        # The kind answered successfully on a platform where it is
-        # documented unavailable; record it truthfully as a mismatch.
-        outcome["negative_matched"] = False
-        return outcome, False, [
-            "windows_housekeeping answered successfully on this "
-            "platform instead of os_unsupported/read_only_failure"]
-    # Windows qualification path.
-    checked = {"kind": None, "candidate_kind": None,
-               "directory_identity": False, "basename_ok": False,
-               "basename_decoded": None}
+
+
+def complete_native_refresh_exercise(service, live_dir, flow):
+    """Native Windows coverage of the Go removalCollector fix.
+
+    ``flow`` is the already-recorded refresh step evidence
+    (database.create, direct.replace, reader.open pinning the current
+    main, current.publish, and ``retention.first_seen.refresh`` with a
+    removals_output, produced by ``run_refresh_envelope_flow``).  This
+    function proves:
+
+    - every product RPC step succeeded;
+    - the removals_output was published with at least one removal row
+      whose removed_at member equals the refresh value;
+    - the private ``.removals.tmp`` temporary is gone after the call
+      (the collector's explicit cleanup path);
+    - the pinning reader closes cleanly.
+
+    Returns ``(refresh_facts, failures)``.
+    """
+
     failures = []
-    if outcome["entries"] is None:
+    refresh_facts = {"step_error": flow.get("step_error"),
+                     "envelopes_after_flow": flow["envelopes"],
+                     "removals_output_rows": None,
+                     "first_seen_matches": None,
+                     "tmp_residue": None}
+    if flow.get("step_error"):
         failures.append(
-            f"no windows_housekeeping report in {reports!r}")
+            f"native refresh stopped at {flow['step_error']}; params "
+            "and responses are recorded in outcome['flow']['steps']")
+    else:
+        removals_path = os.path.join(live_dir, "removals.jsonl")
+        rows = []
+        if os.path.isfile(removals_path):
+            with open(removals_path, "r", encoding="utf-8") as stream:
+                for line in stream:
+                    line = line.strip()
+                    if line:
+                        rows.append(json.loads(line))
+        refresh_facts["removals_output_rows"] = len(rows)
+        refresh_facts["first_seen_matches"] = all(
+            row.get("removed_at") == REFRESH_VALUE for row in rows)
+        if not rows:
+            failures.append("first_seen.refresh published no removal rows")
+        elif not refresh_facts["first_seen_matches"]:
+            failures.append(
+                "first_seen.refresh removal rows do not carry the "
+                f"refresh value {REFRESH_VALUE}")
+        residue = [name for name in sorted(os.listdir(live_dir))
+                   if name.endswith(".removals.tmp")]
+        refresh_facts["tmp_residue"] = residue
+        if residue:
+            failures.append(
+                f"removalCollector left a private temporary behind: "
+                f"{residue}")
+    if flow.get("reader") is not None:
+        close_response = service.call(
+            "close", "iprange.v1.reader.close",
+            {"reader": flow["reader"]})
+        refresh_facts["reader_close"] = close_response
+        if "error" in close_response:
+            failures.append(
+                f"reader.close failed after native refresh: "
+                f"{json.dumps(close_response['error'])[:300]}")
+    refresh_facts["envelopes_after_close"] = envelope_basenames(live_dir)
+    refresh_facts["files"] = sorted(os.listdir(live_dir))
+    return refresh_facts, failures
+
+
+def check_housekeeping_rows(rows, directory):
+    """Validate listed windows_housekeeping rows; returns failures.
+
+    Every row must carry the kind, ``candidate_kind: envelope``,
+    UTF-16LE basename encoding (2), an authenticated directory
+    identity, and a basename that decodes to a real envelope file in
+    the scanned directory.
+    """
+
+    failures = []
+    real_envelopes = envelope_basenames(directory)
     for row in rows:
-        checked["kind"] = row.get("kind")
-        checked["candidate_kind"] = row.get("candidate_kind")
-        checked["directory_identity"] = "directory_identity" in row
-        decoded = decoded_basename(row)
-        checked["basename_ok"] = decoded == candidate_name
-        checked["basename_decoded"] = decoded
-        checked["basename_encoding"] = row.get("basename_encoding")
         if row.get("kind") != "windows_housekeeping":
             failures.append(
                 f"row kind is {row.get('kind')!r}, expected "
@@ -220,32 +534,84 @@ def probe_directory(service, directory, out_path, candidate_name,
             failures.append(
                 f"row candidate_kind is {row.get('candidate_kind')!r}, "
                 "expected 'envelope'")
-        if not checked["directory_identity"]:
-            failures.append("row has no directory_identity")
-        if not checked["basename_ok"]:
+        if row.get("basename_encoding") != 2:
             failures.append(
-                f"row basename does not decode to the synthesized "
-                f"candidate {candidate_name!r}; returned "
-                f"{decoded!r}")
-    outcome["row_checked"] = checked
-    return outcome, not failures, failures
+                f"row basename_encoding is {row.get('basename_encoding')!r}, "
+                "expected 2 (UTF-16LE) on Windows")
+        if not row.get("directory_identity"):
+            failures.append("row has no directory_identity")
+        decoded = decoded_basename(row)
+        if decoded not in real_envelopes:
+            failures.append(
+                f"row basename does not decode to a real envelope file: "
+                f"{decoded!r}; directory has {real_envelopes}")
+    return failures
+
+
+def check_synthesized_pair_rows(rows, directory):
+    """Validate the two rows of one synthesized GC pair.
+
+    The scanner lists every GC candidate name, so the pair directory
+    yields exactly two rows: the authenticated envelope candidate and
+    the inert payload candidate (gc_source.go gcCandidateOf; both
+    products list them).  Returns failures; every row must be free of
+    the problem member, carry UTF-16LE basename encoding (2), and the
+    envelope row must decode to the real envelope file in the
+    directory.
+    """
+
+    failures = []
+    envelope_rows = [r for r in rows
+                     if r.get("candidate_kind") == "envelope"]
+    inert_rows = [r for r in rows
+                  if r.get("candidate_kind") == "inert_payload"]
+    if len(envelope_rows) != 1:
+        failures.append(
+            f"expected exactly one envelope row, got {len(envelope_rows)}")
+    if len(inert_rows) != 1:
+        failures.append(
+            f"expected exactly one inert_payload row, got {len(inert_rows)}")
+    real_envelopes = envelope_basenames(directory)
+    for row in rows:
+        if row.get("kind") != "windows_housekeeping":
+            failures.append(
+                f"row kind is {row.get('kind')!r}, expected "
+                "'windows_housekeeping'")
+        if row.get("basename_encoding") != 2:
+            failures.append(
+                f"row basename_encoding is "
+                f"{row.get('basename_encoding')!r}, expected 2 "
+                "(UTF-16LE) on Windows")
+        if not row.get("directory_identity"):
+            failures.append("row has no directory_identity")
+        if "problem" in row:
+            failures.append(
+                f"row carries a problem member: {row['problem']!r}")
+        decoded = decoded_basename(row)
+        if row.get("candidate_kind") == "envelope":
+            if decoded not in real_envelopes:
+                failures.append(
+                    f"envelope row basename does not decode to a real "
+                    f"envelope file: {decoded!r}; directory has "
+                    f"{real_envelopes}")
+    return failures
 
 
 def main():
     parser = argparse.ArgumentParser(
         description="Windows-host qualification of the iprange v1 "
-                    "windows_housekeeping maintenance kind; the same "
-                    "script records the truthful negative on other "
-                    "platforms.")
+                    "windows_housekeeping maintenance kind: a native "
+                    "retention.first_seen.refresh exercise plus a "
+                    "deterministic format-valid GC pair proof; the "
+                    "same script records the truthful negative on "
+                    "other platforms.")
     parser.add_argument("--binaries", metavar="rust=PATH go=PATH",
                         nargs="+", required=True,
                         help="absolute iprange --jsonrpc executables, as "
                              "rust=PATH go=PATH")
     parser.add_argument("--work-dir", metavar="DIR", required=True,
                         help="absolute existing harness-owned directory "
-                             "that receives candidates/ and empty/; the "
-                             "harness recreates MARKER.txt and its own "
-                             "envelope candidate there")
+                             "that receives empty/ and live-<label>/")
     parser.add_argument("--json-report", metavar="PATH",
                         help="write the JSON report to this file")
     args = parser.parse_args()
@@ -259,25 +625,8 @@ def main():
     on_windows = platform.system() == "Windows"
     report_mode = "windows" if on_windows else "linux-negative"
 
-    # Synthesize the candidate directory: one marker file plus exactly
-    # one recognizable GC envelope candidate.  Only the marker and the
-    # synthesized envelope files are removed on re-runs so the entry
-    # count stays deterministic.
-    candidates_dir = os.path.join(args.work_dir, "candidates")
     empty_dir = os.path.join(args.work_dir, "empty")
-    os.makedirs(candidates_dir, exist_ok=True)
     os.makedirs(empty_dir, exist_ok=True)
-    for name in os.listdir(candidates_dir):
-        if name == MARKER_NAME or (
-                name.startswith(GC_ENVELOPE_PREFIX)
-                and name.endswith(GC_SUFFIX)):
-            os.remove(os.path.join(candidates_dir, name))
-    candidate_name = gc_candidate_name()
-    with open(os.path.join(candidates_dir, MARKER_NAME), "w",
-              encoding="utf-8", newline="") as stream:
-        stream.write(MARKER_TEXT)
-    with open(os.path.join(candidates_dir, candidate_name), "wb") as stream:
-        stream.write(b"gc-envelope-candidate\x00\x01\x02")
 
     report = {
         "schema": "iprange-cli-windows-housekeeping-report-v1",
@@ -298,74 +647,280 @@ def main():
             f"platform {platform.system()} is not Windows; the kind "
             "is documented unavailable here and the products answer "
             "os_unsupported/read_only_failure"),
-        "candidate": {"directory": candidates_dir, "marker": MARKER_NAME,
-                      "envelope": candidate_name},
+        "refresh_flow": {
+            "target_csv_rows": TARGET_CSV_ROWS,
+            "coverage_text_rows": COVERAGE_TEXT_ROWS,
+            "refresh_value": REFRESH_VALUE,
+        },
         "outcomes": [],
         "failed": 0,
     }
 
+    services = {
+        label: HarnessJsonRpcService([binary, "--jsonrpc"], label,
+                                     cwd=args.work_dir)
+        for label, binary in sorted(binaries.items())}
     failed = 0
-    for label, binary in sorted(binaries.items()):
-        outcome = {
-            "binary": label, "path": binary, "pass": False,
-            "failures": [], "empty_dir": None, "candidates_dir": None,
-        }
-        service = HarnessJsonRpcService([binary, "--jsonrpc"], label,
-                                        cwd=args.work_dir)
-        try:
+    outcomes = {}
+    try:
+        for label, binary in sorted(binaries.items()):
+            outcome = {
+                "binary": label, "path": binary, "pass": False,
+                "failures": [], "empty_dir": None, "flow": None,
+            }
+            failures = []
+            service = services[label]
+            # Auditable identity: never trust the caller-provided
+            # label alone.  The binary's own system.describe answer
+            # must claim the expected implementation.
+            try:
+                implementation, describe = describe_identity(service)
+                outcome["identity"] = {
+                    "path": binary,
+                    "sha256": sha256_file(binary),
+                    "implementation": implementation,
+                    "describe_result": describe,
+                }
+                if implementation != label:
+                    failures.append(
+                        f"system.describe claims implementation "
+                        f"{implementation!r}, expected {label!r} for "
+                        f"binary {binary}")
+            except (AssertionError, KeyError, TypeError, ValueError) as exc:
+                failures.append(f"identity audit failed: {exc}")
+
             empty_out = os.path.join(
                 args.work_dir,
                 f"wh-empty-{label}-{uuid.uuid4().hex[:8]}.jsonl")
-            candidates_out = os.path.join(
-                args.work_dir,
-                f"wh-candidates-{label}-{uuid.uuid4().hex[:8]}.jsonl")
-            empty, empty_pass, empty_fail = probe_directory(
-                service, empty_dir, empty_out, candidate_name, report_mode)
-            candidates, cand_pass, cand_fail = probe_directory(
-                service, candidates_dir, candidates_out, candidate_name,
-                report_mode)
-            outcome["empty_dir"] = empty
-            outcome["candidates_dir"] = candidates
-            failures = []
-            if report_mode == "windows":
-                if str(empty.get("entries")) != "0":
-                    empty_fail.append(
-                        f"empty directory must report 0 entries, got "
-                        f"{empty.get('entries')!r} with rows "
-                        f"{len(empty.get('rows') or [])}")
-                if empty_pass and cand_pass:
-                    entries = candidates.get("entries")
-                    try:
-                        entries_ok = int(entries or "0") >= 1
-                    except ValueError:
-                        entries_ok = False
-                    if not entries_ok:
-                        cand_fail.append(
-                            f"candidate directory must report >= 1 "
-                            f"entry, got {entries!r}")
-                failures = empty_fail + cand_fail
-            else:
-                # Negative control: every probe must record the
+            reports, error_data, rows = maintenance_list(
+                service, empty_dir, empty_out)
+            outcome["empty_dir"] = {
+                "error": error_data, "reports": reports, "rows": rows,
+                "entries": kind_entries(reports)}
+            if error_data:
+                outcome["empty_dir"]["negative_matched"] = (
+                    error_data.get("code") == "os_unsupported"
+                    and error_data.get("outcome") == "read_only_failure")
+            if os.path.exists(empty_out):
+                os.remove(empty_out)
+
+            live_dir = os.path.join(args.work_dir, f"live-{label}")
+            shutil.rmtree(live_dir, ignore_errors=True)
+            flow = run_refresh_envelope_flow(service, live_dir, label)
+            outcome["flow"] = flow
+
+            if report_mode == "linux-negative":
+                # Negative control over the real flow directory and
+                # the empty directory: both probes must record the
                 # truthful os_unsupported/read_only_failure negative.
-                for directory_name, probed in (
-                        ("empty_dir", empty),
-                        ("candidates_dir", candidates)):
+                probes = [("empty_dir", outcome["empty_dir"])]
+                flow_out = os.path.join(
+                    args.work_dir, f"wh-flow-{label}-"
+                    f"{uuid.uuid4().hex[:8]}.jsonl")
+                reports, error, rows = maintenance_list(
+                    service, live_dir, flow_out)
+                flow_probe = {"error": error, "reports": reports,
+                              "rows": rows, "entries": kind_entries(reports)}
+                if error:
+                    flow_probe["negative_matched"] = (
+                        error.get("code") == "os_unsupported"
+                        and error.get("outcome") == "read_only_failure")
+                outcome["refresh_dir_probe"] = flow_probe
+                if os.path.exists(flow_out):
+                    os.remove(flow_out)
+                probes.append(("refresh_dir", flow_probe))
+                for directory_name, probed in probes:
                     if not probed.get("negative_matched"):
                         failures.append(
                             f"{directory_name} did not record the "
                             "truthful os_unsupported/read_only_failure "
                             f"negative: error {probed.get('error')!r} "
                             f"reports {probed.get('reports')!r}")
+            else:
+                # Windows qualification path.
+                empty = outcome["empty_dir"]
+                if empty["error"]:
+                    failures.append(
+                        f"maintenance.list failed on Windows over the "
+                        f"empty directory: {empty['error']!r}")
+                else:
+                    try:
+                        empty_entries = int(empty.get("entries") or "0")
+                    except ValueError:
+                        empty_entries = None
+                    empty_rows = empty.get("rows") or []
+                    if empty_entries != 0 or len(empty_rows) != 0 or \
+                            empty_entries != len(empty_rows):
+                        failures.append(
+                            f"empty directory must report entries == "
+                            f"rows == 0, got entries "
+                            f"{empty.get('entries')!r} and "
+                            f"{len(empty_rows)} rows")
+
+                # Native refresh exercise: prove the Go removalCollector
+                # Windows fix at the product boundary -- the refresh
+                # completes, publishes the exact removal log, leaves no
+                # private temporary, and the pinning reader closes.
+                refresh_facts, refresh_failures = (
+                    complete_native_refresh_exercise(service, live_dir,
+                                                     flow))
+                outcome["refresh_native"] = refresh_facts
+                failures.extend(refresh_failures)
+                # Leftover GC pairs from the native retirement are
+                # timing-dependent (the cleanup machine completes them
+                # best-effort); they are recorded as facts, never
+                # asserted.
+
+                # Deterministic GC pair proof: one format-valid
+                # synthesized pair in a dedicated directory, listed,
+                # cross-listed, removed with the listed row unchanged,
+                # and proven durably absent.
+                gc_dir = os.path.join(args.work_dir, f"gc-{label}")
+                shutil.rmtree(gc_dir, ignore_errors=True)
+                outcome["synth"] = synthesize_gc_pair(gc_dir)
+                flow_out = os.path.join(
+                    args.work_dir, f"wh-synth-{label}-"
+                    f"{uuid.uuid4().hex[:8]}.jsonl")
+                reports, error, rows = maintenance_list(
+                    service, gc_dir, flow_out)
+                if error:
+                    failures.append(
+                        f"maintenance.list failed on Windows over the "
+                        f"synthesized pair directory: {error!r}")
+                else:
+                    entries = kind_entries(reports)
+                    try:
+                        entries_int = int(entries or "0")
+                    except ValueError:
+                        entries_int = None
+                    if entries_int != 2 or len(rows) != 2 or \
+                            entries_int != len(rows):
+                        failures.append(
+                            f"synthesized pair directory must report "
+                            f"exactly 2 entries/rows (envelope plus "
+                            f"inert payload candidates), got entries "
+                            f"{entries!r} and {len(rows)} rows")
+                    failures.extend(
+                        check_synthesized_pair_rows(rows, gc_dir))
+                    outcome["windows_listing"] = {
+                        "entries": entries, "rows": rows}
+                    if rows:
+                        envelope_row = next(
+                            (r for r in rows
+                             if r.get("candidate_kind") == "envelope"),
+                            rows[0])
+                        outcome["windows_directory_identity"] = (
+                            envelope_row.get("directory_identity"))
+                        outcome["row_used"] = envelope_row
+                    if os.path.exists(flow_out):
+                        os.remove(flow_out)
+
+                    # Cross-product directory identity: the other
+                    # product lists the same directory; the
+                    # directory_identity member of its rows must equal
+                    # this product's record.
+                    other = "go" if label == "rust" else "rust"
+                    cross_out = os.path.join(
+                        args.work_dir, f"wh-cross-{label}-"
+                        f"{uuid.uuid4().hex[:8]}.jsonl")
+                    cross_reports, cross_error, cross_rows = (
+                        maintenance_list(services[other], gc_dir,
+                                         cross_out))
+                    cross = {"binary": other}
+                    if cross_error:
+                        cross["error"] = cross_error
+                        failures.append(
+                            f"cross-listing by {other} failed over the "
+                            f"{label} synthesized pair directory: "
+                            f"{cross_error!r}")
+                    else:
+                        cross["entries"] = kind_entries(cross_reports)
+                        cross["directory_identity"] = (
+                            cross_rows[0].get("directory_identity")
+                            if cross_rows else None)
+                        cross["matched"] = (
+                            cross["directory_identity"]
+                            == outcome.get(
+                                "windows_directory_identity"))
+                        if not cross["matched"]:
+                            failures.append(
+                                f"directory_identity mismatch between "
+                                f"{label} and {other}: {label} recorded "
+                                f"{outcome.get('windows_directory_identity')!r}, "
+                                f"{other} recorded "
+                                f"{cross['directory_identity']!r}")
+                    outcome["cross_listing"] = cross
+                    if os.path.exists(cross_out):
+                        os.remove(cross_out)
+
+                    if not failures:
+                        # Pair proven listed with a valid identity and
+                        # no problem.  Remove it through the envelope
+                        # row -- the envelope is the authenticated GC
+                        # authority, so its row is the removable entry;
+                        # the inert_payload row carries the payload
+                        # identity and is listing/classification
+                        # evidence (gc_maintenance.rs remove requires
+                        # the envelope identity).  Then prove durable
+                        # absence: the directory must contain nothing
+                        # at all after the removal.
+                        envelope_row = next(
+                            (r for r in rows
+                             if r.get("candidate_kind") == "envelope"),
+                            None)
+                        if envelope_row is None:
+                            failures.append(
+                                "no envelope row among the listed "
+                                "housekeeping rows")
+                        else:
+                            outcome["removed_rows"] = []
+                            removal = service.call(
+                                "rm", "iprange.v1.maintenance.remove",
+                                {"entry": envelope_row})
+                            outcome["removed_rows"].append({
+                                "row": envelope_row, "response": removal})
+                            if "error" in removal:
+                                failures.append(
+                                    "maintenance.remove failed with "
+                                    "the listed envelope row passed "
+                                    "unchanged: "
+                                    f"{json.dumps(removal['error'].get('data', {}))[:300]}")
+                        remaining = sorted(os.listdir(gc_dir))
+                        outcome["envelopes_after"] = remaining
+                        if remaining:
+                            failures.append(
+                                f"GC pair files still present after "
+                                f"maintenance.remove: {remaining}")
+                        after_out = os.path.join(
+                            args.work_dir, f"wh-after-{label}-"
+                            f"{uuid.uuid4().hex[:8]}.jsonl")
+                        after_reports, after_error, after_rows = (
+                            maintenance_list(service, gc_dir, after_out))
+                        outcome["after_listing"] = {
+                            "error": after_error,
+                            "entries": kind_entries(after_reports),
+                            "rows": after_rows}
+                        if os.path.exists(after_out):
+                            os.remove(after_out)
+                        if after_error or after_rows or \
+                                kind_entries(after_reports) != "0":
+                            failures.append(
+                                "synthesized pair directory still lists "
+                                "windows_housekeeping entries after "
+                                "removal: error "
+                                f"{after_error!r}, rows {after_rows}, "
+                                "entries "
+                                f"{kind_entries(after_reports)!r}")
+
             outcome["failures"] = failures
             outcome["pass"] = not failures
             if failures:
                 failed += 1
-        finally:
+            outcomes[label] = outcome
+            report["outcomes"].append(outcome)
+    finally:
+        for service in services.values():
             service.close()
-            for out_path in (empty_out, candidates_out):
-                if os.path.exists(out_path):
-                    os.remove(out_path)
-        report["outcomes"].append(outcome)
 
     if not on_windows:
         # The non-Windows run is a skipped (record-only) negative

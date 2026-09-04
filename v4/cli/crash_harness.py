@@ -39,18 +39,28 @@ scenario):
   ``maintenance.remove`` returns the directory to empty, and the
   never-published destination still truthfully refuses.
 - Scenario D -- ``direct.replace`` on a live database killed at the
-  resize marker: the interrupted commit never becomes the generation
-  (``database.info`` live keeps T0/R0, an immutable open truthfully
-  refuses, zero maintenance residue, a consumer live reader sees T0)
-  and a fresh producer commits T0+1 with one record.
-- Scenario E -- ``export`` killed at the partial-output marker: the
-  destination is absent, the ``<id>.export.tmp`` orphan is the bounded
-  residue (never a managed maintenance kind), the source is
+  durable draft-growth marker (the last deterministic
+  pre-publication boundary at the product interface; the plan's
+  durable sidecar marker is impossible -- neither engine writes the
+  ``.readers`` sidecar during a live commit, see scenario D): the
+  interrupted commit never becomes the generation (``database.info``
+  live keeps T0/R0, an immutable open truthfully refuses, zero
+  maintenance residue, a consumer live reader sees T0) and a fresh
+  producer commits T0+1 with one record.
+- Scenario E -- ``export`` killed at the partial-output marker (real
+  flushed output: the private temp stays 0 bytes until the 64 KiB
+  export buffer flushes, and the kill waits for size > 0): the
+  destination is absent, the ``<id>.export.tmp`` orphan is the
+  bounded residue (never a managed maintenance kind), the source is
   byte-identical, and a retry lands byte-identical to the reference.
-- Scenario F -- ``validate`` killed at the findings-output marker:
-  the findings destination is absent, one ``<id>.export.tmp`` orphan
-  remains, the damaged main is byte-identical, a fresh validate
-  reports the same findings and the committed generation still opens.
+- Scenario F -- ``validate`` killed at the findings-output temp
+  marker (existence, not flushed bytes: the small findings JSONL
+  sits in the buffered writer; the plan's worker-scratch marker is
+  impossible -- neither engine's validate ever spills to authorized
+  scratch, see scenario F): the findings destination is absent, one
+  ``<id>.export.tmp`` orphan remains, the damaged main is
+  byte-identical, a fresh validate reports the same findings and the
+  committed generation still opens.
 
 Every scenario runs in both directions (producer Rust with consumer Go,
 producer Go with consumer Rust).  The report (schema
@@ -175,10 +185,13 @@ class KillableJsonRpcService(run.JsonRpcService):
     """JsonRpcService whose subprocess runs in its own session.
 
     The producer that is meant to crash is spawned with
-    ``start_new_session=True`` so the harness can terminate the whole
-    process group with a targeted ``os.killpg`` (never pkill/killall).
-    Every response and the close path behave exactly like the normal
-    client.
+    ``start_new_session=True`` so the harness can terminate exactly
+    the spawned process tree (never pkill/killall).  On POSIX the
+    whole session receives SIGKILL; on Windows the spawned tree is
+    terminated with a targeted ``taskkill /F /T`` so the windows
+    housekeeping harness can interrupt a publish at the durable
+    reservation marker.  Every response and the close path behave
+    exactly like the normal client.
     """
 
     def __init__(self, argv, implementation, *, cwd=None):
@@ -187,8 +200,28 @@ class KillableJsonRpcService(run.JsonRpcService):
         record_spawn(self.proc)
 
     def kill_process_group(self):
-        """SIGKILL exactly the process group this service spawned."""
+        """Terminate exactly the process group this service spawned."""
 
+        if os.name == "nt":
+            # TerminateProcess first: it delivers immediately, while
+            # taskkill's process launch latency would let a mid-build
+            # publish finish its retirement.  taskkill is the fallback
+            # when the product spawned child processes (worker).
+            try:
+                os.kill(self.proc.pid, signal.SIGTERM)
+            except OSError:
+                pass
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(self.proc.pid)],
+                    capture_output=True, check=False)
+                try:
+                    self.proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+            return
         try:
             os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
         except ProcessLookupError:
@@ -1403,16 +1436,40 @@ def scenario_c(direction, producer, consumer, work_dir, scenario_report):
 
 def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                scenario_report):
-    """Crash direct.replace (commit/finish) at the live resize marker.
+    """Crash direct.replace (commit/finish) at the durable draft-growth marker.
 
     Scenario B interrupts the immutable-to-live transition; this
     scenario interrupts the commit of a full replacement on a live
     database.  ``database.initialize_live`` completes on the
     ``direct-v4`` fixture, then one ``direct.replace`` of a
     200 000-range CSV is killed as soon as the main file grows past
-    its pre-replace size.  The interrupted commit must never become
-    the generation: ``database.info`` live still reports the committed
-    T0/R0, an immutable ``database.info`` truthfully refuses
+    its pre-replace size: the durable draft-growth marker, the last
+    deterministic pre-publication boundary at the product interface.
+    Commit/finish publishes the alternate meta page (the generation
+    flip) by extending the main mapping with draft pages and syncing
+    them, so durable main growth is the final externally observable
+    state before the publication; the growth bytes are never a
+    completed generation.
+
+    The plan-recorded durable sidecar marker (SOW-0028:3851,
+    "commit/finish at a durable sidecar marker") is impossible at
+    this boundary: a live commit never writes the ``.readers``
+    sidecar.  Go: ``LiveWriter.finishCommitLocked``
+    (v4/go/internal/live/live_writer.go:471) calls ``commitLocked``
+    (:491), whose ``prepublicationChecks`` (:509) only verifies the
+    main/sidecar pair and scans the reader table; the publication
+    ``Core.Publish`` (v4/go/internal/writer/publication.go:163)
+    mutates only the main mapping (Shrink / FlushRange / SyncFile /
+    meta-page encode + flush + sync).  Rust:
+    ``LiveWriter::commit_with``
+    (v4/rust/iprange-livedb/src/live_writer/commit.rs:26) runs
+    ``prepublication_checks`` (:120-126: ``verify_pair`` plus
+    ``sidecar.scan_at_most_cancellable``, read-only) before
+    ``core.publish``.  Sidecar writes exist only in
+    lifecycle_create/initialize_live, which scenario B already
+    covers.  The interrupted commit must never become the generation:
+    ``database.info`` live still reports the committed T0/R0, an
+    immutable ``database.info`` truthfully refuses
     (``wrong_state``/``read_only_failure``), no managed maintenance
     residue exists (commit/finish leaves no private maintenance
     artifacts), and a consumer live reader observes T0.  A fresh
@@ -1473,7 +1530,12 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
         producer_service.kill_process_group()
         thread.join(timeout=5)
         scenario_report["kill_method"] = (
-            "SIGKILL process group at live replace resize marker")
+            "SIGKILL process group at durable draft-growth marker: the "
+            "last deterministic pre-publication boundary at the product "
+            "interface; the approved durable sidecar marker is impossible "
+            "because neither engine writes the .readers sidecar during a "
+            "live commit (evidence: Go internal/writer/publication.go "
+            "Publish; Rust live_writer/commit.rs)")
         scenario_report["destination_state"] = {
             "class": "live_dataset_with_uncommitted_write",
             "main_size_before": size_before,
@@ -1625,17 +1687,24 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
 
 
 def scenario_e(direction, producer, consumer, work_dir, scenario_report):
-    """Crash export at the partial-output marker.
+    """Crash export at the partial-output marker (real flushed output).
 
     ``current.publish`` builds one 500 000-range immutable main; a
     completed reference export fixes the exact destination bytes, then
     the same export is killed as soon as its private
-    ``<id>.export.tmp`` partial output appears.  The destination is
-    absent after the kill; the export temp is the bounded residue (an
-    output scratch, not a managed maintenance kind), and the source
-    main is byte-identical.  A fresh producer retries the same export
-    and lands byte-identical to the reference -- the orphaned temp
-    never blocks -- and the consumer still opens the intact source.
+    ``<id>.export.tmp`` partial output carries real flushed bytes.
+    Both exporters buffer 64 KiB (Go ``fileio.NewExportWriter``
+    v4/go/internal/cli/fileio/export_writer.go:109-112; Rust
+    ``ExportWriter::create`` v4/rust/iprange-cli/src/io/
+    export_writer.rs:100-119), so the temp stays 0 bytes until the
+    first buffer flush and ``size > 0`` means deterministic real
+    partial output, never a mere empty temp creation.  The
+    destination is absent after the kill; the export temp is the
+    bounded residue (an output scratch, not a managed maintenance
+    kind), and the source main is byte-identical.  A fresh producer
+    retries the same export and lands byte-identical to the
+    reference -- the orphaned temp never blocks -- and the consumer
+    still opens the intact source.
     """
 
     work = os.path.join(work_dir, f"e-{direction}-{uuid.uuid4().hex[:8]}")
@@ -1678,16 +1747,20 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
         outcome, seen_ms, thread = call_with_worker(
             producer_service, "3", "iprange.v1.export",
             export_params(source, dest), POLL_DEADLINE_SECONDS,
-            seen=lambda: bool(export_temp_basenames(work)))
+            seen=lambda: any(
+                os.path.getsize(os.path.join(work, name)) > 0
+                for name in export_temp_basenames(work)))
         if seen_ms is None:
             raise ScenarioFailure(
-                "export partial-output marker was not observed; "
-                f"worker outcome={outcome}")
+                "export partial-output marker (real flushed output) was "
+                f"not observed; worker outcome={outcome}")
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
         thread.join(timeout=5)
         scenario_report["kill_method"] = (
-            "SIGKILL process group at export partial-output marker")
+            "SIGKILL process group at export partial-output marker "
+            "(real flushed output: the 64 KiB-buffered temp is 0 bytes "
+            "until the first flush; the kill waits for size > 0)")
 
         orphans = export_temp_basenames(work)
         assert_truthful(
@@ -1744,7 +1817,7 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
 
 
 def scenario_f(direction, producer, consumer, work_dir, scenario_report):
-    """Crash validate at the findings-output marker.
+    """Crash validate at the findings-output temp marker.
 
     One 500 000-range immutable main is damaged by flipping one byte
     at offset 8192; a reference validate reports valid=false with
@@ -1756,6 +1829,40 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
     byte-identical.  A fresh validate reports the same truthful
     findings and the consumer still opens the damaged main (the
     committed generation stays readable).
+
+    The marker is temp existence, not flushed bytes: the findings
+    JSONL (3 rows) sits inside the buffered output writer until the
+    stream finishes, so the temp may stay 0 bytes for the whole run
+    and the durable observable at the product interface is the
+    private temp path itself (the validate findings stream is the
+    same 64 KiB-buffered private writer: Go
+    v4/go/internal/cli/handlers/recovery.go:236
+    ``fileio.NewExportWriter``; Rust
+    v4/rust/iprange-cli/src/rpc/handlers/recovery.rs:81
+    ``ExportWriter::create``).
+
+    The plan-recorded worker-scratch marker (SOW-0028:3851,
+    "validate at the worker scratch marker") is impossible: neither
+    engine's validate ever spills to authorized scratch.  The scratch
+    budget fields are API-parity only in both validation engines --
+    Go ``v4/go/internal/validation/types.go:28-68`` validates the
+    fields ("validated for API parity ... the Rust sweep ignores
+    them too") and no validation file consumes them; a heap too small
+    for the 2-bit claim bitmap is a truthful
+    ``insufficient_resource_budget``/``read_only_failure`` refusal
+    (``newClaims``, v4/go/internal/validation/context.go:46-50),
+    never a spill.  Rust ``v4/rust/iprange-livedb/src/validation/
+    types.rs:24-53`` is the same parity-only surface, heap exhaustion
+    is ``Claims::new``/``BudgetExceeded`` (v4/rust/iprange-livedb/
+    src/validation/context.rs:37,485), and the only authorized-scratch
+    implementation in the crate is the recovery sweep
+    (v4/rust/iprange-livedb/src/recovery/scratch_maintenance.rs).
+    Calibrated empirically against both staged binaries (heaps
+    16 B through 256 MiB with scratch enabled): no scratch file ever
+    appeared; below the claim-bitmap requirement validate refuses
+    with the budget error and at every larger heap it completes fully
+    in memory.  The findings-output temp is therefore retained as
+    the deterministic marker.
     """
 
     work = os.path.join(work_dir, f"f-{direction}-{uuid.uuid4().hex[:8]}")
@@ -1829,7 +1936,13 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
         producer_service.kill_process_group()
         thread.join(timeout=5)
         scenario_report["kill_method"] = (
-            "SIGKILL process group at validate findings-output marker")
+            "SIGKILL process group at findings-output temp marker; the "
+            "worker-scratch marker is impossible because neither "
+            "engine's validate spills to authorized scratch (scratch is "
+            "API-parity only in v4/go/internal/validation and "
+            "v4/rust/iprange-livedb/src/validation; a heap below the "
+            "claim-bitmap requirement is a truthful "
+            "insufficient_resource_budget refusal, never a spill)")
 
         orphans = export_temp_basenames(work)
         assert_truthful(
@@ -2061,6 +2174,13 @@ def main():
     )
     for producer_name, consumer_name, producer_bin, consumer_bin in pairs:
         direction = f"{producer_name}->{consumer_name}"
+        # Per-scenario binary identity: every scenario records the exact
+        # sha256 of the producer and consumer binaries it executes, so
+        # the kind gate can validate crash identities against the
+        # cross-report sha->implementation map instead of trusting the
+        # scenario direction label.
+        producer_sha = sha256_file(producer_bin)
+        consumer_sha = sha256_file(consumer_bin)
         work_base = os.path.join(
             args.work_dir, f"{producer_name}-{consumer_name}")
         for name, runner in (
@@ -2091,7 +2211,9 @@ def main():
             scenario_report = {
                 "scenario": f"{name}.{direction}",
                 "producer": f"{producer_name}:{producer_bin}",
+                "producer_sha256": producer_sha,
                 "consumer": f"{consumer_name}:{consumer_bin}",
+                "consumer_sha256": consumer_sha,
                 "marker_seen_ms": None,
                 "kill_method": "SIGKILL process group at durable marker",
                 "destination_state": None,

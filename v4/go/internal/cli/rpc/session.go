@@ -172,7 +172,10 @@ type sessionEvent struct {
 type Session struct {
 	state    *SessionState
 	inFlight atomic.Int64
-	workTx   chan workUnit
+	// workTx carries decoded work units to the worker; it is buffered
+	// to the queue bound so an admitted unit's send never blocks while
+	// the worker executes (inFlight bounds the buffered units).
+	workTx chan workUnit
 	// workerDone is closed when the worker goroutine exits; shutdown
 	// and fatal wait on it before closing connection resources.
 	workerDone chan struct{}
@@ -182,7 +185,7 @@ type Session struct {
 func NewSession() *Session {
 	return &Session{
 		state:      NewSessionState(),
-		workTx:     make(chan workUnit),
+		workTx:     make(chan workUnit, QueuedLimit),
 		workerDone: make(chan struct{}),
 	}
 }
@@ -496,6 +499,32 @@ func (s *Session) handleFrame(line []byte, fw *FrameWriter, writerMu *sync.Mutex
 		}
 	}
 	if batch {
+		if admitted == 0 {
+			// Every element was rejected at admission (busy or
+			// unanswerable): answer the whole array immediately so an
+			// all-rejected batch never occupies queue capacity and the
+			// dispatcher cannot block behind a pipelined flood (Rust
+			// session.rs parity, where the unbounded channel never
+			// blocks either).
+			responses := make([]json.RawMessage, 0, len(entries))
+			for _, entry := range entries {
+				if resp, ok := entryResponse(s, entry); ok {
+					responses = append(responses, resp)
+				}
+			}
+			arr := make([]any, len(responses))
+			for i, r := range responses {
+				arr[i] = json.RawMessage(r)
+			}
+			text, err := encodeResponseFrame(arr)
+			if err != nil {
+				return errors.New("bounded response encoding failed")
+			}
+			writerMu.Lock()
+			werr := fw.WriteLine(text)
+			writerMu.Unlock()
+			return werr
+		}
 		s.workTx <- workUnit{entries: entries, admitted: admitted, batch: true}
 		return nil
 	}

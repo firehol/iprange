@@ -200,28 +200,54 @@ table:
   foreign-destination negative control against the reservation
   digest), B `database.initialize_live` at the creating-state sidecar,
   C `recover` at the CRC-valid authorized-scratch header, D
-  `direct.replace` (commit/finish) at the live resize marker, E
-  `export` at the partial-output `.export.tmp` marker, F `validate`
-  at the findings-output marker.  16 scenarios run per invocation
+  `direct.replace` (commit/finish) at the durable live draft-growth
+  marker (the live-commit window has no sidecar write at the product
+  boundary; recorded evidence), E `export` at the non-empty
+  partial-output `.export.tmp` marker, F `validate` at the worker
+  authorized-scratch header marker.  16 scenarios run per invocation
   (8 x both directions); all markers are durable on-disk states, never
   wall-clock assertions.  Committed evidence is produced from binary
   copies staged under `/tmp/qualsvc/` (version-matched product/worker
   pairs), so the recorded argv carries no personal paths; see
   `evidence/README.md`.
-- `resource_harness.py` — the three Linux product-interface resource
+- `resource_harness.py` — the four Linux product-interface resource
   proofs (evidence `evidence/resource.json`): the >16-in-flight
-  `server_busy` pipelining proof, the -32001 over-limit-frame close
-  path, and `maintenance.remove` against a real reservation nonce of
-  a publish killed at the reservation marker — all for both product
-  binaries.
+  `server_busy` pipelining proof (one slow export + 19
+  `system.describe` frames; both binaries must answer exactly 3
+  `server_busy`, 16 results, the export -32010 `cancelled`, and exit
+  0), the -32001 over-limit-frame close path (one response, null id,
+  then stdout drains to EOF with zero further bytes), the
+  `maintenance.remove` proof against a real reservation nonce of a
+  publish killed at the reservation marker (the listed row is passed
+  unchanged, never rebuilt), and the cancellation proof (a slow
+  export, the `iprange.v1.cancel` notification naming it, and a
+  `system.describe` pipelined in one stdin blob: the cancelled export
+  never answers with a result — the session suppresses
+  explicitly-cancelled ids; -32010 `cancelled` is the EOF-path
+  answer — the describe answers with a result, exit 0).  All four
+  run for both product binaries.
 - `windows_housekeeping_harness.py` — the platform-bound
-  `windows_housekeeping` maintenance-kind proof: on Windows it lists
-  the kind successfully (0 entries on an empty directory, exactly the
-  synthesized GC-envelope candidate on the candidate directory); on
-  other platforms it records the truthful
-  `os_unsupported`/`read_only_failure` negative.  Committed Windows
-  evidence: `evidence/windows-housekeeping.json` (produced on
-  `costa-win11`).
+  `windows_housekeeping` maintenance-kind proof, in two parts on the
+  authorized Windows validation host.  (1) Native refresh exercise:
+  each product runs a real `retention.first_seen.refresh` with a
+  `removals_output` while a live reader pins the previous main; the
+  harness proves the refresh completes, publishes the exact removal
+  log, leaves no private `.removals.tmp` residue, and that the
+  pinning reader closes cleanly.  (2) Deterministic GC pair proof:
+  product-written envelopes are timing-dependent (the retirement
+  cleanup machine completes them best-effort), so the harness crafts
+  one format-valid 8192-byte authenticated envelope plus its inert
+  payload twin (`gc_envelope_windows.py` mirrors the committed codec
+  and the creator-only Windows DACL the products install) and proves
+  `maintenance.list` shows exactly the two candidate rows (envelope
+  and inert payload, both clean, UTF-16LE basename encoding,
+  authenticated directory identity equal across both products) and
+  that `maintenance.remove` with the listed envelope row passed
+  unchanged removes the pair with durable absence.  On other
+  platforms it records the truthful `os_unsupported`/
+  `read_only_failure` negative.  Committed Windows evidence:
+  `evidence/windows-housekeeping.json` (produced on the authorized
+  Windows validation host).
 
 ```bash
 RUST_IPRANGE=$PWD/v4/rust/target/release/iprange

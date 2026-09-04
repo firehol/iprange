@@ -30,57 +30,94 @@ Consumer-only, 134 steps, shared seed-0 direct fixture; passes in the `rust` and
 
 ## Measured memory (one representative matrix)
 
-Go matrix, fresh work dir, under `/usr/bin/time -v`: peak RSS **29,692 kB** (Python runner; the product child runs beside it), elapsed 0.19 s, exit 0. Per-request product memory is bounded by the 65,000-byte response object and 1 MiB frame ceilings.
+Go matrix, fresh work dir, under `/usr/bin/time -v` (final
+qualification binaries, two runs): peak RSS **25,924 kB** and
+**26,044 kB** (Python runner; the product child runs beside it),
+elapsed ~0.05 s, exit 0. Per-request product memory is bounded by
+the 65,000-byte response object and 1 MiB frame ceilings.
 
 ## PROVEN vs deferred
 
 PROVEN: advertised limits; `output_limit` on oversized inline results; reader/cursor 64+1 capacity (`server_busy`); frame-layer batch bound 1..16; bounded adapter memory by design and gates; `maintenance.list` reports the `scratch`/`reservation`/`publication_temp` kinds on Linux (case-backed); `maintenance.remove` against a real abandoned-scratch attempt ID (crash scenario C: list -> remove -> durable absent, both product languages).
 
-The four former NOT-PROVEN items are now proven at the product
-interface by `resource_harness.py` (evidence `evidence/resource.json`)
-and `windows_housekeeping_harness.py` (evidence
-`evidence/windows-housekeeping.json`, executed on the Windows
-validation host):
+The former NOT-PROVEN items are now proven at the product interface
+by `resource_harness.py` (evidence `evidence/resource.json`) and
+`windows_housekeeping_harness.py` (evidence
+`evidence/windows-housekeeping.json`, executed on the authorized
+Windows validation host):
 
 1. The >16-in-flight `server_busy` race — one slow 500,000-range
    export pipelined with 19 `system.describe` frames on one stdin
-   blob: the Rust product answers exactly 3 describes with
+   blob: both product binaries must answer exactly 3 describes with
    transport -32002 behind the single in-flight export and the
-   remaining 16 with results (the 16-deep queue bound); the Go
-   product executes the pipelined frames serially and answers all
-   20 (it never queues beyond the bound, so the refusal is
-   unreachable through this path — recorded truthfully as the Go
-   negative).
+   remaining 16 with results (the 16-deep queue bound; which ids sit
+   at the admission boundary races by a small timing window, so only
+   the count and the id coverage are asserted), the in-flight export
+   answers -32010 `cancelled` (EOF cancels the active unit), and the
+   process exits 0 — the identical session contract for both
+   products.  A 500,000-line feed is the verified minimum that keeps
+   the queue occupied.
 2. The -32001 over-limit-frame close path — one >1 MiB frame yields
-   exactly one -32001 response with a null id, then EOF, then a
-   clean exit 0 in both products.
+   exactly one -32001 response with a null id, then stdout drains to
+   EOF with zero further bytes, then a clean exit 0 in both
+   products.
 3. `maintenance.remove` against a real reservation nonce — a publish
    killed at the reservation marker, one `maintenance.list`
-   reservation row, the removal entry rebuilt from the raw
-   reservation bytes (policy, phase, output and previous identities
-   and digests), `maintenance.remove` returns ok and the
-   reservation is durably absent in both products.
-4. The `windows_housekeeping` maintenance kind — on `costa-win11`
-   (Microsoft Windows 11) both Windows-built product binaries list
-   the kind successfully: 0 entries on an empty directory and
-   exactly one GC-envelope candidate
-   (`.iprange-gcauth-<attempt>-<ordinal>.tmp`, kind
-   `windows_housekeeping`, `candidate_kind: envelope`, UTF-16LE
-   basename encoding, exact basename, authenticated directory
-   identity) on a candidate directory; on non-Windows platforms
-   both products truthfully refuse with
-   `os_unsupported`/`read_only_failure` (Linux negative recorded by
-   the same script).
+   reservation row, the row passed unchanged to
+   `maintenance.remove` (the opaque-entry contract: the removal
+   entry is exactly what `maintenance.list` emitted, never rebuilt
+   or decoded), `maintenance.remove` returns ok and the reservation
+   is durably absent in both products.
+4. CLI cancellation — one stdin blob pipelines a slow export
+   (id 1), the `iprange.v1.cancel` notification naming it, and one
+   `system.describe` (id 2): the cancelled export never answers with
+   a result (the session suppresses explicitly-cancelled ids;
+   -32010 `cancelled` is the EOF-path answer from proof 1), the
+   describe still answers with a result (the dispatcher stays
+   responsive), and the process exits 0 — both products.
+5. The `windows_housekeeping` maintenance kind — on the authorized
+   Windows validation host (Microsoft Windows 11) each Windows-built
+   product binary proves two things.  (1) The native refresh
+   exercise: `retention.first_seen.refresh` with a `removals_output`
+   behind a pinning live reader completes, publishes the exact
+   removal log with the refresh value, leaves no private
+   `.removals.tmp` residue (the Go removalCollector Windows fix is
+   covered natively), and the pinning reader closes cleanly.  (2)
+   The deterministic GC pair proof: product-written GC envelopes are
+   timing-dependent (the retirement cleanup machine completes them
+   best-effort), so the harness builds one format-valid 8,192-byte
+   authenticated envelope plus its inert payload twin from the
+   committed codec and creator-only DACL constants
+   (`gc_envelope_windows.py`), then proves `maintenance.list`
+   reports 0 entries on an empty directory and exactly the two clean
+   candidate rows (envelope and inert payload) on the pair
+   directory — entries == listed rows, UTF-16LE basename encoding,
+   authenticated directory identity equal across both products —
+   and `maintenance.remove` with the listed envelope row passed
+   unchanged removes the pair with durable absence and a zero-row
+   after-listing.  On non-Windows platforms both products truthfully
+   refuse with `os_unsupported`/`read_only_failure` (Linux negative
+   recorded by the same script over the same refresh-built
+   directory).
 
-The Windows qualification additionally found and fixed two Go
-adapter defects of the same class: `v4/go/internal/cli/fileio/
-export_writer.go` and `v4/go/internal/cli/handlers/live.go` (the
-first-seen refresh removal-output collector, on every abort path and
-the publish-failure cleanup) removed their private temporaries while
+The Windows qualification additionally found and fixed three product
+adapter defects: two Go-only temporary-close defects
+(`v4/go/internal/cli/fileio/export_writer.go` and
+`v4/go/internal/cli/handlers/live.go`, the first-seen refresh
+removal-output collector) removed their private temporaries while
 the files were still open, which fails on Windows (Go files do not
-share DELETE); both writers now close the temporary before
-publication/removal.  The Linux Go qualification binary changed hash
-to `f9c7d50e…` as a result; behavior on Linux is unchanged.
+share DELETE; both writers now close the temporary before
+publication/removal), and one cross-language round-trip defect found
+by the deterministic pair proof: both `maintenance.remove`
+windows_housekeeping field decoders required the optional `artifact`
+and `problem` members that `maintenance.list` omits on clean rows
+(`v4/go/internal/cli/handlers/maintenance.go` and
+`v4/rust/iprange-cli/src/rpc/handlers/maintenance.rs`); both now
+treat those members as optional, so the unchanged list row
+round-trips (spec `.agents/sow/specs/iprange-jsonrpc-v1.md:968`).
+The Linux qualification binary hashes changed to `2f1d2bba…` (Go)
+and `86056181…` (Rust) as a result; behavior on Linux is unchanged
+outside the round-trip acceptance.
 
 Deferred to delivery step 6: latency/throughput and engine RSS
 ceilings only.

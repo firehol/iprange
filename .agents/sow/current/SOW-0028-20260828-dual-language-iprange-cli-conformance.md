@@ -108,6 +108,14 @@ Implementation status (2026-09-01):
   milestone 4 (delivery step 5) is re-closed at that revision.
   Delivery step 6 (consolidated benchmark harness and measured
   ceilings) is the next milestone, recorded below.
+  Milestone 4 was reopened a third time on 2026-09-04 by the
+  whole-milestone review at `14ce284e` (four P1 defect classes and
+  seven P2 findings; see the fifth fix wave below).  The fifth fix
+  wave repairs the Go JSON-RPC queue/cancellation contract, the
+  opaque `maintenance.remove` row contract, the crash markers D/E/F
+  (with the recorded D impossibility evidence), the bypassable kind
+  gate, and the resource/Windows P2 items, then re-qualifies the
+  milestone.
 
 ## Requirements
 
@@ -3883,8 +3891,8 @@ evidence.
   is platform-bound and needs the Windows host).
 
   **Decision (user, 2026-09-04): A — prove all four resource items
-  now, including the Windows-kind proof on `costa-win11`.**
-  `costa-win11` access is authorized restricted to SOW-0028 Windows
+  now, including the Windows-kind proof on the authorized Windows validation host.**
+  Access to the authorized Windows validation host is authorized restricted to SOW-0028 Windows
   qualification (compile the two product binaries at the qualified
   revision and run the housekeeping proof); the host is used only
   for that purpose.
@@ -3986,7 +3994,7 @@ Windows) are recorded below.
    (policy, phase, output and previous identities and digests)
    removes the reservation durably.
 3. **`windows_housekeeping` proof** (`v4/cli/windows_housekeeping_harness.py`):
-   on the Windows validation host `costa-win11` (access authorized
+   on the authorized Windows validation host (access authorized
    by the user for SOW-0028 qualification only), both product
    binaries are built at the qualified revision and the script
    proves `maintenance.list` kind `windows_housekeeping` succeeds on
@@ -4037,7 +4045,7 @@ staged at `/tmp/qualsvc/`, evidence in `v4/cli/evidence/`):
   export, Go serializes and answers all 20 — the Go negative is
   recorded truthfully, since Go never queues beyond the documented
   bound).
-- Windows housekeeping: on `costa-win11` (Microsoft Windows 11,
+- Windows housekeeping: on the authorized Windows validation host (Microsoft Windows 11,
   AMD64) both Windows-built product binaries PASS the
   `windows_housekeeping` listing proof (0 entries on an empty
   directory, exactly one listed GC-envelope candidate with UTF-16LE
@@ -4134,3 +4142,228 @@ directly):
   require row count == reported entries, and cross-compare the
   directory identity across both products (the committed evidence
   already satisfies all of these).
+
+### 2026-09-04 (continued) — fifth fix wave: milestone-4 reopened by the whole-milestone review at 14ce284e
+
+An external whole-milestone review of the exact final tree `14ce284e`
+(the record commit that followed the `9b3af7d9` re-close) returned
+FAIL with four P1 defect classes and seven P2 findings.  Per the
+project-final-review skill, the later record-only commit invalidates
+the earlier verdicts, so milestone 4 (delivery step 5) is reopened.
+No new product decision is required: the approved user decisions
+(D1-A/D2-A/D3-B), the frozen JSON-RPC specification, and the recorded
+milestone-4 plan already determine the required behavior.  Product
+sources are repaired under this wave where in-scope adapter defects
+exist; the Rust product source changes only for the wire-contract
+defect below (both languages must conform to the same frozen spec).
+
+P1 blockers and their required corrections:
+
+1. **Go JSON-RPC queue/cancellation contract violation**
+   (`v4/go/internal/cli/rpc/session.go`).  The frozen contract
+   (`.agents/sow/specs/iprange-jsonrpc-v1.md:82`) requires one active
+   request, at most 16 queued, excess requests answered `-32002
+   server_busy`, and cancellation/EOF observable while a slow request
+   runs.  Go uses an unbuffered worker channel
+   (`session.go:181`), and `handleFrame` blocks handing each frame to
+   the worker (`session.go:498`, batch at `:535`), so while a slow
+   operation runs the dispatcher stops reading stdin: cancellation
+   and EOF wait, and frames accumulate in the OS pipe instead of the
+   documented 16-entry queue.  Committed evidence shows Go answering
+   all 20 pipelined requests and the export completing
+   (`v4/cli/evidence/resource.json:30`), and the harness recorded
+   that violation as PASS (`v4/cli/resource_harness.py:220`).
+   Required correction: mirror the Rust session architecture
+   (`v4/rust/iprange-cli/src/rpc/session.rs:222` unbounded channel,
+   `in_flight` admission bound of 16, dispatcher never blocks): make
+   the Go worker channel buffered at the queue limit while keeping
+   the `admitOne` bound, then prove through the real CLI that Go
+   answers exactly three `server_busy` refusals behind one slow
+   export) and that cancellation and EOF land while the slow
+   operation runs.
+2. **`maintenance.list` row cannot be passed unchanged to
+   `maintenance.remove`**.  The contract requires the unchanged
+   opaque list row
+   (`.agents/sow/specs/iprange-jsonrpc-v1.md:968`).  Both languages
+   omit the optional `previous` evidence member when absent
+   (`v4/go/internal/cli/handlers/maintenance.go:859`,
+   `v4/rust/iprange-cli/src/rpc/handlers/maintenance.rs:686`), but
+   both removal handlers require `previous` present and reject null
+   (`maintenance.go:1230`, `maintenance.rs:956`).  The resource
+   harness hid the defect by decoding private reservation block
+   offsets and fabricating a zero-valued `previous`
+   (`v4/cli/resource_harness.py:412,:450`).
+   Required correction: accept an absent optional `previous` in both
+   removal handlers (present must remain an object with `identity`
+   and `digest`; null stays invalid), and change the harness proof to
+   feed the listed row byte-for-byte unchanged with no private-format
+   knowledge.
+3. **Crash scenarios D, E, F do not use the approved interruption
+   points**.  The approved plan
+   (`.agents/sow/current/SOW-0028-20260828-dual-language-iprange-cli-conformance.md:3851`)
+   names commit/finish at a durable sidecar marker, export at a
+   partial-output marker, and validate at the worker scratch marker.
+   - D (`v4/cli/crash_harness.py:1463`) watches main-file growth
+     during input loading.  Investigation for this wave established
+     that a durable sidecar write does not exist in the live-commit
+     window at the product boundary: both engines' commit paths only
+     scan and verify the `.readers` sidecar and mutate the main
+     mapping (Go `v4/go/internal/live/live_writer.go` commit path via
+     `v4/go/internal/writer/publication.go` Publish; Rust
+     `v4/rust/iprange-livedb/src/live_writer/commit.rs`); sidecar
+     writes exist only in creation/transition paths already covered
+     by scenario B.  The worker therefore returns this finding with
+     evidence and keeps the deterministic pre-publication durable
+     marker (draft-growth), with the marker and the impossibility
+     recorded truthfully in the scenario.
+   - E fires when an empty `.export.tmp` merely exists (`:1678`);
+     the corrected marker is real partial output (the export
+     temporary is non-empty, since the writer emits in 64 KiB
+     chunks).
+   - F disables scratch and watches the findings-output temporary
+     (`:365`, `:1820`); the corrected marker is the worker
+     authorized-scratch header (CRC-valid 128-byte ownership header,
+     the same durable marker scenario C proves), with the validation
+     heap calibrated so the damaged scan spills to scratch.  If
+     validation cannot reach that marker at the product boundary,
+     the worker must return with evidence instead of silently
+     weakening the marker.
+4. **The kind-coverage/provenance gate remains bypassable**
+   (`v4/cli/check_kind_coverage.py:133,:178,:223`).  Reproduced
+   false PASSes: a Rust matrix cloned and relabeled as Go (its own
+   binaries block defeats the per-report SHA anchor), Rust→Go crash
+   scenarios duplicated and relabeled Go→Rust (label-trusted
+   producer/consumer), actor `steps: 0` reports, and failed cases
+   with an aggregate `failed: 0` counter.  Required correction: bind
+   SHA→implementation consistently across all reports, validate
+   command/case identities and counters, require executed steps,
+   require crash evidence with real bidirectional identity (not
+   labels), and keep per-kind actor lineage instead of assuming every
+   consumer opened every artifact.
+
+P2 findings (all corrected in this wave):
+
+- `resource_harness.py:366` proof b reads one response but never
+  drains stdout to EOF and sends no trailing sentinel, so extra
+  parsing or responses go undetected; the proof now drains stdout to
+  EOF with a bounded deadline and asserts zero further bytes.
+- `windows_housekeeping_harness.py:200,:336` records stronger facts
+  than it enforces: it now requires `entries == rows`,
+  `basename_encoding == 2` on Windows, cross-compares the directory
+  identity across both products, records `system.describe`
+  identities and auditable build provenance instead of trusting
+  caller labels, and natively exercises
+  `retention.first_seen.refresh` (the committed malformed 23-byte
+  synthesized envelope of the previous revision made both products
+  truthfully report `cleanup_conflict`; see
+  `v4/cli/evidence/windows-housekeeping.json:65` of that revision).
+  The final harness proves the refresh completion, the exact removal
+  log, and the private-temporary cleanup natively, then proves
+  list/remove on a deterministic format-valid 8,192-byte synthesized
+  pair (`gc_envelope_windows.py`, mirroring the committed codec and
+  the creator-only protected DACL; product-written envelopes are
+  timing-dependent at the product boundary and cannot be relied on
+  as leftover artifacts).
+- The host alias of the authorized Windows validation host is
+  removed from committed artifacts (this SOW and the `v4/cli/`
+  documentation), per the sensitive-data gate.
+- Review identity: all five own-model scope reviews and the
+  whole-milestone review for this wave run at one exact final
+  revision with no later commits.
+
+### Fifth wave implementation (this wave)
+
+All four P1 corrections and the P2 corrections landed:
+
+1. Go JSON-RPC session: `v4/go/internal/cli/rpc/session.go` now
+   buffers the worker channel at the 16-entry queue limit, keeps the
+   dispatcher responsive (every admission decision returns
+   `server_busy` for the 17th in-flight unit; a batch whose units
+   are all rejected is answered immediately), and proves
+   cancellation/EOF observability while a slow request runs
+   (`session_test.go`: pipelined-busy, cancellation, and EOF cases).
+2. `maintenance.remove` row round-trips: the reservation `previous`
+   evidence member and the windows_housekeeping `artifact`/`problem`
+   members are optional exactly as `maintenance.list` emits them, in
+   both languages; null stays invalid and unknown members stay
+   refused.  The windows_housekeeping fix was found by the
+   deterministic pair proof (list rows without a `problem` member
+   were refused by both removal decoders with `invalid_argument`).
+3. Crash scenarios D/E/F use their approved interruption points: D
+   records the sidecar-marker impossibility (the engines' commit
+   paths never write a sidecar during the live-commit window;
+   sidecar writes exist only in creation/transition paths already
+   covered by scenario B) and keeps the deterministic
+   pre-publication draft-growth marker, E waits for real partial
+   export output (non-empty `.export.tmp`), and F waits for the
+   worker authorized-scratch header with the validation heap
+   calibrated to spill.
+4. `check_kind_coverage.py` derives language attribution from a
+   global SHA→implementation map built from every supplied report,
+   validates per-case command identities, executed-step counts,
+   crash-identity directions and failed counters, requires crash
+   evidence, and records per-kind actor lineage.  The five
+   reproduced bypass attacks and new clone/relabel/foreign attacks
+   fail; the committed evidence passes.
+5. Windows qualification (`windows_housekeeping_harness.py` +
+   `gc_envelope_windows.py`): native refresh exercise plus a
+   deterministic format-valid GC pair proof (see the P2 bullet
+   above).  The harness runs under the mingw64 Python of the
+   authorized Windows validation host; it uses ctypes only for file
+   creation/identity (the MSYS2 Python build cannot call
+   `GetSecurityInfo` — documented in the module — so the creator
+   commitment is derived from the effective token SID, the same
+   source the products prove the live descriptor against).
+6. Evidence battery regenerated at the final product sources:
+   Rust 38/38 and Go 38/38 single-language matrices, 14+24 both
+   mixed directions, crash 16/16 both directions with the negative
+   control 0/16, resource 8/8 (Go: exactly 3 `server_busy`, 16
+   results, export cancelled), golden 53, sensitivity 14, kind gate
+   PASS, Windows housekeeping PASS for both products.
+
+### Fifth wave validation (this wave)
+
+- Go plain and `v4work` suites, both vet modes, and gofmt: green.
+- Rust `cargo test` (plain and `--all-features`): green, including
+  the new housekeeping round-trip tests in both languages.
+- Linux battery regenerated from staged binaries at the final
+  product sources (Go product `2f1d2bba…`, worker `16236608…`;
+  Rust product `86056181…`, worker `cb9ad6cd…`) — see
+  `v4/cli/evidence/README.md` for the full SHA ledger.
+- Windows battery regenerated on the authorized Windows validation
+  host (Go product `854abf3a…`, worker `7d81deb7…`; Rust product
+  `927dbd47…`, worker `ce757fcb…`) — `evidence/windows-housekeeping.json`
+  with both outcomes PASS.
+- The windows_housekeeping removal round-trip defect found by this
+  wave is fixed in both product languages with unit tests
+  (`v4/go/internal/cli/handlers/maintenance_test.go`,
+  `v4/rust/iprange-cli/src/rpc/handlers/maintenance.rs` tests
+  module); the same-failure search covered every other
+  list→remove field decoder: scratch rows always carry their
+  `authentication` member, and reservation/publication_temp rows
+  omit evidence only when the artifact's certification was never
+  captured — removal of those is refused by design, because the
+  remove API requires the certified evidence
+  (`maintenance.go` reservationRemoveFields/publicationTempRemoveFields
+  and the Rust twins), unlike the housekeeping envelope row whose
+  complete removal identity is present even when `artifact`/`problem`
+  are absent.
+- Sensitive-data gate: regenerated evidence contains no personal
+  paths and no host alias; the SOW, `v4/cli/` documentation and
+  evidence are sanitized.
+- Artifact gate: end-user docs (`v4/cli/README.md`),
+  `v4/cli/evidence/README.md`, and `v4/cli/resource-record.md`
+  updated with the final flows and SHA ledger; no spec change is
+  required (the optional-member acceptance implements the frozen
+  round-trip contract); no project-skill change is required.
+
+### Fifth wave reviews and re-close decision (this wave)
+
+Per the project-final-review skill, the reviews run at one exact
+final revision of this wave with no later repository commits.  The
+five own-model scope reviews reproduce the evidence battery and the
+adversarial gate attacks at that revision, and the whole-milestone
+review (glm-5.3-responses, per the user's standing instruction for
+this SOW) validates the same exact revision.  Their verdicts, any
+repairs they require, and the milestone-4 re-close decision are
+recorded here when the reviews land.

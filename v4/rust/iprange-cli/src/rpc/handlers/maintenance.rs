@@ -953,7 +953,18 @@ fn reservation_remove_fields(
     let evidence = entry["evidence"]
         .as_object()
         .ok_or("entry.evidence must be an object")?;
-    exact_fields(evidence, &["policy", "phase", "output", "previous"])?;
+    // policy, phase, output are required; previous is the only
+    // allowed optional member and any other key is refused.
+    for field in ["policy", "phase", "output"] {
+        if !evidence.contains_key(field) {
+            return Err(format!("missing member {field:?}"));
+        }
+    }
+    for key in evidence.keys() {
+        if !["policy", "phase", "output", "previous"].contains(&key.as_str()) {
+            return Err(format!("unknown member {key:?}"));
+        }
+    }
     for field in ["policy", "phase"] {
         if !evidence[field].is_string() {
             return Err(format!("entry.evidence.{field} must be a string"));
@@ -966,15 +977,22 @@ fn reservation_remove_fields(
     identity_from_value(&output["identity"])?;
     tuple_from_value(&output["tuple"])?;
     digest_from_value(&output["digest"])?;
-    if evidence["previous"].is_null() {
-        return Err("entry.evidence.previous must not be null; absent is the only absent form".into());
+    match evidence.get("previous") {
+        None => {}
+        Some(Value::Null) => {
+            return Err(
+                "entry.evidence.previous must not be null; absent is the only absent form".into(),
+            )
+        }
+        Some(value) => {
+            let previous = value
+                .as_object()
+                .ok_or("entry.evidence.previous must be an object")?;
+            exact_fields(previous, &["identity", "digest"])?;
+            identity_from_value(&previous["identity"])?;
+            digest_from_value(&previous["digest"])?;
+        }
     }
-    let previous = evidence["previous"]
-        .as_object()
-        .ok_or("entry.evidence.previous must be an object")?;
-    exact_fields(previous, &["identity", "digest"])?;
-    identity_from_value(&previous["identity"])?;
-    digest_from_value(&previous["digest"])?;
     Ok((directory, directory_identity, artifact_identity, attempt_id))
 }
 
@@ -1022,22 +1040,44 @@ fn publication_temp_remove_fields(
 fn housekeeping_remove_fields(
     entry: &Map<String, Value>,
 ) -> Result<(String, LocalFileIdentity, [u8; 16], u32, LocalFileIdentity), String> {
-    exact_fields(
-        entry,
-        &[
-            "kind",
-            "directory",
-            "directory_identity",
-            "candidate_kind",
-            "basename_encoding",
-            "basename",
-            "identity",
-            "attempt_id",
-            "ordinal",
-            "artifact",
-            "problem",
-        ],
-    )?;
+    // artifact and problem are optional members: maintenance.list
+    // omits them when they do not apply, and the contract requires an
+    // unchanged list row to round-trip into remove.  The allowed set
+    // therefore covers all eleven list members; only the nine
+    // identification members are required.
+    for key in entry.keys() {
+        if !matches!(
+            key.as_str(),
+            "kind"
+                | "directory"
+                | "directory_identity"
+                | "candidate_kind"
+                | "basename_encoding"
+                | "basename"
+                | "identity"
+                | "attempt_id"
+                | "ordinal"
+                | "artifact"
+                | "problem"
+        ) {
+            return Err(format!("unknown member {key:?}"));
+        }
+    }
+    for field in [
+        "kind",
+        "directory",
+        "directory_identity",
+        "candidate_kind",
+        "basename_encoding",
+        "basename",
+        "identity",
+        "attempt_id",
+        "ordinal",
+    ] {
+        if !entry.contains_key(field) {
+            return Err(format!("missing member {field:?}"));
+        }
+    }
     let directory = remove_directory(entry)?;
     let directory_identity = identity_from_value(&entry["directory_identity"])?;
     match entry["candidate_kind"].as_str() {
@@ -1404,4 +1444,183 @@ fn exact_object_opt<'a>(
 
 fn bounded(result: Value) -> Result<Value, HandlerError> {
     reader::bounded_result(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One valid reservation remove evidence object; the optional
+    /// previous member is included only when requested (the list
+    /// emitter omits it when there is no previous block, so the
+    /// remove wire check must accept its absence).
+    fn reservation_evidence(previous: Option<Value>) -> Value {
+        let mut evidence = json!({
+            "policy": "replace_existing",
+            "phase": "prepared",
+            "output": {
+                "identity": {"volume": "1", "file": "2"},
+                "tuple": {
+                    "database_id": "11111111111111111111111111111111",
+                    "transaction_id": "1",
+                    "commit_nonce": "22222222222222222222222222222222",
+                },
+                "digest": {
+                    "byte_length": "64",
+                    "sha512": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                },
+            },
+        });
+        if let Some(previous) = previous {
+            evidence["previous"] = previous;
+        }
+        evidence
+    }
+
+    /// One valid reservation previous block.
+    fn reservation_previous() -> Value {
+        json!({
+            "identity": {"volume": "3", "file": "4"},
+            "digest": {
+                "byte_length": "32",
+                "sha512": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            },
+        })
+    }
+
+    /// One complete maintenance.remove reservation entry (the exact
+    /// list row shape) around the given evidence value.
+    fn reservation_remove_entry(evidence: Value) -> Map<String, Value> {
+        json!({
+            "kind": "reservation",
+            "directory": "/tmp/probe",
+            "directory_identity": {"volume": "1", "file": "2"},
+            "artifact_identity": {"volume": "9", "file": "8"},
+            "publication_attempt_id": "11111111111111111111111111111111",
+            "evidence": evidence,
+        })
+        .as_object()
+        .unwrap()
+        .clone()
+    }
+
+    #[test]
+    fn reservation_remove_accepts_evidence_without_previous() {
+        let entry = reservation_remove_entry(reservation_evidence(None));
+        let (directory, _, _, attempt) = reservation_remove_fields(&entry).unwrap();
+        assert_eq!(directory, "/tmp/probe");
+        assert_eq!(attempt, [0x11; 16]);
+    }
+
+    #[test]
+    fn reservation_remove_accepts_evidence_with_previous() {
+        let entry = reservation_remove_entry(reservation_evidence(Some(reservation_previous())));
+        reservation_remove_fields(&entry).unwrap();
+    }
+
+    #[test]
+    fn reservation_remove_refuses_null_previous() {
+        let entry = reservation_remove_entry(reservation_evidence(Some(Value::Null)));
+        let error = reservation_remove_fields(&entry).unwrap_err();
+        assert!(
+            error.contains("previous"),
+            "null previous must be refused, got: {error}"
+        );
+    }
+
+    #[test]
+    fn reservation_remove_refuses_unknown_evidence_keys() {
+        let mut evidence = reservation_evidence(Some(reservation_previous()));
+        evidence["extra"] = json!("x");
+        let entry = reservation_remove_entry(evidence);
+        let error = reservation_remove_fields(&entry).unwrap_err();
+        assert!(
+            error.contains("unknown member"),
+            "unknown evidence member must be refused, got: {error}"
+        );
+    }
+
+    #[test]
+    fn reservation_remove_refuses_missing_required_evidence_member() {
+        let mut evidence = reservation_evidence(None);
+        evidence.as_object_mut().unwrap().remove("output");
+        let entry = reservation_remove_entry(evidence);
+        let error = reservation_remove_fields(&entry).unwrap_err();
+        assert!(
+            error.contains("missing member"),
+            "missing required evidence member must be refused, got: {error}"
+        );
+    }
+
+    /// One complete maintenance.remove windows_housekeeping entry
+    /// (the exact list row shape); artifact and problem are included
+    /// only when requested, exactly like maintenance.list emits them.
+    fn housekeeping_remove_entry(artifact: Option<Value>, problem: Option<Value>) -> Map<String, Value> {
+        let mut entry = json!({
+            "kind": "windows_housekeeping",
+            "directory": "/tmp/probe",
+            "directory_identity": {"volume": "1", "file": "2"},
+            "candidate_kind": "envelope",
+            "basename_encoding": 2,
+            "basename": "LgBpAHAAcgBhAG4AZwBlAC0AZwBjAGEAdQB0AGgALQAxAC4AdABtAHAA",
+            "identity": {"volume": "3", "file": "4"},
+            "attempt_id": "11111111111111111111111111111111",
+            "ordinal": 1,
+        });
+        if let Some(artifact) = artifact {
+            entry["artifact"] = artifact;
+        }
+        if let Some(problem) = problem {
+            entry["problem"] = problem;
+        }
+        entry.as_object().unwrap().clone()
+    }
+
+    #[test]
+    fn housekeeping_remove_accepts_row_without_optional_members() {
+        // A clean list row omits artifact and problem; the unchanged
+        // row must round-trip into remove.
+        let entry = housekeeping_remove_entry(None, None);
+        let (directory, _, attempt, ordinal, _) = housekeeping_remove_fields(&entry).unwrap();
+        assert_eq!(directory, "/tmp/probe");
+        assert_eq!(attempt, [0x11; 16]);
+        assert_eq!(ordinal, 1);
+    }
+
+    #[test]
+    fn housekeeping_remove_accepts_row_with_optional_members() {
+        let artifact = json!({"kind": "private_output"});
+        let problem = json!({"code": "cleanup_conflict"});
+        let entry = housekeeping_remove_entry(Some(artifact), Some(problem));
+        housekeeping_remove_fields(&entry).unwrap();
+    }
+
+    #[test]
+    fn housekeeping_remove_refuses_unknown_members() {
+        let mut entry = housekeeping_remove_entry(None, None);
+        entry.insert("extra".into(), json!("x"));
+        let error = housekeeping_remove_fields(&entry).unwrap_err();
+        assert!(
+            error.contains("unknown member"),
+            "unknown entry member must be refused, got: {error}"
+        );
+    }
+
+    #[test]
+    fn reservation_remove_handler_accepts_evidence_without_previous() {
+        // The wire layer accepts the listed row unchanged; the only
+        // refusal that can follow is an SDK-level outcome about the
+        // probe directory, never an invalid_argument param schema
+        // error (the probe directory does not exist).
+        let entry = reservation_remove_entry(reservation_evidence(None));
+        let result = maintenance_remove(&mut SessionState::default(), json!({"entry": entry}));
+        match result {
+            Ok(_) => {}
+            Err(error) => assert_ne!(
+                error.code, "invalid_argument",
+                "evidence without previous must pass the handler wire check: {}",
+                error.message
+            ),
+        }
+    }
 }

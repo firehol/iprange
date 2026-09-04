@@ -1224,12 +1224,22 @@ func reservationRemoveFields(entry rawObject) (string, iprangedb.FileIdentity, i
 }
 
 // validateReservationEvidence enforces the exact evidence object:
-// policy, phase, output (identity, tuple, digest), and previous
-// (identity, digest); null is never a valid absent form (Rust
+// policy, phase, and output (identity, tuple, digest) are required;
+// previous (identity, digest) is optional and is validated only when
+// present; null is never a valid absent form (Rust
 // reservation_remove_fields).
 func validateReservationEvidence(evidence rawObject) *rpc.HandlerError {
-	if err := exactObjectRaw(evidence, "policy", "phase", "output", "previous"); err != nil {
-		return rpc.InvalidParamsError(err.Error())
+	// policy, phase, output are required; previous is the only
+	// allowed optional member and any other key is refused.
+	for key := range evidence {
+		if key != "policy" && key != "phase" && key != "output" && key != "previous" {
+			return rpc.InvalidParamsError(fmt.Sprintf("unknown member %q", key))
+		}
+	}
+	for _, field := range []string{"policy", "phase", "output"} {
+		if _, ok := evidence[field]; !ok {
+			return rpc.InvalidParamsError(fmt.Sprintf("missing member %q", field))
+		}
 	}
 	for _, field := range []string{"policy", "phase"} {
 		if _, err := asString(evidence, field); err != nil {
@@ -1264,25 +1274,30 @@ func validateReservationEvidence(evidence rawObject) *rpc.HandlerError {
 	if err := validateDigestObject(digest); err != nil {
 		return rpc.InvalidParamsError(err.Error())
 	}
-	previous, err := memberObject(evidence, "previous")
-	if err != nil {
-		return rpc.InvalidParamsError("entry.evidence.previous must be an object")
+	if _, present := evidence["previous"]; present {
+		previous, err := memberObject(evidence, "previous")
+		if err != nil {
+			return rpc.InvalidParamsError("entry.evidence.previous must be an object")
+		}
+		if err := exactObjectRaw(previous, "identity", "digest"); err != nil {
+			return rpc.InvalidParamsError(err.Error())
+		}
+		prevIdentity, err := memberObject(previous, "identity")
+		if err != nil {
+			return rpc.InvalidParamsError("entry.evidence.previous.identity must be an object")
+		}
+		if err := validateIdentityObject(prevIdentity); err != nil {
+			return rpc.InvalidParamsError(err.Error())
+		}
+		prevDigest, err := memberObject(previous, "digest")
+		if err != nil {
+			return rpc.InvalidParamsError("entry.evidence.previous.digest must be an object")
+		}
+		if herr := rpcInvalidOrNil(validateDigestObject(prevDigest)); herr != nil {
+			return herr
+		}
 	}
-	if err := exactObjectRaw(previous, "identity", "digest"); err != nil {
-		return rpc.InvalidParamsError(err.Error())
-	}
-	prevIdentity, err := memberObject(previous, "identity")
-	if err != nil {
-		return rpc.InvalidParamsError("entry.evidence.previous.identity must be an object")
-	}
-	if err := validateIdentityObject(prevIdentity); err != nil {
-		return rpc.InvalidParamsError(err.Error())
-	}
-	prevDigest, err := memberObject(previous, "digest")
-	if err != nil {
-		return rpc.InvalidParamsError("entry.evidence.previous.digest must be an object")
-	}
-	return rpcInvalidOrNil(validateDigestObject(prevDigest))
+	return nil
 }
 
 func rpcInvalidOrNil(err error) *rpc.HandlerError {
@@ -1412,8 +1427,30 @@ func decodeDigestObject(digest rawObject) (*iprangedb.PublicationDigest, *rpc.Ha
 // by this method (Rust housekeeping_remove_fields with no payload
 // identity).
 func housekeepingRemoveFields(entry rawObject) (string, iprangedb.FileIdentity, [16]byte, uint32, iprangedb.FileIdentity, *rpc.HandlerError) {
-	if err := exactObjectRaw(entry, "kind", "directory", "directory_identity", "candidate_kind", "basename_encoding", "basename", "identity", "attempt_id", "ordinal", "artifact", "problem"); err != nil {
-		return "", zeroIdentity(), [16]byte{}, 0, zeroIdentity(), rpc.InvalidParamsError(err.Error())
+	// artifact and problem are optional members: maintenance.list
+	// omits them when they do not apply, and the contract requires an
+	// unchanged list row to round-trip into remove.  The allowed set
+	// therefore covers all eleven list members; only the nine
+	// identification members are required (Rust
+	// housekeeping_remove_fields).
+	for key := range entry {
+		switch key {
+		case "kind", "directory", "directory_identity", "candidate_kind",
+			"basename_encoding", "basename", "identity", "attempt_id",
+			"ordinal", "artifact", "problem":
+		default:
+			return "", zeroIdentity(), [16]byte{}, 0, zeroIdentity(),
+				rpc.InvalidParamsError(fmt.Sprintf("unknown member %q", key))
+		}
+	}
+	for _, field := range []string{
+		"kind", "directory", "directory_identity", "candidate_kind",
+		"basename_encoding", "basename", "identity", "attempt_id",
+		"ordinal"} {
+		if _, ok := entry[field]; !ok {
+			return "", zeroIdentity(), [16]byte{}, 0, zeroIdentity(),
+				rpc.InvalidParamsError(fmt.Sprintf("missing member %q", field))
+		}
 	}
 	directory, herr := removeDirectoryField(entry)
 	if herr != nil {

@@ -149,7 +149,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461"
+      "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952"
     },
     "rust": {
       "available": true,
@@ -300,7 +300,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8"
+      "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8"
     }
   },
   "cases": [
@@ -350,12 +350,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 1
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 2
         }
       },
@@ -411,12 +411,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 5
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 6
         }
       },
@@ -468,12 +468,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 1
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 2
         }
       },
@@ -518,12 +518,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 1
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 6
         }
       },
@@ -570,12 +570,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 1
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 3
         }
       },
@@ -613,12 +613,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 7
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 2
         }
       },
@@ -650,12 +650,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 5
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 13
         }
       },
@@ -694,12 +694,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 7
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 2
         }
       },
@@ -731,12 +731,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 4
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 2
         }
       },
@@ -777,12 +777,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 1
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 3
         }
       },
@@ -861,12 +861,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 5
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 3
         }
       },
@@ -925,12 +925,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 3
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 2
         }
       },
@@ -961,12 +961,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 2
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 1
         }
       },
@@ -988,12 +988,12 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "f9c7d50e67475cae04a5793529d118ab76c5142f61384c977e0af56ee9030461",
+          "sha256": "2f1d2bba95cce399410c2a4344e4281eb52ed68e1529b58f81574f00cb299952",
           "steps": 33
         },
         "producer": {
           "implementation": "rust",
-          "sha256": "c13866378040e0524711b8c92b4acdb6ca7f89b3f4db375fd5419bccd7b71eb8",
+          "sha256": "8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8",
           "steps": 20
         }
       },
@@ -1157,19 +1157,18 @@
   ],
   "command": [
     "v4/cli/run.py",
-    "--matrix",
-    "rust_to_go",
     "--rust",
     "/tmp/qualsvc/rust/iprange",
     "--go",
     "/tmp/qualsvc/go/iprange",
     "--fixture-tool",
     "/tmp/qualsvc/rust/v4-fixture",
+    "--matrix",
+    "rust_to_go",
     "--work-dir",
-    "/tmp/qualsvc/ev4/rust_to_go",
+    "/tmp/qualsvc/ev6/w-r2g",
     "--json-report",
-    "/tmp/qualsvc/ev4/matrix-rust_to_go.json",
-    "--allow-skips"
+    "/tmp/qualsvc/ev6/reports/matrix-rust_to_go.json"
   ],
   "environment_allowlist": [
     "PATH",
@@ -1246,87 +1245,87 @@
   },
   "fixture_tool": {
     "path": "/tmp/qualsvc/rust/v4-fixture",
-    "sha256": "d615488f038fa59deea87e0ce3340b780380fe0f2122e8e1ad65edeb25d861f1"
+    "sha256": "322e8e69022aeeef01559ec3aeca95241cfd7983c2f3a39f4c0c7f2152f547e8"
   },
   "frame_sizes": {
     "iprange.v1.algebra.publish": {
-      "max_request_bytes": 768,
+      "max_request_bytes": 758,
       "max_response_bytes": 1428
     },
     "iprange.v1.commit.resolve": {
-      "max_request_bytes": 535,
+      "max_request_bytes": 530,
       "max_response_bytes": 474
     },
     "iprange.v1.current.publish": {
-      "max_request_bytes": 718,
+      "max_request_bytes": 708,
       "max_response_bytes": 1276
     },
     "iprange.v1.database.create": {
-      "max_request_bytes": 330,
+      "max_request_bytes": 325,
       "max_response_bytes": 704
     },
     "iprange.v1.database.create.resolve": {
-      "max_request_bytes": 819,
+      "max_request_bytes": 814,
       "max_response_bytes": 192
     },
     "iprange.v1.database.info": {
-      "max_request_bytes": 217,
+      "max_request_bytes": 212,
       "max_response_bytes": 514
     },
     "iprange.v1.database.initialize_live": {
-      "max_request_bytes": 211,
+      "max_request_bytes": 206,
       "max_response_bytes": 668
     },
     "iprange.v1.database.metadata.get": {
-      "max_request_bytes": 242,
+      "max_request_bytes": 237,
       "max_response_bytes": 217
     },
     "iprange.v1.database.metadata.replace": {
-      "max_request_bytes": 360,
+      "max_request_bytes": 355,
       "max_response_bytes": 547
     },
     "iprange.v1.database.reclaim": {
-      "max_request_bytes": 356,
+      "max_request_bytes": 351,
       "max_response_bytes": 590
     },
     "iprange.v1.database.reset_live": {
-      "max_request_bytes": 226,
+      "max_request_bytes": 221,
       "max_response_bytes": 750
     },
     "iprange.v1.direct.replace": {
-      "max_request_bytes": 460,
+      "max_request_bytes": 450,
       "max_response_bytes": 1071
     },
     "iprange.v1.feeds.create": {
-      "max_request_bytes": 524,
+      "max_request_bytes": 514,
       "max_response_bytes": 1131
     },
     "iprange.v1.feeds.replace": {
-      "max_request_bytes": 494,
+      "max_request_bytes": 484,
       "max_response_bytes": 1065
     },
     "iprange.v1.history.project": {
-      "max_request_bytes": 11655,
+      "max_request_bytes": 11645,
       "max_response_bytes": 1383
     },
     "iprange.v1.join.direct": {
-      "max_request_bytes": 674,
-      "max_response_bytes": 622
+      "max_request_bytes": 659,
+      "max_response_bytes": 617
     },
     "iprange.v1.join.membership": {
-      "max_request_bytes": 767,
-      "max_response_bytes": 647
+      "max_request_bytes": 752,
+      "max_response_bytes": 642
     },
     "iprange.v1.maintenance.list": {
-      "max_request_bytes": 486,
-      "max_response_bytes": 420
+      "max_request_bytes": 476,
+      "max_response_bytes": 415
     },
     "iprange.v1.maintenance.remove": {
       "max_request_bytes": 199,
       "max_response_bytes": 165
     },
     "iprange.v1.publication.inspect": {
-      "max_request_bytes": 179,
+      "max_request_bytes": 174,
       "max_response_bytes": 193
     },
     "iprange.v1.publication.residue.remove": {
@@ -1334,12 +1333,12 @@
       "max_response_bytes": 202
     },
     "iprange.v1.publication.resolve": {
-      "max_request_bytes": 1309,
+      "max_request_bytes": 1304,
       "max_response_bytes": 1187
     },
     "iprange.v1.query.overlaps": {
-      "max_request_bytes": 550,
-      "max_response_bytes": 479
+      "max_request_bytes": 540,
+      "max_response_bytes": 474
     },
     "iprange.v1.reader.close": {
       "max_request_bytes": 145,
@@ -1354,7 +1353,7 @@
       "max_response_bytes": 177
     },
     "iprange.v1.reader.open": {
-      "max_request_bytes": 231,
+      "max_request_bytes": 226,
       "max_response_bytes": 491
     },
     "iprange.v1.reader.ranges.next": {
@@ -1366,23 +1365,23 @@
       "max_response_bytes": 151
     },
     "iprange.v1.recover": {
-      "max_request_bytes": 912,
+      "max_request_bytes": 897,
       "max_response_bytes": 1801
     },
     "iprange.v1.recovery.inspect": {
-      "max_request_bytes": 322,
+      "max_request_bytes": 317,
       "max_response_bytes": 537
     },
     "iprange.v1.retention.first_seen.refresh": {
-      "max_request_bytes": 749,
-      "max_response_bytes": 1372
+      "max_request_bytes": 734,
+      "max_response_bytes": 1367
     },
     "iprange.v1.retention.last_seen.refresh": {
-      "max_request_bytes": 530,
+      "max_request_bytes": 520,
       "max_response_bytes": 1084
     },
     "iprange.v1.snapshot": {
-      "max_request_bytes": 439,
+      "max_request_bytes": 429,
       "max_response_bytes": 1181
     },
     "iprange.v1.system.describe": {
@@ -1390,8 +1389,8 @@
       "max_response_bytes": 2271
     },
     "iprange.v1.validate": {
-      "max_request_bytes": 586,
-      "max_response_bytes": 806
+      "max_request_bytes": 576,
+      "max_response_bytes": 801
     }
   },
   "matrix": "rust_to_go",

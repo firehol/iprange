@@ -3,7 +3,7 @@
     "consumer": "/usr/bin/false",
     "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
     "fixture_tool": "/tmp/qualsvc/rust/v4-fixture",
-    "fixture_tool_sha256": "d615488f038fa59deea87e0ce3340b780380fe0f2122e8e1ad65edeb25d861f1",
+    "fixture_tool_sha256": "322e8e69022aeeef01559ec3aeca95241cfd7983c2f3a39f4c0c7f2152f547e8",
     "producer": "/usr/bin/false",
     "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed"
   },
@@ -16,9 +16,9 @@
     "--fixture-tool",
     "/tmp/qualsvc/rust/v4-fixture",
     "--work-dir",
-    "/tmp/qualsvc/ev5/crash-neg",
+    "/tmp/qualsvc/ev6/w-crash-neg",
     "--json-report",
-    "/tmp/qualsvc/ev5/crash-negative.json"
+    "/tmp/qualsvc/ev6/reports/crash-negative.json"
   ],
   "failed": 16,
   "leftover_processes": [],
@@ -32,6 +32,7 @@
     {
       "assertions": [],
       "consumer": "consumer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "durable reservation marker was not observed; worker outcome={'error': 'service closed stdout; stderr='}"
@@ -42,6 +43,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -50,6 +52,7 @@
     {
       "assertions": [],
       "consumer": "consumer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -60,6 +63,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -68,6 +72,7 @@
     {
       "assertions": [],
       "consumer": "consumer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -78,6 +83,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -86,6 +92,7 @@
     {
       "assertions": [],
       "consumer": "consumer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "creating-state sidecar marker was not observed; worker outcome={'error': 'service closed stdout; stderr='}"
@@ -96,6 +103,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -104,6 +112,7 @@
     {
       "assertions": [],
       "consumer": "consumer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -114,6 +123,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -122,6 +132,7 @@
     {
       "assertions": [],
       "consumer": "consumer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -132,6 +143,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -140,6 +152,7 @@
     {
       "assertions": [],
       "consumer": "consumer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -150,6 +163,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -158,6 +172,7 @@
     {
       "assertions": [],
       "consumer": "consumer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -168,6 +183,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -176,6 +192,7 @@
     {
       "assertions": [],
       "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "durable reservation marker was not observed; worker outcome={'error': 'service closed stdout; stderr='}"
@@ -186,6 +203,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "consumer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -194,6 +212,7 @@
     {
       "assertions": [],
       "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -204,6 +223,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "consumer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -212,6 +232,7 @@
     {
       "assertions": [],
       "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -222,6 +243,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "consumer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -230,6 +252,7 @@
     {
       "assertions": [],
       "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "creating-state sidecar marker was not observed; worker outcome={'error': 'service closed stdout; stderr='}"
@@ -240,6 +263,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "consumer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -248,6 +272,7 @@
     {
       "assertions": [],
       "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -258,6 +283,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "consumer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -266,6 +292,7 @@
     {
       "assertions": [],
       "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -276,6 +303,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "consumer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -284,6 +312,7 @@
     {
       "assertions": [],
       "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -294,6 +323,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "consumer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -302,6 +332,7 @@
     {
       "assertions": [],
       "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -312,6 +343,7 @@
       "marker_seen_ms": null,
       "pass": false,
       "producer": "consumer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,

@@ -1,21 +1,28 @@
 // Transport behavior tests (Rust rpc/session.rs test-suite parity):
 // queue admission and busy rejection, in-position batch members,
 // cancel-during-scan semantics, unanswerable ids, the 65,000-byte
-// response-object ceiling, EOF shutdown with queued units, and fatal
-// stdout failure. The system.describe stub registered here exists only
-// in this test binary; production registration lives in the handlers
-// package.
+// response-object ceiling, EOF shutdown with queued units, fatal
+// stdout failure, and dispatcher responsiveness while a slow request
+// occupies the worker (pipelined busy rejection, cancellation and EOF
+// observability over real stream pipes). The system.describe stub
+// registered here exists only in this test binary; production
+// registration lives in the handlers package.
 
 package rpc
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func init() {
@@ -418,3 +425,450 @@ func TestFloatIDRejected(t *testing.T) {
 }
 
 var _ io.Reader = erroringReader{}
+
+// ---------------------------------------------------------------------------
+// Dispatcher responsiveness while the worker is occupied (SOW-0028
+// milestone-4 repair): the work channel is buffered to QueuedLimit, so
+// the main loop keeps reading stdin while a slow request executes.
+// These tests drive a real session over io.Pipe (input) and net.Pipe
+// (output) and use a registered token-aware slow method; the tests run
+// sequentially, so the package-level gate is safe.
+
+// testSlowGate coordinates one slow-method test: the handler signals
+// entered once it starts, waits for either release or cancellation of
+// the active token, and signals observed the moment it sees the token
+// cancelled.
+type testSlowGate struct {
+	entered  chan struct{}
+	release  chan struct{}
+	observed chan struct{}
+}
+
+func newTestSlowGate() *testSlowGate {
+	return &testSlowGate{
+		entered:  make(chan struct{}, 1),
+		release:  make(chan struct{}, 1),
+		observed: make(chan struct{}, 1),
+	}
+}
+
+// slowGate is the coordination state of the currently running slow
+// method test. Tests in this package run sequentially; each test
+// stores its own gate before starting the session.
+var slowGate atomic.Pointer[testSlowGate]
+
+// registerSlowMethod installs a token-aware slow handler under one
+// inventory name for the duration of one test.
+func registerSlowMethod(t *testing.T) {
+	t.Helper()
+	registry["iprange.v1.database.info"] = registeredMethod{
+		validate: func(params json.RawMessage) error { return nil },
+		handle: func(st *SessionState, params json.RawMessage) (any, *HandlerError) {
+			gate := slowGate.Load()
+			if gate == nil {
+				return nil, NewHandlerError("no_gate", "not_started", "test gate missing")
+			}
+			token := st.Token()
+			select {
+			case gate.entered <- struct{}{}:
+			default:
+			}
+			for !token.IsCancelled() {
+				select {
+				case <-gate.release:
+					return map[string]any{"slow": "released"}, nil
+				case <-time.After(2 * time.Millisecond):
+				}
+			}
+			select {
+			case gate.observed <- struct{}{}:
+			default:
+			}
+			return nil, NewHandlerError("cancelled", "cancelled", "operation was cancelled")
+		},
+	}
+	t.Cleanup(func() { delete(registry, "iprange.v1.database.info") })
+}
+
+// startPipedSession runs one session over real stream pipes so the
+// test can pipeline frames and observe responses while the handler is
+// still executing. Closing in delivers stdin EOF; out supports read
+// deadlines.
+func startPipedSession(t *testing.T) (in io.WriteCloser, out net.Conn, done chan error) {
+	t.Helper()
+	inR, inW := io.Pipe()
+	outL, outR := net.Pipe()
+	done = make(chan error, 1)
+	go func() {
+		done <- NewSession().Run(inR, outL)
+		outL.Close()
+	}()
+	t.Cleanup(func() {
+		inW.Close()
+		outR.Close()
+	})
+	return inW, outR, done
+}
+
+// waitRun waits for the session to terminate and returns its error.
+func waitRun(t *testing.T, done chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(10 * time.Second):
+		t.Fatal("session did not terminate in time")
+		return nil
+	}
+}
+
+// releaseSlow handler flips the slow method's release latch without
+// blocking, so test failure cleanup never deadlocks on a full gate.
+func releaseSlow(t *testing.T, gate *testSlowGate) {
+	t.Helper()
+	select {
+	case gate.release <- struct{}{}:
+	default:
+	}
+}
+
+func writeFrame(t *testing.T, in io.Writer, frame string) {
+	t.Helper()
+	if _, err := io.WriteString(in, frame+"\n"); err != nil {
+		t.Fatalf("write frame: %v", err)
+	}
+}
+
+// readResponseLines reads exactly n response lines, failing if the
+// session produces fewer within the read deadline.
+func readResponseLines(t *testing.T, r *bufio.Reader, out net.Conn, n int) []string {
+	t.Helper()
+	if err := out.SetReadDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	defer out.SetReadDeadline(time.Time{})
+	lines := make([]string, 0, n)
+	for len(lines) < n {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading response %d of %d: %v", len(lines)+1, n, err)
+		}
+		lines = append(lines, strings.TrimSuffix(line, "\n"))
+	}
+	return lines
+}
+
+// drainOutput reads the session's output to EOF in a goroutine; the
+// session's final writes block until the pipe is read, so tests drain
+// concurrently with waiting for Run to return.
+func drainOutput(t *testing.T, out net.Conn) <-chan []byte {
+	t.Helper()
+	if err := out.SetReadDeadline(time.Now().Add(15 * time.Second)); err != nil {
+		t.Fatalf("set read deadline: %v", err)
+	}
+	ch := make(chan []byte, 1)
+	go func() {
+		data, err := io.ReadAll(bufio.NewReader(out))
+		if err != nil {
+			t.Errorf("read output: %v", err)
+		}
+		ch <- data
+	}()
+	return ch
+}
+
+// assertResultID asserts one response line is a result for the id.
+func assertResultID(t *testing.T, line, id string) {
+	t.Helper()
+	obj := decodeLine(t, line)
+	if got, _ := obj["id"].(string); got != id {
+		t.Fatalf("response id = %v, want %s", obj["id"], id)
+	}
+	if _, ok := obj["result"]; !ok {
+		t.Fatalf("response is not a result: %v", obj)
+	}
+}
+
+// assertFactualCancellation asserts one response line is the
+// documented cancelled product outcome (-32010, data.code cancelled)
+// for the id.
+func assertFactualCancellation(t *testing.T, line, id string) {
+	t.Helper()
+	obj := decodeLine(t, line)
+	if got, _ := obj["id"].(string); got != id {
+		t.Fatalf("response id = %v, want %s", obj["id"], id)
+	}
+	if code, ok := errorCode(obj); !ok || code != float64(ProductError) {
+		t.Fatalf("error code = %v, want -32010: %v", obj["error"], obj)
+	}
+	errObj, _ := obj["error"].(map[string]any)
+	dataObj, _ := errObj["data"].(map[string]any)
+	if dataObj == nil || dataObj["code"] != "cancelled" {
+		t.Fatalf("response must report the factual cancellation outcome: %v", obj)
+	}
+}
+
+func decodeLine(t *testing.T, line string) map[string]any {
+	t.Helper()
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(line), &obj); err != nil {
+		t.Fatalf("unmarshal response %q: %v", line, err)
+	}
+	return obj
+}
+
+func errorCode(obj map[string]any) (float64, bool) {
+	errObj, _ := obj["error"].(map[string]any)
+	if errObj == nil {
+		return 0, false
+	}
+	code, _ := errObj["code"].(float64)
+	return code, true
+}
+
+func describeFrame(id string) string {
+	return fmt.Sprintf(`{"jsonrpc":"2.0","id":%q,"method":"iprange.v1.system.describe","params":{}}`, id)
+}
+
+func TestPipelinedBusyWhileWorkerOccupied(t *testing.T) {
+	// With a slow request occupying the worker, 20 pipelined single
+	// requests admit 17 (one active plus 16 queued) and answer the
+	// remaining 3 with -32002 server_busy while the worker is still
+	// busy. The three busy responses must arrive before the slow op is
+	// released, proving the main loop never blocks behind the worker
+	// (pre-fix the unbuffered work channel stalled the dispatcher on
+	// the second frame).
+	registerSlowMethod(t)
+	gate := newTestSlowGate()
+	slowGate.Store(gate)
+	t.Cleanup(func() { releaseSlow(t, gate) })
+	in, out, done := startPipedSession(t)
+	reader := bufio.NewReader(out)
+
+	writeFrame(t, in, `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.database.info","params":{}}`)
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow handler did not start")
+	}
+	for id := 2; id <= 20; id++ {
+		writeFrame(t, in, describeFrame(strconv.Itoa(id)))
+	}
+
+	busy := readResponseLines(t, reader, out, 3)
+	for _, line := range busy {
+		obj := decodeLine(t, line)
+		if code, ok := errorCode(obj); !ok || code != float64(TransportServerBusy) {
+			t.Fatalf("busy response = %v", obj)
+		}
+	}
+
+	releaseSlow(t, gate)
+	rest := readResponseLines(t, reader, out, 17)
+
+	in.Close()
+	if err := waitRun(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	all := append(busy, rest...)
+	if len(all) != 20 {
+		t.Fatalf("got %d responses, want 20", len(all))
+	}
+	results, busys := 0, 0
+	seen := make(map[string]bool)
+	for _, line := range all {
+		obj := decodeLine(t, line)
+		id, _ := obj["id"].(string)
+		if id == "" {
+			t.Fatalf("response without string id: %v", obj)
+		}
+		if seen[id] {
+			t.Fatalf("id %s answered more than once", id)
+		}
+		seen[id] = true
+		if _, ok := obj["result"]; ok {
+			results++
+			continue
+		}
+		if code, ok := errorCode(obj); ok && code == float64(TransportServerBusy) {
+			busys++
+			continue
+		}
+		t.Fatalf("unexpected response: %v", obj)
+	}
+	if results != 17 || busys != 3 {
+		t.Fatalf("results=%d busy=%d, want 17 and 3", results, busys)
+	}
+	for id := 1; id <= 20; id++ {
+		if !seen[strconv.Itoa(id)] {
+			t.Fatalf("id %d never answered", id)
+		}
+	}
+}
+
+func TestBatchBusyMembersAnswerInPosition(t *testing.T) {
+	// Full transport path: with the queue full, every member of a
+	// 16-request batch answers -32002 inside one response array in
+	// frame order. The queue-full state is simulated by seeding the
+	// session's admission counter (in-package test), exactly as the
+	// queue looks while a slow request occupies the worker.
+	session := NewSession()
+	session.inFlight.Store(QueuedLimit)
+	batch := make([]string, 0, 16)
+	for id := 1; id <= 16; id++ {
+		batch = append(batch, describeFrame(strconv.Itoa(id)))
+	}
+	var out bytes.Buffer
+	err := session.Run(strings.NewReader("["+strings.Join(batch, ",")+"]"), &out)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := lines(out.String())
+	if len(got) != 1 {
+		t.Fatalf("got %d response lines, want 1", len(got))
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal([]byte(got[0]), &arr); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(arr) != 16 {
+		t.Fatalf("batch response has %d members, want 16", len(arr))
+	}
+	for i, member := range arr {
+		if id, _ := member["id"].(string); id != strconv.Itoa(i+1) {
+			t.Fatalf("member %d id = %v, want %d", i, member["id"], i+1)
+		}
+		if code, ok := errorCode(member); !ok || code != float64(TransportServerBusy) {
+			t.Fatalf("member %d not busy: %v", i, member)
+		}
+	}
+	if session.inFlight.Load() != QueuedLimit {
+		t.Fatalf("busy batch consumed capacity: %d", session.inFlight.Load())
+	}
+}
+
+func TestAdmissionPartialCapacityExecuteThenBusy(t *testing.T) {
+	// Admission-layer parity with Rust
+	// admission_preserves_batch_order_under_queue_pressure: with one
+	// free slot a frame admits its first element and answers the rest
+	// busy in order, and the counter never exceeds the bound.
+	var inFlight atomic.Int64
+	inFlight.Store(QueuedLimit - 1)
+	for _, id := range []string{"a", "b", "c"} {
+		request := &Request{
+			ID:     idPtr(id),
+			Method: "iprange.v1.system.describe",
+			Params: json.RawMessage(`{}`),
+		}
+		entry := admitOne(request, &inFlight)
+		switch id {
+		case "a":
+			if entry.kind != workExecute {
+				t.Fatalf("first entry kind = %v, want execute", entry.kind)
+			}
+		default:
+			if entry.kind != workBusy {
+				t.Fatalf("entry %s kind = %v, want busy", id, entry.kind)
+			}
+		}
+	}
+	if inFlight.Load() != QueuedLimit {
+		t.Fatalf("inFlight = %d, want %d", inFlight.Load(), QueuedLimit)
+	}
+}
+
+func TestCancelReachesActiveSlowRequest(t *testing.T) {
+	// Regression: a cancel notification sent while a slow request runs
+	// must be applied before the slow op finishes, even when ordinary
+	// requests already fill the queue. The slow handler observes the
+	// cancelled token while it is still blocked and answers its
+	// factual outcome (the cancelled error); the queued ordinary
+	// request still answers.
+	registerSlowMethod(t)
+	gate := newTestSlowGate()
+	slowGate.Store(gate)
+	t.Cleanup(func() { releaseSlow(t, gate) })
+	in, out, done := startPipedSession(t)
+
+	writeFrame(t, in, `{"jsonrpc":"2.0","id":"slow","method":"iprange.v1.database.info","params":{}}`)
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow handler did not start")
+	}
+	// Fill the queue with an ordinary request; pre-fix the dispatcher
+	// blocked on this send while the worker executed the slow request.
+	writeFrame(t, in, describeFrame("fill"))
+	// The cancel must now be applied while the slow op is still
+	// blocked on its gate.
+	writeFrame(t, in, `{"jsonrpc":"2.0","method":"iprange.v1.cancel","params":{"request_id":"slow"}}`)
+
+	select {
+	case <-gate.observed:
+	case <-time.After(5 * time.Second):
+		releaseSlow(t, gate)
+		t.Fatal("cancel never reached the active slow request")
+	}
+
+	// Drain output concurrently: the worker's response writes block
+	// until the test reads the pipe, so waiting for Run first would
+	// deadlock.
+	outData := drainOutput(t, out)
+	in.Close()
+	if err := waitRun(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	data := <-outData
+	got := lines(string(data))
+	// The slow handler was already running when the cancel applied, so
+	// it answers its factual outcome (the cancelled error), exactly
+	// like EOF cancellation; the cancel-drives-omit rule covers
+	// requests not yet started.
+	if len(got) != 2 {
+		t.Fatalf("got %d response lines, want 2: %q", len(got), data)
+	}
+	assertFactualCancellation(t, got[0], "slow")
+	assertResultID(t, got[1], "fill")
+}
+
+func TestEOFReachesActiveSlowRequest(t *testing.T) {
+	// Regression: stdin EOF while a slow request runs must cancel the
+	// active token, let the slow request answer its factual terminal
+	// outcome (-32010 data.code cancelled), drain admitted queued
+	// units, and return nil. Pre-fix the dispatcher blocked on a
+	// queued ordinary request, so EOF was never processed until the
+	// slow op ended.
+	registerSlowMethod(t)
+	gate := newTestSlowGate()
+	slowGate.Store(gate)
+	t.Cleanup(func() { releaseSlow(t, gate) })
+	in, out, done := startPipedSession(t)
+
+	writeFrame(t, in, `{"jsonrpc":"2.0","id":"slow","method":"iprange.v1.database.info","params":{}}`)
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		releaseSlow(t, gate)
+		t.Fatal("slow handler did not start")
+	}
+	// Pre-fix the dispatcher blocked on this send while the worker
+	// executed the slow request, so the EOF below stayed unprocessed.
+	writeFrame(t, in, describeFrame("fill"))
+
+	// Drain output concurrently: the worker's response writes block
+	// until the test reads the pipe, so waiting for Run first would
+	// deadlock.
+	outData := drainOutput(t, out)
+	in.Close()
+	if err := waitRun(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	data := <-outData
+	got := lines(string(data))
+	if len(got) != 2 {
+		t.Fatalf("got %d response lines, want 2: %q", len(got), data)
+	}
+	assertFactualCancellation(t, got[0], "slow")
+	assertResultID(t, got[1], "fill")
+}
