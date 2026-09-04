@@ -11,8 +11,11 @@ host (access authorized for SOW-0028 qualification only):
   (Rust product SHA-256
   `8605618129fc51068e08b3810b39b7cfc8b5bf6c1257dda16031446cb4433cd8`,
   worker
-  `cb9ad6cd82a03b7933d706de9e1b4e4c707836962b7f00e194c5d50cd4511e94`,
-  fixture `322e8e69022aeeef01559ec3aeca95241cfd798c2f3a39f4c0c7f2152f547e8`).
+  `cb9ad6cd82a03b7933d706de9e1b4e4c707836962b7f00e194c5d50cd4511e94` —
+  worker identities are build-proven from the staged version-matched
+  pairs and are not pinned by the committed reports (which pin
+  product actors and the fixture tool),
+  fixture `322e8e69022aeeef01559ec3aeca95241cfd7983c2f3a39f4c0c7f2152f547e8`).
 - Go product + worker: the documented `-buildvcs=false` qualification
   pair (go1.26 linux/amd64, no embedded vcs revision) staged as
   `/tmp/qualsvc/go/{iprange,iprange-v4-worker}`:
@@ -24,7 +27,8 @@ host (access authorized for SOW-0028 qualification only):
     Windows qualification);
   - worker SHA-256
     `16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e`
-    (unchanged).
+    (unchanged; build-proven identity, not pinned by the committed
+    reports).
 - Windows qualification binaries (built on the authorized Windows
   validation host at the same product-source revision, staged under
   `C:/Temp/qualsvc-win/`):
@@ -61,7 +65,7 @@ Windows validation host.
   16/16 scenarios pass — A1/A2/A3 publication interruption and
   destination classification, B live-transition sidecar
   interruption, C authorized-scratch durability, D commit/finish
-  interruption at the live replace resize marker, E export
+  interruption at the durable draft-growth marker, E export
   interruption at the partial-output marker, F validate
   interruption at the findings-output marker — zero leftover
   processes, `failed: 0`, per-scenario kind lists.

@@ -4241,35 +4241,53 @@ P1 blockers and their required corrections:
    labels), and keep per-kind actor lineage instead of assuming every
    consumer opened every artifact.
 
-P2 findings (all corrected in this wave):
+P2 findings (all corrected in this wave; numbered as the
+whole-milestone review of 14ce284e listed them):
 
-- `resource_harness.py:366` proof b reads one response but never
-  drains stdout to EOF and sends no trailing sentinel, so extra
-  parsing or responses go undetected; the proof now drains stdout to
-  EOF with a bounded deadline and asserts zero further bytes.
-- `windows_housekeeping_harness.py:200,:336` records stronger facts
-  than it enforces: it now requires `entries == rows`,
-  `basename_encoding == 2` on Windows, cross-compares the directory
-  identity across both products, records `system.describe`
-  identities and auditable build provenance instead of trusting
-  caller labels, and natively exercises
-  `retention.first_seen.refresh` (the committed malformed 23-byte
-  synthesized envelope of the previous revision made both products
-  truthfully report `cleanup_conflict`; see
-  `v4/cli/evidence/windows-housekeeping.json:65` of that revision).
-  The final harness proves the refresh completion, the exact removal
-  log, and the private-temporary cleanup natively, then proves
-  list/remove on a deterministic format-valid 8,192-byte synthesized
-  pair (`gc_envelope_windows.py`, mirroring the committed codec and
-  the creator-only protected DACL; product-written envelopes are
-  timing-dependent at the product boundary and cannot be relied on
-  as leftover artifacts).
-- The host alias of the authorized Windows validation host is
-  removed from committed artifacts (this SOW and the `v4/cli/`
-  documentation), per the sensitive-data gate.
-- Review identity: all five own-model scope reviews and the
-  whole-milestone review for this wave run at one exact final
-  revision with no later commits.
+1. **Oversized-frame proof did not drain stdout to EOF**
+   (`v4/cli/resource_harness.py:366`): proof b read one response
+   but never drained stdout to EOF and sent no trailing sentinel,
+   so extra parsing or responses went undetected.  Fixed: the proof
+   drains stdout to EOF with a bounded deadline and asserts zero
+   further bytes; evidence: `v4/cli/evidence/resource.json` proof b.
+2. **Windows harness could pass with `entries=1` and zero rows, or
+   with UTF-8 encoding** (`v4/cli/windows_housekeeping_harness.py:200,:336`):
+   it recorded stronger facts than it enforced.  Fixed: the harness
+   now requires `entries == rows` and `basename_encoding == 2` on
+   Windows (the stronger assertions are no longer deferred);
+   `windows-housekeeping.json` is regenerated with both outcomes
+   PASS.
+3. **The Windows run never exercised
+   `retention.first_seen.refresh`** (the removalCollector Windows
+   fix had no native test).  Fixed: the harness natively drives the
+   refresh completion, the exact removal log, and the
+   private-temporary cleanup; evidence: `windows-housekeeping.json`
+   refresh flow steps.
+4. **The harness trusted caller-provided `rust=`/`go=` labels**
+   without `system.describe` identities or auditable build
+   provenance.  Fixed: each outcome records the product-declared
+   identity and the binary SHA-256 produced by the authorized
+   Windows validation host build, instead of the labels.
+5. **The committed GC envelope was malformed** (the previous
+   revision's 23-byte synthesized envelope made both products
+   truthfully report `cleanup_conflict`; see
+   `v4/cli/evidence/windows-housekeeping.json:65` of that
+   revision).  Fixed: list/remove is proven on a deterministic
+   format-valid 8,192-byte synthesized pair
+   (`v4/cli/gc_envelope_windows.py`, mirroring the committed codec
+   and the creator-only protected DACL; product-written envelopes
+   are timing-dependent at the product boundary and cannot be
+   relied on as leftover artifacts).
+6. **Review identity invalidated the previous verdicts**: the
+   recorded five-reviewer round covered 9b3af7d9 while HEAD was the
+   later record commit 14ce284e.  Fixed: the reviews for this wave
+   run at one exact final revision with no later repository commits
+   (including this record commit).
+7. **The host alias of the authorized Windows validation host was
+   committed in public artifacts**.  Fixed: forward-sanitized to
+   "the authorized Windows validation host" in this SOW and the
+   `v4/cli/` documentation, per the sensitive-data gate;
+   repository history is not rewritten without user approval.
 
 ### Fifth wave implementation (this wave)
 
@@ -4289,15 +4307,26 @@ All four P1 corrections and the P2 corrections landed:
    refused.  The windows_housekeeping fix was found by the
    deterministic pair proof (list rows without a `problem` member
    were refused by both removal decoders with `invalid_argument`).
-3. Crash scenarios D/E/F use their approved interruption points: D
-   records the sidecar-marker impossibility (the engines' commit
-   paths never write a sidecar during the live-commit window;
-   sidecar writes exist only in creation/transition paths already
-   covered by scenario B) and keeps the deterministic
-   pre-publication draft-growth marker, E waits for real partial
-   export output (non-empty `.export.tmp`), and F waits for the
-   worker authorized-scratch header with the validation heap
-   calibrated to spill.
+3. Crash scenarios D/E/F use their approved interruption points,
+   and the two plan-recorded markers that are impossible at the
+   product boundary are returned with evidence instead of silently
+   weakened: D records the sidecar-marker impossibility (the
+   engines' commit paths never write a sidecar during the
+   live-commit window; sidecar writes exist only in
+   creation/transition paths already covered by scenario B) and
+   keeps the deterministic pre-publication durable draft-growth
+   marker; E waits for real partial export output (non-empty
+   `.export.tmp`, since the export writer emits 64 KiB chunks);
+   F waits for the private `<id>.export.tmp` findings-output
+   temporary (the findings stream is the same buffered export
+   writer, so the temp may stay 0 bytes for the whole run) and
+   records the scratch-marker impossibility: neither engine's
+   validate ever spills to authorized scratch — the scratch budget
+   fields are API-parity only in both validation engines, and heap
+   sizes 16 B through 256 MiB produce either a truthful budget
+   refusal or a full in-memory completion, never a scratch file
+   (the calibration is recorded in `crash_harness.py`
+   `scenario_f`).
 4. `check_kind_coverage.py` derives language attribution from a
    global SHA→implementation map built from every supplied report,
    validates per-case command identities, executed-step counts,
@@ -4323,17 +4352,37 @@ All four P1 corrections and the P2 corrections landed:
 
 ### Fifth wave validation (this wave)
 
-- Go plain and `v4work` suites, both vet modes, and gofmt: green.
+- Go plain and `v4work` suites, both vet modes, and gofmt: green;
+  the queue-full busy-batch transport corner is pinned by a
+  non-vacuous pipelined test (`TestBatchBusyMembersAnswerInPosition`
+  in `v4/go/internal/cli/rpc/session_test.go`: one slow execute, 16
+  queued executes, then a 16-member batch that must answer all
+  `-32002` from the dispatcher while the worker is still busy) —
+  the previous admission-counter-seeded version of this test could
+  not fail, and the pipelined version stalls against the pre-fix
+  unbuffered dispatcher.
 - Rust `cargo test` (plain and `--all-features`): green, including
   the new housekeeping round-trip tests in both languages.
 - Linux battery regenerated from staged binaries at the final
   product sources (Go product `2f1d2bba…`, worker `16236608…`;
   Rust product `86056181…`, worker `cb9ad6cd…`) — see
-  `v4/cli/evidence/README.md` for the full SHA ledger.
+  `v4/cli/evidence/README.md` for the full SHA ledger.  Worker
+  identities are build-proven from the staged version-matched
+  pairs; the committed reports pin product actors and the fixture
+  tool only.
 - Windows battery regenerated on the authorized Windows validation
   host (Go product `854abf3a…`, worker `7d81deb7…`; Rust product
   `927dbd47…`, worker `ce757fcb…`) — `evidence/windows-housekeeping.json`
-  with both outcomes PASS.
+  with both outcomes PASS; the same worker-identity labeling
+  applies.
+- Record correction: the fourth-wave narrative's intermediate Linux
+  Go product hash `f9c7d50e…` is withdrawn.  No committed tree of
+  this repository reproduces it (a rebuild at the wave-4 functional
+  revision `9b3af7d9` with go1.26.4 and `-buildvcs=false` yields
+  `87804648…`), and no committed evidence report pins it.  The
+  milestone-4 binary identities are the fifth-wave committed
+  evidence ledger, regenerated at the final product sources and
+  rebuild-verified at this wave's exact final revision.
 - The windows_housekeeping removal round-trip defect found by this
   wave is fixed in both product languages with unit tests
   (`v4/go/internal/cli/handlers/maintenance_test.go`,

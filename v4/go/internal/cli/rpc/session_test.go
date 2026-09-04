@@ -356,9 +356,11 @@ func TestCRLFAndLFTerminatedFrames(t *testing.T) {
 	}
 }
 
-func TestBatchBusyMemberStaysInPosition(t *testing.T) {
-	// First request fills the queue via direct admission so the batch
-	// member answers busy in position.
+func TestBatchMemberBusyResponseAtAdmission(t *testing.T) {
+	// Transport round trip of one single-element batch, then the
+	// busy-response machinery exercised directly at the admission
+	// layer (the full-transport busy-array corner is pinned by
+	// TestBatchBusyMembersAnswerInPosition).
 	out, err := runService(t,
 		`[{"jsonrpc":"2.0","id":"1","method":"iprange.v1.system.describe","params":{}}]`)
 	if err != nil {
@@ -708,43 +710,70 @@ func TestPipelinedBusyWhileWorkerOccupied(t *testing.T) {
 }
 
 func TestBatchBusyMembersAnswerInPosition(t *testing.T) {
-	// Full transport path: with the queue full, every member of a
-	// 16-request batch answers -32002 inside one response array in
-	// frame order. The queue-full state is simulated by seeding the
-	// session's admission counter (in-package test), exactly as the
-	// queue looks while a slow request occupies the worker.
-	session := NewSession()
-	session.inFlight.Store(QueuedLimit)
+	// Full transport path under genuine queue pressure: one slow
+	// execute occupies the worker and 16 more pipelined executes fill
+	// the whole 16-entry buffer, so the admission counter sits at its
+	// bound while the worker is still busy.  A following 16-request
+	// batch can admit nothing and must answer all 16 members -32002
+	// inside one response array in frame order, written by the
+	// dispatcher without a channel send; with the buffer genuinely
+	// full any queued unit would stall behind the occupied worker and
+	// no busy response would ever arrive.  The busy array is read
+	// before the gate release; after the release the slow execute
+	// answers, the 16 queued executes answer normally, and the
+	// session exits clean.
+	registerSlowMethod(t)
+	gate := newTestSlowGate()
+	slowGate.Store(gate)
+	t.Cleanup(func() { releaseSlow(t, gate) })
+	in, out, done := startPipedSession(t)
+	reader := bufio.NewReader(out)
+
+	writeFrame(t, in, `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.database.info","params":{}}`)
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow handler did not start")
+	}
+	for id := 2; id <= 17; id++ {
+		writeFrame(t, in, describeFrame(strconv.Itoa(id)))
+	}
+
 	batch := make([]string, 0, 16)
 	for id := 1; id <= 16; id++ {
-		batch = append(batch, describeFrame(strconv.Itoa(id)))
+		batch = append(batch, describeFrame("b"+strconv.Itoa(id)))
 	}
-	var out bytes.Buffer
-	err := session.Run(strings.NewReader("["+strings.Join(batch, ",")+"]"), &out)
-	if err != nil {
-		t.Fatalf("run: %v", err)
-	}
-	got := lines(out.String())
-	if len(got) != 1 {
-		t.Fatalf("got %d response lines, want 1", len(got))
-	}
+	writeFrame(t, in, "["+strings.Join(batch, ",")+"]")
+
+	busyLines := readResponseLines(t, reader, out, 1)
 	var arr []map[string]any
-	if err := json.Unmarshal([]byte(got[0]), &arr); err != nil {
+	if err := json.Unmarshal([]byte(busyLines[0]), &arr); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if len(arr) != 16 {
 		t.Fatalf("batch response has %d members, want 16", len(arr))
 	}
 	for i, member := range arr {
-		if id, _ := member["id"].(string); id != strconv.Itoa(i+1) {
-			t.Fatalf("member %d id = %v, want %d", i, member["id"], i+1)
+		if id, _ := member["id"].(string); id != "b"+strconv.Itoa(i+1) {
+			t.Fatalf("member %d id = %v, want b%d", i, member["id"], i+1)
 		}
 		if code, ok := errorCode(member); !ok || code != float64(TransportServerBusy) {
 			t.Fatalf("member %d not busy: %v", i, member)
 		}
 	}
-	if session.inFlight.Load() != QueuedLimit {
-		t.Fatalf("busy batch consumed capacity: %d", session.inFlight.Load())
+
+	releaseSlow(t, gate)
+	rest := readResponseLines(t, reader, out, 17)
+	in.Close()
+	if err := waitRun(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	assertResultID(t, rest[0], "1")
+	for _, line := range rest[1:] {
+		obj := decodeLine(t, line)
+		if _, ok := obj["result"]; !ok {
+			t.Fatalf("queued execute did not answer with a result: %v", obj)
+		}
 	}
 }
 

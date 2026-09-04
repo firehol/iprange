@@ -203,9 +203,12 @@ table:
   `direct.replace` (commit/finish) at the durable live draft-growth
   marker (the live-commit window has no sidecar write at the product
   boundary; recorded evidence), E `export` at the non-empty
-  partial-output `.export.tmp` marker, F `validate` at the worker
-  authorized-scratch header marker.  16 scenarios run per invocation
-  (8 x both directions); all markers are durable on-disk states, never
+  partial-output `.export.tmp` marker, F `validate` at the private
+  findings-output temporary marker (the plan-recorded worker-scratch
+  marker is impossible at the product boundary: validation never spills
+  to authorized scratch; recorded evidence).  16 scenarios run per
+  invocation (8 x both directions); all markers are durable on-disk
+  states, never
   wall-clock assertions.  Committed evidence is produced from binary
   copies staged under `/tmp/qualsvc/` (version-matched product/worker
   pairs), so the recorded argv carries no personal paths; see
