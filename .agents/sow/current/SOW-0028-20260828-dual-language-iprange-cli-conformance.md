@@ -100,9 +100,14 @@ Implementation status (2026-09-01):
   and the `windows_housekeeping` kind on the Windows validation
   host), the truthful in-workflow recovery wording for D3-B with a
   zero-residue maintenance assertion, and the executed-actor
-  provenance repair of the kind gate.  Delivery step 6 (consolidated
-  benchmark harness and measured ceilings) is the next milestone,
-  recorded below.
+  provenance repair of the kind gate; it also fixed the two
+  same-class Go adapter temporary-remove defects found by the Windows
+  qualification.  The five own-model delta reviews and the
+  glm-5.3-responses whole-milestone review all PASSED at the exact
+  final revision `9b3af7d9` (records in the wave section below), so
+  milestone 4 (delivery step 5) is re-closed at that revision.
+  Delivery step 6 (consolidated benchmark harness and measured
+  ceilings) is the next milestone, recorded below.
 
 ## Requirements
 
@@ -3985,7 +3990,7 @@ Windows) are recorded below.
    by the user for SOW-0028 qualification only), both product
    binaries are built at the qualified revision and the script
    proves `maintenance.list` kind `windows_housekeeping` succeeds on
-   Windows, reports `entries 0` on an empty directory-te and lists a
+   Windows, reports `entries 0` on an empty directory and lists a
    synthesized canonical GC-envelope candidate
    (`.iprange-gcauth-<attempt>-<ordinal>.tmp`) with its authenticated
    directory identity; on non-Windows platforms the same script
@@ -4071,5 +4076,61 @@ Windows Go product
 Windows Rust product
 `5e91d9048f210958d78d935f403cfd41ac6ad587c5b8af8c22c0ba2d352524e8`.
 
-Evidence and closing records are appended after the final reviews at
-the exact final revision.
+### 2026-09-04 (continued) — fourth fix wave reviews and re-close
+
+The five own-model scoped reviewers ran their full rounds at the
+functional revisions of this wave and their incremental deltas at the
+exact final functional revision `9b3af7d9` (working tree clean,
+pushed).  First-round results: three PASS (wire-behavior, provenance, and
+identity/privacy scopes) with four P3 findings, one P1 FAIL (the
+second same-class Go temporary-remove defect in `live.go`, fixed in
+the hardening commit), and one gate-integrity FAIL caused by the tree
+moving under the reviewer (the committed fix wave landed mid-review).
+The P1 and all P3s were fixed and re-verified; all five delta reviews
+then PASSED at `9b3af7d9` with no new findings:
+
+1. crash/wire-behavior scope: PASS — scenarios D/E/F and proofs a/b/c
+   drive only the normal product interface with durable markers;
+   `require_open` makes the E/F consumer reopen mandatory and F pins
+   the fresh findings bytes to the reference bytes.
+2. kind-gate provenance scope: PASS — attribution from executed
+   actors only, label cross-check, and the actor-SHA anchoring in the
+   report binaries block; all doctored classes fail the gate.
+3. recovery wording and records scope: PASS — `recover.successful`
+   step 7 is truthful and non-vacuous in all four matrices; SOW
+   numbers and identities match the committed evidence.
+4. Windows evidence and Go adapter-fix scope: PASS — both
+   close-before-remove fixes verified with no write-after-close and
+   no remaining remove-while-open site in the Go adapters; the Linux
+   qualification build reproduces `f9c7d50e…`; the Windows report
+   and the Linux negative control verified.
+5. identity/privacy/hygiene scope: PASS — no personal paths, hashes
+   coherent across records and staged binaries, diff-check clean,
+   no premature closure claims.
+
+The glm-5.3-responses whole-milestone review at the exact final
+revision `9b3af7d9` returned **PASS** (no P1/P2): it reproduced the
+exact tree identity, the qualification binary identities, all gates
+(fresh crash battery 16/16 both directions, resource 6/6,
+recover.successful 1/1 x four matrices, kind gate, golden 53,
+sensitivity 14, schema self-tests, Go suite and vet in both build
+modes, Rust source graph), verified the Windows evidence internal
+consistency and the records, and confirmed no personal paths and no
+premature closure claims.  Milestone 4 (delivery step 5) is re-closed
+at `9b3af7d9`; the review records name exactly that revision, and
+this SOW section is the record-only commit that follows it.
+
+Non-blocking P3s recorded as tracked follow-ups (owned by the
+remaining delivery step 6 milestone of this SOW; none affects the
+committed evidence, which the whole-milestone review verified
+directly):
+- `v4/cli/resource_harness.py` proof b reads exactly one response
+  and then waits for process exit without draining stdout; a future
+  product regression emitting a second response would go unnoticed.
+  Hardening: drain stdout to EOF with a bounded deadline and assert
+  no further bytes.
+- `v4/cli/windows_housekeeping_harness.py` records stronger facts
+  than it enforces: require `basename_encoding == 2` on Windows,
+  require row count == reported entries, and cross-compare the
+  directory identity across both products (the committed evidence
+  already satisfies all of these).
