@@ -777,6 +777,74 @@ func TestBatchBusyMembersAnswerInPosition(t *testing.T) {
 	}
 }
 
+func TestActiveBatchMemberFreesOneSlotAtATime(t *testing.T) {
+	// A 16-member batch whose first member is slow occupies one
+	// active slot plus 15 queued slots. While member 1 is blocked,
+	// the 15 unexecuted batch members must still count against the
+	// admission bound, so of 10 pipelined single requests exactly 9
+	// answer -32002 and 1 is admitted. Pre-fix the worker subtracted
+	// the whole batch from the admission counter when it picked the
+	// unit up, leaving the 15 pending members uncounted and admitting
+	// all 10.
+	registerSlowMethod(t)
+	gate := newTestSlowGate()
+	slowGate.Store(gate)
+	t.Cleanup(func() { releaseSlow(t, gate) })
+	in, out, done := startPipedSession(t)
+	reader := bufio.NewReader(out)
+
+	batch := make([]string, 0, 16)
+	batch = append(batch, `{"jsonrpc":"2.0","id":"b1","method":"iprange.v1.database.info","params":{}}`)
+	for id := 2; id <= 16; id++ {
+		batch = append(batch, describeFrame("b"+strconv.Itoa(id)))
+	}
+	writeFrame(t, in, "["+strings.Join(batch, ",")+"]")
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow handler did not start")
+	}
+	for id := 1; id <= 10; id++ {
+		writeFrame(t, in, describeFrame("s"+strconv.Itoa(id)))
+	}
+
+	busy := readResponseLines(t, reader, out, 9)
+	for _, line := range busy {
+		obj := decodeLine(t, line)
+		if code, ok := errorCode(obj); !ok || code != float64(TransportServerBusy) {
+			t.Fatalf("busy response = %v", obj)
+		}
+	}
+
+	releaseSlow(t, gate)
+	rest := readResponseLines(t, reader, out, 2)
+	in.Close()
+	if err := waitRun(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	// First response after release: the batch array, 16 members in
+	// frame order, the slow member plus the 15 ordinary results.
+	var arr []map[string]any
+	if err := json.Unmarshal([]byte(rest[0]), &arr); err != nil {
+		t.Fatalf("unmarshal batch: %v", err)
+	}
+	if len(arr) != 16 {
+		t.Fatalf("batch response has %d members, want 16", len(arr))
+	}
+	for i, member := range arr {
+		if id, _ := member["id"].(string); id != "b"+strconv.Itoa(i+1) {
+			t.Fatalf("member %d id = %v, want b%d", i, member["id"], i+1)
+		}
+		if _, ok := member["result"]; !ok {
+			t.Fatalf("member %d not a result: %v", i, member)
+		}
+	}
+	// Second response: the single request admitted while member 1 was
+	// blocked, executed after the batch completed.
+	assertResultID(t, rest[1], "s1")
+}
+
 func TestAdmissionPartialCapacityExecuteThenBusy(t *testing.T) {
 	// Admission-layer parity with Rust
 	// admission_preserves_batch_order_under_queue_pressure: with one

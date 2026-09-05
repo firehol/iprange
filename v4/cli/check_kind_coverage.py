@@ -68,6 +68,30 @@ Evidence integrity rules:
   global implementation map, so a relabeled report's actors resolve
   against the identities recorded by all reports, not against
   self-consistent forged fields of one report.
+- Crash evidence is mandatory: at least one crash report must be
+  supplied and at least one of its scenarios must PASS.  The three
+  crash-only kinds (``publication_reservation``,
+  ``publication_temp``, ``authorized_scratch``) additionally require
+  at least one crash scenario contributing the kind: fabricating
+  them through matrix file ledgers alone cannot satisfy the gate.
+- Every case's per-case ``matrix`` field must name its report's
+  matrix, and a matrix report's ``command`` argv must pass the same
+  matrix label via ``--matrix``; a crash report's ``command`` argv
+  must name the report-root binaries table paths for
+  ``--producer``/``--consumer``/``--fixture-tool``.
+- Every PASS crash scenario's producer/consumer ``impl:path`` must
+  appear in the report-root binaries table and the table's sha256
+  for that path must equal the scenario's sha256.
+- Matrix kinds are credited only to actors that recorded positive
+  executed-step counts: a kind credited to an actor with zero
+  executed steps is a report defect and that credit is dropped.
+- Crash scenarios record per-kind actor lineage
+  (``kinds = {kind: {"created_by": ["producer.0"],
+  "opened_by": ["consumer.0"]}}``): creation is credited only from
+  ``created_by`` actors and opening only from ``opened_by`` actors.
+  Malformed lineage (non-object kinds, missing keys, unknown actor
+  prefixes, empty ``created_by``) fails; the old flat kind list
+  carries no actor lineage and is rejected as legacy evidence.
 
 Exit status 0 when every required kind has both-language evidence and
 no report problem exists; 1 otherwise.
@@ -76,6 +100,7 @@ no report problem exists; 1 otherwise.
 import argparse
 import json
 import os
+import shlex
 import sys
 import tempfile
 
@@ -90,6 +115,22 @@ REQUIRED_KINDS = [
 ]
 REQUIRED_MATRICES = ("rust", "go", "rust_to_go", "go_to_rust")
 ALL_ACTORS = ("producer", "consumer")
+# Report matrix label -> the per-case ``matrix`` field values the
+# runner may emit for that report (mixed matrices write the direction
+# with '->' inside each case while the report root uses '_').
+CASE_MATRIX_NAMES = {
+    "rust": ("rust",),
+    "go": ("go",),
+    "rust_to_go": ("rust_to_go", "rust->go"),
+    "go_to_rust": ("go_to_rust", "go->rust"),
+}
+# Kinds that only the crash battery observes; they must be backed by
+# at least one complying crash scenario, never by matrices alone.
+CRASH_ONLY_KINDS = (
+    "publication_reservation",
+    "publication_temp",
+    "authorized_scratch",
+)
 # Matrix label -> the actor-language pair that the executed binaries must
 # have produced.  Used only as the consistency probe against the global
 # identities of the executed shas, never for attribution.
@@ -166,6 +207,39 @@ def _load_report(path, problems):
     return report
 
 
+def _command_argv(report):
+    """Return the report ``command`` argv as a list, or None.
+
+    The runner records ``sys.argv`` for every matrix and crash
+    report, so the replayed invocation is part of the evidence: a
+    forger must make the recorded command agree with the report.
+    Both list argv (the runner output) and a string command
+    (whitespace separated) are accepted.
+    """
+
+    command = report.get("command")
+    if isinstance(command, str):
+        try:
+            command = shlex.split(command)
+        except ValueError:
+            return None
+    if isinstance(command, list) and all(
+            isinstance(token, str) for token in command):
+        return command
+    return None
+
+
+def _argv_value(argv, flag):
+    """Return the value of one ``--flag value`` (or ``--flag=value``) pair."""
+
+    for index, token in enumerate(argv):
+        if token == flag and index + 1 < len(argv):
+            return argv[index + 1]
+        if token.startswith(flag + "="):
+            return token[len(flag) + 1:]
+    return None
+
+
 def _global_implementation_map(matrix_paths, crash_paths, problems):
     """Build the cross-report sha256 -> implementation map.
 
@@ -215,6 +289,14 @@ def matrix_evidence(path, report, implementation_of, problems):
     implementation.  The top-level ``matrix`` label is never used for
     attribution; it is only cross-checked against the global
     identities of the executed pair, so a relabeled clone fails.
+
+    Every case's per-case ``matrix`` field must name this report's
+    matrix, and the recorded ``command`` argv must pass the same
+    label via ``--matrix``, so the report identity is consistent
+    inside each case and in the replayed invocation.  Kind credits
+    are accepted only from actors that recorded positive executed
+    step counts; a credit naming a zero-step actor is a report
+    defect and that credit is dropped.
     """
 
     matrix = report.get("matrix")
@@ -232,6 +314,21 @@ def matrix_evidence(path, report, implementation_of, problems):
     if leftover:
         problems.append(
             f"matrix {path}: report records leftover product processes: {leftover}")
+    argv = _command_argv(report)
+    if argv is None:
+        problems.append(
+            f"matrix {path}: report records no command argv")
+    else:
+        command_matrix = _argv_value(argv, "--matrix")
+        if command_matrix is None:
+            problems.append(
+                f"matrix {path}: report command records no --matrix "
+                f"argument (report matrix is {matrix!r})")
+        elif command_matrix != matrix:
+            problems.append(
+                f"matrix {path}: report command --matrix "
+                f"{command_matrix!r} does not match report matrix "
+                f"{matrix!r}")
     cases = report.get("cases", [])
     # Counter cross-validation: the per-case status list is the truth;
     # a doctored aggregate can claim any number.  Cases that are not
@@ -250,6 +347,17 @@ def matrix_evidence(path, report, implementation_of, problems):
                 f"matrix {path}: case "
                 f"{case.get('name', '<unnamed>')!r} has unexpected status "
                 f"{status!r}")
+        case_matrix = case.get("matrix")
+        if case_matrix not in CASE_MATRIX_NAMES[matrix]:
+            if case_matrix is None and status != "PASS":
+                # Non-PASS cases may omit the label; a PASS case must
+                # record it so its evidence is attributable.
+                continue
+            problems.append(
+                f"matrix {path}: case {case.get('name', '<unnamed>')!r} "
+                f"records case matrix {case_matrix!r}, which does not "
+                f"match report matrix {matrix!r} (expected "
+                f"{' or '.join(repr(name) for name in CASE_MATRIX_NAMES[matrix])})")
     expected = ACTOR_LANGUAGES[matrix]
     evidence = {}
     pass_cases = 0
@@ -268,6 +376,7 @@ def matrix_evidence(path, report, implementation_of, problems):
                 f"per-case actors map (needs producer and consumer entries)")
             continue
         implementations = {}
+        actor_steps = {}
         steps_sum = 0
         steps_complete = True
         for actor in ALL_ACTORS:
@@ -344,13 +453,16 @@ def matrix_evidence(path, report, implementation_of, problems):
                     f"matrix {path}: PASS case {case_name!r} actor {actor!r} "
                     f"records no executed-step count")
                 steps_complete = False
+                actor_steps[actor] = None
             elif steps < 0:
                 problems.append(
                     f"matrix {path}: PASS case {case_name!r} actor {actor!r} "
                     f"records negative executed-step count {steps}")
                 steps_complete = False
+                actor_steps[actor] = None
             else:
                 steps_sum += steps
+                actor_steps[actor] = steps
         if steps_complete and steps_sum < 1:
             problems.append(
                 f"matrix {path}: PASS case {case_name!r} records zero "
@@ -387,11 +499,46 @@ def matrix_evidence(path, report, implementation_of, problems):
                 continue
             bucket = evidence.setdefault(facts["kind"],
                                          {"created": set(), "opened": set()})
+            # A kind credit names the actor that performed the
+            # operation; an actor that executed zero steps cannot be
+            # credited anywhere (whole-case zero-step failures are
+            # reported separately).  Unknown actor prefixes keep the
+            # poisoned "?" marker so coverage checks must fail.
             for entry in facts.get("created_by", []):
+                if not isinstance(entry, str):
+                    bucket["created"].add("?")
+                    continue
                 actor = entry.split(".", 1)[0]
+                if actor_steps.get(actor) == 0:
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} kind "
+                        f"{facts['kind']!r} credits creator actor {actor!r} "
+                        f"with zero executed steps")
+                    continue
+                if actor not in actor_steps:
+                    bucket["created"].add("?")
+                    continue
+                if actor_steps.get(actor) is None or \
+                        actor_steps.get(actor) < 1:
+                    continue
                 bucket["created"].add(implementations.get(actor, "?"))
             for entry in facts.get("opened_by", []):
+                if not isinstance(entry, str):
+                    bucket["opened"].add("?")
+                    continue
                 actor = entry.split(".", 1)[0]
+                if actor_steps.get(actor) == 0:
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} kind "
+                        f"{facts['kind']!r} credits opener actor {actor!r} "
+                        f"with zero executed steps")
+                    continue
+                if actor not in actor_steps:
+                    bucket["opened"].add("?")
+                    continue
+                if actor_steps.get(actor) is None or \
+                        actor_steps.get(actor) < 1:
+                    continue
                 bucket["opened"].add(implementations.get(actor, "?"))
     stats = {"cases": len(cases), "fail_cases": fail_cases,
              "pass_cases": pass_cases, "contributing": contributing}
@@ -412,19 +559,23 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
 
     Returns ``(evidence, stats, problems)``.  Scenarios whose
     ``"pass"`` is not true never contribute kinds: a failed scenario
-    stops before the artifact inventory runs.  Creation is attributed
-    to the scenario's producer language and consumption to its consumer
-    language; the battery must span both language directions.
+    stops before the artifact inventory runs.  Per-kind actor lineage
+    decides attribution: creation is credited only from the
+    ``created_by`` actors of each kind and opening only from its
+    ``opened_by`` actors; the battery must span both language
+    directions.  The legacy flat kind list carries no per-kind
+    lineage and is rejected.
 
     Scenario identity comes from the per-scenario
     ``producer_sha256``/``consumer_sha256`` records the harness writes
     from the exact binaries it executes, never from the direction
-    label: each role's sha256 must resolve through the global
-    cross-report sha->implementation map to the implementation the
-    scenario declares, and, when the report-root binaries table also
-    maps the role path to a sha256, the two records must agree.  A
-    duplicated direction keeps the original binaries' shas, so its
-    forged labels contradict the global identity of those binaries.
+    label: each role's ``impl:path`` must appear in the report-root
+    binaries table, each role's sha256 must resolve through the
+    global cross-report sha->implementation map to the implementation
+    the scenario declares, and the table's sha256 for the path must
+    equal the scenario's sha256.  A duplicated direction keeps the
+    original binaries' shas, so its forged labels contradict the
+    global identity of those binaries.
     """
 
     failed = report.get("failed", 0)
@@ -435,6 +586,31 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
     if leftover:
         problems.append(
             f"crash {path}: report records leftover product processes: {leftover}")
+    root_binaries = report.get("binaries")
+    if not isinstance(root_binaries, dict):
+        root_binaries = {}
+    argv = _command_argv(report)
+    if argv is None:
+        problems.append(
+            f"crash {path}: report records no command argv")
+    else:
+        role_flags = {"producer": "--producer",
+                      "consumer": "--consumer",
+                      "fixture_tool": "--fixture-tool"}
+        for role in ("producer", "consumer", "fixture_tool"):
+            table_path = root_binaries.get(role)
+            flag = role_flags[role]
+            named = _argv_value(argv, flag)
+            if not isinstance(table_path, str):
+                problems.append(
+                    f"crash {path}: report root binaries table records "
+                    f"no {role} path")
+            elif (not isinstance(named, str)
+                  or os.path.realpath(named) != table_path):
+                problems.append(
+                    f"crash {path}: report command {flag} {named!r} does "
+                    f"not name the report root binaries table path "
+                    f"{table_path!r}")
     scenarios = report.get("scenarios", [])
     # Counter cross-validation: the per-scenario pass flags are the
     # truth for the failed counter.
@@ -491,7 +667,13 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                     f"{role} records no sha256 identity")
                 continue
             root_sha = path_to_sha.get(binary_path)
-            if root_sha is not None and root_sha != sha:
+            if root_sha is None:
+                problems.append(
+                    f"crash {path}: PASS scenario {scenario_name!r} "
+                    f"{role} binary path {binary_path!r} is absent from "
+                    f"the report root binaries table")
+                continue
+            if root_sha != sha:
                 problems.append(
                     f"crash {path}: PASS scenario {scenario_name!r} "
                     f"{role} sha256 {sha!r} contradicts the report "
@@ -543,12 +725,83 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                     f"crash {path}: PASS scenario {scenario_name!r} uses "
                     f"language {producer_impl!r} for both producer and "
                     f"consumer")
-        kinds = scenario.get("kinds") or []
-        for kind in kinds:
+        # Per-kind actor lineage: the harness records for every
+        # observed kind which scenario actors created and opened it.
+        # Only named creators and openers are credited; a legacy
+        # flat kind list carries no per-kind lineage and is
+        # rejected.
+        kinds = scenario.get("kinds")
+        if kinds is None:
+            kinds = {}
+        if isinstance(kinds, list):
+            problems.append(
+                f"crash {path}: PASS scenario {scenario_name!r} records a "
+                f"legacy flat kinds list carries no actor lineage")
+            kinds = {}
+        elif not isinstance(kinds, dict):
+            problems.append(
+                f"crash {path}: PASS scenario {scenario_name!r} records "
+                f"kinds that are neither a lineage object nor a list: "
+                f"{kinds!r}")
+            kinds = {}
+        for kind, lineage in kinds.items():
+            if not isinstance(lineage, dict):
+                problems.append(
+                    f"crash {path}: PASS scenario {scenario_name!r} kind "
+                    f"{kind!r} records lineage that is not an object")
+                continue
+            created_by = lineage.get("created_by")
+            opened_by = lineage.get("opened_by")
+            if "created_by" not in lineage or "opened_by" not in lineage:
+                problems.append(
+                    f"crash {path}: PASS scenario {scenario_name!r} kind "
+                    f"{kind!r} lineage lacks created_by/opened_by keys")
+            if not isinstance(created_by, list):
+                problems.append(
+                    f"crash {path}: PASS scenario {scenario_name!r} kind "
+                    f"{kind!r} created_by is not a list")
+                created_by = []
+            if not isinstance(opened_by, list):
+                problems.append(
+                    f"crash {path}: PASS scenario {scenario_name!r} kind "
+                    f"{kind!r} opened_by is not a list")
+                opened_by = []
+            if not created_by:
+                problems.append(
+                    f"crash {path}: PASS scenario {scenario_name!r} kind "
+                    f"{kind!r} records empty created_by lineage")
             bucket = evidence.setdefault(kind, {"created": set(),
                                                 "opened": set()})
-            bucket["created"].add(producer_impl if producer_impl else "?")
-            bucket["opened"].add(consumer_impl if consumer_impl else "?")
+            for entry in created_by:
+                prefix = ""
+                if isinstance(entry, str) and "." in entry:
+                    head, tail = entry.split(".", 1)
+                    if head in ALL_ACTORS and tail:
+                        prefix = head
+                if prefix not in ALL_ACTORS:
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} created_by actor {entry!r} "
+                        f"carries an unknown or malformed actor prefix")
+                    continue
+                language = (producer_impl if prefix == "producer"
+                            else consumer_impl)
+                bucket["created"].add(language or "?")
+            for entry in opened_by:
+                prefix = ""
+                if isinstance(entry, str) and "." in entry:
+                    head, tail = entry.split(".", 1)
+                    if head in ALL_ACTORS and tail:
+                        prefix = head
+                if prefix not in ALL_ACTORS:
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} opened_by actor {entry!r} "
+                        f"carries an unknown or malformed actor prefix")
+                    continue
+                language = (producer_impl if prefix == "producer"
+                            else consumer_impl)
+                bucket["opened"].add(language or "?")
     if not {"rust", "go"} <= producers or not {"rust", "go"} <= consumers:
         problems.append(
             f"crash {path}: PASS scenarios must span both language "
@@ -570,6 +823,8 @@ def assess(matrix_paths, crash_paths):
                 for kind in REQUIRED_KINDS}
     sources = []
     problems = []
+    crash_pass_seen = False
+    kind_sources = {}
     implementation_of = _global_implementation_map(
         matrix_paths, crash_paths, problems)
 
@@ -579,7 +834,7 @@ def assess(matrix_paths, crash_paths):
         report = _load_report(path, problems)
         if report is None:
             continue
-        matrix, evidence, stats, report_problems = matrix_evidence(
+        matrix, evidence, stats, _ = matrix_evidence(
             path, report, implementation_of, problems)
         if matrix in REQUIRED_MATRICES:
             if matrix in seen_matrices:
@@ -591,12 +846,16 @@ def assess(matrix_paths, crash_paths):
         sources.append(
             f"matrix {path} ({stats['cases']} cases, "
             f"{stats['pass_cases']} PASS)")
-        problems.extend(report_problems)
+        # matrix_evidence appended its findings to ``problems``
+        # directly and returned the same list; extending again would
+        # duplicate every entry.
         for kind, sides in evidence.items():
             bucket = coverage.setdefault(kind,
                                          {"created": set(), "opened": set()})
             bucket["created"].update(sides["created"])
             bucket["opened"].update(sides["opened"])
+            kind_sources.setdefault(
+                kind, {"matrix": False, "crash": False})["matrix"] = True
     for matrix in REQUIRED_MATRICES:
         if matrix not in seen_matrices:
             problems.append(f"missing matrix report for {matrix!r}")
@@ -611,19 +870,32 @@ def assess(matrix_paths, crash_paths):
         report = _load_report(path, problems)
         if report is None:
             continue
-        evidence, stats, report_problems = crash_evidence(
+        evidence, stats, _ = crash_evidence(
             path, report, _crash_path_to_sha(report), implementation_of,
             problems)
         sources.append(
             f"crash {path} ({stats['scenarios']} scenarios, "
             f"{stats['pass_scenarios']} PASS)")
-        problems.extend(report_problems)
+        if stats["pass_scenarios"] > 0:
+            crash_pass_seen = True
+        # crash_evidence appended its findings to ``problems``
+        # directly and returned the same list; extending again would
+        # duplicate every entry.
         for kind, sides in evidence.items():
             bucket = coverage.setdefault(kind,
                                          {"created": set(), "opened": set()})
             bucket["created"].update(sides["created"])
             bucket["opened"].update(sides["opened"])
+            kind_sources.setdefault(
+                kind, {"matrix": False, "crash": False})["crash"] = True
 
+    if not crash_paths:
+        problems.append(
+            "no crash report path supplied: crash evidence is mandatory")
+    elif not crash_pass_seen:
+        problems.append(
+            "no crash report contributes a PASS scenario: crash evidence "
+            "is mandatory")
     unknown = sorted(kind for kind in coverage if kind not in REQUIRED_KINDS)
     if unknown:
         problems.append(f"unknown kinds in PASS evidence: {unknown}")
@@ -637,6 +909,12 @@ def assess(matrix_paths, crash_paths):
             problems.append(
                 f"kind {kind!r} is opened by services and must be opened "
                 f"by both languages: opened by {sorted(bucket['opened'])}")
+        if (kind in CRASH_ONLY_KINDS
+                and not kind_sources.get(kind, {}).get("crash")):
+            problems.append(
+                f"kind {kind!r} is crash-only and requires at least one "
+                f"crash scenario contributing it (no crash source "
+                f"observed)")
     return problems, coverage, sources
 
 
@@ -678,6 +956,10 @@ def _self_test():
         return {
             "schema": "iprange-cli-report-v3",
             "matrix": matrix,
+            "command": [
+                "v4/cli/run.py", "--matrix", matrix,
+                "--work-dir", "/tmp/kind-matrix-work",
+                "--json-report", "/tmp/kind-matrix-report.json"],
             "cases": cases,
             "file_kinds": root_kinds or {},
             "failed": failed,
@@ -699,6 +981,8 @@ def _self_test():
                                  "reservation retained",
                                  "resolve truthful",
                                  "reopen ok")):
+        crash_kinds = ("publication_temp", "publication_reservation",
+                       "authorized_scratch")
         scenarios = []
         sha_of = {"rust": "1" * 64, "go": "2" * 64}
         for i, (p, c) in enumerate(zip(producers, consumers)):
@@ -710,11 +994,19 @@ def _self_test():
                 "consumer_sha256": sha_of[c],
                 "assertions": list(assertions),
                 "failures": [],
-                "kinds": ["publication_temp", "publication_reservation",
-                          "authorized_scratch"],
+                "kinds": {kind: {"created_by": ["producer.0"],
+                                 "opened_by": ["consumer.0"]}
+                          for kind in crash_kinds},
             })
         return {"schema": "iprange-cli-crash-report-v1",
                 "binaries": dict(CRASH_BINARIES),
+                "command": [
+                    "v4/cli/crash_harness.py",
+                    "--producer", BINARY_PATHS["rust"],
+                    "--consumer", BINARY_PATHS["go"],
+                    "--fixture-tool", CRASH_BINARIES["fixture_tool"],
+                    "--work-dir", "/tmp/kind-crash-work",
+                    "--json-report", "/tmp/kind-crash-report.json"],
                 "scenarios": scenarios,
                 "leftover_processes": leftover or [],
                 "failed": failed}
@@ -1026,9 +1318,8 @@ def _self_test():
         #     scenarios keep the real binary paths, so their forged
         #     labels contradict the global identity of the binaries
         #     they name and the gate fails.
-        dupe = {"schema": "iprange-cli-crash-report-v1",
-                "binaries": dict(CRASH_BINARIES),
-                "scenarios": [], "leftover_processes": [], "failed": 0}
+        dupe = dict(crash_report(["rust"], ["go"]))
+        dupe["scenarios"] = []
         for scenario in crash_report(["rust"], ["go"])["scenarios"]:
             dupe["scenarios"].append(scenario)
             copy = dict(scenario)
@@ -1081,6 +1372,148 @@ def _self_test():
         assert problems and any("records no producer_sha256 identity"
                                 in p for p in problems), (
             f"missing per-scenario sha did not fail the gate: {problems}")
+
+        # 18. Per-case matrix lie: a PASS case whose ``matrix`` field
+        #     contradicts its report is not attributable to this
+        #     matrix and fails the gate.
+        lie_matrix = green_report("rust")
+        lie_matrix["cases"][0]["matrix"] = "go"
+        lie_matrix_path = os.path.join(work, "lie-matrix.json")
+        assign(lie_matrix_path, lie_matrix)
+        problems, _c, _s = assess(
+            [lie_matrix_path] + four[1:], [crash_path])
+        assert problems and any("records case matrix" in p
+                                and "does not match" in p
+                                for p in problems), (
+            f"per-case matrix lie did not fail the gate: {problems}")
+
+        # 19. Command lie: a matrix report whose recorded command
+        #     passes a different --matrix than the report matrix
+        #     fails the gate.
+        lie_command = green_report("rust")
+        for index, token in enumerate(lie_command["command"]):
+            if token == "--matrix":
+                lie_command["command"][index + 1] = "go"
+                break
+        lie_command_path = os.path.join(work, "lie-command.json")
+        assign(lie_command_path, lie_command)
+        problems, _c, _s = assess(
+            [lie_command_path] + four[1:], [crash_path])
+        assert problems and any("report command --matrix" in p
+                                and "does not match" in p
+                                for p in problems), (
+            f"command matrix lie did not fail the gate: {problems}")
+
+        # 20. Crash root-table membership: a PASS scenario naming a
+        #     producer path absent from the report-root binaries
+        #     table fails the gate.
+        absent_path = crash_report(["rust", "go"], ["go", "rust"])
+        absent_path["scenarios"][0]["producer"] = (
+            "rust:" + BINARY_PATHS["rust"] + ".absent")
+        absent_path_path = os.path.join(work, "crash-absent-path.json")
+        assign(absent_path_path, absent_path)
+        problems, _c, _s = assess(four, [absent_path_path])
+        assert problems and any("absent from the report root binaries "
+                                "table" in p for p in problems), (
+            f"unlisted crash binary path did not fail the gate: "
+            f"{problems}")
+
+        # 21. Crash-only kinds fabricated through matrix ledgers with
+        #     no crash report at all must fail: crash evidence is
+        #     mandatory and these kinds need a crash source.
+        fabricated_rust = green_report("rust")
+        fabricated_go = green_report("go")
+        for report in (fabricated_rust, fabricated_go):
+            for i, kind in enumerate(CRASH_ONLY_KINDS):
+                report["cases"][0]["file_kinds"][f"crash{i}.bin"] = {
+                    "kind": kind,
+                    "created_by": ["producer.iprange.v1.selftest"],
+                    "opened_by": ["consumer.iprange.v1.selftest"]}
+        fabricated_rust_path = os.path.join(work, "fabricated-rust.json")
+        assign(fabricated_rust_path, fabricated_rust)
+        fabricated_go_path = os.path.join(work, "fabricated-go.json")
+        assign(fabricated_go_path, fabricated_go)
+        problems, _c, _s = assess(
+            [fabricated_rust_path, fabricated_go_path,
+             green["rust_to_go"], green["go_to_rust"]], [])
+        assert problems and any("no crash report path supplied" in p
+                                for p in problems) and any(
+            "requires at least one crash scenario contributing" in p
+            for p in problems), (
+            f"matrix-fabricated crash kinds without crash evidence did "
+            f"not fail the gate: {problems}")
+
+        # 22. Zero-step credit: a PASS case that executes zero steps
+        #     as producer but still credits creation to the producer
+        #     fails, and the producer credit is dropped (the consumer
+        #     opening credit, with steps > 0, still counts).
+        idle_producer = green_report("rust")
+        idle_producer["cases"][0]["actors"]["producer"]["steps"] = 0
+        idle_producer_path = os.path.join(work, "zero-producer.json")
+        assign(idle_producer_path, idle_producer)
+        problems, _c, _s = assess(
+            [idle_producer_path] + four[1:], [crash_path])
+        assert problems and any("credits creator actor" in p
+                                and "zero executed steps" in p
+                                for p in problems), (
+            f"zero-step producer credit did not fail the gate: "
+            f"{problems}")
+
+        # 23. Legacy flat crash kinds: restoring the old flat kind
+        #     list (which carried no per-kind actor lineage and let
+        #     the gate credit every kind to the scenario consumer)
+        #     fails the gate.
+        flat = crash_report(["rust", "go"], ["go", "rust"])
+        flat["scenarios"][0]["kinds"] = [
+            "publication_temp", "publication_reservation",
+            "authorized_scratch"]
+        flat_path = os.path.join(work, "crash-flat-kinds.json")
+        assign(flat_path, flat)
+        problems, _c, _s = assess(four, [flat_path])
+        assert problems and any("legacy flat kinds list carries no actor "
+                                "lineage" in p for p in problems), (
+            f"legacy flat crash kinds did not fail the gate: {problems}")
+
+        # 24. Malformed per-kind lineage: unknown actor prefixes,
+        #     empty created_by, missing lineage keys, non-object
+        #     lineage, and non-object kinds all fail the gate.
+        malformed = []
+        broken_missing = crash_report(["rust", "go"], ["go", "rust"])
+        del broken_missing["scenarios"][0]["kinds"][
+            "publication_reservation"]["opened_by"]
+        malformed.append(("missing-opened-by",
+                          "lacks created_by/opened_by keys",
+                          broken_missing))
+        broken_unknown = crash_report(["rust", "go"], ["go", "rust"])
+        broken_unknown["scenarios"][0]["kinds"][
+            "publication_reservation"]["created_by"] = ["mystery.0"]
+        malformed.append(("unknown-prefix",
+                          "unknown or malformed actor prefix",
+                          broken_unknown))
+        broken_empty = crash_report(["rust", "go"], ["go", "rust"])
+        broken_empty["scenarios"][0]["kinds"][
+            "publication_reservation"]["created_by"] = []
+        malformed.append(("empty-created-by",
+                          "records empty created_by lineage",
+                          broken_empty))
+        broken_lineage_type = crash_report(["rust", "go"], ["go", "rust"])
+        broken_lineage_type["scenarios"][0]["kinds"][
+            "publication_reservation"] = ["producer.0"]
+        malformed.append(("lineage-not-object",
+                          "lineage that is not an object",
+                          broken_lineage_type))
+        broken_kinds_type = crash_report(["rust", "go"], ["go", "rust"])
+        broken_kinds_type["scenarios"][0]["kinds"] = "junk"
+        malformed.append(("kinds-not-object",
+                          "neither a lineage object nor a list",
+                          broken_kinds_type))
+        for label, needle, report in malformed:
+            malformed_path = os.path.join(work, f"crash-{label}.json")
+            assign(malformed_path, report)
+            problems, _c, _s = assess(four, [malformed_path])
+            assert problems and any(needle in p for p in problems), (
+                f"malformed lineage {label!r} did not fail the gate: "
+                f"{problems}")
 
         # 17. Root contradiction: a scenario whose per-scenario sha256
         #     contradicts the report-root binaries table fails.

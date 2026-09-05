@@ -57,10 +57,12 @@ Windows validation host):
    process exits 0 — the identical session contract for both
    products.  A 500,000-line feed is the verified minimum that keeps
    the queue occupied.
-2. The -32001 over-limit-frame close path — one >1 MiB frame yields
-   exactly one -32001 response with a null id, then stdout drains to
-   EOF with zero further bytes, then a clean exit 0 in both
-   products.
+2. The -32001 over-limit-frame close path — one >1 MiB frame is
+   followed in the same stdin stream by a valid `system.describe`
+   sentinel; exactly one -32001 response appears with a null id
+   (the sentinel is never parsed — trailing bytes are provably
+   ignored), stdout drains to EOF with zero further bytes, then a
+   clean exit 0 in both products.
 3. `maintenance.remove` against a real reservation nonce — a publish
    killed at the reservation marker, one `maintenance.list`
    reservation row, the row passed unchanged to

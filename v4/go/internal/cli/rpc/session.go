@@ -9,8 +9,11 @@
 // a 16-request admission counter so the transport never blocks.
 //
 // Per-request semantics:
-//   - one active request plus at most 16 queued; a request exceeding
-//     the bound fails with -32002 server_busy;
+//   - one active request plus at most 16 queued; the admission
+//     counter counts queued members only and the one active member is
+//     not counted, so a member frees its slot when it starts
+//     executing; a request exceeding the bound fails with -32002
+//     server_busy;
 //   - the reader stays active while work executes so cancellation and
 //     EOF are observed;
 //   - the control plane (cancelled/pending ids, active keys, the
@@ -150,9 +153,8 @@ type workEntry struct {
 // workUnit is one decoded frame queued as a unit: array-order
 // execution and one response frame per input frame.
 type workUnit struct {
-	entries  []*workEntry
-	admitted int
-	batch    bool
+	entries []*workEntry
+	batch   bool
 }
 
 // sessionEvent is one event the transport goroutines report to the
@@ -393,7 +395,6 @@ func (s *Session) fatal(err error, _ io.Writer, _ *FrameWriter) error {
 // workerLoop executes work units until the work channel closes.
 func workerLoop(s *Session, fw *FrameWriter, writerMu *sync.Mutex, events chan<- sessionEvent) {
 	for unit := range s.workTx {
-		s.inFlight.Add(-int64(unit.admitted))
 		keys := make(map[string]bool)
 		for _, entry := range unit.entries {
 			if entry.kind == workExecute && entry.request.ID != nil {
@@ -413,6 +414,12 @@ func workerLoop(s *Session, fw *FrameWriter, writerMu *sync.Mutex, events chan<-
 
 		responses := make([]json.RawMessage, 0, len(unit.entries))
 		for _, entry := range unit.entries {
+			// A member frees its queue slot when it starts executing;
+			// earlier members of the same unit stay counted until then.
+			// Busy and unanswerable entries never occupied a slot.
+			if entry.kind == workExecute {
+				s.inFlight.Add(-1)
+			}
 			if resp, ok := entryResponse(s, entry); ok {
 				responses = append(responses, resp)
 			}
@@ -525,7 +532,7 @@ func (s *Session) handleFrame(line []byte, fw *FrameWriter, writerMu *sync.Mutex
 			writerMu.Unlock()
 			return werr
 		}
-		s.workTx <- workUnit{entries: entries, admitted: admitted, batch: true}
+		s.workTx <- workUnit{entries: entries, batch: true}
 		return nil
 	}
 	switch entries[0].kind {
@@ -547,7 +554,7 @@ func (s *Session) handleFrame(line []byte, fw *FrameWriter, writerMu *sync.Mutex
 		writerMu.Unlock()
 		return werr
 	default:
-		s.workTx <- workUnit{entries: entries, admitted: 1, batch: false}
+		s.workTx <- workUnit{entries: entries, batch: false}
 		return nil
 	}
 }

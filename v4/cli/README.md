@@ -192,27 +192,35 @@ table:
 - `crash_harness.py` — process-level interruption proof at the product
   interface: drives the normal JSON-RPC client (reusing `run.py`'s
   service and fixture code — no production test hook), kills the
-  producer at a durable engine marker, then proves with both consumer
-  binaries in both directions that resolution is truthful, residue is
-  bounded, and reopen succeeds.  Eight scenarios cover the recorded
-  crash scope (publish/commit/finish/export/validate): A1/A2
-  `current.publish` interruption at the reservation block (A3 is the
-  foreign-destination negative control against the reservation
-  digest), B `database.initialize_live` at the creating-state sidecar,
-  C `recover` at the CRC-valid authorized-scratch header, D
-  `direct.replace` (commit/finish) at the durable live draft-growth
-  marker (the live-commit window has no sidecar write at the product
-  boundary; recorded evidence), E `export` at the non-empty
-  partial-output `.export.tmp` marker, F `validate` at the private
-  findings-output temporary marker (the plan-recorded worker-scratch
-  marker is impossible at the product boundary: validation never spills
-  to authorized scratch; recorded evidence).  16 scenarios run per
-  invocation (8 x both directions); all markers are durable on-disk
-  states, never
-  wall-clock assertions.  Committed evidence is produced from binary
-  copies staged under `/tmp/qualsvc/` (version-matched product/worker
-  pairs), so the recorded argv carries no personal paths; see
-  `evidence/README.md`.
+  producer at an observable process-crash marker, then proves with
+  both consumer binaries in both directions that resolution is
+  truthful, residue is bounded, and reopen succeeds.  Eight scenarios
+  cover the approved crash scope: A1/A2 `current.publish`
+  interruption at the reservation block (A3 is the foreign-destination
+  negative control against the reservation digest), B
+  `database.initialize_live` at the creating-state sidecar, C
+  `recover` at the CRC-valid authorized-scratch header, D
+  `direct.replace` interruption during uncommitted live-draft
+  construction (a successful control run is recorded first; the
+  exact commit/finish crash points are covered by the SDK fault
+  gates — Go `v4/go/internal/live/lifecycle_crash_test.go`,
+  `v4/go/internal/writer/crash_v4work_test.go`; Rust
+  `v4/rust/iprange-livedb/src/live_crash_tests.rs`; the live-commit
+  window has no sidecar write at the product boundary, recorded
+  evidence), E `export` at the non-empty partial-output `.export.tmp`
+  marker, F `validate` interruption during validation/findings
+  delivery (the findings temporary carries real flushed bytes, the
+  interrupted output is a strict prefix of the successful reference
+  findings, and no destination replacement exists; the
+  plan-recorded worker-scratch marker is impossible at the product
+  boundary: validation never spills to authorized scratch, recorded
+  evidence).  16 scenarios run per invocation (8 x both directions);
+  markers are observable process-crash states (file growth or visible
+  temporary bytes), never wall-clock assertions forged, and their
+  existence alone is not claimed as proof of storage sync.  Committed
+  evidence is produced from binary copies staged under
+  `/tmp/qualsvc/` (version-matched product/worker pairs), so the
+  recorded argv carries no personal paths; see `evidence/README.md`.
 - `resource_harness.py` — the four Linux product-interface resource
   proofs (evidence `evidence/resource.json`): the >16-in-flight
   `server_busy` pipelining proof (one slow export + 19

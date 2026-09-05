@@ -8,8 +8,11 @@
 //! frames wait in a channel behind a 16-request admission counter so
 //! the transport never blocks. Per-request semantics
 //! (iprange-jsonrpc-v1.md):
-//! - one active request set plus at most 16 queued requests; a
-//!   request exceeding the bound fails with -32002 server_busy;
+//! - one active request set plus at most 16 queued requests; the
+//!   admission counter counts queued members only and the one active
+//!   member is not counted, so a member frees its slot when it starts
+//!   executing; a request exceeding the bound fails with -32002
+//!   server_busy;
 //! - the reader stays active while work executes so cancellation
 //!   and EOF are observed;
 //! - the control plane (cancelled/pending ids, active keys, the
@@ -167,18 +170,12 @@ impl WorkEntry {
             Self::Execute(request) | Self::Busy(request) | Self::Unanswerable(request) => request,
         }
     }
-
-    fn occupies_queue(&self) -> bool {
-        matches!(self, Self::Execute(_))
-    }
 }
 
 /// One decoded frame queued as a unit: array-order execution and one
 /// response frame per input frame.
 struct WorkUnit {
     entries: Vec<WorkEntry>,
-    /// Elements that occupied queue capacity and must release it.
-    admitted: usize,
     batch: bool,
 }
 
@@ -202,7 +199,9 @@ pub struct Session {
     /// Cancellation/shutdown control plane; never held by handlers,
     /// so cancel/EOF always reach an active unit's token.
     control: Arc<Mutex<SessionControl>>,
-    /// Requests admitted to the channel but not yet executed.
+    /// Requests admitted but not yet executing; a member frees its
+    /// slot when it starts running, so this counts queued members
+    /// only while a member is active.
     in_flight: Arc<AtomicUsize>,
     work_tx: Option<Sender<WorkUnit>>,
     work_rx: Option<Receiver<WorkUnit>>,
@@ -481,7 +480,6 @@ fn worker_loop<W: Write + Send + 'static>(
     events: Sender<SessionEvent>,
 ) {
     while let Ok(unit) = rx.recv() {
-        in_flight.fetch_sub(unit.admitted, Ordering::Relaxed);
         let keys: HashSet<String> = unit
             .entries
             .iter()
@@ -504,11 +502,20 @@ fn worker_loop<W: Write + Send + 'static>(
             }
             c.active_keys = keys.clone();
         }
-        let mut responses: Vec<Value> = unit
-            .entries
-            .iter()
-            .filter_map(|entry| entry_response(&state, &control, entry))
-            .collect();
+        let mut responses: Vec<Value> = Vec::with_capacity(unit.entries.len());
+        for entry in &unit.entries {
+            // A member frees its queue slot when it starts executing;
+            // earlier members of the same unit stay counted until
+            // then. Cancelled executes were admitted and still free
+            // their slot; busy and unanswerable entries never
+            // occupied one.
+            if matches!(entry, WorkEntry::Execute(_)) {
+                in_flight.fetch_sub(1, Ordering::Relaxed);
+            }
+            if let Some(response) = entry_response(&state, &control, entry) {
+                responses.push(response);
+            }
+        }
         {
             // Terminal state: the unit's request ids are no longer
             // cancellation targets, so a later request reusing an id
@@ -586,7 +593,6 @@ fn handle_frame<W: Write>(
     if entries.is_empty() {
         return Ok(());
     }
-    let admitted = entries.iter().filter(|entry| entry.occupies_queue()).count();
     if batch {
         // Every element answers inside one array in the
         // frame's order, including busy rejections.
@@ -596,7 +602,6 @@ fn handle_frame<W: Write>(
             .unwrap()
             .send(WorkUnit {
                 entries,
-                admitted,
                 batch,
             })
             .map_err(worker_gone)?;
@@ -625,7 +630,6 @@ fn handle_frame<W: Write>(
                     .unwrap()
                     .send(WorkUnit {
                         entries,
-                        admitted: 1,
                         batch,
                     })
                     .map_err(worker_gone)?;
@@ -932,15 +936,7 @@ mod tests {
     }
 
     fn unit(entries: Vec<WorkEntry>, batch: bool) -> WorkUnit {
-        let admitted = entries
-            .iter()
-            .filter(|entry| entry.occupies_queue())
-            .count();
-        WorkUnit {
-            entries,
-            admitted,
-            batch,
-        }
+        WorkUnit { entries, batch }
     }
 
     fn ids(payload: &Value) -> Vec<String> {
@@ -1341,6 +1337,143 @@ mod tests {
         assert!(matches!(entries[1], WorkEntry::Busy(_)));
         assert!(matches!(entries[2], WorkEntry::Busy(_)));
         assert_eq!(in_flight.load(Ordering::Relaxed), QUEUED_LIMIT);
+    }
+
+    #[test]
+    fn active_batch_member_frees_one_slot_at_a_time() {
+        // A 16-member batch whose first member is slow occupies one
+        // active slot plus 15 queued slots. While member 1 is blocked,
+        // the 15 unexecuted batch members must still count against the
+        // admission bound, so of 10 pipelined single requests exactly
+        // 9 answer -32002 and 1 is admitted. Pre-fix the worker
+        // subtracted the whole batch from the admission counter when
+        // it picked the unit up, leaving the 15 pending members
+        // uncounted and admitting all 10.
+        let mut session = Session::new();
+        // Simulate the slow first batch member: a helper thread holds
+        // the session-state mutex (the worker locks it around every
+        // handler call) until the test releases it.
+        let state = session.state.clone();
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let blocker = std::thread::spawn(move || {
+            let _guard = state.lock().unwrap();
+            let _ = locked_tx.send(());
+            let _ = release_rx.recv();
+        });
+        locked_rx.recv().unwrap();
+
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
+        let (events_tx, _events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+        let work_rx = session.work_rx.take().unwrap();
+        let worker_state = session.state.clone();
+        let worker_control = session.control.clone();
+        let worker_writer = Arc::clone(&writer);
+        let worker_in_flight = Arc::clone(&session.in_flight);
+        let worker = std::thread::spawn(move || {
+            worker_loop(
+                worker_state,
+                worker_control,
+                worker_writer,
+                worker_in_flight,
+                work_rx,
+                events_tx,
+            )
+        });
+
+        // One 16-member batch through the real admission path: all 16
+        // members are admitted (the queue starts empty) and the worker
+        // blocks on member 1 behind the held state lock.
+        let batch: Vec<Value> = (1..=16)
+            .map(|i| {
+                json!({
+                    "jsonrpc": "2.0",
+                    "id": format!("b{i}"),
+                    "method": "iprange.v1.system.describe",
+                    "params": {},
+                })
+            })
+            .collect();
+        handle_frame(
+            &mut session,
+            serde_json::to_vec(&Value::Array(batch)).unwrap(),
+            &writer,
+        )
+        .unwrap();
+
+        // Wait until the worker consumed the batch and freed member
+        // 1's slot (15 counted, 1 blocked on the state lock) before
+        // admitting the singles, so the admission decisions are
+        // deterministic.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while session.in_flight.load(Ordering::Relaxed) != 15 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "worker never picked up the batch"
+            );
+            std::thread::yield_now();
+        }
+
+        // 10 pipelined singles while member 1 is still blocked: 1 is
+        // admitted, the other 9 answer -32002 from the dispatcher.
+        for i in 1..=10 {
+            let frame = json!({
+                "jsonrpc": "2.0",
+                "id": format!("s{i}"),
+                "method": "iprange.v1.system.describe",
+                "params": {},
+            });
+            handle_frame(&mut session, serde_json::to_vec(&frame).unwrap(), &writer).unwrap();
+        }
+        assert_eq!(
+            session.in_flight.load(Ordering::Relaxed),
+            16,
+            "one single must be admitted while the 15 batch members stay queued"
+        );
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let busy_lines: Vec<&str> = text.lines().collect();
+        assert_eq!(busy_lines.len(), 9, "exactly 9 busy responses: {text}");
+        for (i, line) in busy_lines.iter().enumerate() {
+            let payload: Value = serde_json::from_str(line).unwrap();
+            assert_eq!(payload["id"], json!(format!("s{}", i + 2)));
+            assert_eq!(
+                payload["error"]["code"],
+                json!(schema::TRANSPORT_SERVER_BUSY)
+            );
+        }
+
+        // Let the slow member finish: the batch answers as one array
+        // in frame order, then the admitted single executes.
+        let _ = release_tx.send(());
+        blocker.join().unwrap();
+        let _ = session.work_tx.take();
+        worker.join().unwrap();
+        assert_eq!(
+            session.in_flight.load(Ordering::Relaxed),
+            0,
+            "every execute must free its slot when it starts"
+        );
+
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let mut lines = text.lines();
+        // Skip the 9 busy responses already asserted pre-release; the
+        // worker wrote everything after them.
+        for _ in 0..9 {
+            lines.next().expect("busy response line");
+        }
+        let payload: Value = serde_json::from_str(lines.next().expect("batch response")).unwrap();
+        let members = payload.as_array().expect("batch answers one array");
+        assert_eq!(members.len(), 16, "all batch members must answer: {text}");
+        for (i, member) in members.iter().enumerate() {
+            assert_eq!(member["id"], json!(format!("b{}", i + 1)));
+            assert!(member.get("result").is_some());
+        }
+        let payload: Value =
+            serde_json::from_str(lines.next().expect("admitted single response")).unwrap();
+        assert_eq!(payload["id"], json!("s1"));
+        assert!(payload.get("result").is_some());
+        assert!(lines.next().is_none(), "no extra output: {text}");
     }
 
     #[test]
@@ -2009,7 +2142,7 @@ mod tests {
             assert!(!c.cancelled.contains("s:b"), "later sibling must not be cancelled");
         }
         let work = session.work_rx.take().unwrap().recv().unwrap();
-        assert_eq!(work.admitted, 2, "both executes occupy queue capacity");
+        assert_eq!(session.in_flight.load(Ordering::Relaxed), 2, "both executes occupy queue capacity");
         let responses: Vec<Value> = work
             .entries
             .iter()
@@ -2039,7 +2172,7 @@ mod tests {
             "a not-yet-admitted element must not be a cancellation target"
         );
         let work = session.work_rx.take().unwrap().recv().unwrap();
-        assert_eq!(work.admitted, 1);
+        assert_eq!(session.in_flight.load(Ordering::Relaxed), 1);
         let responses: Vec<Value> = work
             .entries
             .iter()

@@ -27,8 +27,10 @@ JSON-RPC stdio pipe):
 - Proof b -- the -32001 over-limit frame close path.  One frame over
   the 1 MiB input ceiling (method ``x``; the frame-limit error fires
   before method dispatch) is answered with exactly one response
-  (error code -32001, null id), then the connection closes with
-  zero further bytes on stdout and the process exits 0.
+  (error code -32001, null id); a valid sentinel request written
+  after the over-limit frame in the same stdin stream is never
+  parsed (bytes after the limit are discarded at shutdown), so the
+  process closes with zero further bytes on stdout and exits 0.
 - Proof c -- ``maintenance.remove`` against a real reservation
   nonce.  A producer killed at the reservation magic marker leaves
   one reservation; a fresh producer lists it and removes it with the
@@ -346,9 +348,14 @@ def proof_b(binary, label, work_dir, outcome):
     """Proof b: one over-limit frame answers -32001, then clean close.
 
     One >1 MiB frame is answered with exactly one response (error
-    code -32001, null id); then stdout drains to EOF with zero
-    further bytes (a product emitting a second response fails the
-    proof) and the process exits 0.
+    code -32001, null id).  A valid sentinel request
+    (``system.describe``, distinct id) is written after the over-limit
+    frame in the same stdin stream; the contract says bytes after the
+    limit are never parsed as another frame (spec
+    ``iprange-jsonrpc-v1.md``), so the sentinel must not be answered.
+    stdout then drains to EOF with zero further bytes -- a product
+    that parsed trailing bytes would emit a second response and fail
+    the proof -- and the process exits 0.
     """
 
     work = os.path.join(work_dir, f"b-{label}")
@@ -359,7 +366,15 @@ def proof_b(binary, label, work_dir, outcome):
     try:
         big = json.dumps({"jsonrpc": "2.0", "id": "1", "method": "x",
                           "params": {"pad": "a" * PROOF_B_PAD_BYTES}})
-        proc.stdin.write((big + "\n").encode())
+        # A valid sentinel request after the over-limit frame: the
+        # contract discards bytes after the limit at shutdown without
+        # parsing them, so the sentinel must never be answered.  A
+        # product that parsed trailing bytes would emit a second
+        # response and fail the proof below.
+        sentinel = json.dumps({"jsonrpc": "2.0", "id": "2",
+                               "method": "iprange.v1.system.describe",
+                               "params": {}})
+        proc.stdin.write((big + "\n" + sentinel + "\n").encode())
         proc.stdin.flush()
         proc.stdin.close()
 
@@ -380,8 +395,8 @@ def proof_b(binary, label, work_dir, outcome):
                 f"{response.get('id')!r}")
         # The single -32001 response is the whole answer: drain
         # stdout to EOF and prove zero further bytes arrived (a
-        # product that emitted a second response would show up
-        # here).
+        # product that parsed the trailing sentinel request and
+        # answered it would show up here).
         drained, eof = drain_stdout(proc, PROOF_B_DRAIN_DEADLINE_SECONDS)
         outcome["drained_bytes"] = len(drained)
         outcome["stdout_eof"] = eof

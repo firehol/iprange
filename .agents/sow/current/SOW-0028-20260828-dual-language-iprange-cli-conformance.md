@@ -4416,3 +4416,180 @@ review (glm-5.3-responses, per the user's standing instruction for
 this SOW) validates the same exact revision.  Their verdicts, any
 repairs they require, and the milestone-4 re-close decision are
 recorded here when the reviews land.
+
+### 2026-09-05 (continued) — sixth fix wave: external gate review of da82b571
+
+The external whole-milestone gate review of the exact final revision
+`da82b571` returned FAIL.  The lead independently verified every
+finding before recording this wave:
+
+- P1 — queue admission undercounts an executing batch in both
+  languages: the worker subtracts the whole batch from the
+  in-flight counter before executing its first member
+  (`v4/go/internal/cli/rpc/session.go` workerLoop,
+  `v4/rust/iprange-cli/src/rpc/session.rs` worker_loop), so a slow
+  first member leaves the remaining members queued but uncounted
+  and excess requests are admitted (reproducer: 10 pipelined
+  singles during a slow batch member all admitted instead of 1).
+- P1 — the kind-coverage gate still accepted forged evidence: six
+  mutation classes return PASS (per-case matrix label lies, report
+  command lies, crash binary paths absent from the report root
+  binaries table, no crash report at all with crash-only kinds
+  fabricated through matrices, zero-step producer credited with
+  artifact creation, fabricated consumer opens).
+- P1 — crash scenarios D/F do not implement the approved D1-A
+  markers and the substitution was not returned for a user
+  decision: D interrupts early main-file growth instead of
+  commit/finish, and its feed generator is broken (37,500 of
+  50,000 rows are duplicates, 12,172 rows carry invalid octets
+  such as `10.10.0.256`); F interrupts at the findings-output
+  temporary, which is created before validation starts, so the
+  kill can precede any validation work.
+- P2 — the oversized-frame proof never appends a trailing valid
+  request, so "trailing bytes are never parsed" is unproven.
+- P2 — Windows evidence gaps: abort/failure cleanup paths of the
+  removal-output collector are not exercised, binary hashes carry
+  no source-revision/toolchain/build-command provenance, and the
+  cross-language listing check inspects only the first row.
+
+**Decision (user, 2026-09-05): 1A — amend the crash interruption
+contract, with these conditions:**
+
+- Scenario D becomes "crash during uncommitted live-draft
+  construction", with a successful control run first: the repaired
+  feed runs through `direct.replace` without interruption in both
+  languages and the expected contents and counts are verified;
+  only then is interruption during draft construction tested.  The
+  exact SDK tests that separately cover commit/finish crash points
+  in both languages are recorded.
+- Scenario F proves interruption during validation/findings
+  delivery, not an exact internal walk point: the interrupted
+  findings output must be compared against a successful reference,
+  the interrupted output must be incomplete, and no destination
+  replacement may exist.  A non-empty temporary alone is not
+  sufficient (both products buffer 64 KiB and flush after
+  completion).
+- The validation-scratch expectation is removed: neither engine's
+  validation ever spills to authorized scratch (scratch budgets
+  are API-parity only in both validation engines).
+- Durability wording: file growth or visible temporary bytes are
+  observable process-crash markers; their existence alone does not
+  prove they were synced to storage.  All marker wording uses
+  "observable process-crash marker", never implied storage-sync
+  durability.
+- The remaining repairs proceed under the existing approved scope;
+  each gate repair gains a negative control proving the previously
+  accepted bad evidence now fails.
+- Closure pattern (record-then-review): after the repairs and the
+  regenerated evidence land in one commit, the five own-model
+  scope reviewers and the glm-5.3-responses whole-milestone review
+  run at that exact final revision; the resulting verdict is
+  reported outside the repository (no later record commit).
+
+This section is the decision record; the implementation and
+validation of this wave are recorded below as they land.
+
+### Sixth wave implementation (this wave)
+
+All verified defects were repaired; the user decision 1A (recorded
+above) governs the crash-scope wording:
+
+1. Queue accounting (both languages): the worker loops now release
+   one queue slot per batch member when that member starts
+   executing, instead of subtracting the whole batch on pickup, so
+   "one active request plus at most 16 queued" holds while an
+   executing batch still has unexecuted members (`session.go`
+   workerLoop, `session.rs` worker_loop).  Regression tests:
+   `TestActiveBatchMemberFreesOneSlotAtATime` (Go) and
+   `active_batch_member_frees_one_slot_at_a_time` (Rust) — a slow
+   first batch member plus 10 pipelined singles must admit exactly
+   1 and answer 9 with `-32002`; both tests fail against the
+   pre-fix wholesale decrement.
+2. Kind gate: `check_kind_coverage.py` now requires crash evidence
+   (crash-only kinds must come from crash scenarios), validates the
+   per-case `matrix` field, the report `command` `--matrix`
+   argument, crash binary root-table membership, rejects kind
+   credits to zero-step actors, and consumes per-kind actor
+   lineage (`created_by`/`opened_by`) from crash scenarios instead
+   of assuming every consumer opened every artifact.  Negative
+   controls for all six verified forgery classes were added to the
+   module self-test and verified end-to-end against doctored copies
+   of the genuine evidence (each exits 1).
+3. Crash scenarios D/F per decision 1A:
+   - The direct-CSV feed generator was repaired (four-octet
+     monotonic, non-overlapping ranges with distinct values; the
+     previous generator produced 37,500 duplicate rows and 12,172
+     invalid rows out of 50,000).
+   - D now first records a successful control run (repaired feed →
+     `direct.replace` uninterrupted in the producer language: range
+     count == 200,000, values spot-checked, transaction advanced),
+     then interrupts during uncommitted live-draft construction and
+     proves the committed generation still reflects the
+     pre-transition state.  Exact commit/finish crash points remain
+     covered by the SDK fault gates, recorded in the scenario: Go
+     `TestLiveWriterCommitCrashPointsSelectOnlyACompleteGeneration`
+     (v4/go/internal/live/lifecycle_crash_test.go:201),
+     `TestCrashCommitSelectsCompleteGeneration`
+     (v4/go/internal/writer/crash_v4work_test.go:199),
+     `TestLiveWriterOutcomeUnknownFailClosed`
+     (lifecycle_crash_test.go:365),
+     `TestLiveWriterCommitCancellationAbortsDraft`
+     (v4/go/internal/live/live_writer_test.go:401); Rust
+     `live_crash_tests::commit_crashes_select_only_a_complete_generation`
+     (v4/rust/iprange-livedb/src/live_crash_tests.rs:232, fault
+     points in writer_core/publication.rs:72-115, driven by
+     tests/mixed_live.rs:182).
+   - F now proves interruption during validation/findings delivery:
+     deterministic leaf-page damage (`F_DAMAGED_LEAF_PAGES = 1400`
+     in the harness) yields 1,402 findings / 125,057 bytes for both
+     engines on the final binaries; the interrupted run kills after
+     the findings temporary carries real flushed bytes and asserts
+     the temporary is a strict byte prefix of the reference
+     findings with no destination replacement.
+   - Marker wording across the harness now says "observable
+     process-crash marker" (file growth / visible temporary bytes
+     are observable states; existence alone is not claimed as proof
+     of storage sync).
+4. Oversized-frame proof: proof b now appends a valid
+   `system.describe` sentinel after the oversized frame in the same
+   stdin stream and asserts exactly one response (-32001, id null)
+   with the sentinel unanswered and zero further bytes — trailing
+   bytes are provably never parsed.
+5. Windows harness: `windows_housekeeping_harness.py` now exercises
+   both removal-collector abort/failure cleanup paths
+   (result-budget overflow and publish failure on an existing
+   destination), records build provenance (`--provenance` JSON:
+   revision, clean-tree status, build commands, toolchain) and
+   per-binary mtime/size, and validates the cross-language listing
+   over every row; report schema v2.
+6. Evidence regenerated at the final product sources (Linux): Rust
+   38/38, Go 38/38, mixed 14+24 x2, crash 16/16 both directions
+   with the negative control 0/16, resource 8/8 (proof b with the
+   sentinel), golden 53, sensitivity 14, kind gate PASS.
+
+### Sixth wave validation (this wave)
+
+- Go plain and `v4work` suites, both vet modes, gofmt: green;
+  the new queue-accounting regression test fails against the
+  pre-fix wholesale decrement and passes now (rpc suite, `-race`).
+- Rust `cargo test --workspace --all-features`: 50/50 suites green
+  (261 iprange-cli tests); the new session regression test verified
+  against the pre-fix behavior.
+- Kind gate: module self-test green (existing + six new negative
+  controls); the genuine evidence set passes; every forgery class
+  verified to exit 1 against doctored genuine-evidence copies.
+- Linux battery above regenerated from the staged binaries at the
+  final product sources: Go product `8015bc3f…` (changed by the
+  per-member queue fix), worker `16236608…` unchanged; Rust product
+  `389d01b9…` (changed by the per-member queue fix), worker
+  `cb9ad6cd…` unchanged; fixture `322e8e69…`.
+- Windows battery: pending on the authorized Windows validation
+  host at the same product-source revision (records below once the
+  host run completes).
+- Resource proof b manual verification: both binaries answer
+  exactly one -32001 line when the oversized frame is followed by
+  the sentinel; the sentinel never parses.
+- Sensitive-data gate: regenerated evidence contains no personal
+  paths and no host alias.
+
+

@@ -59,11 +59,36 @@ the refusal is proven on a real artifact directory).
 
 Reuses ``HarnessJsonRpcService`` from ``crash_harness.py`` (import
 side-effect free).  Report schema:
-``iprange-cli-windows-housekeeping-report-v1``.
+``iprange-cli-windows-housekeeping-report-v2``.
+
+Sixth-wave (SOW-0028) additions to this script:
+
+- Two deterministic abort/failure exercises prove the removal-output
+  collector's terminal cleanup paths over the normal JSON-RPC product
+  interface: a refresh abort (``result_budget.max_rows: "1"`` makes
+  the collector refuse row 2, the workflow answers
+  ``output_limit``/``not_started``, and the private ``.removals.tmp``
+  must be discarded with no removal destination created) and a
+  publish failure (the removal destination pre-exists under
+  ``publication_policy: fail_if_exists``, the committed refresh
+  answers an error recording ``removals_publication_failure``, and
+  the private temporary must be discarded without touching the
+  destination).  No wall-clock assertions are used anywhere.
+- ``--provenance PATH`` accepts a JSON file (``{"revision",
+  "tree_clean", "build_commands", "toolchain": {"go", "rustc",
+  "date"}}``) recorded verbatim as ``report.build_provenance``;
+  every binary record additionally carries mtime and size next to
+  its SHA-256.
+- The cross-language listing check validates every cross-listed row:
+  each row's ``directory_identity`` must equal the local
+  ``windows_directory_identity``, the cross entries count must equal
+  the local listing's entries, and both products' listings are
+  validated by ``check_synthesized_pair_rows``.
 """
 
 import argparse
 import base64
+import datetime
 import hashlib
 import json
 import os
@@ -109,6 +134,73 @@ def sha256_file(path):
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def file_evidence(path):
+    """Auditable identity of one binary file.
+
+    The absolute path, SHA-256, UTC ISO-8601 mtime, and byte size are
+    recorded together so every hash in the report sits next to the
+    exact file observed (SOW-0028 build provenance).
+    """
+
+    stat = os.stat(path)
+    return {
+        "path": path,
+        "sha256": sha256_file(path),
+        "mtime": datetime.datetime.fromtimestamp(
+            stat.st_mtime, datetime.timezone.utc).isoformat(),
+        "size": stat.st_size,
+    }
+
+
+def removals_tmp_residue(directory):
+    """Private ``.removals.tmp`` basenames present in one directory."""
+
+    if not os.path.isdir(directory):
+        return []
+    return sorted(name for name in os.listdir(directory)
+                  if name.endswith(".removals.tmp"))
+
+
+def load_provenance(path):
+    """Load and validate one ``--provenance`` JSON file.
+
+    Required shape: ``{"revision": str, "tree_clean": bool,
+    "build_commands": [str], "toolchain": {"go": str, "rustc": str,
+    "date": str}}``.  The object is recorded verbatim in the report
+    as ``build_provenance``; extra members are preserved.  A missing
+    or invalid file is a caller error.
+    """
+
+    try:
+        with open(path, "r", encoding="utf-8") as stream:
+            value = json.load(stream)
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"--provenance {path} is not readable JSON: {exc}")
+    if not isinstance(value, dict):
+        raise SystemExit("--provenance must name a JSON object")
+    problems = []
+    if not isinstance(value.get("revision"), str) or not value.get("revision"):
+        problems.append("revision must be a non-empty string")
+    if not isinstance(value.get("tree_clean"), bool):
+        problems.append("tree_clean must be a boolean")
+    commands = value.get("build_commands")
+    if not isinstance(commands, list) or not all(
+            isinstance(item, str) for item in commands):
+        problems.append("build_commands must be a list of strings")
+    toolchain = value.get("toolchain")
+    if not isinstance(toolchain, dict):
+        problems.append("toolchain must be an object")
+    else:
+        for member in ("go", "rustc", "date"):
+            if not isinstance(toolchain.get(member), str) or \
+                    not toolchain.get(member):
+                problems.append(
+                    f"toolchain.{member} must be a non-empty string")
+    if problems:
+        raise SystemExit("--provenance is invalid: " + "; ".join(problems))
+    return value
 
 
 def envelope_basenames(directory):
@@ -260,33 +352,19 @@ def decoded_basename(row):
     return raw.decode("utf-8", "replace")
 
 
-def run_refresh_envelope_flow(service, live_dir, label):
-    """Drive each product through the native envelope-creating flow.
+def refresh_flow_steps(live_dir, removals_output=None):
+    """One native first-seen refresh step list.
 
-    Steps (every request and response is recorded verbatim for the
-    evidence trail):
-
-    1. ``database.create`` -- the target live database;
-    2. ``direct.replace`` -- populate it with TARGET_CSV_ROWS records;
-    3. ``reader.open`` (mode live) -- pins the current main file so
-       the next commit's Windows retirement cannot rename it away;
-    4. ``current.publish`` -- the immutable coverage source (feed
-       "alpha") covering COVERAGE_TEXT_ROWS ranges;
-    5. ``retention.first_seen.refresh`` with a ``removals_output`` --
-       commits a new live generation; on Windows the retirement of
-       the pinned previous main goes through the GC machinery and
-       leaves a real 8192-byte envelope beside the database.
-
-    The reader is intentionally left open; the caller closes it only
-    after listing.  Returns a dict with ``steps`` (request id,
-    method, params, response), ``reader`` (the open reader handle or
-    None), ``step_error`` (the method whose RPC answer was an error,
-    or None), ``envelopes`` (basenames found), and ``files`` (the
-    directory listing).
+    Shared by the success exercise and the deterministic abort
+    exercises.  Creates ``live_dir``, writes the marker, the target
+    CSV feed, and the coverage source feed, and returns the five
+    steps: ``database.create``, ``direct.replace``, ``reader.open``
+    (pinning the current main), ``current.publish`` (feed "alpha"),
+    and ``retention.first_seen.refresh`` with a ``removals_output``.
+    ``removals_output`` overrides the default removals_output member
+    of the refresh step (None selects the success-flow default).
     """
 
-    flow = {"steps": [], "reader": None, "step_error": None,
-            "envelopes": [], "files": []}
     os.makedirs(live_dir, exist_ok=True)
     with open(os.path.join(live_dir, MARKER_NAME), "w",
               encoding="utf-8", newline="") as stream:
@@ -299,7 +377,15 @@ def run_refresh_envelope_flow(service, live_dir, label):
     write_direct_csv_feed(csv_path, TARGET_CSV_ROWS)
     write_overlap_text_feed(cov_feed, COVERAGE_TEXT_ROWS)
 
-    steps = [
+    if removals_output is None:
+        removals_output = {
+            "path": os.path.join(live_dir, "removals.jsonl"),
+            "publication_policy": "fail_if_exists",
+            "result_budget": {"max_rows": "4096",
+                              "max_output_bytes": "1048576",
+                              "max_open_files": 3}}
+
+    return [
         ("create", "iprange.v1.database.create", {
             "path": db_path, "family": "ipv4", "value_kind": "direct",
             "structure_kind": "none", "value_tag": {"text": "first_seen"},
@@ -329,18 +415,40 @@ def run_refresh_envelope_flow(service, live_dir, label):
             "current": {"source": {"path": cov_path, "mode": "immutable"},
                         "feed": "alpha"},
             "refresh_value": REFRESH_VALUE,
-            "removals_output": {"path": os.path.join(live_dir,
-                                                     "removals.jsonl"),
-                                "publication_policy": "fail_if_exists",
-                                "result_budget": {"max_rows": "4096",
-                                                  "max_output_bytes":
-                                                  "1048576",
-                                                  "max_open_files": 3}},
+            "removals_output": removals_output,
             "metadata": {"mode": "keep"},
             "writer_budget": WRITER_BUDGET}),
     ]
 
-    for rid, method, params in steps:
+
+def run_refresh_envelope_flow(service, live_dir, label):
+    """Drive each product through the native envelope-creating flow.
+
+    Steps (every request and response is recorded verbatim for the
+    evidence trail):
+
+    1. ``database.create`` -- the target live database;
+    2. ``direct.replace`` -- populate it with TARGET_CSV_ROWS records;
+    3. ``reader.open`` (mode live) -- pins the current main file so
+       the next commit's Windows retirement cannot rename it away;
+    4. ``current.publish`` -- the immutable coverage source (feed
+       "alpha") covering COVERAGE_TEXT_ROWS ranges;
+    5. ``retention.first_seen.refresh`` with a ``removals_output`` --
+       commits a new live generation; on Windows the retirement of
+       the pinned previous main goes through the GC machinery and
+       leaves a real 8192-byte envelope beside the database.
+
+    The reader is intentionally left open; the caller closes it only
+    after listing.  Returns a dict with ``steps`` (request id,
+    method, params, response), ``reader`` (the open reader handle or
+    None), ``step_error`` (the method whose RPC answer was an error,
+    or None), ``envelopes`` (basenames found), and ``files`` (the
+    directory listing).
+    """
+
+    flow = {"steps": [], "reader": None, "step_error": None,
+            "envelopes": [], "files": []}
+    for rid, method, params in refresh_flow_steps(live_dir):
         response = service.call(rid, method, params)
         flow["steps"].append({"request_id": rid, "method": method,
                               "params": params, "response": response})
@@ -493,8 +601,7 @@ def complete_native_refresh_exercise(service, live_dir, flow):
             failures.append(
                 "first_seen.refresh removal rows do not carry the "
                 f"refresh value {REFRESH_VALUE}")
-        residue = [name for name in sorted(os.listdir(live_dir))
-                   if name.endswith(".removals.tmp")]
+        residue = removals_tmp_residue(live_dir)
         refresh_facts["tmp_residue"] = residue
         if residue:
             failures.append(
@@ -512,6 +619,155 @@ def complete_native_refresh_exercise(service, live_dir, flow):
     refresh_facts["envelopes_after_close"] = envelope_basenames(live_dir)
     refresh_facts["files"] = sorted(os.listdir(live_dir))
     return refresh_facts, failures
+
+
+def run_refresh_abort_exercises(service, work_dir, label):
+    """Deterministic abort/failure cleanup proofs for the removals
+    collector (sixth-wave P2).
+
+    ``complete_native_refresh_exercise`` proves the successful
+    publication terminal path only.  These two independent
+    fresh-directory flows prove the two remaining terminal paths over
+    the normal JSON-RPC product interface; both are deterministic
+    (pure data and policy, no wall-clock observation):
+
+    1. ``refresh_abort`` -- the removals_output budget is
+       ``max_rows: "1"`` while the refresh must remove
+       ``TARGET_CSV_ROWS - COVERAGE_TEXT_ROWS`` records: the
+       collector refuses row 2 inside the finish step, the workflow
+       aborts with ``output_limit``/``not_started``, and the
+       collector must discard the private ``.removals.tmp`` it
+       already created.  Asserted: the refresh step answers exactly
+       that error, no ``*.removals.tmp`` survives, no removal
+       destination was created, and the pinning reader closes
+       cleanly.
+
+    2. ``publish_failure`` -- the removal destination pre-exists with
+       marker content under ``publication_policy: fail_if_exists``:
+       the refresh commits and publication fails on the existing
+       destination (hard-link refusal), and the collector must
+       discard the private temporary without touching the
+       destination.  Asserted: the refresh step answers an error with
+       outcome ``committed`` whose details record
+       ``removals_publication_failure``, no ``*.removals.tmp``
+       survives, and the destination still holds exactly the
+       pre-existing marker content (not replaced, not removed).
+
+    Returns ``(facts, failures)``.
+    """
+
+    facts = {}
+    failures = []
+    exercises = (
+        ("refresh_abort", "abort-budget", "1", False),
+        ("publish_failure", "abort-publish", "4096", True),
+    )
+    for name, directory_label, max_rows, precreate in exercises:
+        directory = os.path.join(work_dir, f"{directory_label}-{label}")
+        shutil.rmtree(directory, ignore_errors=True)
+        destination = os.path.join(directory, "removals.jsonl")
+        if precreate:
+            os.makedirs(directory, exist_ok=True)
+            with open(destination, "w", encoding="utf-8",
+                      newline="") as stream:
+                stream.write(MARKER_TEXT)
+        removals_output = {
+            "path": destination,
+            "publication_policy": "fail_if_exists",
+            "result_budget": {"max_rows": max_rows,
+                              "max_output_bytes": "1048576",
+                              "max_open_files": 3}}
+        flow = {"steps": [], "reader": None, "step_error": None,
+                "envelopes": [], "files": []}
+        for rid, method, params in refresh_flow_steps(
+                directory, removals_output):
+            response = service.call(rid, method, params)
+            flow["steps"].append({"request_id": rid, "method": method,
+                                  "params": params,
+                                  "response": response})
+            if "error" in response:
+                flow["step_error"] = method
+                break
+            if method == "iprange.v1.reader.open":
+                flow["reader"] = response["result"]["reader"]
+        flow["envelopes"] = envelope_basenames(directory)
+        flow["files"] = sorted(os.listdir(directory))
+        exercise = {"directory": directory, "flow": flow}
+
+        refresh = "iprange.v1.retention.first_seen.refresh"
+        if flow["step_error"] is None:
+            failures.append(
+                f"{name}: expected the refresh step to answer an "
+                "error, but the whole flow succeeded")
+        elif flow["step_error"] != refresh:
+            failures.append(
+                f"{name}: the flow stopped at {flow['step_error']} "
+                "before the refresh step; params and responses are "
+                "recorded in the flow steps")
+        else:
+            response = flow["steps"][-1]["response"]
+            error_data = (response.get("error") or {}).get("data") or {}
+            exercise["error"] = {
+                "code": error_data.get("code"),
+                "outcome": error_data.get("outcome"),
+                "message": error_data.get("message"),
+                "details": error_data.get("details"),
+            }
+            if name == "refresh_abort":
+                if error_data.get("code") != "output_limit" or \
+                        error_data.get("outcome") != "not_started":
+                    failures.append(
+                        f"{name}: expected an output_limit/not_started "
+                        f"abort, got code {error_data.get('code')!r} "
+                        f"outcome {error_data.get('outcome')!r}")
+            else:
+                details = error_data.get("details") or {}
+                if error_data.get("outcome") != "committed":
+                    failures.append(
+                        f"{name}: the publish failure must report the "
+                        f"commit outcome 'committed', got "
+                        f"{error_data.get('outcome')!r}")
+                if "removals_publication_failure" not in details:
+                    failures.append(
+                        f"{name}: the publish failure must record "
+                        "removals_publication_failure in the error "
+                        "details")
+        residue = removals_tmp_residue(directory)
+        exercise["tmp_residue"] = residue
+        if residue:
+            failures.append(
+                f"{name}: the removal collector left a private "
+                f"temporary behind: {residue}")
+        if name == "refresh_abort":
+            destination_exists = os.path.exists(destination)
+            exercise["destination_exists"] = destination_exists
+            if destination_exists:
+                failures.append(
+                    f"{name}: a removal destination was created "
+                    f"despite the abort: {destination}")
+        else:
+            destination_content = None
+            if os.path.isfile(destination):
+                with open(destination, "r", encoding="utf-8") as stream:
+                    destination_content = stream.read()
+            exercise["destination_content"] = destination_content
+            if destination_content != MARKER_TEXT:
+                failures.append(
+                    f"{name}: the pre-existing removal destination "
+                    "must survive untouched (exact marker content "
+                    "expected)")
+        if flow.get("reader") is not None:
+            close_response = service.call(
+                "close", "iprange.v1.reader.close",
+                {"reader": flow["reader"]})
+            exercise["reader_close"] = close_response
+            if "error" in close_response:
+                failures.append(
+                    f"{name}: reader.close failed after the aborted "
+                    f"refresh: {json.dumps(close_response['error'])[:300]}")
+        exercise["files"] = sorted(os.listdir(directory))
+        facts[name] = exercise
+    return facts, failures
 
 
 def check_housekeeping_rows(rows, directory):
@@ -601,10 +857,13 @@ def main():
     parser = argparse.ArgumentParser(
         description="Windows-host qualification of the iprange v1 "
                     "windows_housekeeping maintenance kind: a native "
-                    "retention.first_seen.refresh exercise plus a "
+                    "retention.first_seen.refresh exercise, two "
+                    "deterministic abort/failure cleanup proofs for "
+                    "the removal-output collector, and a "
                     "deterministic format-valid GC pair proof; the "
                     "same script records the truthful negative on "
-                    "other platforms.")
+                    "other platforms.  --provenance attaches the "
+                    "exact source revision/toolchain to the report.")
     parser.add_argument("--binaries", metavar="rust=PATH go=PATH",
                         nargs="+", required=True,
                         help="absolute iprange --jsonrpc executables, as "
@@ -614,6 +873,16 @@ def main():
                              "that receives empty/ and live-<label>/")
     parser.add_argument("--json-report", metavar="PATH",
                         help="write the JSON report to this file")
+    parser.add_argument("--provenance", metavar="PATH",
+                        help="JSON file recording the exact source "
+                             "revision, clean-tree status, build "
+                             "commands, and toolchain that produced "
+                             "the --binaries (schema "
+                             '{"revision": str, "tree_clean": bool, '
+                             '"build_commands": [str], "toolchain": '
+                             '{"go": str, "rustc": str, "date": str}}); '
+                             "recorded verbatim in the report as "
+                             "build_provenance")
     args = parser.parse_args()
 
     if not os.path.isdir(args.work_dir) or not os.path.isabs(args.work_dir):
@@ -629,7 +898,7 @@ def main():
     os.makedirs(empty_dir, exist_ok=True)
 
     report = {
-        "schema": "iprange-cli-windows-housekeeping-report-v1",
+        "schema": "iprange-cli-windows-housekeeping-report-v2",
         "command": sys.argv,
         "platform": {
             "system": platform.system(),
@@ -638,7 +907,7 @@ def main():
             "python": platform.python_version(),
         },
         "binaries": {
-            label: {"path": path, "sha256": sha256_file(path)}
+            label: file_evidence(path)
             for label, path in binaries.items()},
         "work_dir": args.work_dir,
         "windows_qualified": on_windows,
@@ -655,6 +924,8 @@ def main():
         "outcomes": [],
         "failed": 0,
     }
+    if args.provenance:
+        report["build_provenance"] = load_provenance(args.provenance)
 
     services = {
         label: HarnessJsonRpcService([binary, "--jsonrpc"], label,
@@ -675,12 +946,12 @@ def main():
             # must claim the expected implementation.
             try:
                 implementation, describe = describe_identity(service)
-                outcome["identity"] = {
-                    "path": binary,
-                    "sha256": sha256_file(binary),
+                outcome_identity = file_evidence(binary)
+                outcome_identity.update({
                     "implementation": implementation,
                     "describe_result": describe,
-                }
+                })
+                outcome["identity"] = outcome_identity
                 if implementation != label:
                     failures.append(
                         f"system.describe claims implementation "
@@ -708,6 +979,15 @@ def main():
             shutil.rmtree(live_dir, ignore_errors=True)
             flow = run_refresh_envelope_flow(service, live_dir, label)
             outcome["flow"] = flow
+
+            # Deterministic abort/failure cleanup proofs for the
+            # removal-output collector (both platforms: the collector
+            # logic is the same product code; the Windows host adds
+            # the open-handle nuance the fix addresses).
+            abort_facts, abort_failures = run_refresh_abort_exercises(
+                service, args.work_dir, label)
+            outcome["refresh_abort"] = abort_facts
+            failures.extend(abort_failures)
 
             if report_mode == "linux-negative":
                 # Negative control over the real flow directory and
@@ -835,20 +1115,47 @@ def main():
                             f"{cross_error!r}")
                     else:
                         cross["entries"] = kind_entries(cross_reports)
+                        cross["rows"] = cross_rows
+                        # Both products' listings must validate: the
+                        # cross product scans the same synthesized
+                        # pair, so the same pair-row checks apply to
+                        # its rows.
+                        cross_failures = check_synthesized_pair_rows(
+                            cross_rows, gc_dir)
+                        cross["rows_valid"] = not cross_failures
+                        local_identity = outcome.get(
+                            "windows_directory_identity")
+                        cross["identity_matches"] = [
+                            row.get("directory_identity") == local_identity
+                            for row in cross_rows]
                         cross["directory_identity"] = (
                             cross_rows[0].get("directory_identity")
                             if cross_rows else None)
+                        local_entries = (
+                            outcome.get("windows_listing") or {}
+                        ).get("entries")
+                        cross["entries_match"] = (
+                            cross["entries"] == local_entries)
                         cross["matched"] = (
-                            cross["directory_identity"]
-                            == outcome.get(
-                                "windows_directory_identity"))
+                            bool(cross_rows)
+                            and all(cross["identity_matches"]))
+                        for finding in cross_failures:
+                            failures.append(
+                                f"cross-listing by {other} failed "
+                                f"validation: {finding}")
+                        if not cross["entries_match"]:
+                            failures.append(
+                                f"cross-listing entries "
+                                f"{cross['entries']!r} must equal the "
+                                f"local listing entries {local_entries!r}")
                         if not cross["matched"]:
                             failures.append(
                                 f"directory_identity mismatch between "
-                                f"{label} and {other}: {label} recorded "
-                                f"{outcome.get('windows_directory_identity')!r}, "
-                                f"{other} recorded "
-                                f"{cross['directory_identity']!r}")
+                                f"{label} and {other}: every cross row "
+                                f"must carry the identity "
+                                f"{local_identity!r}, got "
+                                f"{cross['identity_matches']!r} over "
+                                f"{len(cross_rows)} rows")
                     outcome["cross_listing"] = cross
                     if os.path.exists(cross_out):
                         os.remove(cross_out)

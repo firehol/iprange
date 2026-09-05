@@ -38,29 +38,41 @@ scenario):
   ``maintenance.list`` reports exactly the on-disk abandoned scratch,
   ``maintenance.remove`` returns the directory to empty, and the
   never-published destination still truthfully refuses.
-- Scenario D -- ``direct.replace`` on a live database killed at the
-  durable draft-growth marker (the last deterministic
-  pre-publication boundary at the product interface; the plan's
-  durable sidecar marker is impossible -- neither engine writes the
-  ``.readers`` sidecar during a live commit, see scenario D): the
-  interrupted commit never becomes the generation (``database.info``
-  live keeps T0/R0, an immutable open truthfully refuses, zero
-  maintenance residue, a consumer live reader sees T0) and a fresh
-  producer commits T0+1 with one record.
+- Scenario D -- ``direct.replace`` on a live database killed during
+  uncommitted live-draft construction (a successful control run fixes
+  the post-transition facts first: transaction advanced,
+  ``range_record_count == line count``, and a live-reader lookup
+  spot-check; the observable process-crash marker is main-file growth
+  while the draft is being built, explicitly not a storage-sync
+  durability claim; the plan's durable sidecar marker is impossible
+  -- neither engine writes the ``.readers`` sidecar during a live
+  commit, and exact commit/finish interruption is owned by the SDK
+  fault gates, see scenario D): the interrupted draft never becomes
+  the generation (``database.info`` live keeps the pre-transition
+  T0/R0 and content probe, the control run's post-transition facts
+  are absent, an immutable open truthfully refuses, zero maintenance
+  residue, a consumer live reader sees the pre-transition
+  generation) and a fresh producer commits T0+1 with one record.
 - Scenario E -- ``export`` killed at the partial-output marker (real
   flushed output: the private temp stays 0 bytes until the 64 KiB
   export buffer flushes, and the kill waits for size > 0): the
   destination is absent, the ``<id>.export.tmp`` orphan is the
   bounded residue (never a managed maintenance kind), the source is
   byte-identical, and a retry lands byte-identical to the reference.
-- Scenario F -- ``validate`` killed at the findings-output temp
-  marker (existence, not flushed bytes: the small findings JSONL
-  sits in the buffered writer; the plan's worker-scratch marker is
-  impossible -- neither engine's validate ever spills to authorized
-  scratch, see scenario F): the findings destination is absent, one
-  ``<id>.export.tmp`` orphan remains, the damaged main is
-  byte-identical, a fresh validate reports the same findings and the
-  committed generation still opens.
+- Scenario F -- ``validate`` killed at the findings-output flush
+  marker during validation/findings delivery (a 1 500 000-range main
+  is damaged by zeroing its last 1 400 derived range-tree leaf
+  pages: >= 1000 findings, reference bytes strictly between one and
+  two 64 KiB writer blocks, so the findings temp becomes non-empty
+  exactly once mid-walk and the interrupted output is a strict
+  prefix of the reference; temp existence alone is insufficient --
+  both products buffer 64 KiB and flush after completion; the plan's
+  worker-scratch marker is impossible -- neither engine's validate
+  ever spills to authorized scratch, see scenario F): the findings
+  destination is absent, one ``<id>.export.tmp`` orphan with
+  strictly fewer bytes than the reference remains, the damaged main
+  is byte-identical, a fresh validate reports the same findings and
+  the committed generation still opens.
 
 Every scenario runs in both directions (producer Rust with consumer Go,
 producer Go with consumer Rust).  The report (schema
@@ -114,11 +126,14 @@ FEED_LINE_COUNT = 1_500_000
 PRIOR_FEED_LINE_COUNT = 200_000
 
 # Per-scenario feed sizes: A/B/C reuse FEED_LINE_COUNT; the live-replace
-# crash (D) uses a 200 000-row direct CSV and the export/validate
-# crashes (E/F) use a 500 000-range text feed, each calibrated so the
-# durable marker window is wide enough on both product binaries.
+# crash (D) uses a 200 000-row direct CSV, the export crash (E) uses a
+# 500 000-range text feed, and the validate crash (F) rebuilds the
+# 1 500 000-range main so its range tree holds enough leaves for the
+# deterministic damage (>= 1000 findings); each is calibrated so the
+# observable marker window is wide enough on both product binaries.
 EXPORT_FEED_LINE_COUNT = 500_000
 DIRECT_FEED_LINE_COUNT = 200_000
+F_DAMAGED_LEAF_PAGES = 1400
 EXPORT_TEMP_SUFFIX = ".export.tmp"
 
 # Every product process this harness spawns is recorded here so the
@@ -189,7 +204,7 @@ class KillableJsonRpcService(run.JsonRpcService):
     the spawned process tree (never pkill/killall).  On POSIX the
     whole session receives SIGKILL; on Windows the spawned tree is
     terminated with a targeted ``taskkill /F /T`` so the windows
-    housekeeping harness can interrupt a publish at the durable
+    housekeeping harness can interrupt a publish at the observable
     reservation marker.  Every response and the close path behave
     exactly like the normal client.
     """
@@ -245,11 +260,11 @@ class ScenarioFailure(AssertionError):
 
 
 def call_with_worker(service, request_id, method, params, deadline, seen):
-    """Issue one request and observe durable markers while it runs.
+    """Issue one request and observe process-crash markers while it runs.
 
     ``service.call`` runs in a worker thread (the killed producer never
     answers).  ``seen`` is a poll callback with no arguments that
-    returns True once the durable marker of the operation appears.
+    returns True once the observable marker of the operation appears.
     Returns ``(outcome, seen_ms, thread)`` where ``outcome`` is the
     worker result dict or an error string, and ``seen_ms`` is the
     elapsed milliseconds when ``seen`` first reported True (or None).
@@ -350,10 +365,17 @@ def publish_params(feed, dest, policy):
 def write_direct_csv_feed(path, line_count):
     """Write a deterministic direct-CSV feed (from,to,value header).
 
-    Ranges start at 10.0.0.0 with 64-address spacing and value 1;
-    ranges never overlap, so the normalized record count equals the
-    line count (the exact generator verified for crash scenario D on
-    both product binaries).
+    Ranges start at 10.0.0.0 with 64-address spacing.  ``from`` is the
+    four octets of ``lo = base + index * 64`` and ``to`` is the four
+    octets of ``lo + 63``: natural carry, monotonic, non-overlapping,
+    never invalid, so the CSV never carries duplicate rows or octets
+    above 255 (the generator property verified for scenario D up to
+    ``DIRECT_FEED_LINE_COUNT``).  The per-line value is ``index + 1``:
+    adjacent same-value ranges would be coalesced by both engines
+    (binary-format-v4.md section 6.1), collapsing the whole feed into
+    one record, so distinct values keep ``range_record_count ==
+    line_count`` after a completed replace (the scenario D control
+    run asserts exactly that).
     """
 
     with open(path, "w", encoding="utf-8", newline="") as stream:
@@ -362,9 +384,11 @@ def write_direct_csv_feed(path, line_count):
         for index in range(line_count):
             lo = base + index * 64
             stream.write(
-                f"10.{(lo >> 24) & 255}.{(lo >> 16) & 255}.{(lo >> 8) & 255},"
-                f"10.{(lo >> 24) & 255}.{(lo >> 16) & 255}."
-                f"{((lo >> 8) & 255) + 63},1\n")
+                f"{(lo >> 24) & 255}.{(lo >> 16) & 255}.{(lo >> 8) & 255}."
+                f"{lo & 255},"
+                f"{((lo + 63) >> 24) & 255}.{((lo + 63) >> 16) & 255}."
+                f"{((lo + 63) >> 8) & 255}.{(lo + 63) & 255},"
+                f"{index + 1}\n")
 
 
 def direct_replace_params(path, feed):
@@ -396,7 +420,13 @@ def export_params(source, dest):
 
 
 def validate_params(path, findings_out):
-    """iprange.v1.validate params with one jsonl findings output."""
+    """iprange.v1.validate params with one jsonl findings output.
+
+    The findings result budget is sized for scenario F's deterministic
+    leaf damage (>= 1000 findings, reference bytes strictly between
+    one and two 64 KiB export-writer blocks); scenario F is the only
+    caller.
+    """
 
     return {
         "path": path, "mode": {"kind": "immutable_current"},
@@ -407,8 +437,8 @@ def validate_params(path, findings_out):
         "findings_output": {"format": "jsonl", "path": findings_out,
                             "publication_policy": "fail_if_exists",
                             "result_budget": {"max_open_files": 3,
-                                              "max_output_bytes": "65536",
-                                              "max_rows": "64"}},
+                                              "max_output_bytes": "33554432",
+                                              "max_rows": "200000"}},
     }
 
 
@@ -731,7 +761,7 @@ def scenario_a1(direction, producer, consumer, work_dir, scenario_report):
             seen=lambda: reservation_seen(work, RESERVATION_MAGIC))
         if seen_ms is None:
             raise ScenarioFailure(
-                "durable reservation marker was not observed; "
+                "reservation marker was not observed; "
                 f"worker outcome={outcome}")
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
@@ -823,7 +853,7 @@ def scenario_a2(direction, producer, consumer, work_dir, scenario_report):
             seen=lambda: reservation_seen(work, RESERVATION_MAGIC))
         if seen_ms is None:
             raise ScenarioFailure(
-                "durable reservation marker was not observed; "
+                "reservation marker was not observed; "
                 f"worker outcome={outcome}")
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
@@ -899,7 +929,7 @@ def scratch_header_authentic(path):
     128-byte ownership header is complete only when its CRC-32C field (last 4 bytes, computed over
     the whole header with the field zeroed) validates.  An
     unauthenticated partial header can never be removed by the engine
-    API, so the crash marker must wait for the durable complete
+    API, so the crash marker must wait for the complete authenticated
     header: a kill before it would leave a lookalike that truthfully
     refuses removal.
     """
@@ -920,11 +950,11 @@ def scratch_header_authentic(path):
 
 
 def scratch_attempt_seen(scratch_dir):
-    """Poll callback: True when an authorized scratch file is durable.
+    """Poll callback: True for an authorized scratch file with a complete header.
 
     The file must carry its complete authenticated ownership header:
     a partial header would leave an unremovable lookalike after the
-    kill, which is not the durable-marker contract being tested.
+    kill, which is not the marker contract being tested.
     """
 
     if not os.path.isdir(scratch_dir):
@@ -957,9 +987,9 @@ def recover_scratch_params(source, dest, scratch_dir, candidate):
     """recover params with authorized scratch enabled.
 
     The heap value is calibrated so the recovery page tables spill to
-    authorized scratch (durable within the operation) while the fixed
+    authorized scratch (visible within the operation) while the fixed
     structures still fit.  The scenario fails if either product does
-    not reach the durable scratch marker at this heap.
+    not reach the observable scratch marker at this heap.
     """
 
     return {
@@ -1038,7 +1068,7 @@ def scenario_a3(direction, producer, consumer, work_dir, fixture_tool,
             seen=lambda: reservation_seen(work, RESERVATION_MAGIC))
         if seen_ms is None:
             raise ScenarioFailure(
-                "durable reservation marker was not observed; "
+                "reservation marker was not observed; "
                 f"worker outcome={outcome}")
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
@@ -1266,7 +1296,7 @@ def scenario_c(direction, producer, consumer, work_dir, scenario_report):
     recovery graph-safety scratch.  A recovery of a damaged large
     database with a constrained heap spills its page tables to
     authorized ``.iprange-scratch-<attempt>-<ordinal>.tmp`` files;
-    the harness kills the producer while that durable marker is live.
+    the harness kills the producer while that observable marker is live.
     A fresh producer lists the abandoned scratch through
     ``maintenance.list`` (where the attempt ID is the authority),
     removes it, and the consumer still truthfully refuses to open the
@@ -1436,23 +1466,41 @@ def scenario_c(direction, producer, consumer, work_dir, scenario_report):
 
 def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                scenario_report):
-    """Crash direct.replace (commit/finish) at the durable draft-growth marker.
+    """Crash direct.replace during uncommitted live-draft construction.
 
     Scenario B interrupts the immutable-to-live transition; this
-    scenario interrupts the commit of a full replacement on a live
-    database.  ``database.initialize_live`` completes on the
-    ``direct-v4`` fixture, then one ``direct.replace`` of a
-    200 000-range CSV is killed as soon as the main file grows past
-    its pre-replace size: the durable draft-growth marker, the last
-    deterministic pre-publication boundary at the product interface.
-    Commit/finish publishes the alternate meta page (the generation
-    flip) by extending the main mapping with draft pages and syncing
-    them, so durable main growth is the final externally observable
-    state before the publication; the growth bytes are never a
-    completed generation.
+    scenario interrupts the construction of an uncommitted direct
+    replacement draft on a live database, with a successful control
+    run first.  ``database.initialize_live`` completes on two fresh
+    ``direct-v4`` fixtures (one control database, one interrupted
+    database); the control run replaces the repaired 200 000-range
+    CSV without interruption and fixes the post-transition facts (the
+    transaction advanced by one, ``range_record_count`` equals the
+    line count, and a deterministic content spot-check through the
+    live reader's lookup).  The interrupted run launches the same
+    replace and the producer is killed as soon as the main file grows
+    past its pre-replace size while the uncommitted draft is being
+    built: the observable process-crash marker during uncommitted
+    live-draft construction.  This is explicitly not a storage-sync
+    durability claim -- draft growth is an observable process-crash
+    marker, never proof that storage synchronized.
 
-    The plan-recorded durable sidecar marker (SOW-0028:3851,
-    "commit/finish at a durable sidecar marker") is impossible at
+    After recovery the committed database must reflect the
+    PRE-transition state (the uncommitted draft never became the
+    committed generation): pre-transition facts (``database.info``
+    T0/R0 plus a content probe of the fixture ranges through the live
+    reader's lookup) are captured before the interrupted replace and
+    asserted after recovery, and the post-transition facts measured
+    by the control run are asserted absent.  An immutable
+    ``database.info`` truthfully refuses
+    (``wrong_state``/``read_only_failure``), no managed maintenance
+    residue exists, a consumer live reader observes the
+    pre-transition generation, and a fresh producer commits a
+    one-record replacement (T0+1), proving the live dataset still
+    resolves.
+
+    The approved durable sidecar marker (SOW-0028:3851, "commit/finish
+    at a durable sidecar marker") remains recorded as impossible at
     this boundary: a live commit never writes the ``.readers``
     sidecar.  Go: ``LiveWriter.finishCommitLocked``
     (v4/go/internal/live/live_writer.go:471) calls ``commitLocked``
@@ -1467,43 +1515,139 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
     ``sidecar.scan_at_most_cancellable``, read-only) before
     ``core.publish``.  Sidecar writes exist only in
     lifecycle_create/initialize_live, which scenario B already
-    covers.  The interrupted commit must never become the generation:
-    ``database.info`` live still reports the committed T0/R0, an
-    immutable ``database.info`` truthfully refuses
-    (``wrong_state``/``read_only_failure``), no managed maintenance
-    residue exists (commit/finish leaves no private maintenance
-    artifacts), and a consumer live reader observes T0.  A fresh
-    producer then commits a one-record replacement (T0+1), proving
-    the live dataset still resolves.
+    covers.  Exact commit/finish interruption is owned by the SDK
+    fault gates, not this harness: Go
+    ``TestLiveWriterCommitCrashPointsSelectOnlyACompleteGeneration``
+    (v4/go/internal/live/lifecycle_crash_test.go:201; points
+    commit.before_private_sync / commit.after_private_sync /
+    commit.after_meta_write / commit.after_meta_sync),
+    ``TestCrashCommitSelectsCompleteGeneration``
+    (v4/go/internal/writer/crash_v4work_test.go:199),
+    ``TestLiveWriterOutcomeUnknownFailClosed``
+    (v4/go/internal/live/lifecycle_crash_test.go:365), and
+    ``TestLiveWriterCommitCancellationAbortsDraft``
+    (v4/go/internal/live/live_writer_test.go:401); Rust
+    ``live_crash_tests::commit_crashes_select_only_a_complete_generation``
+    (v4/rust/iprange-livedb/src/live_crash_tests.rs:232; fault points
+    ``commit.before_private_sync``/``after_private_sync``/
+    ``after_meta_write``/``after_meta_sync`` in
+    v4/rust/iprange-livedb/src/writer_core/publication.rs:72-115),
+    driven through ``live_crash_tests::crash_child`` and
+    ``run_live_crash_child``
+    (v4/rust/iprange-livedb/tests/mixed_live.rs:182).
     """
 
     work = os.path.join(work_dir, f"d-{direction}-{uuid.uuid4().hex[:8]}")
     os.makedirs(work)
-    main = os.path.join(work, "db.iprange")
+    control_dir = os.path.join(work, "control")
+    interrupted_dir = os.path.join(work, "interrupted")
+    os.makedirs(control_dir)
+    os.makedirs(interrupted_dir)
+    control_main = os.path.join(control_dir, "db.iprange")
+    interrupted_main = os.path.join(interrupted_dir, "db.iprange")
     feed = os.path.join(work, "big.csv")
     write_direct_csv_feed(feed, DIRECT_FEED_LINE_COUNT)
-    fixture = subprocess.run(
-        [fixture_tool, "direct-v4", main], capture_output=True, timeout=300,
-        env=child_environment())
-    if fixture.returncode != 0:
-        detail = fixture.stderr.decode("utf-8", "replace").strip()
-        raise ScenarioFailure(
-            f"v4-fixture direct-v4 failed with exit {fixture.returncode}: "
-            f"{detail}")
+    for main in (control_main, interrupted_main):
+        fixture = subprocess.run(
+            [fixture_tool, "direct-v4", main], capture_output=True,
+            timeout=300, env=child_environment())
+        if fixture.returncode != 0:
+            detail = fixture.stderr.decode("utf-8", "replace").strip()
+            raise ScenarioFailure(
+                f"v4-fixture direct-v4 failed with exit {fixture.returncode}: "
+                f"{detail}")
+
+    # Control run first: the repaired replace WITHOUT interruption.  It
+    # fixes the post-transition facts (transaction advanced,
+    # range_record_count == line count, deterministic lookup
+    # spot-check) that the interrupted run must prove absent.
+    control_service = HarnessJsonRpcService(
+        [producer, "--jsonrpc"], f"control-{direction}", cwd=work)
+    try:
+        initialized = control_service.call(
+            "1", "iprange.v1.database.initialize_live",
+            {"path": control_main, "reader_capacity": 8})
+        assert_truthful(
+            "error" not in initialized,
+            f"initialize_live must succeed, got {initialized}",
+            scenario_report)
+        control_info0 = control_service.call(
+            "2", "iprange.v1.database.info",
+            {"source": {"path": control_main, "mode": "live"}})
+        assert_truthful(
+            "error" not in control_info0,
+            f"database.info live must succeed, got {control_info0}",
+            scenario_report)
+        control_pre = control_info0["result"]["info"]
+        replaced = control_service.call(
+            "3", "iprange.v1.direct.replace",
+            direct_replace_params(control_main, feed))
+        assert_truthful(
+            "error" not in replaced
+            and replaced["result"].get("commit", {}).get(
+                "attempted_transaction_id") is not None,
+            f"the control replace must complete, got {replaced}",
+            scenario_report)
+        control_info1 = control_service.call(
+            "4", "iprange.v1.database.info",
+            {"source": {"path": control_main, "mode": "live"}})
+        assert_truthful(
+            "error" not in control_info1,
+            f"database.info live must succeed, got {control_info1}",
+            scenario_report)
+        control_post = control_info1["result"]["info"]
+        assert_truthful(
+            decimal_u64(control_post.get("transaction_id"))
+            == decimal_u64(control_pre.get("transaction_id")) + 1
+            and decimal_u64(control_post.get("range_record_count"))
+            == DIRECT_FEED_LINE_COUNT,
+            "the control replace must advance the transaction by one "
+            "and land exactly the repaired feed line count "
+            f"({DIRECT_FEED_LINE_COUNT}), got "
+            f"{control_post.get('transaction_id')}/"
+            f"{control_post.get('range_record_count')}", scenario_report)
+        control_spot = live_reader_lookup(
+            control_service, "5", control_main,
+            ["10.0.0.0", "10.0.0.63", "10.0.0.64", "10.195.79.192",
+             "10.195.79.255", "192.0.2.10"])
+        assert_truthful(
+            normalized_lookup(control_spot) == [
+                ("10.0.0.0", True, 1),
+                ("10.0.0.63", True, 1),
+                ("10.0.0.64", True, 2),
+                ("10.195.79.192", True, DIRECT_FEED_LINE_COUNT),
+                ("10.195.79.255", True, DIRECT_FEED_LINE_COUNT),
+                ("192.0.2.10", False, None)],
+            "the control spot-check must show the repaired feed ranges "
+            f"with their per-line values, got {normalized_lookup(control_spot)}",
+            scenario_report)
+        scenario_report["control_run"] = {
+            "pre_transition_info": {
+                "transaction_id": control_pre.get("transaction_id"),
+                "range_record_count":
+                    control_pre.get("range_record_count")},
+            "post_transition_info": {
+                "transaction_id": control_post.get("transaction_id"),
+                "range_record_count":
+                    control_post.get("range_record_count")},
+            "spot_check_normalized": normalized_lookup(control_spot),
+        }
+    finally:
+        control_service.close()
 
     producer_service = KillableJsonRpcService(
         [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
     try:
         initialized = producer_service.call(
             "1", "iprange.v1.database.initialize_live",
-            {"path": main, "reader_capacity": 8})
+            {"path": interrupted_main, "reader_capacity": 8})
         assert_truthful(
             "error" not in initialized,
             f"initialize_live must succeed, got {initialized}",
             scenario_report)
         info0 = producer_service.call(
             "2", "iprange.v1.database.info",
-            {"source": {"path": main, "mode": "live"}})
+            {"source": {"path": interrupted_main, "mode": "live"}})
         assert_truthful(
             "error" not in info0,
             f"database.info live must succeed, got {info0}",
@@ -1515,39 +1659,61 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
             t0 is not None and r0 is not None,
             f"database.info must report T0 and range count, got "
             f"{info_facts}", scenario_report)
-        size_before = os.path.getsize(main)
+        pre_lookup = live_reader_lookup(
+            producer_service, "3", interrupted_main,
+            ["192.0.2.10", "192.0.2.20", "198.51.100.35", "10.0.0.0"])
+        assert_truthful(
+            normalized_lookup(pre_lookup) == [
+                ("192.0.2.10", True, 10),
+                ("192.0.2.20", True, 15),
+                ("198.51.100.35", True, 30),
+                ("10.0.0.0", False, None)],
+            "the pre-transition fixture content probe must be intact, "
+            f"got {normalized_lookup(pre_lookup)}", scenario_report)
+        size_before = os.path.getsize(interrupted_main)
 
         outcome, seen_ms, thread = call_with_worker(
-            producer_service, "3", "iprange.v1.direct.replace",
-            direct_replace_params(main, feed), POLL_DEADLINE_SECONDS,
-            seen=lambda: os.path.isfile(main)
-            and os.path.getsize(main) > size_before)
+            producer_service, "4", "iprange.v1.direct.replace",
+            direct_replace_params(interrupted_main, feed),
+            POLL_DEADLINE_SECONDS,
+            seen=lambda: os.path.isfile(interrupted_main)
+            and os.path.getsize(interrupted_main) > size_before)
         if seen_ms is None:
             raise ScenarioFailure(
-                "live resize marker was not observed; "
+                "live draft-growth marker was not observed; "
                 f"worker outcome={outcome}")
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
         thread.join(timeout=5)
         scenario_report["kill_method"] = (
-            "SIGKILL process group at durable draft-growth marker: the "
-            "last deterministic pre-publication boundary at the product "
-            "interface; the approved durable sidecar marker is impossible "
-            "because neither engine writes the .readers sidecar during a "
-            "live commit (evidence: Go internal/writer/publication.go "
-            "Publish; Rust live_writer/commit.rs)")
+            "SIGKILL process group at observable process-crash marker "
+            "during uncommitted live-draft construction (main-file "
+            "growth while the draft is being built; explicitly not a "
+            "storage-sync durability claim).  The uncommitted draft "
+            "must never become the committed generation: the committed "
+            "database must reflect the pre-transition state.  The "
+            "approved durable sidecar marker is impossible because "
+            "neither engine writes the .readers sidecar during a live "
+            "commit (evidence: Go internal/writer/publication.go "
+            "Publish; Rust live_writer/commit.rs); exact "
+            "commit/finish interruption is covered by the SDK fault "
+            "gates (Go lifecycle_crash_test.go "
+            "TestLiveWriterCommitCrashPointsSelectOnlyACompleteGeneration "
+            "and TestLiveWriterOutcomeUnknownFailClosed; live_writer_test.go "
+            "TestLiveWriterCommitCancellationAbortsDraft; Rust "
+            "live_crash_tests::commit_crashes_select_only_a_complete_generation)")
         scenario_report["destination_state"] = {
             "class": "live_dataset_with_uncommitted_write",
             "main_size_before": size_before,
-            "main_size_after": os.path.getsize(main),
+            "main_size_after": os.path.getsize(interrupted_main),
         }
 
         resolver = HarnessJsonRpcService(
             [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work)
         try:
             info_live = resolver.call(
-                "4", "iprange.v1.database.info",
-                {"source": {"path": main, "mode": "live"}})
+                "5", "iprange.v1.database.info",
+                {"source": {"path": interrupted_main, "mode": "live"}})
             assert_truthful(
                 "error" not in info_live,
                 f"database.info live must succeed on a fresh producer, "
@@ -1556,38 +1722,77 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
             assert_truthful(
                 live_facts.get("transaction_id") == t0
                 and live_facts.get("range_record_count") == r0,
-                "an interrupted commit must never become the generation: "
-                f"expected T0={t0} R0={r0}, got "
+                "an interrupted draft must never become the generation: "
+                f"expected pre-transition T0={t0} R0={r0}, got "
                 f"{live_facts.get('transaction_id')}/"
                 f"{live_facts.get('range_record_count')}", scenario_report)
+            post_facts = (scenario_report.get("control_run") or {}).get(
+                "post_transition_info") or {}
+            assert_truthful(
+                not post_facts
+                or (decimal_u64(live_facts.get("transaction_id"))
+                    != decimal_u64(post_facts.get("transaction_id"))
+                    and decimal_u64(live_facts.get("range_record_count"))
+                    != decimal_u64(post_facts.get("range_record_count"))),
+                "the control run's post-transition facts must be absent "
+                "after the interrupted draft: got "
+                f"{live_facts.get('transaction_id')}/"
+                f"{live_facts.get('range_record_count')}, control post "
+                f"{post_facts.get('transaction_id')}/"
+                f"{post_facts.get('range_record_count')}", scenario_report)
+
+            post_lookup = live_reader_lookup(
+                resolver, "6", interrupted_main,
+                ["192.0.2.10", "192.0.2.20", "198.51.100.35", "10.0.0.0"])
+            assert_truthful(
+                normalized_lookup(post_lookup) ==
+                normalized_lookup(pre_lookup),
+                "the committed database must keep the pre-transition "
+                "content probe after the interrupted draft, got "
+                f"{normalized_lookup(post_lookup)}", scenario_report)
+            absent_lookup = live_reader_lookup(
+                resolver, "7", interrupted_main,
+                ["10.0.0.0", "10.0.0.64", "10.195.79.192"])
+            assert_truthful(
+                normalized_lookup(absent_lookup) == [
+                    ("10.0.0.0", False, None),
+                    ("10.0.0.64", False, None),
+                    ("10.195.79.192", False, None)],
+                "the control run's repaired-feed content must be absent "
+                "after the interrupted draft, got "
+                f"{normalized_lookup(absent_lookup)}", scenario_report)
+            scenario_report["inspect_outcome"] = {
+                "database_info_live_pre_transition": {
+                    "transaction_id": live_facts.get("transaction_id"),
+                    "range_record_count":
+                        live_facts.get("range_record_count")},
+                "control_post_transition_absent": True,
+                "pre_transition_probe_after_recovery":
+                    normalized_lookup(post_lookup),
+            }
 
             info_immutable = resolver.call(
-                "5", "iprange.v1.database.info",
-                {"source": {"path": main, "mode": "immutable"}})
+                "8", "iprange.v1.database.info",
+                {"source": {"path": interrupted_main, "mode": "immutable"}})
             immutable_error = info_immutable.get("error", {}).get("data", {})
             assert_truthful(
                 immutable_error.get("code") == "wrong_state"
                 and immutable_error.get("outcome") == "read_only_failure",
                 "immutable database.info must truthfully refuse a live "
                 f"database, got {info_immutable}", scenario_report)
-            scenario_report["inspect_outcome"] = {
-                "database_info_live": {
-                    "transaction_id": live_facts.get("transaction_id"),
-                    "range_record_count":
-                        live_facts.get("range_record_count")},
-                "database_info_immutable": {
-                    "code": immutable_error.get("code"),
-                    "outcome": immutable_error.get("outcome")},
-            }
+            scenario_report["inspect_outcome"]["database_info_immutable"] = {
+                "code": immutable_error.get("code"),
+                "outcome": immutable_error.get("outcome")}
 
             reports, error = maintenance_reports(
-                resolver, work, os.path.join(work, "pre.jsonl"),
+                resolver, interrupted_dir,
+                os.path.join(interrupted_dir, "pre.jsonl"),
                 ["scratch", "reservation", "publication_temp"])
             assert_truthful(
                 error is None and count_kind(reports, "scratch") == 0
                 and count_kind(reports, "reservation") == 0
                 and count_kind(reports, "publication_temp") == 0,
-                f"commit/finish must leave no managed maintenance "
+                f"an interrupted draft must leave no managed maintenance "
                 f"residue, got reports={reports} error={error}",
                 scenario_report)
             scenario_report["residue_bounded"] = {
@@ -1597,8 +1802,8 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                 [consumer, "--jsonrpc"], f"consumer-{direction}", cwd=work)
             try:
                 open_live = consumer_service.call(
-                    "6", "iprange.v1.reader.open",
-                    {"source": {"path": main, "mode": "live"}})
+                    "9", "iprange.v1.reader.open",
+                    {"source": {"path": interrupted_main, "mode": "live"}})
                 assert_truthful(
                     "error" not in open_live,
                     f"consumer live reader must open, got {open_live}",
@@ -1606,11 +1811,12 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                 reopen_info = open_live["result"].get("info", {})
                 assert_truthful(
                     reopen_info.get("transaction_id") == t0,
-                    "consumer live reader must observe the committed T0, "
-                    f"got {reopen_info.get('transaction_id')}",
+                    "consumer live reader must observe the committed "
+                    f"pre-transition T0, got "
+                    f"{reopen_info.get('transaction_id')}",
                     scenario_report)
                 consumer_service.call(
-                    "7", "iprange.v1.reader.close",
+                    "10", "iprange.v1.reader.close",
                     {"reader": open_live["result"]["reader"]})
                 scenario_report["reopen_outcome"] = {
                     "consumer_live_reader_transaction_id":
@@ -1619,13 +1825,13 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                 consumer_service.close()
 
             # A fresh producer commits a one-record replacement: the
-            # interrupted attempt left no authority behind, so the next
-            # commit is T0+1 with exactly the one new record.  On the
-            # Go product the killed producer's worker closes the sidecar
-            # asynchronously, so the first attempt may truthfully refuse
-            # writer_busy while the dead process's writer lease is still
-            # being released; retry with a bounded window (the commit
-            # assertion below stays strict).
+            # interrupted draft attempt left no authority behind, so the
+            # next commit is T0+1 with exactly the one new record.  On
+            # the Go product the killed producer's worker closes the
+            # sidecar asynchronously, so the first attempt may truthfully
+            # refuse writer_busy while the dead process's writer lease is
+            # still being released; retry with a bounded window (the
+            # commit assertion below stays strict).
             small = os.path.join(work, "small.csv")
             with open(small, "w", encoding="utf-8", newline="") as stream:
                 stream.write("from,to,value\n")
@@ -1634,8 +1840,8 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
             transient_busy = 0
             for attempt_index in range(10):
                 attempted = resolver.call(
-                    f"8-{attempt_index}", "iprange.v1.direct.replace",
-                    direct_replace_params(main, small))
+                    f"11-{attempt_index}", "iprange.v1.direct.replace",
+                    direct_replace_params(interrupted_main, small))
                 error = attempted.get("error", {}).get("data", {})
                 if error and error.get("code") == "writer_busy":
                     transient_busy += 1
@@ -1650,8 +1856,8 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                 f"fresh replace must commit, got {replaced}",
                 scenario_report)
             info_after = resolver.call(
-                "9", "iprange.v1.database.info",
-                {"source": {"path": main, "mode": "live"}})
+                "12", "iprange.v1.database.info",
+                {"source": {"path": interrupted_main, "mode": "live"}})
             assert_truthful(
                 "error" not in info_after,
                 f"database.info live must succeed after the commit, got "
@@ -1816,59 +2022,151 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
     return work
 
 
+def live_reader_lookup(service, request_id, main, addresses):
+    """Open one live reader, lookup addresses, and close it again.
+
+    Returns the ``matches`` list of ``iprange.v1.reader.lookup`` over
+    the committed live generation of ``main``: the deterministic
+    content probe used by scenario D's control run and interrupted
+    run.  Raises AssertionError on any protocol deviation.
+    """
+
+    opened = service.call(
+        str(request_id), "iprange.v1.reader.open",
+        {"source": {"path": main, "mode": "live"}})
+    assert "error" not in opened, opened
+    reader = opened["result"]["reader"]
+    try:
+        looked = service.call(
+            f"{request_id}-lookup", "iprange.v1.reader.lookup",
+            {"reader": reader, "addresses": list(addresses)})
+        assert "error" not in looked, looked
+        matches = looked["result"].get("matches")
+        assert matches is not None and len(matches) == len(addresses), looked
+        return matches
+    finally:
+        service.call(
+            f"{request_id}-close", "iprange.v1.reader.close",
+            {"reader": reader})
+
+
+def normalized_lookup(matches):
+    """Lookup matches as (address, present, value-or-None) tuples."""
+
+    return [
+        (match.get("address"), match.get("present") is True,
+         match.get("value") if match.get("present") is True else None)
+        for match in matches]
+
+
+def range_leaf_pages(path, keep_last):
+    """Page numbers of the last ``keep_last`` range-tree leaf pages.
+
+    Walks the committed range tree (meta ``range_root`` at byte offset
+    144, slotted-page convention of binary-format-v4.md sections 6-7):
+    branch slots at byte 32 carry ``item_count`` u16 record offsets
+    and each IPv4 branch record is ``first_from:u32 child_pgno:u32``.
+    Leaf pages are not decoded, only counted.  The walk makes the
+    scenario F damage pattern independent of the builder's exact
+    branch placement (both products build the same format, but the
+    harness never assumes a fixed page layout).
+    """
+
+    page_size = 4096
+
+    def u16(data, offset):
+        return int.from_bytes(data[offset:offset + 2], "little")
+
+    def u32(data, offset):
+        return int.from_bytes(data[offset:offset + 4], "little")
+
+    with open(path, "rb") as stream:
+        data = stream.read()
+    leaves = []
+
+    def visit(page_number):
+        offset = page_number * page_size
+        page_type = data[offset + 4]
+        item_count = u16(data, offset + 16)
+        if page_type == 1:  # range branch
+            for index in range(item_count):
+                record_offset = u16(data, offset + 32 + 2 * index)
+                visit(u32(data, offset + record_offset + 4))
+        else:  # range leaf (page type 2)
+            leaves.append(page_number)
+
+    visit(u32(data, 144))
+    leaves.sort()
+    return leaves[-keep_last:]
+
+
 def scenario_f(direction, producer, consumer, work_dir, scenario_report):
-    """Crash validate at the findings-output temp marker.
+    """Crash validate during validation/findings delivery.
 
-    One 500 000-range immutable main is damaged by flipping one byte
-    at offset 8192; a reference validate reports valid=false with
-    exactly 3 findings (verified identical for both product binaries
-    on this deterministic damage).  The same validate is killed as
-    soon as its private ``<id>.export.tmp`` findings-output temp
-    appears: the findings destination is absent after the kill, one
-    temp orphan is the bounded residue, and the damaged main is
-    byte-identical.  A fresh validate reports the same truthful
-    findings and the consumer still opens the damaged main (the
-    committed generation stays readable).
+    One 1 500 000-range immutable main (``FEED_LINE_COUNT``) is
+    damaged by zeroing its last 1 400 range-tree leaf pages
+    (``F_DAMAGED_LEAF_PAGES``; the leaf page numbers are derived from
+    the committed range tree at runtime, see ``range_leaf_pages``,
+    so the pattern never depends on the builder's exact branch
+    placement); a reference validate reports valid=false with >= 1000
+    findings (page-CRC + count findings; the exact count is verified
+    identical for both product binaries on this deterministic damage
+    -- measured 1 402 findings / 125 057 bytes -- and the lead
+    recalibrates it during the full battery).  The same validate is
+    killed as soon as its private ``<id>.export.tmp`` findings-output
+    temp carries real flushed bytes: the findings destination is
+    absent after the kill, the temp content is a strict prefix of the
+    reference findings with strictly fewer bytes, one temp orphan is
+    the bounded residue, and the damaged main is byte-identical.  A
+    fresh validate reports the same truthful findings and the
+    consumer still opens the damaged main (the committed generation
+    stays readable).
 
-    The marker is temp existence, not flushed bytes: the findings
-    JSONL (3 rows) sits inside the buffered output writer until the
-    stream finishes, so the temp may stay 0 bytes for the whole run
-    and the durable observable at the product interface is the
-    private temp path itself (the validate findings stream is the
-    same 64 KiB-buffered private writer: Go
-    v4/go/internal/cli/handlers/recovery.go:236
-    ``fileio.NewExportWriter``; Rust
-    v4/rust/iprange-cli/src/rpc/handlers/recovery.rs:81
-    ``ExportWriter::create``).
-
-    The plan-recorded worker-scratch marker (SOW-0028:3851,
-    "validate at the worker scratch marker") is impossible: neither
-    engine's validate ever spills to authorized scratch.  The scratch
-    budget fields are API-parity only in both validation engines --
-    Go ``v4/go/internal/validation/types.go:28-68`` validates the
-    fields ("validated for API parity ... the Rust sweep ignores
-    them too") and no validation file consumes them; a heap too small
-    for the 2-bit claim bitmap is a truthful
+    The marker is flushed bytes, not temp existence: both products
+    buffer 64 KiB (Go ``fileio.NewExportWriter``
+    v4/go/internal/cli/fileio/export_writer.go:109-112; Rust
+    ``ExportWriter::create`` v4/rust/iprange-cli/src/io/
+    export_writer.rs:100-119) and flush a full block only when it
+    fills, so a non-empty temporary alone is insufficient.  With
+    reference bytes strictly between one and two blocks the temp
+    becomes non-empty exactly once while the walk still runs and is
+    always a strict prefix of the reference findings: the kill lands
+    during validation/findings delivery, never at an exact internal
+    walk point.  The plan-recorded worker-scratch marker
+    (SOW-0028:3851, "validate at the worker scratch marker") is
+    impossible: neither engine's validate ever spills to authorized
+    scratch.  The scratch budget fields are API-parity only in both
+    validation engines -- Go v4/go/internal/validation/types.go:28-68
+    validates the fields and no validation file consumes them; a heap
+    too small for the 2-bit claim bitmap is a truthful
     ``insufficient_resource_budget``/``read_only_failure`` refusal
     (``newClaims``, v4/go/internal/validation/context.go:46-50),
-    never a spill.  Rust ``v4/rust/iprange-livedb/src/validation/
-    types.rs:24-53`` is the same parity-only surface, heap exhaustion
-    is ``Claims::new``/``BudgetExceeded`` (v4/rust/iprange-livedb/
-    src/validation/context.rs:37,485), and the only authorized-scratch
-    implementation in the crate is the recovery sweep
+    never a spill.  Rust v4/rust/iprange-livedb/src/validation/
+    types.rs:24-53 is the same parity-only surface, heap exhaustion
+    is ``Claims::new``/``BudgetExceeded``
+    (v4/rust/iprange-livedb/src/validation/context.rs:37,485), and
+    the only authorized-scratch implementation in the crate is the
+    recovery sweep
     (v4/rust/iprange-livedb/src/recovery/scratch_maintenance.rs).
-    Calibrated empirically against both staged binaries (heaps
-    16 B through 256 MiB with scratch enabled): no scratch file ever
-    appeared; below the claim-bitmap requirement validate refuses
-    with the budget error and at every larger heap it completes fully
-    in memory.  The findings-output temp is therefore retained as
-    the deterministic marker.
+    Calibrated empirically against both staged binaries: no scratch
+    file ever appeared; below the claim-bitmap requirement validate
+    refuses with the budget error and at every larger heap it
+    completes fully in memory.
+
+    Determinism calibration: the chosen damage is exactly
+    ``F_DAMAGED_LEAF_PAGES`` (= 1 400) whole zeroed range-tree leaf
+    pages of a ``FEED_LINE_COUNT`` (= 1 500 000)-range main; the same
+    damage must give the same reference finding count (and bytes) for
+    both product binaries.  The harness asserts the design bounds
+    (>= 1000 findings, reference bytes strictly between 65 536 and
+    131 072); the lead calibrates/verifies the exact count during the
+    full battery.
     """
 
     work = os.path.join(work_dir, f"f-{direction}-{uuid.uuid4().hex[:8]}")
     os.makedirs(work)
     feed = os.path.join(work, "feed.txt")
-    write_interval_feed(feed, EXPORT_FEED_LINE_COUNT)
+    write_interval_feed(feed, FEED_LINE_COUNT)
     source = os.path.join(work, "big.iprange")
     params = publish_params(feed, source, "fail_if_exists")
 
@@ -1881,12 +2179,18 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
             f"big publish must succeed, got {built}", scenario_report)
     finally:
         builder.close()
-    # Deterministic early damage: flip one byte of the first data page.
+    # Deterministic damage: zero the last F_DAMAGED_LEAF_PAGES
+    # range-tree leaf pages (whole pages; parent branches stay intact
+    # and valid, so the walk keeps visiting every corrupted leaf).
+    corrupt = range_leaf_pages(source, F_DAMAGED_LEAF_PAGES)
+    assert_truthful(
+        len(corrupt) == F_DAMAGED_LEAF_PAGES,
+        f"the 1 500 000-range main must hold >= {F_DAMAGED_LEAF_PAGES} "
+        f"leaf pages, got {len(corrupt)}", scenario_report)
     with open(source, "r+b") as stream:
-        stream.seek(8192)
-        byte = stream.read(1)
-        stream.seek(8192)
-        stream.write(bytes([byte[0] ^ 0xFF]))
+        for page_number in corrupt:
+            stream.seek(page_number * 4096)
+            stream.write(b"\x00" * 4096)
     damaged_sha = sha256_file(source)
 
     ref_path = os.path.join(work, "ref-findings.jsonl")
@@ -1906,17 +2210,24 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
     ref_valid = ref_result.get("valid")
     ref_count = ref_result.get("progress", {}).get("finding_count")
     ref_rows = ref_findings.get("rows")
+    ref_bytes = os.path.getsize(ref_path) if os.path.isfile(ref_path) else 0
     assert_truthful(
         ref_valid is False
-        and decimal_u64(ref_count) == 3 and decimal_u64(ref_rows) == 3,
-        f"reference validate must find exactly 3 findings on the "
-        f"deterministic damage, got valid={ref_valid} "
-        f"finding_count={ref_count} rows={ref_rows}", scenario_report)
+        and decimal_u64(ref_count) >= 1000
+        and decimal_u64(ref_rows) == decimal_u64(ref_count)
+        and 65536 < ref_bytes < 131072,
+        "reference validate on the deterministic leaf damage must find "
+        f">= 1000 findings (got {ref_count}) with reference bytes "
+        f"strictly between one and two 64 KiB writer blocks (got "
+        f"{ref_bytes}); the lead recalibrates the exact finding count "
+        "during the full battery", scenario_report)
     scenario_report["inspect_outcome"] = {
         "reference_validate": {
             "valid": ref_valid,
             "finding_count": ref_count,
             "rows": ref_rows,
+            "bytes": ref_bytes,
+            "damaged_leaf_pages": len(corrupt),
         },
     }
 
@@ -1927,16 +2238,21 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
         outcome, seen_ms, thread = call_with_worker(
             producer_service, "3", "iprange.v1.validate",
             validate_params(source, findings_out), POLL_DEADLINE_SECONDS,
-            seen=lambda: bool(export_temp_basenames(work)))
+            seen=lambda: any(
+                os.path.getsize(os.path.join(work, name)) > 0
+                for name in export_temp_basenames(work)))
         if seen_ms is None:
             raise ScenarioFailure(
-                "validate findings-output marker was not observed; "
-                f"worker outcome={outcome}")
+                "validate findings-output flush marker (real flushed "
+                f"bytes) was not observed; worker outcome={outcome}")
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
         thread.join(timeout=5)
         scenario_report["kill_method"] = (
-            "SIGKILL process group at findings-output temp marker; the "
+            "SIGKILL process group at findings-output flush marker "
+            "during validation/findings delivery (the private export "
+            "temp carries real flushed bytes; interruption lands during "
+            "delivery, not at an exact internal walk point).  The "
             "worker-scratch marker is impossible because neither "
             "engine's validate spills to authorized scratch (scratch is "
             "API-parity only in v4/go/internal/validation and "
@@ -1953,6 +2269,25 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
             len(orphans) == 1,
             f"exactly one findings-output temp must remain as the bounded "
             f"residue, got {orphans}", scenario_report)
+        temp_path = os.path.join(work, orphans[0])
+        temp_bytes = os.path.getsize(temp_path)
+        assert_truthful(
+            temp_bytes > 0,
+            "the interrupted findings temp must carry real flushed "
+            f"bytes, got {temp_bytes}", scenario_report)
+        assert_truthful(
+            temp_bytes < ref_bytes,
+            "interrupted findings bytes must be strictly fewer than the "
+            f"reference findings bytes ({temp_bytes} < {ref_bytes})",
+            scenario_report)
+        with open(temp_path, "rb") as stream, open(
+                ref_path, "rb") as reference_stream:
+            interrupted_head = stream.read()
+            reference_head = reference_stream.read(len(interrupted_head))
+        assert_truthful(
+            interrupted_head == reference_head,
+            "interrupted findings temp must be a strict prefix of the "
+            "reference findings", scenario_report)
         assert_truthful(
             sha256_file(source) == damaged_sha,
             "the damaged main must be byte-identical after the kill",
@@ -1961,10 +2296,13 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
             "class": "validate_findings_aborted",
             "main_sha256_unchanged": True,
             "findings_temp_basenames": orphans,
+            "findings_temp_bytes": temp_bytes,
+            "reference_bytes": ref_bytes,
         }
         scenario_report["residue_bounded"] = {
             "findings_dest_absent": True,
             "export_temp_orphans": orphans,
+            "findings_temp_bytes": temp_bytes,
             "main_sha256_unchanged": True,
         }
 
@@ -2081,42 +2419,77 @@ def executable(value, label):
 
 
 
-def observed_kinds(scenario_report):
-    """Mechanical artifact-kind evidence recorded by one crash scenario.
+def _consumer_opened_main(scenario_report):
+    """True when the scenario's consumer successfully opened the main.
 
-    The gate battery derives the kind-universe coverage from these
-    per-scenario lists together with the declarative matrices' file
-    ledgers: publication crashes observe the retained reservation and
-    private publication output, the live-transition crash observes the
-    sidecar, and the recovery crash observes authorized scratch.
+    The evidence comes from the scenario report's ``reopen_outcome``:
+    ``probe_consumer_open`` on an existing destination (A2/A3/E/F),
+    the post-resolution consumer reopen of the resolved publication
+    (A1/A2), the consumer live reader after the resolved transition
+    (B), or scenario D's consumer live reader of the committed
+    generation.
     """
 
-    kinds = []
+    outcome = scenario_report.get("reopen_outcome") or {}
+    if outcome.get("after_resolution") is not None:
+        return True
+    if (outcome.get("before_resolution") or {}).get(
+            "opened_complete_destination") is True:
+        return True
+    if outcome.get("live") is not None:
+        return True
+    if outcome.get("consumer_live_reader_transaction_id") is not None:
+        return True
+    return False
+
+
+def observed_kinds(scenario_report):
+    """Per-kind actor lineage recorded by one crash scenario.
+
+    The kind gate consumes exactly this shape: each observed artifact
+    kind maps to ``{"created_by": [...], "opened_by": [...]}`` in the
+    matrix-case format.  ``created_by`` is always the scenario's
+    producer actor (``["producer.0"]``; the producer builds the main
+    and the crashed attempt); ``opened_by`` is ``["consumer.0"]``
+    only for kinds the scenario truthfully had the consumer open
+    (``probe_consumer_open`` or the scenario's consumer reader.open
+    succeeded on the committed main; see ``_consumer_opened_main``);
+    every other kind is ``[]`` (for example the sidecar is never
+    opened by the consumer; only the live main is).  The kind-universe
+    coverage follows the declarative matrices' file
+    ledgers: publication crashes observe the retained reservation and
+    private publication output, the live-transition crash observes
+    the sidecar, and the recovery crash observes authorized scratch.
+    """
+
+    def kind(opened):
+        return {"created_by": ["producer.0"],
+                "opened_by": ["consumer.0"] if opened else []}
+
+    kinds = {}
     state = scenario_report.get("destination_state") or {}
-    if state.get("reservation_basenames"):
-        kinds.append("publication_reservation")
-    if state.get("reservation_basename"):
-        kinds.append("publication_reservation")
+    if state.get("reservation_basenames") or state.get("reservation_basename"):
+        kinds["publication_reservation"] = kind(False)
     if state.get("publish_temp_basenames"):
-        kinds.append("publication_temp")
+        kinds["publication_temp"] = kind(False)
     if state.get("scratch_basenames"):
-        kinds.append("authorized_scratch")
+        kinds["authorized_scratch"] = kind(False)
     if state.get("class") in (
             "absent_after_crash", "attempt_complete_after_crash",
             "scratch_residue") or state.get("exists"):
-        kinds.append("v4_main")
+        kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
     if state.get("class") == "main_unchanged_sidecar_present":
-        kinds.append("live_sidecar")
-        kinds.append("v4_main")
+        kinds["live_sidecar"] = kind(False)
+        kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
     if state.get("class") == "live_dataset_with_uncommitted_write":
-        kinds.append("live_sidecar")
-        kinds.append("v4_main")
+        kinds["live_sidecar"] = kind(False)
+        kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
     if state.get("class") == "export_partial_output":
-        kinds.append("adapter_output")
-        kinds.append("v4_main")
+        kinds["adapter_output"] = kind(False)
+        kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
     if state.get("class") == "validate_findings_aborted":
-        kinds.append("v4_main")
-    return sorted(set(kinds))
+        kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
+    return kinds
 
 
 def main():
@@ -2215,7 +2588,8 @@ def main():
                 "consumer": f"{consumer_name}:{consumer_bin}",
                 "consumer_sha256": consumer_sha,
                 "marker_seen_ms": None,
-                "kill_method": "SIGKILL process group at durable marker",
+                "kill_method": "SIGKILL process group at observable "
+                             "process-crash marker",
                 "destination_state": None,
                 "inspect_outcome": None,
                 "resolve_outcome": None,
@@ -2224,7 +2598,7 @@ def main():
                 "pass": False,
                 "assertions": [],
                 "failures": [],
-                "kinds": [],
+                "kinds": {},
             }
             work_dirs.append(work_base)
             try:
