@@ -139,6 +139,14 @@ Implementation status (2026-09-01):
   repairs them and regenerates the evidence at the new canonical
   binaries).
 
+  The eighth fix wave is committed (`90a935b2` repairs, `f73968a2`
+  Windows qualification); the delta five-reviewer round and the
+  glm-5.3-responses whole-milestone review both PASSed at the exact
+  final revision `f73968a2` with zero P1/P2 findings (verbatim
+  verdicts in the wave section below).  Milestone 4 (delivery step
+  5) is closure-ready at `f73968a2`; closure and the start of
+  milestone 5 await the user decision recorded below.
+
 
 ## Requirements
 
@@ -5053,3 +5061,76 @@ The five own-model scope reviews and the glm-5.3-responses
 whole-milestone review run at the exact final revision of this wave
 with no later repository commits; their verdicts and the milestone-4
 close decision are recorded here when they land.
+
+### Verbatim review verdicts — eighth wave (delta at `f73968a2`)
+
+The five own-model scope reviews and the glm-5.3-responses
+whole-milestone review were run against the exact final revision of
+the eighth wave, `f73968a2`, with no later repository commits.  All
+six reviews returned PASS with zero P1/P2 findings.  The individual
+verdicts and their non-blocking notes follow.
+
+- Authority / contracts (Newton) — PASS, three P3 notes:
+  - the Rust 266-test and workspace 866-test counts appear in the
+    SOW narrative but were not logged as a reviewer-measured repeat
+    run;
+  - the 2/20 pre-fix deadlock reproduction is not independently
+    re-verifiable after the fix commit;
+  - the five-run resource-battery streak is recorded as a claim,
+    not as per-run logs.
+- Go implementation (James / Ptolemy) — PASS, one P4 note:
+  - `v4/cli/resource_harness.py:21` module docstring still says
+    "timing race"; the harness now uses monotonic, deadline-bounded
+    clocks.  The Go scope additionally verified that
+    `git diff 26ce667c..f73968a2 -- v4/go` is empty and the Go
+    product SHA-256 is unchanged (`85488a0f...`).
+- Rust / parity (Copernicus / Gibbs) — PASS, one P3 note:
+  - Rust lacks a committed full-transport test for the immediate
+    all-rejected-batch answer branch (Go has
+    `TestBatchBusyMembersAnswerInPosition`); the branch is covered
+    by the committed binary probes (3/3 no-hang), the product
+    rebuilt reproducibly, and 266 `iprange-cli` tests plus 866
+    workspace tests are green.
+- Gates / evidence (Carver / Arendt) — PASS, zero findings:
+  - the mutation battery (fabricated open lineage, `/bin/false` as
+    a producer/consumer, zero-step mixed consumer) exits 1 on the
+    forged inputs; the genuine regenerated evidence PASSes the kind
+    gate; the resource battery re-ran 8/8; Windows, README, and
+    privacy records are consistent.
+- Records / privacy (Goodall / Locke) — PASS, two P3 notes:
+  - the evidence README Go staging path (`/tmp/qualsvc/go`)
+    differs from the report argv path (`/tmp/qualsvc-a8/go`), a
+    documentation-path inconsistency with no evidence impact;
+  - the SOW "exact final revision" sentence did not name
+    `f73968a2` literally (resolved by this entry).
+- Whole-milestone review (glm-5.3-responses) — PASS at `f73968a2`,
+  zero P1/P2, with seven non-blocking notes held as deferred items:
+  1. `v4/cli/resource-record.md:49-55` describes proof a as one
+     blob with racing boundary IDs; it should describe the
+     export-start marker two-phase write.
+  2. `v4/cli/resource_harness.py:109-114` comment says "durable
+     marker"; it should say "observable export-start marker".
+  3. `v4/cli/README.md:52-63` quick-start uses the same `/tmp/w`
+     work directory for all four matrices; the runner requires an
+     empty work dir, so the printed sequence fails after the first
+     run — use distinct work dirs or note the cleanup.
+  4. The evidence README Go staging path differs from the report
+     argv path (same note as the records review above).
+  5. The focused Rust test command needs the worker prebuilt (a
+     clean target yields 262/266 until the worker binary is built
+     adjacent).
+  6. Linux Go provenance should record the `go1.26.4` patch level
+     (the README says `go1.26`).
+  7. The historical Windows-host alias debt in `done/SOW-0026` and
+     `done/SOW-0027` remains an open user decision; history is not
+     rewritten without user approval.
+
+Milestone-4 closure conclusion: with zero P1/P2 findings across all
+six reviews at `f73968a2`, milestone 4 (delivery step 5) is
+closure-ready at that revision.  Per the user's standing rule, the
+P3/P4 documentation notes above are deferred to milestone 5 or the
+SOW close and must not be committed now; they remain recorded here
+as the deferred-item ledger.  The milestone-4 closure and the start
+of milestone 5 (delivery step 6: consolidated benchmark harness and
+measured ceilings, scope recorded above) require the user decision
+recorded in the Status section.
