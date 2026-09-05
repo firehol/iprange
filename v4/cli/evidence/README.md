@@ -30,12 +30,17 @@ host (access authorized for SOW-0028 qualification only):
     (unchanged; build-proven identity, not pinned by the committed
     reports).
 - Windows qualification binaries (built on the authorized Windows
-  validation host at the same product-source revision, staged under
-  `C:/Temp/qualsvc-win/`):
+  validation host at the same product-source revision `908026ab`,
+  clean working tree, staged under `C:/Temp/qualsvc-win/` and
+  `C:/Temp/wqual/`):
   - Go product SHA-256
-    `854abf3a6df4940a2ac74f50e51d5bf2756d4d3bf568bf446b6e6f11d5547d39`;
+    `e507b7a944750f37dd309e537f8c07c127390d0c9996c13c7c1c9f8044c175f1`
+    (go1.26.5 windows/amd64, `-buildvcs=false`);
   - Rust product SHA-256
-    `927dbd47ee019fa4e279353dee2ee97504ad5ef11c75fc9cf4fdb0e469934a48`.
+    `e2124f4abb3ff735747cbdaa0aa4a8b4b6bcf58a831c83079123ec605e10124d`
+    (rustc 1.97.1).
+  Build commands, toolchain, and source revision are recorded in
+  the report's `build_provenance` block.
 
 The external gap review of 2026-09-04 requested the D1-A crash scope,
 the D2-A resource proofs (including the Windows-housekeeping kind),
@@ -103,25 +108,31 @@ Windows validation host.
   never answers with a result — explicitly-cancelled ids are
   suppressed by the session — the describe answers with a result,
   exit 0).
-- `windows-housekeeping.json` — `iprange-cli-windows-housekeeping-report-v1`
-  produced on the authorized Windows validation host (Microsoft
-  Windows 11, AMD64): for each Windows-built product binary the
-  report carries (1) the native refresh exercise — a real
-  `retention.first_seen.refresh` with a `removals_output` behind a
-  pinning live reader completes, publishes the exact removal log
-  with the refresh value, leaves no private `.removals.tmp` residue,
-  and the reader closes cleanly — and (2) the deterministic GC pair
-  proof — one format-valid 8,192-byte authenticated envelope
-  (`.iprange-gcauth-<attempt>-<ordinal>.tmp`, artifact kind
-  `private_output`, UTF-16LE source commitment, full-block CRC-32C,
-  creator-only protected DACL) plus its inert payload twin, listed
-  by `maintenance.list` as exactly two clean candidate rows
-  (envelope and inert payload), cross-listed by the other product
-  with an equal authenticated directory identity, then removed with
-  the listed envelope row passed unchanged, with durable absence
-  and a zero-row after-listing.  The pair is built by
-  `gc_envelope_windows.py` from the committed codec constants
-  (`v4/go/internal/live/gc_codec.go`, `gc_name.go`,
+- `windows-housekeeping.json` —
+  `iprange-cli-windows-housekeeping-report-v2` produced on the
+  authorized Windows validation host (Microsoft Windows 11, AMD64)
+  at the same product-source revision: for each Windows-built
+  product binary the report carries (1) the native refresh exercise —
+  a real `retention.first_seen.refresh` with a `removals_output`
+  behind a pinning live reader completes, publishes the exact
+  removal log with the refresh value, leaves no private
+  `.removals.tmp` residue, and the reader closes cleanly — (2) the
+  two removal-collector abort/failure cleanup exercises (result-
+  budget overflow and publish failure on an existing destination:
+  no `.removals.tmp` residue, no destination replacement), (3) the
+  deterministic GC pair proof — one format-valid 8,192-byte
+  authenticated envelope (`.iprange-gcauth-<attempt>-<ordinal>.tmp`,
+  artifact kind `private_output`, UTF-16LE source commitment,
+  full-block CRC-32C, creator-only protected DACL) plus its inert
+  payload twin, listed by `maintenance.list` as exactly two clean
+  candidate rows (envelope and inert payload), cross-listed by the
+  other product with an equal authenticated directory identity over
+  every listing row, then removed with the listed envelope row
+  passed unchanged, with durable absence and a zero-row
+  after-listing — and (4) build provenance (source revision, clean
+  tree, build commands, toolchain) with per-binary mtime/size.  The
+  pair is built by `gc_envelope_windows.py` from the committed
+  codec constants (`v4/go/internal/live/gc_codec.go`, `gc_name.go`,
   `identity_local_windows.go`, `v4/go/internal/security/
   security_windows.go`), not by any product test hook.  On
   non-Windows platforms the same script records the truthful

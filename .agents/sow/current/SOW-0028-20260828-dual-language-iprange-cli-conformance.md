@@ -4583,9 +4583,19 @@ above) governs the crash-scope wording:
   per-member queue fix), worker `16236608…` unchanged; Rust product
   `389d01b9…` (changed by the per-member queue fix), worker
   `cb9ad6cd…` unchanged; fixture `322e8e69…`.
-- Windows battery: pending on the authorized Windows validation
-  host at the same product-source revision (records below once the
-  host run completes).
+- Windows battery completed on the authorized Windows validation
+  host at the same product-source revision `908026ab` (clone at
+  that exact revision, clean tree): Go product
+  `e507b7a9…`, Rust product `e2124f4a…`; the v2 report
+  (`evidence/windows-housekeeping.json`) records both outcomes
+  PASS with the native refresh exercise, the two removal-collector
+  abort/failure cleanup exercises (result-budget overflow and
+  publish failure — no `.removals.tmp` residue, no destination
+  replacement), the deterministic GC-envelope pair proof
+  (list/remove round-trip), full-row cross-language listing with
+  matching directory identity, per-binary mtime/size, and the
+  build provenance (revision, clean tree, build commands, go1.26.5
+  windows/amd64, rustc 1.97.1).
 - Resource proof b manual verification: both binaries answer
   exactly one -32001 line when the oversized frame is followed by
   the sentinel; the sentinel never parses.
