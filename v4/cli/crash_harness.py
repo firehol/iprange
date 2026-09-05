@@ -331,12 +331,12 @@ def call_with_worker(service, request_id, method, params, deadline, seen):
             worker_done.set()
 
     thread = threading.Thread(target=worker, daemon=True)
-    started = time.time()
+    started = time.monotonic()
     thread.start()
     seen_ms = None
-    while time.time() - started < deadline:
+    while time.monotonic() - started < deadline:
         if seen():
-            seen_ms = (time.time() - started) * 1000
+            seen_ms = (time.monotonic() - started) * 1000
             break
         if worker_done.is_set():
             break

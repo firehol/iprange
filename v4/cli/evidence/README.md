@@ -1,6 +1,6 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-Produced 2026-09-05 (seventh fix wave) on the Linux workstation
+Produced 2026-09-05 (eighth fix wave) on the Linux workstation
 (x86_64) with staged binary copies (no personal paths in the
 committed evidence) plus the Windows-host housekeeping proof on the
 authorized Windows validation host (access authorized for SOW-0028
@@ -11,13 +11,16 @@ qualification only):
   (`cargo build --release --all-features -p iprange-cli --bin iprange
   -p iprange-livedb --bin iprange-v4-worker --example v4-fixture`,
   rustc 1.91.1) staged as
-  `/tmp/qualsvc/rust/{iprange,iprange-v4-worker,v4-fixture}`:
+  `/tmp/qualsvc-a8/rust/{iprange,iprange-v4-worker,v4-fixture}`:
   - product SHA-256
-    `860938744b203a7684d5dbc96e2fff9a8601f7dfd1fca2484107f5bd3b746e8f`
-    (changed by the seventh-wave per-member cancellation scope,
-    bounded transport channels, immediate all-rejected batch answers,
-    and the non-zero framing-failure exit in
-    `v4/rust/iprange-cli/src/rpc/session.rs`);
+    `807d52952197cd3046feb39ed30f8aa09681524cccaeadd2a3b8fc140d98cec3`
+    (changed by the eighth-wave writer-guard scope on the
+    frame-over-limit close path in
+    `v4/rust/iprange-cli/src/rpc/session.rs`, which eliminated a
+    deadlock with admitted work in flight; the seventh-wave
+    per-member cancellation, bounded transport channels, immediate
+    all-rejected batch answers, and non-zero framing-failure exit are
+    included);
   - worker SHA-256
     `cb9ad6cd82a03b7933d706de9e1b4e4c707836962b7f00e194c5d50cd4511e94`
     (unchanged; build-proven identity, not pinned by the committed
@@ -33,7 +36,8 @@ qualification only):
     `85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68`
     (changed by the seventh-wave per-member cancellation scope and
     the non-zero framing-failure exit in
-    `v4/go/internal/cli/rpc/session.go`);
+    `v4/go/internal/cli/rpc/session.go`; unchanged by the eighth
+    wave);
   - worker SHA-256
     `16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e`
     (unchanged; build-proven identity, not pinned by the committed
@@ -80,11 +84,23 @@ required-opened kinds), truthful per-scenario sidecar and
 adapter-output open lineage with per-actor executed operations, the
 exactly-one export-temp orphan contract in crash scenario E, the
 deadline-bounded resource harness, and the strict two-row / exact
-50-record removal-log Windows checks (report schema v3).  All
-Linux commands ran under `nice` with work dirs under
-`/tmp/qualsvc/ev9/`; the Windows evidence for this wave is produced
-on the authorized Windows validation host at the final product
-sources and recorded in the report with build provenance.
+50-record removal-log Windows checks (report schema v3).  The
+five-reviewer round of the seventh wave found one Rust P1
+(frame-over-limit deadlock with in-flight work), gate and resource
+P2s, and record P1/P2s; the eighth fix wave (2026-09-05) repairs
+them and regenerates this evidence: the Rust product above carries
+the writer-guard scope, the kind gate now rejects matrix-side
+fabricated cross-process opens, every harness deadline uses
+`time.monotonic()`, resource proof a waits for the export's private
+temp before pipelining the describes, and resource proof c kills
+only after the reservation file reached its full 8,192-byte block
+(2 x 4,096-byte v4 pages).  All Linux commands ran under `nice`
+with work dirs under `/tmp/qualsvc/ev11/` (matrices and crash) and
+`/tmp/qualsvc/ev12/` (resource); the mixed matrices are invoked with
+`--allow-skips` (recorded truthfully in each report command) so
+every battery command exits 0.  The Windows evidence for this wave
+is produced on the authorized Windows validation host at the final
+product sources and recorded in the report with build provenance.
 
 ## Files
 

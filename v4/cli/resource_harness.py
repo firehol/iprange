@@ -96,6 +96,7 @@ from crash_harness import (  # noqa: E402  (side-effect free)
     RESERVATION_MAGIC,
     call_with_worker,
     child_environment,
+    export_temp_basenames,
     maintenance_reports,
     no_leftover_processes,
     private_artifact_names,
@@ -106,17 +107,23 @@ from crash_harness import (  # noqa: E402  (side-effect free)
 )
 
 # One export of a 500,000-line feed keeps the connection queue
-# occupied long enough for 19 pipelined describes (verified
-# empirically).  The session admits one active unit plus 16 queued,
-# so exactly 3 of the 19 describes answer server_busy; which 3 (the
-# admission-boundary ones near ids 17..20) varies by a small timing
-# race, so the harness asserts the count and the id coverage, never
-# an exact id set.  Both product binaries must satisfy this same
-# contract (the Go session was aligned to it by the SOW-0028 session
-# fix).
+# occupied long enough for 19 pipelined describes.  The harness
+# first writes the export frame alone and waits for the export's
+# private ``.<handle>.export.tmp`` (the durable marker that the
+# export member is executing and its queue slot was already
+# decremented), and only then pipelines the 19 describes: admission
+# deterministically sees one active unit plus 16 free queue slots,
+# so exactly 3 of the 19 describes answer server_busy.  Without the
+# marker wait, a worker delayed by CPU contention can leave the
+# export counted as a queued unit and shift one more describe into
+# server_busy (observed on Go), so the count itself would race.
 PROOF_A_FEED_LINES = 500_000
 PROOF_A_DESCRIBES = 19
 PROOF_A_BUSY_EXPECTED = 3
+# Deadline for the export's private temp to appear after the export
+# frame is written (the export start marker; appears in milliseconds
+# on both products, 30 s is a generous bound for loaded machines).
+PROOF_A_EXPORT_START_DEADLINE_SECONDS = 30.0
 PROOF_A_OK_EXPECTED = PROOF_A_DESCRIBES - PROOF_A_BUSY_EXPECTED
 PROOF_A_READ_DEADLINE_SECONDS = 60.0
 
@@ -132,6 +139,14 @@ PROOF_B_DRAIN_DEADLINE_SECONDS = 15.0
 # stops draining stdin fills the 64 KiB pipe; the write must then
 # fail the proof instead of blocking the harness.
 PROOF_WRITE_DEADLINE_SECONDS = 30.0
+
+# Full reservation block size: 2 x 4096-byte v4 pages (header page
+# plus evidence page; binary-format-v4 publication namespace, Rust
+# publication::reservation::FILE_SIZE and its Go counterpart).  The
+# maintenance collectors list a reservation only when the file has
+# this exact size, so a kill between the two page writes leaves a
+# partial file that is skipped by the list.
+RESERVATION_FILE_SIZE = 8192
 
 
 def parse_binaries(value):
@@ -235,10 +250,10 @@ def read_responses(proc, expect, deadline_seconds):
     os.set_blocking(fd, False)
     sel = selectors.DefaultSelector()
     sel.register(fd, selectors.EVENT_READ)
-    deadline = time.time() + deadline_seconds
+    deadline = time.monotonic() + deadline_seconds
     buf = b""
     while len(responses) < expect:
-        remaining = deadline - time.time()
+        remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         if not sel.select(remaining):
@@ -280,10 +295,10 @@ def write_all_bounded(proc, payload, deadline_seconds, proof):
     os.set_blocking(fd, False)
     sel = selectors.DefaultSelector()
     sel.register(fd, selectors.EVENT_WRITE)
-    deadline = time.time() + deadline_seconds
+    deadline = time.monotonic() + deadline_seconds
     view = memoryview(payload)
     while view:
-        remaining = deadline - time.time()
+        remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise ResourceFailure(
                 f"{proof}: stdin write of {len(payload)} bytes did not "
@@ -320,6 +335,31 @@ def slow_export_params(source, destination):
     }
 
 
+def _wait_for_export_temp(work_dir, proc, deadline_seconds):
+    """Wait for the running export's private temp under a deadline.
+
+    Returns the elapsed milliseconds.  Raises ``ResourceFailure`` if
+    the product process exits first or the marker does not appear
+    within ``deadline_seconds`` (the export member never started).
+    """
+
+    started = time.monotonic()
+    while True:
+        if proc.poll() is not None:
+            raise ResourceFailure(
+                f"proof a: the product exited before the export's "
+                f"private temp appeared (returncode "
+                f"{proc.returncode})")
+        if export_temp_basenames(work_dir):
+            return round((time.monotonic() - started) * 1000, 1)
+        remaining = deadline_seconds - (time.monotonic() - started)
+        if remaining <= 0:
+            raise ResourceFailure(
+                f"proof a: the export's private temp did not appear "
+                f"within {deadline_seconds} s")
+        time.sleep(min(0.02, remaining))
+
+
 def proof_a(binary, label, work_dir, outcome):
     """Proof a: >16-in-flight server_busy race with a pipelining client.
 
@@ -330,9 +370,11 @@ def proof_a(binary, label, work_dir, outcome):
 
     - exactly 20 responses, one per request, ids 1..20 covered once;
     - exactly 3 describes answer -32002 ``server_busy`` (the queue
-      admits one active unit plus 16 queued; the boundary ids near
-      17..20 race by a small timing window, so only the count and
-      the id coverage are asserted);
+      admits one active unit plus 16 queued; the export frame is
+      written alone first and the describes are pipelined only after
+      the export's private temp appeared, so the split is
+      deterministic; the harness asserts the count and the id
+      coverage, never an exact id set);
     - the other 16 describes answer with results;
     - the in-flight export answers -32010 ``cancelled`` (EOF
       cancels the active unit); exit code 0.
@@ -363,16 +405,27 @@ def proof_a(binary, label, work_dir, outcome):
     proc = spawn_jsonrpc(binary, work, stderr_log)
     outcome["pid"] = proc.pid
     try:
-        lines = [json.dumps({"jsonrpc": "2.0", "id": "1",
-                             "method": "iprange.v1.export",
-                             "params": export_params})]
-        for index in range(2, 2 + PROOF_A_DESCRIBES):
-            lines.append(json.dumps({"jsonrpc": "2.0", "id": str(index),
-                                     "method": "iprange.v1.system.describe",
-                                     "params": {}}))
+        # Start the slow export alone.  Its private temp appears only
+        # while the export member is executing -- the session has then
+        # already decremented its queue slot -- so pipelining the
+        # describes after the marker makes the 16-admit/3-busy split
+        # deterministic (without it, a worker delayed by CPU
+        # contention can leave the export counted as a queued unit).
+        export_frame = json.dumps({"jsonrpc": "2.0", "id": "1",
+                                   "method": "iprange.v1.export",
+                                   "params": export_params})
+        write_all_bounded(proc, (export_frame + "\n").encode(),
+                          PROOF_WRITE_DEADLINE_SECONDS,
+                          "proof a export frame")
+        outcome["export_start_marker_ms"] = _wait_for_export_temp(
+            work, proc, PROOF_A_EXPORT_START_DEADLINE_SECONDS)
+        lines = [json.dumps({"jsonrpc": "2.0", "id": str(index),
+                             "method": "iprange.v1.system.describe",
+                             "params": {}})
+                 for index in range(2, 2 + PROOF_A_DESCRIBES)]
         payload = ("\n".join(lines) + "\n").encode()
         write_all_bounded(proc, payload, PROOF_WRITE_DEADLINE_SECONDS,
-                          "proof a")
+                          "proof a describes")
         proc.stdin.close()
 
         responses = read_responses(proc, 20, PROOF_A_READ_DEADLINE_SECONDS)
@@ -549,11 +602,11 @@ def drain_stdout(proc, deadline_seconds):
     pending = _PENDING_STDOUT_BYTES.pop(proc.pid, b"")
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
-    deadline = time.time() + deadline_seconds
+    deadline = time.monotonic() + deadline_seconds
     chunks = [pending] if pending else []
     reached_eof = False
     while True:
-        remaining = deadline - time.time()
+        remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
         if not sel.select(min(remaining, 5.0)):
@@ -581,6 +634,13 @@ def proof_c(binary, label, work_dir, outcome):
     emitted, never rebuilt or decoded), and the reservation is
     durably gone.  The private publication temp may remain: bounded
     residue, recorded.
+
+    The kill waits for the reservation file's full block size, not
+    just the magic header: the magic is written with the header page
+    first, and the maintenance collectors list a reservation only at
+    the exact full block size (8192 bytes), so killing between the
+    header and evidence page writes leaves a partial file the list
+    skips (a latency flake observed on the Rust product).
     """
 
     work = os.path.join(work_dir, f"c-{label}")
@@ -594,10 +654,24 @@ def proof_c(binary, label, work_dir, outcome):
         [binary, "--jsonrpc"], f"c-{label}-producer", cwd=work)
     try:
         outcome["marker_seen_ms"], _thread = None, None
+
+        def reservation_complete():
+            # The magic header alone is not the kill point: the
+            # reservation must be listable when the fresh producer
+            # runs maintenance.list, and the collectors list only
+            # full-size reservation blocks (see
+            # RESERVATION_FILE_SIZE above).
+            if not reservation_seen(work, RESERVATION_MAGIC):
+                return False
+            return any(
+                os.path.getsize(os.path.join(work, name))
+                >= RESERVATION_FILE_SIZE
+                for name in private_artifact_names(work)["reservation"])
+
         _, seen_ms, thread = call_with_worker(
             producer, "1", "iprange.v1.current.publish",
             publish_params(feed, destination, "fail_if_exists"), 20,
-            seen=lambda: reservation_seen(work, RESERVATION_MAGIC))
+            seen=reservation_complete)
         outcome["marker_seen_ms"] = seen_ms
         producer.kill_process_group()
         thread.join(timeout=5)
@@ -832,9 +906,9 @@ def self_test():
         sel.register(stub.stdout, selectors.EVENT_READ)
         ready = sel.select(2.0)
         sel.close()
-        started = time.time()
+        started = time.monotonic()
         responses = read_responses(stub, 1, 0.1)
-        elapsed = time.time() - started
+        elapsed = time.monotonic() - started
         partial = _PENDING_STDOUT_BYTES.pop(stub.pid, b"")
         print(f"self-test read control: read_responses returned in "
               f"{elapsed:.3f} s with {len(responses)} responses and "
@@ -862,7 +936,7 @@ def self_test():
     record_spawn(stub)
     try:
         payload = b"x" * (1024 * 1024)
-        started = time.time()
+        started = time.monotonic()
         try:
             write_all_bounded(stub, payload, 0.5,
                               "self-test write control")
@@ -870,7 +944,7 @@ def self_test():
             failure_text = str(exc)
         else:
             failure_text = None
-        elapsed = time.time() - started
+        elapsed = time.monotonic() - started
         print(f"self-test write control: "
               f"{failure_text or 'unexpected success'} "
               f"in {elapsed:.3f} s")
@@ -963,7 +1037,7 @@ def main():
                        "binary_path": binary, "pass": False,
                        "failures": [],
                        "elapsed_ms": None}
-            started = time.time()
+            started = time.monotonic()
             try:
                 runner(binary, label, run_root, outcome)
                 outcome["pass"] = True
@@ -975,7 +1049,7 @@ def main():
                 print(f"FAIL proof {proof}.{label}: {exc}")
             finally:
                 outcome["elapsed_ms"] = round(
-                    (time.time() - started) * 1000, 1)
+                    (time.monotonic() - started) * 1000, 1)
             report["proofs"].append(outcome)
 
     leftover = no_leftover_processes()

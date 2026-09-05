@@ -226,7 +226,8 @@ table:
   `server_busy` pipelining proof (one slow export + 19
   `system.describe` frames; both binaries must answer exactly 3
   `server_busy`, 16 results, the export -32010 `cancelled`, and exit
-  0), the -32001 over-limit-frame close path (one response, null id,
+  0; the describes are pipelined only after the export's private
+  temp appeared, making the split deterministic), the -32001 over-limit-frame close path (one response, null id,
   then stdout drains to EOF with zero further bytes, exit non-zero
   per the framing-failure contract), the
   `maintenance.remove` proof against a real reservation nonce of a

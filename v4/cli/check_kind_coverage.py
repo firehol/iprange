@@ -726,6 +726,19 @@ def matrix_evidence(path, report, implementation_of, problems):
                 if actor_steps.get(actor) is None or \
                         actor_steps.get(actor) < 1:
                     continue
+                # Mirror of the crash-side open contract: only kinds
+                # the v1 open contract opens (v4_main, live_sidecar,
+                # adapter_output) may carry an opened ref.  Any other
+                # kind has no cross-process open, so the ref is a
+                # fabricated open.
+                if facts["kind"] not in ("live_sidecar",
+                                         "adapter_output", "v4_main"):
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} kind "
+                        f"{facts['kind']!r} records a cross-process open "
+                        f"ref {entry!r} although no v1 open contract "
+                        f"opens this kind")
+                    continue
                 bucket["opened"].add(implementations.get(actor, "?"))
     stats = {"cases": len(cases), "fail_cases": fail_cases,
              "pass_cases": pass_cases, "contributing": contributing}
@@ -1408,8 +1421,10 @@ def _self_test():
 
     def green_report(matrix):
         """One PASS case whose per-case ledger shows the four matrix
-        kinds created and opened by this matrix's actors; the crash
-        battery supplies the three crash-only kinds.  The case records
+        kinds created by this matrix's actors and opened by its
+        consumer wherever the kind has a cross-process open contract;
+        the crash battery supplies the three crash-only kinds.  The
+        case records
         the executed actor implementations, executed-step counts and
         SHA-256 values (both binaries for a mixed matrix, the one
         binary for a single-language matrix), anchored in the report's
@@ -1422,7 +1437,13 @@ def _self_test():
             ledger[f"k{i}.bin"] = {
                 "kind": kind,
                 "created_by": ["producer.iprange.v1.selftest"],
-                "opened_by": ["consumer.iprange.v1.selftest"],
+                # Only kinds with a v1 cross-process open contract
+                # (v4_main, live_sidecar, adapter_output) record
+                # openers; metadata_delivery has no open contract and
+                # truthfully records none.
+                "opened_by": (["consumer.iprange.v1.selftest"]
+                              if kind in ("v4_main", "live_sidecar",
+                                          "adapter_output") else []),
             }
         expected = ACTOR_LANGUAGES[matrix]
         actor_sha = {"rust": "1" * 64, "go": "2" * 64}
@@ -1855,6 +1876,28 @@ def _self_test():
             for p in problems), (
             f"matrix-fabricated crash kinds without crash evidence did "
             f"not fail the gate: {problems}")
+
+        # 21b. Matrix-side fabricated cross-process open: an opened_by
+        #      ref on a kind without a v1 open contract (a publication
+        #      temporary here) is a fabricated cross-process open and
+        #      fails the gate, mirroring the crash-side open-contract
+        #      check.
+        fab_open = green_report("go")
+        fab_open["cases"][0]["file_kinds"]["fab.bin"] = {
+            "kind": "publication_temp",
+            "created_by": ["producer.iprange.v1.selftest"],
+            "opened_by": ["consumer.iprange.v1.selftest"]}
+        fab_open_path = os.path.join(work, "fabricated-open.json")
+        assign(fab_open_path, fab_open)
+        problems, _c, _s = assess(
+            [green["rust"], fab_open_path, green["rust_to_go"],
+             green["go_to_rust"]], [crash_path])
+        assert problems and any(
+            "records a cross-process open ref" in p
+            and "no v1 open contract opens this kind" in p
+            for p in problems), (
+            f"matrix-fabricated cross-process open did not fail the "
+            f"gate: {problems}")
 
         # 22. Zero-step credit: a PASS case that executes zero steps
         #     as producer but still credits creation to the producer

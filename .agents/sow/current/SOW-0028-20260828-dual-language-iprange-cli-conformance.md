@@ -116,6 +116,29 @@ Implementation status (2026-09-01):
   (with the recorded D impossibility evidence), the bypassable kind
   gate, and the resource/Windows P2 items, then re-qualifies the
   milestone.
+  The sixth fix wave pinned the busy-batch transport corner (a slow
+  first member frees one queue slot at a time, so 1 active + 16
+  queued hold exactly), hardened the kind gate's
+  executed-command/provenance binding, recorded scenario D/F crash
+  markers per the ratified amendment, and repaired the
+  resource/Windows proof gaps; the whole-milestone gate review of
+  that wave FAILed (two P1 session defects, one P1 kind-gate defect,
+  and six P2 proof defects; records below).  The seventh fix wave
+  installs per-member cancellation in both sessions (cancelling a
+  queued batch member no longer touches unrelated active work),
+  bounded Rust transport channels with immediate all-rejected batch
+  answers, the non-zero framing-failure exit in both products,
+  the mixed-matrix two-actor kind gate with executed-operation and
+  binary-record binding, truthful sidecar/adapter-output open
+  lineage, the exactly-one export-temp orphan contract, the
+  deadline-bounded resource harness, and the strict two-row /
+  exact-50-record Windows housekeeping checks (report schema v3).
+  The five own-model scope reviews of the seventh wave ran at the
+  exact final revision `26ce667c`: three scopes PASSed and two FAILed
+  (Rust P1, gates P2, records P1/P2; the eighth fix wave below
+  repairs them and regenerates the evidence at the new canonical
+  binaries).
+
 
 ## Requirements
 
@@ -1811,9 +1834,12 @@ Pending implementation and final review.
 - Cancellation tokens are installed per work unit: cancelling one id
   of a currently executing batch aborts the shared token, so
   non-targeted siblings in that same unit end with factual
-  "cancelled" outcomes. Re-arm per entry or use per-entry tokens if
-  narrower cancellation is required (round-12 glm observation,
-  non-blocking; tracked in SOW-0030).
+  "cancelled" outcomes.  RESOLVED by the seventh fix wave: both
+  sessions now install a fresh cancellation token per executing
+  member and track only that member as active, so cancelling a
+  queued or unknown id can never cancel an unrelated executing
+  sibling; both languages carry regression tests (round-12 glm
+  observation).
 - SOW-0027 closed 2026-09-01; this SOW is the sole current SOW.
 - Implement WebSocket daemon separately in SOW-0029 after this API is accepted.
 - Keep authenticated publication in SOW-0017.
@@ -4864,6 +4890,164 @@ remaining fixture-ownership clause, and integrated:
   in the report below).
 - Sensitive-data gate: regenerated evidence contains no personal
   paths and no host alias.
+
+The five own-model scope reviews and the glm-5.3-responses
+whole-milestone review run at the exact final revision of this wave
+with no later repository commits; their verdicts and the milestone-4
+close decision are recorded here when they land.
+
+
+### Eighth wave (2026-09-05) — five-reviewer round at 26ce667c, repairs, regenerated evidence
+
+The mandated five own-model scope reviews of the seventh wave ran at
+the exact final revision `26ce667c` with no repository commits after
+it.  Verdicts: authority/contracts PASS (three P3 record-precision
+notes); Go implementation PASS (three P3 notes); Rust implementation
+and parity FAIL (one P1); evidence and gates FAIL (three P2, three
+P3); records/privacy/identity FAIL (two P1, three P2).
+
+Consolidated findings fixed in this wave:
+
+- P1 — Rust frame-over-limit close deadlocks with in-flight work:
+  the run loop held the writer mutex guard across `shutdown()`
+  (`v4/rust/iprange-cli/src/rpc/session.rs` ~:311-321), and
+  `shutdown()` joins the worker while the worker waits for that same
+  lock to flush an admitted unit's response; the process then hangs
+  forever (SIGTERM-proof; only SIGKILL recovers).  Reproduced on the
+  exact committed release binary: 2/20 runs of 18 pipelined
+  `system.describe` frames followed by one oversized frame hung,
+  while Go (which unlocks before shutdown) exited 1 in 3/3 runs.
+  Fixed: the guard is scoped to the -32001 write only, matching Go
+  and the worker's own write-failure pattern; the new deterministic
+  gated regression test
+  `frame_over_limit_with_admitted_work_drains_and_exits_nonzero`
+  fails pre-fix (run() hangs, 15 s timeout) and passes post-fix in
+  under one second.
+- P2 — matrix-side fabricated opens still passed the kind gate: the
+  "no v1 open contract opens this kind" rejection existed only on
+  the crash path, so an `opened_by` ref on `publication_temp` in a
+  doctored matrix ledger exited 0.  Fixed: `matrix_evidence` mirrors
+  the crash-side open-contract check (only `v4_main`,
+  `live_sidecar`, and `adapter_output` may carry openers); the
+  self-test suite builder's `metadata_delivery` ledger truthfully
+  records no openers; new self-test control 21b proves the mutation
+  now fails.
+- P2 — harness deadlines and elapsed measurements used the wall
+  clock: every `time.time()` computation in `resource_harness.py`
+  (12 sites) and `crash_harness.py` (3 sites) switched to
+  `time.monotonic()`; the docstrings already promised monotonic
+  deadlines, so they are now truthful.
+- P2/P3 — resource-proof determinism: proof a (16-admit/3-busy
+  split) flipped to 15-admit/4-busy under CPU contention on Go
+  because the worker's member-start slot decrement can lag frame
+  admission; proof c.rust listed 0 reservation rows once because the
+  kill at the first magic byte can land between the reservation's
+  header and evidence page writes, and the maintenance collectors
+  list a reservation only at the exact full block size (2 x
+  4,096-byte v4 pages = 8,192 bytes).  Fixed: proof a writes the
+  export frame alone and waits for the export's private
+  `.<handle>.export.tmp` (the member-executing marker) before
+  pipelining the describes; proof c kills only after the reservation
+  file reaches its full block size.  The resource battery is now
+  8/8 in five consecutive runs (previously 2/3).
+- P1/P2 — records: the evidence README Windows block still indexed
+  the sixth-wave report (v2 at `908026ab` with the sixth-wave
+  hashes) while the committed report was v3 at `295ee992`; the SOW
+  Status summary ended at the fifth wave; the Followup still listed
+  the per-work-unit cancellation item the seventh wave implemented;
+  `resource-record.md` quoted stale Linux hashes in the present
+  tense.  Fixed in this section and below; the README Windows block
+  is regenerated with the eighth-wave report.
+
+Record corrections (forward-recorded here, per record hygiene):
+
+- The seventh-wave finding text that scenario E's consumer open of
+  the completed export destination is "likewise unrecorded" is
+  corrected: scenario E's consumer probe opens the intact v4 main
+  source; adapter outputs are plain-text exports that no v1 reader
+  method opens cross-process, so no consumer adapter-output open
+  exists to record (`crash_harness.py` scenario E and
+  `observed_kinds` document the corrected truth).
+- The seventh-wave self-test control counts ("35 controls") are
+  corrected to the verified counts: 37 numbered control groups / 47
+  asserts at `26ce667c`; the eighth wave adds control 21b -> 38
+  groups / 48 asserts (the three reviews counted 33/36/37 under
+  different conventions; the group-marker count here is
+  authoritative).
+- The "six session regression tests fail against the pre-fix code"
+  claim is corrected: the Go differential measured exactly three Go
+  tests failing pre-fix (the two cancellation regressions and the
+  frame-over-limit test; the unknown/completed-id test guards
+  already-correct behavior); the aggregate spans both languages.
+
+Open user decision (pre-existing privacy debt, not a wave defect):
+the private Windows host alias string remains in the historical
+completed SOWs `SOW-0026` (20 occurrences) and `SOW-0027` (6
+occurrences) under `.agents/sow/done/`; it is absent from SOW-0028
+and from `v4/`.  Per the repository sensitive-data rule, history is
+not rewritten without user approval; forward-sanitizing the two
+historical records to "the authorized Windows validation host" is
+offered to the user together with the milestone decision below.
+
+Eighth-wave implementation landed as:
+
+1. Rust session (`v4/rust/iprange-cli/src/rpc/session.rs`): writer
+   guard scoped to the -32001 write in the FrameTooLarge arm, plus
+   the gated regression test above.
+2. Kind gate (`v4/cli/check_kind_coverage.py`): matrix open-contract
+   check mirroring the crash side, suite-ledger truthfulness, and
+   self-test control 21b (38 groups / 48 asserts).
+3. Harnesses (`v4/cli/resource_harness.py`,
+   `v4/cli/crash_harness.py`): monotonic clocks; deterministic
+   proof-a export-start marker and proof-c full-reservation-block
+   kill point in `resource_harness.py`.
+
+Validation (this wave):
+
+- Rust: `cargo test -p iprange-cli --all-features` 266 passed;
+  workspace 866 passed; the new regression test fails pre-fix (hang,
+  15 s timeout) and passes post-fix (<1 s); the release product
+  SHA-256 is `807d5295…` (was `86093874…`); binary repro —
+  oversized-only frame exits 1 with exactly one -32001 id:null
+  (3/3), 18 pipelined describes + oversized frame exits 1 with 19
+  response lines and no hang (3/3), EOF exits 0 (3/3).
+- Kind gate: self-test exit 0 (38 groups / 48 asserts); genuine
+  regenerated evidence PASS; the M4b fabricated-open mutation exits
+  1; historical mutations (`/bin/false` as `--go`, zero-step mixed
+  consumer) still exit 1.
+- Resource harness: self-test read control ~0.100-0.101 s, write
+  control fails ~0.502 s; the battery is 8/8 in five consecutive
+  runs on both products (proof a and proof c deterministic).
+- Linux battery regenerated from the canonical staged binaries
+  (work dirs `/tmp/qualsvc/ev11` matrices and crash,
+  `/tmp/qualsvc/ev12` resource): Rust 38/38, Go 38/38, mixed
+  14 executed + 24 skipped per direction — now invoked with
+  `--allow-skips` so the recorded report commands exit 0 truthfully
+  — crash 16/16 both directions with the `/bin/false` negative
+  0/16, resource 8/8 with non-zero proof-b exits, golden 53,
+  sensitivity 14, kind gate PASS.
+- Evidence identities: Rust product `807d5295…`; Go product
+  `85488a0f…` (unchanged); workers `16236608…`/`cb9ad6cd…`
+  (unchanged); fixture `7c616793…` (unchanged).
+- Go product code is untouched by this wave (the Go scope PASSed at
+  `26ce667c` and the regenerated battery re-proves it).
+
+Windows evidence for this wave is regenerated on the authorized
+Windows validation host at the final product sources and recorded in
+the report below with build provenance.
+
+Sensitive-data gate: the regenerated evidence contains no personal
+paths and no host alias; the historical done/ SOW alias debt is
+recorded as an open user decision above.
+
+Artifact gate: `v4/cli/evidence/README.md` (Linux identities, proof
+determinism wording; Windows block updated with the eighth-wave
+report), `v4/cli/resource-record.md` (current hash identities),
+`v4/cli/README.md` (proof-a marker wording), and this SOW updated;
+no spec change is required (the deadlock fix conforms to the
+framing-failure contract; the marker waits and gate checks are
+qualification facts, not format contracts); no project skill change
+is required.
 
 The five own-model scope reviews and the glm-5.3-responses
 whole-milestone review run at the exact final revision of this wave

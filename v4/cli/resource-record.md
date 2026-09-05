@@ -118,9 +118,12 @@ and `problem` members that `maintenance.list` omits on clean rows
 `v4/rust/iprange-cli/src/rpc/handlers/maintenance.rs`); both now
 treat those members as optional, so the unchanged list row
 round-trips (spec `.agents/sow/specs/iprange-jsonrpc-v1.md:968`).
-The Linux qualification binary hashes changed to `2f1d2bba…` (Go)
-and `86056181…` (Rust) as a result; behavior on Linux is unchanged
-outside the round-trip acceptance.
+The Linux qualification binary hashes at that wave changed to
+`2f1d2bba…` (Go) and `86056181…` (Rust); behavior on Linux was
+unchanged outside the round-trip acceptance.  The current canonical
+Linux identities are recorded in `evidence/README.md` (Go product
+`85488a0f…`, Rust product `807d5295…` at the eighth fix wave; the
+worker and fixture identities are build-proven there as well).
 
 Deferred to delivery step 6: latency/throughput and engine RSS
 ceilings only.

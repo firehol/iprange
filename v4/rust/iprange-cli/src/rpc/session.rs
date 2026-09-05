@@ -309,8 +309,20 @@ impl Session {
                     );
                     let text = schema::encode_response_frame(&payload)
                         .expect("constant transport error within limits");
-                    let mut w = writer.lock().unwrap();
-                    if let Err(err) = w.write_line(&text) {
+                    // Scope the writer guard to the -32001 write only:
+                    // shutdown() joins the worker below, and an admitted
+                    // unit still executing must be able to flush its
+                    // factual response. Holding the guard across the
+                    // join deadlocks the session (the worker blocks on
+                    // the writer mutex); the worker's own write-failure
+                    // path drops the guard before reporting Fatal, and
+                    // the Go session writes under the lock, unlocks,
+                    // then shuts down.
+                    let write_result = {
+                        let mut w = writer.lock().unwrap();
+                        w.write_line(&text)
+                    };
+                    if let Err(err) = write_result {
                         return self.fatal(err);
                     }
                     // A frame over the input ceiling is a framing
@@ -2631,6 +2643,146 @@ mod tests {
             !text.contains("sentinel"),
             "bytes after the oversized frame must never be parsed: {text}"
         );
+    }
+
+    /// Reader driver for the frame-over-limit-with-in-flight-work
+    /// test.
+    ///
+    /// Delivers the admitted unit's frame, then the oversized frame
+    /// only after the worker installed the active member's key (the
+    /// worker is blocked on the test's state-lock barrier inside that
+    /// member), then EOF (unreachable in the error path: the reader
+    /// loop stops at the frame-too-large event).
+    struct FrameOverLimitGatedReader {
+        frames: Vec<Vec<u8>>,
+        next: usize,
+        control: Arc<Mutex<SessionControl>>,
+        active_key: String,
+        eof: bool,
+    }
+
+    impl std::io::Read for FrameOverLimitGatedReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let data = self.fill_buf()?.to_vec();
+            let n = data.len().min(buf.len());
+            buf[..n].copy_from_slice(&data[..n]);
+            self.consume(n);
+            Ok(n)
+        }
+    }
+
+    impl std::io::BufRead for FrameOverLimitGatedReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if self.eof {
+                return Ok(&[]);
+            }
+            if self.next < self.frames.len() {
+                if self.next == self.frames.len() - 1 {
+                    // The oversized frame must land while the worker
+                    // is inside the admitted unit (blocked on the
+                    // test's state-lock barrier), so the unit is
+                    // guaranteed to still need the writer lock when
+                    // shutdown joins the worker.
+                    wait_until("active member key installed", || {
+                        self.control
+                            .lock()
+                            .unwrap()
+                            .active_keys
+                            .contains(&self.active_key)
+                    });
+                }
+                return Ok(&self.frames[self.next]);
+            }
+            self.eof = true;
+            Ok(&[])
+        }
+        fn consume(&mut self, _amt: usize) {
+            self.next += 1;
+        }
+    }
+
+    #[test]
+    fn frame_over_limit_with_admitted_work_drains_and_exits_nonzero() {
+        // P1 regression: an oversized frame arriving while an admitted
+        // unit executes must not hang the session. The -32001 write
+        // must release the writer lock before shutdown() joins the
+        // worker, so the worker flushes the admitted unit's factual
+        // response (drain before close) and run() returns the framing
+        // error (non-zero exit). Pre-fix run() held the writer guard
+        // across the join and deadlocked: the worker could not flush
+        // its response, so the session hung forever.
+        let session = Session::new();
+        let (release_tx, holder) = hold_state_lock(session.state.clone());
+
+        let work = json!({
+            "jsonrpc": "2.0", "id": "admitted",
+            "method": "iprange.v1.system.describe", "params": {},
+        });
+        let mut oversized = vec![b'x'; super::super::framing::INPUT_FRAME_LIMIT + 1];
+        oversized.push(b'\n');
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = FrameOverLimitGatedReader {
+            frames: vec![format!("{work}\n").into_bytes(), oversized],
+            next: 0,
+            control: session.control.clone(),
+            active_key: "s:admitted".to_owned(),
+            eof: false,
+        };
+
+        // Pre-fix run() never returns (the worker needs the writer
+        // lock the main loop holds while joining it), so run it on a
+        // helper thread and fail on a timeout instead of hanging the
+        // test binary.
+        let output_for_run = output.clone();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<io::Result<()>>();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(session.run(reader, SharedVec(output_for_run)));
+        });
+
+        // Release the in-flight-handler barrier only after the -32001
+        // response is on the wire: the admitted unit is then sure to
+        // need the writer lock while shutdown() joins the worker.
+        // Pre-fix the main loop still holds that lock, so the worker
+        // cannot flush and the join never returns (the hang this test
+        // reproduces); post-fix the guard is already dropped.
+        wait_until("frame-too-large response written", || {
+            output
+                .lock()
+                .unwrap()
+                .windows(b"\"id\":null".len())
+                .any(|window| window == b"\"id\":null")
+        });
+        let _ = release_tx.send(());
+        holder.join().unwrap();
+
+        let err = match done_rx.recv_timeout(std::time::Duration::from_secs(15)) {
+            Ok(Ok(())) => panic!("frame-over-limit must fail run(), not succeed"),
+            Ok(Err(err)) => err,
+            Err(_) => panic!(
+                "run() hung: oversized frame with admitted work in flight: deadlocked shutdown (writer lock held across worker join)"
+            ),
+        };
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let mut lines = text.lines();
+        let payload: Value =
+            serde_json::from_str(lines.next().expect("-32001 response first")).unwrap();
+        assert_eq!(payload["id"], Value::Null);
+        assert_eq!(
+            payload["error"]["code"],
+            json!(schema::TRANSPORT_FRAME_TOO_LARGE)
+        );
+        assert_eq!(payload["error"]["message"], json!("frame over input limit"));
+        let drained: Value =
+            serde_json::from_str(lines.next().expect("admitted unit must answer before close"))
+                .unwrap();
+        assert_eq!(drained["id"], json!("admitted"));
+        assert!(
+            drained.get("result").is_some(),
+            "admitted unit must flush its factual response: {text}"
+        );
+        assert!(lines.next().is_none(), "no extra output: {text}");
     }
 
 }
