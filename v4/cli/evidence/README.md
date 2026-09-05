@@ -43,14 +43,14 @@ qualification only):
     (unchanged; build-proven identity, not pinned by the committed
     reports).
 - Windows qualification binaries (built on the authorized Windows
-  validation host at the same product-source revision `908026ab`,
-  clean working tree, staged under `C:/Temp/qualsvc-win/` and
-  `C:/Temp/wqual/`):
+  validation host at the eighth-wave product-source revision
+  `90a935b2`, clean working tree, staged under `C:/Temp/qualsvc-win/`
+  and `C:/Temp/wqual/`):
   - Go product SHA-256
-    `e507b7a944750f37dd309e537f8c07c127390d0c9996c13c7c1c9f8044c175f1`
+    `992e8559e8da0e583a3796c725a2b7bcfb6d52a019b015c68a9d5be330b0a828`
     (go1.26.5 windows/amd64, `-buildvcs=false`);
   - Rust product SHA-256
-    `e2124f4abb3ff735747cbdaa0aa4a8b4b6bcf58a831c83079123ec605e10124d`
+    `a8a45090ef906571a56eb0f242df5f55ba0a4af4f3fcf52ed02ad46b7d5b43bf`
     (rustc 1.97.1).
   Build commands, toolchain, and source revision are recorded in
   the report's `build_provenance` block.
@@ -153,7 +153,7 @@ product sources and recorded in the report with build provenance.
   suppressed by the session — the describe answers with a result,
   exit 0).
 - `windows-housekeeping.json` —
-  `iprange-cli-windows-housekeeping-report-v2` produced on the
+  `iprange-cli-windows-housekeeping-report-v3` produced on the
   authorized Windows validation host (Microsoft Windows 11, AMD64)
   at the same product-source revision: for each Windows-built
   product binary the report carries (1) the native refresh exercise —
