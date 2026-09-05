@@ -1,30 +1,39 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-Produced 2026-09-05 on the Linux workstation (x86_64) with staged
-binary copies (no personal paths in the committed evidence) plus the
-Windows-host housekeeping proof on the authorized Windows validation
-host (access authorized for SOW-0028 qualification only):
+Produced 2026-09-05 (seventh fix wave) on the Linux workstation
+(x86_64) with staged binary copies (no personal paths in the
+committed evidence) plus the Windows-host housekeeping proof on the
+authorized Windows validation host (access authorized for SOW-0028
+qualification only):
 
-- Rust product + worker + fixture tool: copies of
+- Rust product + worker + fixture tool: clean-release builds of
   `v4/rust/target/release/{iprange,iprange-v4-worker,examples/v4-fixture}`
-  staged as `/tmp/qualsvc/rust/{iprange,iprange-v4-worker,v4-fixture}`
-  (Rust product SHA-256
-  `389d01b90a93f8322a11590f6f46cb42509c4d2933f0c755710d9305328ee730`
-  — changed from the previous revision by the sixth-wave per-member
-  queue-accounting fix in `v4/rust/iprange-cli/src/rpc/session.rs`,
-  worker
-  `cb9ad6cd82a03b7933d706de9e1b4e4c707836962b7f00e194c5d50cd4511e94` —
-  worker identities are build-proven from the staged version-matched
-  pairs and are not pinned by the committed reports (which pin
-  product actors and the fixture tool),
-  fixture `322e8e69022aeeef01559ec3aeca95241cfd7983c2f3a39f4c0c7f2152f547e8`).
+  (`cargo build --release --all-features -p iprange-cli --bin iprange
+  -p iprange-livedb --bin iprange-v4-worker --example v4-fixture`,
+  rustc 1.91.1) staged as
+  `/tmp/qualsvc/rust/{iprange,iprange-v4-worker,v4-fixture}`:
+  - product SHA-256
+    `860938744b203a7684d5dbc96e2fff9a8601f7dfd1fca2484107f5bd3b746e8f`
+    (changed by the seventh-wave per-member cancellation scope,
+    bounded transport channels, immediate all-rejected batch answers,
+    and the non-zero framing-failure exit in
+    `v4/rust/iprange-cli/src/rpc/session.rs`);
+  - worker SHA-256
+    `cb9ad6cd82a03b7933d706de9e1b4e4c707836962b7f00e194c5d50cd4511e94`
+    (unchanged; build-proven identity, not pinned by the committed
+    reports);
+  - fixture SHA-256
+    `7c6167933d802fab89f33520198e35286dbdf7bd6e0e348ee03fea5457c93459`
+    (source unchanged since the fixture-qualification wave; identity
+    is build-proven at this revision with the recorded command).
 - Go product + worker: the documented `-buildvcs=false` qualification
   pair (go1.26 linux/amd64, no embedded vcs revision) staged as
   `/tmp/qualsvc/go/{iprange,iprange-v4-worker}`:
   - product SHA-256
-    `8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c`
-    (changed from the previous revision by the sixth-wave per-member
-    queue-accounting fix in `v4/go/internal/cli/rpc/session.go`);
+    `85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68`
+    (changed by the seventh-wave per-member cancellation scope and
+    the non-zero framing-failure exit in
+    `v4/go/internal/cli/rpc/session.go`);
   - worker SHA-256
     `16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e`
     (unchanged; build-proven identity, not pinned by the committed
@@ -54,10 +63,28 @@ accounting in both session implementations, the hardened kind gate
 with six negative controls, crash scenarios D/F per the amended
 contract (successful control run + interrupted findings compared
 against the reference), the oversized-frame sentinel proof, and
-per-kind crash lineage records.  All
-Linux commands ran under `nice` with work dirs under `/tmp/qualsvc/ev6/`;
-the Windows evidence ran under the mingw64 Python of the authorized
-Windows validation host.
+per-kind crash lineage records.  The whole-milestone gate review
+of the sixth wave returned FAIL (two P1 session defects, one P1
+kind-gate defect, and six P2 proof defects; the full finding list is
+recorded in SOW-0028's seventh-wave section).  This evidence set is
+regenerated at the seventh fix wave: per-member cancellation tokens
+in both session implementations (cancelling a queued batch member no
+longer touches unrelated active work), bounded Rust transport
+channels with immediate all-rejected-batch answers, a non-zero exit
+on the -32001 framing-failure close in both products, the hardened
+kind gate (mixed matrices require both actors to execute every PASS
+case, executed-operation records, effective/duplicate command option
+validation with executable-to-binary-record binding, crash open
+facts backed by recorded opens, fixture-created v4_main lineage,
+required-opened kinds), truthful per-scenario sidecar and
+adapter-output open lineage with per-actor executed operations, the
+exactly-one export-temp orphan contract in crash scenario E, the
+deadline-bounded resource harness, and the strict two-row / exact
+50-record removal-log Windows checks (report schema v3).  All
+Linux commands ran under `nice` with work dirs under
+`/tmp/qualsvc/ev9/`; the Windows evidence for this wave is produced
+on the authorized Windows validation host at the final product
+sources and recorded in the report with build provenance.
 
 ## Files
 
@@ -100,7 +127,8 @@ Windows validation host.
   `system.describe` sentinel in the same stdin stream; exactly one
   null-id -32001 response appears, the sentinel unanswered — trailing
   bytes are never parsed — stdout drains to EOF with zero further
-  bytes, exit 0), (c) `maintenance.remove` against a
+  bytes, exit non-zero (startup/framing failure)), (c)
+  `maintenance.remove` against a
   real reservation nonce (kill at the reservation marker, list,
   remove with the listed row passed unchanged, durable absence),
   (d) CLI cancellation (slow export id 1, `iprange.v1.cancel` naming

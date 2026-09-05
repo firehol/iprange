@@ -24,8 +24,11 @@
 //   - cancel notifications apply during the frame scan: only ids
 //     admitted and not yet terminal are valid targets; a same-batch
 //     cancel may target an earlier sibling but not a later one;
-//     queued matches are skipped without a response; the active
-//     request is signalled only when it contains the cancelled id;
+//     queued matches are skipped without a response; each executing
+//     member runs under its own fresh cancellation token with only
+//     its own id marked active, so the active request is signalled
+//     only when it contains the cancelled id and a cancelled queued
+//     sibling's token can never reach a later member;
 //   - a whole frame decodes strictly before anything in it executes;
 //     envelope failures produce one id-null error and the service
 //     keeps serving;
@@ -38,7 +41,8 @@
 //     closes all cursors and registered live readers, and exits 0
 //     unless transport shutdown itself failed;
 //   - a frame over the input ceiling produces -32001 with id null and
-//     the process closes without parsing later bytes;
+//     the process closes without parsing later bytes, exiting non-zero
+//     (startup/framing failure);
 //   - an unanswerable id (its echo alone cannot fit the response
 //     object ceiling) produces -32001 with id null; the service keeps
 //     serving;
@@ -77,10 +81,11 @@ type sessionControl struct {
 	// First worker write failure; makes shutdown exit non-zero when
 	// stdout broke while draining queued units.
 	fatalWrite error
-	// Cancellation signal for the active work unit; the worker
-	// replaces it once per unit.
+	// Cancellation signal for the executing work member; the worker
+	// replaces it with a fresh token once per executing member.
 	token *iprangedb.CancellationToken
-	// Ids of the request set currently executing.
+	// Ids of the request member currently executing; empty between
+	// members and for non-executing entries.
 	activeKeys map[string]bool
 }
 
@@ -116,9 +121,9 @@ func newSessionControl() *sessionControl {
 	}
 }
 
-// Token returns the active unit's cancellation token. Handlers poll
-// this token during long SDK work; the session loop can cancel it at
-// any time through the control plane.
+// Token returns the executing member's cancellation token. Handlers
+// poll this token during long SDK work; the session loop can cancel
+// it at any time through the control plane.
 func (st *SessionState) Token() *iprangedb.CancellationToken {
 	st.controlMu.Lock()
 	defer st.controlMu.Unlock()
@@ -261,7 +266,15 @@ loop:
 					if werr != nil {
 						runErr = s.fatal(werr, writer, fw)
 					} else {
-						runErr = s.shutdown()
+						// Framing failures exit non-zero (spec
+						// iprange-jsonrpc-v1.md shutdown section): drain
+						// queued work and close resources exactly like EOF,
+						// then report the framing failure.
+						if err := s.shutdown(); err != nil {
+							runErr = err
+						} else {
+							runErr = errors.New("frame over input limit: framing failure")
+						}
 					}
 					break loop
 				}
@@ -395,6 +408,9 @@ func (s *Session) fatal(err error, _ io.Writer, _ *FrameWriter) error {
 // workerLoop executes work units until the work channel closes.
 func workerLoop(s *Session, fw *FrameWriter, writerMu *sync.Mutex, events chan<- sessionEvent) {
 	for unit := range s.workTx {
+		// Unit-level terminal key set: every execute id of the unit is
+		// removed from the cancellation/pending tables once all members
+		// have run.
 		keys := make(map[string]bool)
 		for _, entry := range unit.entries {
 			if entry.kind == workExecute && entry.request.ID != nil {
@@ -402,16 +418,6 @@ func workerLoop(s *Session, fw *FrameWriter, writerMu *sync.Mutex, events chan<-
 			}
 		}
 		st := s.state
-		// Token/flag update in one control-lock scope: if shutdown
-		// lands between a check and a fresh token install, the fresh
-		// token would escape cancellation.
-		st.controlMu.Lock()
-		if !st.control.shuttingDown {
-			st.control.token = iprangedb.NewCancellationToken()
-		}
-		st.control.activeKeys = keys
-		st.controlMu.Unlock()
-
 		responses := make([]json.RawMessage, 0, len(unit.entries))
 		for _, entry := range unit.entries {
 			// A member frees its queue slot when it starts executing;
@@ -420,9 +426,36 @@ func workerLoop(s *Session, fw *FrameWriter, writerMu *sync.Mutex, events chan<-
 			if entry.kind == workExecute {
 				s.inFlight.Add(-1)
 			}
+			// Per-member cancellation scope: the executing member runs
+			// under its own fresh token with only its own id marked active,
+			// so cancelling a queued sibling cannot reach this member's
+			// token and a cancelled member's token cannot poison later
+			// siblings. Token/flag update in one control-lock scope: if
+			// shutdown lands between a check and a fresh token install, the
+			// fresh token would escape cancellation; while shutting down the
+			// already-cancelled token is kept so queued work after EOF keeps
+			// aborting factually.
+			st.controlMu.Lock()
+			if entry.kind == workExecute && !st.control.shuttingDown {
+				st.control.token = iprangedb.NewCancellationToken()
+			}
+			active := make(map[string]bool)
+			if entry.kind == workExecute && entry.request.ID != nil {
+				active[entry.request.ID.Key()] = true
+			}
+			st.control.activeKeys = active
+			st.controlMu.Unlock()
+
 			if resp, ok := entryResponse(s, entry); ok {
 				responses = append(responses, resp)
 			}
+
+			// The member is no longer active; a cancel arriving now can only
+			// mark its id (driving the omit path for members still queued in
+			// this unit), never cancel a token.
+			st.controlMu.Lock()
+			st.control.activeKeys = make(map[string]bool)
+			st.controlMu.Unlock()
 		}
 		// Terminal state: the unit's ids are no longer cancellation
 		// targets, so a later request reusing an id starts clean.

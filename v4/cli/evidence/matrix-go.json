@@ -149,7 +149,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c"
+      "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68"
     },
     "rust": {
       "available": true,
@@ -300,7 +300,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "389d01b90a93f8322a11590f6f46cb42509c4d2933f0c755710d9305328ee730"
+      "sha256": "860938744b203a7684d5dbc96e2fff9a8601f7dfd1fca2484107f5bd3b746e8f"
     }
   },
   "cases": [
@@ -308,12 +308,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.algebra.compare"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -327,12 +331,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.algebra.count"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -346,12 +354,17 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.algebra.count",
+            "iprange.v1.algebra.compare"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 2
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -365,12 +378,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.algebra.publish"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         }
       },
@@ -392,12 +409,17 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.cancel",
+            "iprange.v1.system.describe"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 4
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -411,12 +433,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.create"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         }
       },
@@ -430,12 +456,17 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.info",
+            "iprange.v1.database.metadata.get"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 2
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -457,12 +488,19 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.metadata.get"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.database.metadata.replace"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 2
         }
       },
@@ -482,7 +520,9 @@
             "producer.iprange.v1.database.create"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "consumer.iprange.v1.database.metadata.get"
+          ]
         }
       },
       "matrix": "go",
@@ -494,12 +534,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.metadata.replace"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         }
       },
@@ -513,12 +557,20 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.direct.replace",
+            "iprange.v1.retention.first_seen.refresh",
+            "iprange.v1.retention.last_seen.refresh",
+            "iprange.v1.database.reclaim"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 7
         }
       },
@@ -575,12 +627,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.export"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -602,12 +658,21 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.feeds.create",
+            "iprange.v1.feeds.replace",
+            "iprange.v1.feeds.rename",
+            "iprange.v1.feeds.delete",
+            "iprange.v1.feeds.import"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 6
         }
       },
@@ -642,12 +707,24 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.ranges.open",
+            "iprange.v1.reader.ranges.next",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 5
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.feeds.create",
+            "iprange.v1.direct.replace",
+            "iprange.v1.history.project"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 6
         }
       },
@@ -669,7 +746,9 @@
             "producer.iprange.v1.database.create"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "consumer.iprange.v1.reader.open"
+          ]
         },
         "last_seen.iprange": {
           "created_by": [
@@ -687,7 +766,10 @@
             "producer.iprange.v1.database.create"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "producer.iprange.v1.history.project",
+            "producer.iprange.v1.history.project"
+          ]
         }
       },
       "matrix": "go",
@@ -699,12 +781,19 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.join.direct"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.direct.replace"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 2
         }
       },
@@ -731,7 +820,9 @@
             "producer.iprange.v1.database.create"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "consumer.iprange.v1.join.direct"
+          ]
         }
       },
       "matrix": "go",
@@ -743,12 +834,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.join.membership"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -770,12 +865,23 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.info"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.database.initialize_live",
+            "iprange.v1.feeds.create",
+            "iprange.v1.commit.resolve",
+            "iprange.v1.database.create.resolve",
+            "iprange.v1.database.reset_live"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 6
         }
       },
@@ -804,7 +910,10 @@
             "producer.iprange.v1.database.initialize_live"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "consumer.iprange.v1.database.info",
+            "producer.iprange.v1.feeds.create"
+          ]
         }
       },
       "matrix": "go",
@@ -816,12 +925,19 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.initialize_live",
+            "iprange.v1.database.live_transition.resolve",
+            "iprange.v1.database.live_residue.resolve",
+            "iprange.v1.database.reset_live"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 4
         }
       },
@@ -843,12 +959,20 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.maintenance.list"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.maintenance.remove",
+            "iprange.v1.database.create",
+            "iprange.v1.database.reclaim"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 3
         }
       },
@@ -886,12 +1010,23 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.ranges.open",
+            "iprange.v1.reader.ranges.next",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 7
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.direct.replace"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 2
         }
       },
@@ -911,7 +1046,9 @@
             "producer.iprange.v1.database.create"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "consumer.iprange.v1.reader.open"
+          ]
         }
       },
       "matrix": "go",
@@ -923,12 +1060,30 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.ranges.open",
+            "iprange.v1.reader.ranges.next",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 5
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.reader.open",
+            "iprange.v1.database.reclaim",
+            "iprange.v1.direct.replace",
+            "iprange.v1.database.info",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.ranges.open",
+            "iprange.v1.reader.ranges.next",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 13
         }
       },
@@ -955,7 +1110,11 @@
             "producer.iprange.v1.database.create"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "consumer.iprange.v1.reader.open",
+            "producer.iprange.v1.reader.open",
+            "producer.iprange.v1.database.info"
+          ]
         }
       },
       "matrix": "go",
@@ -967,12 +1126,24 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.matching_feeds",
+            "iprange.v1.reader.ranges.open",
+            "iprange.v1.reader.ranges.next",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 7
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.feeds.create"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 2
         }
       },
@@ -992,7 +1163,9 @@
             "producer.iprange.v1.database.create"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "consumer.iprange.v1.reader.open"
+          ]
         }
       },
       "matrix": "go",
@@ -1004,12 +1177,22 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.snapshot",
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 4
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.direct.replace"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 2
         }
       },
@@ -1029,7 +1212,9 @@
             "producer.iprange.v1.database.create"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "consumer.iprange.v1.snapshot"
+          ]
         },
         "snap.iprange": {
           "created_by": [
@@ -1050,12 +1235,20 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.publication.inspect"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.current.publish",
+            "iprange.v1.publication.resolve",
+            "iprange.v1.publication.residue.remove"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 3
         }
       },
@@ -1080,12 +1273,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.query.cardinalities"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -1107,12 +1304,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.query.matching_feeds"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -1134,12 +1335,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.query.overlaps"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -1161,12 +1366,23 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.metadata",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.feeds.open",
+            "iprange.v1.reader.ranges.open",
+            "iprange.v1.reader.ranges.next",
+            "iprange.v1.reader.ranges.close",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 11
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -1180,12 +1396,18 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.info",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 3
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -1199,12 +1421,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.lookup"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -1218,12 +1444,24 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.feeds.open",
+            "iprange.v1.reader.feeds.next",
+            "iprange.v1.reader.feeds.close",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.matching_feeds",
+            "iprange.v1.reader.ranges.open",
+            "iprange.v1.reader.ranges.next",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 13
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -1237,12 +1475,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.open"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -1256,12 +1498,21 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.matching_feeds",
+            "iprange.v1.reader.ranges.open",
+            "iprange.v1.reader.ranges.next",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 6
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -1275,12 +1526,23 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.validate",
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 5
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.recovery.inspect",
+            "iprange.v1.recover",
+            "iprange.v1.maintenance.list"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 3
         }
       },
@@ -1333,12 +1595,21 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.system.describe",
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.ranges.open",
+            "iprange.v1.reader.ranges.close",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 134
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -1352,12 +1623,21 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.close"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 3
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.snapshot",
+            "iprange.v1.publication.resolve"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 2
         }
       },
@@ -1382,12 +1662,16 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.system.describe"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 0
         }
       },
@@ -1401,12 +1685,19 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.validate",
+            "iprange.v1.recovery.inspect"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 2
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.recover"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 1
         }
       },
@@ -1428,12 +1719,40 @@
       "actors": {
         "consumer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.reader.open",
+            "iprange.v1.reader.lookup",
+            "iprange.v1.reader.close",
+            "iprange.v1.reader.ranges.open",
+            "iprange.v1.reader.ranges.next",
+            "iprange.v1.query.overlaps",
+            "iprange.v1.join.direct",
+            "iprange.v1.join.membership",
+            "iprange.v1.validate",
+            "iprange.v1.recovery.inspect",
+            "iprange.v1.maintenance.list"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 33
         },
         "producer": {
           "implementation": "go",
-          "sha256": "8015bc3f9018648ef671aba1382083c2f06555d8146da9d99e2a5e7a9bf7a13c",
+          "operations": [
+            "iprange.v1.current.publish",
+            "iprange.v1.publication.resolve",
+            "iprange.v1.publication.residue.remove",
+            "iprange.v1.database.create",
+            "iprange.v1.direct.replace",
+            "iprange.v1.retention.first_seen.refresh",
+            "iprange.v1.retention.last_seen.refresh",
+            "iprange.v1.feeds.create",
+            "iprange.v1.feeds.replace",
+            "iprange.v1.history.project",
+            "iprange.v1.algebra.publish",
+            "iprange.v1.snapshot",
+            "iprange.v1.database.reclaim"
+          ],
+          "sha256": "85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68",
           "steps": 20
         }
       },
@@ -1479,7 +1798,15 @@
             "producer.iprange.v1.database.create"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "consumer.iprange.v1.reader.open",
+            "consumer.iprange.v1.reader.open",
+            "consumer.iprange.v1.query.overlaps",
+            "consumer.iprange.v1.join.direct",
+            "consumer.iprange.v1.join.membership",
+            "producer.iprange.v1.algebra.publish",
+            "producer.iprange.v1.snapshot"
+          ]
         },
         "findings.jsonl": {
           "created_by": [
@@ -1504,7 +1831,9 @@
             "producer.iprange.v1.database.create"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "consumer.iprange.v1.reader.open"
+          ]
         },
         "genesis.iprange": {
           "created_by": [
@@ -1548,7 +1877,11 @@
             "producer.iprange.v1.database.create"
           ],
           "kind": "live_sidecar",
-          "opened_by": []
+          "opened_by": [
+            "consumer.iprange.v1.reader.open",
+            "producer.iprange.v1.history.project",
+            "consumer.iprange.v1.join.direct"
+          ]
         },
         "overlaps.csv": {
           "created_by": [
@@ -1606,9 +1939,9 @@
     "--matrix",
     "go",
     "--work-dir",
-    "/tmp/qualsvc/ev7/work/m-go",
+    "/tmp/qualsvc/ev9/work/m-go",
     "--json-report",
-    "/tmp/qualsvc/ev7/reports/matrix-go.json"
+    "/tmp/qualsvc/ev9/reports/matrix-go.json"
   ],
   "environment_allowlist": [
     "PATH",
@@ -1649,7 +1982,18 @@
         "iprange.v1.database.create": 16,
         "iprange.v1.database.initialize_live": 2
       },
-      "opened_by": {}
+      "opened_by": {
+        "iprange.v1.algebra.publish": 1,
+        "iprange.v1.database.info": 2,
+        "iprange.v1.database.metadata.get": 1,
+        "iprange.v1.feeds.create": 1,
+        "iprange.v1.history.project": 3,
+        "iprange.v1.join.direct": 3,
+        "iprange.v1.join.membership": 1,
+        "iprange.v1.query.overlaps": 1,
+        "iprange.v1.reader.open": 9,
+        "iprange.v1.snapshot": 2
+      }
     },
     "metadata_delivery": {
       "created_by": {
@@ -1697,7 +2041,7 @@
   },
   "fixture_tool": {
     "path": "/tmp/qualsvc/rust/v4-fixture",
-    "sha256": "322e8e69022aeeef01559ec3aeca95241cfd7983c2f3a39f4c0c7f2152f547e8"
+    "sha256": "7c6167933d802fab89f33520198e35286dbdf7bd6e0e348ee03fea5457c93459"
   },
   "frame_sizes": {
     "iprange.v1.algebra.compare": {

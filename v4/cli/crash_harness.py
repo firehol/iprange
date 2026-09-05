@@ -56,9 +56,11 @@ scenario):
 - Scenario E -- ``export`` killed at the partial-output marker (real
   flushed output: the private temp stays 0 bytes until the 64 KiB
   export buffer flushes, and the kill waits for size > 0): the
-  destination is absent, the ``<id>.export.tmp`` orphan is the
-  bounded residue (never a managed maintenance kind), the source is
-  byte-identical, and a retry lands byte-identical to the reference.
+  destination is absent, exactly one private ``.<handle>.export.tmp``
+  orphan is the bounded residue (never a managed maintenance kind),
+  the source is byte-identical, a retry lands byte-identical to the
+  reference and removes its own private temp, and the consumer still
+  opens the intact source.
 - Scenario F -- ``validate`` killed at the findings-output flush
   marker during validation/findings delivery (a 1 500 000-range main
   is damaged by zeroing its last 1 400 derived range-tree leaf
@@ -78,7 +80,10 @@ Every scenario runs in both directions (producer Rust with consumer Go,
 producer Go with consumer Rust).  The report (schema
 ``iprange-cli-crash-report-v1``) records per-scenario marker timing,
 kill method, destination state, inspect/resolve/reopen outcomes,
-bounded-residue evidence, and the pass verdict.  Exit status is 0
+bounded-residue evidence, the additive per-role executed-operation
+lists (``operations``) and live-reader-open facts
+(``live_reader_opens``/``adapter_output_opens``) that the kind gate's
+lineage validation consumes, and the pass verdict.  Exit status is 0
 only when every scenario passes and no owned process remains.
 """
 
@@ -140,6 +145,42 @@ EXPORT_TEMP_SUFFIX = ".export.tmp"
 # final leftover check can match exactly our own PIDs (never a
 # pkill-style pattern).
 SPAWNED_PIDS = []
+
+# Per-scenario service-call log (additive report field ``operations``):
+# role -> ordered method names of every JSON-RPC call the scenario made
+# on the producer/consumer binaries.  The harness spawns JSON-RPC
+# services only on the two product binaries (the fixture tool is not a
+# JSON-RPC service and the capability probe is not a scenario call), so
+# ``argv[0]`` identifies the role; ``main()`` resets the log before
+# every scenario.
+OPERATIONS = {"producer": [], "consumer": []}
+
+# Per-direction actor binaries, set by main() before each direction's
+# scenarios; ``_service_role`` attributes every spawned service call.
+_ACTOR_BINARIES = {"producer": None, "consumer": None}
+
+
+def _service_role(argv):
+    """Producer/consumer role of one spawned service argv.
+
+    Returns None for a service the scenario did not spawn on a product
+    binary (the capability probe), so the operation log only records
+    scenario service calls.
+    """
+
+    binary = os.path.realpath(argv[0])
+    for role in ("producer", "consumer"):
+        if binary == _ACTOR_BINARIES[role]:
+            return role
+    return None
+
+
+def _record_service_call(service, method):
+    """Append one JSON-RPC method to its actor's operation log."""
+
+    role = _service_role(service.argv)
+    if role is not None:
+        OPERATIONS[role].append(method)
 
 
 def record_spawn(proc):
@@ -214,6 +255,10 @@ class KillableJsonRpcService(run.JsonRpcService):
                          start_new_session=True)
         record_spawn(self.proc)
 
+    def call(self, request_id, method, params):
+        _record_service_call(self, method)
+        return super().call(request_id, method, params)
+
     def kill_process_group(self):
         """Terminate exactly the process group this service spawned."""
 
@@ -253,6 +298,10 @@ class HarnessJsonRpcService(run.JsonRpcService):
     def __init__(self, argv, implementation, *, cwd=None):
         super().__init__(argv, implementation, cwd=cwd)
         record_spawn(self.proc)
+
+    def call(self, request_id, method, params):
+        _record_service_call(self, method)
+        return super().call(request_id, method, params)
 
 
 class ScenarioFailure(AssertionError):
@@ -450,6 +499,65 @@ def export_temp_basenames(work_dir):
     return sorted(
         name for name in os.listdir(work_dir)
         if name.endswith(EXPORT_TEMP_SUFFIX))
+
+
+def assert_one_export_orphan(orphans, scenario_report):
+    """Assert the interrupted export left EXACTLY one private temp.
+
+    The export contract leaves exactly one private
+    ``.<handle>.export.tmp`` (O_EXCL basename: a leading dot, a
+    non-empty attempt handle, then EXPORT_TEMP_SUFFIX) behind on an
+    interrupted attempt (Go
+    v4/go/internal/cli/fileio/export_writer.go:106; Rust
+    v4/rust/iprange-cli/src/io/export_writer.rs:100).  Accepting any
+    larger residue would hide foreign or recreated temporaries, so
+    the check is exact: one file whose basename matches the private
+    pattern.  Returns the orphan basename.
+    """
+
+    assert_truthful(
+        len(orphans) == 1,
+        f"exactly one export temp must remain as the bounded residue "
+        f"(the interrupted attempt's private .<handle>.export.tmp), got "
+        f"{orphans}", scenario_report)
+    name = orphans[0]
+    assert_truthful(
+        name.startswith(".")
+        and name.endswith(EXPORT_TEMP_SUFFIX)
+        and len(name) > len(EXPORT_TEMP_SUFFIX) + 1,
+        f"the orphan must be a private .<handle>.export.tmp basename "
+        f"(leading dot, non-empty handle, {EXPORT_TEMP_SUFFIX!r} suffix), "
+        f"got {name!r}", scenario_report)
+    return name
+
+
+def _orphan_contract_self_test():
+    """In-memory negative control for the exactly-one export-temp bound.
+
+    Mirrors scenario A3's negative-control pattern (a planted artifact
+    must be rejected): injecting N>1 export temporaries, an empty set,
+    or a non-private basename into ``assert_one_export_orphan`` must
+    fail its assertions, and the genuine single-orphan shape must pass.
+    Runs once at harness startup (no processes, no files) so an
+    unlimited-residue regression fails the harness before any scenario
+    runs, not after a heavy battery.
+    """
+
+    report = {"assertions": [], "failures": []}
+    assert assert_one_export_orphan(
+        [".deadbeef.export.tmp"], report) == ".deadbeef.export.tmp"
+    assert not report["failures"]
+    for injected in ([".a.export.tmp", ".b.export.tmp"], [],
+                     [".no-suffix"], [".export.tmp"], ["export.tmp"],
+                     ["a.export.tmp"]):
+        report = {"assertions": [], "failures": []}
+        try:
+            assert_one_export_orphan(injected, report)
+        except ScenarioFailure:
+            continue
+        raise AssertionError(
+            f"negative control: residue {injected} must fail the "
+            "exactly-one private export-temp assertion")
 
 
 def decimal_u64(value):
@@ -1134,6 +1242,7 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
             f"v4-fixture direct-v4 failed with exit {fixture.returncode}: "
             f"{detail}")
     main_sha256 = sha256_file(main)
+    scenario_report["fixture_created_main"] = True
 
     producer_service = KillableJsonRpcService(
         [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
@@ -1240,6 +1349,10 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
                 "error" not in info,
                 f"database.info live must succeed after resolution, got "
                 f"{info}", scenario_report)
+            # The resolver's live database.info opened a live reader:
+            # the producer-side sidecar reader-table open (recorded for
+            # the live_sidecar opened lineage).
+            _record_live_open(scenario_report, "producer")
             info_facts = info["result"].get("info", {})
             consumer_service2 = HarnessJsonRpcService(
                 [consumer, "--jsonrpc"], f"consumer2-{direction}", cwd=work)
@@ -1251,6 +1364,7 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
                     "error" not in open_live,
                     f"live reader must reopen after resolution, got "
                     f"{open_live}", scenario_report)
+                _record_live_open(scenario_report, "consumer")
                 reopen_info = open_live["result"].get("info", {})
                 assert_truthful(
                     reopen_info.get("database_id") == info_facts.get(
@@ -1557,6 +1671,7 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                 f"v4-fixture direct-v4 failed with exit {fixture.returncode}: "
                 f"{detail}")
 
+    scenario_report["fixture_created_main"] = True
     # Control run first: the repaired replace WITHOUT interruption.  It
     # fixes the post-transition facts (transaction advanced,
     # range_record_count == line count, deterministic lookup
@@ -1578,6 +1693,7 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
             "error" not in control_info0,
             f"database.info live must succeed, got {control_info0}",
             scenario_report)
+        _record_live_open(scenario_report, "producer")
         control_pre = control_info0["result"]["info"]
         replaced = control_service.call(
             "3", "iprange.v1.direct.replace",
@@ -1609,7 +1725,7 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
         control_spot = live_reader_lookup(
             control_service, "5", control_main,
             ["10.0.0.0", "10.0.0.63", "10.0.0.64", "10.195.79.192",
-             "10.195.79.255", "192.0.2.10"])
+             "10.195.79.255", "192.0.2.10"], scenario_report)
         assert_truthful(
             normalized_lookup(control_spot) == [
                 ("10.0.0.0", True, 1),
@@ -1652,6 +1768,7 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
             "error" not in info0,
             f"database.info live must succeed, got {info0}",
             scenario_report)
+        _record_live_open(scenario_report, "producer")
         info_facts = info0["result"]["info"]
         t0 = info_facts.get("transaction_id")
         r0 = info_facts.get("range_record_count")
@@ -1661,7 +1778,8 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
             f"{info_facts}", scenario_report)
         pre_lookup = live_reader_lookup(
             producer_service, "3", interrupted_main,
-            ["192.0.2.10", "192.0.2.20", "198.51.100.35", "10.0.0.0"])
+            ["192.0.2.10", "192.0.2.20", "198.51.100.35", "10.0.0.0"],
+            scenario_report)
         assert_truthful(
             normalized_lookup(pre_lookup) == [
                 ("192.0.2.10", True, 10),
@@ -1718,6 +1836,7 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                 "error" not in info_live,
                 f"database.info live must succeed on a fresh producer, "
                 f"got {info_live}", scenario_report)
+            _record_live_open(scenario_report, "producer")
             live_facts = info_live["result"]["info"]
             assert_truthful(
                 live_facts.get("transaction_id") == t0
@@ -1743,7 +1862,8 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
 
             post_lookup = live_reader_lookup(
                 resolver, "6", interrupted_main,
-                ["192.0.2.10", "192.0.2.20", "198.51.100.35", "10.0.0.0"])
+                ["192.0.2.10", "192.0.2.20", "198.51.100.35", "10.0.0.0"],
+                scenario_report)
             assert_truthful(
                 normalized_lookup(post_lookup) ==
                 normalized_lookup(pre_lookup),
@@ -1752,7 +1872,8 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                 f"{normalized_lookup(post_lookup)}", scenario_report)
             absent_lookup = live_reader_lookup(
                 resolver, "7", interrupted_main,
-                ["10.0.0.0", "10.0.0.64", "10.195.79.192"])
+                ["10.0.0.0", "10.0.0.64", "10.195.79.192"],
+                scenario_report)
             assert_truthful(
                 normalized_lookup(absent_lookup) == [
                     ("10.0.0.0", False, None),
@@ -1808,6 +1929,7 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                     "error" not in open_live,
                     f"consumer live reader must open, got {open_live}",
                     scenario_report)
+                _record_live_open(scenario_report, "consumer")
                 reopen_info = open_live["result"].get("info", {})
                 assert_truthful(
                     reopen_info.get("transaction_id") == t0,
@@ -1862,6 +1984,7 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                 "error" not in info_after,
                 f"database.info live must succeed after the commit, got "
                 f"{info_after}", scenario_report)
+            _record_live_open(scenario_report, "producer")
             after_facts = info_after["result"]["info"]
             assert_truthful(
                 decimal_u64(after_facts.get("transaction_id"))
@@ -1905,12 +2028,14 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
     export_writer.rs:100-119), so the temp stays 0 bytes until the
     first buffer flush and ``size > 0`` means deterministic real
     partial output, never a mere empty temp creation.  The
-    destination is absent after the kill; the export temp is the
-    bounded residue (an output scratch, not a managed maintenance
-    kind), and the source main is byte-identical.  A fresh producer
-    retries the same export and lands byte-identical to the
-    reference -- the orphaned temp never blocks -- and the consumer
-    still opens the intact source.
+    destination is absent after the kill; exactly one private
+    ``.<handle>.export.tmp`` orphan (the interrupted attempt's
+    O_EXCL temporary) is the bounded residue (an output scratch, not
+    a managed maintenance kind), and the source main is
+    byte-identical.  A fresh producer retries the same export, lands
+    byte-identical to the reference, and removes its own private
+    temp -- the orphaned temp never blocks and no new residue
+    appears -- and the consumer still opens the intact source.
     """
 
     work = os.path.join(work_dir, f"e-{direction}-{uuid.uuid4().hex[:8]}")
@@ -1973,10 +2098,17 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
             not os.path.isfile(dest),
             "export destination must be absent after the kill",
             scenario_report)
-        assert_truthful(
-            len(orphans) >= 1,
-            f"at least one export temp must remain as the bounded "
-            f"residue, got {orphans}", scenario_report)
+        assert_one_export_orphan(orphans, scenario_report)
+        # The interrupted attempt's export writer OPENED its private
+        # adapter-output temp (O_EXCL create+open in both engines: Go
+        # v4/go/internal/cli/fileio/export_writer.go:106, Rust
+        # v4/rust/iprange-cli/src/io/export_writer.rs:100), and the
+        # retry's writer opens its own temp the same way, so the
+        # producer is the adapter_output opener actor.  The consumer
+        # never opens the adapter output: adapter outputs are plain
+        # text, not v4 mains, so reader.open cannot open them (the
+        # scenario's consumer probe targets the v4 main source).
+        _record_adapter_open(scenario_report, "producer")
         assert_truthful(
             sha256_file(source) == source_sha,
             "the immutable source must be unchanged by the interrupted "
@@ -2007,8 +2139,19 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
                 "retry_export_completed": True,
                 "sha256_match": True,
             }
+            # The completed retry removed its own private temp: the
+            # post-retry orphan set must be EXACTLY the pre-retry set
+            # (no new .export.tmp residue, and the interrupted attempt's
+            # orphan is untouched).
+            orphans_after_retry = export_temp_basenames(work)
+            assert_truthful(
+                orphans_after_retry == orphans,
+                "the completed retry must remove its own private temp "
+                "and leave exactly the pre-retry orphan set (no new "
+                f"residue): pre-retry {orphans}, post-retry "
+                f"{orphans_after_retry}", scenario_report)
             scenario_report["residue_bounded"]["orphans_after_retry"] = (
-                export_temp_basenames(work))
+                orphans_after_retry)
 
             # The consumer still opens the intact immutable source
             # (mandatory: an existing source must never refuse).
@@ -2022,19 +2165,26 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
     return work
 
 
-def live_reader_lookup(service, request_id, main, addresses):
+def live_reader_lookup(service, request_id, main, addresses,
+                      scenario_report):
     """Open one live reader, lookup addresses, and close it again.
 
     Returns the ``matches`` list of ``iprange.v1.reader.lookup`` over
     the committed live generation of ``main``: the deterministic
     content probe used by scenario D's control run and interrupted
-    run.  Raises AssertionError on any protocol deviation.
+    run.  The successful live open is recorded for the scenario's
+    ``live_reader_opens`` lineage (scenario D runs every probe on the
+    producer binary's services).  Raises AssertionError on any
+    protocol deviation.
     """
 
     opened = service.call(
         str(request_id), "iprange.v1.reader.open",
         {"source": {"path": main, "mode": "live"}})
     assert "error" not in opened, opened
+    role = _service_role(service.argv)
+    if role is not None:
+        _record_live_open(scenario_report, role)
     reader = opened["result"]["reader"]
     try:
         looked = service.call(
@@ -2443,27 +2593,93 @@ def _consumer_opened_main(scenario_report):
     return False
 
 
+def _record_live_open(scenario_report, actor):
+    """Record one successful live reader open by a scenario actor.
+
+    A live reader open registers in and writes the ``<main>.readers``
+    sidecar reader table (Rust reader_core/live.rs:62 ->
+    live_sidecar.rs:170-191; Go live_reader.go:68 -> sidecar.go:146),
+    so every successful live-mode ``reader.open`` / ``database.info``
+    call the scenario executes is the sidecar-open lineage evidence.
+    Idempotent; ``observed_kinds`` derives the ``live_sidecar``
+    opened lineage from this record.
+    """
+
+    scenario_report.setdefault("live_reader_opens", {})[actor] = True
+
+
+def _record_adapter_open(scenario_report, actor):
+    """Record one adapter-output open by a scenario actor.
+
+    An adapter output (export/validate destination family, including
+    the writer's private ``.<handle>.export.tmp``) is opened by the
+    export/validate WRITER of the producing actor; ``observed_kinds``
+    derives the ``adapter_output`` opened lineage from this record.
+    """
+
+    scenario_report.setdefault("adapter_output_opens", {})[actor] = True
+
+
+def _opened_by_actors(scenario_report, field):
+    """``actor.0`` opened refs for every actor that recorded an open.
+
+    The ordinals follow the crash lineage convention (index 0 of the
+    actor's recorded operation list); the full method-level truth is
+    the scenario's additive ``operations`` field.
+    """
+
+    refs = []
+    opens = scenario_report.get(field) or {}
+    for actor in ("producer", "consumer"):
+        if opens.get(actor):
+            refs.append(f"{actor}.0")
+    return refs
+
+
 def observed_kinds(scenario_report):
     """Per-kind actor lineage recorded by one crash scenario.
 
     The kind gate consumes exactly this shape: each observed artifact
     kind maps to ``{"created_by": [...], "opened_by": [...]}`` in the
-    matrix-case format.  ``created_by`` is always the scenario's
+    matrix-case format.  ``created_by`` is normally the scenario's
     producer actor (``["producer.0"]``; the producer builds the main
-    and the crashed attempt); ``opened_by`` is ``["consumer.0"]``
-    only for kinds the scenario truthfully had the consumer open
-    (``probe_consumer_open`` or the scenario's consumer reader.open
-    succeeded on the committed main; see ``_consumer_opened_main``);
-    every other kind is ``[]`` (for example the sidecar is never
-    opened by the consumer; only the live main is).  The kind-universe
-    coverage follows the declarative matrices' file
+    and the crashed attempt).  Scenarios whose v4 main was created by
+    the external v4-fixture tool (B and D, ``fixture_created_main``)
+    record no product creator ref for ``v4_main``: crediting the
+    producer would be a false attribution, and the kind coverage is
+    satisfied by the publish scenarios (A1, A2, E, F).
+
+    Opened lineage is DERIVED from the scenario's recorded outcomes,
+    never hardcoded:
+
+    - ``v4_main``: ``["consumer.0"]`` when the consumer opened the
+      main (``probe_consumer_open`` or the scenario's consumer
+      reader.open succeeded; see ``_consumer_opened_main``).
+    - ``live_sidecar``: every actor recorded in ``live_reader_opens``.
+      A live reader open registers in and writes the
+      ``<main>.readers`` sidecar reader table in both engines, so the
+      live-transition scenarios record the resolver's
+      ``database.info`` live open (producer) and the consumer's live
+      ``reader.open`` (consumer) at their call sites.
+    - ``adapter_output``: every actor recorded in
+      ``adapter_output_opens``.  Scenario E records the producer:
+      the interrupted attempt's export writer opened its private
+      adapter-output temp (O_EXCL create+open in both engines) and
+      the retry's writer opens its own the same way.  The consumer
+      never opens adapter outputs -- they are plain text, not v4
+      mains, so ``reader.open`` cannot open them; the scenario's
+      consumer probe targets the v4 main source.
+
+    The kind-universe coverage follows the declarative matrices' file
     ledgers: publication crashes observe the retained reservation and
-    private publication output, the live-transition crash observes
+    private publication output, the live-transition crashes observe
     the sidecar, and the recovery crash observes authorized scratch.
     """
 
     def kind(opened):
-        return {"created_by": ["producer.0"],
+        created = ([] if scenario_report.get("fixture_created_main")
+                   else ["producer.0"])
+        return {"created_by": created,
                 "opened_by": ["consumer.0"] if opened else []}
 
     kinds = {}
@@ -2479,13 +2695,22 @@ def observed_kinds(scenario_report):
             "scratch_residue") or state.get("exists"):
         kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
     if state.get("class") == "main_unchanged_sidecar_present":
-        kinds["live_sidecar"] = kind(False)
+        kinds["live_sidecar"] = {
+            "created_by": ["producer.0"],
+            "opened_by": _opened_by_actors(
+                scenario_report, "live_reader_opens")}
         kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
     if state.get("class") == "live_dataset_with_uncommitted_write":
-        kinds["live_sidecar"] = kind(False)
+        kinds["live_sidecar"] = {
+            "created_by": ["producer.0"],
+            "opened_by": _opened_by_actors(
+                scenario_report, "live_reader_opens")}
         kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
     if state.get("class") == "export_partial_output":
-        kinds["adapter_output"] = kind(False)
+        kinds["adapter_output"] = {
+            "created_by": ["producer.0"],
+            "opened_by": _opened_by_actors(
+                scenario_report, "adapter_output_opens")}
         kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
     if state.get("class") == "validate_findings_aborted":
         kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
@@ -2514,6 +2739,10 @@ def main():
 
     if not os.path.isdir(args.work_dir) or not os.path.isabs(args.work_dir):
         parser.error("--work-dir must be an absolute existing directory")
+    try:
+        _orphan_contract_self_test()
+    except AssertionError as exc:
+        parser.error(f"export-orphan negative control failed: {exc}")
     producer = executable(args.producer, "producer binary")
     consumer = executable(args.consumer, "consumer binary")
     fixture_tool = executable(args.fixture_tool, "fixture tool")
@@ -2547,6 +2776,8 @@ def main():
     )
     for producer_name, consumer_name, producer_bin, consumer_bin in pairs:
         direction = f"{producer_name}->{consumer_name}"
+        _ACTOR_BINARIES["producer"] = os.path.realpath(producer_bin)
+        _ACTOR_BINARIES["consumer"] = os.path.realpath(consumer_bin)
         # Per-scenario binary identity: every scenario records the exact
         # sha256 of the producer and consumer binaries it executes, so
         # the kind gate can validate crash identities against the
@@ -2599,7 +2830,20 @@ def main():
                 "assertions": [],
                 "failures": [],
                 "kinds": {},
+                # Additive lineage evidence: per-role executed operation
+                # lists and per-role live-reader / adapter-output opens
+                # (the kind gate validates lineage refs against these).
+                # fixture_created_main: truthfully records that the
+                # scenario's v4 main was produced by the external
+                # v4-fixture tool (scenarios B and D), so no product
+                # creator ref is recorded for it.
+                "fixture_created_main": False,
+                "operations": {"producer": [], "consumer": []},
+                "live_reader_opens": {},
+                "adapter_output_opens": {},
             }
+            OPERATIONS["producer"] = []
+            OPERATIONS["consumer"] = []
             work_dirs.append(work_base)
             try:
                 runner(scenario_report)
@@ -2611,6 +2855,9 @@ def main():
                 failed += 1
                 scenario_report["failures"].append(str(exc))
                 print(f"FAIL {scenario_report['scenario']}: {exc}")
+            scenario_report["operations"] = {
+                "producer": list(OPERATIONS["producer"]),
+                "consumer": list(OPERATIONS["consumer"])}
             report["scenarios"].append(scenario_report)
 
     leftover = no_leftover_processes()

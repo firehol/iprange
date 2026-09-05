@@ -4,9 +4,15 @@
 //! Model: a reader thread forwards one physical input frame at a time
 //! to the main loop as `SessionEvent::Line`; the main loop applies
 //! cancellation and queue admission; one worker thread executes one
-//! decoded frame (a single request or a batch) at a time; additional
-//! frames wait in a channel behind a 16-request admission counter so
-//! the transport never blocks. Per-request semantics
+//! decoded frame (a single request or a batch) at a time. Both
+//! channels are bounded: the event channel (capacity 64) feeds the
+//! main loop and applies pipe backpressure to the reader whenever
+//! the loop is saturated, and the work channel (capacity 16, the
+//! admission bound) carries admitted units only so a send never
+//! blocks. A batch whose every element was rejected (busy or
+//! unanswerable) is answered immediately as one array by the main
+//! loop and never occupies the work channel; batches with at least
+//! one admitted element are queued. Per-request semantics
 //! (iprange-jsonrpc-v1.md):
 //! - one active request set plus at most 16 queued requests; the
 //!   admission counter counts queued members only and the one active
@@ -26,8 +32,8 @@
 //!   a same-batch cancel may target an earlier sibling (already
 //!   admitted and marked pending) but not a later sibling (not yet
 //!   admitted); queued matches are skipped without a response; the
-//!   active request set is signalled only when it contains the
-//!   cancelled id;
+//!   active request set holds only the currently executing member
+//!   and is signalled only when it contains the cancelled id;
 //! - a whole frame decodes strictly before anything in it executes;
 //!   envelope failures produce one id-null error and the service
 //!   keeps serving;
@@ -58,7 +64,7 @@
 use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
@@ -203,7 +209,7 @@ pub struct Session {
     /// slot when it starts running, so this counts queued members
     /// only while a member is active.
     in_flight: Arc<AtomicUsize>,
-    work_tx: Option<Sender<WorkUnit>>,
+    work_tx: Option<SyncSender<WorkUnit>>,
     work_rx: Option<Receiver<WorkUnit>>,
     worker: Option<JoinHandle<()>>,
 }
@@ -218,7 +224,7 @@ fn request_key(request: &Request) -> Option<String> {
 
 impl Session {
     pub fn new() -> Self {
-        let (work_tx, work_rx) = std::sync::mpsc::channel::<WorkUnit>();
+        let (work_tx, work_rx) = std::sync::mpsc::sync_channel::<WorkUnit>(QUEUED_LIMIT);
         let control = Arc::new(Mutex::new(SessionControl::new()));
         let state = Arc::new(Mutex::new(SessionState {
             resources: ConnectionState::default(),
@@ -245,7 +251,7 @@ impl Session {
         reader: R,
         writer: W,
     ) -> io::Result<()> {
-        let (events_tx, events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+        let (events_tx, events_rx) = std::sync::mpsc::sync_channel::<SessionEvent>(64);
 
         // Block SIGINT/SIGTERM in this (main) thread before the
         // transport threads spawn so every thread inherits the mask;
@@ -307,7 +313,16 @@ impl Session {
                     if let Err(err) = w.write_line(&text) {
                         return self.fatal(err);
                     }
-                    return self.shutdown();
+                    // A frame over the input ceiling is a framing
+                    // failure: drain and clean up like EOF, but exit
+                    // non-zero (spec iprange-jsonrpc-v1.md).
+                    if let Err(err) = self.shutdown() {
+                        return Err(err);
+                    }
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "frame over input limit: framing failure",
+                    ));
                 }
                 Ok(SessionEvent::Line(Err(super::framing::LineReadError::Io(error)))) => {
                     // A real stdin read error is not EOF: the input
@@ -451,7 +466,7 @@ impl Session {
 /// transport failure it stays blocked on the input; the main loop
 /// deliberately never joins this thread and the process exits when
 /// the main function returns.
-fn reader_loop<R: BufRead>(mut reader: LineReader<R>, events: Sender<SessionEvent>) {
+fn reader_loop<R: BufRead>(mut reader: LineReader<R>, events: SyncSender<SessionEvent>) {
     loop {
         match reader.read_line() {
             Ok(Some(line)) => {
@@ -477,7 +492,7 @@ fn worker_loop<W: Write + Send + 'static>(
     writer: Arc<Mutex<FrameWriter<W>>>,
     in_flight: Arc<AtomicUsize>,
     rx: Receiver<WorkUnit>,
-    events: Sender<SessionEvent>,
+    events: SyncSender<SessionEvent>,
 ) {
     while let Ok(unit) = rx.recv() {
         let keys: HashSet<String> = unit
@@ -486,22 +501,6 @@ fn worker_loop<W: Write + Send + 'static>(
             .filter(|entry| matches!(entry, WorkEntry::Execute(_)))
             .filter_map(|entry| request_key(entry.request()))
             .collect();
-        // Token/flag update in one control lock scope: if shutdown
-        // lands between a check and a fresh token install, the fresh
-        // token would escape cancellation. A unit admitted before EOF
-        // installs its own token (shutdown then cancels it: active,
-        // factual). A unit still queued when EOF lands keeps the
-        // already-cancelled token installed by begin_shutdown: quick
-        // work answers normally, SDK long work aborts factually, and
-        // no admitted unit is skipped. The channel close (work_tx
-        // dropped by shutdown) ends the loop.
-        {
-            let mut c = control.lock().unwrap();
-            if !c.shutting_down {
-                c.token = Arc::new(CancellationToken::new());
-            }
-            c.active_keys = keys.clone();
-        }
         let mut responses: Vec<Value> = Vec::with_capacity(unit.entries.len());
         for entry in &unit.entries {
             // A member frees its queue slot when it starts executing;
@@ -512,8 +511,37 @@ fn worker_loop<W: Write + Send + 'static>(
             if matches!(entry, WorkEntry::Execute(_)) {
                 in_flight.fetch_sub(1, Ordering::Relaxed);
             }
+            // Per-member cancellation state (spec: per-request
+            // cancellation): only the member about to run installs a
+            // fresh token and owns the active-keys set, so cancelling
+            // a queued sibling never cancels unrelated active work.
+            // Busy/unanswerable members run no handler and expose no
+            // active key. Token/flag update happens in one control
+            // lock scope: if shutdown lands between a check and a
+            // fresh token install, the fresh token would escape
+            // cancellation. A member admitted before EOF installs its
+            // own token (shutdown then cancels it: active, factual).
+            // A member still queued when EOF lands keeps the
+            // already-cancelled token installed by begin_shutdown:
+            // quick work answers normally, SDK long work aborts
+            // factually, and no admitted unit is skipped. The channel
+            // close (work_tx dropped by shutdown) ends the loop.
+            {
+                let mut c = control.lock().unwrap();
+                if matches!(entry, WorkEntry::Execute(_)) && !c.shutting_down {
+                    c.token = Arc::new(CancellationToken::new());
+                }
+                c.active_keys = match entry {
+                    WorkEntry::Execute(request) => request_key(request).into_iter().collect(),
+                    WorkEntry::Busy(_) | WorkEntry::Unanswerable(_) => HashSet::default(),
+                };
+            }
             if let Some(response) = entry_response(&state, &control, entry) {
                 responses.push(response);
+            }
+            {
+                let mut c = control.lock().unwrap();
+                c.active_keys.clear();
             }
         }
         {
@@ -539,10 +567,15 @@ fn worker_loop<W: Write + Send + 'static>(
         // batch has at most 16 members, so the array cannot exceed the
         // frame ceiling (iprange-jsonrpc-v1.md, Framing).
         let text = schema::encode_response_frame(&payload).expect("response frame within ceiling");
-        let mut w = writer.lock().unwrap();
-        if let Err(err) = w.write_line(&text) {
+        let write_result = {
+            let mut w = writer.lock().unwrap();
+            w.write_line(&text)
+        };
+        if let Err(err) = write_result {
             // Broken stdout is a fatal transport failure: record it,
-            // report it to the main loop, and stop executing.
+            // report it to the main loop (after releasing the writer
+            // lock, so the main loop can always drain the bounded
+            // event channel), and stop executing.
             control.lock().unwrap().fatal_error = Some((err.kind(), err.to_string()));
             let _ = events.send(SessionEvent::Fatal(err));
             return;
@@ -594,8 +627,24 @@ fn handle_frame<W: Write>(
         return Ok(());
     }
     if batch {
-        // Every element answers inside one array in the
-        // frame's order, including busy rejections.
+        // Every element answers inside one array in the frame's
+        // order, including busy rejections. A batch with no admitted
+        // Execute element (every element busy or unanswerable)
+        // answers immediately as one array and never occupies queue
+        // capacity; only batches with at least one admitted element
+        // are queued.
+        if !entries.iter().any(|entry| matches!(entry, WorkEntry::Execute(_))) {
+            let responses: Vec<Value> = entries
+                .iter()
+                .filter_map(|entry| entry_response(&session.state, &session.control, entry))
+                .collect();
+            let payload = Value::Array(responses);
+            let text = schema::encode_response_frame(&payload)
+                .expect("bounded batch response within ceiling");
+            let mut w = writer.lock().unwrap();
+            w.write_line(&text)?;
+            return Ok(());
+        }
         session
             .work_tx
             .as_ref()
@@ -859,11 +908,11 @@ fn execute(state: &Arc<Mutex<SessionState>>, request: &Request) -> Value {
 mod signals {
     use super::SessionEvent;
     use std::io::{self, ErrorKind};
-    use std::sync::mpsc::Sender;
+    use std::sync::mpsc::SyncSender;
 
     /// Block SIGINT/SIGTERM and spawn the watcher. The watcher never
     /// exits; the process terminates when the main function returns.
-    pub fn watch(events: Sender<SessionEvent>) {
+    pub fn watch(events: SyncSender<SessionEvent>) {
         let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
         unsafe {
             libc::sigemptyset(&mut set);
@@ -906,10 +955,10 @@ mod signals {
 #[cfg(not(unix))]
 mod signals {
     use super::SessionEvent;
-    use std::sync::mpsc::Sender;
+    use std::sync::mpsc::SyncSender;
 
     /// No-op: termination handling is Unix-only.
-    pub fn watch(_events: Sender<SessionEvent>) {}
+    pub fn watch(_events: SyncSender<SessionEvent>) {}
 }
 
 #[cfg(test)]
@@ -1365,7 +1414,7 @@ mod tests {
 
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
-        let (events_tx, _events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+        let (events_tx, _events_rx) = std::sync::mpsc::sync_channel::<SessionEvent>(64);
         let work_rx = session.work_rx.take().unwrap();
         let worker_state = session.state.clone();
         let worker_control = session.control.clone();
@@ -1710,7 +1759,7 @@ mod tests {
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
         let in_flight = Arc::new(AtomicUsize::new(3));
-        let (events_tx, _events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+        let (events_tx, _events_rx) = std::sync::mpsc::sync_channel::<SessionEvent>(64);
 
         for id in ["a", "b", "c"] {
             work_tx
@@ -1755,7 +1804,7 @@ mod tests {
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
         let in_flight = Arc::new(AtomicUsize::new(1));
-        let (events_tx, _events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+        let (events_tx, _events_rx) = std::sync::mpsc::sync_channel::<SessionEvent>(64);
 
         let open = Request {
             id: Some(RequestId::String("slow".into())),
@@ -1789,7 +1838,7 @@ mod tests {
         let control = state.lock().unwrap().control.clone();
         let writer = Arc::new(Mutex::new(FrameWriter::new(FailingWriter)));
         let in_flight = Arc::new(AtomicUsize::new(2));
-        let (events_tx, events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+        let (events_tx, events_rx) = std::sync::mpsc::sync_channel::<SessionEvent>(64);
 
         work_tx
             .send(unit(vec![WorkEntry::Execute(request("a", None))], false))
@@ -2084,7 +2133,7 @@ mod tests {
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
         let in_flight = Arc::new(AtomicUsize::new(1));
-        let (events_tx, _events_rx) = std::sync::mpsc::channel::<SessionEvent>();
+        let (events_tx, _events_rx) = std::sync::mpsc::sync_channel::<SessionEvent>(64);
         let open = Request {
             id: Some(RequestId::String("queued".into())),
             method: "iprange.v1.reader.open".into(),
@@ -2209,4 +2258,379 @@ mod tests {
         assert!(members[0].get("result").is_some());
         assert!(lines.next().is_none(), "no extra output: {text}");
     }
+    /// Hold the session-state mutex until released, standing in for an
+    /// in-flight slow handler (the worker locks session state around
+    /// every handler call). Reports when the lock is held so the test
+    /// can arm the barrier before the session starts; the worker then
+    /// deterministically blocks inside the first batch member.
+    fn hold_state_lock(
+        state: Arc<Mutex<SessionState>>,
+    ) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>) {
+        let (locked_tx, locked_rx) = std::sync::mpsc::channel::<()>();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::spawn(move || {
+            let _guard = state.lock().unwrap();
+            let _ = locked_tx.send(());
+            let _ = release_rx.recv();
+        });
+        locked_rx.recv().unwrap();
+        (release_tx, handle)
+    }
+
+    /// Poll a condition with a bounded deadline.
+    fn wait_until(what: &str, mut condition: impl FnMut() -> bool) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !condition() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "timed out waiting for {what}"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    /// Reader driver for the per-member cancellation stream tests.
+    ///
+    /// Delivers one frame per read. The final frame (the cancel
+    /// notification) is gated: it is delivered only after the worker
+    /// installed the active member's key (the worker is blocked on the
+    /// test's state-lock barrier inside that member). The barrier can
+    /// be pre-armed (`release`/`holder` given) or armed by the reader
+    /// itself before the batch frame when earlier frames must first
+    /// complete (their response marker is awaited, then the barrier is
+    /// created). After all frames are delivered, `wait_cancelled`
+    /// (when given) is awaited so the main loop has recorded the
+    /// cancel, the barrier is released, the batch response marker is
+    /// awaited on the shared output, and only then EOF is reported so
+    /// shutdown never races the batch.
+    struct GatedCancelReader {
+        frames: Vec<Vec<u8>>,
+        next: usize,
+        control: Arc<Mutex<SessionControl>>,
+        active_key: String,
+        wait_cancelled: Option<String>,
+        release: Option<std::sync::mpsc::Sender<()>>,
+        holder: Option<std::thread::JoinHandle<()>>,
+        state: Option<Arc<Mutex<SessionState>>>,
+        arm_marker: Option<Vec<u8>>,
+        output: Arc<Mutex<Vec<u8>>>,
+        marker: Vec<u8>,
+        eof: bool,
+    }
+
+    impl std::io::Read for GatedCancelReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let data = self.fill_buf()?.to_vec();
+            let n = data.len().min(buf.len());
+            buf[..n].copy_from_slice(&data[..n]);
+            self.consume(n);
+            Ok(n)
+        }
+    }
+
+    impl std::io::BufRead for GatedCancelReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if self.eof {
+                return Ok(&[]);
+            }
+            if self.next < self.frames.len() {
+                if self.release.is_none() && self.next == 1 {
+                    // Frames before the batch ran while the state lock
+                    // was free. Arm the in-flight-handler barrier now:
+                    // first wait for their response marker (when the
+                    // test requires them terminal), then hold the
+                    // state lock so the worker blocks inside the
+                    // batch's active member.
+                    if let Some(marker) = &self.arm_marker {
+                        wait_until("earlier frames answered", || {
+                            self.output
+                                .lock()
+                                .unwrap()
+                                .windows(marker.len())
+                                .any(|window| window == marker)
+                        });
+                    }
+                    let (release_tx, holder) =
+                        hold_state_lock(self.state.as_ref().unwrap().clone());
+                    self.release = Some(release_tx);
+                    self.holder = Some(holder);
+                }
+                if self.next == self.frames.len() - 1 {
+                    // The follow-up frame must land while the worker is
+                    // inside the active batch member.
+                    wait_until("active member key installed", || {
+                        self.control
+                            .lock()
+                            .unwrap()
+                            .active_keys
+                            .contains(&self.active_key)
+                    });
+                }
+                return Ok(&self.frames[self.next]);
+            }
+            if let Some(key) = &self.wait_cancelled {
+                wait_until("cancel applied by the main loop", || {
+                    self.control.lock().unwrap().cancelled.contains(key)
+                });
+            }
+            if let Some(release) = &self.release {
+                let _ = release.send(());
+            }
+            if let Some(holder) = self.holder.take() {
+                let _ = holder.join();
+            }
+            wait_until("batch response written", || {
+                self.output
+                    .lock()
+                    .unwrap()
+                    .windows(self.marker.len())
+                    .any(|window| window == self.marker)
+            });
+            self.eof = true;
+            Ok(&[])
+        }
+        fn consume(&mut self, _amt: usize) {
+            self.next += 1;
+        }
+    }
+
+    #[test]
+    fn cancel_queued_batch_member_does_not_cancel_active_sibling() {
+        // P1 regression: batch [slow export id=active, describe
+        // id=queued]; cancelling the queued sibling must not cancel
+        // the running member. With per-member tokens, cancel(queued)
+        // marks the queued key cancelled (its member is omitted) and
+        // leaves the active member's fresh token untouched, so the
+        // active member answers its normal success.
+        let fixture = crate::rpc::handlers::reader::test_support::create_direct_v6(
+            "cancel-queued-sibling",
+        );
+        let session = Session::new();
+        let (release_tx, holder) = hold_state_lock(session.state.clone());
+
+        let batch = json!([
+            {"jsonrpc": "2.0", "id": "active", "method": "iprange.v1.reader.open",
+             "params": crate::rpc::handlers::reader::test_support::live_source(&fixture.path)},
+            {"jsonrpc": "2.0", "id": "queued", "method": "iprange.v1.system.describe",
+             "params": {}},
+        ]);
+        let cancel = json!({
+            "jsonrpc": "2.0",
+            "method": "iprange.v1.cancel",
+            "params": {"request_id": "queued"},
+        });
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = GatedCancelReader {
+            frames: vec![
+                format!("{batch}\n").into_bytes(),
+                format!("{cancel}\n").into_bytes(),
+            ],
+            next: 0,
+            control: session.control.clone(),
+            active_key: "s:active".to_owned(),
+            wait_cancelled: Some("s:queued".to_owned()),
+            release: Some(release_tx),
+            holder: None,
+            state: None,
+            arm_marker: None,
+            output: output.clone(),
+            marker: b"\"id\":\"active\"".to_vec(),
+            eof: false,
+        };
+        session.run(reader, SharedVec(output.clone())).unwrap();
+        holder.join().unwrap();
+        fixture.remove();
+
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let mut lines = text.lines();
+        let payload: Value = serde_json::from_str(lines.next().expect("batch response")).unwrap();
+        let members = payload.as_array().expect("batch answers one array");
+        assert_eq!(
+            members.len(),
+            1,
+            "cancelled queued member must be omitted: {text}"
+        );
+        assert_eq!(members[0]["id"], json!("active"));
+        assert!(
+            members[0].get("error").is_none(),
+            "active member must not be cancelled: {text}"
+        );
+        assert!(
+            members[0].get("result").is_some(),
+            "active member must answer its normal success: {text}"
+        );
+        assert!(lines.next().is_none(), "no extra output: {text}");
+    }
+
+    #[test]
+    fn cancel_active_member_does_not_poison_later_sibling() {
+        // Per-member tokens: batch [slow id=a, slow id=b]; cancelling
+        // the running member a cancels only a's fresh token, so a
+        // answers the factual cancelled outcome and b still completes
+        // with success in the same array.
+        let fixture = crate::rpc::handlers::reader::test_support::create_direct_v6(
+            "cancel-active-sibling",
+        );
+        let session = Session::new();
+        let (release_tx, holder) = hold_state_lock(session.state.clone());
+
+        let batch = json!([
+            {"jsonrpc": "2.0", "id": "a", "method": "iprange.v1.reader.open",
+             "params": crate::rpc::handlers::reader::test_support::live_source(&fixture.path)},
+            {"jsonrpc": "2.0", "id": "b", "method": "iprange.v1.reader.open",
+             "params": crate::rpc::handlers::reader::test_support::live_source(&fixture.path)},
+        ]);
+        let cancel = json!({
+            "jsonrpc": "2.0",
+            "method": "iprange.v1.cancel",
+            "params": {"request_id": "a"},
+        });
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = GatedCancelReader {
+            frames: vec![
+                format!("{batch}\n").into_bytes(),
+                format!("{cancel}\n").into_bytes(),
+            ],
+            next: 0,
+            control: session.control.clone(),
+            active_key: "s:a".to_owned(),
+            wait_cancelled: Some("s:a".to_owned()),
+            release: Some(release_tx),
+            holder: None,
+            state: None,
+            arm_marker: None,
+            output: output.clone(),
+            marker: b"\"id\":\"b\"".to_vec(),
+            eof: false,
+        };
+        session.run(reader, SharedVec(output.clone())).unwrap();
+        holder.join().unwrap();
+        fixture.remove();
+
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let mut lines = text.lines();
+        let payload: Value = serde_json::from_str(lines.next().expect("batch response")).unwrap();
+        let members = payload.as_array().expect("batch answers one array");
+        assert_eq!(members.len(), 2, "both members must answer: {text}");
+        assert_eq!(members[0]["id"], json!("a"));
+        assert_eq!(
+            members[0]["error"]["data"]["code"],
+            json!("cancelled"),
+            "active member must abort with the factual outcome: {text}"
+        );
+        assert_eq!(members[1]["id"], json!("b"));
+        assert!(
+            members[1].get("result").is_some(),
+            "later sibling must complete normally: {text}"
+        );
+        assert!(lines.next().is_none(), "no extra output: {text}");
+    }
+
+    #[test]
+    fn cancel_unknown_or_completed_id_while_other_members_run() {
+        // Cancels for an unknown id and an already-terminal id are
+        // ignored while a batch member runs: the running member keeps
+        // its fresh token, every member answers completely, and the
+        // stream keeps serving.
+        let fixture = crate::rpc::handlers::reader::test_support::create_direct_v6(
+            "cancel-unknown-terminal",
+        );
+        let session = Session::new();
+
+        let done = json!({
+            "jsonrpc": "2.0", "id": "done",
+            "method": "iprange.v1.system.describe", "params": {},
+        });
+        let batch = json!([
+            {"jsonrpc": "2.0", "id": "run", "method": "iprange.v1.reader.open",
+             "params": crate::rpc::handlers::reader::test_support::live_source(&fixture.path)},
+            {"jsonrpc": "2.0", "id": "tail", "method": "iprange.v1.system.describe",
+             "params": {}},
+        ]);
+        let cancels = json!([
+            {"jsonrpc": "2.0", "method": "iprange.v1.cancel",
+             "params": {"request_id": "zzz"}},
+            {"jsonrpc": "2.0", "method": "iprange.v1.cancel",
+             "params": {"request_id": "done"}},
+        ]);
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = GatedCancelReader {
+            frames: vec![
+                format!("{done}\n").into_bytes(),
+                format!("{batch}\n").into_bytes(),
+                format!("{cancels}\n").into_bytes(),
+            ],
+            next: 0,
+            control: session.control.clone(),
+            // The cancels land only once the worker is inside the run
+            // member; the reader arms the barrier after the done
+            // response, so "done" completed (and was pruned from
+            // pending) before the batch unit starts.
+            active_key: "s:run".to_owned(),
+            wait_cancelled: None,
+            release: None,
+            holder: None,
+            state: Some(session.state.clone()),
+            arm_marker: Some(b"\"id\":\"done\"".to_vec()),
+            output: output.clone(),
+            marker: b"\"id\":\"tail\"".to_vec(),
+            eof: false,
+        };
+        session.run(reader, SharedVec(output.clone())).unwrap();
+        fixture.remove();
+
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let mut lines = text.lines();
+        let done_payload: Value =
+            serde_json::from_str(lines.next().expect("describe response")).unwrap();
+        assert_eq!(done_payload["id"], json!("done"));
+        assert!(done_payload.get("result").is_some());
+        let payload: Value = serde_json::from_str(lines.next().expect("batch response")).unwrap();
+        let members = payload.as_array().expect("batch answers one array");
+        assert_eq!(members.len(), 2, "every member must answer: {text}");
+        assert_eq!(members[0]["id"], json!("run"));
+        assert!(
+            members[0].get("result").is_some(),
+            "running member must complete normally: {text}"
+        );
+        assert_eq!(members[1]["id"], json!("tail"));
+        assert!(members[1].get("result").is_some());
+        assert!(lines.next().is_none(), "no extra output: {text}");
+    }
+
+    #[test]
+    fn frame_over_limit_exits_nonzero() {
+        // A frame over the input ceiling is a framing failure: one
+        // -32001 response with id null, later bytes (the sentinel)
+        // are never parsed, and the session exits non-zero (spec
+        // iprange-jsonrpc-v1.md).
+        let mut input = vec![b'x'; super::super::framing::INPUT_FRAME_LIMIT + 100];
+        input.push(b'\n');
+        input.extend_from_slice(
+            b"{\"jsonrpc\":\"2.0\",\"id\":\"sentinel\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n",
+        );
+        let reader = StdinOpenReader {
+            remaining: Box::leak(input.into_boxed_slice()),
+        };
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let session = Session::new();
+        let err = session.run(reader, SharedVec(output.clone())).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let mut lines = text.lines();
+        let payload: Value =
+            serde_json::from_str(lines.next().expect("one -32001 response")).unwrap();
+        assert_eq!(payload["id"], Value::Null);
+        assert_eq!(
+            payload["error"]["code"],
+            json!(schema::TRANSPORT_FRAME_TOO_LARGE)
+        );
+        assert_eq!(payload["error"]["message"], json!("frame over input limit"));
+        assert!(lines.next().is_none(), "sentinel must be unanswered: {text}");
+        assert!(
+            !text.contains("sentinel"),
+            "bytes after the oversized frame must never be parsed: {text}"
+        );
+    }
+
 }

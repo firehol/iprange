@@ -47,6 +47,37 @@ Evidence integrity rules:
   together must record at least one executed step; every PASS crash
   scenario must record a non-empty executed ``assertions`` list (the
   crash schema has no step counter).
+- Executed-operation records are mandatory: every PASS matrix case
+  must record per-actor ``operations`` lists (the method names each
+  binary executed) and every PASS crash scenario must record a
+  per-actor ``operations`` map (``{role: [method, ...]}``).  Lineage
+  refs are checked against these records: a matrix ref
+  ``actor.operation`` must name an operation in that actor's list (or
+  the always-allowed ``legacy`` marker) and a crash ref
+  ``actor.ordinal`` must index that actor's list.  Unknown actors,
+  unknown operations, and out-of-range ordinals fail the gate.
+- Mixed matrices (``rust_to_go``, ``go_to_rust``) execute both
+  binaries in every PASS case: producer and consumer must each
+  record at least one executed step independently.  Single-language
+  matrices keep the aggregate step rule (one actor may legitimately
+  be idle).
+- Command provenance is final-value and bound to the report's own
+  binary records: repeated identity options (``--matrix``,
+  ``--producer``, ``--consumer``, ``--rust``, ``--go``,
+  ``--fixture-tool``) fail; the effective (final) ``--matrix`` value
+  must equal the report matrix; the matrix command's ``--rust`` /
+  ``--go`` paths and the crash command's ``--producer`` /
+  ``--consumer`` paths must name binaries the report records, and
+  those binaries must resolve through the global sha256 ->
+  implementation map to the language the flag names.
+- Crash scenarios must keep their artifact evidence: every PASS
+  scenario records a non-empty ``destination_state`` object and a
+  ``reopen_outcome`` object; emptied or missing state is a report
+  defect.
+- ``live_sidecar`` and ``adapter_output`` imply a cross-process
+  reader: both-language opened coverage is required, and empty
+  opened coverage fails the gate instead of vacating the
+  requirement.
 - Counters are cross-validated with the per-case records: the number
   of matrix cases that are not PASS/SKIP must equal ``failed``, and
   the number of crash scenarios whose ``pass`` is not true must equal
@@ -131,6 +162,10 @@ CRASH_ONLY_KINDS = (
     "publication_temp",
     "authorized_scratch",
 )
+# Kinds whose contract implies a cross-process reader: both-language
+# opened coverage is mandatory; empty opened coverage is a FAIL, not a
+# vacuous pass.
+REQUIRED_OPENED_KINDS = ("live_sidecar", "adapter_output")
 # Matrix label -> the actor-language pair that the executed binaries must
 # have produced.  Used only as the consistency probe against the global
 # identities of the executed shas, never for attribution.
@@ -168,6 +203,25 @@ def _matrix_binary_declarations(report):
             yield sha, implementation
 
 
+def _crash_consumer_opened_main(scenario):
+    """Mirror of crash_harness._consumer_opened_main: true when the
+    scenario's recorded reopen_outcome proves the consumer opened the
+    v4 main (probe_consumer_open, post-resolution reopen, or a live
+    reader open)."""
+
+    outcome = scenario.get("reopen_outcome") or {}
+    if outcome.get("after_resolution") is not None:
+        return True
+    if (outcome.get("before_resolution") or {}).get(
+            "opened_complete_destination") is True:
+        return True
+    if outcome.get("live") is not None:
+        return True
+    if outcome.get("consumer_live_reader_transaction_id") is not None:
+        return True
+    return False
+
+
 def _crash_path_to_sha(report):
     """Crash-report root binaries table: binary path -> sha256.
 
@@ -191,6 +245,29 @@ def _crash_path_to_sha(report):
         path = binaries.get(key[:-len("_sha256")])
         if isinstance(path, str):
             table[path] = value
+    return table
+
+
+def _matrix_path_to_sha(report):
+    """Matrix-report binaries block: binary path -> sha256.
+
+    Matrix reports record each product binary as a capability record
+    with a ``path`` and ``sha256``; the command binding resolves the
+    recorded ``--rust``/``--go`` path through this table and then
+    through the global sha256 -> implementation map.
+    """
+
+    table = {}
+    binaries = report.get("binaries")
+    if not isinstance(binaries, dict):
+        return table
+    for record in binaries.values():
+        if not isinstance(record, dict):
+            continue
+        path = record.get("path")
+        sha = record.get("sha256")
+        if isinstance(path, str) and isinstance(sha, str):
+            table[path] = sha
     return table
 
 
@@ -229,15 +306,50 @@ def _command_argv(report):
     return None
 
 
-def _argv_value(argv, flag):
-    """Return the value of one ``--flag value`` (or ``--flag=value``) pair."""
+def _argv_pairs(argv):
+    """Yield ``(flag, value)`` for every ``--flag value`` / ``--flag=value`` pair."""
 
     for index, token in enumerate(argv):
-        if token == flag and index + 1 < len(argv):
-            return argv[index + 1]
-        if token.startswith(flag + "="):
-            return token[len(flag) + 1:]
-    return None
+        if not isinstance(token, str) or not token.startswith("--"):
+            continue
+        if "=" in token:
+            flag, value = token.split("=", 1)
+            yield flag, value
+        elif index + 1 < len(argv):
+            yield token, argv[index + 1]
+
+
+def _argv_value(argv, flag):
+    """Return the FINAL value of one ``--flag value`` (or ``--flag=value``).
+
+    The runner records the replayed ``sys.argv``; argparse scalar
+    options keep the last occurrence, so the effective value is the
+    final one.  A trailing override therefore wins, exactly as it did
+    in the executed run.
+    """
+
+    value = None
+    for seen_flag, seen_value in _argv_pairs(argv):
+        if seen_flag == flag:
+            value = seen_value
+    return value
+
+
+def _argv_duplicates(argv, flags):
+    """Return the identity flags supplied more than once in ``argv``.
+
+    A repeated identity option is either a replay defect or a forgery
+    ambiguity: argparse scalar options never consume two values, so
+    the recorded command cannot be the executed command.  Callers
+    fail the report when this returns non-empty.
+    """
+
+    duplicates = []
+    for flag in flags:
+        if sum(1 for seen_flag, _ in _argv_pairs(argv)
+               if seen_flag == flag) > 1:
+            duplicates.append(flag)
+    return duplicates
 
 
 def _global_implementation_map(matrix_paths, crash_paths, problems):
@@ -319,6 +431,12 @@ def matrix_evidence(path, report, implementation_of, problems):
         problems.append(
             f"matrix {path}: report records no command argv")
     else:
+        duplicated = _argv_duplicates(
+            argv, ("--matrix", "--rust", "--go", "--fixture-tool"))
+        if duplicated:
+            problems.append(
+                f"matrix {path}: report command supplies the identity "
+                f"option(s) {sorted(duplicated)} more than once")
         command_matrix = _argv_value(argv, "--matrix")
         if command_matrix is None:
             problems.append(
@@ -329,6 +447,28 @@ def matrix_evidence(path, report, implementation_of, problems):
                 f"matrix {path}: report command --matrix "
                 f"{command_matrix!r} does not match report matrix "
                 f"{matrix!r}")
+        report_shas = _matrix_path_to_sha(report)
+        for flag, language in (("--rust", "rust"), ("--go", "go")):
+            named = _argv_value(argv, flag)
+            if named is None:
+                problems.append(
+                    f"matrix {path}: report command records no {flag} "
+                    f"argument")
+                continue
+            bound_path = os.path.realpath(named)
+            bound_sha = report_shas.get(bound_path)
+            if bound_sha is None:
+                problems.append(
+                    f"matrix {path}: report command {flag} {named!r} "
+                    f"does not name any binary record of the report")
+                continue
+            bound_implementation = implementation_of.get(bound_sha)
+            if bound_implementation != language:
+                problems.append(
+                    f"matrix {path}: report command {flag} {named!r} "
+                    f"names binary {bound_path!r} (sha256 {bound_sha!r}) "
+                    f"whose global implementation is "
+                    f"{bound_implementation!r}, not {language!r}")
     cases = report.get("cases", [])
     # Counter cross-validation: the per-case status list is the truth;
     # a doctored aggregate can claim any number.  Cases that are not
@@ -377,6 +517,7 @@ def matrix_evidence(path, report, implementation_of, problems):
             continue
         implementations = {}
         actor_steps = {}
+        actor_operations = {}
         steps_sum = 0
         steps_complete = True
         for actor in ALL_ACTORS:
@@ -463,10 +604,34 @@ def matrix_evidence(path, report, implementation_of, problems):
             else:
                 steps_sum += steps
                 actor_steps[actor] = steps
+            # The runner records every executed method of the actor;
+            # without the executed-operation record a PASS case cannot
+            # prove its lineage refs name executed work.
+            operations = entry.get("operations")
+            if not isinstance(operations, list) or any(
+                    not isinstance(op, str) or not op
+                    for op in operations):
+                problems.append(
+                    f"matrix {path}: PASS case {case_name!r} actor "
+                    f"{actor!r} records no executed-operation record")
+                actor_operations[actor] = []
+            else:
+                actor_operations[actor] = operations
         if steps_complete and steps_sum < 1:
             problems.append(
                 f"matrix {path}: PASS case {case_name!r} records zero "
                 f"executed steps (no executed-work evidence)")
+        if matrix in ("rust_to_go", "go_to_rust") and steps_complete:
+            # Mixed matrices execute both binaries for every PASS
+            # case: each actor must record executed work on its own.
+            # Single-language matrices legitimately leave one actor
+            # idle (the aggregate step rule covers them).
+            for actor in ALL_ACTORS:
+                if actor_steps.get(actor, 0) < 1:
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} records "
+                        f"zero executed {actor} steps (mixed matrix "
+                        f"requires both actors to execute)")
         # Label/identity probe: the pair of global identities of the
         # executed shas must match the pair the matrix label claims.
         # A clone relabeled to another matrix keeps its executed
@@ -505,36 +670,58 @@ def matrix_evidence(path, report, implementation_of, problems):
             # reported separately).  Unknown actor prefixes keep the
             # poisoned "?" marker so coverage checks must fail.
             for entry in facts.get("created_by", []):
-                if not isinstance(entry, str):
+                actor, operation = _matrix_ref(entry)
+                if actor is None:
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} kind "
+                        f"{facts['kind']!r} created_by ref {entry!r} "
+                        f"carries an unknown actor or malformed "
+                        f"operation")
                     bucket["created"].add("?")
                     continue
-                actor = entry.split(".", 1)[0]
+                if operation != "legacy" and \
+                        operation not in actor_operations.get(actor, ()):
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} kind "
+                        f"{facts['kind']!r} created_by ref {entry!r} names "
+                        f"an operation not recorded in actor {actor!r} "
+                        f"executed operations")
+                    bucket["created"].add("?")
+                    continue
                 if actor_steps.get(actor) == 0:
                     problems.append(
                         f"matrix {path}: PASS case {case_name!r} kind "
                         f"{facts['kind']!r} credits creator actor {actor!r} "
                         f"with zero executed steps")
                     continue
-                if actor not in actor_steps:
-                    bucket["created"].add("?")
-                    continue
                 if actor_steps.get(actor) is None or \
                         actor_steps.get(actor) < 1:
                     continue
                 bucket["created"].add(implementations.get(actor, "?"))
             for entry in facts.get("opened_by", []):
-                if not isinstance(entry, str):
+                actor, operation = _matrix_ref(entry)
+                if actor is None:
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} kind "
+                        f"{facts['kind']!r} opened_by ref {entry!r} "
+                        f"carries an unknown actor or malformed "
+                        f"operation")
                     bucket["opened"].add("?")
                     continue
-                actor = entry.split(".", 1)[0]
+                if operation != "legacy" and \
+                        operation not in actor_operations.get(actor, ()):
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} kind "
+                        f"{facts['kind']!r} opened_by ref {entry!r} names "
+                        f"an operation not recorded in actor {actor!r} "
+                        f"executed operations")
+                    bucket["opened"].add("?")
+                    continue
                 if actor_steps.get(actor) == 0:
                     problems.append(
                         f"matrix {path}: PASS case {case_name!r} kind "
                         f"{facts['kind']!r} credits opener actor {actor!r} "
                         f"with zero executed steps")
-                    continue
-                if actor not in actor_steps:
-                    bucket["opened"].add("?")
                     continue
                 if actor_steps.get(actor) is None or \
                         actor_steps.get(actor) < 1:
@@ -543,6 +730,39 @@ def matrix_evidence(path, report, implementation_of, problems):
     stats = {"cases": len(cases), "fail_cases": fail_cases,
              "pass_cases": pass_cases, "contributing": contributing}
     return matrix, evidence, stats, problems
+
+
+def _matrix_ref(entry):
+    """Split a matrix lineage ref ``actor.operation``.
+
+    Returns ``(actor, operation)``, or ``(None, None)`` when the ref
+    does not name a known actor (producer/consumer) with a non-empty
+    operation.  The operation part is validated against the actor's
+    recorded executed operations by the caller.
+    """
+
+    if not isinstance(entry, str) or "." not in entry:
+        return None, None
+    actor, operation = entry.split(".", 1)
+    if actor not in ALL_ACTORS or not operation:
+        return None, None
+    return actor, operation
+
+
+def _crash_ref_ordinal(ref):
+    """Split a crash lineage ref ``actor.ordinal``.
+
+    Crash refs index the per-actor executed-operation list recorded on
+    the scenario; returns ``(actor, ordinal)`` or ``(None, None)``
+    when the ref does not name a known actor with a decimal ordinal.
+    """
+
+    if not isinstance(ref, str) or "." not in ref:
+        return None, None
+    actor, tail = ref.split(".", 1)
+    if actor not in ALL_ACTORS or not tail.isdigit():
+        return None, None
+    return actor, int(tail)
 
 
 def _split_identity(value):
@@ -597,6 +817,12 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
         role_flags = {"producer": "--producer",
                       "consumer": "--consumer",
                       "fixture_tool": "--fixture-tool"}
+        duplicated = _argv_duplicates(
+            argv, ("--producer", "--consumer", "--fixture-tool"))
+        if duplicated:
+            problems.append(
+                f"crash {path}: report command supplies the identity "
+                f"option(s) {sorted(duplicated)} more than once")
         for role in ("producer", "consumer", "fixture_tool"):
             table_path = root_binaries.get(role)
             flag = role_flags[role]
@@ -611,6 +837,20 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                     f"crash {path}: report command {flag} {named!r} does "
                     f"not name the report root binaries table path "
                     f"{table_path!r}")
+            elif role != "fixture_tool":
+                # The same path -> sha -> implementation binding the
+                # scenarios use: the named binary must resolve through
+                # the global map to a product language.
+                bound_sha = path_to_sha.get(table_path)
+                bound_implementation = None
+                if isinstance(bound_sha, str):
+                    bound_implementation = implementation_of.get(bound_sha)
+                if bound_implementation not in PRODUCT_LANGUAGES:
+                    problems.append(
+                        f"crash {path}: report command {flag} {named!r} "
+                        f"names binary {table_path!r} sha256 "
+                        f"{bound_sha!r} which does not resolve through "
+                        f"the global implementation map")
     scenarios = report.get("scenarios", [])
     # Counter cross-validation: the per-scenario pass flags are the
     # truth for the failed counter.
@@ -628,6 +868,19 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
             continue
         pass_scenarios += 1
         scenario_name = scenario.get("scenario", "<unnamed>")
+        # Every PASS scenario must keep its recorded artifact state: a
+        # scenario whose destination state or reopen outcome was
+        # emptied has no evidence of what the crash left behind.
+        destination_state = scenario.get("destination_state")
+        if not isinstance(destination_state, dict) or not destination_state:
+            problems.append(
+                f"crash {path}: PASS scenario {scenario_name!r} records "
+                f"no destination_state artifact evidence")
+        reopen_outcome = scenario.get("reopen_outcome")
+        if not isinstance(reopen_outcome, dict):
+            problems.append(
+                f"crash {path}: PASS scenario {scenario_name!r} records "
+                f"no reopen_outcome (must be an object)")
         # Per-scenario binary identity is mandatory: the harness records
         # the sha256 of the producer and consumer binaries each scenario
         # executes; a PASS scenario without it has no executed identity.
@@ -646,6 +899,21 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
             problems.append(
                 f"crash {path}: PASS scenario {scenario_name!r} records no "
                 f"executed assertions (no executed-work evidence)")
+        # Executed-operation record: the crash harness records the
+        # executed methods per actor (``operations = {role: [method,
+        # ...]}``); lineage refs are ordinals into those lists, so a
+        # scenario without the record has no executed-operation
+        # evidence.
+        scenario_operations = scenario.get("operations")
+        if not (isinstance(scenario_operations, dict)
+                and all(isinstance(scenario_operations.get(role), list)
+                        and all(isinstance(op, str) and op
+                                for op in scenario_operations[role])
+                        for role in ALL_ACTORS)):
+            problems.append(
+                f"crash {path}: PASS scenario {scenario_name!r} records "
+                f"no executed-operation record")
+            scenario_operations = None
         producer_label, producer_path = _split_identity(
             scenario.get("producer"))
         consumer_label, consumer_path = _split_identity(
@@ -767,39 +1035,99 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                     f"{kind!r} opened_by is not a list")
                 opened_by = []
             if not created_by:
-                problems.append(
-                    f"crash {path}: PASS scenario {scenario_name!r} kind "
-                    f"{kind!r} records empty created_by lineage")
+                # Scenarios whose v4 main was produced by the external
+                # v4-fixture tool (B, D) truthfully record no product
+                # creator ref for v4_main; the kind coverage is met by
+                # the publish scenarios (A1, A2, E, F).  Any other
+                # kind, and any scenario without the flag, must name a
+                # creator.
+                fixture_main = (kind == "v4_main" and bool(
+                    scenario.get("fixture_created_main")))
+                if not fixture_main:
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} kind "
+                        f"{kind!r} records empty created_by lineage")
             bucket = evidence.setdefault(kind, {"created": set(),
                                                 "opened": set()})
             for entry in created_by:
-                prefix = ""
-                if isinstance(entry, str) and "." in entry:
-                    head, tail = entry.split(".", 1)
-                    if head in ALL_ACTORS and tail:
-                        prefix = head
-                if prefix not in ALL_ACTORS:
+                actor, ordinal = _crash_ref_ordinal(entry)
+                if actor is None:
                     problems.append(
                         f"crash {path}: PASS scenario {scenario_name!r} "
-                        f"kind {kind!r} created_by actor {entry!r} "
-                        f"carries an unknown or malformed actor prefix")
+                        f"kind {kind!r} created_by ref {entry!r} carries "
+                        f"an unknown or malformed actor prefix or ordinal")
                     continue
-                language = (producer_impl if prefix == "producer"
+                if scenario_operations is not None and \
+                        ordinal >= len(scenario_operations.get(actor, ())):
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} created_by ref {entry!r} names "
+                        f"operation ordinal {ordinal} beyond the recorded "
+                        f"executed operations of actor {actor!r}")
+                    continue
+                language = (producer_impl if actor == "producer"
                             else consumer_impl)
                 bucket["created"].add(language or "?")
             for entry in opened_by:
-                prefix = ""
-                if isinstance(entry, str) and "." in entry:
-                    head, tail = entry.split(".", 1)
-                    if head in ALL_ACTORS and tail:
-                        prefix = head
-                if prefix not in ALL_ACTORS:
+                actor, ordinal = _crash_ref_ordinal(entry)
+                if actor is None:
                     problems.append(
                         f"crash {path}: PASS scenario {scenario_name!r} "
-                        f"kind {kind!r} opened_by actor {entry!r} "
-                        f"carries an unknown or malformed actor prefix")
+                        f"kind {kind!r} opened_by ref {entry!r} carries "
+                        f"an unknown or malformed actor prefix or ordinal")
                     continue
-                language = (producer_impl if prefix == "producer"
+                if scenario_operations is not None and \
+                        ordinal >= len(scenario_operations.get(actor, ())):
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} opened_by ref {entry!r} names "
+                        f"operation ordinal {ordinal} beyond the recorded "
+                        f"executed operations of actor {actor!r}")
+                    continue
+                # Open refs must be backed by the scenario's recorded
+                # open facts: live_sidecar opens require the actor in
+                # live_reader_opens, adapter_output opens require the
+                # actor in adapter_output_opens, v4_main opens require
+                # the consumer reopen proof, and every other kind has
+                # no cross-process open contract (an opened ref is a
+                # fabricated open).  The harness records these facts
+                # at the call sites (crash_harness.py _record_live_open
+                # / _record_adapter_open / _consumer_opened_main).
+                open_facts = scenario.get("live_reader_opens") or {}
+                adapter_facts = scenario.get(
+                    "adapter_output_opens") or {}
+                if kind == "live_sidecar" and not open_facts.get(actor):
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} opened_by ref {entry!r} is not "
+                        f"backed by a recorded live reader open of "
+                        f"actor {actor!r}")
+                    continue
+                if kind == "adapter_output" and \
+                        not adapter_facts.get(actor):
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} opened_by ref {entry!r} is not "
+                        f"backed by a recorded adapter-output open of "
+                        f"actor {actor!r}")
+                    continue
+                if kind == "v4_main" and not (
+                        actor == "consumer"
+                        and _crash_consumer_opened_main(scenario)):
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} opened_by ref {entry!r} is not "
+                        f"backed by a recorded consumer main open")
+                    continue
+                if kind not in ("live_sidecar", "adapter_output",
+                                "v4_main"):
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} records a cross-process open "
+                        f"ref {entry!r} although no v1 open contract "
+                        f"opens this kind")
+                    continue
+                language = (producer_impl if actor == "producer"
                             else consumer_impl)
                 bucket["opened"].add(language or "?")
     if not {"rust", "go"} <= producers or not {"rust", "go"} <= consumers:
@@ -905,7 +1233,14 @@ def assess(matrix_paths, crash_paths):
             problems.append(
                 f"kind {kind!r} must be created by both languages: "
                 f"created by {sorted(bucket['created'])}")
-        if bucket["opened"] and not {"rust", "go"} <= bucket["opened"]:
+        if kind in REQUIRED_OPENED_KINDS:
+            # These kinds imply a cross-process reader; empty opened
+            # coverage is a FAIL, never a vacuous pass.
+            if not {"rust", "go"} <= bucket["opened"]:
+                problems.append(
+                    f"kind {kind!r} must be opened by both languages: "
+                    f"opened by {sorted(bucket['opened'])}")
+        elif bucket["opened"] and not {"rust", "go"} <= bucket["opened"]:
             problems.append(
                 f"kind {kind!r} is opened by services and must be opened "
                 f"by both languages: opened by {sorted(bucket['opened'])}")
@@ -924,7 +1259,13 @@ def main():
                         metavar="PATH", help="one matrix report (repeatable)")
     parser.add_argument("--crash", action="append", default=[],
                         metavar="PATH", help="one crash report (repeatable)")
+    parser.add_argument("--self-test", action="store_true",
+                        help="run the doctored-report regression suite "
+                             "and exit")
     args = parser.parse_args()
+    if args.self_test:
+        _self_test()
+        return 0
     if not args.matrix and not args.crash:
         parser.error("at least one --matrix or --crash report is required")
 
@@ -933,9 +1274,13 @@ def main():
     print("Sources: " + "; ".join(sources))
     for kind in REQUIRED_KINDS:
         bucket = coverage[kind]
+        if kind in REQUIRED_OPENED_KINDS:
+            opened_ok = {"rust", "go"} <= bucket["opened"]
+        else:
+            opened_ok = (not bucket["opened"]
+                         or {"rust", "go"} <= bucket["opened"])
         status = "OK  " if ({"rust", "go"} <= bucket["created"]
-                            and (not bucket["opened"]
-                                 or {"rust", "go"} <= bucket["opened"])) else "MISS"
+                            and opened_ok) else "MISS"
         print(f"  {status} {kind}: created by "
               f"{sorted(bucket['created']) or ['<none>']}, opened by "
               f"{sorted(bucket['opened']) or ['<none>']}")
@@ -957,7 +1302,11 @@ def _self_test():
             "schema": "iprange-cli-report-v3",
             "matrix": matrix,
             "command": [
-                "v4/cli/run.py", "--matrix", matrix,
+                "v4/cli/run.py",
+                "--rust", BINARY_PATHS["rust"],
+                "--go", BINARY_PATHS["go"],
+                "--fixture-tool", CRASH_BINARIES["fixture_tool"],
+                "--matrix", matrix,
                 "--work-dir", "/tmp/kind-matrix-work",
                 "--json-report", "/tmp/kind-matrix-report.json"],
             "cases": cases,
@@ -994,10 +1343,47 @@ def _self_test():
                 "consumer_sha256": sha_of[c],
                 "assertions": list(assertions),
                 "failures": [],
-                "kinds": {kind: {"created_by": ["producer.0"],
-                                 "opened_by": ["consumer.0"]}
-                          for kind in crash_kinds},
+                "destination_state": {
+                    "class": "absent_after_crash", "exists": False,
+                    "reservation_basename": [".reservation.tmp"],
+                    "publish_temp_basenames": [".publication.tmp"],
+                    "recorded_output_sha512": "0" * 128,
+                },
+                "reopen_outcome": {
+                    "before_resolution": {"code": "invalid_path",
+                                          "outcome": "not_started"},
+                    "after_resolution": {"database_id": "doctored",
+                                         "transaction_id": "1"},
+                },
+                "operations": {
+                    "producer": ["iprange.v1.database.create",
+                                 "iprange.v1.publication.resolve"],
+                    "consumer": ["iprange.v1.reader.open",
+                                 "iprange.v1.publication.inspect"],
+                },
+                "live_reader_opens": {"producer": True,
+                                      "consumer": True},
+                "adapter_output_opens": {"producer": True},
+                "kinds": {
+                    kind: {"created_by": ["producer.0"],
+                           "opened_by": []}
+                    for kind in crash_kinds},
             })
+            # Every scenario truthfully records the open-contract
+            # kinds: v4_main (consumer reopen), live_sidecar (the
+            # live reader opens of both actors), and adapter_output
+            # (the producer's export writer open).  The two directions
+            # span both languages.
+            scenario = scenarios[-1]
+            scenario["kinds"]["v4_main"] = {
+                "created_by": ["producer.0"],
+                "opened_by": ["consumer.0"]}
+            scenario["kinds"]["live_sidecar"] = {
+                "created_by": ["producer.0"],
+                "opened_by": ["producer.0", "consumer.0"]}
+            scenario["kinds"]["adapter_output"] = {
+                "created_by": ["producer.0"],
+                "opened_by": ["producer.0"]}
         return {"schema": "iprange-cli-crash-report-v1",
                 "binaries": dict(CRASH_BINARIES),
                 "command": [
@@ -1047,11 +1433,13 @@ def _self_test():
                     "sha256": actor_sha[expected["producer"]],
                     "implementation": expected["producer"],
                     "steps": 1,
+                    "operations": ["iprange.v1.selftest"],
                 },
                 "consumer": {
                     "sha256": actor_sha[expected["consumer"]],
                     "implementation": expected["consumer"],
                     "steps": 1,
+                    "operations": ["iprange.v1.selftest"],
                 },
             },
             "file_kinds": ledger}], failed=0)
@@ -1079,8 +1467,15 @@ def _self_test():
         assert not problems, f"green battery failed: {problems}"
         assert all({"rust", "go"} <= coverage[k]["created"]
                    for k in REQUIRED_KINDS)
-        assert all({"rust", "go"} <= coverage[k]["opened"]
-                   for k in REQUIRED_KINDS)
+        # Open coverage is contract-based: kinds with a cross-process
+        # open contract must be opened by both languages; kinds
+        # without one (publication temporaries, scratch) truthfully
+        # record no openers and the gate requires a non-empty opener
+        # set only for the required-opened kinds.
+        for kind in REQUIRED_OPENED_KINDS:
+            assert {"rust", "go"} <= coverage[kind]["opened"], (
+                f"required-opened kind {kind} lacks both-language "
+                f"open coverage: {coverage[kind]}")
 
         # 2. Missing any matrix report fails the gate.
         problems, _c, _s = assess(four[:1] + four[2:], [crash_path])
@@ -1116,9 +1511,16 @@ def _self_test():
         assign(rust_created_path, rust_created)
         r2g_created_path = os.path.join(work, "one-lang-r2g.json")
         assign(r2g_created_path, r2g_created)
+        import copy as _copy
+        crash_no_v4 = _copy.deepcopy(crash_report(
+            ["rust", "go"], ["go", "rust"]))
+        for scenario in crash_no_v4["scenarios"]:
+            scenario["kinds"]["v4_main"]["created_by"] = []
+        crash_no_v4_path = os.path.join(work, "one-lang-crash.json")
+        assign(crash_no_v4_path, crash_no_v4)
         problems, _c, _s = assess(
             [rust_created_path, green["go"], r2g_created_path,
-             green["go_to_rust"]], [crash_path])
+             green["go_to_rust"]], [crash_no_v4_path])
         assert problems and any("created by both languages" in p
                                 for p in problems)
 
@@ -1136,9 +1538,16 @@ def _self_test():
         assign(rust_opened_path, rust_opened)
         g2r_opened_path = os.path.join(work, "no-open-g2r.json")
         assign(g2r_opened_path, g2r_opened)
+        import copy as _copy2
+        crash_no_v4_open = _copy2.deepcopy(crash_report(
+            ["rust", "go"], ["go", "rust"]))
+        for scenario in crash_no_v4_open["scenarios"]:
+            scenario["kinds"]["v4_main"]["opened_by"] = []
+        crash_no_v4_open_path = os.path.join(work, "no-open-crash.json")
+        assign(crash_no_v4_open_path, crash_no_v4_open)
         problems, _c, _s = assess(
             [rust_opened_path, green["go"], green["rust_to_go"],
-             g2r_opened_path], [crash_path])
+             g2r_opened_path], [crash_no_v4_open_path])
         assert problems and any("opened by both languages" in p
                                 for p in problems)
 
@@ -1221,6 +1630,10 @@ def _self_test():
         #     "rust" by the genuine reports and "go" by the clone, a
         #     global identity conflict.
         forge = green_report("rust")
+        # The shared BINARIES dict is aliased by every green report;
+        # the clone's binary block must be a private copy so the
+        # mutation cannot poison the other reports of the battery.
+        forge["binaries"] = _copy.deepcopy(BINARIES)
         forge["matrix"] = "go"
         forge["cases"][0]["actors"]["producer"]["implementation"] = "go"
         forge["cases"][0]["actors"]["consumer"]["implementation"] = "go"
@@ -1525,6 +1938,196 @@ def _self_test():
         assert problems and any("contradicts the report binaries table"
                                 in p for p in problems), (
             f"root-table contradiction did not fail the gate: {problems}")
+
+        # 25. Mixed matrices execute both actors: a PASS case of a
+        #     mixed matrix with consumer steps=0 (and its consumer
+        #     credits removed) fails even though the aggregate step
+        #     sum would accept it.
+        mixed_idle = green_report("rust_to_go")
+        mixed_idle["cases"][0]["actors"]["consumer"]["steps"] = 0
+        for facts in mixed_idle["cases"][0]["file_kinds"].values():
+            for field in ("created_by", "opened_by"):
+                facts[field] = [ref for ref in facts[field]
+                                if not ref.startswith("consumer.")]
+        mixed_idle_path = os.path.join(work, "mixed-idle-consumer.json")
+        assign(mixed_idle_path, mixed_idle)
+        problems, _c, _s = assess(
+            [green["rust"], green["go"], mixed_idle_path,
+             green["go_to_rust"]], [crash_path])
+        assert problems and any("zero executed consumer steps" in p
+                                for p in problems), (
+            f"mixed zero-consumer-steps did not fail the gate: {problems}")
+
+        # 26. A PASS case whose actor records no executed-operation
+        #     record fails the gate even when the actor executed
+        #     positive steps.
+        no_ops = green_report("go")
+        del no_ops["cases"][0]["actors"]["consumer"]["operations"]
+        no_ops_path = os.path.join(work, "no-operations.json")
+        assign(no_ops_path, no_ops)
+        problems, _c, _s = assess(
+            [green["rust"], no_ops_path, green["rust_to_go"],
+             green["go_to_rust"]], [crash_path])
+        assert problems and any("no executed-operation record" in p
+                                for p in problems), (
+            f"missing operations record did not fail the gate: {problems}")
+
+        # 27. Lineage refs must name recorded actors and executed
+        #     operations: an unknown-actor ref and a known actor with
+        #     an unrecorded operation both fail the gate.
+        ghost_actor = green_report("rust")
+        ghost_actor["cases"][0]["file_kinds"]["k0.bin"][
+            "created_by"].append("ghost.no-such-operation")
+        ghost_actor_path = os.path.join(work, "ghost-actor.json")
+        assign(ghost_actor_path, ghost_actor)
+        problems, _c, _s = assess(
+            [ghost_actor_path] + four[1:], [crash_path])
+        assert problems and any("unknown actor" in p
+                                for p in problems), (
+            f"ghost actor ref did not fail the gate: {problems}")
+        ghost_operation = green_report("rust")
+        ghost_operation["cases"][0]["file_kinds"]["k0.bin"][
+            "created_by"].append("producer.no-such-executed-operation")
+        ghost_operation_path = os.path.join(work, "ghost-operation.json")
+        assign(ghost_operation_path, ghost_operation)
+        problems, _c, _s = assess(
+            [ghost_operation_path] + four[1:], [crash_path])
+        assert problems and any("not recorded in actor" in p
+                                for p in problems), (
+            f"ghost operation ref did not fail the gate: {problems}")
+
+        # 28. Duplicate identity options are rejected: a trailing
+        #     --matrix override and a trailing --producer override
+        #     both fail the gate as ambiguous commands.
+        dupe_matrix = green_report("go")
+        dupe_matrix["command"].extend(["--matrix", "rust"])
+        dupe_matrix_path = os.path.join(work, "dupe-matrix.json")
+        assign(dupe_matrix_path, dupe_matrix)
+        problems, _c, _s = assess(
+            [green["rust"], dupe_matrix_path, green["rust_to_go"],
+             green["go_to_rust"]], [crash_path])
+        assert problems and any("more than once" in p for p in problems), (
+            f"duplicate --matrix did not fail the gate: {problems}")
+        dupe_crash = crash_report(["rust", "go"], ["go", "rust"])
+        dupe_crash["command"].extend(["--producer", "/bin/false"])
+        dupe_crash_path = os.path.join(work, "dupe-producer.json")
+        assign(dupe_crash_path, dupe_crash)
+        problems, _c, _s = assess(four, [dupe_crash_path])
+        assert problems and any("more than once" in p for p in problems), (
+            f"duplicate --producer did not fail the gate: {problems}")
+
+        # 29. Executable arguments must name the report binary
+        #     records: a --go /bin/false and a --producer /bin/false
+        #     both fail the gate.
+        false_matrix = green_report("rust_to_go")
+        for index, token in enumerate(false_matrix["command"]):
+            if token == "--go":
+                false_matrix["command"][index + 1] = "/bin/false"
+                break
+        false_matrix_path = os.path.join(work, "false-matrix-binary.json")
+        assign(false_matrix_path, false_matrix)
+        problems, _c, _s = assess(
+            [green["rust"], green["go"], false_matrix_path,
+             green["go_to_rust"]], [crash_path])
+        assert problems and any("does not name any binary record" in p
+                                for p in problems), (
+            f"/bin/false --go did not fail the gate: {problems}")
+        false_crash = crash_report(["rust", "go"], ["go", "rust"])
+        for index, token in enumerate(false_crash["command"]):
+            if token == "--producer":
+                false_crash["command"][index + 1] = "/bin/false"
+                break
+        false_crash_path = os.path.join(work, "false-crash-producer.json")
+        assign(false_crash_path, false_crash)
+        problems, _c, _s = assess(four, [false_crash_path])
+        assert problems and any("does not name the report root binaries "
+                                "table path" in p for p in problems), (
+            f"/bin/false --producer did not fail the gate: {problems}")
+
+        # 30. A PASS crash scenario must keep its artifact evidence:
+        #     destination_state={} and reopen_outcome=None are both
+        #     report defects and fail the gate.
+        contradictory = crash_report(["rust", "go"], ["go", "rust"])
+        for scenario in contradictory["scenarios"]:
+            scenario["destination_state"] = {}
+            scenario["reopen_outcome"] = None
+        contradictory_path = os.path.join(work, "contradictory-state.json")
+        assign(contradictory_path, contradictory)
+        problems, _c, _s = assess(four, [contradictory_path])
+        assert problems and any("destination_state" in p
+                                for p in problems) and any(
+            "reopen_outcome" in p for p in problems), (
+            f"contradictory scenario state did not fail the gate: "
+            f"{problems}")
+
+        # 31. Required-opened kinds: live_sidecar and adapter_output
+        #     imply a cross-process reader, so empty opened coverage
+        #     fails instead of vacating the requirement.
+        unopened = {}
+        for m in REQUIRED_MATRICES:
+            unopened_report = green_report(m)
+            for facts in unopened_report["cases"][0]["file_kinds"].values():
+                if facts["kind"] in REQUIRED_OPENED_KINDS:
+                    facts["opened_by"] = []
+            unopened[m] = os.path.join(work, f"unopened-{m}.json")
+            assign(unopened[m], unopened_report)
+        unopened_crash = _copy.deepcopy(crash_report(
+            ["rust", "go"], ["go", "rust"]))
+        for scenario in unopened_crash["scenarios"]:
+            for kind in REQUIRED_OPENED_KINDS:
+                if kind in scenario["kinds"]:
+                    scenario["kinds"][kind]["opened_by"] = []
+        unopened_crash_path = os.path.join(work, "unopened-crash.json")
+        assign(unopened_crash_path, unopened_crash)
+        problems, _c, _s = assess(
+            [unopened[m] for m in REQUIRED_MATRICES],
+            [unopened_crash_path])
+        assert problems and any("must be opened by both languages: "
+                                "opened by []" in p for p in problems), (
+            f"empty opened coverage for required-opened kind did not "
+            f"fail the gate: {problems}")
+
+        # 32. Crash lineage ordinals must index the recorded executed
+        #     operations: an ordinal past the end of the actor's list
+        #     fails the gate.
+        beyond_ops = crash_report(["rust", "go"], ["go", "rust"])
+        beyond_ops["scenarios"][0]["kinds"]["publication_reservation"][
+            "created_by"] = ["producer.5"]
+        beyond_ops_path = os.path.join(work, "crash-ordinal.json")
+        assign(beyond_ops_path, beyond_ops)
+        problems, _c, _s = assess(four, [beyond_ops_path])
+        assert problems and any("beyond the recorded executed operations"
+                                in p for p in problems), (
+            f"crash ordinal beyond operations did not fail the gate: "
+            f"{problems}")
+
+        # 33. Fixture-created mains: a PASS scenario that truthfully
+        #     records fixture_created_main may leave v4_main with an
+        #     empty created_by (B/D mains come from the external
+        #     v4-fixture tool); without the flag the empty creator
+        #     still fails the gate.
+        fixture_scenario = crash_report(["rust", "go"], ["go", "rust"])
+        scenario = fixture_scenario["scenarios"][0]
+        scenario["fixture_created_main"] = True
+        scenario["kinds"]["v4_main"] = {
+            "created_by": [], "opened_by": ["consumer.0"]}
+        fixture_path = os.path.join(work, "crash-fixture-main.json")
+        assign(fixture_path, fixture_scenario)
+        problems, _c, _s = assess(four, [fixture_path])
+        assert not any("records empty created_by lineage" in p
+                       for p in problems), (
+            f"fixture-created v4_main empty creator failed the gate: "
+            f"{problems}")
+        unmarked = crash_report(["rust", "go"], ["go", "rust"])
+        unmarked["scenarios"][0]["kinds"]["v4_main"] = {
+            "created_by": [], "opened_by": ["consumer.0"]}
+        unmarked_path = os.path.join(work, "crash-unmarked-main.json")
+        assign(unmarked_path, unmarked)
+        problems, _c, _s = assess(four, [unmarked_path])
+        assert problems and any("records empty created_by lineage" in p
+                                for p in problems), (
+            f"unmarked empty v4_main creator did not fail the gate: "
+            f"{problems}")
 
 
 if __name__ == "__main__":

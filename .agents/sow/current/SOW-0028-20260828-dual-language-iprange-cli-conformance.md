@@ -4603,3 +4603,269 @@ above) governs the crash-scope wording:
   paths and no host alias.
 
 
+
+### 2026-09-05 (continued) — seventh fix wave: external gate review of aaeb1eef
+
+The external whole-milestone gate review of the exact final revision
+`aaeb1eef` (review artifact `/tmp/iprange-aaeb-review.vZvGjc/review.md`)
+returned FAIL with two P1 defect classes, one P1 qualification defect,
+and six P2 proof defects.  The lead independently verified every
+finding before recording this wave, using the review's production
+probes against the staged binaries whose hashes match the committed
+evidence (Go product `8015bc3f…`, Rust product `389d01b9…`) and the
+gate CLI itself:
+
+- P1 — cancelling a queued batch member cancels unrelated active
+  work in both languages: the worker installs every batch member as
+  active and cancels one shared per-batch token
+  (`v4/go/internal/cli/rpc/session.go` workerLoop/applyCancel,
+  `v4/rust/iprange-cli/src/rpc/session.rs` worker_loop/apply_cancel).
+  Production probe: batch [slow export id=active, describe id=queued],
+  cancel(queued) while the export runs → export answers -32010
+  cancelled in both binaries.
+- P1 — Rust transport retention is unbounded and fully-rejected
+  batches are queued behind active work: events and work channels are
+  unbounded `mpsc::channel`s (session.rs), so with stdout unread the
+  reader accepted all 12,582,912 bytes offered (RSS grew from
+  ~5.7 MiB to ~18.7 MiB) and ten all-busy batches produced zero
+  responses before a later dispatch marker; Go applied pipe
+  backpressure after ~168 frames and answered the rejected batches
+  immediately.
+- P1 — the kind-coverage gate still accepts mixed matrices with zero
+  consumer execution: the per-case check sums actor steps
+  (`check_kind_coverage.py` ~:466), so setting consumer.steps=0 and
+  removing consumer credits in every mixed PASS case still exits 0.
+- P2 — command provenance accepts internally contradictory reports:
+  `_argv_value` reads the first repeated flag while the runner's
+  argparse uses the final value; `--go /bin/false`, a trailing extra
+  `--matrix go`, and a trailing `--producer /bin/false` all pass the
+  gate CLI.  Additional lineage mutations verified by the lead to
+  pass: fabricated consumer opens, nonexistent actor/operation
+  references, contradictory scenario state, unknown-matrix-actor
+  credits.
+- P2 — artifact lineage omits real sidecar and adapter-output opens:
+  scenario B opens a live reader through the consumer
+  (`crash_harness.py` ~:1247), which both engines open read-write
+  (with slot-claim writes) into `<main>.readers`, yet
+  `observed_kinds` hardcodes `live_sidecar opened_by: []` (~:2482)
+  and scenario E's consumer open of the completed export destination
+  is likewise unrecorded; `run.py` record_ledger counts opened paths
+  only when explicitly declared in step params, so implicit sidecar
+  opens are absent from matrix lineage; the gate then vacates the
+  both-language opened requirement when opened_by is empty
+  (`check_kind_coverage.py` ~:908).
+- P2 — crash scenario E accepts unlimited orphan residue: the
+  assertion is only `len(orphans) >= 1` (~:1977); 21 surviving export
+  temporaries pass; the retry residue set is recorded without a bound.
+- P2 — the resource harness deadline is bypassed by a partial
+  response: `read_responses` calls blocking `readline()` after a
+  readable wake (`resource_harness.py` ~:200); a 0.1 s deadline
+  blocked 2.01 s and a child that never completes the line hangs the
+  harness forever; synchronous stdin writes have no deadline at all.
+- P2 — Windows cross-listing accepts extra and false rows
+  (`check_synthesized_pair_rows` ~:807, cross branch ~:1116): a third
+  alien row, nonexistent inert basename, and wrong identities all
+  pass; the exact removal-log proof accepts a single
+  `{"removed_at":123456}` record (~:588) although the deterministic
+  200/150-record inputs must produce exactly 50 complete records.
+- P2 — the frame-over-limit path exits zero in both products while
+  the normative spec requires non-zero for startup/framing failure
+  (iprange-jsonrpc-v1.md:96-105): both sessions route the oversize
+  close through `shutdown()` (exit 0) and the resource proof b
+  mandates 0.
+
+**Decision (lead, recorded before implementation): repair all nine
+failure classes within SOW-0028.  The exit-status contract is
+resolved by the design-authority order: the normative specification
+(`iprange-jsonrpc-v1.md:96-105`, framing failure exits non-zero)
+prevails over the implementation/test-pinned exit 0; both products,
+the Go session regression test, and resource proof b are conformed to
+it.**  All other repairs are gate-hardening and defect fixes under
+the existing approved scope; every gate repair gains a negative
+control proving the previously accepted bad evidence now fails, per
+the 2026-09-05 user decision.  The Windows report is regenerated on
+the authorized Windows validation host at the final product sources
+(D2-A authorization covers SOW-0028 Windows qualification).
+
+Repair ownership (six parallel workers, disjoint write scopes):
+- Go session (`v4/go/internal/cli/rpc/session.go`,
+  `session_test.go`): per-member cancellation token and active
+  identity; oversize frame exits non-zero; regression tests for
+  cancelling active, queued, completed, and unknown ids while other
+  batch members remain.
+- Rust session (`v4/rust/iprange-cli/src/rpc/session.rs`): identical
+  per-member cancellation; bounded events and work channels;
+  all-rejected batches answered immediately; oversize exits non-zero.
+- Kind gate (`v4/cli/check_kind_coverage.py`): mixed per-case
+  two-actor execution; executed-operation records; effective/duplicate
+  command option rejection and executable→binary-record binding;
+  crash scenario shape validation; sidecar/adapter-output opened
+  coverage enforcement; negative controls for every rule.
+- Runner and crash lineages (`v4/cli/run.py`,
+  `v4/cli/crash_harness.py`): truthful implicit sidecar and
+  adapter-output opens; per-actor executed-operation records;
+  scenario E exactly-one orphan bound with retry residue assertion.
+- Resource harness (`v4/cli/resource_harness.py`): monotonic-deadline
+  nonblocking reads and writes; proof b requires the non-zero framing
+  exit; deadline negative controls.
+- Windows harness (`v4/cli/windows_housekeeping_harness.py`): strict
+  two-row cross-listing with identity/basename/digest verification;
+  exact 50-record removal-log proof with independent derivation;
+  removal log captured in the report; self-test negative controls.
+
+Implementation and validation of this wave are recorded below as they
+land.
+
+### Seventh wave implementation (this wave)
+
+All nine verified findings were repaired by six parallel workers with
+disjoint write scopes (worker ownership is recorded in the decision
+section above); the lead then reviewed every diff, fixed the
+remaining fixture-ownership clause, and integrated:
+
+1. Go session (`v4/go/internal/cli/rpc/session.go`,
+   `session_test.go`): the worker now installs a fresh cancellation
+   token and an active-identity set containing only the currently
+   executing member's request id (cleared between members), so
+   cancelling a queued sibling only marks it cancelled and never
+   touches unrelated active work, and a cancelled member's token can
+   never poison later siblings; the frame-over-limit path still
+   drains queued work and closes resources but returns a framing
+   error, so the process exits non-zero per
+   `iprange-jsonrpc-v1.md:96-105`.  New regression tests fail
+   against the pre-fix code:
+   `TestCancelQueuedBatchMemberDoesNotCancelActiveSibling`
+   (10/10 deterministic), `TestCancelActiveMemberDoesNotPoisonLaterSibling`,
+   `TestCancelUnknownOrCompletedIdWhileOtherMembersRun`,
+   and the updated `TestFrameOverLimitFailsWithIDNullAndCloses`
+   (now expects the framing error).
+2. Rust session (`v4/rust/iprange-cli/src/rpc/session.rs`): the
+   identical per-member cancellation scope; the events channel is now
+   `sync_channel(64)` and the work channel `sync_channel(QUEUED_LIMIT)`
+   so the reader applies pipe backpressure instead of retaining
+   unbounded input (the 12 MiB probe now retains ~64 KiB-worth of
+   frames); fully-rejected batches are answered immediately in the
+   frame handler instead of being queued behind active work (Go
+   parity); the worker releases the writer lock before reporting a
+   Fatal write failure (a bounded-channel deadlock hazard found
+   during the change); the frame-over-limit path exits non-zero.
+   New tests: `cancel_queued_batch_member_does_not_cancel_active_sibling`,
+   `cancel_active_member_does_not_poison_later_sibling`,
+   `cancel_unknown_or_completed_id_while_other_members_run`,
+   `frame_over_limit_exits_nonzero` (35/35 module tests pass).
+3. Kind gate (`v4/cli/check_kind_coverage.py`): mixed matrices
+   require `producer.steps >= 1` AND `consumer.steps >= 1` per PASS
+   case; per-case/per-scenario `operations` records are mandatory and
+   every lineage ref must index them; command validation uses
+   final-value argparse semantics, rejects duplicate identity
+   options, and binds `--rust/--go/--producer/--consumer` values to
+   the report's binary records (`/bin/false` and unlisted paths
+   fail); PASS scenarios must keep `destination_state` and
+   `reopen_outcome`; crash open refs must be backed by the scenario's
+   recorded `live_reader_opens`/`adapter_output_opens` facts (and
+   v4_main opens by the recorded consumer reopen), so fabricated
+   opens on scratch/reservation/temp kinds fail;
+   `REQUIRED_OPENED_KINDS = ("live_sidecar", "adapter_output")`
+   cannot vacate on empty opened coverage; fixture-created v4_main
+   (scenario flag `fixture_created_main`) truthfully records no
+   product creator.  Self-test controls grew to 35 (new controls for
+   every rule, including the fixture-created accept/reject pair and
+   the fabricated-open rejection); all nine previously accepted
+   mutations now exit 1 through the real gate CLI and the genuine
+   regenerated evidence passes.
+4. runner and crash lineages (`v4/cli/run.py`,
+   `v4/cli/crash_harness.py`): per-actor executed-operation records;
+   implicit sidecar opens are derived for live-opening methods from
+   the declared main path (`<main>.readers`, `LIVE_OPEN_METHODS` and
+   per-method reader-source slots verified against the Rust handlers
+   and the case files); crash scenarios record sidecar and
+   adapter-output opens at the actual call sites (the false
+   "the sidecar is never opened by the consumer" comment is
+   removed); scenario B/D record `fixture_created_main` so their
+   fixture-created mains carry no product creator (the reviewer's
+   fixture-ownership clause); scenario E asserts exactly one
+   private `.export.tmp` orphan matching the interrupted attempt and
+   that the successful retry introduces no new residue (negative
+   control at harness startup).
+5. Resource harness (`v4/cli/resource_harness.py`):
+   `read_responses` reads incrementally with `os.read` under a
+   monotonic deadline (`readline()` removed — a partial line can no
+   longer stall the harness); `write_all_bounded` applies the same
+   deadline to stdin writes; proof b now requires the non-zero exit
+   code of the framing-failure close; `--self-test` proves both
+   controls (0.1 s read deadline returns in ~0.101 s, a 1 MiB write
+   to a non-draining child fails in ~0.502 s).
+6. Windows harness (`v4/cli/windows_housekeeping_harness.py`):
+   strict pair-row validation (exactly two rows, candidate-kind
+   whitelist, decoded basenames vs the synth names, real-file
+   existence, row identities vs the synth recording — including a
+   newly recorded `envelope_identity` — and envelope sha256) plus
+   exact cross-listing equality; the native refresh proof derives the
+   exact 50-record removal log independently from the deterministic
+   200/150-record inputs and the first-seen policy (the derived
+   digest reproduces the adopted product log byte-for-byte:
+   `sha256 96c8ab…`, 4 752 bytes, 50 records), asserts every record
+   field and the RPC-advertised identity, and captures the full log
+   in the report (schema v3); `--self-test` covers every known
+   mutation.  The report is regenerated on the authorized Windows
+   validation host at the final product sources.
+7. Evidence regenerated at the final product sources (Linux battery,
+   work dir `/tmp/qualsvc/ev9/`): Rust 38/38, Go 38/38, mixed
+   14+24 x2, crash 16/16 both directions with the negative control
+   0/16, resource 8/8 (proof b records the non-zero exit for both
+   products), golden 53, sensitivity 14, kind gate PASS with the
+   truthful lineage (live_sidecar and adapter_output opened by both
+   languages, publication kinds truthfully unopened).  During
+   integration the lead found that a previous staged Rust product
+   artifact had been built from an intermediate source state (the
+   canonical `--bin iprange` release build was not reproducible from
+   the recorded command); the canonical clean-release build command
+   (`cargo build --release --all-features -p iprange-cli --bin
+   iprange -p iprange-livedb --bin iprange-v4-worker --example
+   v4-fixture`) is now recorded in `evidence/README.md` with the new
+   product SHA-256
+   `860938744b203a7684d5dbc96e2fff9a8601f7dfd1fca2484107f5bd3b746e8f`
+   and the whole battery was re-run against it.
+- Sensitive-data gate: regenerated evidence contains no personal
+  paths and no host alias.
+- Artifact gate: `v4/cli/README.md`, `v4/cli/evidence/README.md`,
+  and `v4/cli/resource-record.md` updated (proof b exit status,
+  canonical build identity, seventh-wave narrative); no spec change
+  is required (the non-zero framing-failure exit conforms to the
+  existing normative shutdown contract; the fixture-ownership and
+  open-lineage records are qualification facts, not format
+  contracts); no project-skill change is required.
+
+### Seventh wave validation (this wave)
+
+- Go plain and `v4work` suites, vet, gofmt: green; the six session
+  regression tests fail against the pre-fix code and pass now (the
+  cancellation trio includes the stream-level
+  queued-sibling reproducer, 10/10 pre-fix deterministic).
+- Rust `cargo test --workspace --all-features`: 50/50 suites green
+  (35 iprange-cli session tests including the four new regressions;
+  the whole workspace compiles warning-free).
+- Kind gate: self-test green (35 controls); every formerly-accepted
+  mutation (nine classes) exits 1 through the real gate CLI; the
+  genuine regenerated evidence passes with both-language opened
+  coverage for `live_sidecar` and `adapter_output`.
+- Linux battery above regenerated from the canonical staged
+  binaries: Go product `85488a0f…`, worker `16236608…`; Rust product
+  `86093874…`, worker `cb9ad6cd…`; fixture `7c616793…`.
+- Resource harness self-test: read control 0.1 s deadline returns in
+  ~0.101 s (previously blocked the full stall); write control fails
+  in ~0.502 s; proof b both products exit non-zero with exactly one
+  -32001 and the sentinel unanswered.
+- Windows harness self-test: all five P2-5 mutations and all eight
+  P2-6 doctored-log controls fail; the synthetic complete set and the
+  derived exact log identity pass.
+- Windows battery: rerun on the authorized Windows validation host
+  at the final product sources after the harness changes (recorded
+  in the report below).
+- Sensitive-data gate: regenerated evidence contains no personal
+  paths and no host alias.
+
+The five own-model scope reviews and the glm-5.3-responses
+whole-milestone review run at the exact final revision of this wave
+with no later repository commits; their verdicts and the milestone-4
+close decision are recorded here when they land.

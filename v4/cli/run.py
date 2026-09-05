@@ -82,6 +82,48 @@ DECLARED_V4_MAIN_KEYS = frozenset({
     "last_seen", "input", "direct", "metadata", "candidate",
 })
 
+# Methods that OPEN A LIVE READER when their reader-source slot carries
+# mode "live".  Engine-verified: a live source routes through the SDK
+# LiveReader::open, which registers in and writes the ``<main>.readers``
+# sidecar reader table (Rust reader_core/live.rs:62 ->
+# live_sidecar.rs:170-191; Go live_reader.go:68 -> sidecar.go:146).
+# The set is derived from the executed case files: every method a case
+# executes with a live source opens the sidecar and is listed here; a
+# live-open method added to a case without extending this set fails the
+# kind gate (missing sidecar lineage) instead of silently under-
+# reporting.
+LIVE_OPEN_METHODS = frozenset({
+    "iprange.v1.reader.open",
+    "iprange.v1.database.info",
+    "iprange.v1.database.metadata.get",
+    "iprange.v1.history.project",
+    "iprange.v1.join.direct",
+    "iprange.v1.join.membership",
+    "iprange.v1.query.overlaps",
+    "iprange.v1.algebra.publish",
+    "iprange.v1.feeds.create",
+    "iprange.v1.snapshot",
+})
+
+# Param key paths of the LIVE READER SOURCE per live-open method; "*"
+# walks every element of a list.  Only these slots open a live reader:
+# the other declared v4-main slots of the same step are writer or
+# immutable targets (feeds.create's ``path`` opens the live WRITER,
+# never a reader; history.project's ``path`` is a writer) and must not
+# credit the sidecar.
+LIVE_READER_SOURCE_SLOTS = {
+    "iprange.v1.reader.open": (("source",),),
+    "iprange.v1.database.info": (("source",),),
+    "iprange.v1.database.metadata.get": (("source",),),
+    "iprange.v1.history.project": (("last_seen",),),
+    "iprange.v1.join.direct": (("direct",), ("membership", "source")),
+    "iprange.v1.join.membership": (("left", "source"), ("right", "source")),
+    "iprange.v1.query.overlaps": (("source",),),
+    "iprange.v1.algebra.publish": (("sources", "*", "source"),),
+    "iprange.v1.feeds.create": (("current", "source"),),
+    "iprange.v1.snapshot": (("source",),),
+}
+
 # Per-method peak wire-frame sizes observed by every JsonRpcService
 # client in this process (one physical line per frame; the byte counts
 # include the LF terminator for both directions).
@@ -209,6 +251,10 @@ class CaseRunner:
         self.captures = {}          # capture name -> (owning actor, value)
         self.services = {}          # actor -> JsonRpcService (mixed mode)
         self.actor_steps = {}       # actor -> executed step count
+        self.actor_operations = {"producer": [], "consumer": []}
+        # actor -> ordered unique executed method names ("legacy" for
+        # CLI steps); the kind gate validates every lineage ref against
+        # these lists.
         self.service = None         # single-actor mode; also sensitivity-gate hook
         self.service_argv = [binary, "--jsonrpc"]
         self.cursors = {}
@@ -416,6 +462,76 @@ class CaseRunner:
                     "kind": kind, "created_by": [], "opened_by": []})
                 entry["opened_by"].append(f"{actor}.{method}")
 
+        # Implicit live-reader opens: a live-open step whose reader
+        # source carries an existing ``<main>.readers`` sidecar writes
+        # that sidecar's reader table even though the sidecar is never
+        # named in the step params (a declared-path step reopens only
+        # the main).  The open is recorded with the step's actor and
+        # method, exactly like the declared-path opens above; the
+        # reader-source slots and methods are LIVE_READER_SOURCE_SLOTS /
+        # LIVE_OPEN_METHODS (engine-verified: only a live-mode
+        # reader-source open writes the sidecar; writer and immutable
+        # slots never do).
+        if method in LIVE_OPEN_METHODS:
+            for path in self.live_reader_source_paths(step):
+                sidecar = path + LIVE_SIDECAR_SUFFIX
+                if sidecar not in before:
+                    continue
+                bucket = self.file_kinds.setdefault(
+                    KIND_LIVE_SIDECAR, {"created_by": {}, "opened_by": {}})
+                self._ledger_increment(bucket, "opened_by", method)
+                entry = self.file_kinds_paths.setdefault(sidecar, {
+                    "kind": KIND_LIVE_SIDECAR,
+                    "created_by": [], "opened_by": []})
+                entry["opened_by"].append(f"{actor}.{method}")
+
+    def live_reader_source_paths(self, step):
+        """Absolute v4-main paths a live-open step opens as LIVE readers.
+
+        A live-open method (see LIVE_OPEN_METHODS) opens one live
+        reader per reader-source slot (LIVE_READER_SOURCE_SLOTS) whose
+        mode is "live".  The paths resolve exactly like
+        ``declared_paths`` (work-relative ``$WORK/...`` or work-dir
+        absolute); capture placeholders never resolve and are skipped.
+        """
+
+        method = step["method"]
+        if method not in LIVE_OPEN_METHODS:
+            return []
+        opened = []
+
+        def resolve(value):
+            if isinstance(value, str) and value.startswith(WORK_PLACEHOLDER):
+                return safe_work_path(self.work_dir, value[len(WORK_PLACEHOLDER):])
+            if isinstance(value, str) and not value.startswith(CAPTURE_PLACEHOLDER):
+                absolute = os.path.abspath(value)
+                real = os.path.realpath(absolute)
+                if os.path.commonpath((real, self.work_dir)) == self.work_dir:
+                    return absolute
+            return None
+
+        def descend(nodes, keys):
+            for key in keys:
+                next_nodes = []
+                for node in nodes:
+                    if key == "*":
+                        next_nodes.extend(node if isinstance(node, list) else [])
+                    elif isinstance(node, dict):
+                        value = node.get(key)
+                        if value is not None:
+                            next_nodes.append(value)
+                nodes = next_nodes
+            return nodes
+
+        for keys in LIVE_READER_SOURCE_SLOTS.get(method, ()):
+            for node in descend([step.get("params", {})], keys):
+                if not isinstance(node, dict) or node.get("mode") != "live":
+                    continue
+                located = resolve(node.get("path"))
+                if located is not None and located not in opened:
+                    opened.append(located)
+        return opened
+
     # ---- substitutions --------------------------------------------
     def substitute(self, value, actor="consumer"):
         if isinstance(value, str):
@@ -482,6 +598,8 @@ class CaseRunner:
 
         service = self.service_for(actor)
         self.actor_steps[actor] = self.actor_steps.get(actor, 0) + 1
+        if method not in self.actor_operations[actor]:
+            self.actor_operations[actor].append(method)
         if step.get("notification"):
             service.notify(method, params)
             self.record_ledger(before, step)
@@ -996,6 +1114,8 @@ class CaseRunner:
         argv = self.substitute(step["argv"], actor)
         before = self.inventory()
         self.actor_steps[actor] = self.actor_steps.get(actor, 0) + 1
+        if "legacy" not in self.actor_operations[actor]:
+            self.actor_operations[actor].append("legacy")
         stdin_data = None
         if "stdin_fixture" in step:
             fixture = safe_work_path(self.work_dir, step["stdin_fixture"], must_exist=True)
@@ -1674,6 +1794,7 @@ def main():
                     "sha256": capability["sha256"],
                     "implementation": implementation,
                     "steps": runner.actor_steps.get(actor, 0),
+                    "operations": list(runner.actor_operations[actor]),
                 }
             report["passed"] += 1
             report["oracle_checks"] += runner.oracle_checks

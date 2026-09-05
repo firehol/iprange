@@ -20,6 +20,7 @@ import (
 	"net"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -97,17 +98,28 @@ func TestUnknownMethod(t *testing.T) {
 }
 
 func TestFrameOverLimitFailsWithIDNullAndCloses(t *testing.T) {
+	// A frame over the input ceiling is a startup/framing failure: the
+	// session answers -32001 with id null, closes without parsing later
+	// bytes, and exits non-zero (spec iprange-jsonrpc-v1.md shutdown
+	// section).
 	big := strings.Repeat("a", InputFrameLimit+10)
 	out, err := runService(t, `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.system.describe","params":{"x":"`+big+`"}}`)
-	if err != nil {
-		t.Fatalf("run: %v", err)
+	if err == nil {
+		t.Fatal("expected a framing failure error")
+	}
+	if !strings.Contains(err.Error(), "frame over input limit") {
+		t.Fatalf("error = %v", err)
 	}
 	lines := lines(out)
 	if len(lines) != 1 {
-		t.Fatalf("got %d lines, want 1", len(lines))
+		t.Fatalf("got %d lines, want 1: %q", len(lines), out)
 	}
 	if !strings.Contains(lines[0], `"code":-32001`) || !strings.Contains(lines[0], `"id":null`) {
 		t.Fatalf("line = %q", lines[0])
+	}
+	// No further bytes after the single -32001 response.
+	if out != lines[0]+"\n" {
+		t.Fatalf("output has bytes beyond the -32001 line: %q", out)
 	}
 }
 
@@ -927,6 +939,160 @@ func TestCancelReachesActiveSlowRequest(t *testing.T) {
 	}
 	assertFactualCancellation(t, got[0], "slow")
 	assertResultID(t, got[1], "fill")
+}
+
+func TestCancelQueuedBatchMemberDoesNotCancelActiveSibling(t *testing.T) {
+	// Regression (reviewer P1-1): cancelling a queued batch member must
+	// not cancel the active sibling. Pre-fix the worker installed every
+	// batch member's id as active and cancelled one shared token, so
+	// cancel(request_id=queued) made the running member answer -32010.
+	// The handler checks its token only after the test releases it, so
+	// any wrong cancellation is observed deterministically. The queued
+	// member is skipped without a response (cancel-drives-omit); the
+	// active member completes with its success result.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(unblock)
+	registry["iprange.v1.database.info"] = registeredMethod{
+		validate: func(json.RawMessage) error { return nil },
+		handle: func(st *SessionState, _ json.RawMessage) (any, *HandlerError) {
+			token := st.Token()
+			close(entered)
+			<-release
+			if token.IsCancelled() {
+				return nil, NewHandlerError("cancelled", "cancelled", "wrong sibling cancelled active work")
+			}
+			return map[string]any{"completed": true}, nil
+		},
+	}
+	t.Cleanup(func() { delete(registry, "iprange.v1.database.info") })
+	in, out, done := startPipedSession(t)
+	reader := bufio.NewReader(out)
+
+	writeFrame(t, in, `[{"jsonrpc":"2.0","id":"active","method":"iprange.v1.database.info","params":{}},{"jsonrpc":"2.0","id":"queued","method":"iprange.v1.system.describe","params":{}}]`)
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("active member did not start")
+	}
+	writeFrame(t, in, `{"jsonrpc":"2.0","method":"iprange.v1.cancel","params":{"request_id":"queued"}}`)
+	// The schema-error response proves the dispatcher applied the
+	// cancel frame before the test releases the active member.
+	writeFrame(t, in, `{}`)
+	marker := readResponseLines(t, reader, out, 1)
+	if code, _ := errorCode(decodeLine(t, marker[0])); code != -32600 {
+		t.Fatalf("bad dispatcher marker: %s", marker[0])
+	}
+	unblock()
+	result := readResponseLines(t, reader, out, 1)
+	in.Close()
+	if err := waitRun(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal([]byte(result[0]), &arr); err != nil {
+		t.Fatalf("unmarshal batch: %v", err)
+	}
+	if len(arr) != 1 || arr[0]["id"] != "active" || arr[0]["result"] == nil {
+		t.Fatalf("cancelling the queued sibling must preserve the active member's success; got %s", result[0])
+	}
+}
+
+func TestCancelActiveMemberDoesNotPoisonLaterSibling(t *testing.T) {
+	// Cancelling the running member of a batch cancels only that
+	// member's own fresh token: the batch array carries the factual
+	// -32010 for the cancelled member and the queued sibling still
+	// completes with its success result. Pre-fix the shared token
+	// poisoned every sibling behind the cancelled member.
+	registerSlowMethod(t)
+	gate := newTestSlowGate()
+	slowGate.Store(gate)
+	t.Cleanup(func() { releaseSlow(t, gate) })
+	in, out, done := startPipedSession(t)
+	reader := bufio.NewReader(out)
+
+	writeFrame(t, in, `[{"jsonrpc":"2.0","id":"activeA","method":"iprange.v1.database.info","params":{}},{"jsonrpc":"2.0","id":"queuedB","method":"iprange.v1.database.info","params":{}}]`)
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("active member did not start")
+	}
+	writeFrame(t, in, `{"jsonrpc":"2.0","method":"iprange.v1.cancel","params":{"request_id":"activeA"}}`)
+	select {
+	case <-gate.observed:
+	case <-time.After(5 * time.Second):
+		releaseSlow(t, gate)
+		t.Fatal("cancel never reached the active batch member")
+	}
+	// The cancelled member answered factually; release so the queued
+	// sibling finishes under its own fresh token.
+	releaseSlow(t, gate)
+	result := readResponseLines(t, reader, out, 1)
+	in.Close()
+	if err := waitRun(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal([]byte(result[0]), &arr); err != nil {
+		t.Fatalf("unmarshal batch: %v", err)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("batch has %d members, want 2", len(arr))
+	}
+	cancelledLine, err := json.Marshal(arr[0])
+	if err != nil {
+		t.Fatalf("marshal cancelled member: %v", err)
+	}
+	assertFactualCancellation(t, string(cancelledLine), "activeA")
+	if id, _ := arr[1]["id"].(string); id != "queuedB" {
+		t.Fatalf("sibling id = %v, want queuedB", arr[1]["id"])
+	}
+	if _, ok := arr[1]["result"]; !ok {
+		t.Fatalf("sibling did not complete with a result: %v", arr[1])
+	}
+}
+
+func TestCancelUnknownOrCompletedIdWhileOtherMembersRun(t *testing.T) {
+	// A cancel for an unknown id, or for an id already terminal from an
+	// earlier frame, is ignored per spec and must never disturb a batch
+	// whose members are still executing.
+	in, out, done := startPipedSession(t)
+	reader := bufio.NewReader(out)
+
+	// The earlier frame completes id "done"; its terminal cleanup runs
+	// before its response is written, so a later cancel of it is a
+	// no-op.
+	writeFrame(t, in, describeFrame("done"))
+	if got := readResponseLines(t, reader, out, 1); !strings.Contains(got[0], `"id":"done"`) {
+		t.Fatalf("earlier frame response = %q", got[0])
+	}
+	writeFrame(t, in, `[{"jsonrpc":"2.0","id":"a","method":"iprange.v1.system.describe","params":{}},{"jsonrpc":"2.0","id":"b","method":"iprange.v1.system.describe","params":{}}]`)
+	writeFrame(t, in, `{"jsonrpc":"2.0","method":"iprange.v1.cancel","params":{"request_id":"unknown"}}`)
+	writeFrame(t, in, `{"jsonrpc":"2.0","method":"iprange.v1.cancel","params":{"request_id":"done"}}`)
+	in.Close()
+	// The batch response is read before waitRun: the worker's write
+	// blocks until the test drains the pipe.
+	batch := readResponseLines(t, reader, out, 1)
+	if err := waitRun(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	var arr []map[string]any
+	if err := json.Unmarshal([]byte(batch[0]), &arr); err != nil {
+		t.Fatalf("unmarshal batch: %v", err)
+	}
+	if len(arr) != 2 {
+		t.Fatalf("batch has %d members, want 2", len(arr))
+	}
+	for _, member := range arr {
+		if id, _ := member["id"].(string); id != "a" && id != "b" {
+			t.Fatalf("unexpected batch member id %v", member["id"])
+		}
+		if _, ok := member["result"]; !ok {
+			t.Fatalf("member %v did not complete with a result", member["id"])
+		}
+	}
 }
 
 func TestEOFReachesActiveSlowRequest(t *testing.T) {

@@ -227,7 +227,8 @@ table:
   `system.describe` frames; both binaries must answer exactly 3
   `server_busy`, 16 results, the export -32010 `cancelled`, and exit
   0), the -32001 over-limit-frame close path (one response, null id,
-  then stdout drains to EOF with zero further bytes), the
+  then stdout drains to EOF with zero further bytes, exit non-zero
+  per the framing-failure contract), the
   `maintenance.remove` proof against a real reservation nonce of a
   publish killed at the reservation marker (the listed row is passed
   unchanged, never rebuilt), and the cancellation proof (a slow

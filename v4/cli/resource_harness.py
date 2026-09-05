@@ -30,7 +30,10 @@ JSON-RPC stdio pipe):
   (error code -32001, null id); a valid sentinel request written
   after the over-limit frame in the same stdin stream is never
   parsed (bytes after the limit are discarded at shutdown), so the
-  process closes with zero further bytes on stdout and exits 0.
+  process closes with zero further bytes on stdout and exits
+  non-zero (the frame-limit path is a startup/framing failure; the
+  session contract ``iprange-jsonrpc-v1.md`` mandates a non-zero
+  exit when the service cannot continue).
 - Proof c -- ``maintenance.remove`` against a real reservation
   nonce.  A producer killed at the reservation magic marker leaves
   one reservation; a fresh producer lists it and removes it with the
@@ -54,6 +57,19 @@ the harness to exit 0.  The report (schema
 ``iprange-cli-resource-report-v1``) records per-proof evidence per
 binary and the failed count.
 
+Every stdio exchange with a product process is bounded by a
+monotonic deadline.  Request payloads are written by
+``write_all_bounded`` (non-blocking stdin, select-on-write,
+``ResourceFailure`` when a child stops draining stdin instead of a
+blocking ``write`` that fills the 64 KiB pipe forever); responses
+are read by ``read_responses`` (non-blocking stdout, select-on-read,
+only complete LF-terminated lines are decoded -- never
+``readline()``, which blocks while a child holds a partial line
+open; bytes that are not part of a returned response line are
+retained for ``drain_stdout`` accounting and never parsed).
+``--self-test`` runs two stub-child negative controls proving both
+deadline bypasses now fail.
+
 Reuses the helpers from ``crash_harness.py`` (import side-effect
 free) for the JSON-RPC client, the killable producer service, the
 durable marker poll, provision of the text feed, publication params,
@@ -66,6 +82,7 @@ import json
 import os
 import platform
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -110,6 +127,11 @@ PROOF_B_PAD_BYTES = 1_100_000
 # that emitted a second response (or kept stdout open) must fail the
 # proof instead of hanging it.
 PROOF_B_DRAIN_DEADLINE_SECONDS = 15.0
+
+# Bounded deadline for every request-payload write: a product that
+# stops draining stdin fills the 64 KiB pipe; the write must then
+# fail the proof instead of blocking the harness.
+PROOF_WRITE_DEADLINE_SECONDS = 30.0
 
 
 def parse_binaries(value):
@@ -177,31 +199,106 @@ def stderr_tail(path, limit=1200):
         return ""
 
 
-def read_responses(proc, expect, deadline_seconds):
-    """Read up to ``expect`` JSON-RPC response lines with a deadline.
+# Bytes that ``read_responses`` took out of the pipe but that are not
+# part of any returned response line (the start of a next response,
+# or an unterminated trailing line when the deadline expires or EOF
+# arrives).  Keyed by ``proc.pid``; ``drain_stdout`` consumes the
+# entry so its byte count stays exact.  Never parsed as a response.
+_PENDING_STDOUT_BYTES = {}
 
-    Uses a selector so a product that stays alive without answering
-    cannot block the harness forever; returns the list of decoded
-    responses read so far (the caller asserts the count).
+
+def read_responses(proc, expect, deadline_seconds):
+    """Read up to ``expect`` complete LF-terminated response lines.
+
+    Reads are non-blocking under a monotonic deadline: the stdout fd
+    is switched to non-blocking once, a selector waits for
+    readability only up to the remaining time, and each wake reads at
+    most 65536 bytes with ``os.read`` (never ``readline()``, which
+    blocks for as long as a child holds a partial line open).  Only
+    complete LF-terminated lines are decoded as responses, in wire
+    order.  At most ``expect`` lines are decoded: once the count is
+    met, any remaining bytes -- complete extra response lines, the
+    start of a next response, or an unterminated trailing line when
+    the deadline expires or EOF arrives -- are retained in
+    ``_PENDING_STDOUT_BYTES`` under ``proc.pid`` for ``drain_stdout``
+    byte accounting and are never parsed.
+
+    Returns the list of decoded response objects read so far (the
+    caller asserts the count); a product that stays alive without
+    answering cannot block the harness past the deadline.
     """
 
     import selectors
 
     responses = []
+    fd = proc.stdout.fileno()
+    os.set_blocking(fd, False)
     sel = selectors.DefaultSelector()
-    sel.register(proc.stdout, selectors.EVENT_READ)
+    sel.register(fd, selectors.EVENT_READ)
     deadline = time.time() + deadline_seconds
+    buf = b""
     while len(responses) < expect:
         remaining = deadline - time.time()
         if remaining <= 0:
             break
         if not sel.select(remaining):
             continue
-        raw = proc.stdout.readline()
-        if not raw:
+        try:
+            chunk = os.read(fd, 65536)
+        except (BlockingIOError, InterruptedError):
+            continue
+        if not chunk:
             break
-        responses.append(json.loads(raw))
+        buf += chunk
+        while len(responses) < expect:
+            line_end = buf.find(b"\n")
+            if line_end < 0:
+                break
+            responses.append(json.loads(buf[:line_end]))
+            buf = buf[line_end + 1:]
+    if buf:
+        _PENDING_STDOUT_BYTES[proc.pid] = buf
     return responses
+
+
+def write_all_bounded(proc, payload, deadline_seconds, proof):
+    """Write ``payload`` to ``proc.stdin`` under a monotonic deadline.
+
+    stdin is switched to non-blocking once; the loop waits on the
+    write side with a selector -- never a blocking ``write``, which
+    once a child stops draining stdin fills the 64 KiB pipe and
+    blocks the harness forever -- and passes each writable wake to
+    ``os.write`` until every byte is accepted.  A child that stops
+    draining stdin raises a ``ResourceFailure`` naming the proof when
+    the deadline expires.  The caller still closes stdin
+    (``proc.stdin.close()``) after the payload is fully written.
+    """
+
+    import selectors
+
+    fd = proc.stdin.fileno()
+    os.set_blocking(fd, False)
+    sel = selectors.DefaultSelector()
+    sel.register(fd, selectors.EVENT_WRITE)
+    deadline = time.time() + deadline_seconds
+    view = memoryview(payload)
+    while view:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            raise ResourceFailure(
+                f"{proof}: stdin write of {len(payload)} bytes did not "
+                f"complete within {deadline_seconds} s "
+                f"({len(view)} bytes pending; the child stopped "
+                "draining stdin)")
+        if not sel.select(remaining):
+            continue
+        try:
+            written = os.write(fd, view)
+        except (BlockingIOError, InterruptedError):
+            continue
+        if written <= 0:
+            continue
+        view = view[written:]
 
 
 def slow_export_params(source, destination):
@@ -273,8 +370,9 @@ def proof_a(binary, label, work_dir, outcome):
             lines.append(json.dumps({"jsonrpc": "2.0", "id": str(index),
                                      "method": "iprange.v1.system.describe",
                                      "params": {}}))
-        proc.stdin.write(("\n".join(lines) + "\n").encode())
-        proc.stdin.flush()
+        payload = ("\n".join(lines) + "\n").encode()
+        write_all_bounded(proc, payload, PROOF_WRITE_DEADLINE_SECONDS,
+                          "proof a")
         proc.stdin.close()
 
         responses = read_responses(proc, 20, PROOF_A_READ_DEADLINE_SECONDS)
@@ -355,7 +453,10 @@ def proof_b(binary, label, work_dir, outcome):
     ``iprange-jsonrpc-v1.md``), so the sentinel must not be answered.
     stdout then drains to EOF with zero further bytes -- a product
     that parsed trailing bytes would emit a second response and fail
-    the proof -- and the process exits 0.
+    the proof -- and the process exits non-zero (the frame-limit path
+    is a startup/framing failure; the session contract
+    ``iprange-jsonrpc-v1.md`` mandates a non-zero exit when the
+    service cannot continue).
     """
 
     work = os.path.join(work_dir, f"b-{label}")
@@ -374,8 +475,9 @@ def proof_b(binary, label, work_dir, outcome):
         sentinel = json.dumps({"jsonrpc": "2.0", "id": "2",
                                "method": "iprange.v1.system.describe",
                                "params": {}})
-        proc.stdin.write((big + "\n" + sentinel + "\n").encode())
-        proc.stdin.flush()
+        payload = (big + "\n" + sentinel + "\n").encode()
+        write_all_bounded(proc, payload, PROOF_WRITE_DEADLINE_SECONDS,
+                          "proof b")
         proc.stdin.close()
 
         responses = read_responses(proc, 1, 30)
@@ -416,10 +518,10 @@ def proof_b(binary, label, work_dir, outcome):
             proc.kill()
             proc.wait(timeout=5)
     outcome["exit_code"] = proc.returncode
-    if proc.returncode != 0:
+    if proc.returncode == 0:
         raise ResourceFailure(
-            f"expected exit code 0 after the over-limit close, got "
-            f"{proc.returncode}")
+            "expected a non-zero exit code after the over-limit close "
+            f"(startup/framing failure), got {proc.returncode}")
     outcome["stderr_tail"] = stderr_tail(stderr_log)
     if not outcome["stderr_tail"]:
         outcome.pop("stderr_tail")
@@ -429,19 +531,26 @@ def drain_stdout(proc, deadline_seconds):
     """Read every remaining stdout byte until EOF or deadline.
 
     Returns ``(bytes_read, reached_eof)``: ``bytes_read`` is the
-    exact byte count observed after the caller's last ``readline``
-    (zero for a product that answered exactly once), and
-    ``reached_eof`` is True only when stdout reached EOF while the
-    deadline was still open.  Used by proof b to prove the single
-    -32001 response is the product's complete answer.
+    exact byte count observed after the caller's last
+    ``read_responses`` -- including any bytes ``read_responses`` had
+    already taken out of the pipe and retained in
+    ``_PENDING_STDOUT_BYTES``, so the accounting stays exact (zero
+    for a product that answered exactly once) -- and ``reached_eof``
+    is True only when stdout reached EOF while the deadline was still
+    open.  Used by proof b to prove the single -32001 response is the
+    product's complete answer.  Reads are per-wake ``read1`` under
+    ``select(min(remaining, 5.0))``; the stdout fd may already be
+    non-blocking from ``read_responses``, so a spurious EAGAIN/INTR
+    wake is retried, never fatal.
     """
 
     import selectors
 
+    pending = _PENDING_STDOUT_BYTES.pop(proc.pid, b"")
     sel = selectors.DefaultSelector()
     sel.register(proc.stdout, selectors.EVENT_READ)
     deadline = time.time() + deadline_seconds
-    chunks = []
+    chunks = [pending] if pending else []
     reached_eof = False
     while True:
         remaining = deadline - time.time()
@@ -451,6 +560,8 @@ def drain_stdout(proc, deadline_seconds):
             continue
         try:
             chunk = proc.stdout.read1(65536)
+        except (BlockingIOError, InterruptedError):
+            continue
         except (ValueError, OSError):
             chunk = proc.stdout.read(65536)
         if not chunk:
@@ -608,8 +719,9 @@ def proof_d(binary, label, work_dir, outcome):
                         "method": "iprange.v1.system.describe",
                         "params": {}}),
         ]
-        proc.stdin.write(("\n".join(frames) + "\n").encode())
-        proc.stdin.flush()
+        payload = ("\n".join(frames) + "\n").encode()
+        write_all_bounded(proc, payload, PROOF_WRITE_DEADLINE_SECONDS,
+                          "proof d")
         proc.stdin.close()
 
         responses = read_responses(proc, 2, PROOF_A_READ_DEADLINE_SECONDS)
@@ -669,16 +781,139 @@ def proof_d(binary, label, work_dir, outcome):
         outcome.pop("stderr_tail")
 
 
+def _kill_process_group(proc):
+    """Kill one owned setsid subprocess group and wait for it to exit."""
+
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def self_test():
+    """Bounded-I/O negative controls (no product binaries required).
+
+    Two stub children prove the previously accepted deadline bypasses
+    now fail instead of hanging the harness:
+
+    1. Read control: a child that writes one unterminated line
+       (``printf "{"``) and then sleeps 2 s.  ``read_responses``
+       with a 0.1 s deadline must return within a bounded wall window
+       (asserted under 1.5 s), must decode zero responses, and must
+       retain the unterminated bytes in ``_PENDING_STDOUT_BYTES``
+       (reported, never parsed).
+    2. Write control: a child that never drains stdin (``sleep 2``).
+       ``write_all_bounded`` of 1 MiB with a 0.5 s deadline must raise
+       ``ResourceFailure`` within the window instead of blocking on
+       the full 64 KiB pipe.
+
+    Prints one line per control and returns 0 only when both controls
+    pass and no owned child survives.  The lead runs this with
+    ``--self-test`` during integration.
+    """
+
+    import selectors
+
+    failures = []
+
+    # Read control: partial line plus a sleeping child.
+    stub = subprocess.Popen(
+        ["/bin/sh", "-c", 'printf "{" ; sleep 2'],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, start_new_session=True)
+    record_spawn(stub)
+    try:
+        sel = selectors.DefaultSelector()
+        sel.register(stub.stdout, selectors.EVENT_READ)
+        ready = sel.select(2.0)
+        sel.close()
+        started = time.time()
+        responses = read_responses(stub, 1, 0.1)
+        elapsed = time.time() - started
+        partial = _PENDING_STDOUT_BYTES.pop(stub.pid, b"")
+        print(f"self-test read control: read_responses returned in "
+              f"{elapsed:.3f} s with {len(responses)} responses and "
+              f"unterminated bytes retained {partial!r}")
+        if elapsed >= 1.5:
+            failures.append(
+                f"read control returned in {elapsed:.3f} s "
+                "(bounded window 1.5 s)")
+        if responses:
+            failures.append(
+                f"read control decoded the unterminated line as a "
+                f"response: {responses!r}")
+        if ready and partial != b"{":
+            failures.append(
+                f"read control retained {partial!r}, expected b'{{'")
+    finally:
+        _kill_process_group(stub)
+        stub.stdout.close()
+
+    # Write control: child that never drains stdin.
+    stub = subprocess.Popen(
+        ["/bin/sh", "-c", "sleep 2"], stdin=subprocess.PIPE,
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True)
+    record_spawn(stub)
+    try:
+        payload = b"x" * (1024 * 1024)
+        started = time.time()
+        try:
+            write_all_bounded(stub, payload, 0.5,
+                              "self-test write control")
+        except ResourceFailure as exc:
+            failure_text = str(exc)
+        else:
+            failure_text = None
+        elapsed = time.time() - started
+        print(f"self-test write control: "
+              f"{failure_text or 'unexpected success'} "
+              f"in {elapsed:.3f} s")
+        if failure_text is None:
+            failures.append(
+                "write control completed against a child that never "
+                "drains stdin")
+        elif elapsed >= 1.5:
+            failures.append(
+                f"write control raised in {elapsed:.3f} s "
+                "(bounded window 1.5 s)")
+    finally:
+        _kill_process_group(stub)
+        stub.stdin.close()
+
+    leftover = no_leftover_processes()
+    if leftover:
+        failures.append(f"self-test left owned children alive: {leftover}")
+
+    for failure in failures:
+        print(f"FAIL self-test: {failure}")
+    if failures:
+        print(f"FAIL self-test: {len(failures)} failure(s)")
+        return 1
+    print("PASS self-test: bounded read and write controls")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Bounded-resource proofs at the iprange v1 JSON-RPC "
                     "product interface (milestone-4 resource gate).")
+    parser.add_argument("--self-test", action="store_true",
+                        help="run the bounded-I/O negative controls "
+                             "(no product binaries) and exit")
     parser.add_argument("--binaries", metavar="rust=PATH go=PATH",
-                        nargs="+", required=True,
+                        nargs="+",
                         help="absolute iprange --jsonrpc executables, as "
-                             "rust=PATH go=PATH")
-    parser.add_argument("--work-dir", metavar="DIR", required=True,
-                        help="absolute existing root work directory")
+                             "rust=PATH go=PATH (required unless "
+                             "--self-test is given)")
+    parser.add_argument("--work-dir", metavar="DIR",
+                        help="absolute existing root work directory "
+                             "(required unless --self-test is given)")
     parser.add_argument("--json-report", metavar="PATH",
                         help="write the JSON resource report to this file")
     parser.add_argument("--keep-work", action="store_true",
@@ -686,6 +921,13 @@ def main():
                              "remove them after the run)")
     args = parser.parse_args()
 
+    if args.self_test:
+        return self_test()
+
+    if not args.binaries:
+        parser.error("--binaries is required unless --self-test is given")
+    if not args.work_dir:
+        parser.error("--work-dir is required unless --self-test is given")
     if not os.path.isdir(args.work_dir) or not os.path.isabs(args.work_dir):
         parser.error("--work-dir must be an absolute existing directory")
 

@@ -61,8 +61,9 @@ Windows validation host):
    followed in the same stdin stream by a valid `system.describe`
    sentinel; exactly one -32001 response appears with a null id
    (the sentinel is never parsed — trailing bytes are provably
-   ignored), stdout drains to EOF with zero further bytes, then a
-   clean exit 0 in both products.
+   ignored), stdout drains to EOF with zero further bytes, and the
+   process exits non-zero in both products (startup/framing failure,
+   iprange-jsonrpc-v1.md shutdown section).
 3. `maintenance.remove` against a real reservation nonce — a publish
    killed at the reservation marker, one `maintenance.list`
    reservation row, the row passed unchanged to
