@@ -2,23 +2,23 @@
   "binaries": {
     "consumer": "/usr/bin/false",
     "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
-    "fixture_tool": "/tmp/qualsvc/ev18/bin/rust/v4-fixture",
+    "fixture_tool": "/tmp/qualsvc/ev19/bin/rust/v4-fixture",
     "fixture_tool_sha256": "7c6167933d802fab89f33520198e35286dbdf7bd6e0e348ee03fea5457c93459",
-    "producer": "/tmp/qualsvc/ev18/bin/rust/iprange",
-    "producer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d"
+    "producer": "/tmp/qualsvc/ev19/bin/rust/iprange",
+    "producer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0"
   },
   "command": [
     "v4/cli/crash_harness.py",
     "--producer",
-    "/tmp/qualsvc/ev18/bin/rust/iprange",
+    "/tmp/qualsvc/ev19/bin/rust/iprange",
     "--consumer",
     "/bin/false",
     "--fixture-tool",
-    "/tmp/qualsvc/ev18/bin/rust/v4-fixture",
+    "/tmp/qualsvc/ev19/bin/rust/v4-fixture",
     "--work-dir",
-    "/tmp/qualsvc/ev18/wrk-crashneg",
+    "/tmp/qualsvc/ev19/wrk-crashneg",
     "--json-report",
-    "/tmp/qualsvc/ev18/reports/crash-negative.json"
+    "/tmp/qualsvc/ev19/reports/crash-negative.json"
   ],
   "failed": 16,
   "leftover_processes": [],
@@ -32,8 +32,8 @@
     {
       "adapter_output_opens": {},
       "assertions": [
-        "exactly one reservation must remain, got ['.iprange-reservation-33fc913bd567e9b6664608604bb0f971.tmp']",
-        "at most one private publication output may remain, got ['.iprange-publish-33fc913bd567e9b6664608604bb0f971.tmp']",
+        "exactly one reservation must remain, got ['.iprange-reservation-693b33973876c738fd4087947a9f9245.tmp']",
+        "at most one private publication output may remain, got ['.iprange-publish-693b33973876c738fd4087947a9f9245.tmp']",
         "the retained reservation must carry the output digest",
         "destination must be absent or the exact complete attempt output (atomic namespace publication), got absent_after_crash"
       ],
@@ -48,11 +48,11 @@
         "class": "absent_after_crash",
         "exists": false,
         "publish_temp_basenames": [
-          ".iprange-publish-33fc913bd567e9b6664608604bb0f971.tmp"
+          ".iprange-publish-693b33973876c738fd4087947a9f9245.tmp"
         ],
-        "recorded_output_sha512": "5da1eedee79af0c7d7378f2332bc8cf7f1d200f0a8944a2fb5946cef9c00d923bc4d4c0c4dd60ee7d93357db5ac98875317555a7f3dde2dc863f723e69592644",
+        "recorded_output_sha512": "31a73bdbb69b13a71ffa1f3cef269c820d3a957bc6f4b0da55685b22f1f3eb50a625d719fe87987df36d106a779b8801309a37f0eb06cbacc4d44e0fd73afbf2",
         "reservation_basename": [
-          ".iprange-reservation-33fc913bd567e9b6664608604bb0f971.tmp"
+          ".iprange-reservation-693b33973876c738fd4087947a9f9245.tmp"
         ]
       },
       "failures": [
@@ -63,7 +63,7 @@
       "kill_method": "SIGKILL process group at observable process-crash marker",
       "kinds": {},
       "live_reader_opens": {},
-      "marker_seen_ms": 348.3,
+      "marker_seen_ms": 330.8,
       "operations": {
         "consumer": [
           "iprange.v1.reader.open"
@@ -73,8 +73,8 @@
         ]
       },
       "pass": false,
-      "producer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "producer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "producer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "producer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -83,8 +83,8 @@
     {
       "adapter_output_opens": {},
       "assertions": [
-        "prior publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '225388ec4005a123e1331300ba72415c', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': '2bced39049e6874ac4b4fd4d970321a8', 'destination_basename': 'cHVibGlzaGVkLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '236856149', 'volume': '66307'}, 'output_byte_length': '2875392', 'output_identity': {'file': '236856151', 'volume': '66307'}, 'output_sha512': 'e98357ca6e07f662f5293f17801fff18d6b9e65cd7d6b34b3d27faaa11427427e4924458a4ea2f36b7425b8981b9ae876452b0eb83ae3d374652125370afc533', 'publication_attempt_id': '96b63f4d54968626da79fad6f7b46f01', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '236856152', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '51200000', 'input_record_count': '200000', 'normalized_interval_count': '200000'}}}",
-        "exactly one reservation must remain, got ['.iprange-reservation-fa18ef21a37365e5004d286bb1aaf748.tmp']",
+        "prior publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': 'd3e33315aae30c8466fb988688200801', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': '75c4cfaa7de3d54af3752944ea679769', 'destination_basename': 'cHVibGlzaGVkLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '236867308', 'volume': '66307'}, 'output_byte_length': '2875392', 'output_identity': {'file': '236867310', 'volume': '66307'}, 'output_sha512': 'aeaec555823c504de3a087314980da2115f85d373dcd6db1fd6280566ed7dada2cab0287a4228bf90090d54469350c659ac232c82452a72adfae4815ef6377c9', 'publication_attempt_id': 'f75e32b7ff7f8769d2ff5622f62e070c', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '236867311', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '51200000', 'input_record_count': '200000', 'normalized_interval_count': '200000'}}}",
+        "exactly one reservation must remain, got ['.iprange-reservation-dc9fe8d101d0065f940469080e13abeb.tmp']",
         "the retained reservation must carry the output digest",
         "destination must be absent, prior, or match the reservation-recorded output digest, got 'prior_complete'"
       ],
@@ -98,13 +98,13 @@
       "destination_state": {
         "class": "prior_complete",
         "exists": true,
-        "prior_sha256": "ace2755d735783a7ddae6e1b6a7115e5393dc7df315d5291cc0fe9d3e1359584",
-        "prior_sha512": "e98357ca6e07f662f5293f17801fff18d6b9e65cd7d6b34b3d27faaa11427427e4924458a4ea2f36b7425b8981b9ae876452b0eb83ae3d374652125370afc533",
+        "prior_sha256": "67355ad1337b998858ea3c268233ee2e72b52d941ee08e4d58098a8dc22710ac",
+        "prior_sha512": "aeaec555823c504de3a087314980da2115f85d373dcd6db1fd6280566ed7dada2cab0287a4228bf90090d54469350c659ac232c82452a72adfae4815ef6377c9",
         "publish_temp_basenames": [
-          ".iprange-publish-fa18ef21a37365e5004d286bb1aaf748.tmp"
+          ".iprange-publish-dc9fe8d101d0065f940469080e13abeb.tmp"
         ],
         "reservation_basename": [
-          ".iprange-reservation-fa18ef21a37365e5004d286bb1aaf748.tmp"
+          ".iprange-reservation-dc9fe8d101d0065f940469080e13abeb.tmp"
         ]
       },
       "failures": [
@@ -115,7 +115,7 @@
       "kill_method": "SIGKILL process group at observable process-crash marker",
       "kinds": {},
       "live_reader_opens": {},
-      "marker_seen_ms": 343.1,
+      "marker_seen_ms": 341.0,
       "operations": {
         "consumer": [
           "iprange.v1.reader.open"
@@ -126,8 +126,8 @@
         ]
       },
       "pass": false,
-      "producer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "producer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "producer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "producer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -136,8 +136,8 @@
     {
       "adapter_output_opens": {},
       "assertions": [
-        "prior publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '4782357a5d6b330a62345f786dcc1937', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': 'a64ca17d5cc432c8825ae38a6f88b6ec', 'destination_basename': 'cHVibGlzaGVkLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '236856185', 'volume': '66307'}, 'output_byte_length': '2875392', 'output_identity': {'file': '236856187', 'volume': '66307'}, 'output_sha512': '9ffd309f20898ccd103dbb65e064292ccb5f87c1db2660f7cc1af9af6da8c24361a4d87497640735f55cb1e1e0f300a1c5ae13174880a8242b7d5dbccfa80144', 'publication_attempt_id': 'deb1c4bcac08faa3e41daa38a6e826e1', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '236856188', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '51200000', 'input_record_count': '200000', 'normalized_interval_count': '200000'}}}",
-        "exactly one reservation must remain, got ['.iprange-reservation-aac9d9c6e369c2812aa3c02ce1e54713.tmp']",
+        "prior publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': 'c243b08ce4f94ac51365077b328b585d', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': '4b52a1c6f976ed1329a584dc6281d72c', 'destination_basename': 'cHVibGlzaGVkLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '236867319', 'volume': '66307'}, 'output_byte_length': '2875392', 'output_identity': {'file': '236867321', 'volume': '66307'}, 'output_sha512': '3b15e6a2b1e4f990ecf462148c4bc4a0b6527cff7f8906b70bffcfa1df82544cc27da9cd321fb2bd8de03c6ff36ecc6058348b075fe373897034dc10245ad7f3', 'publication_attempt_id': 'aa2cd34c7b7d5f83efe223302253bd15', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '236867322', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '51200000', 'input_record_count': '200000', 'normalized_interval_count': '200000'}}}",
+        "exactly one reservation must remain, got ['.iprange-reservation-8bea59b8ec65d827cfb41cb9006dcce1.tmp']",
         "a destination that is neither prior nor the reservation output must classify foreign, got 'foreign'"
       ],
       "consumer": "consumer:/usr/bin/false",
@@ -151,10 +151,10 @@
         "class": "foreign",
         "exists": true,
         "publish_temp_basenames": [
-          ".iprange-publish-aac9d9c6e369c2812aa3c02ce1e54713.tmp"
+          ".iprange-publish-8bea59b8ec65d827cfb41cb9006dcce1.tmp"
         ],
         "reservation_basename": [
-          ".iprange-reservation-aac9d9c6e369c2812aa3c02ce1e54713.tmp"
+          ".iprange-reservation-8bea59b8ec65d827cfb41cb9006dcce1.tmp"
         ]
       },
       "failures": [
@@ -165,7 +165,7 @@
       "kill_method": "SIGKILL process group at observable process-crash marker",
       "kinds": {},
       "live_reader_opens": {},
-      "marker_seen_ms": 344.5,
+      "marker_seen_ms": 329.7,
       "operations": {
         "consumer": [
           "iprange.v1.reader.open"
@@ -176,8 +176,8 @@
         ]
       },
       "pass": false,
-      "producer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "producer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "producer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "producer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "reopen_outcome": null,
       "residue_bounded": null,
       "resolve_outcome": null,
@@ -191,8 +191,8 @@
         "database.info live must truthfully refuse an interrupted transition, got {'error': {'code': -32010, 'data': {'code': 'wrong_state', 'outcome': 'read_only_failure'}, 'message': 'wrong operation state: reader table is not ready'}, 'id': 'ilive', 'jsonrpc': '2.0'}",
         "database.info immutable must truthfully refuse an interrupted transition, got {'error': {'code': -32010, 'data': {'code': 'wrong_state', 'outcome': 'read_only_failure'}, 'message': 'wrong database mode: immutable open requires the canonical .readers sidecar to be absent'}, 'id': 'iimmutable', 'jsonrpc': '2.0'}",
         "no maintenance residue may exist beside the sidecar, got reports=[{'entries': '0', 'kind': 'scratch'}, {'entries': '0', 'kind': 'reservation'}, {'entries': '0', 'kind': 'publication_temp'}] error=None",
-        "residue resolution must report the truthful completed transition, got {'database_id': '98df43f93c9c312241b4f4cae690f9ee', 'housekeeping': {'artifacts': []}, 'kind': 'canonical', 'main_identity': {'file': '236856195', 'volume': '66307'}, 'method': 'iprange.v1.database.live_residue.resolve', 'reader_capacity': 8, 'residue_possible': False, 'sidecar_id': '7e0fd7eb985c1b3840aecbc7cfc26992', 'sidecar_identity': {'file': '236856192', 'volume': '66307'}, 'status': 'completed', 'visible_housekeeping': []}",
-        "database.info live must succeed after resolution, got {'id': '5', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': '91651411cb47c9e0ecb921f0983be92a', 'database_id': '98df43f93c9c312241b4f4cae690f9ee', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}"
+        "residue resolution must report the truthful completed transition, got {'database_id': '36ec91d0354a660ed1922df63bd4a7c9', 'housekeeping': {'artifacts': []}, 'kind': 'canonical', 'main_identity': {'file': '236867329', 'volume': '66307'}, 'method': 'iprange.v1.database.live_residue.resolve', 'reader_capacity': 8, 'residue_possible': False, 'sidecar_id': '139bf25ad01c370aa41b24a22d9ca888', 'sidecar_identity': {'file': '236867326', 'volume': '66307'}, 'status': 'completed', 'visible_housekeeping': []}",
+        "database.info live must succeed after resolution, got {'id': '5', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': 'a44054716dcbc33f528e1d2b94389b90', 'database_id': '36ec91d0354a660ed1922df63bd4a7c9', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}"
       ],
       "consumer": "consumer:/usr/bin/false",
       "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
@@ -201,7 +201,7 @@
       },
       "destination_state": {
         "class": "main_unchanged_sidecar_present",
-        "main_sha256": "e51e96c5788ee19ec64ffa8fd3e9c20e5a198ce14676efd82c828c13de71a9ea",
+        "main_sha256": "39c6b7f2380231173dfcc340bd493585874060f2f344d53f80f4b221a0b08831",
         "sidecar_basename": "direct.iprange.readers",
         "sidecar_present": true
       },
@@ -224,7 +224,7 @@
       "live_reader_opens": {
         "producer": 5
       },
-      "marker_seen_ms": 1.0,
+      "marker_seen_ms": 0.9,
       "operations": {
         "consumer": [
           "iprange.v1.reader.open"
@@ -239,8 +239,8 @@
         ]
       },
       "pass": false,
-      "producer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "producer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "producer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "producer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "reopen_outcome": null,
       "residue_bounded": {
         "maintenance_list_pre": [
@@ -269,17 +269,17 @@
     {
       "adapter_output_opens": {},
       "assertions": [
-        "big publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '8b8dbc83a2d60997f0611cddb050e0fb', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': '88b69ec8bd6ee28b4bc7fb1c969f5713', 'destination_basename': 'YmlnLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '236856196', 'volume': '66307'}, 'output_byte_length': '21282816', 'output_identity': {'file': '236856199', 'volume': '66307'}, 'output_sha512': '1d48bc3ba2e261dd9f4e0a2956d49ec805fec2ff8a0b733434fe44f08c67cce8c09d05b2bdde3c3832f4b104aaf47fcb7bd98fd3c8b2f00884403685e317c538', 'publication_attempt_id': 'c02c005ecf5b34fe6e5e74f149ade2a5', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '236856200', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '384000000', 'input_record_count': '1500000', 'normalized_interval_count': '1500000'}}}",
-        "recovery.inspect must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'candidates': [{'commit_nonce': '8b8dbc83a2d60997f0611cddb050e0fb', 'database_id': '88b69ec8bd6ee28b4bc7fb1c969f5713', 'label': 'newest', 'meta_page': 1, 'source_identity': {'file': '236856199', 'volume': '66307'}, 'transaction_id': '1'}], 'method': 'iprange.v1.recovery.inspect', 'progress': {'bounded_possible_span_addresses': '0', 'checked_unique_pages': '0', 'finding_count': '0', 'has_unbounded_unknown': False, 'untraversable_subgraphs': '0'}, 'source_identity': {'file': '236856199', 'volume': '66307'}}}",
+        "big publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '93d6553afc7eb2ef51c1d3b4dd8c2059', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': 'd455488157356cd024c40306e4888a20', 'destination_basename': 'YmlnLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '236867330', 'volume': '66307'}, 'output_byte_length': '21282816', 'output_identity': {'file': '236867333', 'volume': '66307'}, 'output_sha512': '20a88e3d24f8af9887365f7b30cd2873ace9882aab49837b7b9badb2c8391652c7e010a4ec8aa43804152510855e6023bac402ae2ac5c0f01913dfec7c1d5a4d', 'publication_attempt_id': '32adab88b7bb703b16b8c13c6e9ce570', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '236867334', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '384000000', 'input_record_count': '1500000', 'normalized_interval_count': '1500000'}}}",
+        "recovery.inspect must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'candidates': [{'commit_nonce': '93d6553afc7eb2ef51c1d3b4dd8c2059', 'database_id': 'd455488157356cd024c40306e4888a20', 'label': 'newest', 'meta_page': 1, 'source_identity': {'file': '236867333', 'volume': '66307'}, 'transaction_id': '1'}], 'method': 'iprange.v1.recovery.inspect', 'progress': {'bounded_possible_span_addresses': '0', 'checked_unique_pages': '0', 'finding_count': '0', 'has_unbounded_unknown': False, 'untraversable_subgraphs': '0'}, 'source_identity': {'file': '236867333', 'volume': '66307'}}}",
         "exactly one recovery candidate expected, got 1",
-        "abandoned scratch must be bounded by max_scratch_files, got 1 files: ['.iprange-scratch-f6f2cf58ade0c8f6bc00839f6039cf50-00000000.tmp']",
+        "abandoned scratch must be bounded by max_scratch_files, got 1 files: ['.iprange-scratch-b34af092e369c7142339d0be550ecc40-00000000.tmp']",
         "the recovery destination must never appear before the kill",
         "maintenance.list scratch must succeed, got None",
-        "maintenance.list must report exactly the on-disk abandoned scratch: reports=[{'entries': '1', 'kind': 'scratch'}] rows=[{'artifact_identity': {'file': '236856218', 'volume': '66307'}, 'attempt_id': 'f6f2cf58ade0c8f6bc00839f6039cf50', 'authentication': {'kind': 'authenticated', 'owner': 'recovery'}, 'directory': '/tmp/qualsvc/ev18/wrk-crashneg/rust-consumer/c-rust->consumer-abe38336/scratch', 'directory_identity': {'file': '236856197', 'volume': '66307'}, 'kind': 'scratch', 'ordinal': 0}] disk=['.iprange-scratch-f6f2cf58ade0c8f6bc00839f6039cf50-00000000.tmp']",
+        "maintenance.list must report exactly the on-disk abandoned scratch: reports=[{'entries': '1', 'kind': 'scratch'}] rows=[{'artifact_identity': {'file': '236867336', 'volume': '66307'}, 'attempt_id': 'b34af092e369c7142339d0be550ecc40', 'authentication': {'kind': 'authenticated', 'owner': 'recovery'}, 'directory': '/tmp/qualsvc/ev19/wrk-crashneg/rust-consumer/c-rust->consumer-fba0e16b/scratch', 'directory_identity': {'file': '236867331', 'volume': '66307'}, 'kind': 'scratch', 'ordinal': 0}] disk=['.iprange-scratch-b34af092e369c7142339d0be550ecc40-00000000.tmp']",
         "maintenance.remove must succeed, got {'id': '4', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.maintenance.remove', 'removal': {'cleanup_state': 'clean', 'housekeeping': {'artifacts': []}, 'source_present': True, 'visible_housekeeping': []}}}",
         "removal must delete every abandoned scratch file",
         "maintenance.list residue must succeed, got None",
-        "maintenance residue counts must match the on-disk residue: reports=[{'entries': '1', 'kind': 'publication_temp'}, {'entries': '0', 'kind': 'reservation'}] disk={'reservation': [], 'publish_temp': ['.iprange-publish-3e813aa4cbdce3a87b45631f1dff4b70.tmp']}"
+        "maintenance residue counts must match the on-disk residue: reports=[{'entries': '1', 'kind': 'publication_temp'}, {'entries': '0', 'kind': 'reservation'}] disk={'reservation': [], 'publish_temp': ['.iprange-publish-09de8d705a7a76d3dd10f1f517f20738.tmp']}"
       ],
       "consumer": "consumer:/usr/bin/false",
       "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
@@ -292,11 +292,11 @@
       "destination_state": {
         "class": "scratch_residue",
         "publish_temp_basenames": [
-          ".iprange-publish-3e813aa4cbdce3a87b45631f1dff4b70.tmp"
+          ".iprange-publish-09de8d705a7a76d3dd10f1f517f20738.tmp"
         ],
         "reservation_basenames": [],
         "scratch_basenames": [
-          ".iprange-scratch-f6f2cf58ade0c8f6bc00839f6039cf50-00000000.tmp"
+          ".iprange-scratch-b34af092e369c7142339d0be550ecc40-00000000.tmp"
         ]
       },
       "failures": [
@@ -322,12 +322,12 @@
         ]
       },
       "pass": false,
-      "producer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "producer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "producer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "producer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "reopen_outcome": null,
       "residue_bounded": {
         "attempt_ids": [
-          "f6f2cf58ade0c8f6bc00839f6039cf50"
+          "b34af092e369c7142339d0be550ecc40"
         ],
         "publication_temp": 1,
         "reports": [
@@ -345,17 +345,17 @@
     {
       "adapter_output_opens": {},
       "assertions": [
-        "initialize_live must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'commit_nonce': 'db91c5003b7a30ca60e7b3f20af1a25c', 'database_id': 'e60cbab8f97c84fe61dece431cba2a68', 'directory_identity': {'file': '236856220', 'volume': '66307'}, 'housekeeping': {'artifacts': []}, 'main_basename': 'db.iprange', 'main_identity': {'file': '236856230', 'volume': '66307'}, 'method': 'iprange.v1.database.initialize_live', 'new_sidecar_identity': {'file': '236856223', 'volume': '66307'}, 'new_sidecar_location': 'canonical', 'operation': 'initialize', 'reader_capacity': 8, 'residue_possible': False, 'sidecar_id': 'afc4e94a8ee23c1b23d7b9d5a41e5b7f', 'status': 'initialized', 'transaction_id': '2', 'visible_housekeeping': []}}",
-        "database.info live must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': 'db91c5003b7a30ca60e7b3f20af1a25c', 'database_id': 'e60cbab8f97c84fe61dece431cba2a68', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
-        "the control replace must complete, got {'id': '3', 'jsonrpc': '2.0', 'result': {'commit': {'attempted_commit_nonce': '5cf70d803a695c3646a2e123fe788a5d', 'attempted_database_id': 'e60cbab8f97c84fe61dece431cba2a68', 'attempted_transaction_id': '3', 'cleanup': {}, 'coordination_cleanup': {}, 'directory_identity': {'file': '236856220', 'volume': '66307'}, 'durability': 'committed', 'main_identity': {'file': '236856230', 'volume': '66307'}}, 'metadata_logical_change': 'unchanged', 'method': 'iprange.v1.direct.replace', 'report': {'added_addresses': '12800000', 'after_addresses': '12800000', 'after_range_record_count': '200000', 'before_addresses': '26', 'before_range_record_count': '3', 'changed_value_addresses': '0', 'created_feed_count': '0', 'input_addresses': '12800000', 'input_normalized_interval_count': '200000', 'input_record_count': '200000', 'logical_change': 'changed', 'matched_feed_count': '0', 'removed_addresses': '26', 'source_distinct_membership_count': '0', 'source_feed_count': '0', 'translated_membership_count': '0', 'unchanged_value_addresses': '0', 'workflow': 'direct_replacement'}, 'writer_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
-        "database.info live must succeed, got {'id': '4', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': '5cf70d803a695c3646a2e123fe788a5d', 'database_id': 'e60cbab8f97c84fe61dece431cba2a68', 'meta_selection': 'proven_current', 'page_count': '1395', 'range_record_count': '200000', 'structure_kind': 'none', 'transaction_id': '3', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
+        "initialize_live must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'commit_nonce': '44f1edd3efaeb70fc737153ba1dabe47', 'database_id': '03cb6c6eb68d14a566d921c8313f6a59', 'directory_identity': {'file': '236867338', 'volume': '66307'}, 'housekeeping': {'artifacts': []}, 'main_basename': 'db.iprange', 'main_identity': {'file': '236867343', 'volume': '66307'}, 'method': 'iprange.v1.database.initialize_live', 'new_sidecar_identity': {'file': '236867341', 'volume': '66307'}, 'new_sidecar_location': 'canonical', 'operation': 'initialize', 'reader_capacity': 8, 'residue_possible': False, 'sidecar_id': '09bd6e4c2fe2fc4fff0dfdfbe79cdb2f', 'status': 'initialized', 'transaction_id': '2', 'visible_housekeeping': []}}",
+        "database.info live must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': '44f1edd3efaeb70fc737153ba1dabe47', 'database_id': '03cb6c6eb68d14a566d921c8313f6a59', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
+        "the control replace must complete, got {'id': '3', 'jsonrpc': '2.0', 'result': {'commit': {'attempted_commit_nonce': 'ac088f5dccdb09505b24ac3f0a387219', 'attempted_database_id': '03cb6c6eb68d14a566d921c8313f6a59', 'attempted_transaction_id': '3', 'cleanup': {}, 'coordination_cleanup': {}, 'directory_identity': {'file': '236867338', 'volume': '66307'}, 'durability': 'committed', 'main_identity': {'file': '236867343', 'volume': '66307'}}, 'metadata_logical_change': 'unchanged', 'method': 'iprange.v1.direct.replace', 'report': {'added_addresses': '12800000', 'after_addresses': '12800000', 'after_range_record_count': '200000', 'before_addresses': '26', 'before_range_record_count': '3', 'changed_value_addresses': '0', 'created_feed_count': '0', 'input_addresses': '12800000', 'input_normalized_interval_count': '200000', 'input_record_count': '200000', 'logical_change': 'changed', 'matched_feed_count': '0', 'removed_addresses': '26', 'source_distinct_membership_count': '0', 'source_feed_count': '0', 'translated_membership_count': '0', 'unchanged_value_addresses': '0', 'workflow': 'direct_replacement'}, 'writer_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
+        "database.info live must succeed, got {'id': '4', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': 'ac088f5dccdb09505b24ac3f0a387219', 'database_id': '03cb6c6eb68d14a566d921c8313f6a59', 'meta_selection': 'proven_current', 'page_count': '1395', 'range_record_count': '200000', 'structure_kind': 'none', 'transaction_id': '3', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
         "the control replace must advance the transaction by one and land exactly the repaired feed line count (200000), got 3/200000",
         "the control spot-check must show the repaired feed ranges with their per-line values, got [('10.0.0.0', True, 1), ('10.0.0.63', True, 1), ('10.0.0.64', True, 2), ('10.195.79.192', True, 200000), ('10.195.79.255', True, 200000), ('192.0.2.10', False, None)]",
-        "initialize_live must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'commit_nonce': '38d95a9df61abc7fa9a21c549ebcf1c6', 'database_id': '8d2310a21a926f1eb501dec35f9dfd14', 'directory_identity': {'file': '236856221', 'volume': '66307'}, 'housekeeping': {'artifacts': []}, 'main_basename': 'db.iprange', 'main_identity': {'file': '236856231', 'volume': '66307'}, 'method': 'iprange.v1.database.initialize_live', 'new_sidecar_identity': {'file': '236856229', 'volume': '66307'}, 'new_sidecar_location': 'canonical', 'operation': 'initialize', 'reader_capacity': 8, 'residue_possible': False, 'sidecar_id': '49cb0e20901a5fe74970dd65af7c39ef', 'status': 'initialized', 'transaction_id': '2', 'visible_housekeeping': []}}",
-        "database.info live must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': '38d95a9df61abc7fa9a21c549ebcf1c6', 'database_id': '8d2310a21a926f1eb501dec35f9dfd14', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
-        "database.info must report T0 and range count, got {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': '38d95a9df61abc7fa9a21c549ebcf1c6', 'database_id': '8d2310a21a926f1eb501dec35f9dfd14', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}",
+        "initialize_live must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'commit_nonce': '33fd8b4c7fb2f03696a00a696b0c203e', 'database_id': '43071211593785cefafbd7acf5fe9286', 'directory_identity': {'file': '236867339', 'volume': '66307'}, 'housekeeping': {'artifacts': []}, 'main_basename': 'db.iprange', 'main_identity': {'file': '236867344', 'volume': '66307'}, 'method': 'iprange.v1.database.initialize_live', 'new_sidecar_identity': {'file': '236867342', 'volume': '66307'}, 'new_sidecar_location': 'canonical', 'operation': 'initialize', 'reader_capacity': 8, 'residue_possible': False, 'sidecar_id': 'e1d63b12d3a2057b487acbda296b5d1b', 'status': 'initialized', 'transaction_id': '2', 'visible_housekeeping': []}}",
+        "database.info live must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': '33fd8b4c7fb2f03696a00a696b0c203e', 'database_id': '43071211593785cefafbd7acf5fe9286', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
+        "database.info must report T0 and range count, got {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': '33fd8b4c7fb2f03696a00a696b0c203e', 'database_id': '43071211593785cefafbd7acf5fe9286', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}",
         "the pre-transition fixture content probe must be intact, got [('192.0.2.10', True, 10), ('192.0.2.20', True, 15), ('198.51.100.35', True, 30), ('10.0.0.0', False, None)]",
-        "database.info live must succeed on a fresh producer, got {'id': '5', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': '38d95a9df61abc7fa9a21c549ebcf1c6', 'database_id': '8d2310a21a926f1eb501dec35f9dfd14', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
+        "database.info live must succeed on a fresh producer, got {'id': '5', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': '33fd8b4c7fb2f03696a00a696b0c203e', 'database_id': '43071211593785cefafbd7acf5fe9286', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
         "an interrupted draft must never become the generation: expected pre-transition T0=2 R0=3, got 2/3",
         "the control run's post-transition facts must be absent after the interrupted draft: got 2/3, control post 3/200000",
         "the committed database must keep the pre-transition content probe after the interrupted draft, got [('192.0.2.10', True, 10), ('192.0.2.20', True, 15), ('198.51.100.35', True, 30), ('10.0.0.0', False, None)]",
@@ -457,7 +457,7 @@
       "live_reader_opens": {
         "producer": 17
       },
-      "marker_seen_ms": 0.3,
+      "marker_seen_ms": 0.4,
       "operations": {
         "consumer": [
           "iprange.v1.reader.open"
@@ -488,8 +488,8 @@
         ]
       },
       "pass": false,
-      "producer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "producer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "producer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "producer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "reopen_outcome": null,
       "residue_bounded": {
         "maintenance_list_pre": [
@@ -515,15 +515,15 @@
         "producer": 2
       },
       "assertions": [
-        "big publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': 'a9cbe38ef3547bdbcbf36a2a4b7471b4', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': '5d2480fff9dc1c0426a7c857614f7fda', 'destination_basename': 'YmlnLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '236856233', 'volume': '66307'}, 'output_byte_length': '7127040', 'output_identity': {'file': '236856235', 'volume': '66307'}, 'output_sha512': '08f53e9c1efe8f1960df4f4253c2102061714553a1cb589ebd599869820d2b21a6bd31909c658420980af68a148f403fca897ff2a6f109b2179a00cfe3bbe42d', 'publication_attempt_id': '4891e765c31b36f68758cba76148298b', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '236856240', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '128000000', 'input_record_count': '500000', 'normalized_interval_count': '500000'}}}",
-        "reference export must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'addresses': '128000000', 'bytes': '12472986', 'format': 'ranges', 'identity': {'file': '236856235', 'volume': '66307'}, 'method': 'iprange.v1.export', 'path': '/tmp/qualsvc/ev18/wrk-crashneg/rust-consumer/e-rust->consumer-056c39c0/ref.txt', 'rows': '500000', 'sha256': '4d5094acbc4cb0b9f24a34665f366aa73e4772132fba75ffb626de397e48a505'}}",
+        "big publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '31959dd9ddc1fd9d53eb8b3126ec4102', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': '427f8eaffad4ca152c8f895c5906bff5', 'destination_basename': 'YmlnLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '236867346', 'volume': '66307'}, 'output_byte_length': '7127040', 'output_identity': {'file': '236867348', 'volume': '66307'}, 'output_sha512': 'dcd54a1bf10d43707a0606745f015505837fa94b3674a0611b3a51163279c19c2508c74680e2a8779f9fe91c72d50e6ecee7e18796a29ec05091d27d6d4b2f4d', 'publication_attempt_id': 'd62baf66c554cd359bef794bb9b6c714', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '236867349', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '128000000', 'input_record_count': '500000', 'normalized_interval_count': '500000'}}}",
+        "reference export must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'addresses': '128000000', 'bytes': '12472986', 'format': 'ranges', 'identity': {'file': '236867348', 'volume': '66307'}, 'method': 'iprange.v1.export', 'path': '/tmp/qualsvc/ev19/wrk-crashneg/rust-consumer/e-rust->consumer-e35c51c7/ref.txt', 'rows': '500000', 'sha256': '4d5094acbc4cb0b9f24a34665f366aa73e4772132fba75ffb626de397e48a505'}}",
         "export destination must be absent after the kill",
-        "exactly one export temp must remain as the bounded residue (the interrupted attempt's private .<handle>.export.tmp), got ['.67d8c9502c7188a9638f1d3ab7656adc.export.tmp']",
-        "the orphan must be a private .<handle>.export.tmp basename (leading dot, non-empty handle, '.export.tmp' suffix), got '.67d8c9502c7188a9638f1d3ab7656adc.export.tmp'",
+        "exactly one export temp must remain as the bounded residue (the interrupted attempt's private .<handle>.export.tmp), got ['.37d2fa271f8b7d84b572638b39bd4fee.export.tmp']",
+        "the orphan must be a private .<handle>.export.tmp basename (leading dot, non-empty handle, '.export.tmp' suffix), got '.37d2fa271f8b7d84b572638b39bd4fee.export.tmp'",
         "the immutable source must be unchanged by the interrupted export",
-        "export retry must complete, got {'id': '4', 'jsonrpc': '2.0', 'result': {'addresses': '128000000', 'bytes': '12472986', 'format': 'ranges', 'identity': {'file': '236856235', 'volume': '66307'}, 'method': 'iprange.v1.export', 'path': '/tmp/qualsvc/ev18/wrk-crashneg/rust-consumer/e-rust->consumer-056c39c0/out.txt', 'rows': '500000', 'sha256': '4d5094acbc4cb0b9f24a34665f366aa73e4772132fba75ffb626de397e48a505'}}",
+        "export retry must complete, got {'id': '4', 'jsonrpc': '2.0', 'result': {'addresses': '128000000', 'bytes': '12472986', 'format': 'ranges', 'identity': {'file': '236867348', 'volume': '66307'}, 'method': 'iprange.v1.export', 'path': '/tmp/qualsvc/ev19/wrk-crashneg/rust-consumer/e-rust->consumer-e35c51c7/out.txt', 'rows': '500000', 'sha256': '4d5094acbc4cb0b9f24a34665f366aa73e4772132fba75ffb626de397e48a505'}}",
         "retried export must land byte-identical to the reference",
-        "the completed retry must remove its own private temp and leave exactly the pre-retry orphan set (no new residue): pre-retry ['.67d8c9502c7188a9638f1d3ab7656adc.export.tmp'], post-retry ['.67d8c9502c7188a9638f1d3ab7656adc.export.tmp']"
+        "the completed retry must remove its own private temp and leave exactly the pre-retry orphan set (no new residue): pre-retry ['.37d2fa271f8b7d84b572638b39bd4fee.export.tmp'], post-retry ['.37d2fa271f8b7d84b572638b39bd4fee.export.tmp']"
       ],
       "consumer": "consumer:/usr/bin/false",
       "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
@@ -535,7 +535,7 @@
         "class": "export_partial_output",
         "dest_absent_after_crash": true,
         "export_temp_basenames": [
-          ".67d8c9502c7188a9638f1d3ab7656adc.export.tmp"
+          ".37d2fa271f8b7d84b572638b39bd4fee.export.tmp"
         ]
       },
       "failures": [
@@ -546,7 +546,7 @@
       "kill_method": "SIGKILL process group at export partial-output marker (real flushed output: the 64 KiB-buffered temp is 0 bytes until the first flush; the kill waits for size > 0)",
       "kinds": {},
       "live_reader_opens": {},
-      "marker_seen_ms": 5.0,
+      "marker_seen_ms": 4.8,
       "operations": {
         "consumer": [
           "iprange.v1.reader.open"
@@ -559,15 +559,15 @@
         ]
       },
       "pass": false,
-      "producer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "producer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "producer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "producer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "reopen_outcome": null,
       "residue_bounded": {
         "export_temp_orphans": [
-          ".67d8c9502c7188a9638f1d3ab7656adc.export.tmp"
+          ".37d2fa271f8b7d84b572638b39bd4fee.export.tmp"
         ],
         "orphans_after_retry": [
-          ".67d8c9502c7188a9638f1d3ab7656adc.export.tmp"
+          ".37d2fa271f8b7d84b572638b39bd4fee.export.tmp"
         ]
       },
       "resolve_outcome": {
@@ -579,17 +579,17 @@
     {
       "adapter_output_opens": {},
       "assertions": [
-        "big publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '58d76a250e718b1abe10bf10a080a9e7', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': 'b37e80dfe29aa0e2fa02dd666e7ab119', 'destination_basename': 'YmlnLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '236856259', 'volume': '66307'}, 'output_byte_length': '21282816', 'output_identity': {'file': '236858123', 'volume': '66307'}, 'output_sha512': '28bb0e66e49ac24dd49fc12892ec176e8d6294e98edf492ccbcd513ce03f831a2706125f6fcc9df05a99174743521d751bb6e3df97fd90d8e5de222221084d08', 'publication_attempt_id': 'a887b1dc2606ae9d865e9f7db253caa8', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '236858124', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '384000000', 'input_record_count': '1500000', 'normalized_interval_count': '1500000'}}}",
+        "big publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '6926c972ff8ece4d4efe4fa94f1e1847', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': 'e6f7764ba861e898374c7ddca748942f', 'destination_basename': 'YmlnLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '236867352', 'volume': '66307'}, 'output_byte_length': '21282816', 'output_identity': {'file': '236867354', 'volume': '66307'}, 'output_sha512': 'f81540cfda2b388252ee4e129a41646b339f5b1245042240083ac9fcc66d8468f250ce122d7dea5c4920a751f8f4039fb2f8bc8e680c5f21e34e0affcad019c5', 'publication_attempt_id': '414cf60dd223003414ecd8f53c953aaa', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '236867355', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '384000000', 'input_record_count': '1500000', 'normalized_interval_count': '1500000'}}}",
         "the 1 500 000-range main must hold >= 1400 leaf pages, got 1400",
-        "reference validate must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'findings': {'bytes': '125057', 'path': '/tmp/qualsvc/ev18/wrk-crashneg/rust-consumer/f-rust->consumer-8d8bce25/ref-findings.jsonl', 'rows': '1402', 'sha256': 'ee6696b5082b73881bec2eb273d1b0b845af982efaf70b12d4027fb8c633fb1c'}, 'method': 'iprange.v1.validate', 'result': {'file_identity': {'file': '236858123', 'volume': '66307'}, 'generation': {'address_family': 'ipv4', 'commit_nonce': '58d76a250e718b1abe10bf10a080a9e7', 'database_id': 'b37e80dfe29aa0e2fa02dd666e7ab119', 'page_count': '5196', 'structure_kind': 'none', 'transaction_id': '1', 'value_kind': 'membership', 'value_tag': {'hex': '707562746167'}}, 'progress': {'bounded_possible_span_addresses': '0', 'checked_unique_pages': '5194', 'finding_count': '1402', 'has_unbounded_unknown': True, 'untraversable_subgraphs': '1400'}, 'valid': False}}}",
+        "reference validate must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'findings': {'bytes': '125057', 'path': '/tmp/qualsvc/ev19/wrk-crashneg/rust-consumer/f-rust->consumer-64f9c8c9/ref-findings.jsonl', 'rows': '1402', 'sha256': 'ee6696b5082b73881bec2eb273d1b0b845af982efaf70b12d4027fb8c633fb1c'}, 'method': 'iprange.v1.validate', 'result': {'file_identity': {'file': '236867354', 'volume': '66307'}, 'generation': {'address_family': 'ipv4', 'commit_nonce': '6926c972ff8ece4d4efe4fa94f1e1847', 'database_id': 'e6f7764ba861e898374c7ddca748942f', 'page_count': '5196', 'structure_kind': 'none', 'transaction_id': '1', 'value_kind': 'membership', 'value_tag': {'hex': '707562746167'}}, 'progress': {'bounded_possible_span_addresses': '0', 'checked_unique_pages': '5194', 'finding_count': '1402', 'has_unbounded_unknown': True, 'untraversable_subgraphs': '1400'}, 'valid': False}}}",
         "reference validate on the deterministic leaf damage must find >= 1000 findings (got 1402) with reference bytes strictly between one and two 64 KiB writer blocks (got 125057); the lead recalibrates the exact finding count during the full battery",
         "findings destination must be absent after the kill",
-        "exactly one findings-output temp must remain as the bounded residue, got ['.de6b053021f2a16880c0cd34591b0b12.export.tmp']",
+        "exactly one findings-output temp must remain as the bounded residue, got ['.aa2f9404c8d2e9382036805d74cb68ca.export.tmp']",
         "the interrupted findings temp must carry real flushed bytes, got 65485",
         "interrupted findings bytes must be strictly fewer than the reference findings bytes (65485 < 125057)",
         "interrupted findings temp must be a strict prefix of the reference findings",
         "the damaged main must be byte-identical after the kill",
-        "fresh validate must succeed, got {'id': '4', 'jsonrpc': '2.0', 'result': {'findings': {'bytes': '125057', 'path': '/tmp/qualsvc/ev18/wrk-crashneg/rust-consumer/f-rust->consumer-8d8bce25/fresh-findings.jsonl', 'rows': '1402', 'sha256': 'ee6696b5082b73881bec2eb273d1b0b845af982efaf70b12d4027fb8c633fb1c'}, 'method': 'iprange.v1.validate', 'result': {'file_identity': {'file': '236858123', 'volume': '66307'}, 'generation': {'address_family': 'ipv4', 'commit_nonce': '58d76a250e718b1abe10bf10a080a9e7', 'database_id': 'b37e80dfe29aa0e2fa02dd666e7ab119', 'page_count': '5196', 'structure_kind': 'none', 'transaction_id': '1', 'value_kind': 'membership', 'value_tag': {'hex': '707562746167'}}, 'progress': {'bounded_possible_span_addresses': '0', 'checked_unique_pages': '5194', 'finding_count': '1402', 'has_unbounded_unknown': True, 'untraversable_subgraphs': '1400'}, 'valid': False}}}",
+        "fresh validate must succeed, got {'id': '4', 'jsonrpc': '2.0', 'result': {'findings': {'bytes': '125057', 'path': '/tmp/qualsvc/ev19/wrk-crashneg/rust-consumer/f-rust->consumer-64f9c8c9/fresh-findings.jsonl', 'rows': '1402', 'sha256': 'ee6696b5082b73881bec2eb273d1b0b845af982efaf70b12d4027fb8c633fb1c'}, 'method': 'iprange.v1.validate', 'result': {'file_identity': {'file': '236867354', 'volume': '66307'}, 'generation': {'address_family': 'ipv4', 'commit_nonce': '6926c972ff8ece4d4efe4fa94f1e1847', 'database_id': 'e6f7764ba861e898374c7ddca748942f', 'page_count': '5196', 'structure_kind': 'none', 'transaction_id': '1', 'value_kind': 'membership', 'value_tag': {'hex': '707562746167'}}, 'progress': {'bounded_possible_span_addresses': '0', 'checked_unique_pages': '5194', 'finding_count': '1402', 'has_unbounded_unknown': True, 'untraversable_subgraphs': '1400'}, 'valid': False}}}",
         "fresh validate must report the same truthful findings as the reference (valid=False count=1402 rows=1402), got valid=False count=1402 rows=1402",
         "fresh validate findings must be byte-identical to the reference findings (same deterministic damage)"
       ],
@@ -601,7 +601,7 @@
       "destination_state": {
         "class": "validate_findings_aborted",
         "findings_temp_basenames": [
-          ".de6b053021f2a16880c0cd34591b0b12.export.tmp"
+          ".aa2f9404c8d2e9382036805d74cb68ca.export.tmp"
         ],
         "findings_temp_bytes": 65485,
         "main_sha256_unchanged": true,
@@ -623,7 +623,7 @@
       "kill_method": "SIGKILL process group at findings-output flush marker during validation/findings delivery (the private export temp carries real flushed bytes; interruption lands during delivery, not at an exact internal walk point).  The worker-scratch marker is impossible because neither engine's validate spills to authorized scratch (scratch is API-parity only in v4/go/internal/validation and v4/rust/iprange-livedb/src/validation; a heap below the claim-bitmap requirement is a truthful insufficient_resource_budget refusal, never a spill)",
       "kinds": {},
       "live_reader_opens": {},
-      "marker_seen_ms": 790.3,
+      "marker_seen_ms": 790.9,
       "operations": {
         "consumer": [
           "iprange.v1.reader.open"
@@ -636,12 +636,12 @@
         ]
       },
       "pass": false,
-      "producer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "producer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "producer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "producer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "reopen_outcome": null,
       "residue_bounded": {
         "export_temp_orphans": [
-          ".de6b053021f2a16880c0cd34591b0b12.export.tmp"
+          ".aa2f9404c8d2e9382036805d74cb68ca.export.tmp"
         ],
         "findings_dest_absent": true,
         "findings_temp_bytes": 65485,
@@ -659,8 +659,8 @@
     {
       "adapter_output_opens": {},
       "assertions": [],
-      "consumer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "consumer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "consumer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "consumer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "destination_state": null,
       "failures": [
         "reservation marker was not observed; worker outcome={'error': 'service closed stdout; stderr='}"
@@ -688,8 +688,8 @@
     {
       "adapter_output_opens": {},
       "assertions": [],
-      "consumer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "consumer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "consumer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "consumer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -717,8 +717,8 @@
     {
       "adapter_output_opens": {},
       "assertions": [],
-      "consumer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "consumer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "consumer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "consumer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -746,8 +746,8 @@
     {
       "adapter_output_opens": {},
       "assertions": [],
-      "consumer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "consumer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "consumer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "consumer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "destination_state": null,
       "failures": [
         "creating-state sidecar marker was not observed; worker outcome={'error': 'service closed stdout; stderr='}"
@@ -775,8 +775,8 @@
     {
       "adapter_output_opens": {},
       "assertions": [],
-      "consumer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "consumer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "consumer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "consumer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -804,8 +804,8 @@
     {
       "adapter_output_opens": {},
       "assertions": [],
-      "consumer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "consumer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "consumer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "consumer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -833,8 +833,8 @@
     {
       "adapter_output_opens": {},
       "assertions": [],
-      "consumer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "consumer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "consumer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "consumer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="
@@ -862,8 +862,8 @@
     {
       "adapter_output_opens": {},
       "assertions": [],
-      "consumer": "rust:/tmp/qualsvc/ev18/bin/rust/iprange",
-      "consumer_sha256": "f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d",
+      "consumer": "rust:/tmp/qualsvc/ev19/bin/rust/iprange",
+      "consumer_sha256": "24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0",
       "destination_state": null,
       "failures": [
         "service closed stdout; stderr="

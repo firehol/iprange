@@ -262,6 +262,57 @@ fn oversized_unterminated_frame_answers_and_exits() {
 }
 
 #[test]
+fn overflow_at_eof_exits_nonzero() {
+    // Role-round finding (round 2): a final unterminated frame of
+    // exactly LIMIT+1 bytes at EOF is over the ceiling (no
+    // terminator exists to strip a CR for), so it is a framing
+    // failure: one -32001 (id null) and a NON-ZERO exit, matching
+    // the Go reader.  Pre-fix Rust answered the -32001 at the schema
+    // layer and then exited 0 through the clean-EOF path.
+    for tail in [&b""[..], &b"\r"[..]] {
+        for _ in 0..2 {
+            let mut child = spawn_product();
+            let mut stdin = child.stdin.take().expect("stdin");
+            // 1,048,576 is INPUT_FRAME_LIMIT; LIMIT+1 payload bytes
+            // without LF, then EOF.
+            let limit = 1_048_576usize;
+            let mut body = vec![b'x'; limit + 1];
+            if !tail.is_empty() {
+                body[limit] = b'\r';
+            }
+            let mut written = 0usize;
+            while written < body.len() {
+                let take = 65536usize.min(body.len() - written);
+                written += stdin.write(&body[written..written + take]).expect("write bytes");
+            }
+            drop(stdin); // EOF
+            let mut stdout = child.stdout.take().expect("stdout");
+            let code = wait_nonzero(&mut child, Duration::from_secs(3));
+            assert_eq!(
+                code, 1,
+                "overflow at EOF (tail {tail:?}): exit code {code}, want 1"
+            );
+            use std::io::Read;
+            let mut text = String::new();
+            stdout
+                .read_to_string(&mut text)
+                .expect("read stdout after exit");
+            let mut lines = text.lines();
+            let first = lines.next().expect("one -32001 response");
+            assert!(first.contains("-32001"), "response is not -32001: {first}");
+            assert!(
+                first.contains("\"id\":null"),
+                "over-limit response must carry id null: {first}"
+            );
+            assert!(
+                lines.next().is_none(),
+                "only the -32001 response may appear: {text}"
+            );
+        }
+    }
+}
+
+#[test]
 fn idle_session_signal_exits_nonzero() {
     for sig in [libc::SIGINT, libc::SIGTERM] {
         for _ in 0..2 {

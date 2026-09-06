@@ -1012,6 +1012,11 @@ def self_test():
        responses to one ``expect=2`` read must be rejected
        (role-round finding: the duplicate-id rejection previously had
        no detecting control, so a regression could pass unnoticed).
+    4. Drain-flood control: a child that floods stdout without EOF
+       must fail ``drain_stdout`` at its accumulated-byte ceiling
+       (role-round finding: the drain was deadline-bounded only, so
+       a cap regression could re-open unbounded harness memory for
+       the whole drain deadline).
 
     Prints one line per control and returns 0 only when all controls
     pass and no owned child survives.  The lead runs this with
@@ -1120,6 +1125,40 @@ def self_test():
             failures.append(
                 f"duplicate-id control raised in {elapsed:.3f} s "
                 "(bounded window 1.5 s)")
+    finally:
+        _kill_process_group(stub)
+        stub.stdout.close()
+
+    # Drain-flood control: a peer that never reaches EOF and floods
+    # stdout past the accumulated ceiling must fail drain_stdout at
+    # the ceiling instead of accumulating memory for the deadline.
+    stub = subprocess.Popen(
+        ["/bin/sh", "-c",
+         "head -c 3000000 /dev/zero | tr '\\0' 'x'; sleep 5"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, start_new_session=True)
+    record_spawn(stub)
+    try:
+        started = time.monotonic()
+        try:
+            drain_stdout(stub, 5.0)
+            failure_text = None
+        except ResourceFailure as exc:
+            failure_text = str(exc)
+        elapsed = time.monotonic() - started
+        print(f"self-test drain-flood control: "
+              f"{failure_text or 'unexpected success'} in {elapsed:.3f} s")
+        if failure_text is None:
+            failures.append("drain-flood control: drain_stdout accepted "
+                            "a flooding peer past the ceiling")
+        elif "ceiling" not in failure_text:
+            failures.append(
+                f"drain-flood control failed for the wrong reason: "
+                f"{failure_text}")
+        elif elapsed >= 3.0:
+            failures.append(
+                f"drain-flood control raised in {elapsed:.3f} s "
+                "(bounded window 3.0 s)")
     finally:
         _kill_process_group(stub)
         stub.stdout.close()

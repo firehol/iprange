@@ -6382,3 +6382,83 @@ failed the wave-11 revision, this section repairs every verified
 finding, and milestone 4 is re-CLOSED once the role-round delta
 passes the exact final revision of this wave.  Milestone 5
 (delivery step 6) remains unstarted per user decision 1A.
+
+### Wave 13 (2026-09-06) — role-round delta FAIL (EOF framing boundary and drain control) and repair
+
+The wave-12 closure was submitted to the seven standing role
+reviewers at HEAD `21b62a66`.  Five roles returned before the tree
+changed (the remaining two were interrupted): tester and security
+returned PASS; parity returned FAIL with 1 P1, operations returned
+FAIL with 1 P2 (the same boundary class, independently confirmed),
+and performance returned FAIL with 1 P2:
+
+1. **P1 — Rust exited 0 on a framing failure at the LIMIT+1-at-EOF
+   boundary; Go exited 1 (parity role, independently confirmed by
+   operations; reproduced by the lead on the staged binaries).**
+   `v4/rust/iprange-cli/src/rpc/framing.rs` — the `read_line` EOF
+   arm returned the accumulated buffer without the ceiling check
+   that Go's EOF arm has (`v4/go/internal/cli/rpc/framing.go`).  A
+   final unterminated frame of exactly `INPUT_FRAME_LIMIT+1` bytes
+   (no LF), with or without a trailing CR, is over the ceiling (at
+   EOF no terminator exists to strip a CR for); both products emit
+   the byte-identical -32001 (id null) wire response, but Go exits 1
+   through the framing-failure path while Rust answered at the
+   schema layer, continued, and then exited 0 through the clean-EOF
+   path — an exit-status consumer could mistake a framing failure
+   for success, violating the spec's framing-failure non-zero exit
+   and the Go/Rust parity claim.  Repair: the Rust EOF arm now
+   checks `self.buf.len() > INPUT_FRAME_LIMIT` exactly like Go and
+   reports `FrameTooLarge`.  Regression tests: Rust
+   `overflow_at_eof_exits_nonzero` (plain and CR-tail, two trials
+   each; one null-id -32001 and exit 1 within 3 s), Go
+   `TestOversizedEOFExitsNonZero` (pins the same shape in both
+   variants).  Measured post-fix: both products exit 1 in ~0.05 s
+   on both variants.
+
+2. **P2 — the drain_stdout byte-cap repair had no committed
+   detecting control (performance role).**  The wave-12 cap exists,
+   but `drain_stdout` is called only by proof b whose real product
+   reaches EOF in milliseconds, so no committed test could detect a
+   cap regression.  Repair: `resource_harness.py --self-test` now
+   runs a drain-flood control (a peer flooding stdout without EOF;
+   must raise `ResourceFailure` at the accumulated ceiling within a
+   bounded window).  Measured: rejected at the ceiling in ~0.002 s.
+
+#### Validated fixes, before the role-round delta (wave 13)
+
+- Go: `go test ./...` (go1.26.4) PASS, including the new
+  `TestOversizedEOFExitsNonZero`; Rust: `cargo test` (workspace)
+  PASS, including the new `overflow_at_eof_exits_nonzero`.
+- Product identity (release, staged, recorded), Linux: Rust
+  `24733db0…` (changed by this wave's framing EOF-arm check); Go
+  `7f88bb7c…` and the worker and fixture identities are unchanged
+  (`cb9ad6cd…`, `202a83ac…`, `7c616793…`); the Linux evidence is
+  regenerated at the new identity in `v4/cli/evidence/`.
+- Full battery at the new identity (sequential, one host, staged
+  under `/tmp/qualsvc/ev19/`): matrices rust 38/38, go 38/38,
+  rust_to_go 14+24, go_to_rust 14+24; crash positive 16/16 both
+  directions, /bin/false negative control 16/16 failed; resource
+  8/8; golden 55 exchanges; sensitivity 14 modes; kind gate PASS on
+  the regenerated evidence.
+- Framework self-tests: resource_harness `--self-test` PASS (now
+  including the read, write, duplicate-id, and drain-flood
+  controls), windows_housekeeping_harness `--self-test` PASS
+  (M1-M7), kind-gate `--self-test` controls 1-42 PASS, run.py
+  protocol self-tests PASS.
+
+#### Sensitive-data and artifact gate (wave 13)
+
+No personal paths, host aliases, or secrets in the regenerated
+evidence or in this SOW.  Specs: no spec amendment (the framing
+reader now enforces the already-specified ceiling at EOF; the
+transport contract is unchanged).  End-user docs: none affected.
+Evidence: `v4/cli/evidence/*.json` regenerated at the new Rust
+identity and `resource-record.md` / `evidence/README.md` updated.
+Project skills: unchanged.  SOW lifecycle: this section records the
+delta findings and repair; the role-round verdicts at the final
+wave-13 revision are recorded in the next section.
+
+Closure statement: milestone 4 acceptance remains REOPENED pending
+the role-round delta at the exact final revision of this wave;
+milestone 5 (delivery step 6) remains unstarted per user decision
+1A.

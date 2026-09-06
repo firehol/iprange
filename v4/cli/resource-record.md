@@ -127,14 +127,17 @@ The Linux qualification binary hashes at that wave changed to
 `2f1d2bba…` (Go) and `86056181…` (Rust); behavior on Linux was
 unchanged outside the round-trip acceptance.  The current canonical
 Linux identities are recorded in `evidence/README.md` (Go product
-`7f88bb7c…`, Rust product `f6926c1c…` at the twelfth-wave revision
-after the internal role round found the graceful fatal path still
-blocked on a full diagnostic pipe and the frame reader still waited
-for a terminator that may never arrive; the worker and fixture
-identities are build-proven there as well).  The signal-path
-forced-exit floor is ~1.05-1.07 s (1 s watchdog + 50 ms diagnostic
-grace); the graceful fatal path exits within ~60 ms of the session
-failure even with a full stderr pipe.
+`7f88bb7c…`, Rust product `24733db0…` at the thirteenth-wave
+revision, after the role-round delta found the Rust EOF arm missing
+the ceiling check that Go has — a final unterminated frame of
+LIMIT+1 bytes at EOF now exits non-zero in both products; the
+worker and fixture identities are build-proven there as well).  The
+signal-path forced-exit floor is ~1.05-1.07 s (1 s watchdog + 50 ms
+diagnostic grace); the graceful fatal path exits within ~60 ms of
+the session failure even with a full stderr pipe; an over-limit
+input frame (with or without a terminator, including the
+EOF-resolved LIMIT+1 shape) answers -32001 (id null) and exits
+non-zero in both products.
 
 Deferred to delivery step 6: latency/throughput and engine RSS
 ceilings only.  Wave-10 note: the D1-A signal contract adds a

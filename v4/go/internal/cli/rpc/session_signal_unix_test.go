@@ -121,6 +121,14 @@ func TestTerminationSignalHelperProcess(t *testing.T) {
 		// and exits non-zero (spec iprange-jsonrpc-v1.md framing
 		// section).
 		err = NewSession().Run(os.Stdin, os.Stdout)
+	case "oversized-eof":
+		// Exactly LIMIT+1 payload bytes without LF, then EOF
+		// (role-round finding, round 2): the EOF-resolved frame is
+		// over the ceiling (no terminator exists to strip a CR for),
+		// so the reader reports the framing failure: -32001 with id
+		// null and a non-zero exit, pinned for Go parity with the
+		// Rust reader.
+		err = NewSession().Run(os.Stdin, os.Stdout)
 	case "eof-first":
 		// Supervisor stop sequence: the response for one request is
 		// written, EOF follows immediately, and the termination
@@ -219,6 +227,97 @@ func TestTerminationSignalDrainWedgeForcesNonZeroExit(t *testing.T) {
 	// process-lifetime watchdog can serve the signal.
 	runSignalTrials(t, "drain-wedge", syscall.SIGTERM, 1)
 	runSignalTrials(t, "drain-wedge", syscall.SIGINT, 1)
+}
+
+func TestOversizedEOFExitsNonZero(t *testing.T) {
+	// Role-round finding (round 2): a final unterminated frame of
+	// exactly LIMIT+1 bytes at EOF is over the ceiling, so it is a
+	// framing failure: one -32001 (id null) and a non-zero exit
+	// (spec iprange-jsonrpc-v1.md framing + shutdown sections).  The
+	// Go reader always reported the ceiling at EOF; this pins the
+	// shape so the Rust reader cannot diverge again.
+	for _, tail := range []string{"", "\r"} {
+		for iteration := 0; iteration < 2; iteration++ {
+			cmd := exec.Command(os.Args[0], "-test.run=^TestTerminationSignalHelperProcess$")
+			cmd.Env = append(os.Environ(), signalTestHelperEnv+"=oversized-eof")
+			stdin, err := cmd.StdinPipe()
+			if err != nil {
+				t.Fatalf("stdin pipe: %v", err)
+			}
+			stdout, err := cmd.StdoutPipe()
+			if err != nil {
+				stdin.Close()
+				t.Fatalf("stdout pipe: %v", err)
+			}
+			cmd.Stderr = &bytes.Buffer{}
+			if err := cmd.Start(); err != nil {
+				t.Fatalf("start helper: %v", err)
+			}
+			body := make([]byte, InputFrameLimit+1)
+			for i := range body {
+				body[i] = 'x'
+			}
+			if tail == "\r" {
+				body[InputFrameLimit] = '\r'
+			}
+			written := 0
+			for written < len(body) {
+				take := 65536
+				if left := len(body) - written; left < take {
+					take = left
+				}
+				n, werr := stdin.Write(body[written : written+take])
+				written += n
+				if werr != nil {
+					t.Fatalf("write overflowing bytes: %v", werr)
+				}
+			}
+			stdin.Close() // EOF resolves the frame
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+			lineCh := make(chan string, 1)
+			errCh := make(chan error, 1)
+			go func() {
+				line, rerr := bufio.NewReader(stdout).ReadString('\n')
+				if rerr != nil {
+					errCh <- rerr
+					return
+				}
+				lineCh <- line
+			}()
+			select {
+			case line := <-lineCh:
+				var payload map[string]any
+				if err := json.Unmarshal([]byte(line), &payload); err != nil {
+					t.Fatalf("bad -32001 json: %v (%q)", err, line)
+				}
+				if payload["id"] != nil {
+					t.Fatalf("expected null id, got %v", payload["id"])
+				}
+				errorObj, _ := payload["error"].(map[string]any)
+				if code, _ := errorObj["code"].(float64); int(code) != -32001 {
+					t.Fatalf("expected -32001, got %v", payload["error"])
+				}
+			case rerr := <-errCh:
+				t.Fatalf("read -32001: %v", rerr)
+			case <-time.After(3 * time.Second):
+				cmd.Process.Kill()
+				cmd.Wait()
+				t.Fatalf("no -32001 response within 3s (tail %q)", tail)
+			}
+			select {
+			case err := <-done:
+				exit, ok := err.(*exec.ExitError)
+				if !ok || exit.ExitCode() != 1 {
+					t.Fatalf("oversized-eof (tail %q): exit = %v, want 1", tail, err)
+				}
+			case <-time.After(3 * time.Second):
+				cmd.Process.Kill()
+				cmd.Wait()
+				t.Fatalf("oversized-eof: helper did not terminate within 3s")
+			}
+		}
+	}
 }
 
 func TestGracefulFatalFullStderrForcedExit(t *testing.T) {

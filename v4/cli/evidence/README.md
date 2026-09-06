@@ -42,19 +42,16 @@ sections.
 - Rust product + worker + fixture tool: clean-release builds of
   `v4/rust/target/release/{iprange,iprange-v4-worker,examples/v4-fixture}`
   (rustc 1.97.1) staged as
-  `/tmp/qualsvc/ev18/bin/rust/{iprange,iprange-v4-worker,v4-fixture}`:
+  `/tmp/qualsvc/ev19/bin/rust/{iprange,iprange-v4-worker,v4-fixture}`:
   - product SHA-256
-    `f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d`
-    (changed by the twelfth wave in
-    `v4/rust/iprange-cli/src/rpc/mod.rs`: the graceful-fatal
-    diagnostic is now best-effort from a detached thread with the
-    same 50 ms bound the forced exit uses, so a full stderr pipe can
-    no longer block the exit on the graceful path either; and in
-    `v4/rust/iprange-cli/src/rpc/framing.rs`: an over-limit frame is
-    reported immediately at the byte that makes the payload
-    definitely over the ceiling, without waiting for a terminator
-    that may never arrive; the wave-11 session.rs fixes are
-    included);
+    `24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0`
+    (shipped in the twelfth wave: the graceful-fatal diagnostic
+    detached in `mod.rs` with the forced exit's 50 ms bound and the
+    immediate over-limit report in `framing.rs`; changed by the
+    thirteenth wave in `framing.rs`: the EOF arm now checks the
+    ceiling like the Go reader, so a final unterminated frame of
+    LIMIT+1 bytes at EOF is a framing failure with a non-zero exit;
+    the wave-11 session.rs fixes are included);
   - worker SHA-256
     `cb9ad6cd82a03b7933d706de9e1b4e4c707836962b7f00e194c5d50cd4511e94`
     (unchanged; build-proven identity, not pinned by the committed
@@ -68,13 +65,10 @@ sections.
   `/tmp/qualsvc/ev18/bin/go/{iprange,iprange-v4-worker}`:
   - product SHA-256
     `7f88bb7c63e994ca41845da667c69bc67158ddbcc5082a658b6c21dd2131b47c`
-    (changed by the twelfth wave in
-    `v4/go/internal/cli/rpc/rpc.go`: the graceful-fatal diagnostic is
-    now best-effort from a detached goroutine with the same 50 ms
-    bound the forced exit uses; and in
-    `v4/go/internal/cli/rpc/framing.go`: an over-limit frame is
-    reported immediately without waiting for a terminator; the
-    wave-11 session.go fixes are included);
+    (unchanged by the thirteenth wave; shipped in the twelfth wave:
+    the graceful-fatal diagnostic detached in rpc.go, the immediate
+    over-limit report in framing.go, plus the wave-11 session.go
+    fixes);
   - worker SHA-256
     `202a83ac92f5c8b85b44068a1553aef0dbf25a81fb2d888022592292d03b6141`
     (the worker source tree is unchanged since the eighth wave and

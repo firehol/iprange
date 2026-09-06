@@ -70,6 +70,17 @@ impl<R: BufRead> LineReader<R> {
                     if self.buf.is_empty() {
                         return Ok(None);
                     }
+                    // A final unterminated frame at EOF is accepted
+                    // only up to the ceiling.  At EOF there is no
+                    // terminator to strip a CR for, so any accumulated
+                    // payload above the limit is a framing failure
+                    // with a non-zero exit (Go parity; role-round
+                    // finding: the EOF-resolved LIMIT+1 shape used to
+                    // answer -32001 at the schema layer and then exit
+                    // 0 through the clean-EOF path).
+                    if self.buf.len() > INPUT_FRAME_LIMIT {
+                        return Err(LineReadError::FrameTooLarge);
+                    }
                     return Ok(Some(std::mem::take(&mut self.buf)));
                 }
                 Ok(b) => {
