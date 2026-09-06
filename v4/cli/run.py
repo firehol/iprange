@@ -1252,18 +1252,26 @@ class JsonRpcService:
             start_new_session=start_new_session,
         )
         # Deadline-bounded mode reads and writes the raw pipe fds
-        # under selectors; the buffered wrappers cannot be time-boxed
-        # and would hide bytes from the selector loops, so they are
-        # detached (the raw owners are kept in the service object).
+        # under selectors (POSIX); the buffered wrappers cannot be
+        # time-boxed and would hide bytes from the selector loops, so
+        # they are detached (the raw owners are kept in the service
+        # object).  Windows cannot select() on pipes (WinError 10038),
+        # so a Windows deadline-bounded service keeps the buffered
+        # wrappers and applies the deadline with worker threads
+        # instead; a timed-out thread poisons the service because its
+        # bytes can no longer be attributed to a correlated read.
         self.read_deadline = read_deadline
         self.write_deadline = write_deadline
         self._read_buf = b""
         self._raw_stdin = None
         self._raw_stdout = None
-        if write_deadline is not None:
+        self._use_threads = bool(self.read_deadline or self.write_deadline) \
+            and os.name == "nt"
+        if write_deadline is not None and not self._use_threads:
             self._raw_stdin = self.proc.stdin.detach()
-        if read_deadline is not None:
+        if read_deadline is not None and not self._use_threads:
             self._raw_stdout = self.proc.stdout.detach()
+        self._poisoned = False
         self.lock = threading.Lock()
         self.stderr_tail = []
 
@@ -1286,10 +1294,16 @@ class JsonRpcService:
             request_bytes = len(wire_bytes) + 1
             if len(wire_bytes) > frame.INPUT_FRAME_LIMIT:
                 raise AssertionError("client request frame over limit")
+            if self._poisoned:
+                raise AssertionError(
+                    "service poisoned by a bounded I/O timeout; "
+                    "a later exchange cannot be correlated")
             try:
                 if self.write_deadline is None:
                     self.proc.stdin.write(wire_bytes + b"\n")
                     self.proc.stdin.flush()
+                elif self._use_threads:
+                    self._write_bounded_thread(wire_bytes + b"\n")
                 else:
                     self._write_bounded(wire_bytes + b"\n")
             except TimeoutError as exc:
@@ -1301,6 +1315,13 @@ class JsonRpcService:
                     f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
             if self.read_deadline is None:
                 line = self.proc.stdout.readline()
+            elif self._use_threads:
+                try:
+                    line = self._readline_bounded_thread()
+                except TimeoutError as exc:
+                    raise AssertionError(
+                        f"service did not answer within the bounded read "
+                        f"deadline: {exc}") from exc
             else:
                 try:
                     line = self._readline_bounded()
@@ -1335,10 +1356,16 @@ class JsonRpcService:
             request_bytes = len(wire_bytes) + 1
             if len(wire_bytes) > frame.INPUT_FRAME_LIMIT:
                 raise AssertionError("client notification frame over limit")
+            if self._poisoned:
+                raise AssertionError(
+                    "service poisoned by a bounded I/O timeout; "
+                    "a later exchange cannot be correlated")
             try:
                 if self.write_deadline is None:
                     self.proc.stdin.write(wire_bytes + b"\n")
                     self.proc.stdin.flush()
+                elif self._use_threads:
+                    self._write_bounded_thread(wire_bytes + b"\n")
                 else:
                     self._write_bounded(wire_bytes + b"\n")
             except TimeoutError as exc:
@@ -1368,6 +1395,68 @@ class JsonRpcService:
                 frame.STD_INVALID_REQUEST,
                 f"response id {response.get('id')!r} != request id {request_id!r}")
         return response
+
+    def _write_bounded_thread(self, payload):
+        """Write one request frame under the deadline via a worker
+        thread (Windows: select() cannot wait on pipes).
+
+        A worker thread performs the blocking write; the caller joins
+        it for at most the configured deadline.  On timeout the
+        service is poisoned: the stuck thread may later consume or
+        interleave bytes, so no other exchange can be correlated.
+        """
+
+        done = threading.Event()
+        result = {}
+
+        def worker():
+            try:
+                self.proc.stdin.write(payload)
+                self.proc.stdin.flush()
+                result["ok"] = True
+            except Exception as exc:  # noqa: BLE001 - propagated below
+                result["err"] = exc
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        if not done.wait(self.write_deadline):
+            self._poisoned = True
+            raise TimeoutError(
+                f"write deadline {self.write_deadline:.3f} s expired")
+        if "err" in result:
+            raise result["err"]
+
+    def _readline_bounded_thread(self):
+        """Read one LF-terminated frame under the deadline via a
+        worker thread (Windows: select() cannot wait on pipes).
+
+        The buffered wrapper keeps partial frames across calls, so
+        correlated reads remain intact until a timeout poisons the
+        service.
+        """
+
+        done = threading.Event()
+        result = {}
+
+        def worker():
+            try:
+                result["line"] = self.proc.stdout.readline()
+            except Exception as exc:  # noqa: BLE001 - propagated below
+                result["err"] = exc
+            finally:
+                done.set()
+
+        thread = threading.Thread(target=worker, daemon=True)
+        thread.start()
+        if not done.wait(self.read_deadline):
+            self._poisoned = True
+            raise TimeoutError(
+                f"read deadline {self.read_deadline:.3f} s expired")
+        if "err" in result:
+            raise result["err"]
+        return result["line"]
 
     def _write_bounded(self, payload):
         """Write one request frame under ``self.write_deadline``.
