@@ -127,11 +127,13 @@ The Linux qualification binary hashes at that wave changed to
 `2f1d2bba…` (Go) and `86056181…` (Rust); behavior on Linux was
 unchanged outside the round-trip acceptance.  The current canonical
 Linux identities are recorded in `evidence/README.md` (Go product
-`7f88bb7c…`, Rust product `24733db0…` at the thirteenth-wave
-revision, after the role-round delta found the Rust EOF arm missing
-the ceiling check that Go has — a final unterminated frame of
-LIMIT+1 bytes at EOF now exits non-zero in both products; the
-worker and fixture identities are build-proven there as well).  The
+`d228ebe5…`, Rust product `6ab63dfd…` at the fourteenth-wave
+revision; the worker and fixture identities are build-proven there
+as well).  The wave-13 role-round delta found the Rust EOF arm
+missing the ceiling check that Go has — a final unterminated frame
+of LIMIT+1 bytes at EOF now exits non-zero in both products; the
+wave-14 delta repaired held over-limit frame reporting, the Windows
+basename round-trip, and the resource-proof residue drains.  The
 signal-path forced-exit floor is ~1.05-1.07 s (1 s watchdog + 50 ms
 diagnostic grace); the graceful fatal path exits within ~60 ms of
 the session failure even with a full stderr pipe; an over-limit

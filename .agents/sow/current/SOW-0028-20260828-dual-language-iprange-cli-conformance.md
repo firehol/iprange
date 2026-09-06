@@ -6577,7 +6577,9 @@ disposition:
    stdin, -32001 + exit 1); unit tests pin the non-CR immediate
    shape (`held_limit_plus_one_non_cr_is_immediate`) and the CR-tail
    /LF legal boundary (`held_limit_plus_one_cr_tail_resolves_on_lf`).
-   Measured: both products exit 1 in ~0.02 s on the held shape.
+   Measured on the held shape: both products answer -32001
+   within ~0.01 s (Go ~0.007 s, Rust ~0.002 s) and exit 1 in
+   ~0.07 s (the documented fatal-exit grace).
 
 2. P1 — the Rust Windows `main_basename` round-trip was broken:
    `LocalBasename` stores UTF-16LE units (encoding 2) on Windows but
@@ -6681,4 +6683,43 @@ golden count corrected to 55.  Evidence:
 `v4/cli/evidence/*.json` regenerated at the wave-14 revision with
 `evidence/README.md` updated.  Framework records: wave-14 section
 and Status appended.
+
+
+#### Wave-14 role-round delta (2026-09-07) — records and gate controls
+
+The wave-14 role round (tester, operations, parity, portability,
+security, performance, glm roles at HEAD `805eaf54`) returned three
+verified findings from the performance role; all were verified by
+the lead before fixing (file:line and fresh measurements below).
+
+1. P2 — `v4/cli/resource-record.md` cited the wave-13 canonical
+   Linux identity hashes (Go `7f88bb7c…`, Rust `24733db0…`) as
+   "current" while HEAD evidence (`v4/cli/evidence/README.md`,
+   `.local/shared/binaries/SHASUMS.txt`) records the wave-14
+   identities (Go `d228ebe5…`, Rust `6ab63dfd…`).  The record now
+   states the wave-14 identities and keeps the wave-13 EOF-ceiling
+   and wave-14 repair history as dated facts.
+
+2. P2 — the wave-14 fixture-identity rejections in
+   `v4/cli/check_kind_coverage.py` (crash fixture path recorded
+   without `fixture_tool_sha256`; two crash reports naming the same
+   fixture path with different hashes) had no committed detecting
+   controls: deleting the guards still passed `--self-test` and the
+   genuine gate.  Two controls were added to `_self_test` (#42
+   crash-fixture-missing-sha, #43 cross-crash fixture conflict);
+   `--self-test` PASS and the genuine kind gate PASS on the
+   committed evidence.
+
+3. P3 — the wave-14 record's "both products exit 1 in ~0.02 s on
+   the held shape" conflated the -32001 response with process exit.
+   Fresh measurement at the staged wave-14 binaries: both products
+   answer -32001 within ~0.01 s (Go ~0.007 s, Rust ~0.002 s) and
+   exit 1 in ~0.07 s (the documented fatal-exit grace).  The SOW
+   wording was corrected.
+
+Validation at the fixed tree: kind-gate `--self-test` PASS (all
+controls incl. the two new ones), genuine kind gate PASS,
+held-shape probe PASS on both staged products (Go `d228ebe5…`,
+Rust `6ab63dfd…`).  The role round restarted as a delta at the new
+HEAD; results are recorded below when complete.
 

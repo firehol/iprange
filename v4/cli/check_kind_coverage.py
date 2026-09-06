@@ -3188,7 +3188,38 @@ def _self_test():
         genuine_mutation_fails("fixture-hash-contradiction",
                                fixture_hash_contradiction)
 
-        # 42. Positive control for the explicit-actor contract
+        # 42. Crash-side fixture identity (external review finding):
+        #     the crash root binaries table is the authority for the
+        #     battery fixture; a fixture path recorded without its
+        #     sha256 must fail the gate (the pre-fix gate skipped the
+        #     matrix comparison when the sha was absent).
+        def missing_crash_fixture_sha(matrices, crash):
+            crash["binaries"].pop("fixture_tool_sha256", None)
+        genuine_mutation_fails("crash-fixture-missing-sha",
+                               missing_crash_fixture_sha)
+
+        # 43. Cross-crash fixture conflict (external review finding):
+        #     two crash reports naming the same fixture path with
+        #     different sha256 values contradict each other; the gate
+        #     must fail instead of letting a later record silently
+        #     override the earlier identity.
+        matrices, crash = load_genuine()
+        crash_conflict = _copy.deepcopy(crash)
+        crash_conflict["binaries"]["fixture_tool_sha256"] = "f" * 64
+        paths = []
+        for index, report in enumerate(matrices):
+            path = os.path.join(work, f"fixture-conflict-{index}.json")
+            assign(path, report)
+            paths.append(path)
+        crash_first = os.path.join(work, "fixture-conflict-crash-1.json")
+        crash_second = os.path.join(work, "fixture-conflict-crash-2.json")
+        assign(crash_first, crash)
+        assign(crash_second, crash_conflict)
+        problems, _c, _s = assess(paths, [crash_first, crash_second])
+        assert problems, (
+            "cross-crash fixture sha conflict did not fail the gate")
+
+        # 44. Positive control for the explicit-actor contract
         #     (external review finding): capability is a property of
         #     the method, not of the actor who executes it.  The
         #     role-inverted database.metadata workflow (the consumer
