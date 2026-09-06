@@ -65,20 +65,44 @@ impl ReaderCore {
     }
 
     pub(crate) fn open_immutable(path: &Path) -> Result<Self> {
+        #[cfg(windows)]
+        eprintln!("DIAG imm open step1 sidecar {:?}", crate::path::canonical_sidecar(path));
         let sidecar = crate::path::canonical_sidecar(path)?;
+        #[cfg(windows)]
+        eprintln!("DIAG imm open step2 require_sidecar_absent");
         crate::database_file::require_sidecar_absent(&sidecar)?;
 
+        #[cfg(windows)]
+        eprintln!("DIAG imm open step3 open_read_only");
         let file = crate::database_file::open_read_only(path)?;
+        #[cfg(windows)]
+        eprintln!("DIAG imm open step4 identity_any_link");
         let identity = crate::live_namespace::identity_any_link(&file)?;
+        #[cfg(windows)]
+        eprintln!("DIAG imm open step5 lock_file");
         live_lock::lock_file(&file, MAIN_LIFETIME_LOCK, Mode::Shared)?;
+        #[cfg(windows)]
+        eprintln!("DIAG imm open step6 verify_path_any_link");
         crate::live_namespace::verify_path_any_link(path, identity)?;
+        #[cfg(windows)]
+        eprintln!("DIAG imm open step7 require_sidecar_absent again");
         crate::database_file::require_sidecar_absent(&sidecar)?;
 
+        #[cfg(windows)]
+        eprintln!("DIAG imm open step8 map_reader");
         let (mapping, bootstrap) =
             crate::database_file::map_reader(file, OpenMode::ImmutableReader)?;
+        #[cfg(windows)]
+        eprintln!("DIAG imm open step9 require_main_available");
         crate::live_cleanup::require_main_available(path, identity, bootstrap.meta.database_id)?;
+        #[cfg(windows)]
+        eprintln!("DIAG imm open step10 verify_path_any_link again");
         crate::live_namespace::verify_path_any_link(path, identity)?;
+        #[cfg(windows)]
+        eprintln!("DIAG imm open step11 require_sidecar_absent third");
         crate::database_file::require_sidecar_absent(&sidecar)?;
+        #[cfg(windows)]
+        eprintln!("DIAG imm open done");
         Ok(Self::new(mapping, bootstrap, None))
     }
 
