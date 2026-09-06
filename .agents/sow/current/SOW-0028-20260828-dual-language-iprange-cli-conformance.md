@@ -5952,4 +5952,7 @@ go Linux, `984d0e9d…` go Windows at `7bc59597`); case statuses and
 oracle counts unchanged (38/38 both languages, 14+24 both mixed
 directions, 16/16 crash positive, 0/16 negative, 8/8 resource,
 Windows 2/2, golden 55, sensitivity 14, kind gate PASS with the
-forged argv probes FAIL).
+argv-strip/relabel mutations FAIL — the consistent argv clone in its
+own declared slot remains the gate's documented one-report-fork
+residual, mitigated by battery reruns and adversarial rounds, as
+caveated above).
