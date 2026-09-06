@@ -1177,7 +1177,15 @@ fn decode_view(value: &Value) -> Result<ExportView, HandlerError> {
 
 fn validate_result_budget(value: &Value) -> Result<(), String> {
     let budget = value.as_object().ok_or("result_budget must be an object")?;
-    if budget.len() != 3 {
+    // The budget must be exactly the canonical member set; indexing a
+    // member that is not present panics on serde_json maps, and a
+    // frame-valid request must never crash the worker (the Go product
+    // answers -32602; regression pinned by
+    // invalid_result_budget_member_set_answers_error).
+    const CANONICAL: [&str; 3] = ["max_rows", "max_output_bytes", "max_open_files"];
+    if budget.len() != CANONICAL.len()
+        || CANONICAL.iter().any(|name| !budget.contains_key(*name))
+    {
         return Err(
             "result_budget requires exactly max_rows, max_output_bytes, and max_open_files".into(),
         );
@@ -1464,6 +1472,21 @@ mod tests {
         let mut zero_files = base.clone();
         zero_files["result_budget"]["max_open_files"] = json!(0);
         assert!(validate_export(&zero_files).is_err());
+        // A wrong-name third member (frame-valid, wrong names) must be
+        // rejected as an error, never panic the worker: the pre-fix
+        // validator checked only the member count and indexed the
+        // canonical names, panicking with "no entry found for key"
+        // (product-level P1).
+        let mut wrong_name = base.clone();
+        wrong_name["result_budget"]["max_workspace_bytes"] = json!(1);
+        wrong_name["result_budget"]
+            .as_object_mut()
+            .unwrap()
+            .remove("max_open_files");
+        assert!(validate_export(&wrong_name).is_err());
+        let mut extra_member = base.clone();
+        extra_member["result_budget"]["max_workspace_bytes"] = json!(1);
+        assert!(validate_export(&extra_member).is_err());
     }
 
     #[test]

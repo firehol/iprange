@@ -1,11 +1,11 @@
 //! Process-level termination-signal contract (SOW-0028 wave-10 D1).
 //!
 //! The `--jsonrpc` service must never ignore SIGINT/SIGTERM: an idle
-//! session exits non-zero through the graceful fatal path, and a
-//! wedged session (stdout stalled, events channel full, shutdown
-//! unreachable) is force-exited non-zero by the bounded watcher
-//! retry.  Mirrors the Go helper-process tests in
-//! `v4/go/internal/cli/rpc/session_test.go`.
+//! session exits non-zero through the graceful fatal path; wedged
+//! sessions (stalled stdout, full or partially-filled events
+//! channel, shutdown drain) are force-exited non-zero by the
+//! process-lifetime bound.  Mirrors the Go helper-process tests in
+//! `v4/go/internal/cli/rpc/session_signal_unix_test.go`.
 
 #![cfg(unix)]
 
@@ -45,6 +45,16 @@ fn wait_nonzero(child: &mut Child, timeout: Duration) -> i32 {
     }
 }
 
+fn flood_frames(count: usize, _close: bool) -> Vec<String> {
+    (0..count)
+        .map(|i| {
+            format!(
+                "{{\"jsonrpc\":\"2.0\",\"id\":{i},\"method\":\"iprange.v1.system.describe\",\"params\":{{}}}}\n"
+            )
+        })
+        .collect()
+}
+
 #[test]
 fn idle_session_signal_exits_nonzero() {
     for sig in [libc::SIGINT, libc::SIGTERM] {
@@ -57,32 +67,65 @@ fn idle_session_signal_exits_nonzero() {
     }
 }
 
+fn wedge_trial(sig: libc::c_int, frames: usize, close_stdin: bool) -> i32 {
+    let mut child = spawn_product();
+    let mut stdin = child.stdin.take().expect("stdin");
+    let writer = std::thread::spawn(move || {
+        for frame in flood_frames(frames, close_stdin) {
+            if stdin.write_all(frame.as_bytes()).is_err() {
+                break;
+            }
+            let _ = stdin.flush();
+        }
+        if close_stdin {
+            let _ = stdin.flush();
+        }
+    });
+    std::thread::sleep(Duration::from_secs(1));
+    if close_stdin {
+        let _ = writer.join();
+        // drop(stdin) happens when the thread's closure ends; the
+        // product sees EOF on its stdin pipe.
+    }
+    let code = signal_and_wait(child, sig, Duration::from_secs(4));
+    assert_eq!(code, 1, "wedge frames={frames} close={close_stdin} signal {sig}: exit code {code}, want 1");
+    code
+}
+
 #[test]
 fn wedged_session_signal_forces_nonzero_exit() {
+    // Full-flood wedge: far more frames than the transport can hold;
+    // the events channel is full at signal time.
     for sig in [libc::SIGINT, libc::SIGTERM] {
         for _ in 0..2 {
-            let mut child = spawn_product();
-            // Pipeline more frames than the transport can hold and
-            // never read stdout: the worker blocks on the full stdout
-            // pipe, the main loop on the full work queue, the reader
-            // on the full events channel (the wedge state).  Writing
-            // in a thread because stdin itself stops being drained.
-            let mut stdin = child.stdin.take().expect("stdin");
-            let writer = std::thread::spawn(move || {
-                for i in 0..2000 {
-                    let frame = format!(
-                        "{{\"jsonrpc\":\"2.0\",\"id\":{i},\"method\":\"iprange.v1.system.describe\",\"params\":{{}}}}\n"
-                    );
-                    if stdin.write_all(frame.as_bytes()).is_err() {
-                        break;
-                    }
-                    let _ = stdin.flush();
-                }
-            });
-            std::thread::sleep(Duration::from_secs(1));
-            let code = signal_and_wait(child, sig, Duration::from_secs(4));
-            assert_eq!(code, 1, "wedged signal {sig}: exit code {code}, want 1");
-            drop(writer);
+            wedge_trial(sig, 2000, false);
+        }
+    }
+}
+
+#[test]
+fn partial_wedge_signal_forces_nonzero_exit() {
+    // Second role-round finding: a few dozen frames (below the
+    // 64-slot events channel capacity) with stdin open and stdout
+    // never read.  A delivered Fatal event would sit unprocessed;
+    // only the process-lifetime bound can serve the signal.
+    for sig in [libc::SIGINT, libc::SIGTERM] {
+        for _ in 0..2 {
+            wedge_trial(sig, 60, false);
+        }
+    }
+}
+
+#[test]
+fn drain_wedge_signal_forces_nonzero_exit() {
+    // Second role-round finding: the worker is blocked mid-write on a
+    // full stdout pipe while the main loop joins it after EOF (the
+    // shutdown drain).  The events channel is empty, so a delivered
+    // Fatal event would sit unprocessed; only the process-lifetime
+    // bound can serve the signal.
+    for sig in [libc::SIGINT, libc::SIGTERM] {
+        for _ in 0..2 {
+            wedge_trial(sig, 60, true);
         }
     }
 }

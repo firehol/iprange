@@ -976,9 +976,10 @@ fn execute(state: &Arc<Mutex<SessionState>>, request: &Request) -> Value {
 /// The watcher records the consumed signal in the session control
 /// plane before attempting delivery, so a signal that raced EOF still
 /// produces a non-zero exit (the EOF path checks the flag), and never
-/// ignores a signal when the transport is wedged: if the events
-/// channel stays full and shutdown cannot begin, a bounded retry with
-/// explicit yields force-exits non-zero after 500 ms.
+/// ignores a signal: a process-lifetime bound force-exits non-zero
+/// 1 s after the signal is consumed, whether or not the fatal event
+/// delivery succeeded (a delivered event can sit unprocessed in a
+/// partially-filled channel while the main loop is wedged).
 #[cfg(unix)]
 mod signals {
     use super::{SessionControl, SessionEvent};
@@ -1017,12 +1018,17 @@ mod signals {
                             control.fatal_error = Some((err.kind(), err.to_string()));
                         }
                     }
-                    // Graceful delivery first; the bounded retry with
-                    // yield force-exits if shutdown cannot begin (the
-                    // wedge state: events channel full, main loop
-                    // blocked on the full work queue).
+                    // Graceful delivery first (bounded retry with
+                    // explicit yields); then a process-LIFETIME bound:
+                    // exit non-zero whether or not delivery succeeded.
+                    // A delivered Fatal event can sit unprocessed in a
+                    // partially-filled events channel while the main
+                    // loop is wedged (blocked on the full work queue
+                    // or joining a worker blocked on a full stdout
+                    // pipe), so the force-exit must not depend on the
+                    // delivery blocking (second role-round finding).
                     let deadline = std::time::Instant::now()
-                        + std::time::Duration::from_millis(500);
+                        + std::time::Duration::from_millis(1000);
                     let mut pending = err;
                     loop {
                         match watcher_events.try_send(SessionEvent::Fatal(pending)) {
@@ -1033,17 +1039,24 @@ mod signals {
                                 } else {
                                     break; // only Fatal is ever sent here; defensive
                                 }
-                                if std::time::Instant::now() >= deadline {
-                                    eprintln!(
-                                        "iprange: terminated by signal {signal}: transport wedged, forcing exit"
-                                    );
-                                    std::process::exit(1);
-                                }
-                                std::thread::yield_now();
                             }
                             Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
                         }
+                        std::thread::yield_now();
+                        if std::time::Instant::now() >= deadline {
+                            break;
+                        }
                     }
+                    // Cooperative shutdown normally exits the process
+                    // long before this; the sleep is the hard bound for
+                    // uncooperative states and cannot be disarmed by a
+                    // successful delivery.
+                    std::thread::sleep(
+                        deadline.saturating_duration_since(std::time::Instant::now()));
+                    eprintln!(
+                        "iprange: terminated by signal {signal}: forcing exit"
+                    );
+                    std::process::exit(1);
                 } else {
                     // sigwait cannot fail for a valid blocked set on
                     // the process's own signal mask; avoid a spin on
@@ -2965,5 +2978,66 @@ mod tests {
         let value: Value = serde_json::from_str(text.trim()).unwrap();
         assert_eq!(value["error"]["code"], json!(schema::STD_INVALID_REQUEST));
         assert_eq!(value["id"], Value::Null);
+    }
+
+    /// Reader that delivers one input line, then EOF after a fixed
+    /// delay (used to hold the session open past the first response
+    /// so a test can observe the mid-drain window).
+    struct DelayedEofReader {
+        input: Vec<u8>,
+        delivered: bool,
+        delay: std::time::Duration,
+    }
+
+    impl std::io::Read for DelayedEofReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            let data = self.fill_buf()?.to_vec();
+            let n = data.len().min(buf.len());
+            buf[..n].copy_from_slice(&data[..n]);
+            self.consume(n);
+            Ok(n)
+        }
+    }
+
+    impl std::io::BufRead for DelayedEofReader {
+        fn fill_buf(&mut self) -> io::Result<&[u8]> {
+            if !self.delivered {
+                self.delivered = true;
+                return Ok(&self.input);
+            }
+            std::thread::sleep(self.delay);
+            Ok(&[])
+        }
+        fn consume(&mut self, amt: usize) {
+            self.input.drain(..amt);
+        }
+    }
+
+    #[test]
+    fn signal_recorded_during_eof_drain_wins_over_exit_zero() {
+        // A termination signal consumed while the worker is still
+        // draining after EOF must make run() return Err even though
+        // the EOF shutdown itself completes cleanly (the EOF branch
+        // checks control.termination_signal after shutdown; D1
+        // wave-10; the Go mid-drain helper test mirrors this).
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = DelayedEofReader {
+            input:
+                b"{\"jsonrpc\":\"2.0\",\"id\":\"d1\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n"
+                    .to_vec(),
+            delivered: false,
+            delay: std::time::Duration::from_millis(500),
+        };
+        let mut session = Session::new();
+        let control = std::sync::Arc::clone(&session.control);
+        let signal_thread = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            control.lock().unwrap().termination_signal = Some(15);
+        });
+        let result = session.run(reader, SharedVec(output.clone()));
+        signal_thread.join().unwrap();
+        let err = result.unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::Interrupted);
+        assert!(err.to_string().contains("terminated by signal 15"));
     }
 }

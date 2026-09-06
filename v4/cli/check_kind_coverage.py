@@ -127,16 +127,16 @@ Evidence integrity rules:
   must name the report-root binaries table paths for
   ``--producer``/``--consumer``/``--fixture-tool``.
 - Matrix per-case argv is the execution anchor for the role a case
-  claims: every PASS matrix case of an argv-era revision records
-  ``actors.<role>.argv`` (the realpath of the binary that served that
-  role) and each argv realpath must equal the path of the report
-  binary record (matched by the actor sha256) that served the role.
-  A revision is argv-era when ANY supplied matrix report carries
-  argv-shaped actor records -- the runner that wrote that report also
-  wrote argv -- so the committed pre-argv evidence passes until the
-  wave regen, while after regen every future report without argv
-  fails; a relabeled case whose argv names the binary it actually
-  executed contradicts the role identity it claims.
+  claims: every PASS matrix case records ``actors.<role>.argv``
+  (the realpath of the binary that served that role), each argv must
+  be an absolute path, and each argv realpath must equal the path of
+  the report binary record (matched by the actor sha256) that served
+  the role -- whose record must itself carry a path.  A relabeled
+  case whose argv names the binary it actually executed contradicts
+  the role identity it claims; a record without argv, or whose binary
+  record lacks a path, fails unconditionally (second role-round
+  finding closed the pre-regen escape hatch: the committed evidence
+  is argv-era).
 - Every PASS crash scenario's producer/consumer ``impl:path`` must
   appear in the report-root binaries table and the table's sha256
   for that path must equal the scenario's sha256.
@@ -764,13 +764,11 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
     # rule (assess() pre-scans every matrix report) flows in through
     # argv_required.  Committed pre-argv evidence satisfies neither
     # and passes until the wave regen.
-    report_argv_era = _report_carries_argv(report)
-    if argv_required and not report_argv_era:
-        problems.append(
-            f"matrix {path}: report records no per-case actor argv "
-            f"while the battery is argv-era (every PASS case must "
-            f"record actors.<role>.argv)")
-    argv_required_here = argv_required or report_argv_era
+    # The per-case argv anchor is unconditional: the committed
+    # evidence revision is argv-era, and the pre-regen escape hatch
+    # (strip argv everywhere -> battery looks pre-argv -> pass) is a
+    # closed bypass (second role-round finding).
+    argv_required_here = True
     argv = _command_argv(report)
     if argv is None:
         problems.append(
@@ -979,9 +977,22 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                 if not (isinstance(actor_argv, str) and actor_argv):
                     problems.append(
                         f"matrix {path}: PASS case {case_name!r} actor "
-                        f"{actor!r} records no argv (argv-era identity)")
-                elif binary_path is not None and \
-                        os.path.realpath(actor_argv) != \
+                        f"{actor!r} records no argv (execution anchor)")
+                    continue
+                if not os.path.isabs(actor_argv):
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} actor "
+                        f"{actor!r} argv {actor_argv!r} is not an "
+                        f"absolute path")
+                    continue
+                if binary_path is None:
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} actor "
+                        f"{actor!r} argv {actor_argv!r} resolves to no "
+                        f"report binary record path (the record matched "
+                        f"by sha256 {sha!r} carries no path)")
+                    continue
+                if os.path.realpath(actor_argv) != \
                         os.path.realpath(binary_path):
                     problems.append(
                         f"matrix {path}: PASS case {case_name!r} actor "
@@ -1661,9 +1672,7 @@ def assess(matrix_paths, crash_paths):
     # argv-era, every matrix report of the revision must carry argv on
     # every PASS case (a future report without argv fails after regen;
     # the fully pre-argv committed evidence passes until regen).
-    battery_argv_era = any(
-        _report_carries_argv(_load_report(path, []))
-        for path in matrix_paths)
+    battery_argv_era = True  # unconditional (second role-round finding)
 
     seen_matrices = {}
     matrix_stats = {}
@@ -2872,13 +2881,12 @@ def _self_test():
         genuine_mutation_fails("false-main-open-operation",
                                false_main_open)
 
-        # 35. Matrix argv anchor (wave-10): the requirement is
-        #     conditional -- a fully pre-argv battery passes until the
-        #     wave regen, but an argv-era battery requires every PASS
-        #     case to carry actors.<role>.argv whose realpath names
-        #     the report binary that served the role.  A PASS case
-        #     without argv and an argv naming a different binary both
-        #     fail the gate.
+        # 35. Matrix argv anchor (wave-10, unconditional since the
+        #     second role round): every PASS case must carry
+        #     actors.<role>.argv whose realpath names the report
+        #     binary that served the role.  A battery stripped of all
+        #     argv (the pre-regen escape hatch), a PASS case without
+        #     argv, and an argv naming a different binary all fail.
         preargv = {}
         for m in REQUIRED_MATRICES:
             preargv_report = green_report(m)
@@ -2888,9 +2896,10 @@ def _self_test():
             assign(preargv[m], preargv_report)
         problems, _c, _s = assess(
             [preargv[m] for m in REQUIRED_MATRICES], [crash_path])
-        assert not problems, (
-            f"fully pre-argv battery failed the conditional argv rule: "
-            f"{problems}")
+        assert problems and any("records no argv" in p
+                                for p in problems), (
+            f"fully argv-stripped battery did not fail the "
+            f"unconditional argv rule: {problems}")
 
         no_argv = green_report("go")
         del no_argv["cases"][0]["actors"]["producer"]["argv"]
@@ -2901,6 +2910,38 @@ def _self_test():
              green["go_to_rust"]], [crash_path])
         assert problems and any("records no argv" in p for p in problems), (
             f"argv-less PASS case did not fail the gate: {problems}")
+
+        # 35b. Binary-record path anchor (second role round): the
+        #      report binary record matched by the actor sha256 must
+        #      carry a path; dropping every path breaks the argv
+        #      resolution and fails the gate.
+        pathless = green_report("go")
+        pathless["binaries"] = _copy.deepcopy(BINARIES)
+        for record in pathless["binaries"].values():
+            record.pop("path", None)
+        pathless_path = os.path.join(work, "pathless-binaries.json")
+        assign(pathless_path, pathless)
+        problems, _c, _s = assess(
+            [green["rust"], pathless_path, green["rust_to_go"],
+             green["go_to_rust"]], [crash_path])
+        assert problems and any("carries no path" in p for p in problems), (
+            f"binary record without a path did not fail the gate: "
+            f"{problems}")
+
+        # 35c. Absolute-argv anchor (second role round): a relative
+        #      argv cannot anchor the executed binary; the gate fails
+        #      the PASS case instead of resolving it against cwd.
+        relative_argv = green_report("rust")
+        relative_argv["cases"][0]["actors"]["producer"]["argv"] = (
+            "rust-iprange")
+        relative_argv_path = os.path.join(work, "relative-argv.json")
+        assign(relative_argv_path, relative_argv)
+        problems, _c, _s = assess(
+            [relative_argv_path, green["go"], green["rust_to_go"],
+             green["go_to_rust"]], [crash_path])
+        assert problems and any("not an absolute path" in p
+                                for p in problems), (
+            f"relative actor argv did not fail the gate: {problems}")
 
         bad_argv = green_report("rust")
         bad_argv["cases"][0]["actors"]["producer"]["argv"] = BINARY_PATHS["go"]

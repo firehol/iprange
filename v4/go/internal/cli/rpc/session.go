@@ -250,10 +250,19 @@ func (s *Session) Run(reader io.Reader, writer io.Writer) error {
 	// selects on reader EOF: a signal observed at any point, including
 	// mid-drain after the main loop already chose the EOF path, must
 	// still win over the exit-zero path (the main loop checks
-	// terminationSignal before returning nil). If the transport is
-	// wedged (events channel full, shutdown unreachable because the
-	// worker is blocked on a full stdout pipe), a watchdog forces the
-	// non-zero exit so a termination signal can never be ignored.
+	// terminationSignal before returning nil).
+	//
+	// The force-exit bound is a process LIFETIME bound, not a
+	// channel-delivery bound: it arms the moment the signal is
+	// consumed, whether or not the fatal event delivery blocks.  A
+	// delivery that succeeds into a partially-filled events channel
+	// would otherwise disarm the watchdog while the wedged main loop
+	// (blocked on the full work queue or joining a worker that is
+	// blocked on a full stdout pipe) never processes the event — the
+	// signal would be ignored forever (second role-round finding).
+	// The graceful path runs concurrently; cooperative shutdown
+	// finishes in milliseconds, so the deadline only fires for
+	// uncooperative states.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -269,19 +278,14 @@ func (s *Session) Run(reader io.Reader, writer io.Writer) error {
 			st.control.fatalWrite = err
 		}
 		st.controlMu.Unlock()
-		delivered := make(chan struct{})
-		go func() {
-			reportFatal(events, s, err)
-			close(delivered)
-		}()
-		select {
-		case <-delivered:
-			// The main loop took the fatal path, or shutdown already
-			// began and the report became abortable.
-		case <-time.After(signalForceExitTimeout):
-			fmt.Fprintf(os.Stderr, "iprange: %v: transport wedged, forcing exit\n", err)
-			os.Exit(1)
-		}
+		go reportFatal(events, s, err)
+		time.Sleep(signalForceExitTimeout)
+		// Reached only when the process did not exit through the
+		// graceful path in time (main loop wedged or still draining
+		// an uncooperative worker); never leave the signal unserved.
+		fmt.Fprintf(os.Stderr, "iprange: terminated by signal %d: forcing exit\n",
+			int(sig.(syscall.Signal)))
+		os.Exit(1)
 	}()
 
 	var runErr error
@@ -347,6 +351,27 @@ loop:
 		st.controlMu.Unlock()
 		if terminated && err != nil {
 			runErr = err
+		} else {
+			// Go delivers signals to Notify channels asynchronously;
+			// a termination signal sent together with EOF (the
+			// supervisor stop sequence) can still be pending in the
+			// runtime when the flag check above ran.  Poll the signal
+			// channel briefly before accepting the exit-zero EOF
+			// outcome so the pending signal is consumed and wins
+			// (Rust cannot lose this race: the signal sits pending in
+			// the process mask until sigwait consumes it).
+			select {
+			case sig := <-sigCh:
+				sigErr := errors.New("terminated by signal " + sig.String())
+				st.controlMu.Lock()
+				st.control.terminationSignal = true
+				if st.control.fatalWrite == nil {
+					st.control.fatalWrite = sigErr
+				}
+				st.controlMu.Unlock()
+				runErr = sigErr
+			case <-time.After(signalEofGracePoll):
+			}
 		}
 	}
 	select {
@@ -461,13 +486,21 @@ func (s *Session) fatal(err error, _ io.Writer, _ *FrameWriter) error {
 	return err
 }
 
-// signalForceExitTimeout bounds how long a termination signal waits
-// for the graceful fatal path before the watchdog forces the process
-// to exit non-zero. The events channel can be permanently full and
-// shutdown unreachable (worker blocked on a full stdout pipe, main
-// loop blocked on the full work queue); never leave the operator
-// without a working termination signal.
-const signalForceExitTimeout = 500 * time.Millisecond
+// signalForceExitTimeout bounds the process lifetime from the moment
+// a termination signal is consumed: the graceful fatal path runs
+// concurrently and normally finishes in milliseconds; if the process
+// has not exited by the deadline (wedged main loop or a worker that
+// will not drain), the watcher force-exits non-zero.  This is a
+// process-lifetime bound, deliberately independent of whether the
+// fatal event delivery can block (second role-round finding).
+const signalForceExitTimeout = 1 * time.Second
+
+// signalEofGracePoll is how long the clean-EOF exit path waits for a
+// termination signal that may be pending in the runtime (Go delivers
+// signals to Notify channels asynchronously).  Enough for the runtime
+// to wake the watcher; the concurrent signal+EOF supervisor pattern
+// is then consumed before the exit-zero result is accepted.
+const signalEofGracePoll = 25 * time.Millisecond
 
 // reportFatal delivers the worker's terminal failure to the main
 // loop without ever blocking past shutdown. The main loop stops

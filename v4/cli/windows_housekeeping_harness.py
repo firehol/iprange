@@ -146,6 +146,13 @@ GC_SUFFIX = ".tmp"
 MARKER_NAME = "MARKER.txt"
 MARKER_TEXT = "windows_housekeeping harness marker\n"
 
+# The qualification run must never block forever on a stalled RPC
+# peer.  Every controlled Windows flow answers well within these
+# bounds, so a hung product fails the run instead of hanging the
+# qualification host.
+RPC_READ_DEADLINE_SECONDS = 300.0
+RPC_WRITE_DEADLINE_SECONDS = 120.0
+
 # Live refresh flow sizes: the target live database gets
 # TARGET_CSV_ROWS direct records; the coverage source (an immutable
 # feed database named "alpha") covers the first COVERAGE_TEXT_ROWS of
@@ -1766,8 +1773,10 @@ def main():
         report["build_provenance"] = load_provenance(args.provenance)
 
     services = {
-        label: HarnessJsonRpcService([binary, "--jsonrpc"], label,
-                                     cwd=args.work_dir)
+        label: HarnessJsonRpcService(
+            [binary, "--jsonrpc"], label, cwd=args.work_dir,
+            read_deadline=RPC_READ_DEADLINE_SECONDS,
+            write_deadline=RPC_WRITE_DEADLINE_SECONDS)
         for label, binary in sorted(binaries.items())}
     failed = 0
     outcomes = {}

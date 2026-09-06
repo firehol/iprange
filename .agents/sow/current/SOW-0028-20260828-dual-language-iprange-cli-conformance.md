@@ -5727,3 +5727,137 @@ recorded staging identities only.
   unchanged (no workflow change).
 - SOW lifecycle: this section records the wave; the role round and
   Windows regeneration are tracked below.
+
+
+### Repairs (wave 10, second role round at `639b529f`, re-fix in progress)
+
+The first wave-10 fix commit `639b529f` was sent through the second
+role round (all seven roles, same brief: delta re-review at the
+repaired revision with the staged binaries `2315e28a…` rust /
+`3bf33dfd…` go).  The round returned FAIL with ten verified findings;
+the re-fix for every finding is implemented and validated below.
+
+#### Verified round findings at `639b529f`
+
+1. P1 — signal-wedge design flaw (tester/operations).  The D1-A
+   watchdog required the Fatal-event *send* to block.  With a
+   partially-filled events channel (≤ 63 free slots) the
+   `try_send` succeeds guaranteed, so the watchdog's force-exit
+   deadline disarmed, and the wedged main loop (blocked on the full
+   work queue or joining a worker blocked on the full stdout pipe)
+   never processed the delivered event: the process ignored the
+   signal forever.  Two reproduced sub-states: the partial-flood
+   wedge (60 frames, stdin open, stdout unread; 13 s+ hangs) and
+   the drain-wedge (worker blocked mid-write on the full stdout
+   pipe at EOF, main loop joining it; 18/18 trials hung).
+2. P1 — Go loses the concurrent signal+EOF race about half the time
+   (parity).  Go delivers signals to `signal.Notify` channels
+   asynchronously via the runtime; Rust's process-mask + `sigwait`
+   cannot lose the signal.  Leader reproduced: ~50% of concurrent
+   signal+EOF runs exited 0, contradicting the wave's
+   signal-wins-over-EOF contract.
+3. P1 — Rust export worker panics on a frame-valid wrong-name budget
+   (glm).  `export` params carrying `max_workspace_bytes` (instead
+   of the canonical `max_open_files`) passed validation and panicked
+   the worker at `v4/rust/iprange-cli/src/rpc/handlers/export.rs:1189:25`
+   ("no entry found for key"), killing every later response; Go
+   answered the same frame `-32602` and continued.
+4. P1 records — `v4/cli/evidence/README.md:140-143` still contained
+   the wave-9 false sentence claiming the Windows evidence was
+   "produced at the final product sources" (security/glm/
+   operations).  The committed Windows evidence is the eighth-wave
+   set (`90a935b2`); the wave-10 regeneration had not happened.
+5. P2 — Go signal tests are not Unix-guarded (portability):
+   `cmd.Process.Signal` fails to compile on Windows.  The signal
+   test block had to move behind `//go:build unix`.
+6. P2 — Rust lacked committed detections for the mid-drain
+   signal-wins-over-EOF rule and for both wedge sub-states
+   (tester/performance).  The wave narrative claimed them "in both
+   languages"; only Go had the mid-drain detecting test at
+   `639b529f`, and neither product had the partial-wedge or
+   drain-wedge sub-state tests.
+7. P2 — kind gate argv anchor still bypassable (security/parity).
+   Dropping `path` from the report binary records, or stripping
+   argv from every report (the pre-regen escape hatch), made the
+   forgery probes pass with exit 0.
+8. P2 — Windows housekeeping harness constructs its RPC client with
+   no deadlines (operations): `windows_housekeeping_harness.py:1769`
+   could hang the qualification host forever on a stalled product.
+9. P2 — Go deflate charge is pinned to the go1.26.4 toolchain
+   (portability): `v4/go/internal/writer/metadata.go:31` documents an
+   ~840 KiB flate workspace that measures ~1.08 MiB under go1.27.
+   This is a writer-engine (SOW-0025/0030) concern, not a SOW-0028
+   adapter defect; flagged to the user, tracked in the SOW-0030
+   queue, no product change here.
+
+Also recorded: Go watchdog diagnostic formatting ("terminated by
+signal terminated"); the Rust watcher's channel-holder is a one-shot
+CLI lifetime (accepted); the README "recorded below when it lands"
+dangling pointer.
+
+#### Re-fix (wave 10, second round)
+
+- D1-A deepening — process-lifetime bound, not delivery-bound: both
+  watchers force-exit non-zero 1 s after the signal is consumed,
+  whether or not the Fatal delivery succeeded (Go
+  `signalForceExitTimeout = 1s`, Rust watcher 1 s deadline + sleep
+  pending the graceful path).  The partial-flood and drain-wedge
+  sub-states both terminate now.  Go additionally polls `sigCh` for
+  25 ms at clean EOF before accepting the exit-zero result, closing
+  the runtime-delivery race (finding 2).
+- Rust export canonical member-set validation
+  (finding 3): the `result_budget` member is accepted only when the
+  params carry exactly the canonical export members; a wrong-name
+  budget member now yields `-32602` like Go, with a unit regression
+  and a product-level repro (both products answer `-32602`, the
+  trailing `system.describe` still answers, no panic).
+- Records (finding 4): the false README sentence is deleted and
+  replaced with the truthful eighth-wave identity plus the pending
+  D4 regeneration note; the dangling "recorded below when it lands"
+  pointer now names SOW-0028's tenth-wave section.
+- Portability (finding 5): the Go signal tests moved to
+  `v4/go/internal/cli/rpc/session_signal_unix_test.go` with
+  `//go:build unix`; `session_test.go` keeps the non-signal tests
+  and no longer imports `os`/`os/exec`/`syscall`.
+- Signal regression coverage (finding 6): Rust unit test
+  `signal_recorded_during_eof_drain_wins_over_exit_zero` plus
+  process tests `partial_wedge_signal_forces_nonzero_exit` and
+  `drain_wedge_signal_forces_nonzero_exit`; Go helper modes
+  `partial-wedge` and `drain-wedge` with
+  `TestTerminationSignalPartialWedgeForcesNonZeroExit` /
+  `TestTerminationSignalDrainWedgeForcesNonZeroExit`.
+- Kind gate (finding 7): the per-case argv anchor is unconditional
+  (`argv_required_here = True`); actor argv must be an absolute
+  path; the report binary record matched by the actor sha256 must
+  carry a path.  `--self-test` gained the pathless-binary-record and
+  relative-argv controls; the argv-strip battery control now asserts
+  FAILURE.  The pre-regen escape hatch is closed.
+- Windows harness (finding 8): `RPC_READ_DEADLINE_SECONDS = 300.0` /
+  `RPC_WRITE_DEADLINE_SECONDS = 120.0` wired into every
+  `HarnessJsonRpcService` construction.
+- Deflate charge (finding 9): no SOW-0028 product change; flagged to
+  the user, tracked for SOW-0025/0030.
+
+#### Validation (wave 10, second round, uncommitted re-fix tree)
+
+- Go: `go build ./...` PASS; `go test ./...` (canonical go1.26.4)
+  PASS including the six signal tests (idle, wedged, mid-drain,
+  partial-wedge, drain-wedge, helper).
+- Rust: `cargo test -p iprange-cli` — 270 lib/bin tests PASS
+  (including the mid-drain unit test and 23 export tests) + 4
+  termination process tests PASS.
+- Products (release, rebuilt after re-fix): Rust `4b9683b5…`, Go
+  `42270270…`; worker and fixture identities unchanged
+  (`cb9ad6cd…`, `202a83ac…`, `7c616793…`).
+- Product-level probes: signal wedge 4/4 trials exit 1 per product
+  (SIGINT+SIGTERM); partial-wedge 60-frame probe: 8/8 trials exit 1
+  in ~1.015 s across both products (pre-fix: 13 s+ hang); export
+  wrong-name-budget repro: both products `-32602`, trailing describe
+  answered, no panic.
+- Kind gate: `--self-test` exit 0 (controls updated to the
+  unconditional semantics); genuine committed evidence PASS;
+  `.local/parity/wave10/forged-consistent-argv.json` and
+  `.local/parity/wave10/forged-consistent-noargv.json` FAIL (exit 1).
+- Evidence regeneration with the re-fixed binaries and the D4
+  Windows run remain pending (recorded below); the committed
+  evidence at this commit is still the first-fix wave set.

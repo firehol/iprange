@@ -70,8 +70,9 @@ sections.
 - Windows qualification binaries (built on the authorized Windows
   validation host at the eighth-wave product-source revision
   `90a935b2`, clean working tree, staged under `C:/Temp/qualsvc-win/`
-  and `C:/Temp/wqual/`; wave-10 regeneration at the wave-10 revision
-  is recorded below when it lands):
+  and `C:/Temp/wqual/`; the wave-10 regeneration of the Windows
+  evidence at the wave-10 product sources is a pending qualification
+  step tracked in SOW-0028's tenth-wave section):
   - Go product SHA-256
     `992e8559e8da0e583a3796c725a2b7bcfb6d52a019b015c68a9d5be330b0a828`
     (go1.26.5 windows/amd64, `-buildvcs=false`);
@@ -137,10 +138,12 @@ cross-listing `source_basename` equality.  All Linux commands ran
 under `nice` with work dirs under `/tmp/qualsvc/ev17/work2/`
 (matrices, crash, resource); the mixed matrices
 are invoked with `--allow-skips` (recorded truthfully in each
-report command) so every battery command exits 0.  The Windows
-evidence for this wave is produced on the authorized Windows
-validation host at the final product sources and recorded in the
-report with build provenance.
+report command) so every battery command exits 0.  The committed
+Windows evidence is still the eighth-wave set (built at the
+eighth-wave product-source revision `90a935b2`); regenerating it at
+the wave-10 product sources is a pending qualification step on the
+authorized Windows validation host, tracked in SOW-0028's tenth-wave
+section.
 
 ## Files
 
