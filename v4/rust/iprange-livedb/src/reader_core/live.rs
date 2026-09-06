@@ -48,37 +48,19 @@ impl LiveReaderCore {
         live_lock::require_live_supported()?;
         cancellation.check()?;
         let main_path = path.to_path_buf();
-        #[cfg(windows)]
-        eprintln!("DIAG live open step1 open_read_only {:?}", &main_path);
         let file = crate::database_file::open_read_only(&main_path)?;
-        #[cfg(windows)]
-        eprintln!("DIAG live open step2 identity");
         let main_identity = crate::live_namespace::identity(&file)?;
-        #[cfg(windows)]
-        eprintln!("DIAG live open step3 main lock");
         live_lock::lock_file_cancellable(&file, MAIN_LIFETIME_LOCK, Mode::Shared, cancellation)?;
-        #[cfg(windows)]
-        eprintln!("DIAG live open step4 verify_path");
         crate::live_namespace::verify_path(&main_path, main_identity)?;
 
-        #[cfg(windows)]
-        eprintln!("DIAG live open step5 map_reader");
         let (mut mapping, initial) = crate::database_file::map_reader(file, OpenMode::LiveReader)?;
-        #[cfg(windows)]
-        eprintln!("DIAG live open step6 require_main_available");
         crate::live_cleanup::require_main_available(
             &main_path,
             main_identity,
             initial.meta.database_id,
         )?;
-        #[cfg(windows)]
-        eprintln!("DIAG live open step7 sidecar open {:?}", crate::path::canonical_sidecar(&main_path));
         let sidecar = Sidecar::open(&main_path, initial.meta.database_id)?;
-        #[cfg(windows)]
-        eprintln!("DIAG live open step8 sidecar gate lock");
         sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation)?;
-        #[cfg(windows)]
-        eprintln!("DIAG live open step9 register");
         let registration = register(
             &mut mapping,
             &main_path,
@@ -86,11 +68,7 @@ impl LiveReaderCore {
             &sidecar,
             cancellation,
         );
-        #[cfg(windows)]
-        eprintln!("DIAG live open step10 finish_with_cleanup");
         let (bootstrap, slot) = finish_with_cleanup(registration, sidecar.unlock_gate())?;
-        #[cfg(windows)]
-        eprintln!("DIAG live open done");
         let owner_identity = ProcessIdentity::capture();
         Ok(Self {
             reader: ReaderCore::new(mapping, bootstrap, Some(owner_identity)),
