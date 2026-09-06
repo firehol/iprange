@@ -1,24 +1,24 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The twelfth-wave (internal role-round repair) evidence is
-regenerated at the wave 2026-09-06 revision after the wave-11
-closure: the internal role round failed the wave-11 revision with
-one remaining P1 (the graceful fatal path still wrote the
-session-failure diagnostic synchronously, so a full diagnostic pipe
-blocked the exit outside the signal path), one new P1 (the frame
-readers waited for a terminator that may never arrive, so an
-unterminated over-limit frame never produced the required -32001 +
-close), two P2 harness ceilings (the stdout drain had no accumulated
-byte cap; the duplicate-id rejection had no detecting control), and
-three P3 repairs.  Both products now exit non-zero within ~60 ms on
-the graceful fatal path even with a full, undrained stderr pipe,
-an unterminated over-limit frame is answered -32001 (id null) and
-closed immediately, the drain is byte-bounded, and the harness
-self-tests cover the duplicate-id rejection and the
-already-exited poisoned-peer close.  Linux reports record the new
-product identities `f6926c1c…` (rust) and `7f88bb7c…` (go); the
-Windows housekeeping report is regenerated at the same product
-source revision (recorded below).
+The thirteenth-wave (role-round delta repair) evidence is
+regenerated at the wave 2026-09-06 revision after the wave-12
+closure: the role-round delta failed the wave-12 revision on the
+EOF framing boundary (Rust exited 0 on a final unterminated frame
+of exactly LIMIT+1 bytes at EOF while Go exited 1, with
+byte-identical -32001 wire output) and on a missing detecting
+control for the drain byte cap.  Both are repaired: the Rust reader
+now checks the ceiling at EOF exactly like the Go reader, the new
+LIMIT+1-at-EOF process tests pin the non-zero exit in both
+products, and the drain-flood self-test control pins the drain
+ceiling.  Both products answer an over-limit input frame with
+-32001 (id null) and exit non-zero in every shape (held-open
+unterminated, LF-terminated, and EOF-resolved), the graceful fatal
+path exits within ~60 ms even with a full undrained stderr pipe,
+and the harness self-tests cover the read, write, duplicate-id, and
+drain-flood controls.  Linux reports record the product identities
+`24733db0…` (rust) and `7f88bb7c…` (go); the Windows housekeeping
+report is regenerated at the same product source revision (recorded
+below).
 
 Produced 2026-09-06 on the Linux workstation (x86_64) from staged
 binary copies (no personal paths in the committed evidence) plus the

@@ -6473,3 +6473,47 @@ Closure statement: milestone 4 acceptance remains REOPENED pending
 the role-round delta at the exact final revision of this wave;
 milestone 5 (delivery step 6) remains unstarted per user decision
 1A.
+
+### Role round verdicts — wave 13 (2026-09-06): all seven roles PASS
+
+At HEAD `b947d8a6` (the exact final wave-13 revision), all seven
+standing role reviewers returned PASS with no P0-P2 findings:
+
+- tester: PASS (both wave-13 repairs verified at the binary level;
+  the round-2 duplicate-`.stdin()` cosmetic note retracted as a
+  false positive from a display artifact);
+- operations: PASS (EOF boundary re-probed plain and CR-tail: both
+  products -32001 + exit 1; boundary sweep incl. legal
+  payload-LIMIT controls green; drain-flood control verified);
+- parity: PASS (full boundary matrix at the new identities:
+  LIMIT+1-at-EOF, CR-tail, LF-terminated, held-open, and legal
+  LIMIT/CRLF controls all Go/Rust identical including stderr exit
+  parity; drain-flood control verified);
+- portability: PASS (regression tests green, same-failure search
+  found the two framing readers arm-for-arm identical; the round-2
+  "stuck child" observation resolved as a Python-side
+  `Popen.poll()` reaping artifact, not product behavior);
+- security: PASS (all classes re-probed, evidence genuine at
+  `24733db0`/`7f88bb7c` and Windows `de902a73`/`42173bb7`,
+  records truthful, secrets clean);
+- performance: PASS (drain cap control verified at the exact
+  ceiling; no request-path impact from the delta);
+- glm-5.3 whole-milestone validator: PASS (identity and battery
+  counts verified; no later commit than `b947d8a6`).
+
+Non-blocking notes recorded with the round: the viewer
+observability flake seen once by the glm-5.3 role in round 2
+(Rust `graceful_fatal_full_stderr_exits_nonzero`) never recurred
+across ~43 full-suite runs and ~500 direct probes and is tracked
+here; the exact-LIMIT-at-EOF accepted boundary is pinned by
+identical `>` ceiling code in both readers rather than a dedicated
+test (covered by the parity boundary sweep).
+
+Milestone-4 closure (delivery step 5): milestone 4 is now
+RE-CLOSED at `b947d8a6` under the wave-9 accepted decision set:
+functional parity and qualification PASS for both product
+implementations; the ≤1.3x performance requirement was FAILED and
+is not waived; engine-level performance residuals remain owned by
+SOW-0030; this SOW-0028 remains open for delivery step 6
+(dual-language CLI conformance benchmarks, milestone 5) which stays
+unstarted per user decision 1A.
