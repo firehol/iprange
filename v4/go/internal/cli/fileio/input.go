@@ -604,7 +604,7 @@ func (c *textInputCore[K]) openBinary(reader *bufio.Reader, file *os.File, ipv6 
 		remaining:      remaining,
 		optimized:      optimized,
 		expectedUnique: *expectedUnique,
-	}}
+	}, file: file}
 	return nil
 }
 
