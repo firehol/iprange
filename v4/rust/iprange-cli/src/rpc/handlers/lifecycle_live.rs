@@ -802,7 +802,35 @@ pub(crate) fn live_transition_result_from_wire(
 
 #[cfg(test)]
 mod tests {
-    use super::decode_artifact_basename;
+    use super::{decode_artifact_basename, decode_file_identity};
+    use serde_json::json;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn decode_file_identity_kind_is_posix() {
+        let identity = decode_file_identity(
+            &json!({"volume": "123", "file": "456"}),
+            "directory_identity",
+        )
+        .expect("decode");
+        assert_eq!(identity.kind, 1);
+        assert_eq!(identity.bytes[0..8], 123u64.to_le_bytes());
+        assert_eq!(identity.bytes[8..16], 456u64.to_le_bytes());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn decode_file_identity_kind_is_windows() {
+        // Windows identities record kind 2 (publication namespace);
+        // an unchanged create/transition result must decode to the
+        // same kind the SDK compares (external review finding).
+        let identity = decode_file_identity(
+            &json!({"volume": "123", "file": "456"}),
+            "directory_identity",
+        )
+        .expect("decode");
+        assert_eq!(identity.kind, 2);
+    }
 
     #[test]
     fn artifact_basename_encoding1_keeps_utf8_bytes() {
