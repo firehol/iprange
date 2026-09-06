@@ -571,6 +571,13 @@ creates an empty database, and leaves metadata absent. A client that needs
 initial metadata calls `database.metadata.replace` after successful creation.
 Result is the complete `CreateResult` plus `method`.
 
+The `main_basename` members of `CreateResult` and
+`LiveTransitionResult` are decoded destination basename text: a
+store that records UTF-16LE path units renders them as decoded
+Unicode text, and a store that records single-byte path bytes
+renders that byte text unchanged; the resolve methods round-trip
+the same text.
+
 ### `iprange.v1.database.initialize_live`
 
 Params: `path`, `reader_capacity`, and no budget. Result is the complete
@@ -969,8 +976,12 @@ Params:
 Kinds are unique and the bound is 1 through 65536. JSONL output writes one
 complete mechanically converted public SDK entry per row; CSV is unsupported
 for this method because nested authenticated identities must not be flattened.
-Rows are ordered by kind then canonical basename. Every removable entry
-contains its opaque authenticated removal identity. Result contains the SDK
+Rows are ordered by kind then canonical basename. Artifact
+basenames are the opaque per-byte wire form recorded by the
+product (on Windows, the raw UTF-16LE units with no decoding) and
+must be passed through unchanged, never decoded by clients. Every
+removable entry contains its opaque authenticated removal
+identity. Result contains the SDK
 list reports and ordinary output facts.
 
 ### `iprange.v1.maintenance.remove`

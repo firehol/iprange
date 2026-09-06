@@ -66,7 +66,7 @@ sections.
 - Rust product + worker + fixture tool: clean-release builds of
   `v4/rust/target/release/{iprange,iprange-v4-worker,examples/v4-fixture}`
   (rustc 1.97.1) staged as
-  `/tmp/qualsvc/ev19/bin/rust/{iprange,iprange-v4-worker,v4-fixture}`:
+  `/tmp/qualsvc/ev21/bin/rust/{iprange,iprange-v4-worker,v4-fixture}`:
   - product SHA-256
     `6ab63dfd72f498a4d2a41b856e2d94750adaa6598c16968c2489fcbe75ff8d93`
     (wave-14 build: the immediate held-over-limit report in
@@ -85,7 +85,7 @@ sections.
     identity predated the current release toolchain).
 - Go product + worker: the documented `-buildvcs=false` qualification
   pair (go1.26 linux/amd64, no embedded vcs revision) staged as
-  `/tmp/qualsvc/ev18/bin/go/{iprange,iprange-v4-worker}`:
+  `/tmp/qualsvc/ev21/bin/go/{iprange,iprange-v4-worker}`:
   - product SHA-256
     `d228ebe5c024e9f8dc8cccfc31295f73f0ddf87a83fb2ee4c01a52336ef3467d`
     (wave-14 build: the immediate held-over-limit report in

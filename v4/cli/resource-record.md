@@ -141,6 +141,11 @@ input frame (with or without a terminator, including the
 EOF-resolved LIMIT+1 shape) answers -32001 (id null) and exits
 non-zero in both products.
 
+Wave-14: proofs a and d additionally require the stdout stream
+to drain to EOF with zero trailing bytes after the expected
+responses (the harness drains the pipe and asserts no residue; a
+self-test control pins the detection).
+
 Deferred to delivery step 6: latency/throughput and engine RSS
 ceilings only.  Wave-10 note: the D1-A signal contract adds a
 deliberate ~25 ms grace wait to every clean-EOF exit in both

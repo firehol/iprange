@@ -6675,14 +6675,18 @@ disposition:
 
 No personal paths, host aliases, or secrets in the regenerated
 evidence or in this SOW; evidence JSONs were scanned for personal
-tokens.  Specs: no spec amendment (the framing reader now enforces
-the already-specified ceiling for the held-open shape; the
-`main_basename` wire contract for create/transition results is the
-documented unchanged round-trip).  End-user docs: `v4/cli/README.md`
+tokens.  Specs: the framing reader now enforces the
+already-specified ceiling for the held-open shape (no ceiling
+amendment); the `main_basename` wire semantics (decoded text on
+create/transition results) and the maintenance artifact basename
+opaque per-byte form are now pinned normatively in
+`iprange-jsonrpc-v1.md`.  End-user docs: `v4/cli/README.md`
 golden count corrected to 55.  Evidence:
 `v4/cli/evidence/*.json` regenerated at the wave-14 revision with
-`evidence/README.md` updated.  Framework records: wave-14 section
-and Status appended.
+`evidence/README.md` updated and its staging labels corrected to
+the qualified wave-14 paths.  Framework records: wave-14 section
+and Status appended; `v4/cli/resource-record.md` updated with the
+wave-14 identities and the proofs a/d residue drain.
 
 
 #### Wave-14 role-round delta (2026-09-07) — records and gate controls
@@ -6716,6 +6720,22 @@ the lead before fixing (file:line and fresh measurements below).
    answer -32001 within ~0.01 s (Go ~0.007 s, Rust ~0.002 s) and
    exit 1 in ~0.07 s (the documented fatal-exit grace).  The SOW
    wording was corrected.
+
+P3 dispositions from the same round (verified, fixed in the same
+wave): the SOW "~0.02 s" wording (item 3 above); the wave-14
+narrative in `v4/cli/evidence/README.md` referenced the stale
+`ev18`/`ev19` staging paths instead of the qualified `ev21` paths
+(corrected); the `main_basename` wire semantics and the
+maintenance artifact basename opaque per-byte form were committed
+to `iprange-jsonrpc-v1.md` (the wave-14 record previously called
+the round-trip "documented" without a normative home);
+`v4/cli/resource-record.md` now names the proofs a/d zero-residue
+drain.  Role observations left unaddressed as out-of-scope or
+pre-existing: Go's encoding-1-only basename stores (the Rust
+encoding-2 defect has no Go mirror), Rust lossy-by-truncation for
+an odd trailing UTF-16 unit (unit-tested by design), a test-only
+bounded Wait/read race window, and the 505-byte LocalBasename
+storage cap.
 
 Validation at the fixed tree: kind-gate `--self-test` PASS (all
 controls incl. the two new ones), genuine kind gate PASS,
