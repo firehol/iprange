@@ -128,8 +128,10 @@ the wave-14 revision (matrices 38/38 single, 14+24 mixed; crash
 16/16; resource 8/8; golden 55; sensitivity 14; kind gate PASS;
 Windows housekeeping 2/2 with clean `main_basename` from both
 products).  The milestone-4 closure recorded at `b947d8a6` is
-re-opened pending the wave-14 role round and external control
-re-review; milestone 5 remains unstarted per user decision 1A.
+re-opened pending the wave-14 external control re-review (the
+wave-14 role round PASSed at `3d090ccf`; verdicts are recorded in
+the Wave-14 delta section); milestone 5 remains unstarted per
+user decision 1A.
 
 
 
@@ -6740,6 +6742,45 @@ storage cap.
 Validation at the fixed tree: kind-gate `--self-test` PASS (all
 controls incl. the two new ones), genuine kind gate PASS,
 held-shape probe PASS on both staged products (Go `d228ebe5…`,
-Rust `6ab63dfd…`).  The role round restarted as a delta at the new
-HEAD; results are recorded below when complete.
+Rust `6ab63dfd…`).
+
+#### Role round verdicts — wave-14 delta (HEAD `3d090ccf`)
+
+All seven roles PASS at `3d090ccf` (product source unchanged since
+`e272c990`; the reviewed delta is `744d62d9` + `3d090ccf`):
+tester, operations, parity, portability, security, performance,
+and the glm-5.3-responses whole-milestone validator.  Each role
+re-verified the two P2 repairs with its own adversarial probes:
+
+- tester: the two new fixture-identity forgery classes and all
+  prior forgery classes rejected; the actor-swapped positive
+  control accepted; gate self-test and genuine gate PASS;
+  held-shape probe matches the corrected record.
+- operations: same-class stale-identity hunt clean; the spec pins
+  match both products' handlers and the committed evidence.
+- parity: self-test PASS; product and spec wire semantics
+  consistent for both languages; no stale hashes remain live.
+- portability: restored the pre-fix guard behavior in a sandbox
+  copy and showed `--self-test` fails exactly at control #42, so
+  the controls detect removal of the guard class.
+- security: the missing-sha and cross-crash-conflict rejections
+  were reproduced on the real committed evidence (not only
+  synthetic reports); two identical crash reports are accepted
+  (no false failure).
+- performance: bounded probe at the staged wave-14 binaries —
+  response within ~0.1 ms of the boundary byte, exit 1 at
+  63.5-63.8 ms; the corrected timing record is truthful.
+- glm: mutated the committed evidence in-sandbox; both new
+  rejection shapes fail with the exact diagnostic; PASS.
+
+Non-blocking P3 carry-overs recorded as out-of-scope or
+pre-existing (no product action): Go encoding-1-only basename
+stores, Rust odd-tail lossy-by-truncation (unit-tested by
+design), the bounded test-only `Wait`/read race window, the
+505-byte `LocalBasename` storage cap, synchronous startup stderr
+diagnostics, and the signal-bounded over-limit close on a full
+undrained stdout.  The closure records commit below adds the
+`commit.cleanup` `main_basename` decoded-text rule to the spec
+and records this PASS set; the roles and the external control
+re-review that exact final revision.
 
