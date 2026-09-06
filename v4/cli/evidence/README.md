@@ -77,15 +77,16 @@ sections.
     byte-reproducible across toolchains or build paths, and not
     pinned by the committed reports).
 - Windows qualification binaries (built on the authorized Windows
-  validation host at the wave-12 product-source revision
-  `40c1c046`, clean tracked tree, staged under
-  `C:/Temp/qualsvc-win/ev18/`):
+  validation host at the wave-13 product-source revision
+  `5346f716`, clean tracked tree, staged under
+  `C:/Temp/qualsvc-win/ev19/`):
   - Go product SHA-256
     `42173bb7a14e37c22b2e37ba2f028535b1243a1088f434f10312c7048a90ce20`
-    (go1.26.5 windows/amd64, `-buildvcs=false`);
+    (go1.26.5 windows/amd64, `-buildvcs=false`; unchanged since the
+    wave-12 revision);
   - Rust product SHA-256
-    `6dcf2cb25a97f56ad239d050e2bb1811d62db4b802fd67550bf3c985098d73d1`
-    (rustc 1.97.1).
+    `de902a73f628f57cf807e211122d2b5db39c4b7ca2a038ea1ff4b8aa3b4f0c15`
+    (rustc 1.97.1; carries the EOF ceiling check).
   Build commands, toolchain, and source revision are recorded in
   the report's `build_provenance` block; the harness runs under the
   native Windows Python 3.14.6 (embeddable distribution staged on

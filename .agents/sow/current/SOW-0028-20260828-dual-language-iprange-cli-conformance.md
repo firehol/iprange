@@ -6445,6 +6445,17 @@ and performance returned FAIL with 1 P2:
   controls), windows_housekeeping_harness `--self-test` PASS
   (M1-M7), kind-gate `--self-test` controls 1-42 PASS, run.py
   protocol self-tests PASS.
+- Windows housekeeping on the authorized validation host at the
+  wave-13 product-source revision `5346f716` (go1.26.5 / rustc
+  1.97.1, clean archived tree, staged under
+  `C:/Temp/qualsvc-win/ev19/`): 2/2 PASS with the deadline-bounded
+  client under the native Windows Python 3.14.6; report schema v3
+  records Go `42173bb7…` (unchanged) / Rust `de902a73…` (carries
+  the EOF ceiling check), the exact 50-row removal logs
+  (byte-identical across both products), the two-row deterministic
+  pair listing with ordinal 1 equal across the synthesized facts,
+  the nested artifact, and the used row, and build provenance at
+  `5346f716` with a clean tree.
 
 #### Sensitive-data and artifact gate (wave 13)
 
