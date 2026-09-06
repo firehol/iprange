@@ -530,32 +530,6 @@ def _command_argv(report):
     return None
 
 
-def _report_carries_argv(report):
-    """True when a matrix report records argv-shaped actor identity.
-
-    The post-regen matrix runner writes ``actors.<role>.argv`` (the
-    realpath of the binary that served the role) on every PASS case.
-    A report that records even one argv-shaped actor entry was written
-    by that runner; committed pre-argv evidence records none.  The
-    conditional argv rule keys on this: once a revision contains an
-    argv-era report, every report of the revision must carry argv on
-    every PASS case.
-    """
-
-    cases = report.get("cases")
-    if not isinstance(cases, list):
-        return False
-    for case in cases:
-        actors = case.get("actors")
-        if not isinstance(actors, dict):
-            continue
-        for entry in actors.values():
-            if isinstance(entry, dict) and isinstance(
-                    entry.get("argv"), str) and entry["argv"]:
-                return True
-    return False
-
-
 def _argv_pairs(argv):
     """Yield ``(flag, value)`` for every ``--flag value`` / ``--flag=value`` pair."""
 
@@ -758,12 +732,6 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
     if leftover:
         problems.append(
             f"matrix {path}: report records leftover product processes: {leftover}")
-    # argv-era detection: the post-regen runner records the executed
-    # binary path of every actor on every PASS case.  A report that
-    # carries any argv-shaped actor record is argv-era; the battery
-    # rule (assess() pre-scans every matrix report) flows in through
-    # argv_required.  Committed pre-argv evidence satisfies neither
-    # and passes until the wave regen.
     # The per-case argv anchor is unconditional: the committed
     # evidence revision is argv-era, and the pre-regen escape hatch
     # (strip argv everywhere -> battery looks pre-argv -> pass) is a
