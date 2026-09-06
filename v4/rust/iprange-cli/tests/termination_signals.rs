@@ -117,6 +117,35 @@ fn partial_wedge_signal_forces_nonzero_exit() {
 }
 
 #[test]
+fn eof_first_signal_wins_over_exit_zero() {
+    // Third role-round finding (the Go contract class): a supervisor
+    // that closes stdin and signals back-to-back must not see a
+    // clean exit.  The response line on stdout marks the moment the
+    // process enters the EOF tail; the signal lands inside it and
+    // must win over the exit-zero outcome.
+    use std::io::{BufRead, BufReader};
+    for sig in [libc::SIGINT, libc::SIGTERM] {
+        for _ in 0..2 {
+            let mut child = spawn_product();
+            {
+                let stdin = child.stdin.as_mut().expect("stdin");
+                let _ = stdin.write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n");
+                let _ = stdin.flush();
+            }
+            drop(child.stdin.take()); // EOF right after the request
+            let stdout = child.stdout.as_mut().expect("stdout");
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            assert!(line.contains("\"id\":1"), "describe response: {line}");
+            let code = signal_and_wait(child, sig, Duration::from_secs(3));
+            assert_eq!(code, 1, "eof-first signal {sig}: exit code {code}, want 1");
+        }
+    }
+}
+
+#[test]
 fn drain_wedge_signal_forces_nonzero_exit() {
     // Second role-round finding: the worker is blocked mid-write on a
     // full stdout pipe while the main loop joins it after EOF (the

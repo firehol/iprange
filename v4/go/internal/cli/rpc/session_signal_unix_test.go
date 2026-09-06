@@ -9,6 +9,7 @@
 package rpc
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
@@ -94,6 +95,17 @@ func TestTerminationSignalHelperProcess(t *testing.T) {
 		// (role-round finding).
 		input := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n"
 		err = NewSession().Run(strings.NewReader(input), blockingWriter{})
+	case "eof-first":
+		// Supervisor stop sequence: the response for one request is
+		// written, EOF follows immediately, and the termination
+		// signal lands while the process is inside the EOF tail.
+		// The signal must win over the exit-zero outcome (third
+		// role-round finding: the pre-fix sigCh grace poll could
+		// never win the FIFO receiver queue against the watcher, so
+		// this shape exited 0).  The response line on stdout tells
+		// the parent exactly when to signal.
+		input := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n"
+		err = NewSession().Run(strings.NewReader(input), os.Stdout)
 	default:
 		os.Exit(2)
 	}
@@ -181,4 +193,56 @@ func TestTerminationSignalDrainWedgeForcesNonZeroExit(t *testing.T) {
 	// process-lifetime watchdog can serve the signal.
 	runSignalTrials(t, "drain-wedge", syscall.SIGTERM, 1)
 	runSignalTrials(t, "drain-wedge", syscall.SIGINT, 1)
+}
+
+func TestTerminationSignalEOFFirstWinsOverExitZero(t *testing.T) {
+	// Third role-round finding: stdin closes right after one request
+	// and the termination signal lands while the process is inside
+	// the EOF tail (the parent signals as soon as the response line
+	// appears on the helper's stdout).  Pre-fix the sigCh grace poll
+	// lost the FIFO receiver queue to the watcher and this shape
+	// exited 0 ~100% of trials.
+	for iteration := 0; iteration < 3; iteration++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestTerminationSignalHelperProcess$")
+		cmd.Env = append(os.Environ(), signalTestHelperEnv+"=eof-first")
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			t.Fatalf("stdout pipe: %v", err)
+		}
+		cmd.Stderr = &bytes.Buffer{}
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start helper: %v", err)
+		}
+		// The response line is written just before the EOF tail
+		// starts; the tail stays alive for the 25 ms grace window.
+		line, err := bufio.NewReader(stdout).ReadString('\n')
+		if err != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+			t.Fatalf("read response: %v", err)
+		}
+		if !strings.Contains(line, "\"id\":1") {
+			cmd.Process.Kill()
+			cmd.Wait()
+			t.Fatalf("response line: %q", line)
+		}
+		if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+			cmd.Process.Kill()
+			cmd.Wait()
+			t.Fatalf("signal: %v", err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case err := <-done:
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 {
+				t.Fatalf("eof-first: exit = %v, want 1", err)
+			}
+		case <-time.After(3 * time.Second):
+			cmd.Process.Kill()
+			cmd.Wait()
+			t.Fatalf("eof-first: helper did not terminate within 3s")
+		}
+	}
 }
