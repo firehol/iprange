@@ -359,15 +359,30 @@ impl Session {
                     // EOF always wins over the exit-zero EOF path
                     // (D1 wave-10): the watcher records it in control
                     // before attempting delivery, so the EOF branch
-                    // never silently drops it.
-                    let termination = self.control.lock().unwrap().termination_signal;
-                    if let Some(signal) = termination {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Interrupted,
-                            format!("terminated by signal {signal}"),
-                        ));
+                    // never silently drops it.  The flag is polled for
+                    // a grace window after the shutdown drain: a
+                    // supervisor that closes stdin and signals
+                    // back-to-back can deliver the signal after the
+                    // drain completed but before the process exits,
+                    // and a one-shot check would silently return
+                    // exit-zero (third role-round parity finding;
+                    // mirrors the Go 25 ms sigRecorded grace).
+                    let grace = std::time::Instant::now()
+                        + std::time::Duration::from_millis(25);
+                    loop {
+                        let termination =
+                            self.control.lock().unwrap().termination_signal;
+                        if let Some(signal) = termination {
+                            return Err(io::Error::new(
+                                io::ErrorKind::Interrupted,
+                                format!("terminated by signal {signal}"),
+                            ));
+                        }
+                        if std::time::Instant::now() >= grace {
+                            return shutdown_result;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(1));
                     }
-                    return shutdown_result;
                 }
                 Ok(SessionEvent::Line(Ok(Some(line)))) => {
                     if let Err(err) = handle_frame(&mut self, line, &writer) {

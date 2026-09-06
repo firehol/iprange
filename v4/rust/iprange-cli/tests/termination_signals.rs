@@ -116,20 +116,39 @@ fn partial_wedge_signal_forces_nonzero_exit() {
     }
 }
 
-// Note: the eof-first supervisor shape (close stdin + signal
-// back-to-back) is intentionally NOT a Rust process test.  The Rust
-// EOF tail checks the recorded signal after the worker join and has
-// no grace window, so a parent-side kill that lands after the check
-// legitimately observes exit 0 (sub-millisecond TOCTOU, same class
-// as the Go residual past its 25 ms grace).  A process-level
-// assertion of exit 1 would therefore be stronger than the product
-// guarantee and flakes under schedule delay (security role finding,
-// reproduced 1/3 full-suite runs).  The deterministic detections
-// are: the in-process unit test
-// `signal_recorded_during_eof_drain_wins_over_exit_zero` for the
-// graceful EOF path, the process-level wedge and drain-wedge tests
-// for the force-exit path, and the Go eof-first process test, whose
-// 25 ms grace window makes the supervisor shape deterministic.
+// eof_first_signal_wins_over_exit_zero: the supervisor stop shape
+// (close stdin + signal back-to-back) must never observe a clean
+// exit.  The Rust EOF tail polls the watcher's recorded flag for the
+// same 25 ms grace window Go uses, so a signal delivered after the
+// shutdown drain but before the process exits still wins (third
+// role-round parity fix); without the grace the shape exited 0 in
+// ~3/4 of trials and the test flaked under load (1/3 full-suite
+// runs), which is why an earlier committed version was removed
+// before the grace existed.
+
+#[test]
+fn eof_first_signal_wins_over_exit_zero() {
+    use std::io::{BufRead, BufReader};
+    for sig in [libc::SIGINT, libc::SIGTERM] {
+        for _ in 0..2 {
+            let mut child = spawn_product();
+            {
+                let stdin = child.stdin.as_mut().expect("stdin");
+                let _ = stdin.write_all(
+                    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n");
+                let _ = stdin.flush();
+            }
+            drop(child.stdin.take()); // EOF right after the request
+            let stdout = child.stdout.as_mut().expect("stdout");
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            assert!(line.contains("\"id\":1"), "describe response: {line}");
+            let code = signal_and_wait(child, sig, Duration::from_secs(3));
+            assert_eq!(code, 1, "eof-first signal {sig}: exit code {code}, want 1");
+        }
+    }
+}
 
 #[test]
 fn drain_wedge_signal_forces_nonzero_exit() {
