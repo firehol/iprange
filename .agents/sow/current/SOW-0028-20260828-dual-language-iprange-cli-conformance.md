@@ -5848,8 +5848,10 @@ dangling pointer.
   (including the mid-drain unit test and 23 export tests) + 4
   termination process tests PASS.
 - Products (release, rebuilt after re-fix): Rust `4b9683b5…`, Go
-  `42270270…`; worker and fixture identities unchanged
-  (`cb9ad6cd…`, `202a83ac…`, `7c616793…`).
+  `b3a359c8…` (third round: the clean-EOF sigCh FIFO race fix
+  rebuilt the Go product again; Linux and Windows evidence
+  regenerated at the final identities); worker and fixture
+  identities unchanged (`cb9ad6cd…`, `202a83ac…`, `7c616793…`).
 - Product-level probes: signal wedge 4/4 trials exit 1 per product
   (SIGINT+SIGTERM); partial-wedge 60-frame probe: 8/8 trials exit 1
   in ~1.015 s across both products (pre-fix: 13 s+ hang); export
@@ -5865,9 +5867,10 @@ dangling pointer.
 #### D4 — Windows qualification regeneration (completed 2026-09-06)
 
 On the authorized Windows validation host (`costa-win11`, SOW-0028
-qualification only), the wave-10 product sources at `f67fc728`
-(clean tracked tree) built:
-- Go `bc84a7dc…` (go1.26.5 windows/amd64, `-buildvcs=false`);
+qualification only), the wave-10 product sources at `7bc59597`
+(clean tracked tree; initially `f67fc728`, Go rebuilt after the
+third-role-round signal fix) built:
+- Go `984d0e9d…` (go1.26.5 windows/amd64, `-buildvcs=false`);
 - Rust `8fb912b7…` (rustc 1.97.1).
 
 The wave-9 deadline-bounded RPC client used select() on pipe fds,
@@ -5885,3 +5888,46 @@ pair proof and cross-listing, and 200-row/150-row refresh flow.
 Windows binary hashes, build commands, toolchain, tree-clean state,
 and source revision are recorded in the report's
 `build_provenance` block.
+
+
+#### Third round (wave 10) — delta re-review findings and re-fix
+
+The seven roles re-reviewed the second-round repairs at `747fc1c6`
+with the staged binaries `4b9683b5…` rust / `42270270…` go.
+glm-5.3-responses returned FAIL with one P1 (recorded below); the
+six own-model roles were still reviewing the delta when the P1 fix
+landed, and their re-verdicts at the final revision are recorded
+after this section.
+
+P1 (glm, lead-reproduced 103/112 at 3-26 ms offsets) — the Go
+clean-EOF grace poll was dead code: the EOF exit path received from
+`sigCh` directly, but Go serves channel receivers FIFO and the
+watcher goroutine has been parked on `sigCh` since session start, so
+the poll could never win the receive.  A signal landing in the
+post-drain window was recorded by the watcher and then ignored while
+the process exited 0.  The `sigDone` channel of the first-round
+design was likewise dead (its close is deferred, and the watcher
+only exits via `os.Exit`, which never runs defers).
+
+Re-fix (commit `7bc59597`, Go product `b3a359c8…`): the watcher
+closes `sigRecorded` immediately after writing the control plane
+(before the graceful delivery), and the EOF exit path waits on that
+channel through the unit-tested `waitSignalRecorded` primitive for
+the 25 ms grace window, then re-reads the recorded error.  Re-run
+of the exact repro at 3/6/8/12/20/26 ms offsets: 72/72 non-zero
+(pre-fix 103/112 exit zero).  The remaining residual — a signal the
+runtime delivers after the grace window and before process exit —
+is the sub-millisecond TOCTOU class the Rust implementation has
+natively; documented in the code and matched by parity analysis.
+
+Also folded into the round: the dead `_report_carries_argv` detector
+removed from the kind gate (no callers after the unconditional argv
+rule) and the SOW status update.
+
+This round's Linux evidence and the Windows host run were
+regenerated at the final identities (`4b9683b5…` rust, `b3a359c8…`
+go Linux, `984d0e9d…` go Windows at `7bc59597`); case statuses and
+oracle counts unchanged (38/38 both languages, 14+24 both mixed
+directions, 16/16 crash positive, 0/16 negative, 8/8 resource,
+Windows 2/2, golden 55, sensitivity 14, kind gate PASS with the
+forged argv probes FAIL).

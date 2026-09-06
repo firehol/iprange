@@ -51,19 +51,20 @@ sections.
   pair (go1.26 linux/amd64, no embedded vcs revision) staged as
   `/tmp/qualsvc/ev17/bin/go/{iprange,iprange-v4-worker}`:
   - product SHA-256
-    `42270270d40c634b48c3642e0bb229aeee9d59b89f92e351b8dadab3b96ae198`
-    (changed by the second wave-10 repair round in
-    `v4/go/internal/cli/rpc/session.go`: the signal watcher
-    force-exits non-zero 1 s after signal consumption as a
-    process-lifetime bound, independent of fatal-event delivery, so
-    a partially-filled or fully-wedged transport can no longer
-    ignore SIGINT/SIGTERM, and the clean-EOF path polls 25 ms for a
-    pending signal so the runtime-delivery race cannot win over the
-    signal-wins-over-EOF contract; the first round's
-    wedged-transport watchdog, the ninth-wave fatal-report select,
-    the seventh-wave per-member cancellation, bounded transport
-    channels, immediate all-rejected batch answers, and non-zero
-    framing-failure exit are included);
+    `b3a359c8984b3b23c081be6a6250458b0fd35a9b344adfe0f0b053382efb1fa3`
+    (changed by the third wave-10 role round in
+    `v4/go/internal/cli/rpc/session.go`: the clean-EOF path now
+    waits on the watcher's sigRecorded channel instead of receiving
+    from sigCh, whose FIFO receiver queue made the earlier grace
+    poll dead code; every signal recorded up to the 25 ms grace
+    window wins over the exit-zero outcome; the second round's
+    process-lifetime 1 s force-exit bound, independent of
+    fatal-event delivery, so a partially-filled or fully-wedged
+    transport can no longer ignore SIGINT/SIGTERM; the first
+    round's wedged-transport watchdog, the ninth-wave fatal-report
+    select, the seventh-wave per-member cancellation, bounded
+    transport channels, immediate all-rejected batch answers, and
+    non-zero framing-failure exit are included);
   - worker SHA-256
     `202a83ac92f5c8b85b44068a1553aef0dbf25a81fb2d888022592292d03b6141`
     (the worker source tree is unchanged since the eighth wave and
@@ -73,9 +74,9 @@ sections.
     pinned by the committed reports).
 - Windows qualification binaries (built on the authorized Windows
   validation host at the wave-10 product-source revision
-  `f67fc728`, clean working tree, staged under `C:/Temp/qualsvc-win/`):
+  `7bc59597`, clean working tree, staged under `C:/Temp/qualsvc-win/`):
   - Go product SHA-256
-    `bc84a7dc6e640c5814382821485ea2767bc1263889179bda96f5b474164d3e43`
+    `984d0e9d7636aac1a82786416d1ad33dbb0fb28b1aebadc748ac850001395454`
     (go1.26.5 windows/amd64, `-buildvcs=false`);
   - Rust product SHA-256
     `8fb912b733706add1c64994c5f0fa0fe1523169cbef79836ef22d7b0022c2edd`
@@ -141,7 +142,7 @@ under `nice` with work dirs under `/tmp/qualsvc/ev17/work2/`
 are invoked with `--allow-skips` (recorded truthfully in each
 report command) so every battery command exits 0.  The Windows
 housekeeping evidence is regenerated at the wave-10 product sources
-(`f67fc728`) on the authorized Windows validation host with the
+(`7bc59597`) on the authorized Windows validation host with the
 deadline-bounded client running in its Windows thread mode; the
 report schema is v3 with the exact 50-record removal log and
 build provenance.
