@@ -83,14 +83,19 @@ sections.
     byte-reproducible across toolchains or build paths, and not
     pinned by the committed reports).
 - Windows qualification binaries (built on the authorized Windows
-  validation host at the wave-12 product-source revision, clean
-  tracked tree, staged under `C:/Temp/qualsvc-win/`):
+  validation host at the wave-12 product-source revision
+  `40c1c046`, clean tracked tree, staged under
+  `C:/Temp/qualsvc-win/ev18/`):
   - Go product SHA-256
+    `42173bb7a14e37c22b2e37ba2f028535b1243a1088f434f10312c7048a90ce20`
     (go1.26.5 windows/amd64, `-buildvcs=false`);
   - Rust product SHA-256
+    `6dcf2cb25a97f56ad239d050e2bb1811d62db4b802fd67550bf3c985098d73d1`
     (rustc 1.97.1).
   Build commands, toolchain, and source revision are recorded in
-  the report's `build_provenance` block.
+  the report's `build_provenance` block; the harness runs under the
+  native Windows Python 3.14.6 (embeddable distribution staged on
+  the qualification host, no system install).
 
 The external gap review of 2026-09-04 requested the D1-A crash scope,
 the D2-A resource proofs (including the Windows-housekeeping kind),

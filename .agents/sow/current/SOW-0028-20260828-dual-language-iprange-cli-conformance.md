@@ -6349,6 +6349,16 @@ two P2 harness ceilings, and three P3 repairs:
   `--self-test` PASS (M1-M7), kind-gate `--self-test` controls
   1-42 PASS, run.py protocol self-tests PASS (run at every matrix
   start).
+- Windows housekeeping on the authorized validation host at the
+  wave-12 product-source revision `40c1c046` (go1.26.5 / rustc
+  1.97.1, clean archived tree, staged under
+  `C:/Temp/qualsvc-win/ev18/`): 2/2 PASS with the deadline-bounded
+  client under the native Windows Python 3.14.6; report schema v3
+  records Go `42173bb7…` / Rust `6dcf2cb2…`, the exact 50-row
+  removal logs (identical bytes across both products), the
+  two-row deterministic pair listing with ordinal 1 equal across
+  the synthesized facts, the nested artifact, and the used row, and
+  build provenance at `40c1c046` with a clean tree.
 
 #### Sensitive-data and artifact gate (wave 12)
 
