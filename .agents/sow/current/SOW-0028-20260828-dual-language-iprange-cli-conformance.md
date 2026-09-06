@@ -92,6 +92,25 @@ are committed; the only shared residual is a signal the runtime
 delivers after the 25 ms grace window and before process exit — the
 bounded TOCTOU class now identical in both products, disclosed in
 code and records.
+Wave-13 state (2026-09-06): the whole-milestone control review wave
+(waves 11-12) repaired the seven-wave finding set (full-stderr
+shutdown hang on both fatal paths, held-open and EOF-resolved
+over-limit frame handling, drain byte ceiling, duplicate-id
+self-test control); the wave-13 role round then closed the last
+Go/Rust framing divergence (Rust exited 0 on an exactly-LIMIT+1
+frame at EOF).  ALL SEVEN ROLES PASS the final wave-13 revision
+`b947d8a6` (tester, operations, parity, portability, security,
+performance, and the glm-5.3-responses whole-milestone validator;
+verdicts recorded in the "Role round verdicts -- wave 13"
+section).  Milestone 4 (delivery step 5) is RE-CLOSED at
+`b947d8a6`: functional parity and qualification PASS; the <=1.3x
+performance requirement FAILED and is not waived, owned by pending
+SOW-0030; milestone 5 (delivery step 6, dual-language CLI conformance
+benchmarks) remains unstarted per user decision 1A.  The wave-13
+Linux product identities are Go `7f88bb7c…` and Rust `24733db0…`; the
+Windows housekeeping evidence is at Go `42173bb7…` / Rust
+`6dcf2cb2…` built at `5346f716`.
+
 
 User decision (2026-09-06, recorded before the milestone-4 closure
 record below): milestone 4 (delivery step 5) is CLOSED at the final
