@@ -75,12 +75,13 @@ user as an independent check.
 
 Status: in-progress
 
-Wave-10 state (2026-09-06): first role-based review round FAILed with
-eleven verified findings; all four user decisions (D1-A, D2-A, D3-A,
-D4-A) approved; the repairs, regenerated evidence, and gate
-validations are recorded in the Tenth wave section below.  The wave-10
-role round and the Windows-host regeneration are pending at the wave
-HEAD.
+Wave-10 state (2026-09-06): the first role-based review round
+FAILed with eleven verified findings; all four user decisions
+(D1-A, D2-A, D3-A, D4-A) were approved; the second round FAILed with
+ten verified findings, all repaired and validated; the regenerated
+Linux evidence and the Windows-host regeneration are recorded in the
+Tenth wave section.  The second wave-10 role round at the repaired
+HEAD is in progress.
 
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
