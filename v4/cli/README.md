@@ -80,7 +80,7 @@ product binaries do not implement). The `work-dir` must already exist.
 Other gates:
 
 ```bash
-nice python3 v4/cli/check_golden.py        # 53 golden wire exchanges
+nice python3 v4/cli/check_golden.py        # 55 golden wire exchanges
 nice python3 v4/cli/sensitivity_gate.py    # 14 broken-server modes
 nice python3 v4/cli/check_kind_coverage.py --matrix ... --crash ...
                                            # artifact-kind universe gate

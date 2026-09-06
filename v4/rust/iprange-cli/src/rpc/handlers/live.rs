@@ -1193,7 +1193,7 @@ fn live_transition_result(result: &LiveTransitionResult) -> Value {
         "commit_nonce": convert::hex_id(&result.commit_nonce),
         "directory_identity": file_identity_fact(&result.directory_identity),
         "main_identity": file_identity_fact(&result.main_identity),
-        "main_basename": lifecycle::basename(result.main_basename.as_bytes()),
+        "main_basename": lifecycle::local_basename_text(&result.main_basename),
         "reader_capacity": result.reader_capacity,
         "sidecar_id": convert::hex_id(&result.sidecar_id),
         "new_sidecar_location": coordination_location(result.new_sidecar_location),

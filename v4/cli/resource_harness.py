@@ -139,6 +139,14 @@ PROOF_B_PAD_BYTES = 1_100_000
 # proof instead of hanging it.
 PROOF_B_DRAIN_DEADLINE_SECONDS = 15.0
 
+# Bounded drain deadline used by proofs a and d after all expected
+# responses: a product that emits any further stdout bytes (a stray
+# or malformed trailing response) must fail the proof; the drain also
+# reaches EOF on the normal exit-0 shutdown path (external review
+# finding: the proofs previously ignored the residue retained after
+# the expected responses were read).
+PROOF_AD_DRAIN_DEADLINE_SECONDS = 15.0
+
 # Bounded deadline for every request-payload write: a product that
 # stops draining stdin fills the 64 KiB pipe; the write must then
 # fail the proof instead of blocking the harness.
@@ -527,6 +535,16 @@ def proof_a(binary, label, work_dir, outcome):
                 "expected the in-flight export to answer -32010 "
                 "cancelled at EOF shutdown, got "
                 f"{outcome['export_code']}")
+        # Any stdout byte after the expected responses is a stray
+        # trailing frame (duplicate or malformed): drain to EOF and
+        # require zero residue (external review finding).  The normal
+        # EOF shutdown emits nothing else and exits 0.
+        drained, _ = drain_stdout(proc, PROOF_AD_DRAIN_DEADLINE_SECONDS)
+        if drained:
+            raise ResourceFailure(
+                f"proof a: {len(drained)} trailing stdout bytes after "
+                f"the {len(responses)} expected responses; the response "
+                f"stream must be exactly the expected set")
         # EOF shutdown must terminate the process by itself with
         # exit code 0; a product that stays alive after all
         # responses is killed (recorded) and the proof fails.
@@ -956,6 +974,15 @@ def proof_d(binary, label, work_dir, outcome):
         outcome["export_code"] = (
             export["error"]["code"] if export is not None else None)
         outcome["describe_answered"] = "result" in describe
+        # Any stdout byte after the expected responses is a stray
+        # trailing frame (duplicate or malformed): drain to EOF and
+        # require zero residue (external review finding).
+        drained, _ = drain_stdout(proc, PROOF_AD_DRAIN_DEADLINE_SECONDS)
+        if drained:
+            raise ResourceFailure(
+                f"proof d: {len(drained)} trailing stdout bytes after "
+                f"the expected responses; the response stream must be "
+                f"exactly the expected set")
         # EOF shutdown must terminate the process by itself with
         # exit code 0 (same contract as proof a).
         try:
@@ -1158,6 +1185,42 @@ def self_test():
         elif elapsed >= 3.0:
             failures.append(
                 f"drain-flood control raised in {elapsed:.3f} s "
+                "(bounded window 3.0 s)")
+    finally:
+        _kill_process_group(stub)
+        stub.stdout.close()
+
+    # Trailing-residue control (external review finding): a peer that
+    # answers the expected responses plus one extra trailing frame
+    # must leave the extra frame for the post-read drain the proofs
+    # now require; the proofs' ``drained == b""`` assertion would
+    # otherwise be vacuous.
+    stub = subprocess.Popen(
+        ["/bin/sh", "-c",
+         r"""printf '%s
+' '{"jsonrpc":"2.0","id":1,"result":{}}' '{"jsonrpc":"2.0","id":2,"result":{}}' ; sleep 2"""],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, start_new_session=True)
+    record_spawn(stub)
+    try:
+        started = time.monotonic()
+        responses = read_responses(stub, 1, 2.0)
+        drained, _reached_eof = drain_stdout(stub, 1.0)
+        elapsed = time.monotonic() - started
+        print(f"self-test trailing-residue control: "
+              f"{len(responses)} expected response plus "
+              f"{len(drained)} residue bytes in {elapsed:.3f} s")
+        if len(responses) != 1:
+            failures.append(
+                f"trailing-residue control returned {len(responses)} "
+                f"responses for expect=1")
+        if not drained:
+            failures.append(
+                "trailing-residue control captured no trailing response; "
+                "the proof residue check would miss a stray frame")
+        if elapsed >= 3.0:
+            failures.append(
+                f"trailing-residue control ran {elapsed:.3f} s "
                 "(bounded window 3.0 s)")
     finally:
         _kill_process_group(stub)

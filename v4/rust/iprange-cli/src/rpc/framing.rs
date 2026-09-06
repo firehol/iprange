@@ -115,6 +115,20 @@ impl<R: BufRead> LineReader<R> {
                         return Err(LineReadError::FrameTooLarge);
                     }
                     self.buf.extend_from_slice(b);
+                    // A payload of exactly LIMIT+1 bytes is final only
+                    // when its last byte can still be the CR of a CRLF
+                    // terminator (payload of LIMIT bytes plus CRLF).
+                    // When the last byte is any other byte, no
+                    // continuation can make the frame legal -- even a
+                    // following LF leaves the payload over the ceiling
+                    // -- so report the failure immediately without
+                    // waiting for the terminator or EOF (Go parity;
+                    // external review finding).
+                    if self.buf.len() == INPUT_FRAME_LIMIT + 1
+                        && self.buf.last() != Some(&b'\r')
+                    {
+                        return Err(LineReadError::FrameTooLarge);
+                    }
                     let n = b.len();
                     self.inner.consume(n);
                 }
@@ -193,6 +207,66 @@ mod tests {
         crlf.extend_from_slice(b"\r\n");
         let mut reader = LineReader::new(Cursor::new(crlf));
         assert_eq!(reader.read_line().unwrap().unwrap(), body);
+        assert!(reader.read_line().unwrap().is_none());
+    }
+
+    /// One-shot reader that delivers exactly one payload and panics if
+    /// it is queried again: the held-open shape where no terminator or
+    /// EOF ever arrives cannot block in a unit test, so the decisive
+    /// property is that the reader must not ask for more input after a
+    /// LIMIT+1 non-CR payload (external review finding: the pre-fix
+    /// reader awaited another byte forever and never reported).
+    struct HeldNonCR {
+        data: Vec<u8>,
+        done: bool,
+    }
+
+    impl std::io::Read for HeldNonCR {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            assert!(
+                !self.done,
+                "reader queried again: a LIMIT+1 non-CR frame must be                  final without more input"
+            );
+            self.done = true;
+            let n = buf.len().min(self.data.len());
+            buf[..n].copy_from_slice(&self.data[..n]);
+            Ok(n)
+        }
+    }
+
+    #[test]
+    fn held_limit_plus_one_non_cr_is_immediate() {
+        // A held-open frame of exactly LIMIT+1 bytes whose last byte
+        // is not the CR of a CRLF terminator can never become legal,
+        // so the reader must report FrameTooLarge immediately instead
+        // of awaiting the terminator or EOF (the peer may hold stdin
+        // open forever).
+        let reader = std::io::BufReader::with_capacity(
+            INPUT_FRAME_LIMIT + 2,
+            HeldNonCR {
+                data: vec![b'x'; INPUT_FRAME_LIMIT + 1],
+                done: false,
+            },
+        );
+        let mut line_reader = LineReader::new(reader);
+        assert!(matches!(
+            line_reader.read_line(),
+            Err(LineReadError::FrameTooLarge)
+        ));
+    }
+
+    #[test]
+    fn held_limit_plus_one_cr_tail_resolves_on_lf() {
+        // A held LIMIT+1 payload whose last byte is the CR of a CRLF
+        // terminator is still potentially legal: a following LF leaves
+        // exactly LIMIT payload bytes, so the reader must keep waiting
+        // (not report early) and then accept the CRLF frame.
+        let mut data = vec![b'x'; INPUT_FRAME_LIMIT + 1];
+        data[INPUT_FRAME_LIMIT] = b'\r';
+        data.extend_from_slice(b"\n");
+        let mut reader = LineReader::new(Cursor::new(data));
+        let line = reader.read_line().unwrap().unwrap();
+        assert_eq!(line.len(), INPUT_FRAME_LIMIT);
         assert!(reader.read_line().unwrap().is_none());
     }
 

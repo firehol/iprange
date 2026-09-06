@@ -27,13 +27,30 @@ fn full_stderr_pipe() -> (std::os::fd::OwnedFd, std::os::fd::OwnedFd) {
     unsafe {
         let flags = libc::fcntl(write_fd, libc::F_GETFL, 0);
         libc::fcntl(write_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        // Fill from a real buffer of the pipe-chunk size.  A full
+        // non-blocking pipe write fails with EAGAIN; any other error
+        // means the "full" premise is not established and must fail
+        // loudly instead of being treated as full (external review
+        // finding: the pre-fix loop wrote 4096 bytes from a one-byte
+        // buffer, which is undefined behaviour on over-read, and
+        // accepted every write error as full-pipe proof).
+        let filler = vec![b' '; 65536];
         loop {
             let n = libc::write(
                 write_fd,
-                b" ".as_ptr() as *const libc::c_void,
-                4096,
+                filler.as_ptr() as *const libc::c_void,
+                filler.len(),
             );
             if n < 0 {
+                // A full non-blocking pipe fails with EAGAIN; a short
+                // write simply means the pipe accepted part of the
+                // chunk, so only the terminal error proves full.
+                let errno = std::io::Error::last_os_error();
+                assert_eq!(
+                    errno.raw_os_error(),
+                    Some(libc::EAGAIN),
+                    "fill stderr pipe: unexpected write error {errno}"
+                );
                 break;
             }
         }
@@ -63,7 +80,15 @@ fn broken_stdout() -> std::os::fd::OwnedFd {
 /// never-drained pipe, so the forced-exit diagnostic can never be
 /// written (external review finding).  Returns the child and the read
 /// end the caller must keep alive for the child's lifetime.
-fn spawn_product_full_stderr() -> (Child, std::os::fd::OwnedFd) {
+/// Spawn the product with a stderr fd that is a full, never-drained
+/// pipe and a genuinely wedged session: describe frames fill the
+/// piped (never read) stdout so the worker blocks, the events channel
+/// fills and the dispatcher stalls; the process-lifetime watchdog's
+/// detached-diagnostic exit is then the only path that can serve a
+/// signal (external review finding: signalling an idle session only
+/// exercised the graceful exit).  Returns the child and the stderr
+/// read end the caller must keep alive for the child's lifetime.
+fn spawn_product_wedged_full_stderr() -> (Child, std::os::fd::OwnedFd) {
     let (write_owned, read_owned) = full_stderr_pipe();
     let child = Command::new(env!("CARGO_BIN_EXE_iprange"))
         .arg("--jsonrpc")
@@ -71,7 +96,7 @@ fn spawn_product_full_stderr() -> (Child, std::os::fd::OwnedFd) {
         .stdout(Stdio::piped())
         .stderr(Stdio::from(write_owned))
         .spawn()
-        .expect("spawn iprange --jsonrpc with full stderr");
+        .expect("spawn iprange --jsonrpc wedged with full stderr");
     (child, read_owned)
 }
 
@@ -152,12 +177,34 @@ fn full_stderr_signal_forces_nonzero_exit() {
     // External review finding: the forced exit must never depend on a
     // blocking diagnostic write.  With stderr a full, undrained pipe,
     // the product must still exit non-zero within the bounded
-    // watchdog window.
+    // watchdog window, with the session genuinely wedged so the
+    // watchdog's detached-diagnostic path (not the graceful exit)
+    // serves the signal.
     for sig in [libc::SIGINT, libc::SIGTERM] {
-        let (child, _read_end) = spawn_product_full_stderr();
+        let (mut child, _read_end) = spawn_product_wedged_full_stderr();
+        let mut stdin = child.stdin.take().expect("stdin");
+        // Fill the child's stdout until its pipe is full: the worker
+        // blocks and the process-lifetime watchdog becomes the only
+        // exit path.  The writer thread stops at the first write
+        // error (the child stopped draining once wedged, and after
+        // exit the child closes stdin so the writer drains away).
+        let writer = std::thread::spawn(move || {
+            let frame = b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n";
+            for _ in 0..8000usize {
+                if stdin.write_all(frame).is_err() {
+                    break;
+                }
+            }
+            let _ = stdin.flush();
+        });
+        // Give the burst time to wedge the session before signalling.
         std::thread::sleep(Duration::from_millis(300));
         let code = signal_and_wait(child, sig, Duration::from_secs(4));
-        assert_eq!(code, 1, "full-stderr signal {sig}: exit code {code}, want 1");
+        assert_eq!(
+            code, 1,
+            "full-stderr wedged signal {sig}: exit code {code}, want 1"
+        );
+        let _ = writer.join().ok();
     }
 }
 
@@ -258,6 +305,56 @@ fn oversized_unterminated_frame_answers_and_exits() {
             lines.next().is_none(),
             "only the -32001 response may appear: {text}"
         );
+    }
+}
+
+#[test]
+fn oversized_held_non_cr_frame_answers_and_exits() {
+    // External review finding: a held-open frame of exactly
+    // LIMIT+1 bytes whose last byte is not the CR of a CRLF
+    // terminator can never become legal -- even a following LF would
+    // leave the payload over the ceiling -- so the reader must report
+    // -32001 (id null) and exit non-zero immediately, without waiting
+    // for the terminator or EOF while the peer holds stdin open
+    // (Go parity).
+    for _ in 0..2 {
+        let mut child = spawn_product();
+        let mut stdin = child.stdin.take().expect("stdin");
+        // 1,048,576 is INPUT_FRAME_LIMIT; exactly LIMIT+1 non-CR
+        // bytes, no LF, and stdin stays open on purpose.
+        let limit = 1_048_576usize;
+        let chunk = vec![b'x'; 65536];
+        let mut written = 0usize;
+        while written < limit + 1 {
+            let take = chunk.len().min(limit + 1 - written);
+            written += stdin.write(&chunk[..take]).expect("write bytes");
+        }
+        let mut stdout = child.stdout.take().expect("stdout");
+        let code = wait_nonzero(&mut child, Duration::from_secs(3));
+        assert_eq!(
+            code, 1,
+            "held LIMIT+1 non-CR: exit code {code}, want 1"
+        );
+        use std::io::Read;
+        let mut text = String::new();
+        stdout
+            .read_to_string(&mut text)
+            .expect("read stdout after exit");
+        let mut lines = text.lines();
+        let first = lines.next().expect("one -32001 response");
+        assert!(
+            first.contains("-32001"),
+            "response is not -32001: {first}"
+        );
+        assert!(
+            first.contains("\"id\":null"),
+            "over-limit response must carry id null: {first}"
+        );
+        assert!(
+            lines.next().is_none(),
+            "only the -32001 response may appear: {text}"
+        );
+        let _ = stdin; // stdin stays open; the frame is resolved by exit
     }
 }
 

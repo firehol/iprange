@@ -1675,10 +1675,31 @@ def assess(matrix_paths, crash_paths):
         if isinstance(binaries, dict) and isinstance(
                 binaries.get("fixture_tool"), str):
             real = os.path.realpath(binaries["fixture_tool"])
-            fixture_paths.add(real)
             sha = binaries.get("fixture_tool_sha256")
-            if isinstance(sha, str):
-                fixture_shas[real] = sha
+            if not isinstance(sha, str) or not sha:
+                # The crash root binaries table is the authority for
+                # the fixture identity; a fixture path recorded without
+                # its sha256 must never make the matrix comparison
+                # vacuous (external review finding: ``fixture_shas``
+                # previously skipped the record, so any matrix sha
+                # passed the cross-check).
+                problems.append(
+                    f"crash {path}: fixture_tool {binaries['fixture_tool']!r} "
+                    f"is recorded without a fixture_tool_sha256, so the "
+                    f"gate cannot verify the fixture identity")
+                continue
+            if real in fixture_shas and fixture_shas[real] != sha:
+                # Two crash reports naming the same fixture path with
+                # different hashes cannot both be the battery's fixture
+                # (external review finding: the later record silently
+                # overwrote the earlier one).
+                problems.append(
+                    f"crash {path}: fixture_tool sha256 {sha!r} contradicts "
+                    f"the earlier identity {fixture_shas[real]!r} for the "
+                    f"same fixture path {real!r}")
+                continue
+            fixture_paths.add(real)
+            fixture_shas[real] = sha
 
     seen_matrices = {}
     matrix_stats = {}
@@ -1716,7 +1737,18 @@ def assess(matrix_paths, crash_paths):
                         f"({sorted(fixture_paths) or '<none>'})")
                 else:
                     recorded = fixture_shas.get(real)
-                    if recorded is not None and recorded != fixture_sha:
+                    if recorded is None:
+                        # The fixture path is the battery fixture but no
+                        # crash report carried a sha256 for it, so the
+                        # matrix sha256 cannot be verified (external
+                        # review finding: the previous gate skipped the
+                        # comparison when the crash identity was absent).
+                        problems.append(
+                            f"matrix {path}: fixture_tool sha256 "
+                            f"{fixture_sha!r} cannot be verified: no "
+                            f"crash report records an identity for "
+                            f"{fixture_path!r}")
+                    elif recorded != fixture_sha:
                         problems.append(
                             f"matrix {path}: fixture_tool sha256 "
                             f"{fixture_sha!r} contradicts the crash "

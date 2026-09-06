@@ -111,16 +111,28 @@ func (lr *LineReader) ReadLine() (line []byte, ok bool, err *LineReadError) {
 		}
 		if len(buf) < InputFrameLimit+1 {
 			buf = append(buf, b)
+			// A payload of exactly LIMIT+1 bytes is final only when
+			// its last byte can still be the CR of a CRLF
+			// terminator (payload of LIMIT bytes plus CRLF).  When
+			// the last byte is any other byte, no continuation can
+			// make the frame legal -- even a following LF leaves the
+			// payload over the ceiling -- so report the failure
+			// immediately without waiting for the terminator or EOF.
+			// The peer may hold stdin open forever, so the -32001 +
+			// close (spec iprange-jsonrpc-v1.md) must not depend on
+			// the frame being terminated (external review finding).
+			if len(buf) == InputFrameLimit+1 && buf[len(buf)-1] != '\r' {
+				return nil, false, &LineReadError{FrameTooLarge: true}
+			}
 			continue
 		}
-		// A (LIMIT+2)-th accumulated byte can never be part of a
-		// legal frame, even after stripping one CR of a CRLF
-		// terminator.  Report the failure immediately without waiting
-		// for the line terminator or EOF: the peer may hold stdin
-		// open forever, and the -32001 + close (spec
-		// iprange-jsonrpc-v1.md) must not depend on the frame being
-		// terminated (role-round finding).  Bytes after the limit are
-		// never parsed: the caller shuts the session down.
+		// A (LIMIT+2)-th accumulated byte (or a LIMIT+1-th byte that
+		// is not the CR of a CRLF terminator) can never be part of a
+		// legal frame.  This tail is only reached when the LIMIT+1
+		// bytes are already held with a trailing CR, so any further
+		// byte that is not the LF terminator is over the ceiling
+		// after the CR strip.  Bytes after the limit are never
+		// parsed: the caller shuts the session down.
 		return nil, false, &LineReadError{FrameTooLarge: true}
 	}
 }

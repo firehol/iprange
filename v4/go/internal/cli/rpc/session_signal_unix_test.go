@@ -103,6 +103,20 @@ func TestTerminationSignalHelperProcess(t *testing.T) {
 		// signalled, within the bounded watchdog window.
 		r, _ := io.Pipe()
 		err = NewSession().Run(r, io.Discard)
+	case "full-stderr-wedged":
+		// Wedged variant of the full-stderr signal shape (external
+		// review finding): the signal must be served by the
+		// process-lifetime watchdog's detached-diagnostic path, not
+		// the graceful idle exit.  The worker blocks on the stalled
+		// writer and the main loop on the full work queue, so only
+		// the watchdog can exit; stderr is a full, never-drained pipe
+		// so the forced-exit diagnostic can never be written.
+		input := strings.Builder{}
+		for i := 0; i < 512; i++ {
+			input.WriteString("{\"jsonrpc\":\"2.0\",\"id\":" + strconv.Itoa(i) +
+				",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n")
+		}
+		err = NewSession().Run(strings.NewReader(input.String()), blockingWriter{})
 	case "graceful-fatal-full-stderr":
 		// Graceful-fatal-path independence (role-round finding): the
 		// session fails because its response write fails (the parent
@@ -273,8 +287,6 @@ func TestOversizedEOFExitsNonZero(t *testing.T) {
 				}
 			}
 			stdin.Close() // EOF resolves the frame
-			done := make(chan error, 1)
-			go func() { done <- cmd.Wait() }()
 			lineCh := make(chan string, 1)
 			errCh := make(chan error, 1)
 			go func() {
@@ -302,9 +314,20 @@ func TestOversizedEOFExitsNonZero(t *testing.T) {
 				t.Fatalf("read -32001: %v", rerr)
 			case <-time.After(3 * time.Second):
 				cmd.Process.Kill()
+				// Let the reader finish on the pipe EOF before Wait
+				// closes the pipe (StdoutPipe: Wait must not run
+				// while a read is in flight).
+				select {
+				case <-errCh:
+				case <-time.After(time.Second):
+				}
 				cmd.Wait()
+				stdin.Close()
 				t.Fatalf("no -32001 response within 3s (tail %q)", tail)
 			}
+			done := make(chan error, 1)
+			go func() { done <- cmd.Wait() }()
+
 			select {
 			case err := <-done:
 				exit, ok := err.(*exec.ExitError)
@@ -352,20 +375,26 @@ func TestGracefulFatalFullStderrForcedExit(t *testing.T) {
 		if err := syscall.SetNonblock(fds[1], false); err != nil {
 			t.Fatalf("restore blocking: %v", err)
 		}
-		cmd.Stderr = os.NewFile(uintptr(fds[1]), "stderr-full-pipe")
+		stderrFile := os.NewFile(uintptr(fds[1]), "stderr-full-pipe")
+		cmd.Stderr = stderrFile
 		cmd.Stdout = devfull
 		stdin, err := cmd.StdinPipe()
 		if err != nil {
-			syscall.Close(fds[1])
+			stderrFile.Close()
 			syscall.Close(fds[0])
 			t.Fatalf("stdin pipe: %v", err)
 		}
 		if err := cmd.Start(); err != nil {
-			syscall.Close(fds[1])
+			stderrFile.Close()
 			syscall.Close(fds[0])
 			t.Fatalf("start helper: %v", err)
 		}
-		syscall.Close(fds[1])
+		// Close the parent's copy of the stderr write end through
+		// the *os.File, never a raw syscall.Close: the child holds
+		// its own duplicate, and the os.File finalizer must never
+		// close a later-reused fd number (pre-existing flaky EBADF
+		// across this suite under load).
+		stderrFile.Close()
 		io.WriteString(stdin, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n")
 		stdin.Close()
 		done := make(chan error, 1)
@@ -467,8 +496,6 @@ func TestOversizedUnterminatedFrameAnswersAndExits(t *testing.T) {
 				t.Fatalf("write oversized bytes: %v", werr)
 			}
 		}
-		done := make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
 		lineCh := make(chan string, 1)
 		errCh := make(chan error, 1)
 		go func() {
@@ -496,10 +523,20 @@ func TestOversizedUnterminatedFrameAnswersAndExits(t *testing.T) {
 			t.Fatalf("read -32001: %v", rerr)
 		case <-time.After(3 * time.Second):
 			cmd.Process.Kill()
+			// Let the reader finish on the pipe EOF before Wait
+			// closes the pipe (StdoutPipe: Wait must not run
+			// while a read is in flight).
+			select {
+			case <-errCh:
+			case <-time.After(time.Second):
+			}
 			cmd.Wait()
 			stdin.Close()
 			t.Fatalf("no -32001 response within 3s")
 		}
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+
 		select {
 		case err := <-done:
 			exit, ok := err.(*exec.ExitError)
@@ -517,6 +554,105 @@ func TestOversizedUnterminatedFrameAnswersAndExits(t *testing.T) {
 	}
 }
 
+func TestOversizedHeldNonCRFrameAnswersAndExits(t *testing.T) {
+	// External review finding: a held-open frame of exactly LIMIT+1
+	// bytes whose last byte is not the CR of a CRLF terminator can
+	// never become legal -- even a following LF would leave the
+	// payload over the ceiling -- so the reader must report -32001
+	// (id null) and exit non-zero immediately, without waiting for
+	// the terminator or EOF while the peer holds stdin open.
+	for iteration := 0; iteration < 2; iteration++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestTerminationSignalHelperProcess$")
+		cmd.Env = append(os.Environ(), signalTestHelperEnv+"=oversized-unterminated")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatalf("stdin pipe: %v", err)
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			stdin.Close()
+			t.Fatalf("stdout pipe: %v", err)
+		}
+		cmd.Stderr = &bytes.Buffer{}
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start helper: %v", err)
+		}
+		// Exactly LIMIT+1 non-CR bytes without LF; stdin stays open
+		// on purpose (the decisive shape: the pre-fix reader held the
+		// bytes and awaited another byte forever).
+		buf := make([]byte, 65536)
+		for i := range buf {
+			buf[i] = 'x'
+		}
+		written := 0
+		for written < InputFrameLimit+1 {
+			take := len(buf)
+			if left := InputFrameLimit + 1 - written; left < take {
+				take = left
+			}
+			n, werr := stdin.Write(buf[:take])
+			written += n
+			if werr != nil {
+				t.Fatalf("write oversized bytes: %v", werr)
+			}
+		}
+		lineCh := make(chan string, 1)
+		errCh := make(chan error, 1)
+		go func() {
+			line, rerr := bufio.NewReader(stdout).ReadString('\n')
+			if rerr != nil {
+				errCh <- rerr
+				return
+			}
+			lineCh <- line
+		}()
+		select {
+		case line := <-lineCh:
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(line), &payload); err != nil {
+				t.Fatalf("bad -32001 json: %v (%q)", err, line)
+			}
+			if payload["id"] != nil {
+				t.Fatalf("expected null id, got %v", payload["id"])
+			}
+			errorObj, _ := payload["error"].(map[string]any)
+			if code, _ := errorObj["code"].(float64); int(code) != -32001 {
+				t.Fatalf("expected -32001, got %v", payload["error"])
+			}
+		case rerr := <-errCh:
+			t.Fatalf("read -32001: %v", rerr)
+		case <-time.After(3 * time.Second):
+			cmd.Process.Kill()
+			// Let the reader finish on the pipe EOF before Wait
+			// closes the pipe (StdoutPipe: Wait must not run while a
+			// read is in flight).
+			select {
+			case <-errCh:
+			case <-time.After(time.Second):
+			}
+			cmd.Wait()
+			stdin.Close()
+			t.Fatalf("no -32001 response within 3s (held LIMIT+1 non-CR)")
+		}
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case err := <-done:
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 {
+				stdin.Close()
+				t.Fatalf("held LIMIT+1 non-CR: exit = %v, want 1", err)
+			}
+		case <-time.After(3 * time.Second):
+			cmd.Process.Kill()
+			cmd.Wait()
+			stdin.Close()
+			t.Fatalf("held LIMIT+1 non-CR: helper did not terminate within 3s")
+		}
+		stdin.Close()
+	}
+}
+
 func TestTerminationSignalFullStderrForcedExit(t *testing.T) {
 	// External review finding: the watchdog's forced exit must never
 	// depend on a blocking diagnostic write.  A full, undrained
@@ -525,7 +661,11 @@ func TestTerminationSignalFullStderrForcedExit(t *testing.T) {
 	sig := syscall.SIGTERM
 	for iteration := 0; iteration < 2; iteration++ {
 		cmd := exec.Command(os.Args[0], "-test.run=^TestTerminationSignalHelperProcess$")
-		cmd.Env = append(os.Environ(), signalTestHelperEnv+"=full-stderr")
+		// The wedged mode keeps the worker blocked on the stalled
+		// writer so the signal is served by the watchdog path, with
+		// the same full, undrained stderr pipe (external review
+		// finding).
+		cmd.Env = append(os.Environ(), signalTestHelperEnv+"=full-stderr-wedged")
 		// The diagnostic pipe is built from raw syscalls: an os.Pipe
 		// fd is registered with the runtime poller, and os.File
 		// writes on the non-blocking fd would wait for writability
@@ -549,13 +689,19 @@ func TestTerminationSignalFullStderrForcedExit(t *testing.T) {
 		if err := syscall.SetNonblock(fds[1], false); err != nil {
 			t.Fatalf("restore blocking: %v", err)
 		}
-		cmd.Stderr = os.NewFile(uintptr(fds[1]), "stderr-full-pipe")
+		stderrFile := os.NewFile(uintptr(fds[1]), "stderr-full-pipe")
+		cmd.Stderr = stderrFile
 		if err := cmd.Start(); err != nil {
-			syscall.Close(fds[1])
+			stderrFile.Close()
 			syscall.Close(fds[0])
 			t.Fatalf("start helper: %v", err)
 		}
-		syscall.Close(fds[1])
+		// Close the parent's copy of the stderr write end through
+		// the *os.File, never a raw syscall.Close: the child holds
+		// its own duplicate, and the os.File finalizer must never
+		// close a later-reused fd number (pre-existing flaky EBADF
+		// across this suite under load).
+		stderrFile.Close()
 		// Let the session install its signal watcher.
 		time.Sleep(300 * time.Millisecond)
 		if err := cmd.Process.Signal(sig); err != nil {

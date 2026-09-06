@@ -432,7 +432,7 @@ pub(crate) fn create_result(result: &CreateResult) -> Result<Value, HandlerError
         "database_id": convert::hex_id(&result.database_id),
         "commit_nonce": convert::hex_id(&result.commit_nonce),
         "sidecar_id": convert::hex_id(&result.sidecar_id),
-        "main_basename": basename(result.main_basename.as_bytes()),
+        "main_basename": local_basename_text(&result.main_basename),
         "reader_capacity": result.reader_capacity,
         "state": creation_state(result.state),
         "residue_possible": result.residue_possible,
@@ -514,6 +514,30 @@ fn abort_outcome(value: iprange_livedb::AbortOutcome) -> &'static str {
 
 pub(crate) fn basename(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
+}
+
+/// Render one SDK-local basename to its wire text, honoring the
+/// platform encoding tag (external review finding).  Encoding 1 is
+/// raw POSIX bytes (UTF-8 lossy), encoding 2 is UTF-16LE units (as
+/// stored on Windows by ``LocalBasename::from_path``); the stored
+/// bytes are never the wire text.  The create/transition results
+/// must round-trip: a client passes the returned ``main_basename``
+/// back unchanged and the resolver compares it against the clean
+/// destination basename (spec iprange-jsonrpc-v1.md §database.*).
+pub(crate) fn local_basename_text(value: &iprange_livedb::LocalBasename) -> String {
+    match value.encoding() {
+        2 => utf16le_text(value.as_bytes()),
+        _ => String::from_utf8_lossy(value.as_bytes()).into_owned(),
+    }
+}
+
+/// Decode raw UTF-16LE wire units (encoding 2) to text, lossy.
+pub(crate) fn utf16le_text(bytes: &[u8]) -> String {
+    let units: Vec<u16> = bytes
+        .chunks_exact(2)
+        .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+        .collect();
+    String::from_utf16_lossy(&units)
 }
 
 pub(crate) fn file_identity(identity: &LocalFileIdentity) -> Result<Value, HandlerError> {
@@ -645,7 +669,7 @@ pub(crate) fn commit_cleanup(value: &iprange_livedb::CommitCleanupArtifacts) -> 
 fn commit_cleanup_artifact(value: &iprange_livedb::CommitCleanupArtifact) -> Value {
     let mut result = json!({
         "directory_identity": file_identity_ok(&value.directory_identity),
-        "main_basename": basename(value.main_basename.as_bytes()),
+        "main_basename": local_basename_text(&value.main_basename),
         "main_identity": file_identity_ok(&value.main_identity),
         "expected_database_id": convert::hex_id(&value.expected_database_id),
         "target_transaction_id": convert::decimal_u64(value.target_transaction_id),
@@ -1217,5 +1241,60 @@ mod positive_budget_tests {
         let mut zero_files = valid.clone();
         zero_files["max_open_files"] = json!(0);
         assert!(validate_writer_budget(&zero_files).is_err());
+    }
+}
+
+#[cfg(test)]
+mod local_basename_tests {
+    use super::*;
+
+    /// UTF-16LE wire bytes of one name (what LocalBasename stores in
+    /// its encoding-2 Windows branch).
+    fn utf16le_wire(text: &str) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        for unit in text.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        bytes
+    }
+
+    #[test]
+    fn utf16le_encoding_renders_to_clean_text() {
+        // External review finding: on Windows LocalBasename stores
+        // UTF-16LE units (encoding 2); the wire rendering must decode
+        // them to text (round-trippable through the resolvers) instead
+        // of emitting the NUL-interleaved raw units.
+        let bytes = utf16le_wire("live.iprange");
+        assert_eq!(utf16le_text(&bytes), "live.iprange");
+        // Precondition: the raw UTF-16LE units carry the (ASCII) code
+        // point in the low byte and NUL in the high byte, so every
+        // odd-index byte must be zero and every even-index byte
+        // non-zero.  This pins that the wire was really the
+        // NUL-interleaved unit stream the decoder must clean up.
+        for (index, byte) in bytes.iter().enumerate() {
+            if index % 2 == 1 {
+                assert_eq!(*byte, 0, "precondition: high byte {index} is not NUL");
+            } else {
+                assert_ne!(*byte, 0, "precondition: low byte {index} is NUL");
+            }
+        }
+    }
+
+    #[test]
+    fn posix_encoding_renders_raw_bytes_lossy() {
+        let name = std::env::temp_dir().join("live.iprange");
+        let local = iprange_livedb::LocalBasename::from_path(&name).unwrap();
+        assert_eq!(local.encoding(), 1);
+        assert_eq!(local_basename_text(&local), "live.iprange");
+    }
+
+    #[test]
+    fn incomplete_utf16le_tail_is_lossy_not_panicking() {
+        // An odd trailing byte (e.g. a truncated basename) decodes
+        // lossily instead of panicking or truncating the result.
+        let mut bytes = utf16le_wire("live");
+        bytes.push(0x61);
+        let text = utf16le_text(&bytes);
+        assert!(text.starts_with("live"));
     }
 }
