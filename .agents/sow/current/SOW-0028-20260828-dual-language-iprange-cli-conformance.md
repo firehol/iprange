@@ -5999,8 +5999,9 @@ the last repository commit before the external whole-milestone
 control review at the exact revision below; the control review's
 verdict is appended after it lands.
 
-- Final revision: commit `5939dc28b9802be902da56358d0f0083b0bc56e1` (extends the all-seven-PASS
-  revision `cbb373bf`; pushed; working tree clean at record time).
+- Final revision: the HEAD carrying this closure record (the
+  all-seven-PASS revision it extends is `cbb373bf`; pushed; working
+  tree clean at record time).
 - Internal gate: ALL SEVEN standing roles PASS the exact final
   revision (tester, operations, parity, portability, security,
   performance, glm-5.3-responses whole-milestone validator); every
