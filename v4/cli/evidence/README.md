@@ -72,16 +72,13 @@ sections.
     byte-reproducible across toolchains or build paths, and not
     pinned by the committed reports).
 - Windows qualification binaries (built on the authorized Windows
-  validation host at the eighth-wave product-source revision
-  `90a935b2`, clean working tree, staged under `C:/Temp/qualsvc-win/`
-  and `C:/Temp/wqual/`; the wave-10 regeneration of the Windows
-  evidence at the wave-10 product sources is a pending qualification
-  step tracked in SOW-0028's tenth-wave section):
+  validation host at the wave-10 product-source revision
+  `f67fc728`, clean working tree, staged under `C:/Temp/qualsvc-win/`):
   - Go product SHA-256
-    `992e8559e8da0e583a3796c725a2b7bcfb6d52a019b015c68a9d5be330b0a828`
+    `bc84a7dc6e640c5814382821485ea2767bc1263889179bda96f5b474164d3e43`
     (go1.26.5 windows/amd64, `-buildvcs=false`);
   - Rust product SHA-256
-    `a8a45090ef906571a56eb0f242df5f55ba0a4af4f3fcf52ed02ad46b7d5b43bf`
+    `8fb912b733706add1c64994c5f0fa0fe1523169cbef79836ef22d7b0022c2edd`
     (rustc 1.97.1).
   Build commands, toolchain, and source revision are recorded in
   the report's `build_provenance` block.
@@ -142,12 +139,12 @@ cross-listing `source_basename` equality.  All Linux commands ran
 under `nice` with work dirs under `/tmp/qualsvc/ev17/work2/`
 (matrices, crash, resource); the mixed matrices
 are invoked with `--allow-skips` (recorded truthfully in each
-report command) so every battery command exits 0.  The committed
-Windows evidence is still the eighth-wave set (built at the
-eighth-wave product-source revision `90a935b2`); regenerating it at
-the wave-10 product sources is a pending qualification step on the
-authorized Windows validation host, tracked in SOW-0028's tenth-wave
-section.
+report command) so every battery command exits 0.  The Windows
+housekeeping evidence is regenerated at the wave-10 product sources
+(`f67fc728`) on the authorized Windows validation host with the
+deadline-bounded client running in its Windows thread mode; the
+report schema is v3 with the exact 50-record removal log and
+build provenance.
 
 ## Files
 

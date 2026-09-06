@@ -5859,5 +5859,28 @@ dangling pointer.
   `.local/parity/wave10/forged-consistent-argv.json` and
   `.local/parity/wave10/forged-consistent-noargv.json` FAIL (exit 1).
 - Evidence regeneration with the re-fixed binaries and the D4
-  Windows run remain pending (recorded below); the committed
-  evidence at this commit is still the first-fix wave set.
+  Windows run are completed (recorded below).
+
+#### D4 — Windows qualification regeneration (completed 2026-09-06)
+
+On the authorized Windows validation host (`costa-win11`, SOW-0028
+qualification only), the wave-10 product sources at `f67fc728`
+(clean tracked tree) built:
+- Go `bc84a7dc…` (go1.26.5 windows/amd64, `-buildvcs=false`);
+- Rust `8fb912b7…` (rustc 1.97.1).
+
+The wave-9 deadline-bounded RPC client used select() on pipe fds,
+which Windows rejects (WinError 10038/10093); the first host run
+failed at the first bounded write.  The shared client now applies
+deadlines with worker threads on Windows (buffered wrappers kept, a
+timed-out thread poisons the service because its bytes can no longer
+be correlated) while POSIX keeps the selector path.  With that
+repair, `windows_housekeeping_harness.py` (mingw64 Python 3.14) ran
+2/2 PASS on the host with the deadline-bounded client and recorded
+`windows-housekeeping.json` at schema v3 (exact 50-row removal log,
+removal-log sha256, build provenance) — the native refresh exercise,
+both removal-collector abort/cleanup proofs, the deterministic GC
+pair proof and cross-listing, and 200-row/150-row refresh flow.
+Windows binary hashes, build commands, toolchain, tree-clean state,
+and source revision are recorded in the report's
+`build_provenance` block.
