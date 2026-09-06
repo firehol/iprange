@@ -55,12 +55,14 @@ package rpc
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/signal"
 	"sync"
 	"sync/atomic"
 	"syscall"
+	"time"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 )
@@ -81,6 +83,9 @@ type sessionControl struct {
 	// First worker write failure; makes shutdown exit non-zero when
 	// stdout broke while draining queued units.
 	fatalWrite error
+	// Set when the termination-signal watcher consumes SIGINT/SIGTERM;
+	// the EOF exit path reports non-zero when a signal raced EOF.
+	terminationSignal bool
 	// Cancellation signal for the executing work member; the worker
 	// replaces it with a fresh token once per executing member.
 	token *iprangedb.CancellationToken
@@ -241,24 +246,41 @@ func (s *Session) Run(reader io.Reader, writer io.Writer) error {
 
 	// Termination signals (Unix): report their delivery as a fatal
 	// transport failure so the process exits non-zero after the same
-	// cancellation/cleanup path as broken stdout.
+	// cancellation/cleanup path as broken stdout. The watcher never
+	// selects on reader EOF: a signal observed at any point, including
+	// mid-drain after the main loop already chose the EOF path, must
+	// still win over the exit-zero path (the main loop checks
+	// terminationSignal before returning nil). If the transport is
+	// wedged (events channel full, shutdown unreachable because the
+	// worker is blocked on a full stdout pipe), a watchdog forces the
+	// non-zero exit so a termination signal can never be ignored.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
 	sigDone := make(chan struct{})
 	go func() {
 		defer close(sigDone)
-		select {
-		case sig := <-sigCh:
-			err := errors.New("terminated by signal " + sig.String())
-			st := s.state
-			st.controlMu.Lock()
-			if st.control.fatalWrite == nil {
-				st.control.fatalWrite = err
-			}
-			st.controlMu.Unlock()
+		sig := <-sigCh
+		err := errors.New("terminated by signal " + sig.String())
+		st := s.state
+		st.controlMu.Lock()
+		st.control.terminationSignal = true
+		if st.control.fatalWrite == nil {
+			st.control.fatalWrite = err
+		}
+		st.controlMu.Unlock()
+		delivered := make(chan struct{})
+		go func() {
 			reportFatal(events, s, err)
-		case <-readerDone:
+			close(delivered)
+		}()
+		select {
+		case <-delivered:
+			// The main loop took the fatal path, or shutdown already
+			// began and the report became abortable.
+		case <-time.After(signalForceExitTimeout):
+			fmt.Fprintf(os.Stderr, "iprange: %v: transport wedged, forcing exit\n", err)
+			os.Exit(1)
 		}
 	}()
 
@@ -313,6 +335,20 @@ loop:
 	// the events channel and sets runErr; the channel close alone
 	// cannot happen without shutdown) this wait still terminates.
 	<-s.workerDone
+	if runErr == nil {
+		// A termination signal observed before or during EOF always
+		// wins over the exit-zero EOF path (termination signals are
+		// fatal transport failures; the EOF branch may have raced the
+		// watcher's event delivery with the EOF event).
+		st := s.state
+		st.controlMu.Lock()
+		terminated := st.control.terminationSignal
+		err := st.control.fatalWrite
+		st.controlMu.Unlock()
+		if terminated && err != nil {
+			runErr = err
+		}
+	}
 	select {
 	case <-sigDone:
 	default:
@@ -424,6 +460,14 @@ func (s *Session) fatal(err error, _ io.Writer, _ *FrameWriter) error {
 	}
 	return err
 }
+
+// signalForceExitTimeout bounds how long a termination signal waits
+// for the graceful fatal path before the watchdog forces the process
+// to exit non-zero. The events channel can be permanently full and
+// shutdown unreachable (worker blocked on a full stdout pipe, main
+// loop blocked on the full work queue); never leave the operator
+// without a working termination signal.
+const signalForceExitTimeout = 500 * time.Millisecond
 
 // reportFatal delivers the worker's terminal failure to the main
 // loop without ever blocking past shutdown. The main loop stops

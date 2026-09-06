@@ -54,9 +54,15 @@ Evidence integrity rules:
   refs are checked against these records: a matrix ref
   ``actor.operation`` must name a real recorded operation of that
   actor (there is no free ``legacy`` marker) and a crash ref
-  ``actor.ordinal`` must index that actor's list; an opened crash ref
-  must index an open-capable method of the kind (v4_main opens are
-  ``iprange.v1.reader.open``).  Unknown actors, unknown operations,
+  ``actor.ordinal`` must index that actor's list; every created ref
+  and every opened ref must name a method that can actually create
+  (respectively open) that kind when executed by that actor, per the
+  per-kind per-actor capability maps MATRIX_CREATE_METHODS /
+  MATRIX_OPEN_METHODS on the matrix side and CRASH_CREATE_METHODS /
+  CRASH_OPEN_METHODS on the crash side -- crediting current.publish
+  with recovery scratch or maintenance.list with a live reader open
+  is a fabricated lineage, not merely an in-range ordinal.  Unknown
+  actors, unknown operations,
   out-of-range ordinals, fabricated opens, and empty operation lists
   on actors that recorded executed work fail the gate.
 - Mixed matrices (``rust_to_go``, ``go_to_rust``) execute both
@@ -120,6 +126,17 @@ Evidence integrity rules:
   matrix label via ``--matrix``; a crash report's ``command`` argv
   must name the report-root binaries table paths for
   ``--producer``/``--consumer``/``--fixture-tool``.
+- Matrix per-case argv is the execution anchor for the role a case
+  claims: every PASS matrix case of an argv-era revision records
+  ``actors.<role>.argv`` (the realpath of the binary that served that
+  role) and each argv realpath must equal the path of the report
+  binary record (matched by the actor sha256) that served the role.
+  A revision is argv-era when ANY supplied matrix report carries
+  argv-shaped actor records -- the runner that wrote that report also
+  wrote argv -- so the committed pre-argv evidence passes until the
+  wave regen, while after regen every future report without argv
+  fails; a relabeled case whose argv names the binary it actually
+  executed contradicts the role identity it claims.
 - Every PASS crash scenario's producer/consumer ``impl:path`` must
   appear in the report-root binaries table and the table's sha256
   for that path must equal the scenario's sha256.
@@ -133,6 +150,19 @@ Evidence integrity rules:
   Malformed lineage (non-object kinds, missing keys, unknown actor
   prefixes, empty ``created_by``) fails; the old flat kind list
   carries no actor lineage and is rejected as legacy evidence.
+
+Honest limitations.  This gate is a mechanical consistency and
+identity anchor: every check compares fields inside and across the
+supplied reports.  A fully consistent offline forgery of ALL reports
+of one revision -- one that rewrites every matrix and crash report,
+the global sha256 map, the binaries tables, the commands, and the
+per-case argv consistently -- is not mechanically distinguishable by
+this gate alone; such forgeries are caught by the adversarial review
+reruns that remain part of the gate process.  Fixture identity is
+enforced as a cross-report consistency anchor: the crash report root
+binaries table is the authority every recorded command must name, but
+no on-disk hash of the fixture binary can be required for committed
+evidence whose build-time paths no longer exist on the review machine.
 
 Exit status 0 when every required kind has both-language evidence and
 no report problem exists; 1 otherwise.
@@ -181,16 +211,166 @@ CRASH_ONLY_KINDS = (
 # opened coverage is mandatory; empty opened coverage is a FAIL, not a
 # vacuous pass.
 REQUIRED_OPENED_KINDS = ("live_sidecar", "adapter_output")
-# Open-capable methods per crash-opened kind.  The harness records the
-# method that performed each open in the per-actor operation list; an
-# opened ref must index such a method, not merely an in-range ordinal
-# (``reader.close`` at the right index is a fabricated open).  Kinds
-# not listed here have multi-writer open contracts (live_sidecar is
-# opened by reader.open and by live-mode database.info; adapter_output
-# by the export/validate writer) and keep the recorded-list plus
-# backing-fact checks.
+# Per-kind per-actor method-capability maps.  A lineage ref must name
+# an operation that can actually create (respectively open) that kind
+# when executed by that actor; an in-range ordinal naming
+# maintenance.list or reader.close is a fabricated credit, not a
+# lineage.  The maps are the AUTHORITATIVE sets, derived from the
+# committed genuine evidence (v4/cli/evidence/matrix-*.json and
+# crash.json: every recorded operation that actually creates/opens
+# each kind per actor) and from the crash harness recording call
+# sites (crash_harness.py _record_creation, _record_live_open,
+# _record_adapter_open, _consumer_opened_main).  A kind/actor pair
+# absent from a map has no capable method: any ref naming it fails.
+# The matrix ledger is mechanical (run.py record_ledger credits the
+# step method whose inventory delta produced the file / opened a
+# declared path), so the matrix maps mirror exactly the methods the
+# genuine matrix evidence credits; the crash maps mirror the crash
+# harness call sites plus the genuine scenario ordinals.
+
+# Crash-side creation: the harness records creation credits at the
+# crash call sites (_record_creation) -- current.publish creates the
+# reservation/temp/main, recover creates scratch (and, when the kill
+# lands in its output phase, the recovery reservation/temp),
+# initialize_live creates the sidecar, export creates the adapter
+# output.  Only the producer actor ever records crash-side creation.
+CRASH_CREATE_METHODS = {
+    "v4_main": {
+        "producer": ("iprange.v1.current.publish",),
+    },
+    "live_sidecar": {
+        "producer": ("iprange.v1.database.initialize_live",),
+    },
+    "publication_reservation": {
+        "producer": ("iprange.v1.current.publish",
+                     "iprange.v1.recover"),
+    },
+    "publication_temp": {
+        "producer": ("iprange.v1.current.publish",
+                     "iprange.v1.recover"),
+    },
+    "authorized_scratch": {
+        "producer": ("iprange.v1.recover",),
+    },
+    "adapter_output": {
+        "producer": ("iprange.v1.export",),
+    },
+}
+
+# Crash-side opens: the harness records the open at the call site's
+# operation ordinal -- the consumer's successful reader.open for
+# v4_main (_consumer_opened_main), the resolver's live-mode
+# database.info for the producer sidecar open (_record_live_open)
+# plus the consumer's live reader.open, and the crashed export
+# writer's open for adapter_output (_record_adapter_open).
 CRASH_OPEN_METHODS = {
-    "v4_main": ("iprange.v1.reader.open",),
+    "v4_main": {
+        "consumer": ("iprange.v1.reader.open",),
+    },
+    "live_sidecar": {
+        "producer": ("iprange.v1.database.info",),
+        "consumer": ("iprange.v1.reader.open",),
+    },
+    "adapter_output": {
+        "producer": ("iprange.v1.export",),
+    },
+}
+
+# Matrix-side creation credits observed in the committed matrix
+# evidence (run.py record_ledger credits the step method whose
+# inventory delta produced the file).
+MATRIX_CREATE_METHODS = {
+    "v4_main": {
+        "producer": ("iprange.v1.algebra.publish",
+                     "iprange.v1.current.publish",
+                     "iprange.v1.database.create",
+                     "iprange.v1.recover",
+                     "iprange.v1.snapshot"),
+        "consumer": ("iprange.v1.snapshot",),
+    },
+    "live_sidecar": {
+        "producer": ("iprange.v1.database.create",
+                     "iprange.v1.database.initialize_live"),
+    },
+    "publication_reservation": {
+        "producer": ("iprange.v1.current.publish",),
+    },
+    "publication_temp": {
+        "producer": ("iprange.v1.current.publish",
+                     "iprange.v1.recover"),
+    },
+    "authorized_scratch": {
+        "producer": ("iprange.v1.recover",),
+    },
+    "adapter_output": {
+        "producer": ("iprange.v1.export",
+                     "iprange.v1.maintenance.list",
+                     "iprange.v1.recover",
+                     "iprange.v1.retention.first_seen.refresh"),
+        "consumer": ("iprange.v1.export",
+                     "iprange.v1.join.direct",
+                     "iprange.v1.join.membership",
+                     "iprange.v1.maintenance.list",
+                     "iprange.v1.query.cardinalities",
+                     "iprange.v1.query.matching_feeds",
+                     "iprange.v1.query.overlaps",
+                     "iprange.v1.validate"),
+    },
+    "metadata_delivery": {
+        "consumer": ("iprange.v1.database.metadata.get",),
+    },
+}
+
+# Matrix-side open credits observed in the committed matrix evidence.
+# adapter_output has no matrix-side opener record: the only
+# adapter-output opener is the producer export writer observed by the
+# crash battery, so any matrix opened ref on adapter_output fails.
+MATRIX_OPEN_METHODS = {
+    "v4_main": {
+        "producer": ("iprange.v1.algebra.publish",
+                     "iprange.v1.commit.resolve",
+                     "iprange.v1.database.create.resolve",
+                     "iprange.v1.database.info",
+                     "iprange.v1.database.metadata.replace",
+                     "iprange.v1.database.reclaim",
+                     "iprange.v1.database.reset_live",
+                     "iprange.v1.direct.replace",
+                     "iprange.v1.feeds.create",
+                     "iprange.v1.feeds.delete",
+                     "iprange.v1.feeds.import",
+                     "iprange.v1.feeds.rename",
+                     "iprange.v1.feeds.replace",
+                     "iprange.v1.history.project",
+                     "iprange.v1.publication.resolve",
+                     "iprange.v1.reader.open",
+                     "iprange.v1.retention.first_seen.refresh",
+                     "iprange.v1.retention.last_seen.refresh",
+                     "iprange.v1.snapshot"),
+        "consumer": ("iprange.v1.database.metadata.get",
+                     "iprange.v1.join.direct",
+                     "iprange.v1.join.membership",
+                     "iprange.v1.publication.inspect",
+                     "iprange.v1.query.overlaps",
+                     "iprange.v1.reader.open",
+                     "iprange.v1.recovery.inspect",
+                     "iprange.v1.snapshot",
+                     "iprange.v1.validate"),
+    },
+    "live_sidecar": {
+        "producer": ("iprange.v1.algebra.publish",
+                     "iprange.v1.database.info",
+                     "iprange.v1.feeds.create",
+                     "iprange.v1.history.project",
+                     "iprange.v1.reader.open",
+                     "iprange.v1.snapshot"),
+        "consumer": ("iprange.v1.database.info",
+                     "iprange.v1.database.metadata.get",
+                     "iprange.v1.join.direct",
+                     "iprange.v1.join.membership",
+                     "iprange.v1.query.overlaps",
+                     "iprange.v1.reader.open",
+                     "iprange.v1.snapshot"),
+    },
 }
 
 # Parser caches for the single-authority command replay (lazy).
@@ -348,6 +528,32 @@ def _command_argv(report):
             isinstance(token, str) for token in command):
         return command
     return None
+
+
+def _report_carries_argv(report):
+    """True when a matrix report records argv-shaped actor identity.
+
+    The post-regen matrix runner writes ``actors.<role>.argv`` (the
+    realpath of the binary that served the role) on every PASS case.
+    A report that records even one argv-shaped actor entry was written
+    by that runner; committed pre-argv evidence records none.  The
+    conditional argv rule keys on this: once a revision contains an
+    argv-era report, every report of the revision must carry argv on
+    every PASS case.
+    """
+
+    cases = report.get("cases")
+    if not isinstance(cases, list):
+        return False
+    for case in cases:
+        actors = case.get("actors")
+        if not isinstance(actors, dict):
+            continue
+        for entry in actors.values():
+            if isinstance(entry, dict) and isinstance(
+                    entry.get("argv"), str) and entry["argv"]:
+                return True
+    return False
 
 
 def _argv_pairs(argv):
@@ -508,7 +714,7 @@ def _global_implementation_map(matrix_paths, crash_paths, problems):
 
 
 def matrix_evidence(path, report, implementation_of, fixture_paths,
-                      problems):
+                      argv_required, problems):
     """Kind -> created/opened language sets observed by one matrix.
 
     Returns ``(matrix, evidence, stats, problems)``.  ``stats`` holds
@@ -552,6 +758,19 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
     if leftover:
         problems.append(
             f"matrix {path}: report records leftover product processes: {leftover}")
+    # argv-era detection: the post-regen runner records the executed
+    # binary path of every actor on every PASS case.  A report that
+    # carries any argv-shaped actor record is argv-era; the battery
+    # rule (assess() pre-scans every matrix report) flows in through
+    # argv_required.  Committed pre-argv evidence satisfies neither
+    # and passes until the wave regen.
+    report_argv_era = _report_carries_argv(report)
+    if argv_required and not report_argv_era:
+        problems.append(
+            f"matrix {path}: report records no per-case actor argv "
+            f"while the battery is argv-era (every PASS case must "
+            f"record actors.<role>.argv)")
+    argv_required_here = argv_required or report_argv_era
     argv = _command_argv(report)
     if argv is None:
         problems.append(
@@ -700,11 +919,15 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
             # declaration of the same sha256.
             sha = entry.get("sha256")
             declared = None
+            binary_path = None
             if isinstance(report.get("binaries"), dict) and isinstance(sha, str):
                 for record in report["binaries"].values():
                     if isinstance(record, dict) and record.get("sha256") == sha:
                         declared = (record.get("result") or {}).get(
                             "implementation")
+                        candidate_path = record.get("path")
+                        if isinstance(candidate_path, str):
+                            binary_path = candidate_path
                         break
             if not (isinstance(sha, str) and sha):
                 problems.append(
@@ -745,6 +968,26 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                 # agrees with the case declaration; an invalid case
                 # declaration keeps the poisoned "?" lineage marker.
                 implementations[actor] = global_implementation
+            # Matrix-side execution anchor: in an argv-era revision
+            # the runner records the realpath of the binary that
+            # served each role; the argv must name the report binary
+            # record the actor sha256 resolved to, so a relabeled
+            # case carrying the argv of the binary it actually
+            # executed contradicts the role it claims.
+            if argv_required_here:
+                actor_argv = entry.get("argv")
+                if not (isinstance(actor_argv, str) and actor_argv):
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} actor "
+                        f"{actor!r} records no argv (argv-era identity)")
+                elif binary_path is not None and \
+                        os.path.realpath(actor_argv) != \
+                        os.path.realpath(binary_path):
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} actor "
+                        f"{actor!r} argv {actor_argv!r} does not resolve "
+                        f"to the report binary path {binary_path!r} that "
+                        f"served the role (sha256 {sha!r})")
             # Executed-work evidence: the runner records the executed
             # step count per actor; a case that executed nothing (or
             # was doctored to claim nothing) is not evidence.
@@ -860,6 +1103,16 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                         f"marker)")
                     bucket["created"].add("?")
                     continue
+                if operation not in MATRIX_CREATE_METHODS.get(
+                        facts["kind"], {}).get(actor, ()):
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} kind "
+                        f"{facts['kind']!r} created_by ref {entry!r} names "
+                        f"operation {operation!r} which is not a "
+                        f"create-capable method of actor {actor!r} for "
+                        f"this kind")
+                    bucket["created"].add("?")
+                    continue
                 if actor_steps.get(actor) == 0:
                     problems.append(
                         f"matrix {path}: PASS case {case_name!r} kind "
@@ -910,6 +1163,15 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                         f"{facts['kind']!r} records a cross-process open "
                         f"ref {entry!r} although no v1 open contract "
                         f"opens this kind")
+                    continue
+                if operation not in MATRIX_OPEN_METHODS.get(
+                        facts["kind"], {}).get(actor, ()):
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} kind "
+                        f"{facts['kind']!r} opened_by ref {entry!r} names "
+                        f"operation {operation!r} which is not an "
+                        f"open-capable method of actor {actor!r} for "
+                        f"this kind")
                     continue
                 bucket["opened"].add(implementations.get(actor, "?"))
     stats = {"cases": len(cases), "fail_cases": fail_cases,
@@ -1024,7 +1286,8 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                         f"crash {path}: report root binaries table records "
                         f"no {role} path")
                 elif (not isinstance(named, str)
-                      or os.path.realpath(named) != table_path):
+                      or os.path.realpath(named)
+                      != os.path.realpath(table_path)):
                     problems.append(
                         f"crash {path}: report command {flag} {named!r} does "
                         f"not name the report root binaries table path "
@@ -1258,6 +1521,17 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                         f"operation ordinal {ordinal} beyond the recorded "
                         f"executed operations of actor {actor!r}")
                     continue
+                if scenario_operations is not None and \
+                        scenario_operations.get(actor, ())[ordinal] not in \
+                        CRASH_CREATE_METHODS.get(kind, {}).get(actor, ()):
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} created_by ref {entry!r} names "
+                        f"operation "
+                        f"{scenario_operations.get(actor, ())[ordinal]!r} "
+                        f"which is not a create-capable method of actor "
+                        f"{actor!r} for this kind")
+                    continue
                 language = (producer_impl if actor == "producer"
                             else consumer_impl)
                 bucket["created"].add(language or "?")
@@ -1278,24 +1552,23 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                         f"executed operations of actor {actor!r}")
                     continue
                 # Open refs must be semantically compatible with the
-                # kind: the operation at the ordinal must be an
-                # open-capable method, not merely in range (a
-                # ``reader.close`` at the right index is a fabricated
-                # open).  Kinds with a single open contract are listed
-                # in CRASH_OPEN_METHODS; the multi-writer kinds keep
-                # the recorded-list membership plus the backing-fact
-                # checks below.
-                if (scenario_operations is not None
-                        and kind in CRASH_OPEN_METHODS
-                        and scenario_operations.get(actor, ())[ordinal]
-                        not in CRASH_OPEN_METHODS[kind]):
+                # kind and actor: the operation at the ordinal must be
+                # an open-capable method of that actor for that kind,
+                # not merely in range (a ``reader.close`` or a
+                # ``maintenance.list`` at the right index is a
+                # fabricated open).  CRASH_OPEN_METHODS is the
+                # per-kind per-actor authority; the multi-writer kinds
+                # additionally keep the backing-fact checks below.
+                if scenario_operations is not None and \
+                        scenario_operations.get(actor, ())[ordinal] not in \
+                        CRASH_OPEN_METHODS.get(kind, {}).get(actor, ()):
                     problems.append(
                         f"crash {path}: PASS scenario {scenario_name!r} "
                         f"kind {kind!r} opened_by ref {entry!r} names "
                         f"operation "
                         f"{scenario_operations.get(actor, ())[ordinal]!r} "
-                        f"which is not an open-capable method for this "
-                        f"kind")
+                        f"which is not an open-capable method of actor "
+                        f"{actor!r} for this kind")
                     continue
                 # Open refs must be backed by the scenario's recorded
                 # open facts: live_sidecar opens require the actor in
@@ -1383,6 +1656,15 @@ def assess(matrix_paths, crash_paths):
                 binaries.get("fixture_tool"), str):
             fixture_paths.add(os.path.realpath(binaries["fixture_tool"]))
 
+    # argv-era detection at the battery level: the post-regen runner
+    # writes per-case actor argv; if ANY supplied matrix report is
+    # argv-era, every matrix report of the revision must carry argv on
+    # every PASS case (a future report without argv fails after regen;
+    # the fully pre-argv committed evidence passes until regen).
+    battery_argv_era = any(
+        _report_carries_argv(_load_report(path, []))
+        for path in matrix_paths)
+
     seen_matrices = {}
     matrix_stats = {}
     for path in matrix_paths:
@@ -1390,7 +1672,8 @@ def assess(matrix_paths, crash_paths):
         if report is None:
             continue
         matrix, evidence, stats, _ = matrix_evidence(
-            path, report, implementation_of, fixture_paths, problems)
+            path, report, implementation_of, fixture_paths,
+            battery_argv_era, problems)
         if matrix in REQUIRED_MATRICES:
             if matrix in seen_matrices:
                 problems.append(
@@ -1557,60 +1840,136 @@ def _self_test():
                                  "reservation retained",
                                  "resolve truthful",
                                  "reopen ok")):
-        crash_kinds = ("publication_temp", "publication_reservation",
-                       "authorized_scratch")
-        scenarios = []
         sha_of = {"rust": "1" * 64, "go": "2" * 64}
-        for i, (p, c) in enumerate(zip(producers, consumers)):
-            scenarios.append({
+        scenarios = []
+
+        def scenario(i, p, c, shape):
+            """One PASS scenario mirroring the committed crash shapes.
+
+            The operation lists and lineage ordinals are method-capable
+            for the kinds the shape observes (CRASH_CREATE_METHODS /
+            CRASH_OPEN_METHODS): A observes the publish residue
+            (current.publish), B the live sidecar (initialize_live /
+            live database.info / reader.open), C the recovery scratch
+            (recover), E the export partial output (export writer).
+            """
+            state = {
+                "A": {"class": "absent_after_crash", "exists": False,
+                      "reservation_basename": [".reservation.tmp"],
+                      "publish_temp_basenames": [".publication.tmp"]},
+                "B": {"class": "main_unchanged_sidecar_present",
+                      "exists": True},
+                "C": {"class": "scratch_residue", "exists": True,
+                      "scratch_basenames": ["scratch-1.tmp"],
+                      "publish_temp_basenames": [".publication.tmp"]},
+                "E": {"class": "export_partial_output",
+                      "dest_absent_after_crash": True,
+                      "export_temp_basenames": ["out.d.txt.tmp"]},
+            }[shape]
+            outcome = {
+                "A": {"before_resolution": {"code": "invalid_path",
+                                            "outcome": "not_started"},
+                      "after_resolution": {"database_id": "doctored",
+                                           "transaction_id": "1"}},
+                "B": {"live": {"database_id": "doctored",
+                               "transaction_id": "2"},
+                      "immutable": {"code": "wrong_state",
+                                    "outcome": "read_only_failure"}},
+                "C": {"before_resolution": {"code": "invalid_path",
+                                            "outcome": "not_started"}},
+                "E": {"before_resolution": {"opened_complete_destination":
+                                            True, "reader_closed": True}},
+            }[shape]
+            producer_ops = {
+                "A": ["iprange.v1.current.publish",
+                      "iprange.v1.maintenance.list",
+                      "iprange.v1.publication.inspect",
+                      "iprange.v1.publication.resolve",
+                      "iprange.v1.publication.inspect",
+                      "iprange.v1.maintenance.list"],
+                "B": ["iprange.v1.database.initialize_live",
+                      "iprange.v1.database.info",
+                      "iprange.v1.database.info",
+                      "iprange.v1.maintenance.list",
+                      "iprange.v1.database.live_residue.resolve",
+                      "iprange.v1.database.info"],
+                "C": ["iprange.v1.current.publish",
+                      "iprange.v1.recovery.inspect",
+                      "iprange.v1.recover",
+                      "iprange.v1.maintenance.list",
+                      "iprange.v1.maintenance.remove",
+                      "iprange.v1.maintenance.list"],
+                "E": ["iprange.v1.current.publish",
+                      "iprange.v1.export",
+                      "iprange.v1.export",
+                      "iprange.v1.export"],
+            }[shape]
+            consumer_ops = {
+                "A": ["iprange.v1.reader.open", "iprange.v1.reader.open"],
+                "B": ["iprange.v1.reader.open", "iprange.v1.reader.open"],
+                "C": ["iprange.v1.reader.open"],
+                "E": ["iprange.v1.reader.open", "iprange.v1.reader.close"],
+            }[shape]
+            main_open_ordinal = {"A": 1, "B": 0, "C": None, "E": 0}[shape]
+            kinds = {}
+            if shape == "A":
+                kinds["publication_reservation"] = {
+                    "created_by": ["producer.0"], "opened_by": []}
+                kinds["publication_temp"] = {
+                    "created_by": ["producer.0"], "opened_by": []}
+                kinds["v4_main"] = {
+                    "created_by": ["producer.0"],
+                    "opened_by": ["consumer.1"]}
+            if shape == "B":
+                kinds["live_sidecar"] = {
+                    "created_by": ["producer.0"],
+                    "opened_by": ["producer.5", "consumer.0"]}
+                kinds["v4_main"] = {"created_by": [], "opened_by": []}
+            if shape == "C":
+                kinds["authorized_scratch"] = {
+                    "created_by": ["producer.2"], "opened_by": []}
+                kinds["publication_temp"] = {
+                    "created_by": ["producer.2"], "opened_by": []}
+                kinds["v4_main"] = {"created_by": ["producer.0"],
+                                    "opened_by": []}
+            if shape == "E":
+                kinds["adapter_output"] = {
+                    "created_by": ["producer.2"],
+                    "opened_by": ["producer.2"]}
+                kinds["v4_main"] = {
+                    "created_by": ["producer.0"],
+                    "opened_by": ["consumer.0"]}
+            live_reader_opens = (
+                {"producer": 5, "consumer": 0} if shape == "B" else {})
+            adapter_output_opens = (
+                {"producer": 2} if shape == "E" else {})
+            reopen_outcome = dict(outcome)
+            if main_open_ordinal is not None:
+                reopen_outcome["consumer_main_open_ordinal"] = (
+                    main_open_ordinal)
+            return {
                 "scenario": f"S{i}.{p}->{c}", "pass": True,
                 "producer": f"{p}:{BINARY_PATHS[p]}",
                 "producer_sha256": sha_of[p],
                 "consumer": f"{c}:{BINARY_PATHS[c]}",
                 "consumer_sha256": sha_of[c],
+                "fixture_created_main": shape == "B",
                 "assertions": list(assertions),
                 "failures": [],
-                "destination_state": {
-                    "class": "absent_after_crash", "exists": False,
-                    "reservation_basename": [".reservation.tmp"],
-                    "publish_temp_basenames": [".publication.tmp"],
-                    "recorded_output_sha512": "0" * 128,
-                },
-                "reopen_outcome": {
-                    "before_resolution": {"code": "invalid_path",
-                                          "outcome": "not_started"},
-                    "after_resolution": {"database_id": "doctored",
-                                         "transaction_id": "1"},
-                },
-                "operations": {
-                    "producer": ["iprange.v1.database.create",
-                                 "iprange.v1.publication.resolve"],
-                    "consumer": ["iprange.v1.reader.open",
-                                 "iprange.v1.publication.inspect"],
-                },
-                "live_reader_opens": {"producer": True,
-                                      "consumer": True},
-                "adapter_output_opens": {"producer": True},
-                "kinds": {
-                    kind: {"created_by": ["producer.0"],
-                           "opened_by": []}
-                    for kind in crash_kinds},
-            })
-            # Every scenario truthfully records the open-contract
-            # kinds: v4_main (consumer reopen), live_sidecar (the
-            # live reader opens of both actors), and adapter_output
-            # (the producer's export writer open).  The two directions
-            # span both languages.
-            scenario = scenarios[-1]
-            scenario["kinds"]["v4_main"] = {
-                "created_by": ["producer.0"],
-                "opened_by": ["consumer.0"]}
-            scenario["kinds"]["live_sidecar"] = {
-                "created_by": ["producer.0"],
-                "opened_by": ["producer.0", "consumer.0"]}
-            scenario["kinds"]["adapter_output"] = {
-                "created_by": ["producer.0"],
-                "opened_by": ["producer.0"]}
+                "destination_state": state,
+                "reopen_outcome": reopen_outcome,
+                "operations": {"producer": producer_ops,
+                               "consumer": consumer_ops},
+                "live_reader_opens": live_reader_opens,
+                "adapter_output_opens": adapter_output_opens,
+                "kinds": kinds,
+            }
+
+        index = 0
+        for p, c in zip(producers, consumers):
+            for shape in ("A", "B", "C", "E"):
+                scenarios.append(scenario(index, p, c, shape))
+                index += 1
         return {"schema": "iprange-cli-crash-report-v1",
                 "binaries": dict(CRASH_BINARIES),
                 "command": [
@@ -1637,27 +1996,40 @@ def _self_test():
         """One PASS case whose per-case ledger shows the four matrix
         kinds created by this matrix's actors and opened by its
         consumer wherever the kind has a cross-process open contract;
-        the crash battery supplies the three crash-only kinds.  The
-        case records
-        the executed actor implementations, executed-step counts and
-        SHA-256 values (both binaries for a mixed matrix, the one
-        binary for a single-language matrix), anchored in the report's
+        the crash battery supplies the three crash-only kinds.  Every
+        ref names a method that is create/open-capable for the kind
+        and actor (MATRIX_CREATE_METHODS / MATRIX_OPEN_METHODS), and
+        the case records the executed actor implementations,
+        executed-step counts, SHA-256 values and the argv realpath of
+        the binary that served each role, anchored in the report's
         binaries block, so language attribution never depends on the
         top-level label."""
         ledger = {}
         for i, kind in enumerate([
                 "v4_main", "live_sidecar", "adapter_output",
                 "metadata_delivery"]):
+            created = {
+                "v4_main": "producer.iprange.v1.database.create",
+                "live_sidecar": "producer.iprange.v1.database.create",
+                "adapter_output": "producer.iprange.v1.export",
+                "metadata_delivery":
+                    "consumer.iprange.v1.database.metadata.get",
+            }[kind]
+            # Only kinds with a v1 cross-process open contract record
+            # openers.  adapter_output has NO matrix-side opener record
+            # (the only adapter-output opener is the producer export
+            # writer the crash battery observes) and metadata_delivery
+            # has no open contract, so both truthfully record none.
+            opened = {
+                "v4_main": ["consumer.iprange.v1.reader.open"],
+                "live_sidecar": ["consumer.iprange.v1.reader.open"],
+                "adapter_output": [],
+                "metadata_delivery": [],
+            }[kind]
             ledger[f"k{i}.bin"] = {
                 "kind": kind,
-                "created_by": ["producer.iprange.v1.selftest"],
-                # Only kinds with a v1 cross-process open contract
-                # (v4_main, live_sidecar, adapter_output) record
-                # openers; metadata_delivery has no open contract and
-                # truthfully records none.
-                "opened_by": (["consumer.iprange.v1.selftest"]
-                              if kind in ("v4_main", "live_sidecar",
-                                          "adapter_output") else []),
+                "created_by": [created],
+                "opened_by": opened,
             }
         expected = ACTOR_LANGUAGES[matrix]
         actor_sha = {"rust": "1" * 64, "go": "2" * 64}
@@ -1667,19 +2039,24 @@ def _self_test():
                 "producer": {
                     "sha256": actor_sha[expected["producer"]],
                     "implementation": expected["producer"],
+                    "argv": BINARY_PATHS[expected["producer"]],
                     "steps": 1,
-                    "operations": ["iprange.v1.selftest"],
+                    "operations": ["iprange.v1.database.create",
+                                   "iprange.v1.export"],
                 },
                 "consumer": {
                     "sha256": actor_sha[expected["consumer"]],
                     "implementation": expected["consumer"],
+                    "argv": BINARY_PATHS[expected["consumer"]],
                     "steps": 1,
-                    "operations": ["iprange.v1.selftest"],
+                    "operations": ["iprange.v1.reader.open",
+                                   "iprange.v1.database.metadata.get"],
                 },
             },
             "file_kinds": ledger}], failed=0)
         report["binaries"] = BINARIES
         return report
+
 
     with tempfile.TemporaryDirectory() as work:
         green = {}
@@ -2099,8 +2476,8 @@ def _self_test():
         fab_open = green_report("go")
         fab_open["cases"][0]["file_kinds"]["fab.bin"] = {
             "kind": "publication_temp",
-            "created_by": ["producer.iprange.v1.selftest"],
-            "opened_by": ["consumer.iprange.v1.selftest"]}
+            "created_by": ["producer.iprange.v1.export"],
+            "opened_by": ["consumer.iprange.v1.reader.open"]}
         fab_open_path = os.path.join(work, "fabricated-open.json")
         assign(fab_open_path, fab_open)
         problems, _c, _s = assess(
@@ -2349,7 +2726,7 @@ def _self_test():
         #     fails the gate.
         beyond_ops = crash_report(["rust", "go"], ["go", "rust"])
         beyond_ops["scenarios"][0]["kinds"]["publication_reservation"][
-            "created_by"] = ["producer.5"]
+            "created_by"] = ["producer.9"]
         beyond_ops_path = os.path.join(work, "crash-ordinal.json")
         assign(beyond_ops_path, beyond_ops)
         problems, _c, _s = assess(four, [beyond_ops_path])
@@ -2494,6 +2871,143 @@ def _self_test():
                         "consumer.1"]
         genuine_mutation_fails("false-main-open-operation",
                                false_main_open)
+
+        # 35. Matrix argv anchor (wave-10): the requirement is
+        #     conditional -- a fully pre-argv battery passes until the
+        #     wave regen, but an argv-era battery requires every PASS
+        #     case to carry actors.<role>.argv whose realpath names
+        #     the report binary that served the role.  A PASS case
+        #     without argv and an argv naming a different binary both
+        #     fail the gate.
+        preargv = {}
+        for m in REQUIRED_MATRICES:
+            preargv_report = green_report(m)
+            for actor in preargv_report["cases"][0]["actors"].values():
+                del actor["argv"]
+            preargv[m] = os.path.join(work, f"preargv-{m}.json")
+            assign(preargv[m], preargv_report)
+        problems, _c, _s = assess(
+            [preargv[m] for m in REQUIRED_MATRICES], [crash_path])
+        assert not problems, (
+            f"fully pre-argv battery failed the conditional argv rule: "
+            f"{problems}")
+
+        no_argv = green_report("go")
+        del no_argv["cases"][0]["actors"]["producer"]["argv"]
+        no_argv_path = os.path.join(work, "no-argv.json")
+        assign(no_argv_path, no_argv)
+        problems, _c, _s = assess(
+            [green["rust"], no_argv_path, green["rust_to_go"],
+             green["go_to_rust"]], [crash_path])
+        assert problems and any("records no argv" in p for p in problems), (
+            f"argv-less PASS case did not fail the gate: {problems}")
+
+        bad_argv = green_report("rust")
+        bad_argv["cases"][0]["actors"]["producer"]["argv"] = BINARY_PATHS["go"]
+        bad_argv_path = os.path.join(work, "bad-argv.json")
+        assign(bad_argv_path, bad_argv)
+        problems, _c, _s = assess(
+            [bad_argv_path, green["go"], green["rust_to_go"],
+             green["go_to_rust"]], [crash_path])
+        assert problems and any("argv" in p
+                                and "does not resolve" in p
+                                for p in problems), (
+            f"argv naming a different binary did not fail the gate: "
+            f"{problems}")
+
+        # 36. Command-path realpath symmetry (wave-10): recorded
+        #     commands may name a symlink to the recorded binary; both
+        #     the crash command and the matrix command resolve it to
+        #     the real binary path (realpath on both sides), exactly
+        #     like the matrix binding.  A symlink to another role's
+        #     binary still fails.
+        rust_link = os.path.join(work, "rust-iprange-link")
+        go_link = os.path.join(work, "go-iprange-link")
+        os.symlink(BINARY_PATHS["rust"], rust_link)
+        os.symlink(BINARY_PATHS["go"], go_link)
+        link_crash = crash_report(["rust", "go"], ["go", "rust"])
+        link_crash["command"][
+            link_crash["command"].index("--producer") + 1] = rust_link
+        link_crash_path = os.path.join(work, "crash-symlink.json")
+        assign(link_crash_path, link_crash)
+        problems, _c, _s = assess(four, [link_crash_path])
+        assert not problems, (
+            f"crash command symlink to the recorded binary failed the "
+            f"gate: {problems}")
+        link_matrix = green_report("rust_to_go")
+        link_matrix["command"][
+            link_matrix["command"].index("--go") + 1] = go_link
+        link_matrix_path = os.path.join(work, "matrix-symlink.json")
+        assign(link_matrix_path, link_matrix)
+        problems, _c, _s = assess(
+            [green["rust"], green["go"], link_matrix_path,
+             green["go_to_rust"]], [crash_path])
+        assert not problems, (
+            f"matrix command symlink to the recorded binary failed the "
+            f"gate: {problems}")
+        wrong_link_crash = crash_report(["rust", "go"], ["go", "rust"])
+        wrong_link_crash["command"][
+            wrong_link_crash["command"].index("--consumer") + 1] = rust_link
+        wrong_link_path = os.path.join(work, "crash-wrong-symlink.json")
+        assign(wrong_link_path, wrong_link_crash)
+        problems, _c, _s = assess(four, [wrong_link_path])
+        assert problems and any("does not name the report root binaries "
+                                "table path" in p for p in problems), (
+            f"crash command symlink to another role's binary did not "
+            f"fail the gate: {problems}")
+        false_link = os.path.join(work, "false-link")
+        os.symlink("/bin/false", false_link)
+        false_crash = crash_report(["rust", "go"], ["go", "rust"])
+        false_crash["command"][
+            false_crash["command"].index("--producer") + 1] = false_link
+        false_crash_path = os.path.join(work, "crash-false-symlink.json")
+        assign(false_crash_path, false_crash)
+        problems, _c, _s = assess(four, [false_crash_path])
+        assert problems and any("does not name the report root binaries "
+                                "table path" in p for p in problems), (
+            f"crash command symlink to /bin/false did not fail the gate: "
+            f"{problems}")
+
+        # 37. The verified crash-side forgery classes (wave-10): on
+        #     the GENUINE evidence, crediting current.publish with the
+        #     recovery scratch creator (scenario C) and
+        #     maintenance.list with a live sidecar open (scenario B)
+        #     is fabricated lineage and fails the gate.
+        def forged_create_credit(matrices, crash):
+            for scenario in crash["scenarios"]:
+                if scenario["scenario"].startswith("C."):
+                    scenario["kinds"]["authorized_scratch"][
+                        "created_by"] = ["producer.0"]
+        genuine_mutation_fails("fabricated-create-credit",
+                               forged_create_credit)
+
+        def forged_live_sidecar_open(matrices, crash):
+            for scenario in crash["scenarios"]:
+                if scenario["scenario"].startswith("B."):
+                    scenario["kinds"]["live_sidecar"][
+                        "opened_by"] = ["producer.3"]
+        genuine_mutation_fails("fabricated-sidecar-open",
+                               forged_live_sidecar_open)
+
+        # 38. Matrix-side capability enforcement: a RECORDED consumer
+        #     method that is not open-capable for live_sidecar (the
+        #     workflow.publisher consumer records maintenance.list but
+        #     the live_sidecar opener contract never credits it) is a
+        #     fabricated matrix open on GENUINE evidence.
+        def forged_matrix_sidecar_open(matrices, crash):
+            for report in matrices:
+                for case in report["cases"]:
+                    if case.get("status") != "PASS":
+                        continue
+                    if case.get("name") != "workflow.publisher":
+                        continue
+                    case["file_kinds"]["wf-fake.bin"] = {
+                        "kind": "live_sidecar",
+                        "created_by": ["producer.iprange.v1.database.create"],
+                        "opened_by": [
+                            "consumer.iprange.v1.maintenance.list"]}
+        genuine_mutation_fails("matrix-sidecar-open-capability",
+                               forged_matrix_sidecar_open)
 
 
 if __name__ == "__main__":

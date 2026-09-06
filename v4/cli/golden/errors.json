@@ -1,0 +1,51 @@
+{
+ "schema": "iprange-golden-v1",
+ "family": "errors",
+ "note": "Invalid-notification contract (D3, wave-10): an id-less non-cancel request is not executed and is answered with one -32600 whose id is null; inside a batch the whole batch is rejected with one -32600 id:null and healthy siblings are not executed (spec requests section).",
+ "exchanges": [
+  {
+   "request": {
+    "jsonrpc": "2.0",
+    "method": "iprange.v1.system.describe",
+    "params": {}
+   },
+   "expect_error": {
+    "error": {
+     "code": -32600,
+     "message": "notifications are not accepted except iprange.v1.cancel"
+    },
+    "id": null,
+    "jsonrpc": "2.0"
+   }
+  },
+  {
+   "request": [
+    {
+     "jsonrpc": "2.0",
+     "id": "ok1",
+     "method": "iprange.v1.system.describe",
+     "params": {}
+    },
+    {
+     "jsonrpc": "2.0",
+     "method": "iprange.v1.system.describe",
+     "params": {}
+    },
+    {
+     "jsonrpc": "2.0",
+     "id": "ok2",
+     "method": "iprange.v1.system.describe",
+     "params": {}
+    }
+   ],
+   "expect_error": {
+    "error": {
+     "code": -32600,
+     "message": "notifications are not accepted except iprange.v1.cancel"
+    },
+    "id": null,
+    "jsonrpc": "2.0"
+   }
+  }
+ ]
+}

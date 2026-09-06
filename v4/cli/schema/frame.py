@@ -246,10 +246,12 @@ def decode_response(text):
     if "id" not in value:
         raise FrameError(STD_INVALID_REQUEST, "response id is required")
     if value["id"] is None:
-        # The spec blesses id:null only for the transport frame-too-large
-        # response (-32001); every other response must echo a real id.
+        # The spec blesses id:null for responses whose id cannot be
+        # echoed: the transport frame-too-large response (-32001) and
+        # the invalid-notification response (-32600, an id-less
+        # non-cancel request is answered with id null).
         err = value.get("error") or {}
-        if err.get("code") != TRANSPORT_FRAME_TOO_LARGE:
+        if err.get("code") not in (TRANSPORT_FRAME_TOO_LARGE, STD_INVALID_REQUEST):
             raise FrameError(STD_INVALID_REQUEST, "response id must be a string or integral number")
     else:
         _validate_id(value["id"])

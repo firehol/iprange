@@ -116,6 +116,16 @@ LIVE_SIDECAR_SUFFIX = ".readers"
 RESERVATION_MAGIC = b"IPR4RSV1"
 SIDECAR_MAGIC = b"IPRDRS4\x00"
 
+# Stall guard for every JSON-RPC service this harness spawns (run.py
+# parity with resource_harness.py).  Each bound applies to ONE read or
+# ONE write operation, never to a whole run: normal calls complete in
+# milliseconds.  Crash scenarios kill the producer mid-request, so the
+# bounded client must fail the stalled operation instead of blocking
+# on the pipe forever; a silent-but-alive binary must not hang the
+# harness.
+CRASH_IO_DEADLINE_SECONDS = 120.0
+
+
 # Marker polling: the reservation/sidecar file is the durable record
 # only once its header block is on disk; the poll loop reads 8-16
 # header bytes per iteration and kills within a fraction of a
@@ -265,9 +275,12 @@ class KillableJsonRpcService(run.JsonRpcService):
     exactly like the normal client.
     """
 
-    def __init__(self, argv, implementation, *, cwd=None):
+    def __init__(self, argv, implementation, *, cwd=None,
+                 read_deadline=None, write_deadline=None):
         super().__init__(argv, implementation, cwd=cwd,
-                         start_new_session=True)
+                         start_new_session=True,
+                         read_deadline=read_deadline,
+                         write_deadline=write_deadline)
         record_spawn(self.proc)
 
     def call(self, request_id, method, params):
@@ -667,7 +680,9 @@ def probe_consumer_open(consumer, work, dest, scenario_report,
 
     consumer_service = HarnessJsonRpcService(
         [consumer, "--jsonrpc"], f"consumer-{os.path.basename(work)}",
-        cwd=work)
+        cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         reader_open = consumer_service.call(
             "ro", "iprange.v1.reader.open",
@@ -737,7 +752,9 @@ def resolve_interrupted_publication(producer, consumer, work, dest,
 
     resolver = HarnessJsonRpcService(
         [producer, "--jsonrpc"], f"resolver-{os.path.basename(work)}",
-        cwd=work)
+        cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         reports, error = maintenance_reports(
             resolver, work, os.path.join(work, "pre.jsonl"),
@@ -848,7 +865,9 @@ def resolve_interrupted_publication(producer, consumer, work, dest,
 
         consumer_service = HarnessJsonRpcService(
             [consumer, "--jsonrpc"], f"consumer2-{os.path.basename(work)}",
-            cwd=work)
+            cwd=work,
+            read_deadline=CRASH_IO_DEADLINE_SECONDS,
+            write_deadline=CRASH_IO_DEADLINE_SECONDS)
         try:
             reopened = consumer_service.call(
                 "8", "iprange.v1.reader.open",
@@ -890,7 +909,9 @@ def scenario_a1(direction, producer, consumer, work_dir, scenario_report):
     params = publish_params(feed, dest, "fail_if_exists")
 
     producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         outcome, seen_ms, thread = call_with_worker(
             producer_service, "1", "iprange.v1.current.publish", params,
@@ -971,7 +992,9 @@ def scenario_a2(direction, producer, consumer, work_dir, scenario_report):
 
     # Build the pre-crash destination with a completed publish.
     builder = HarnessJsonRpcService(
-        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         built = builder.call("1", "iprange.v1.current.publish", prior_params)
         assert_truthful(
@@ -987,7 +1010,9 @@ def scenario_a2(direction, producer, consumer, work_dir, scenario_report):
     replace_params = publish_params(feed, dest, "replace_existing")
 
     producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         outcome, seen_ms, thread = call_with_worker(
             producer_service, "9", "iprange.v1.current.publish",
@@ -1192,7 +1217,9 @@ def scenario_a3(direction, producer, consumer, work_dir, fixture_tool,
     prior_params = publish_params(prior_feed, dest, "fail_if_exists")
 
     builder = HarnessJsonRpcService(
-        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         built = builder.call("1", "iprange.v1.current.publish", prior_params)
         assert_truthful(
@@ -1208,7 +1235,9 @@ def scenario_a3(direction, producer, consumer, work_dir, fixture_tool,
     replace_params = publish_params(feed, dest, "replace_existing")
 
     producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         outcome, seen_ms, thread = call_with_worker(
             producer_service, "9", "iprange.v1.current.publish",
@@ -1290,7 +1319,9 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
     scenario_report["fixture_created_main"] = True
 
     producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         outcome, seen_ms, thread = call_with_worker(
             producer_service, "9", "iprange.v1.database.initialize_live",
@@ -1324,7 +1355,9 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
         }
 
         resolver = HarnessJsonRpcService(
-            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work)
+            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work,
+            read_deadline=CRASH_IO_DEADLINE_SECONDS,
+            write_deadline=CRASH_IO_DEADLINE_SECONDS)
         try:
             # Both database.info modes truthfully refuse an interrupted
             # transition (no false success before resolution).
@@ -1404,7 +1437,9 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
             _record_live_open(scenario_report, "producer")
             info_facts = info["result"].get("info", {})
             consumer_service2 = HarnessJsonRpcService(
-                [consumer, "--jsonrpc"], f"consumer2-{direction}", cwd=work)
+                [consumer, "--jsonrpc"], f"consumer2-{direction}", cwd=work,
+                read_deadline=CRASH_IO_DEADLINE_SECONDS,
+                write_deadline=CRASH_IO_DEADLINE_SECONDS)
             try:
                 open_live = consumer_service2.call(
                     "6", "iprange.v1.reader.open",
@@ -1478,7 +1513,9 @@ def scenario_c(direction, producer, consumer, work_dir, scenario_report):
     params = publish_params(feed, source, "fail_if_exists")
 
     builder = HarnessJsonRpcService(
-        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         built = builder.call("1", "iprange.v1.current.publish", params)
         assert_truthful(
@@ -1495,7 +1532,9 @@ def scenario_c(direction, producer, consumer, work_dir, scenario_report):
         stream.truncate(os.path.getsize(source) - 4096)
 
     producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         inspect = producer_service.call(
             "2", "iprange.v1.recovery.inspect",
@@ -1555,7 +1594,9 @@ def scenario_c(direction, producer, consumer, work_dir, scenario_report):
         }
 
         resolver = HarnessJsonRpcService(
-            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work)
+            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work,
+            read_deadline=CRASH_IO_DEADLINE_SECONDS,
+            write_deadline=CRASH_IO_DEADLINE_SECONDS)
         try:
             # The fresh process lists exactly the on-disk abandoned
             # scratch; the attempt ID embedded in the basename is the
@@ -1738,7 +1779,9 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
     # range_record_count == line count, deterministic lookup
     # spot-check) that the interrupted run must prove absent.
     control_service = HarnessJsonRpcService(
-        [producer, "--jsonrpc"], f"control-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"control-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         initialized = control_service.call(
             "1", "iprange.v1.database.initialize_live",
@@ -1813,7 +1856,9 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
         control_service.close()
 
     producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         initialized = producer_service.call(
             "1", "iprange.v1.database.initialize_live",
@@ -1892,7 +1937,9 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
         }
 
         resolver = HarnessJsonRpcService(
-            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work)
+            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work,
+            read_deadline=CRASH_IO_DEADLINE_SECONDS,
+            write_deadline=CRASH_IO_DEADLINE_SECONDS)
         try:
             info_live = resolver.call(
                 "5", "iprange.v1.database.info",
@@ -1985,7 +2032,9 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                 "maintenance_list_pre": reports}
 
             consumer_service = HarnessJsonRpcService(
-                [consumer, "--jsonrpc"], f"consumer-{direction}", cwd=work)
+                [consumer, "--jsonrpc"], f"consumer-{direction}", cwd=work,
+                read_deadline=CRASH_IO_DEADLINE_SECONDS,
+                write_deadline=CRASH_IO_DEADLINE_SECONDS)
             try:
                 open_live = consumer_service.call(
                     "9", "iprange.v1.reader.open",
@@ -2113,7 +2162,9 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
     params = publish_params(feed, source, "fail_if_exists")
 
     builder = HarnessJsonRpcService(
-        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         built = builder.call("1", "iprange.v1.current.publish", params)
         assert_truthful(
@@ -2128,7 +2179,9 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
     # Reference export: the exact complete destination bytes.
     ref_path = os.path.join(work, "ref.txt")
     ref_service = HarnessJsonRpcService(
-        [producer, "--jsonrpc"], f"ref-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"ref-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         reference = ref_service.call(
             "2", "iprange.v1.export", export_params(source, ref_path))
@@ -2143,7 +2196,9 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
 
     dest = os.path.join(work, "out.txt")
     producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         outcome, seen_ms, thread = call_with_worker(
             producer_service, "3", "iprange.v1.export",
@@ -2197,7 +2252,9 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
         }
 
         resolver = HarnessJsonRpcService(
-            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work)
+            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work,
+            read_deadline=CRASH_IO_DEADLINE_SECONDS,
+            write_deadline=CRASH_IO_DEADLINE_SECONDS)
         try:
             retried = resolver.call(
                 "4", "iprange.v1.export", export_params(source, dest))
@@ -2395,7 +2452,9 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
     params = publish_params(feed, source, "fail_if_exists")
 
     builder = HarnessJsonRpcService(
-        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"builder-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         built = builder.call("1", "iprange.v1.current.publish", params)
         assert_truthful(
@@ -2422,7 +2481,9 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
 
     ref_path = os.path.join(work, "ref-findings.jsonl")
     ref_service = HarnessJsonRpcService(
-        [producer, "--jsonrpc"], f"ref-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"ref-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         reference = ref_service.call(
             "2", "iprange.v1.validate", validate_params(source, ref_path))
@@ -2460,7 +2521,9 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
 
     findings_out = os.path.join(work, "f.jsonl")
     producer_service = KillableJsonRpcService(
-        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work)
+        [producer, "--jsonrpc"], f"producer-{direction}", cwd=work,
+        read_deadline=CRASH_IO_DEADLINE_SECONDS,
+        write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
         outcome, seen_ms, thread = call_with_worker(
             producer_service, "3", "iprange.v1.validate",
@@ -2534,7 +2597,9 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
         }
 
         resolver = HarnessJsonRpcService(
-            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work)
+            [producer, "--jsonrpc"], f"resolver-{direction}", cwd=work,
+            read_deadline=CRASH_IO_DEADLINE_SECONDS,
+            write_deadline=CRASH_IO_DEADLINE_SECONDS)
         try:
             fresh_path = os.path.join(work, "fresh-findings.jsonl")
             fresh = resolver.call(
@@ -2615,7 +2680,10 @@ def product_implementation(binary, fallback):
     """
 
     try:
-        service = run.JsonRpcService([binary, "--jsonrpc"], "probe")
+        service = run.JsonRpcService(
+            [binary, "--jsonrpc"], "probe",
+            read_deadline=CRASH_IO_DEADLINE_SECONDS,
+            write_deadline=CRASH_IO_DEADLINE_SECONDS)
         try:
             outcome, _seen_ms, thread = call_with_worker(
                 service, "implementation-probe",

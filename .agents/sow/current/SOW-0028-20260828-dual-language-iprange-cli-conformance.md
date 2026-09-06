@@ -75,6 +75,13 @@ user as an independent check.
 
 Status: in-progress
 
+Wave-10 state (2026-09-06): first role-based review round FAILed with
+eleven verified findings; all four user decisions (D1-A, D2-A, D3-A,
+D4-A) approved; the repairs, regenerated evidence, and gate
+validations are recorded in the Tenth wave section below.  The wave-10
+role round and the Windows-host regeneration are pending at the wave
+HEAD.
+
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -5402,3 +5409,321 @@ The five own-model scope reviews and the glm-5.3-responses
 whole-milestone review run at the exact final revision of this wave
 with no later repository commits; their verdicts and the
 milestone-4 close decision are recorded here when they land.
+
+## Tenth wave (2026-09-06) — first role-based review round at `d6f757c3`
+
+This is the first round run under the approved role-based review
+protocol (seven standing roles with sandboxes under `.local/`,
+recorded above).  The round covered the exact ninth-wave revision
+`d6f757c3` with the staged binaries in
+`.local/shared/binaries/SHASUMS.txt` (rust `58036aee…`, go
+`f3e9f1e4…`, go worker `202a83ac…`, rust worker `cb9ad6cd…`,
+fixture `7c616793…`).
+
+### Verdict: FAIL
+
+Six roles returned: parity (FAIL), performance (FAIL), operations
+(FAIL), security (FAIL), tester (FAIL), portability (FAIL).  The
+glm-5.3-responses whole-milestone validator confirmed the Windows
+provenance finding and no additional distinct issue.  Every blocking
+finding below was independently reproduced by the lead at `d6f757c3`
+before being recorded.
+
+### Verified blocking findings
+
+1. P1 — termination signals are ignored while the transport is
+   wedged, in both products (performance; lead-reproduced 4/4).
+   Trigger: ~2,000 pipelined `system.describe` frames, stdout
+   unread, stdin held open.  Within ~1 s the worker is blocked on
+   the full 64 KiB stdout pipe, the main loop on the full work
+   queue, the reader on the full 64-slot events channel.  In that
+   state SIGINT/SIGTERM never terminates the process (only SIGKILL
+   works).  Cause: every fatal report crosses the full events
+   channel; the ninth-wave repair makes reports abortable only once
+   shutdown begins, which cannot happen in the wedge.  Go:
+   `v4/go/internal/cli/rpc/session.go:279-290, 428-435`; Rust:
+   `v4/rust/iprange-cli/src/rpc/session.rs:966-979`.  No committed
+   test sends a termination signal to either session.
+
+2. P2 — Rust fatal-report retry is a no-yield busy-spin
+   (performance; code-verified).  `session.rs:597-614` retries
+   `try_send` in a tight loop with no `yield_now()`; in the
+   Finding-1 state it can burn one core indefinitely.
+
+3. P2 — Go broken-stdout exit is a runtime SIGPIPE death, not the
+   session fatal path (performance; lead-reproduced).  Close stdout
+   mid-flood: Go dies `rc=-13` with no stderr, Rust exits 1 with
+   `iprange: Broken pipe (os error 32)`.  Non-zero either way, but
+   the wave narrative attributes the Go exit to `control.fatalWrite`
+   and cleanup, which is EPIPE-false (`/dev/full` floods do use it).
+
+4. P2 — busy/reject accounting diverges ~2.4× between products on
+   identical pipelined floods (parity; lead-reproduced).  3,000
+   frames: Rust 446 result / 2,554 busy; Go 1,087 / 1,913.  512
+   frames: Rust 113/399, Go 143/369.  Both products stay within the
+   documented 1-active + 16-queued bound at every instant, and the
+   deterministic slow-member case (resource proof-a) is identical in
+   both; the distribution of which requests are rejected is not a
+   committed contract and has no detecting test.
+
+5. P2 — the kind gate accepts a fabricated cross-language matrix
+   whose "rust consumer" never executed (parity, tester; lead-
+   reproduced, gate exit 0).  Genuine Go-run case records relabeled
+   to `go->rust` with a genuine rust sha from the same report's
+   binaries block pass every check.  `check_kind_coverage.py`
+   derives attribution from attacker-controlled report labels with
+   no per-case execution anchor.
+
+6. P2 — the kind gate accepts fabricated crash-side lineage
+   (operations; lead-reproduced 2/3 mutation classes).
+   `authorized_scratch.created_by = ["producer.0"]` (`current.publish`
+   credited as recovery-scratch creator) and
+   `live_sidecar.opened_by = ["producer.3"]` (`maintenance.list`
+   credited as a live open) pass.  Capability enforcement exists
+   only for `v4_main` opens
+   (`check_kind_coverage.py:192-200`); the create side and the
+   multi-writer open kinds have none.  (The operations report's
+   third claim — a matrix `system.describe` creator credit — is NOT
+   reproducible: the gate rejects it at `d6f757c3`.)
+
+7. P2 — a fully consistent fixture-tool forgery is accepted (tester;
+   lead-reproduced).  Changing the crash root table, the crash
+   command, and every matrix command to one nonexistent fixture path
+   with sha `"4"*64` passes; the gate never hashes or stats any
+   binary and the fixture binding is cross-report path equality
+   only.
+
+8. P2 — the deadline-bounded shared client is wired only into the
+   resource harness (operations; code-verified).  Crash-harness
+   call sites and the conformance runner construct
+   `run.JsonRpcService` without `read_deadline`/`write_deadline`
+   (`v4/cli/crash_harness.py:314-317, 668-1497`;
+   `v4/cli/run.py:1189-1199, 1660`); a product stall hangs those
+   gates forever — the exact class the ninth wave repaired on the
+   resource path.
+
+9. P2 — spec contradicts pinned behavior for id-less non-cancel
+   requests (operations; lead-reproduced).  The spec
+   (`iprange-jsonrpc-v1.md` ~line 87) says such a request "produces
+   no response"; both products answer one `-32600` with `id: null`
+   and reject the whole batch if embedded.  The shared schema pins
+   the product behavior (`v4/cli/schema/frame.py:136-144`); no test
+   pins either side.
+
+10. P1 records — the Windows qualification claim for this wave is
+    contradicted by the committed evidence (security, glm, tester,
+    portability; lead-verified).  `v4/cli/evidence/
+    windows-housekeeping.json` is byte-identical at `700e7de9` and
+    `d6f757c3` (sha `353265d4…`), records
+    `build_provenance.revision = 90a935b2` (eighth wave) and 2026-09-05
+    builds; the SOW ninth-wave section and
+    `v4/cli/evidence/README.md:126-129` claim regeneration at the
+    final product sources, which is false.  The ninth-wave session
+    repair is therefore unproven on the Windows host.
+
+11. P2 records — the Go worker hash-change explanation is false
+    (security; lead-verified).  The wave says Go worker `202a83ac…`
+    "changed with the product: it links `internal/cli/rpc`"; the
+    staged worker has 0 `internal/cli/rpc` symbols and the worker
+    tree is unchanged `90a935b2..d6f757c3`.  Worker identity is
+    build-proven, not pinned, so evidence is unaffected; the
+    explanation must be corrected.
+
+### P3 notes (recorded; fixed in passing or reported)
+
+- Parse-error `message` text differs between products (parity F3);
+  `code`/`id`/exit behavior identical; diagnostic-only.
+- Signal + EOF race can exit 0 (parity F4, operations mid-drain
+  note): identical race in both products, untested; the deterministic
+  daemon-idle case exits 1.
+- Rust `signals` module uses `unsafe` FFI outside the frozen
+  boundaries (portability, pre-existing, idiomatic
+  `pthread_sigmask`/`sigwait`; recorded for the boundary ledger).
+- `resource-record.md` peak-RSS measures runner + product child
+  together; milestone 5 must separate product attribution.
+- Crash-command binding uses `realpath(named)` vs matrix realpath-
+  vs-realpath (tester P3, genuine evidence unaffected).
+
+### Open decisions for this wave (user decision required before repair)
+
+- D1 — signal-wedge repair design (Finding 1/2).
+- D2 — busy/reject split parity contract (Finding 4).
+- D3 — id-less non-cancel contract (Finding 9).
+- D4 — Windows qualification regeneration (Finding 10).
+
+### User decisions (2026-09-06, recorded before implementation)
+
+- D1: A — graceful fatal path plus a bounded watchdog in both
+  products; the watcher records the termination signal, attempts the
+  normal cancellation/cleanup path, and force-exits non-zero with a
+  stderr diagnostic if shutdown has not begun within ~500 ms.  The
+  Rust fatal-report retry gains `yield_now()`.  Add committed
+  signal tests for idle and wedged transport states, and make a
+  signal observed before EOF always win over the EOF exit-0 path.
+- D2: A — the busy/reject distribution under sustained pressure is
+  declared non-contractual (scheduler-dependent) in the spec and
+  SOW; normative bound (1 active + 16 queued), exactly-once id
+  coverage, deterministic slow-member ordering stay tested;
+  the split is recorded as diagnostic evidence.
+- D3: A — amend the spec to the pinned behavior for id-less
+  non-cancel requests (one -32600 with id null; whole-batch
+  rejection inside a batch) and add a conformance case pinning it.
+- D4: A — regenerate the Windows host qualification on the
+  authorized validation host from the repaired wave-10 HEAD at the
+  end of the wavebinary shipment, and correct the SOW/README claims.
+
+### Repairs implemented (wave 10, committed after validation)
+
+D1-A — termination-signal contract (findings 1-3):
+- Go `v4/go/internal/cli/rpc/session.go`: the signal watcher no longer
+  selects on reader EOF, records the signal in the control plane
+  (`terminationSignal`), and arms a 500 ms watchdog that prints a
+  diagnostic and `os.Exit(1)` when the graceful fatal report cannot
+  be delivered (wedged transport).  The EOF exit path returns the
+  recorded signal error when a signal raced EOF, so a signal observed
+  before/during EOF always wins over the exit-zero path.
+- Rust `v4/rust/iprange-cli/src/rpc/session.rs`: the signal watcher
+  records `termination_signal` in the control plane and retries the
+  fatal report with explicit `yield_now()` and a 500 ms force-exit
+  deadline; the worker's fatal-report retry gains the same yield +
+  deadline; the EOF branch reports non-zero when a signal was
+  recorded.
+- Committed regressions: Go helper-process tests
+  (`TestTerminationSignalIdleExitsNonZero`,
+  `TestTerminationSignalWedgedSessionForcesNonZeroExit`,
+  `TestTerminationSignalDuringDrainWinsOverEOF`) and Rust process
+  tests (`idle_session_signal_exits_nonzero`,
+  `wedged_session_signal_forces_nonzero_exit`); the wedged-transport
+  case reproduced the P1 hang pre-fix and exits 1 post-fix at product
+  level (4/4 signal trials per product).
+- Record correction: the ninth-wave narrative attributed the Go
+  close-stdout exit to `control.fatalWrite`; the Go product dies by
+  runtime SIGPIPE (`rc=-13`, no stderr) on fd-close while Rust exits 1
+  with `Broken pipe`.  Both are non-zero transport failures; the
+  records now state the Go mechanism truthfully (evidence README
+  identity block).
+
+D2-A — busy/reject distribution (finding 4):
+- Spec `iprange-jsonrpc-v1.md` requests section: the 1-active +
+  16-queued bound is normative; the exact busy/reject distribution
+  under sustained pressure is scheduler-dependent and not part of the
+  cross-language parity contract; every request is answered exactly
+  once and accepted requests execute in admission order.
+- Wave-10 diagnostic split (3000-frame flood, 4 runs): Rust
+  468-607 result / ~2400-2500 busy; Go 1105-1289 / ~1700-1900 busy —
+  recorded as diagnostic; the deterministic slow-member ordering
+  remains covered by resource proof-a (identical in both products).
+
+D3-A — id-less non-cancel requests (finding 9):
+- Spec `iprange-jsonrpc-v1.md`: an id-less non-cancel request is an
+  invalid notification: not executed, answered with one `-32600`
+  whose id is null; inside a batch the whole batch is rejected with
+  one `-32600` id:null.
+- Shared schema `v4/cli/schema/frame.py`: `decode_response` now
+  blesses id:null for the -32600 invalid-notification response (it
+  previously allowed only -32001), matching both products and the
+  request-side schema (frame.py:136-144).
+- Pinned by committed tests in both products (Go
+  `TestIdlessNonCancelIsInvalidNotification`; Rust
+  `idless_non_cancel_is_an_invalid_notification`,
+  `batch_with_idless_member_is_rejected_as_a_whole`) and by two new
+  golden exchanges (`v4/cli/golden/errors.json`, corpus 53 -> 55;
+  `check_golden.py` extended with the `expect_error` exchange family).
+
+D4-A — Windows qualification (finding 10): regeneration on the
+authorized Windows validation host runs at the wave HEAD after the
+role round (Section below).
+
+Kind-gate hardening (findings 5-7):
+- `v4/cli/check_kind_coverage.py`: per-kind per-actor
+  method-capability maps for created_by and opened_by refs on both
+  the crash and matrix sides (derived from the genuine evidence and
+  the harness recording call sites); crash-command binding is now
+  realpath-vs-realpath; `--self-test` gained controls 35-38.
+- Per-case `actors.<role>.argv` execution anchor recorded by the
+  runner (`v4/cli/run.py`) and enforced by the gate for argv-era
+  batteries; the relabeled-matrix forgery (finding 5) is REJECTED
+  against the regenerated evidence (30 problems; pre-regen evidence
+  passes by the documented conditional rule).
+- The crash-side fabricated lineage mutations (finding 6) are
+  REJECTED (verified: `fabricated-create-credit` 3 problems,
+  `fabricated-sidecar-open` 2 problems).
+- The gate docstring now states the honest guarantee: mechanical
+  consistency and identity anchor; a fully consistent offline forgery
+  of ALL reports is caught by adversarial review reruns, and fixture
+  identity is a cross-report consistency anchor (no on-disk hash is
+  possible for committed evidence whose build paths are gone).
+
+Deadline-bounded client wiring (finding 8):
+- `v4/cli/run.py` (RUNNER_IO_DEADLINE_SECONDS=120,
+  PROBE_IO_DEADLINE_SECONDS=30) and `v4/cli/crash_harness.py`
+  (CRASH_IO_DEADLINE_SECONDS=120) pass read/write deadlines at all 30
+  service construction sites (3 runner + 27 crash harness); a stalled
+  product now fails the proof instead of hanging forever.  Named
+  constants are documented as stall guards, not performance budgets.
+
+Records corrections:
+- Go worker identity: the ninth-wave claim "changed with the product:
+  it links internal/cli/rpc" is false (0 rpc symbols; worker tree
+  unchanged `90a935b2..d6f757c3`; rebuilding the unchanged worker
+  reproduces `202a83ac…`, so the wave-8-to-wave-9 hash move was a
+  build-environment sensitivity, not a source change).  Corrected in
+  the evidence README.
+- The ninth-wave "no spec change is required" sentence is superseded
+  by the D3 spec amendment above.
+- P3 notes from the round: parse-error `message` text differs between
+  products (diagnostic-only; code/id/exit identical; accepted);
+  Rust `signals` `unsafe` FFI is pre-existing, idiomatic
+  `pthread_sigmask`/`sigwait` and remains inside the documented
+  exception for the signal handler boundary; the wave-10 signal
+  changes did not add unsafe.
+
+### Validation (wave 10, all at the wave HEAD with the committed binaries)
+
+- Go: `go test ./...` (canonical `go1.26.4`) — all packages PASS,
+  including the three new termination-signal tests and the id-less
+  tests.
+- Rust: `cargo test -p iprange-cli` — 269 lib/bin tests + 2 process
+  termination-signal tests PASS.
+- Products (release, recorded SHASUMS): Rust `2315e28a…`, Go
+  `3bf33dfd…`; worker and fixture identities unchanged (`cb9ad6cd…`,
+  `202a83ac…`, `7c616793…`).
+- Signal wedge at product level: 4/4 trials per product exit 1
+  (pre-fix: ignored indefinitely).
+- Matrices (regenerated, argv-era): rust 38/38, go 38/38,
+  rust_to_go 14+24, go_to_rust 14+24; mixed runs with `--allow-skips`
+  recorded truthfully in each report.
+- Crash battery: positive 16/16 (both directions); negative
+  (/bin/false) 0/16; a concurrent-battery transient failure of the
+  detached crash run was reproduced and isolated — standalone runs
+  pass 16/16 consistently (twice), and the committed reports come
+  from the standalone runs.
+- Resource battery: 8/8; golden corpus 55 exchanges; sensitivity
+  gate 14 modes; Windows harness self-test PASS.
+- Kind gate: PASS on the regenerated genuine evidence; the three
+  verified forgery classes now FAIL (relabeled matrix, crash
+  create-credit, crash sidecar-open); `--self-test` exit 0.
+- Peak-RSS attribution note (M5): `resource-record.md` records that
+  the measured peak RSS includes the runner child together with the
+  product; milestone 5 must measure the product child separately
+  before the 1.3x ceiling claim.
+
+### Sensitive-data gate (wave 10)
+
+No personal paths, host aliases, or secrets in the regenerated
+evidence or this SOW; all probe scratch stays under `.local/` and
+`/tmp/qualsvc/ev17/`; the committed evidence paths point at the
+recorded staging identities only.
+
+### Artifact gate (wave 10)
+
+- Specs: `iprange-jsonrpc-v1.md` amended (D2 distribution sentence,
+  D3 invalid-notification sentence).
+- End-user docs: none affected (transport contract only).
+- Evidence: `v4/cli/evidence/*.json` regenerated; README identity
+  block and narrative updated; `resource-record.md` updated
+  (identities + M5 attribution note).
+- Project skills: `project-final-review` and `project-v4-rust`
+  unchanged (no workflow change).
+- SOW lifecycle: this section records the wave; the role round and
+  Windows regeneration are tracked below.

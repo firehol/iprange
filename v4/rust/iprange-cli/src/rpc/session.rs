@@ -100,6 +100,9 @@ struct SessionControl {
     /// Clone); makes the shutdown path exit non-zero when stdout broke
     /// while draining queued units.
     fatal_error: Option<(io::ErrorKind, String)>,
+    /// Set when the termination-signal watcher consumes SIGINT/SIGTERM;
+    /// the EOF exit path reports non-zero when a signal raced EOF.
+    termination_signal: Option<i32>,
     /// Cancellation signal for the active work unit; the worker
     /// replaces it once per unit.
     token: Arc<CancellationToken>,
@@ -114,6 +117,7 @@ impl SessionControl {
             pending: HashSet::default(),
             shutting_down: false,
             fatal_error: None,
+            termination_signal: None,
             token: Arc::new(CancellationToken::new()),
             active_keys: HashSet::default(),
         }
@@ -256,7 +260,8 @@ impl Session {
         // Block SIGINT/SIGTERM in this (main) thread before the
         // transport threads spawn so every thread inherits the mask;
         // the watcher reports their delivery as a fatal failure.
-        signals::watch(events_tx.clone());
+        let signal_control = Arc::clone(&self.control);
+        signals::watch(events_tx.clone(), signal_control);
 
         let writer = Arc::new(Mutex::new(FrameWriter::new(writer)));
         let worker_state = Arc::clone(&self.state);
@@ -345,7 +350,25 @@ impl Session {
                         format!("stdin read failed: {error}"),
                     ));
                 }
-                Ok(SessionEvent::Line(Ok(None))) => return self.shutdown(),
+                Ok(SessionEvent::Line(Ok(None))) => {
+                    let shutdown_result = self.shutdown();
+                    if shutdown_result.is_err() {
+                        return shutdown_result;
+                    }
+                    // A termination signal consumed before or during
+                    // EOF always wins over the exit-zero EOF path
+                    // (D1 wave-10): the watcher records it in control
+                    // before attempting delivery, so the EOF branch
+                    // never silently drops it.
+                    let termination = self.control.lock().unwrap().termination_signal;
+                    if let Some(signal) = termination {
+                        return Err(io::Error::new(
+                            io::ErrorKind::Interrupted,
+                            format!("terminated by signal {signal}"),
+                        ));
+                    }
+                    return shutdown_result;
+                }
                 Ok(SessionEvent::Line(Ok(Some(line)))) => {
                     if let Err(err) = handle_frame(&mut self, line, &writer) {
                         return self.fatal(err);
@@ -598,6 +621,13 @@ fn worker_loop<W: Write + Send + 'static>(
             // non-zero exit.
             control.lock().unwrap().fatal_error = Some((err.kind(), err.to_string()));
             let mut fatal_err = io::Error::new(err.kind(), err.to_string());
+            // Bounded retry with yield: lossless before shutdown,
+            // abortable after it, and never a no-yield busy-spin.  If
+            // shutdown cannot begin because the events channel stays
+            // full (transport wedged), the deadline force-exits so a
+            // fatal transport failure is never silently ignored.
+            let deadline = std::time::Instant::now()
+                + std::time::Duration::from_millis(500);
             loop {
                 if control.lock().unwrap().shutting_down {
                     break;
@@ -609,6 +639,11 @@ fn worker_loop<W: Write + Send + 'static>(
                         _ => break, // only Fatal is ever sent here; defensive
                     },
                     Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
+                }
+                std::thread::yield_now();
+                if std::time::Instant::now() >= deadline {
+                    eprintln!("iprange: fatal transport failure: events channel wedged, forcing exit");
+                    std::process::exit(1);
                 }
             }
             return;
@@ -937,15 +972,23 @@ fn execute(state: &Arc<Mutex<SessionState>>, request: &Request) -> Value {
 /// the mask); a watcher thread reports their delivery as a fatal
 /// transport failure so the process exits non-zero after the same
 /// cancellation/cleanup path as broken stdout.
+///
+/// The watcher records the consumed signal in the session control
+/// plane before attempting delivery, so a signal that raced EOF still
+/// produces a non-zero exit (the EOF path checks the flag), and never
+/// ignores a signal when the transport is wedged: if the events
+/// channel stays full and shutdown cannot begin, a bounded retry with
+/// explicit yields force-exits non-zero after 500 ms.
 #[cfg(unix)]
 mod signals {
-    use super::SessionEvent;
+    use super::{SessionControl, SessionEvent};
     use std::io::{self, ErrorKind};
     use std::sync::mpsc::SyncSender;
+    use std::sync::{Arc, Mutex};
 
     /// Block SIGINT/SIGTERM and spawn the watcher. The watcher never
     /// exits; the process terminates when the main function returns.
-    pub fn watch(events: SyncSender<SessionEvent>) {
+    pub fn watch(events: SyncSender<SessionEvent>, control: Arc<Mutex<SessionControl>>) {
         let mut set: libc::sigset_t = unsafe { std::mem::zeroed() };
         unsafe {
             libc::sigemptyset(&mut set);
@@ -963,10 +1006,44 @@ mod signals {
                 // sigwait atomically consumes the pending signal; the
                 // mask keeps it undeliverable to other threads.
                 if unsafe { libc::sigwait(&set, &mut signal) } == 0 {
-                    let _ = watcher_events.send(SessionEvent::Fatal(io::Error::new(
+                    let err = io::Error::new(
                         ErrorKind::Interrupted,
                         format!("terminated by signal {signal}"),
-                    )));
+                    );
+                    {
+                        let mut control = control.lock().unwrap();
+                        control.termination_signal = Some(signal);
+                        if control.fatal_error.is_none() {
+                            control.fatal_error = Some((err.kind(), err.to_string()));
+                        }
+                    }
+                    // Graceful delivery first; the bounded retry with
+                    // yield force-exits if shutdown cannot begin (the
+                    // wedge state: events channel full, main loop
+                    // blocked on the full work queue).
+                    let deadline = std::time::Instant::now()
+                        + std::time::Duration::from_millis(500);
+                    let mut pending = err;
+                    loop {
+                        match watcher_events.try_send(SessionEvent::Fatal(pending)) {
+                            Ok(()) => break,
+                            Err(std::sync::mpsc::TrySendError::Full(returned)) => {
+                                if let SessionEvent::Fatal(returned_err) = returned {
+                                    pending = returned_err;
+                                } else {
+                                    break; // only Fatal is ever sent here; defensive
+                                }
+                                if std::time::Instant::now() >= deadline {
+                                    eprintln!(
+                                        "iprange: terminated by signal {signal}: transport wedged, forcing exit"
+                                    );
+                                    std::process::exit(1);
+                                }
+                                std::thread::yield_now();
+                            }
+                            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
+                        }
+                    }
                 } else {
                     // sigwait cannot fail for a valid blocked set on
                     // the process's own signal mask; avoid a spin on
@@ -988,10 +1065,10 @@ mod signals {
 #[cfg(not(unix))]
 mod signals {
     use super::SessionEvent;
-    use std::sync::mpsc::SyncSender;
+    use std::sync::{mpsc::SyncSender, Arc, Mutex};
 
     /// No-op: termination handling is Unix-only.
-    pub fn watch(_events: SyncSender<SessionEvent>) {}
+    pub fn watch(_events: SyncSender<SessionEvent>, _control: Arc<Mutex<super::SessionControl>>) {}
 }
 
 #[cfg(test)]
@@ -2844,4 +2921,49 @@ mod tests {
         }
     }
 
+    #[test]
+    fn idless_non_cancel_is_an_invalid_notification() {
+        // Spec (D3 wave-10): an id-less non-cancel request is an
+        // invalid notification: not executed, answered with one
+        // -32600 whose id is null; the connection keeps serving.
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = ResponseAwareReader {
+            input:
+                b"{\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n"
+                    .to_vec(),
+            delivered: false,
+            output: output.clone(),
+            marker: b"\"code\":-32600",
+        };
+        let session = Session::new();
+        session.run(reader, SharedVec(output.clone())).unwrap();
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert_eq!(text.lines().count(), 1, "unexpected output: {text}");
+        let value: Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(value["error"]["code"], json!(schema::STD_INVALID_REQUEST));
+        assert_eq!(value["id"], Value::Null);
+    }
+
+    #[test]
+    fn batch_with_idless_member_is_rejected_as_a_whole() {
+        // Spec (D3 wave-10): inside a batch, an id-less non-cancel
+        // member rejects the WHOLE batch with one -32600 id:null and
+        // healthy siblings are not executed.
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let reader = ResponseAwareReader {
+            input:
+                b"[{\"jsonrpc\":\"2.0\",\"id\":\"ok1\",\"method\":\"iprange.v1.system.describe\",\"params\":{}},{\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.system.describe\",\"params\":{}},{\"jsonrpc\":\"2.0\",\"id\":\"ok2\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}]\n"
+                    .to_vec(),
+            delivered: false,
+            output: output.clone(),
+            marker: b"\"code\":-32600",
+        };
+        let session = Session::new();
+        session.run(reader, SharedVec(output.clone())).unwrap();
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert_eq!(text.lines().count(), 1, "unexpected output: {text}");
+        let value: Value = serde_json::from_str(text.trim()).unwrap();
+        assert_eq!(value["error"]["code"], json!(schema::STD_INVALID_REQUEST));
+        assert_eq!(value["id"], Value::Null);
+    }
 }

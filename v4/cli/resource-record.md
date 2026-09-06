@@ -32,9 +32,14 @@ Consumer-only, 134 steps, shared seed-0 direct fixture; passes in the `rust` and
 
 Go matrix, fresh work dir, under `/usr/bin/time -v` (final
 qualification binaries, two runs): peak RSS **25,924 kB** and
-**26,044 kB** (Python runner; the product child runs beside it),
-elapsed ~0.05 s, exit 0. Per-request product memory is bounded by
-the 65,000-byte response object and 1 MiB frame ceilings.
+**26,044 kB** (Python runner + product child measured together),
+elapsed ~0.05 s, exit 0.  Milestone-5 methodology note (wave-10):
+the step-6 CPU/peak-RSS 1.3x acceptance contract needs
+product-child-only attribution; the recorded number measures the
+runner and the product child together (`/usr/bin/time -v` around
+the matrix run), so it cannot support the ceiling claim without
+separating the child process. Per-request product memory is bounded
+by the 65,000-byte response object and 1 MiB frame ceilings.
 
 ## PROVEN vs deferred
 
@@ -122,7 +127,7 @@ The Linux qualification binary hashes at that wave changed to
 `2f1d2bba…` (Go) and `86056181…` (Rust); behavior on Linux was
 unchanged outside the round-trip acceptance.  The current canonical
 Linux identities are recorded in `evidence/README.md` (Go product
-`f3e9f1e4…`, Rust product `58036aee…` at the ninth fix wave; the
+`3bf33dfd…`, Rust product `2315e28a…` at the tenth fix wave; the
 worker and fixture identities are build-proven there as well).
 
 Deferred to delivery step 6: latency/throughput and engine RSS

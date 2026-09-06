@@ -19,10 +19,10 @@ either side.  Single-language matrices run both roles on the one
 selected executable.  A case that cannot exercise both actors is skipped with its
 reason, so a mixed-direction PASS always means both binaries actually
 served; a mixed direction that executes no both-actor case fails as a
-matrix.  Per-case PASS entries record each actor binary's SHA-256,
-product-declared implementation ("rust"|"go"), and executed-step count,
-so language attribution derives from the executed binaries themselves,
-never from the report-level matrix label.
+matrix.  Per-case PASS entries record each actor binary's SHA-256, canonical
+executed path (argv), product-declared implementation ("rust"|"go"),
+and executed-step count, so language attribution derives from the
+executed binaries themselves, never from the report-level matrix label.
 """
 
 import argparse
@@ -124,6 +124,17 @@ LIVE_READER_SOURCE_SLOTS = {
     "iprange.v1.feeds.create": (("current", "source"),),
     "iprange.v1.snapshot": (("source",),),
 }
+
+# Deadline-bounded JSON-RPC client stall guards (resource_harness.py
+# parity).  Each bound applies to ONE read or ONE write operation,
+# never to a whole run: normal calls complete in milliseconds and are
+# unaffected, but a peer that stops answering or stops draining stdin
+# must fail the run instead of blocking a runner forever.
+RUNNER_IO_DEADLINE_SECONDS = 120.0
+# The capability probe is a single short describe call under normal
+# conditions, so its per-operation stall guard is shorter.
+PROBE_IO_DEADLINE_SECONDS = 30.0
+
 
 # Per-method peak wire-frame sizes observed by every JsonRpcService
 # client in this process (one physical line per frame; the byte counts
@@ -1188,13 +1199,17 @@ class CaseRunner:
             if self.service is None:
                 self.service = JsonRpcService(
                     [self.binary, "--jsonrpc"], self.implementation,
-                    cwd=self.work_dir)
+                    cwd=self.work_dir,
+                    read_deadline=RUNNER_IO_DEADLINE_SECONDS,
+                    write_deadline=RUNNER_IO_DEADLINE_SECONDS)
             return self.service
         service = self.services.get(actor)
         if service is None:
             service = JsonRpcService(
                 [self.actor_binaries[actor], "--jsonrpc"],
-                f"{self.implementation}:{actor}", cwd=self.work_dir)
+                f"{self.implementation}:{actor}", cwd=self.work_dir,
+                read_deadline=RUNNER_IO_DEADLINE_SECONDS,
+                write_deadline=RUNNER_IO_DEADLINE_SECONDS)
             self.services[actor] = service
         return service
 
@@ -1657,7 +1672,10 @@ def describe_capabilities(binary):
         return CAPABILITIES_CACHE[cache_key]
     record = {"path": binary, "sha256": cache_key[1], "methods": [], "available": False}
     try:
-        service = JsonRpcService([binary, "--jsonrpc"], "probe")
+        service = JsonRpcService(
+            [binary, "--jsonrpc"], "probe",
+            read_deadline=PROBE_IO_DEADLINE_SECONDS,
+            write_deadline=PROBE_IO_DEADLINE_SECONDS)
         try:
             response = service.call(
                 "capability-probe", "iprange.v1.system.describe", {})
@@ -1916,6 +1934,11 @@ def main():
                 entry["actors"][actor] = {
                     "sha256": capability["sha256"],
                     "implementation": implementation,
+                    # Canonical executed-binary path (realpath) for the
+                    # binary that served this actor role, anchored at
+                    # parse time; a relabeled clone cannot alias a
+                    # different executable's evidence.
+                    "argv": os.path.realpath(binaries[key]),
                     "steps": runner.actor_steps.get(actor, 0),
                     "operations": list(runner.actor_operations[actor]),
                 }

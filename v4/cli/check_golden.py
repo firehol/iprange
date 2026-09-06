@@ -111,6 +111,35 @@ def semantic_errors(method, params, result):
     return errors
 
 
+def check_expect_error(exchange):
+    """Validate an intentionally invalid request whose only acceptable
+    wire outcome is the recorded error response: the request must be
+    rejected by the shared frame schema, and the recorded response must
+    be a valid error frame with an integer code and a null id (the
+    invalid-notification -32600 contract, D3 wave-10)."""
+
+    errors = []
+    request = exchange["request"]
+    expect = exchange["expect_error"]
+    try:
+        frame.decode_frame(json.dumps(request, separators=(",", ":")))
+        errors.append("request: expected a frame-schema rejection, decoded ok")
+    except frame.FrameError:
+        pass
+    try:
+        decoded = frame.decode_response(json.dumps(expect, separators=(",", ":")))
+        if decoded.get("id") is not None:
+            errors.append("expect_error: id must be null")
+        err = decoded.get("error")
+        if not isinstance(err, dict) or not isinstance(err.get("code"), int):
+            errors.append("expect_error: error.code must be an integer")
+        frame.encode_response_object(expect)
+        frame.encode_response_frame(expect)
+    except (frame.FrameError, ValidationError) as exc:
+        errors.append(f"expect_error: {exc}")
+    return errors
+
+
 def check_reader_sequence(exchanges, path):
     """Check handle/kind/cursor coherence across reader golden sequences."""
 
@@ -178,15 +207,28 @@ def check_golden_file(path):
         return errors, []
 
     for index, exchange in enumerate(golden["exchanges"]):
-        if not isinstance(exchange, dict) or set(exchange) != {"request", "response"}:
-            errors.append(f"exchange {index}: members must be exactly request, response")
+        if not isinstance(exchange, dict) or set(exchange) not in (
+                {"request", "response"}, {"request", "expect_error"}):
+            errors.append(
+                "exchange %d: members must be exactly request+response or "
+                "request+expect_error" % index)
+            continue
+        if "expect_error" in exchange:
+            for error in check_expect_error(exchange):
+                errors.append(f"exchange {index} {exchange['request'].get('method')}: {error}")
             continue
         for error in check_exchange(exchange, path):
             errors.append(f"exchange {index} {exchange['request'].get('method')}: {error}")
     if path.endswith("reader.json"):
         errors.extend(check_reader_sequence(golden["exchanges"], path))
-    return errors, [item["request"]["method"] for item in golden["exchanges"]
-                    if isinstance(item, dict) and isinstance(item.get("request"), dict)]
+    error_exchanges = sum(
+        1 for item in golden["exchanges"]
+        if isinstance(item, dict) and "expect_error" in item)
+    return (errors,
+            [item["request"]["method"] for item in golden["exchanges"]
+             if isinstance(item, dict) and "response" in item
+             and isinstance(item.get("request"), dict)],
+            error_exchanges)
 
 
 def main():
@@ -202,14 +244,16 @@ def main():
     for name in sorted(os.listdir(golden_dir)):
         if not name.endswith(".json"):
             continue
-        errors, methods_seen = check_golden_file(os.path.join(golden_dir, name))
-        checked_golden += len(methods_seen)
+        errors, methods_seen, error_exchanges = check_golden_file(
+            os.path.join(golden_dir, name))
+        checked_golden += len(methods_seen) + error_exchanges
         covered_methods.extend(methods_seen)
         failures.extend(f"{os.path.join(golden_dir, name)}: {error}" for error in errors)
 
     expected = set(methods.METHOD_NAMES)
     if sorted(covered_methods) != sorted(set(covered_methods)):
-        failures.append("golden corpus contains duplicate method exchanges")
+        failures.append(
+            "golden corpus contains duplicate happy-path method exchanges")
     missing = sorted(expected - set(covered_methods))
     extra = sorted(set(covered_methods) - expected)
     if missing:

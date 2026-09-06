@@ -77,10 +77,18 @@ bitmap words, allocator state, or file-backed mapping addresses.
 - Batch elements execute in array order. Their responses are returned in one
   array in the same order, excluding valid notifications.
 - `iprange.v1.cancel` is the only notification. Every other method requires an
-  `id`; a request without one is not executed and produces no response, as
-  required for an invalid notification by JSON-RPC 2.0.
+  `id`; a request without one is an invalid notification: it is not executed
+  and is answered with one `-32600` response whose `id` is null. Inside a
+  batch, the whole batch is rejected with one `-32600` response whose `id`
+  is null (the batch error rule).
 - The service has one active ordinary request and at most 16 queued requests.
   A request exceeding the queue bound fails with `server_busy`.
+- The queue bound is normative; under sustained pressure the exact
+  distribution of which requests receive `server_busy` is
+  scheduler-dependent and is not part of the cross-language parity
+  contract. Every request is answered exactly once (result or
+  `server_busy`), and accepted requests execute in admission order
+  (batch members in array order).
 - The read loop remains active while work executes so cancellation and EOF can
   be observed.
 - Cancellation notifications are transport controls: the read loop applies
