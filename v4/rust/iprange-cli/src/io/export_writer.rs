@@ -768,10 +768,13 @@ mod tests {
 
     #[test]
     fn writer_refuses_budgets_before_exceeding_them() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let directory = std::env::temp_dir().join(format!(
-            "iprange-export-budget-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
+            "iprange-export-budget-{}-{unique}",
+            std::process::id()
         ));
         fs::create_dir_all(&directory).unwrap();
         let destination = directory.join("out.netset");
@@ -817,10 +820,13 @@ mod tests {
 
     #[test]
     fn writer_publishes_atomically_with_exact_digest() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let directory = std::env::temp_dir().join(format!(
-            "iprange-export-digest-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
+            "iprange-export-digest-{}-{unique}",
+            std::process::id()
         ));
         fs::create_dir_all(&directory).unwrap();
         let destination = directory.join("out.ipset");
@@ -882,10 +888,13 @@ mod tests {
         // failure reports outcome_unknown with the adapter-owned
         // evidence: path, policy, stage, and the exact exported facts
         // (final-review finding T3).
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let directory = std::env::temp_dir().join(format!(
-            "iprange-publication-evidence-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
+            "iprange-publication-evidence-{}-{unique}",
+            std::process::id()
         ));
         fs::create_dir_all(&directory).unwrap();
         let destination = directory.join("out.net");

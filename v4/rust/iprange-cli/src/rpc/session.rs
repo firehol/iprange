@@ -3060,7 +3060,7 @@ mod tests {
             delivered: false,
             delay: std::time::Duration::from_millis(500),
         };
-        let mut session = Session::new();
+        let session = Session::new();
         let control = std::sync::Arc::clone(&session.control);
         let signal_thread = std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(200));

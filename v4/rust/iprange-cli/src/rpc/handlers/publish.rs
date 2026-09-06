@@ -491,9 +491,12 @@ mod tests {
     #[test]
     fn current_publish_normalizes_text_into_one_cataloged_feed() {
         let unique = format!(
-            "iprange-current-{}-{:?}",
+            "iprange-current-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         );
         let input = std::env::temp_dir().join(format!("{unique}.txt"));
         let destination = std::env::temp_dir().join(format!("{unique}.iprange"));
@@ -545,9 +548,12 @@ mod tests {
     #[test]
     fn empty_input_still_publishes_the_named_empty_feed() {
         let unique = format!(
-            "iprange-current-empty-{}-{:?}",
+            "iprange-current-empty-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         );
         let input = std::env::temp_dir().join(format!("{unique}.txt"));
         let destination = std::env::temp_dir().join(format!("{unique}.iprange"));
@@ -630,10 +636,13 @@ mod error_tests {
             ("invalid_path", "not_started")
         );
 
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let directory = std::env::temp_dir().join(format!(
-            "iprange-current-invalid-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
+            "iprange-current-invalid-{}-{unique}",
+            std::process::id()
         ));
         std::fs::create_dir(&directory).unwrap();
         let input = directory.join("input.txt");

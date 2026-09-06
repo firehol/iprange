@@ -1070,9 +1070,12 @@ mod tests {
     #[test]
     fn create_result_conversion_uses_optional_and_exact_fields() {
         let unique = format!(
-            "iprange-create-result-{}-{:?}",
+            "iprange-create-result-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
         );
         let main = std::env::temp_dir().join(unique);
         let result = create_live(
@@ -1107,10 +1110,13 @@ mod handler_tests {
     use serde_json::json;
 
     fn unique(label: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         std::env::temp_dir().join(format!(
-            "iprange-lifecycle-{label}-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
+            "iprange-lifecycle-{label}-{}-{unique}",
+            std::process::id()
         ))
     }
 

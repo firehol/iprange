@@ -1547,10 +1547,13 @@ mod tests {
         let ipv4 = options(AddressFamilyInput::Ipv4, 32, true);
         assert!(parse_text_line("\u{feff}1.2.3.4".as_bytes(), ipv4).is_err());
 
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let directory = std::env::temp_dir().join(format!(
-            "iprange-input-bom-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
+            "iprange-input-bom-{}-{unique}",
+            std::process::id()
         ));
         std::fs::create_dir(&directory).unwrap();
         let first = directory.join("first.txt");
@@ -1581,10 +1584,13 @@ mod tests {
 
     #[test]
     fn legacy_v4_binary_input_streams_record_payload() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let path = std::env::temp_dir().join(format!(
-            "iprange-input-binary-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
+            "iprange-input-binary-{}-{unique}",
+            std::process::id()
         ));
         let mut bytes = Vec::new();
         bytes.extend_from_slice(b"iprange binary format v1.0\n");
@@ -1618,10 +1624,13 @@ mod tests {
 
     #[test]
     fn at_expansion_bounds_total_paths_and_reads_lists() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let directory = std::env::temp_dir().join(format!(
-            "iprange-input-expand-{}-{:?}",
-            std::process::id(),
-            std::time::SystemTime::now()
+            "iprange-input-expand-{}-{unique}",
+            std::process::id()
         ));
         std::fs::create_dir(&directory).unwrap();
         let first = directory.join("01.txt");

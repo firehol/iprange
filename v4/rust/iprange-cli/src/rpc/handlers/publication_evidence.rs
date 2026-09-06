@@ -599,7 +599,10 @@ mod tests {
         let mut bytes = [0u8; 32];
         bytes[0..8].copy_from_slice(&volume.to_le_bytes());
         bytes[8..16].copy_from_slice(&file.to_le_bytes());
-        iprange_livedb::validation::LocalFileIdentity { kind: 1, bytes }
+        iprange_livedb::validation::LocalFileIdentity {
+            kind: if cfg!(windows) { 2 } else { 1 },
+            bytes,
+        }
     }
 
     fn sample_attempt() -> PublicationAttempt {

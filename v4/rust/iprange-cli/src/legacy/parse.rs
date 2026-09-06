@@ -1660,6 +1660,7 @@ mod tests {
         );
     }
 
+    #[cfg(unix)]
     #[test]
     fn nonexistent_files_and_lists_produce_exact_c_errors() {
         let missing = "/nonexistent/iprange-parse-test-file";
@@ -1684,6 +1685,34 @@ mod tests {
             err,
             "iprange: Cannot access /nonexistent/iprange-parse-test-list: No such file or directory"
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn nonexistent_files_and_lists_report_the_missing_path() {
+        // Windows reports its own local error text; the stable contract
+        // is that the exact failing path is identified. The numeric
+        // system code is locale-independent.
+        let missing = "/nonexistent/iprange-parse-test-file";
+        let mut o = opts();
+        o.sources.push(path_spec(missing));
+        let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
+        assert!(err.contains(missing), "missing file error names the path: {err}");
+        assert!(err.contains("os error 2"), "missing file carries the system code: {err}");
+        assert!(err.contains("Cannot load ipset"), "missing file keeps the C context: {err}");
+
+        let mut o = opts();
+        o.sources.push(SourceSpec {
+            kind: SourceKind::FileList,
+            arg: Some("/nonexistent/iprange-parse-test-list".to_owned()),
+            label: None,
+        });
+        let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
+        assert!(
+            err.contains("/nonexistent/iprange-parse-test-list"),
+            "missing list names the path: {err}"
+        );
+        assert!(err.contains("Cannot access"), "missing list keeps the C context: {err}");
     }
 
     #[test]
