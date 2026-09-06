@@ -657,7 +657,14 @@ fn worker_loop<W: Write + Send + 'static>(
                 }
                 std::thread::yield_now();
                 if std::time::Instant::now() >= deadline {
-                    eprintln!("iprange: fatal transport failure: events channel wedged, forcing exit");
+                    // Best-effort diagnostic: a full stderr pipe must
+                    // never block the forced exit (external review
+                    // finding); the detached write gets a bounded
+                    // grace before process::exit runs regardless.
+                    std::thread::spawn(|| {
+                        eprintln!("iprange: fatal transport failure: events channel wedged, forcing exit");
+                    });
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                     std::process::exit(1);
                 }
             }
@@ -1068,9 +1075,19 @@ mod signals {
                     // successful delivery.
                     std::thread::sleep(
                         deadline.saturating_duration_since(std::time::Instant::now()));
-                    eprintln!(
-                        "iprange: terminated by signal {signal}: forcing exit"
-                    );
+                    // The diagnostic write is best-effort: a full
+                    // stderr pipe must never block the forced exit
+                    // (external review finding).  A detached thread
+                    // emits it and process::exit runs after a bounded
+                    // grace even if the write is still blocked; the
+                    // message may be cut off when stderr is writable
+                    // but slower, which is accepted.
+                    std::thread::spawn(move || {
+                        eprintln!(
+                            "iprange: terminated by signal {signal}: forcing exit"
+                        );
+                    });
+                    std::thread::sleep(std::time::Duration::from_millis(50));
                     std::process::exit(1);
                 } else {
                     // sigwait cannot fail for a valid blocked set on

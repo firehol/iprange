@@ -211,114 +211,78 @@ CRASH_ONLY_KINDS = (
 # opened coverage is mandatory; empty opened coverage is a FAIL, not a
 # vacuous pass.
 REQUIRED_OPENED_KINDS = ("live_sidecar", "adapter_output")
-# Per-kind per-actor method-capability maps.  A lineage ref must name
-# an operation that can actually create (respectively open) that kind
-# when executed by that actor; an in-range ordinal naming
-# maintenance.list or reader.close is a fabricated credit, not a
-# lineage.  The maps are the AUTHORITATIVE sets, derived from the
-# committed genuine evidence (v4/cli/evidence/matrix-*.json and
-# crash.json: every recorded operation that actually creates/opens
-# each kind per actor) and from the crash harness recording call
-# sites (crash_harness.py _record_creation, _record_live_open,
-# _record_adapter_open, _consumer_opened_main).  A kind/actor pair
-# absent from a map has no capable method: any ref naming it fails.
-# The matrix ledger is mechanical (run.py record_ledger credits the
-# step method whose inventory delta produced the file / opened a
-# declared path), so the matrix maps mirror exactly the methods the
-# genuine matrix evidence credits; the crash maps mirror the crash
-# harness call sites plus the genuine scenario ordinals.
+# Per-kind method-capability maps.  A lineage ref must name an
+# operation that can actually create (respectively open) that kind;
+# an in-range ordinal naming maintenance.list or reader.close is a
+# fabricated credit, not a lineage.  Capability is a property of the
+# method, NOT of the actor who executes it: the approved explicit-actor
+# contract lets either actor create, transform, or read (external
+# review finding), so the maps are per-kind method sets independent of
+# actor naming.  The actor remains the execution and language
+# attribution authority: which binary ran, and therefore which
+# language is credited for a kind, comes exclusively from the
+# per-case/scenario actor records.
+#
+# The sets are the AUTHORITATIVE sets, derived from the committed
+# genuine evidence (v4/cli/evidence/matrix-*.json and crash.json:
+# every recorded operation that actually creates/opens each kind per
+# actor) and from the crash harness recording call sites
+# (crash_harness.py _record_creation, _record_live_open,
+# _record_adapter_open, _consumer_opened_main).  A kind absent from a
+# map has no capable method: any ref naming it fails.
 
-# Crash-side creation: the harness records creation credits at the
-# crash call sites (_record_creation) -- current.publish creates the
-# reservation/temp/main, recover creates scratch (and, when the kill
-# lands in its output phase, the recovery reservation/temp),
-# initialize_live creates the sidecar, export creates the adapter
-# output.  Only the producer actor ever records crash-side creation.
+# Crash-side creation: current.publish creates the reservation/temp/
+# main, recover creates scratch (and, when the kill lands in its
+# output phase, the recovery reservation/temp), initialize_live
+# creates the sidecar, export creates the adapter output.
 CRASH_CREATE_METHODS = {
-    "v4_main": {
-        "producer": ("iprange.v1.current.publish",),
-    },
-    "live_sidecar": {
-        "producer": ("iprange.v1.database.initialize_live",),
-    },
-    "publication_reservation": {
-        "producer": ("iprange.v1.current.publish",
-                     "iprange.v1.recover"),
-    },
-    "publication_temp": {
-        "producer": ("iprange.v1.current.publish",
-                     "iprange.v1.recover"),
-    },
-    "authorized_scratch": {
-        "producer": ("iprange.v1.recover",),
-    },
-    "adapter_output": {
-        "producer": ("iprange.v1.export",),
-    },
+    "v4_main": ("iprange.v1.current.publish",),
+    "live_sidecar": ("iprange.v1.database.initialize_live",),
+    "publication_reservation": ("iprange.v1.current.publish",
+                                "iprange.v1.recover"),
+    "publication_temp": ("iprange.v1.current.publish",
+                         "iprange.v1.recover"),
+    "authorized_scratch": ("iprange.v1.recover",),
+    "adapter_output": ("iprange.v1.export",),
 }
 
-# Crash-side opens: the harness records the open at the call site's
-# operation ordinal -- the consumer's successful reader.open for
-# v4_main (_consumer_opened_main), the resolver's live-mode
-# database.info for the producer sidecar open (_record_live_open)
-# plus the consumer's live reader.open, and the crashed export
-# writer's open for adapter_output (_record_adapter_open).
+# Crash-side opens: the consumer's successful reader.open for v4_main,
+# the resolver's live-mode database.info plus the consumer's live
+# reader.open for the sidecar, and the crashed export writer's open
+# for adapter_output.
 CRASH_OPEN_METHODS = {
-    "v4_main": {
-        "consumer": ("iprange.v1.reader.open",),
-    },
-    "live_sidecar": {
-        "producer": ("iprange.v1.database.info",),
-        "consumer": ("iprange.v1.reader.open",),
-    },
-    "adapter_output": {
-        "producer": ("iprange.v1.export",),
-    },
+    "v4_main": ("iprange.v1.reader.open",),
+    "live_sidecar": ("iprange.v1.database.info",
+                     "iprange.v1.reader.open"),
+    "adapter_output": ("iprange.v1.export",),
 }
 
 # Matrix-side creation credits observed in the committed matrix
 # evidence (run.py record_ledger credits the step method whose
 # inventory delta produced the file).
 MATRIX_CREATE_METHODS = {
-    "v4_main": {
-        "producer": ("iprange.v1.algebra.publish",
-                     "iprange.v1.current.publish",
-                     "iprange.v1.database.create",
-                     "iprange.v1.recover",
-                     "iprange.v1.snapshot"),
-        "consumer": ("iprange.v1.snapshot",),
-    },
-    "live_sidecar": {
-        "producer": ("iprange.v1.database.create",
+    "v4_main": ("iprange.v1.algebra.publish",
+                "iprange.v1.current.publish",
+                "iprange.v1.database.create",
+                "iprange.v1.recover",
+                "iprange.v1.snapshot"),
+    "live_sidecar": ("iprange.v1.database.create",
                      "iprange.v1.database.initialize_live"),
-    },
-    "publication_reservation": {
-        "producer": ("iprange.v1.current.publish",),
-    },
-    "publication_temp": {
-        "producer": ("iprange.v1.current.publish",
-                     "iprange.v1.recover"),
-    },
-    "authorized_scratch": {
-        "producer": ("iprange.v1.recover",),
-    },
-    "adapter_output": {
-        "producer": ("iprange.v1.export",
-                     "iprange.v1.maintenance.list",
-                     "iprange.v1.recover",
-                     "iprange.v1.retention.first_seen.refresh"),
-        "consumer": ("iprange.v1.export",
-                     "iprange.v1.join.direct",
-                     "iprange.v1.join.membership",
-                     "iprange.v1.maintenance.list",
-                     "iprange.v1.query.cardinalities",
-                     "iprange.v1.query.matching_feeds",
-                     "iprange.v1.query.overlaps",
-                     "iprange.v1.validate"),
-    },
-    "metadata_delivery": {
-        "consumer": ("iprange.v1.database.metadata.get",),
-    },
+    "publication_reservation": ("iprange.v1.current.publish",),
+    "publication_temp": ("iprange.v1.current.publish",
+                         "iprange.v1.recover"),
+    "authorized_scratch": ("iprange.v1.recover",),
+    "adapter_output": ("iprange.v1.export",
+                       "iprange.v1.maintenance.list",
+                       "iprange.v1.recover",
+                       "iprange.v1.retention.first_seen.refresh",
+                       "iprange.v1.join.direct",
+                       "iprange.v1.join.membership",
+                       "iprange.v1.query.cardinalities",
+                       "iprange.v1.query.matching_feeds",
+                       "iprange.v1.query.overlaps",
+                       "iprange.v1.validate"),
+    "metadata_delivery": ("iprange.v1.database.metadata.get",),
 }
 
 # Matrix-side open credits observed in the committed matrix evidence.
@@ -326,51 +290,42 @@ MATRIX_CREATE_METHODS = {
 # adapter-output opener is the producer export writer observed by the
 # crash battery, so any matrix opened ref on adapter_output fails.
 MATRIX_OPEN_METHODS = {
-    "v4_main": {
-        "producer": ("iprange.v1.algebra.publish",
-                     "iprange.v1.commit.resolve",
-                     "iprange.v1.database.create.resolve",
+    "v4_main": ("iprange.v1.algebra.publish",
+                "iprange.v1.commit.resolve",
+                "iprange.v1.database.create.resolve",
+                "iprange.v1.database.info",
+                "iprange.v1.database.metadata.replace",
+                "iprange.v1.database.metadata.get",
+                "iprange.v1.database.reclaim",
+                "iprange.v1.database.reset_live",
+                "iprange.v1.direct.replace",
+                "iprange.v1.feeds.create",
+                "iprange.v1.feeds.delete",
+                "iprange.v1.feeds.import",
+                "iprange.v1.feeds.rename",
+                "iprange.v1.feeds.replace",
+                "iprange.v1.history.project",
+                "iprange.v1.join.direct",
+                "iprange.v1.join.membership",
+                "iprange.v1.publication.inspect",
+                "iprange.v1.publication.resolve",
+                "iprange.v1.query.overlaps",
+                "iprange.v1.reader.open",
+                "iprange.v1.recovery.inspect",
+                "iprange.v1.retention.first_seen.refresh",
+                "iprange.v1.retention.last_seen.refresh",
+                "iprange.v1.snapshot",
+                "iprange.v1.validate"),
+    "live_sidecar": ("iprange.v1.algebra.publish",
                      "iprange.v1.database.info",
-                     "iprange.v1.database.metadata.replace",
-                     "iprange.v1.database.reclaim",
-                     "iprange.v1.database.reset_live",
-                     "iprange.v1.direct.replace",
-                     "iprange.v1.feeds.create",
-                     "iprange.v1.feeds.delete",
-                     "iprange.v1.feeds.import",
-                     "iprange.v1.feeds.rename",
-                     "iprange.v1.feeds.replace",
-                     "iprange.v1.history.project",
-                     "iprange.v1.publication.resolve",
-                     "iprange.v1.reader.open",
-                     "iprange.v1.retention.first_seen.refresh",
-                     "iprange.v1.retention.last_seen.refresh",
-                     "iprange.v1.snapshot"),
-        "consumer": ("iprange.v1.database.metadata.get",
-                     "iprange.v1.join.direct",
-                     "iprange.v1.join.membership",
-                     "iprange.v1.publication.inspect",
-                     "iprange.v1.query.overlaps",
-                     "iprange.v1.reader.open",
-                     "iprange.v1.recovery.inspect",
-                     "iprange.v1.snapshot",
-                     "iprange.v1.validate"),
-    },
-    "live_sidecar": {
-        "producer": ("iprange.v1.algebra.publish",
-                     "iprange.v1.database.info",
-                     "iprange.v1.feeds.create",
-                     "iprange.v1.history.project",
-                     "iprange.v1.reader.open",
-                     "iprange.v1.snapshot"),
-        "consumer": ("iprange.v1.database.info",
                      "iprange.v1.database.metadata.get",
+                     "iprange.v1.feeds.create",
+                     "iprange.v1.history.project",
                      "iprange.v1.join.direct",
                      "iprange.v1.join.membership",
                      "iprange.v1.query.overlaps",
                      "iprange.v1.reader.open",
                      "iprange.v1.snapshot"),
-    },
 }
 
 # Parser caches for the single-authority command replay (lazy).
@@ -763,6 +718,13 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
         if runner_parser is not None:
             namespace = _parse_recorded_command(
                 runner_parser, argv, f"matrix {path}", problems)
+        # Per-language command-selected executable: the path the
+        # recorded command names for each product language.  Each
+        # actor must be bound to exactly this executable (external
+        # review finding); a report that runs a different binary for a
+        # role while its command claims another contradicts the
+        # record.
+        command_selected = {}
         if namespace is not None:
             command_matrix = namespace.matrix
             if command_matrix is None:
@@ -785,6 +747,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                         f"argument")
                     continue
                 bound_path = os.path.realpath(named)
+                command_selected[language] = bound_path
                 bound_sha = report_shas.get(bound_path)
                 if bound_sha is None:
                     problems.append(
@@ -967,6 +930,23 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                         f"{actor!r} argv {actor_argv!r} does not resolve "
                         f"to the report binary path {binary_path!r} that "
                         f"served the role (sha256 {sha!r})")
+            # Command/executable join (external review finding): the
+            # binary that served the role must be the exact executable
+            # the recorded command selected for its language.  The
+            # per-case argv anchor and the command binding were two
+            # independent authorities; joining them closes a report
+            # that runs one binary for a role while its recorded
+            # command claims another.
+            if (implementation in PRODUCT_LANGUAGES
+                    and binary_path is not None
+                    and implementation in command_selected):
+                if os.path.realpath(binary_path) !=                         os.path.realpath(command_selected[implementation]):
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} actor "
+                        f"{actor!r} executable {binary_path!r} (sha256 "
+                        f"{sha!r}) is not the binary the recorded "
+                        f"command selected for {implementation} "
+                        f"({command_selected[implementation]!r})")
             # Executed-work evidence: the runner records the executed
             # step count per actor; a case that executed nothing (or
             # was doctored to claim nothing) is not evidence.
@@ -1083,7 +1063,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                     bucket["created"].add("?")
                     continue
                 if operation not in MATRIX_CREATE_METHODS.get(
-                        facts["kind"], {}).get(actor, ()):
+                        facts["kind"], ()):
                     problems.append(
                         f"matrix {path}: PASS case {case_name!r} kind "
                         f"{facts['kind']!r} created_by ref {entry!r} names "
@@ -1144,7 +1124,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                         f"opens this kind")
                     continue
                 if operation not in MATRIX_OPEN_METHODS.get(
-                        facts["kind"], {}).get(actor, ()):
+                        facts["kind"], ()):
                     problems.append(
                         f"matrix {path}: PASS case {case_name!r} kind "
                         f"{facts['kind']!r} opened_by ref {entry!r} names "
@@ -1502,7 +1482,7 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                     continue
                 if scenario_operations is not None and \
                         scenario_operations.get(actor, ())[ordinal] not in \
-                        CRASH_CREATE_METHODS.get(kind, {}).get(actor, ()):
+                        CRASH_CREATE_METHODS.get(kind, ()):
                     problems.append(
                         f"crash {path}: PASS scenario {scenario_name!r} "
                         f"kind {kind!r} created_by ref {entry!r} names "
@@ -1510,6 +1490,33 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                         f"{scenario_operations.get(actor, ())[ordinal]!r} "
                         f"which is not a create-capable method of actor "
                         f"{actor!r} for this kind")
+                    continue
+                # The ref must name the EXACT recorded creation event:
+                # the scenario records the producer operation ordinal
+                # whose call actually created the kind
+                # (crash_harness _record_creation -> created_ordinals).
+                # An in-range ordinal alone cannot distinguish a failed
+                # earlier call from the later successful one (external
+                # review finding), so a ref that does not match the
+                # recorded ordinal -- or a report that omits the
+                # created_ordinals record entirely -- fails.
+                recorded_created = (
+                    scenario.get("created_ordinals") or {}).get(kind)
+                if not (isinstance(recorded_created, int)
+                        and not isinstance(recorded_created, bool)):
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} created_by ref {entry!r} records "
+                        f"no created ordinal for the kind (the exact "
+                        f"creation event is unrecorded)")
+                    continue
+                if recorded_created != ordinal:
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} created_by ref {entry!r} names "
+                        f"operation ordinal {ordinal} but the recorded "
+                        f"creation of this kind is at ordinal "
+                        f"{recorded_created}")
                     continue
                 language = (producer_impl if actor == "producer"
                             else consumer_impl)
@@ -1540,7 +1547,7 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                 # additionally keep the backing-fact checks below.
                 if scenario_operations is not None and \
                         scenario_operations.get(actor, ())[ordinal] not in \
-                        CRASH_OPEN_METHODS.get(kind, {}).get(actor, ()):
+                        CRASH_OPEN_METHODS.get(kind, ()):
                     problems.append(
                         f"crash {path}: PASS scenario {scenario_name!r} "
                         f"kind {kind!r} opened_by ref {entry!r} names "
@@ -1593,6 +1600,39 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                         f"ref {entry!r} although no v1 open contract "
                         f"opens this kind")
                     continue
+                # The ref must name the EXACT recorded open event: the
+                # scenario stores the service-call ordinal that
+                # actually opened the kind (live_reader_opens /
+                # adapter_output_opens / consumer_main_open_ordinal).
+                # A ref naming a different executed operation is a
+                # fabricated open even when the method is capable
+                # (external review finding).
+                recorded_open = None
+                if kind == "live_sidecar":
+                    value = open_facts.get(actor)
+                    recorded_open = 0 if value is True else value
+                elif kind == "adapter_output":
+                    value = adapter_facts.get(actor)
+                    recorded_open = 0 if value is True else value
+                elif kind == "v4_main":
+                    recorded_open = (
+                        scenario.get("reopen_outcome") or {}).get(
+                        "consumer_main_open_ordinal")
+                if not (isinstance(recorded_open, int)
+                        and not isinstance(recorded_open, bool)):
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} opened_by ref {entry!r} records "
+                        f"no exact open ordinal for this kind and actor")
+                    continue
+                if recorded_open != ordinal:
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} opened_by ref {entry!r} names "
+                        f"operation ordinal {ordinal} but the recorded "
+                        f"{kind} open of actor {actor!r} is at ordinal "
+                        f"{recorded_open}")
+                    continue
                 language = (producer_impl if actor == "producer"
                             else consumer_impl)
                 bucket["opened"].add(language or "?")
@@ -1626,6 +1666,7 @@ def assess(matrix_paths, crash_paths):
     # command names, so it is the authority for the matrix commands'
     # ``--fixture-tool`` binding.
     fixture_paths = set()
+    fixture_shas = {}
     for path in crash_paths:
         report = _load_report(path, [])
         if not isinstance(report, dict):
@@ -1633,7 +1674,11 @@ def assess(matrix_paths, crash_paths):
         binaries = report.get("binaries")
         if isinstance(binaries, dict) and isinstance(
                 binaries.get("fixture_tool"), str):
-            fixture_paths.add(os.path.realpath(binaries["fixture_tool"]))
+            real = os.path.realpath(binaries["fixture_tool"])
+            fixture_paths.add(real)
+            sha = binaries.get("fixture_tool_sha256")
+            if isinstance(sha, str):
+                fixture_shas[real] = sha
 
     seen_matrices = {}
     matrix_stats = {}
@@ -1653,6 +1698,30 @@ def assess(matrix_paths, crash_paths):
         sources.append(
             f"matrix {path} ({stats['cases']} cases, "
             f"{stats['pass_cases']} PASS)")
+        # Cross-report fixture identity (external review finding): the
+        # matrix report records the v4-fixture tool it used; the path
+        # must be the battery's fixture and its sha256 must equal the
+        # crash report root identity for the same path.
+        fixture = report.get("fixture_tool")
+        if isinstance(fixture, dict):
+            fixture_path = fixture.get("path")
+            fixture_sha = fixture.get("sha256")
+            if isinstance(fixture_path, str) and isinstance(
+                    fixture_sha, str):
+                real = os.path.realpath(fixture_path)
+                if real not in fixture_paths:
+                    problems.append(
+                        f"matrix {path}: fixture_tool {fixture_path!r} "
+                        f"does not name the battery fixture "
+                        f"({sorted(fixture_paths) or '<none>'})")
+                else:
+                    recorded = fixture_shas.get(real)
+                    if recorded is not None and recorded != fixture_sha:
+                        problems.append(
+                            f"matrix {path}: fixture_tool sha256 "
+                            f"{fixture_sha!r} contradicts the crash "
+                            f"report identity {recorded!r} for "
+                            f"{fixture_path!r}")
         # matrix_evidence appended its findings to ``problems``
         # directly and returned the same list; extending again would
         # duplicate every entry.
@@ -1908,6 +1977,14 @@ def _self_test():
                 kinds["v4_main"] = {
                     "created_by": ["producer.0"],
                     "opened_by": ["consumer.0"]}
+            created_ordinals = {
+                "A": {"publication_reservation": 0,
+                      "publication_temp": 0, "v4_main": 0},
+                "B": {"live_sidecar": 0},
+                "C": {"authorized_scratch": 2,
+                      "publication_temp": 2, "v4_main": 0},
+                "E": {"adapter_output": 2, "v4_main": 0},
+            }[shape]
             live_reader_opens = (
                 {"producer": 5, "consumer": 0} if shape == "B" else {})
             adapter_output_opens = (
@@ -1931,6 +2008,7 @@ def _self_test():
                                "consumer": consumer_ops},
                 "live_reader_opens": live_reader_opens,
                 "adapter_output_opens": adapter_output_opens,
+                "created_ordinals": created_ordinals,
                 "kinds": kinds,
             }
 
@@ -3009,6 +3087,142 @@ def _self_test():
                             "consumer.iprange.v1.maintenance.list"]}
         genuine_mutation_fails("matrix-sidecar-open-capability",
                                forged_matrix_sidecar_open)
+
+        # 39. Crash lineage ordinal anatomy (external review finding):
+        #     a created/opened ref must name the EXACT recorded
+        #     event, not merely an in-range capable ordinal.  The
+        #     pre-fix gate accepted a ref to a failed earlier
+        #     operation, a ref that contradicted the recorded open
+        #     ordinal, a ref that contradicted created_ordinals, and a
+        #     report with created_ordinals removed outright; on the
+        #     GENUINE evidence every one of these must now fail.
+        def forged_main_open_ordinal(matrices, crash):
+            for scenario in crash["scenarios"]:
+                if scenario["scenario"].startswith("A1."):
+                    scenario["kinds"]["v4_main"]["opened_by"] = [
+                        "consumer.0"]
+        genuine_mutation_fails("failed-main-open-ordinal",
+                               forged_main_open_ordinal)
+
+        def forged_sidecar_open_ordinal(matrices, crash):
+            for scenario in crash["scenarios"]:
+                if scenario["scenario"].startswith("B."):
+                    scenario["kinds"]["live_sidecar"]["opened_by"] = [
+                        "producer.1", "consumer.0"]
+        genuine_mutation_fails("failed-sidecar-open-ordinal",
+                               forged_sidecar_open_ordinal)
+
+        def forged_creation_ordinal(matrices, crash):
+            for scenario in crash["scenarios"]:
+                if scenario["scenario"].startswith("A2."):
+                    scenario["kinds"]["publication_reservation"][
+                        "created_by"] = ["producer.0"]
+        genuine_mutation_fails("wrong-creation-ordinal",
+                               forged_creation_ordinal)
+
+        def missing_creation_ordinals(matrices, crash):
+            for scenario in crash["scenarios"]:
+                scenario.pop("created_ordinals", None)
+        genuine_mutation_fails("missing-creation-ordinals",
+                               missing_creation_ordinals)
+
+        # 40. Command/executable join (external review finding): the
+        #     actor that served a role must be the exact binary the
+        #     recorded command selected for its language.  A second
+        #     Go record whose path/sha the case actors adopt while the
+        #     command still claims the real Go binary contradicts the
+        #     record and fails the gate.
+        def alternate_actor_binary(matrices, crash):
+            report = matrices[2]  # go_to_rust
+            stale = _copy.deepcopy(report["binaries"]["go"])
+            stale["path"] = "/tmp/stale-go-iprange"
+            stale["sha256"] = "f" * 64
+            report["binaries"]["stale_go"] = stale
+            for case in report["cases"]:
+                if case.get("status") != "PASS":
+                    continue
+                case["actors"]["consumer"]["argv"] = stale["path"]
+                case["actors"]["consumer"]["sha256"] = stale["sha256"]
+        genuine_mutation_fails("alternate-actor-binary",
+                               alternate_actor_binary)
+
+        # 41. Fixture identity cross-report (external review
+        #     finding): a matrix report that carries a fixture_tool
+        #     record must agree with the crash report's recorded
+        #     identity for the same path; a contradictory hash is an
+        #     internal inconsistency, not a legitimate report.
+        def fixture_hash_contradiction(matrices, crash):
+            matrices[2]["fixture_tool"]["sha256"] = "f" * 64
+        genuine_mutation_fails("fixture-hash-contradiction",
+                               fixture_hash_contradiction)
+
+        # 42. Positive control for the explicit-actor contract
+        #     (external review finding): capability is a property of
+        #     the method, not of the actor who executes it.  The
+        #     role-inverted database.metadata workflow (the consumer
+        #     creates the database and replaces metadata, the producer
+        #     reads) runs with the real products in both directions;
+        #     the gate must accept the recorded ledger instead of
+        #     reporting per-actor capability errors.
+        def actor_swapped_case():
+            matrices, crash = load_genuine()
+            report = matrices[3]  # go_to_rust
+            producer = report["binaries"]["go"]
+            consumer = report["binaries"]["rust"]
+            setup = {
+                "name": "database.metadata-role-inverted",
+                "matrix": "go->rust",
+                "status": "PASS",
+                "actors": {
+                    "producer": {
+                        "sha256": producer["sha256"],
+                        "implementation": "go",
+                        "argv": producer["path"],
+                        "steps": 1,
+                        "operations": [
+                            "iprange.v1.database.metadata.get"],
+                    },
+                    "consumer": {
+                        "sha256": consumer["sha256"],
+                        "implementation": "rust",
+                        "argv": consumer["path"],
+                        "steps": 2,
+                        "operations": [
+                            "iprange.v1.database.create",
+                            "iprange.v1.database.metadata.replace"],
+                    },
+                },
+                "file_kinds": {
+                    "swapped-v4.bin": {
+                        "kind": "v4_main",
+                        "created_by": [
+                            "consumer.iprange.v1.database.create"],
+                        "opened_by": [
+                            "consumer.iprange.v1.database.metadata.replace",
+                            "producer.iprange.v1.database.metadata.get"],
+                    },
+                    "swapped-sidecar.bin": {
+                        "kind": "live_sidecar",
+                        "created_by": [
+                            "consumer.iprange.v1.database.create"],
+                        "opened_by": [
+                            "producer.iprange.v1.database.metadata.get"],
+                    },
+                },
+            }
+            report["cases"].append(setup)
+            paths = []
+            for index, mutated in enumerate(matrices):
+                path = os.path.join(work, f"actor-swap-{index}.json")
+                assign(path, mutated)
+                paths.append(path)
+            crash_swapped = os.path.join(work, "actor-swap-crash.json")
+            assign(crash_swapped, crash)
+            problems, _c, _s = assess(paths, [crash_swapped])
+            assert not problems, (
+                f"actor-swapped database.metadata ledger rejected: "
+                f"{problems}")
+        actor_swapped_case()
 
 
 if __name__ == "__main__":

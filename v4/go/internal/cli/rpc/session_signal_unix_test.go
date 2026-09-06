@@ -95,6 +95,14 @@ func TestTerminationSignalHelperProcess(t *testing.T) {
 		// (role-round finding).
 		input := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n"
 		err = NewSession().Run(strings.NewReader(input), blockingWriter{})
+	case "full-stderr":
+		// Watcher force-exit independence (external review finding):
+		// the parent gives this session a stderr that is a full,
+		// never-drained pipe, so the forced-exit diagnostic can never
+		// be written.  The idle session must still exit non-zero when
+		// signalled, within the bounded watchdog window.
+		r, _ := io.Pipe()
+		err = NewSession().Run(r, io.Discard)
 	case "eof-first":
 		// Supervisor stop sequence: the response for one request is
 		// written, EOF follows immediately, and the termination
@@ -193,6 +201,71 @@ func TestTerminationSignalDrainWedgeForcesNonZeroExit(t *testing.T) {
 	// process-lifetime watchdog can serve the signal.
 	runSignalTrials(t, "drain-wedge", syscall.SIGTERM, 1)
 	runSignalTrials(t, "drain-wedge", syscall.SIGINT, 1)
+}
+
+func TestTerminationSignalFullStderrForcedExit(t *testing.T) {
+	// External review finding: the watchdog's forced exit must never
+	// depend on a blocking diagnostic write.  A full, undrained
+	// stderr pipe must not prevent the forced non-zero exit within
+	// the bounded watchdog window.
+	sig := syscall.SIGTERM
+	for iteration := 0; iteration < 2; iteration++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestTerminationSignalHelperProcess$")
+		cmd.Env = append(os.Environ(), signalTestHelperEnv+"=full-stderr")
+		// The diagnostic pipe is built from raw syscalls: an os.Pipe
+		// fd is registered with the runtime poller, and os.File
+		// writes on the non-blocking fd would wait for writability
+		// forever instead of returning EAGAIN.  Raw fds keep the
+		// fill loop and the child's fd 2 purely syscall-side.
+		var fds [2]int
+		if err := syscall.Pipe(fds[:]); err != nil {
+			t.Fatalf("pipe: %v", err)
+		}
+		// Fill the write side (the test never drains the read side),
+		// so the child's stderr writes would block forever.
+		if err := syscall.SetNonblock(fds[1], true); err != nil {
+			t.Fatalf("setnonblock: %v", err)
+		}
+		fill := make([]byte, 65536)
+		for {
+			if _, werr := syscall.Write(fds[1], fill); werr != nil {
+				break
+			}
+		}
+		if err := syscall.SetNonblock(fds[1], false); err != nil {
+			t.Fatalf("restore blocking: %v", err)
+		}
+		cmd.Stderr = os.NewFile(uintptr(fds[1]), "stderr-full-pipe")
+		if err := cmd.Start(); err != nil {
+			syscall.Close(fds[1])
+			syscall.Close(fds[0])
+			t.Fatalf("start helper: %v", err)
+		}
+		syscall.Close(fds[1])
+		// Let the session install its signal watcher.
+		time.Sleep(300 * time.Millisecond)
+		if err := cmd.Process.Signal(sig); err != nil {
+			cmd.Process.Kill()
+			syscall.Close(fds[0])
+			t.Fatalf("signal %v: %v", sig, err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case err := <-done:
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 {
+				syscall.Close(fds[0])
+				t.Fatalf("full-stderr %v: exit = %v, want 1", sig, err)
+			}
+		case <-time.After(3 * time.Second):
+			cmd.Process.Kill()
+			cmd.Wait()
+			syscall.Close(fds[0])
+			t.Fatalf("full-stderr %v: helper did not terminate within 3s", sig)
+		}
+		syscall.Close(fds[0])
+	}
 }
 
 func TestTerminationSignalEOFFirstWinsOverExitZero(t *testing.T) {

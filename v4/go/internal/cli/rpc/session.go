@@ -291,8 +291,16 @@ func (s *Session) Run(reader io.Reader, writer io.Writer) error {
 		// Reached only when the process did not exit through the
 		// graceful path in time (main loop wedged or still draining
 		// an uncooperative worker); never leave the signal unserved.
-		fmt.Fprintf(os.Stderr, "iprange: terminated by signal %d: forcing exit\n",
-			int(sig.(syscall.Signal)))
+		// The diagnostic write is best-effort: a full stderr pipe
+		// must never block the forced exit (external review finding).
+		// The detached goroutine gives the message a bounded chance
+		// to land when stderr is writable; os.Exit runs regardless of
+		// whether the write finished.
+		go func() {
+			fmt.Fprintf(os.Stderr, "iprange: terminated by signal %d: forcing exit\n",
+				int(sig.(syscall.Signal)))
+		}()
+		time.Sleep(forceExitDiagnosticGrace)
 		os.Exit(1)
 	}()
 
@@ -478,6 +486,14 @@ func (s *Session) fatal(err error, _ io.Writer, _ *FrameWriter) error {
 // process-lifetime bound, deliberately independent of whether the
 // fatal event delivery can block (second role-round finding).
 const signalForceExitTimeout = 1 * time.Second
+
+// forceExitDiagnosticGrace bounds the best-effort stderr diagnostic
+// the signal watcher writes before its forced exit.  The diagnostic is
+// advisory and is emitted from a detached goroutine: a full diagnostic
+// pipe must not block the forced exit, so os.Exit runs after this
+// bounded grace even if the write is still blocked (external review
+// finding).
+const forceExitDiagnosticGrace = 50 * time.Millisecond
 
 // signalEofGracePoll is how long the clean-EOF exit path waits for
 // the watcher's signal recording after the worker joined.  Go

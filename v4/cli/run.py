@@ -1272,6 +1272,9 @@ class JsonRpcService:
         if read_deadline is not None and not self._use_threads:
             self._raw_stdout = self.proc.stdout.detach()
         self._poisoned = False
+        # Worker threads of deadline-bounded threaded I/O (Windows);
+        # close() joins them under a bound after the peer is gone.
+        self._io_threads = []
         self.lock = threading.Lock()
         self.stderr_tail = []
 
@@ -1314,7 +1317,13 @@ class JsonRpcService:
                 raise AssertionError(
                     f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
             if self.read_deadline is None:
-                line = self.proc.stdout.readline()
+                # Bound the no-deadline readline: the buffered
+                # wrapper's readline(size) never buffers more than
+                # size bytes, so a peer emitting an unterminated frame
+                # can no longer accumulate unbounded output (external
+                # review finding).
+                line = self.proc.stdout.readline(
+                    frame.OUTPUT_FRAME_LIMIT + 2)
             elif self._use_threads:
                 try:
                     line = self._readline_bounded_thread()
@@ -1322,6 +1331,9 @@ class JsonRpcService:
                     raise AssertionError(
                         f"service did not answer within the bounded read "
                         f"deadline: {exc}") from exc
+                except frame.FrameError as exc:
+                    self._poisoned = True
+                    raise AssertionError(str(exc)) from exc
             else:
                 try:
                     line = self._readline_bounded()
@@ -1329,9 +1341,21 @@ class JsonRpcService:
                     raise AssertionError(
                         f"service did not answer within the bounded read "
                         f"deadline: {exc}") from exc
+                except frame.FrameError as exc:
+                    self._poisoned = True
+                    raise AssertionError(str(exc)) from exc
             if not line:
                 raise AssertionError(
                     f"service closed stdout; stderr={''.join(self.stderr_tail[-5:])}")
+            if len(line) > frame.OUTPUT_FRAME_LIMIT + 1:
+                # One response frame at or over the output ceiling
+                # (payload + terminator): violating the ceiling on a
+                # shared stream poisons it, later bytes cannot be
+                # correlated (external review finding).
+                self._poisoned = True
+                raise AssertionError(
+                    f"response frame of {len(line)} bytes exceeds the "
+                    f"{frame.OUTPUT_FRAME_LIMIT} byte output ceiling")
             # Raw response frame as read, LF terminator included; same
             # unit as the request frame.
             record_frame_size(method, request_bytes, len(line))
@@ -1420,6 +1444,7 @@ class JsonRpcService:
                 done.set()
 
         thread = threading.Thread(target=worker, daemon=True)
+        self._io_threads.append(thread)
         thread.start()
         if not done.wait(self.write_deadline):
             self._poisoned = True
@@ -1432,9 +1457,13 @@ class JsonRpcService:
         """Read one LF-terminated frame under the deadline via a
         worker thread (Windows: select() cannot wait on pipes).
 
-        The buffered wrapper keeps partial frames across calls, so
-        correlated reads remain intact until a timeout poisons the
-        service.
+        The worker reads raw chunks off the pipe fd (never the
+        buffered wrapper's readline, which can buffer a peer's output
+        without bound) and the caller accumulates them in the same
+        per-frame buffer as the POSIX path, so partial frames stay
+        intact across calls and a frame that grows past the output
+        ceiling is rejected instead of retained (external review
+        finding).
         """
 
         done = threading.Event()
@@ -1442,13 +1471,24 @@ class JsonRpcService:
 
         def worker():
             try:
-                result["line"] = self.proc.stdout.readline()
+                fd = self.proc.stdout.fileno()
+                while True:
+                    if b"\n" in self._read_buf:
+                        break
+                    if len(self._read_buf) > frame.OUTPUT_FRAME_LIMIT:
+                        break
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        break
+                    self._read_buf += chunk
+                result["ok"] = True
             except Exception as exc:  # noqa: BLE001 - propagated below
                 result["err"] = exc
             finally:
                 done.set()
 
         thread = threading.Thread(target=worker, daemon=True)
+        self._io_threads.append(thread)
         thread.start()
         if not done.wait(self.read_deadline):
             self._poisoned = True
@@ -1456,7 +1496,21 @@ class JsonRpcService:
                 f"read deadline {self.read_deadline:.3f} s expired")
         if "err" in result:
             raise result["err"]
-        return result["line"]
+        line_end = self._read_buf.find(b"\n")
+        if line_end >= 0:
+            line = self._read_buf[:line_end + 1]
+            self._read_buf = self._read_buf[line_end + 1:]
+            return line
+        if len(self._read_buf) > frame.OUTPUT_FRAME_LIMIT:
+            raise frame.FrameError(
+                frame.TRANSPORT_FRAME_TOO_LARGE,
+                "response frame grew past the output ceiling without "
+                "a terminator")
+        # EOF tail: return the remaining bytes exactly like the POSIX
+        # path so a peer that closes stdout mid-frame surfaces the
+        # closed-stdout error, not a hang.
+        remaining, self._read_buf = self._read_buf, b""
+        return remaining
 
     def _write_bounded(self, payload):
         """Write one request frame under ``self.write_deadline``.
@@ -1516,6 +1570,11 @@ class JsonRpcService:
                     line = self._read_buf[:line_end + 1]
                     self._read_buf = self._read_buf[line_end + 1:]
                     return line
+                if len(self._read_buf) > frame.OUTPUT_FRAME_LIMIT:
+                    raise frame.FrameError(
+                        frame.TRANSPORT_FRAME_TOO_LARGE,
+                        "response frame grew past the output ceiling "
+                        "without a terminator")
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError(
@@ -1534,26 +1593,77 @@ class JsonRpcService:
         finally:
             sel.close()
 
-    def close(self):
-        """Close stdin and wait for this owned subprocess to terminate."""
+    def close(self, allow_forced=False):
+        """Close stdin and wait for this owned subprocess to terminate.
 
-        try:
-            if self._raw_stdin is not None:
-                self._raw_stdin.close()
-            elif self.proc.stdin and not self.proc.stdin.closed:
-                self.proc.stdin.close()
-            if self.read_deadline is None and self.write_deadline is None:
-                self.proc.wait(timeout=30)
-            else:
-                # A deadline-bounded service belongs to a harness whose
-                # every exchange is bounded; a stalled child must not
-                # pin the proof in cleanup either.  Real products exit
-                # at stdin EOF in milliseconds, so the short grace only
-                # affects stalled peers.
-                self.proc.wait(timeout=0.2)
-        except Exception:
+        Bounded teardown: a peer that does not exit after stdin EOF is
+        reaped with a bounded kill.  A peer that had to be
+        force-terminated BY THIS CALL is reported as a qualification
+        failure (it did not finish its normal EOF shutdown) unless
+        ``allow_forced`` is set (deliberate-stall controls).  Peers
+        already terminated by the caller (crash scenarios' process
+        groups) are reaped silently.
+
+        In threaded mode (Windows deadlines), a peer poisoned by a
+        bounded-I/O timeout is reaped before touching buffered
+        wrappers whose locks a blocked worker may still hold; the
+        worker threads are then joined under a bound (external review
+        finding).
+        """
+
+        forced = False
+        if self._use_threads and self._poisoned:
+            # A timed-out writer may still hold the buffered stdin
+            # lock, so closing the wrapper would block.  Reap the
+            # child first: its death fails the blocked write (releasing
+            # the lock) and ends a blocked read with EOF; then the
+            # wrapped streams can be closed without waiting on a
+            # worker whose bytes can no longer be correlated.
+            forced = True
             self.proc.kill()
             self.proc.wait(timeout=5)
+        else:
+            try:
+                if self._raw_stdin is not None:
+                    self._raw_stdin.close()
+                elif self.proc.stdin and not self.proc.stdin.closed:
+                    self.proc.stdin.close()
+                if self.read_deadline is None and self.write_deadline is None:
+                    self.proc.wait(timeout=30)
+                else:
+                    # A deadline-bounded service belongs to a harness
+                    # whose every exchange is bounded; a stalled child
+                    # must not pin the proof in cleanup either.  Real
+                    # products exit at stdin EOF in milliseconds, so
+                    # the short grace only affects stalled peers.
+                    self.proc.wait(timeout=0.2)
+            except Exception:
+                forced = True
+                if self.proc.poll() is None:
+                    self.proc.kill()
+                self.proc.wait(timeout=5)
+        # Join bounded-I/O worker threads under a bound; they are
+        # unblocked by the peer's exit or kill above.
+        for thread in self._io_threads:
+            thread.join(timeout=5)
+        # The stderr drainer ends at EOF once the peer is gone; join it
+        # before closing its stream so a closed-file race cannot appear.
+        if getattr(self, "drainer", None) is not None:
+            self.drainer.join(timeout=3)
+        # Close the buffered wrappers only after the peer is gone: a
+        # still-blocked writer's write fails once the peer's pipe end
+        # closes, releasing the lock.
+        for stream in (self.proc.stdin, self.proc.stdout, self.proc.stderr):
+            try:
+                if stream is not None and not stream.closed:
+                    stream.close()
+            except Exception:
+                pass
+        if forced and not allow_forced:
+            raise AssertionError(
+                "service did not terminate cleanly at stdin EOF and had "
+                f"to be force-terminated (returncode "
+                f"{self.proc.returncode})")
 
 
 def parse_interval_text(text):

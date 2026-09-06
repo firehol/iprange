@@ -1,5 +1,18 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
+The eleventh-wave (whole-milestone control review fix) evidence is
+regenerated at the wave 2026-09-06 revision `155459b0` plus the
+full-stderr forced-exit repair: both products now force-exit
+non-zero even when their diagnostic pipe is full, the shared client
+has bounded/validated response ingestion and truthful bounded
+teardown, the kind gate enforces exact crash lineage ordinals and
+joins the command-selected executable with each actor, capability is
+actor-independent, fixture identity is cross-checked, and the Windows
+housekeeping checks compare the top-level removal ordinal.  Linux
+reports record the new product identities `eb08c3d4…` (rust) and
+`c0204ade…` (go); the Windows housekeeping report and hosts are
+regenerated at the same source revision (recorded below).
+
 Produced 2026-09-06 on the Linux workstation (x86_64) from staged
 binary copies (no personal paths in the committed evidence) plus the
 Windows-host housekeeping proof on the authorized Windows validation
@@ -26,9 +39,13 @@ sections.
   rustc 1.91.1) staged as
   `/tmp/qualsvc/ev17/bin/rust/{iprange,iprange-v4-worker,v4-fixture}`:
   - product SHA-256
-    `de597e187afbd7ee8108794273cbc1e32b429e495432d8a053fa8dc7f552da8a`
-    (changed by the third wave-10 role round in
-    `v4/rust/iprange-cli/src/rpc/session.rs`: the EOF tail now
+    `eb08c3d4e0d02729e7621393a0bf187a50a4f0d58fcba154e4208c95ebec4e4e`
+    (changed by the eleventh wave in
+    `v4/rust/iprange-cli/src/rpc/session.rs`: the forced-exit
+    diagnostics are now best-effort from a detached thread, so a full
+    stderr pipe can no longer block the watchdog's exit; the same
+    applies to the wedged-channel fatal diagnostic; plus the third
+    wave-10 role round's change: the EOF tail now
     polls the watcher's recorded flag for the same 25 ms grace
     window Go uses, so the supervisor eof-first shape (close stdin,
     signal back-to-back) is deterministic non-zero instead of ~3/4
@@ -52,9 +69,13 @@ sections.
   pair (go1.26 linux/amd64, no embedded vcs revision) staged as
   `/tmp/qualsvc/ev17/bin/go/{iprange,iprange-v4-worker}`:
   - product SHA-256
-    `b3a359c8984b3b23c081be6a6250458b0fd35a9b344adfe0f0b053382efb1fa3`
-    (changed by the third wave-10 role round in
-    `v4/go/internal/cli/rpc/session.go`: the clean-EOF path now
+    `c0204ade05cdc34b11b78fa595a4b38891d18ede02301a47253dabe1376b36ee`
+    (changed by the eleventh wave in
+    `v4/go/internal/cli/rpc/session.go`: the forced-exit diagnostic
+    is now best-effort from a detached goroutine with a bounded
+    grace, so a full stderr pipe can no longer block the watchdog's
+    os.Exit; plus the third wave-10 role round's change: the clean-EOF
+    path now
     waits on the watcher's sigRecorded channel instead of receiving
     from sigCh, whose FIFO receiver queue made the earlier grace
     poll dead code; every signal recorded up to the 25 ms grace

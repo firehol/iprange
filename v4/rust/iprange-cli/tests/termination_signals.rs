@@ -13,6 +13,44 @@ use std::io::Write;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// Spawn the product with a stderr file descriptor that is a full,
+/// never-drained pipe, so the forced-exit diagnostic can never be
+/// written (external review finding).  Returns the child and the read
+/// end the caller must keep alive for the child's lifetime.
+fn spawn_product_full_stderr() -> (Child, std::os::fd::OwnedFd) {
+    use std::os::fd::{FromRawFd, OwnedFd};
+    let mut fds = [0 as libc::c_int; 2];
+    let rc = unsafe { libc::pipe(fds.as_mut_ptr()) };
+    assert_eq!(rc, 0, "pipe");
+    let read_fd = fds[0];
+    let write_fd = fds[1];
+    unsafe {
+        let flags = libc::fcntl(write_fd, libc::F_GETFL, 0);
+        libc::fcntl(write_fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
+        loop {
+            let n = libc::write(
+                write_fd,
+                b" ".as_ptr() as *const libc::c_void,
+                4096,
+            );
+            if n < 0 {
+                break;
+            }
+        }
+        libc::fcntl(write_fd, libc::F_SETFL, flags);
+    }
+    let write_owned = unsafe { OwnedFd::from_raw_fd(write_fd) };
+    let child = Command::new(env!("CARGO_BIN_EXE_iprange"))
+        .arg("--jsonrpc")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(write_owned))
+        .spawn()
+        .expect("spawn iprange --jsonrpc with full stderr");
+    let read_owned = unsafe { OwnedFd::from_raw_fd(read_fd) };
+    (child, read_owned)
+}
+
 fn spawn_product() -> Child {
     Command::new(env!("CARGO_BIN_EXE_iprange"))
         .arg("--jsonrpc")
@@ -53,6 +91,20 @@ fn flood_frames(count: usize, _close: bool) -> Vec<String> {
             )
         })
         .collect()
+}
+
+#[test]
+fn full_stderr_signal_forces_nonzero_exit() {
+    // External review finding: the forced exit must never depend on a
+    // blocking diagnostic write.  With stderr a full, undrained pipe,
+    // the product must still exit non-zero within the bounded
+    // watchdog window.
+    for sig in [libc::SIGINT, libc::SIGTERM] {
+        let (child, _read_end) = spawn_product_full_stderr();
+        std::thread::sleep(Duration::from_millis(300));
+        let code = signal_and_wait(child, sig, Duration::from_secs(4));
+        assert_eq!(code, 1, "full-stderr signal {sig}: exit code {code}, want 1");
+    }
 }
 
 #[test]

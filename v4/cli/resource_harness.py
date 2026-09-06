@@ -227,7 +227,7 @@ _PENDING_STDOUT_BYTES = {}
 
 
 def read_responses(proc, expect, deadline_seconds,
-                   max_line_bytes=None, raw_lines=None):
+                   max_line_bytes=frame.OUTPUT_FRAME_LIMIT, raw_lines=None):
     """Read up to ``expect`` complete LF-terminated response lines.
 
     Reads are non-blocking under a monotonic deadline: the stdout fd
@@ -243,13 +243,18 @@ def read_responses(proc, expect, deadline_seconds,
     ``_PENDING_STDOUT_BYTES`` under ``proc.pid`` for ``drain_stdout``
     byte accounting and are never parsed.
 
-    ``max_line_bytes`` bounds one accumulated line: a response
-    frame that grows past the ceiling without a terminator raises
-    ``ResourceFailure`` instead of buffering a peer's unbounded
-    output.  ``raw_lines``, when supplied, receives the exact wire
-    bytes of every decoded line (LF included) so callers can apply
-    the shared server-response envelope validator, which operates on
-    raw text.
+    Every complete line must satisfy the server response contract
+    before it is returned (mandatory at every call site, external
+    review finding): ``frame.decode_response`` (jsonrpc 2.0, exactly
+    one of result/error, well-formed error object, valid id) plus the
+    65,000-byte response-object ceiling; a peer emitting a malformed,
+    oversized, or duplicate-id response is a qualification failure,
+    never a silently accepted or collapsed result.  ``max_line_bytes``
+    defaults to the transport output frame limit and bounds one
+    accumulated line; the accumulated buffer is additionally capped at
+    roughly ``expect`` frames so a pathological stream cannot buffer
+    unbounded output.  ``raw_lines``, when supplied, receives the
+    exact wire bytes of every decoded line (LF included) for evidence.
 
     Returns the list of decoded response objects read so far (the
     caller asserts the count); a product that stays alive without
@@ -265,6 +270,8 @@ def read_responses(proc, expect, deadline_seconds,
     sel.register(fd, selectors.EVENT_READ)
     deadline = time.monotonic() + deadline_seconds
     buf = b""
+    accumulated_cap = (expect + 1) * (frame.OUTPUT_FRAME_LIMIT + 1)
+    seen_ids = set()
     while len(responses) < expect:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
@@ -278,22 +285,43 @@ def read_responses(proc, expect, deadline_seconds,
         if not chunk:
             break
         buf += chunk
+        if len(buf) > accumulated_cap:
+            raise ResourceFailure(
+                f"response stream accumulated {len(buf)} bytes past the "
+                f"{accumulated_cap} byte ceiling (output ceiling)")
         while len(responses) < expect:
             line_end = buf.find(b"\n")
             if line_end < 0:
-                if max_line_bytes is not None and len(buf) > max_line_bytes:
+                if len(buf) > max_line_bytes:
                     raise ResourceFailure(
                         f"response frame exceeded {max_line_bytes} bytes "
                         f"without a terminator (output ceiling)")
                 break
             line = buf[:line_end + 1]
-            if max_line_bytes is not None and len(line) > max_line_bytes:
+            if len(line) > max_line_bytes:
                 raise ResourceFailure(
                     f"response frame of {len(line)} bytes exceeds the "
                     f"{max_line_bytes} byte output ceiling")
             if raw_lines is not None:
                 raw_lines.append(line)
-            responses.append(json.loads(buf[:line_end]))
+            payload = buf[:line_end]
+            if len(payload) > frame.RESPONSE_OBJECT_LIMIT:
+                raise ResourceFailure(
+                    f"response object of {len(payload)} bytes exceeds "
+                    f"the {frame.RESPONSE_OBJECT_LIMIT} byte object "
+                    f"ceiling")
+            try:
+                text = payload.decode("utf-8")
+                response = frame.decode_response(text)
+            except (UnicodeDecodeError, frame.FrameError) as exc:
+                raise ResourceFailure(
+                    f"invalid server response envelope: {exc}") from exc
+            rid = response.get("id")
+            if rid in seen_ids:
+                raise ResourceFailure(
+                    f"duplicate response id {rid!r} from one request")
+            seen_ids.add(rid)
+            responses.append(response)
             buf = buf[line_end + 1:]
     if buf:
         _PENDING_STDOUT_BYTES[proc.pid] = buf
@@ -1108,7 +1136,10 @@ def self_test():
     else:
         read_failure = None
     elapsed = time.monotonic() - started
-    stalled_read.close()
+    # Deliberate-stall control: close() force-terminates the stub, so
+    # the forced-termination report is allowed here (the stub is
+    # designed to stay alive).
+    stalled_read.close(allow_forced=True)
     print(f"self-test shared-path read deadline: "
           f"{read_failure or 'unexpected success'} in {elapsed:.2f} s")
     if read_failure is None:
@@ -1140,7 +1171,7 @@ def self_test():
     else:
         write_failure = None
     elapsed = time.monotonic() - started
-    stalled_write.close()
+    stalled_write.close(allow_forced=True)
     print(f"self-test shared-path write deadline: "
           f"{write_failure or 'unexpected success'} in {elapsed:.2f} s")
     if write_failure is None:

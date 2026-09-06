@@ -1169,11 +1169,31 @@ def check_synthesized_pair_rows(rows, directory, synth):
                 f"{row_kind} row identity {row.get('identity')!r} does "
                 f"not equal the synthesized identity "
                 f"{want_identity!r}")
+        # The top-level row ordinal is the removal identifier the
+        # maintenance row carries unchanged (maintenance.go parses and
+        # passes it to removal); it must equal the synthesized ordinal
+        # and the nested artifact ordinal.  Comparing only the nested
+        # artifact fields would let a contradictory top-level removal
+        # ordinal pass (external review finding).
+        row_ordinal = row.get("ordinal")
+        want_ordinal = (synth or {}).get("ordinal")
+        if isinstance(want_ordinal, int) and                 not isinstance(want_ordinal, bool):
+            if row_ordinal != want_ordinal:
+                failures.append(
+                    f"{row_kind} row ordinal {row_ordinal!r} does not "
+                    f"equal the synthesized ordinal {want_ordinal!r}")
         artifact = row.get("artifact")
         if not isinstance(artifact, dict):
             failures.append(
                 f"{row_kind} row carries no artifact object")
             continue
+        if isinstance(artifact.get("ordinal"), int) and \
+                not isinstance(artifact.get("ordinal"), bool) and \
+                row_ordinal != artifact.get("ordinal"):
+            failures.append(
+                f"{row_kind} top-level row ordinal {row_ordinal!r} does "
+                f"not equal the nested artifact ordinal "
+                f"{artifact.get('ordinal')!r}")
         artifact_checks = (
             # (label, expected, got) or (label, expected, got, custom
             # failure text); every required HOUSEKEEPING_ARTIFACT
@@ -1282,7 +1302,7 @@ def check_cross_rows_match(local_rows, cross_rows):
             failures.append(
                 f"cross {kind!r} basename {cross_basename!r} does not "
                 f"equal the local {local_basename!r}")
-        for member in ("identity", "directory_identity"):
+        for member in ("identity", "directory_identity", "ordinal"):
             if local.get(member) != cross.get(member):
                 failures.append(
                     f"cross {kind!r} row {member} "
@@ -1574,6 +1594,21 @@ def _self_test():
         expect_fail(
             "P2-5 M6 source_basename changed (cross equality)",
             check_cross_rows_match(rows, m6))
+
+        # M7: the top-level envelope-row ordinal changed while the
+        # nested artifact ordinal and the synthesized facts stay 1
+        # (external review finding: the ordinal is the removal
+        # identifier and must be compared on both rows and against the
+        # fixture facts, not just the nested artifact fields).  Both
+        # check families must fail.
+        m7 = [dict(row) for row in rows]
+        m7[env_idx]["ordinal"] = 42
+        expect_fail(
+            "P2-5 M7 top-level ordinal changed (pair rows)",
+            check_synthesized_pair_rows(m7, scratch, synth))
+        expect_fail(
+            "P2-5 M7 top-level ordinal changed (cross equality)",
+            check_cross_rows_match(rows, m7))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
