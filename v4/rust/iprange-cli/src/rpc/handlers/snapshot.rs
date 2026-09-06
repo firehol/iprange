@@ -519,7 +519,17 @@ mod tests {
         assert_eq!(converted["coordination_access_policy"], json!("absent"));
         assert_eq!(converted["cleanup"], json!({}));
         assert_eq!(converted["coordination_cleanup"], json!({}));
+        // Windows GC retirement reports that the removed coordination
+        // artifacts could reappear after a crash (the removal is not
+        // power-loss durable); both SDKs implement the same state.
+        assert_eq!(converted["housekeeping"]["artifacts"], json!([]));
+        #[cfg(unix)]
         assert_eq!(converted["housekeeping"], json!({"artifacts": []}));
+        #[cfg(windows)]
+        assert_eq!(
+            converted["housekeeping"],
+            json!({"state": "crash_reappearance_possible", "artifacts": []})
+        );
         assert_eq!(converted["visible_housekeeping"], json!([]));
         let attempt = converted["attempt"]
             .as_object()

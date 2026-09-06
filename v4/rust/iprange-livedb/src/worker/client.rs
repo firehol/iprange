@@ -56,7 +56,12 @@ fn record_unreadable_page(
 
 pub(super) fn spawn(control: &Control) -> Result<Process> {
     let mut last_error = None;
+    let mut attempted = false;
     for executable in worker_candidates()? {
+        if !executable.is_file() {
+            continue;
+        }
+        attempted = true;
         let child = Command::new(&executable)
             .arg("--control")
             .arg(control.path())
@@ -71,6 +76,11 @@ pub(super) fn spawn(control: &Control) -> Result<Process> {
             }
             Err(error) => return Err(error.into()),
         }
+    }
+    if !attempted {
+        return Err(Error::Unsupported(
+            "SDK validation/recovery worker is unavailable",
+        ));
     }
     Err(last_error.map_or_else(
         || Error::Unsupported("SDK validation/recovery worker is unavailable"),

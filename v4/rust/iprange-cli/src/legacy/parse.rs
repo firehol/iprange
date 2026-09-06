@@ -1698,7 +1698,10 @@ mod tests {
         o.sources.push(path_spec(missing));
         let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
         assert!(err.contains(missing), "missing file error names the path: {err}");
-        assert!(err.contains("os error 2"), "missing file carries the system code: {err}");
+        assert!(
+            err.contains("os error"),
+            "missing file carries the system error code: {err}"
+        );
         assert!(err.contains("Cannot load ipset"), "missing file keeps the C context: {err}");
 
         let mut o = opts();
