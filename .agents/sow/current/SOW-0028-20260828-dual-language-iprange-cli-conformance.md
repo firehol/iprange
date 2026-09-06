@@ -5848,11 +5848,12 @@ dangling pointer.
 - Rust: `cargo test -p iprange-cli` — 270 lib/bin tests PASS
   (including the mid-drain unit test and 23 export tests) + 4
   termination process tests PASS.
-- Products (release, rebuilt after re-fix): Rust `4b9683b5…`, Go
+- Products (release, rebuilt after re-fix): Rust `de597e18…`, Go
   `b3a359c8…` (third round: the clean-EOF sigCh FIFO race fix
-  rebuilt the Go product again; Linux and Windows evidence
-  regenerated at the final identities); worker and fixture
-  identities unchanged (`cb9ad6cd…`, `202a83ac…`, `7c616793…`).
+  rebuilt the Go product, and the Rust EOF grace fix rebuilt the
+  Rust product; Linux and Windows evidence regenerated at the
+  final identities); worker and fixture identities unchanged
+  (`cb9ad6cd…`, `202a83ac…`, `7c616793…`).
 - Product-level probes: signal wedge 4/4 trials exit 1 per product
   (SIGINT+SIGTERM); partial-wedge 60-frame probe: 8/8 trials exit 1
   in ~1.015 s across both products (pre-fix: 13 s+ hang); export
@@ -5876,11 +5877,11 @@ dangling pointer.
 #### D4 — Windows qualification regeneration (completed 2026-09-06)
 
 On the authorized Windows validation host (SOW-0028
-qualification only), the wave-10 product sources at `7bc59597`
-(clean tracked tree; initially `f67fc728`, Go rebuilt after the
-third-role-round signal fix) built:
+qualification only), the wave-10 product sources at `e13be7ea`
+(clean tracked tree; initially `f67fc728`, rebuilt after the
+third-role-round Go signal fix and the Rust EOF grace fix) built:
 - Go `984d0e9d…` (go1.26.5 windows/amd64, `-buildvcs=false`);
-- Rust `8fb912b7…` (rustc 1.97.1).
+- Rust `877824f0…` (rustc 1.97.1).
 
 The wave-9 deadline-bounded RPC client used select() on pipe fds,
 which Windows rejects (WinError 10038/10093); the first host run
@@ -5916,17 +5917,23 @@ That P2 was first addressed by committed tests in both languages
   the Go EOF tail's 25 ms grace window makes the shape deterministic
   (pre-fix exit 0 ~100%; committed test 3/3).
 - Rust: an `eof_first_signal_wins_over_exit_zero` process test was
-  committed at `383c7d42` and REMOVED at `5dd1ac6d` (security role
-  finding; lead reproduced 1/3 full-suite failures): the assertion
-  was stronger than the product guarantee — the Rust EOF tail checks
-  the recorded signal after the worker join with no grace window, so
-  a parent kill landing after the check legitimately observes exit 0
-  (sub-millisecond TOCTOU, measured 6/20 single-test failures under
-  load).  The deterministic Rust detections are the in-process unit
-  test `signal_recorded_during_eof_drain_wins_over_exit_zero`, the
-  wedge/drain-wedge force-exit process tests, and the Go eof-first
-  process test; the rationale is recorded in
-  `v4/rust/iprange-cli/tests/termination_signals.rs`.
+  committed at `383c7d42`, then removed at `5dd1ac6d` (security role
+  finding; lead reproduced 1/3 full-suite failures), because at that
+  point the assertion was stronger than the product guarantee — the
+  Rust EOF tail checked the recorded signal once after the worker
+  join with no grace window, so a parent kill landing after the
+  check legitimately observed exit 0 (sub-millisecond TOCTOU,
+  measured 6/20 single-test failures under load).  The glm-5.3
+  final validator then FAILed the closure: the approved D1-A
+  contract requires the signal to win at any point, and the removal
+  had silently re-scoped an approved contract.  The product was
+  fixed instead (commit `e13be7ea`): the Rust EOF tail now polls
+  the watcher's recorded flag for the same 25 ms grace window Go
+  uses (75/75 non-zero at 0-15 ms offsets; the residual past the
+  grace window is the same bounded class as Go).  The
+  `eof_first_signal_wins_over_exit_zero` process test is restored
+  and deterministic (5/5 process tests, 3/3 consecutive full-suite
+  runs green).  Rust product identity changed to `de597e18…`.
 
 tester, security, and performance were still reviewing the earlier
 delta; their re-verdicts at the final revision `383c7d42` are
@@ -5958,12 +5965,12 @@ removed from the kind gate (no callers after the unconditional argv
 rule) and the SOW status update.
 
 This round's Linux evidence and the Windows host run were
-regenerated at the final identities (`4b9683b5…` rust, `b3a359c8…`
-go Linux, `984d0e9d…` go Windows at `7bc59597`); case statuses and
-oracle counts unchanged (38/38 both languages, 14+24 both mixed
-directions, 16/16 crash positive, 0/16 negative, 8/8 resource,
-Windows 2/2, golden 55, sensitivity 14, kind gate PASS with the
-argv-strip/relabel mutations FAIL — the consistent argv clone in its
-own declared slot remains the gate's documented one-report-fork
-residual, mitigated by battery reruns and adversarial rounds, as
-caveated above).
+regenerated at the final identities (`de597e18…` rust, `b3a359c8…`
+go Linux, `984d0e9d…` go Windows and `877824f0…` Windows rust at
+`e13be7ea`); case statuses and oracle counts unchanged (38/38 both
+languages, 14+24 both mixed directions, 16/16 crash positive, 0/16
+negative, 8/8 resource, Windows 2/2, golden 55, sensitivity 14,
+kind gate PASS with the argv-strip/relabel mutations FAIL — the
+consistent argv clone in its own declared slot remains the gate's
+documented one-report-fork residual, mitigated by battery reruns
+and adversarial rounds, as caveated above).
