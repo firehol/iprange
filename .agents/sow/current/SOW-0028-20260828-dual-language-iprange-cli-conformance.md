@@ -93,6 +93,12 @@ delivers after the 25 ms grace window and before process exit — the
 bounded TOCTOU class now identical in both products, disclosed in
 code and records.
 
+User decision (2026-09-06, recorded before the milestone-4 closure
+record below): milestone 4 (delivery step 5) is CLOSED at the final
+wave-10 revision; milestone 5 (delivery step 6, consolidated
+benchmark harness and measured ceilings) is NOT started; SOW-0028
+remains the sole active SOW.
+
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -5983,3 +5989,61 @@ kind gate PASS with the argv-strip/relabel mutations FAIL — the
 consistent argv clone in its own declared slot remains the gate's
 documented one-report-fork residual, mitigated by battery reruns
 and adversarial rounds, as caveated above).
+
+
+### Milestone 4 (delivery step 5) — closure record (2026-09-06)
+
+User decision (recorded above in the Status section): option 1A —
+milestone 4 is closed; milestone 5 is NOT started.  This record is
+the last repository commit before the external whole-milestone
+control review at the exact revision below; the control review's
+verdict is appended after it lands.
+
+- Final revision: commit `5939dc28b9802be902da56358d0f0083b0bc56e1` (extends the all-seven-PASS
+  revision `cbb373bf`; pushed; working tree clean at record time).
+- Internal gate: ALL SEVEN standing roles PASS the exact final
+  revision (tester, operations, parity, portability, security,
+  performance, glm-5.3-responses whole-milestone validator); every
+  verdict starts with the reviewed HEAD and its delta evidence is in
+  `.local/<role>/report*.md`.  The round restarted twice on verified
+  findings (Go clean-EOF FIFO signal race; Rust eof-first contract
+  gap) and both fixes are at the final product identities.
+- Product identities (staged, SHASUMS-recorded): Rust `de597e18…`
+  (linux) / `877824f0…` (windows), Go `b3a359c8…` (linux) /
+  `984d0e9d…` (windows); workers and fixture unchanged
+  (`cb9ad6cd…`, `202a83ac…`, `7c616793…`).
+- Evidence: matrices 38/38 both languages, 14 executed + 24 skipped
+  both mixed directions, crash positive 16/16 and negative 0/16,
+  resource 8/8, golden 55 exchanges, sensitivity 14 modes, Windows
+  housekeeping 2/2 (schema v3, 50-row removal logs, build
+  provenance at `e13be7ea`); kind gate PASS on the genuine committed
+  evidence with the argv-strip/pathless/relative forgery classes
+  REJECTED.
+- Disclosed residuals (accepted, recorded in code and records):
+  1. A termination signal the runtime delivers after the shared
+     25 ms EOF grace window and before process exit observes exit 0
+     — the bounded TOCTOU class, now identical in both products.
+  2. The kind gate's documented one-report-fork residual: a fully
+     consistent single-report rewrite (shas, argv, paths) passes in
+     its own declared slot; mitigated by the battery reruns and the
+     adversarial rounds, not by the mechanical gate.
+  3. The fixture-tool identity is a cross-report consistency anchor;
+     the gate does not hash the fixture binary on disk (documented in
+     the gate module).
+  4. Go deflate workspace charge pinned to the go1.26.4 toolchain
+     (`v4/go/internal/writer/metadata.go:31`, ~840 KiB vs ~1.08 MiB
+     under go1.27) — flagged to the user; owned by SOW-0025/SOW-0030,
+     no SOW-0028 product change.
+- Deferred ledger (mapped): parse-error `message` text differences
+  across products (P3, diagnostic-only, recorded; code/id/exit
+  behavior identical); the busy/reject split under sustained pressure
+  (D2-A: scheduler-dependent, non-contractual, diagnostic);
+  milestone 5 (benchmark harness and ceilings) NOT started per the
+  user decision, with the ~25 ms clean-EOF session floor recorded in
+  `resource-record.md` for its latency methodology; engine
+  performance residuals owned by pending SOW-0030; SOW-0017 (snapshot
+  signing) stays paused; SOW-0029 (WebSocket/daemon) stays pending.
+- Closure statement: milestone 4 (delivery step 5) is CLOSED.  The
+  next committed record is the external whole-milestone control
+  review verdict at the exact revision of this record; the internal
+  process claims no further repository change before that verdict.
