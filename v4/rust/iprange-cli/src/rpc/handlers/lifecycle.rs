@@ -346,8 +346,7 @@ pub(crate) fn metadata_value(value: &Value) -> Result<MetadataValue, HandlerErro
 fn read_bounded(path: &str, observed_len: u64) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
     let mut file = std::fs::File::open(path)?;
-    let cap = usize::try_from(iprange_livedb::MAX_METADATA_UNCOMPRESSED)
-        .unwrap_or(usize::MAX);
+    let cap = usize::try_from(iprange_livedb::MAX_METADATA_UNCOMPRESSED).unwrap_or(usize::MAX);
     let observed = usize::try_from(observed_len).unwrap_or(cap).min(cap);
     let mut bytes = Vec::with_capacity(observed);
     let mut chunk = [0u8; 64 * 1024];
@@ -512,8 +511,14 @@ fn abort_outcome(value: iprange_livedb::AbortOutcome) -> &'static str {
     }
 }
 
+/// Render one artifact basename to its documented opaque per-byte
+/// wire form (iprange-jsonrpc-v1.md): every stored byte becomes the
+/// same-numbered U+00xx character, so the JSON string preserves the
+/// exact stored bytes (UTF-16LE units on Windows, UTF-8 text on
+/// POSIX).  ASCII names therefore render unchanged, and non-ASCII
+/// names keep every unit instead of collapsing through UTF-8 lossy.
 pub(crate) fn basename(bytes: &[u8]) -> String {
-    String::from_utf8_lossy(bytes).into_owned()
+    bytes.iter().map(|&byte| char::from(byte)).collect()
 }
 
 /// Render one SDK-local basename to its wire text, honoring the
@@ -570,7 +575,10 @@ pub(crate) fn file_identity(identity: &LocalFileIdentity) -> Result<Value, Handl
 }
 
 pub(crate) fn housekeeping(state: Housekeeping, artifacts: &[HousekeepingArtifact]) -> Value {
-    let listed = artifacts.iter().map(housekeeping_artifact).collect::<Vec<_>>();
+    let listed = artifacts
+        .iter()
+        .map(housekeeping_artifact)
+        .collect::<Vec<_>>();
     match state {
         Housekeeping::None => json!({"artifacts": []}),
         Housekeeping::CrashReappearancePossible => {
@@ -805,9 +813,9 @@ pub(crate) fn validate_value_tag(value: &Value) -> Result<(), String> {
             .ok_or("value_tag.hex must be a string")?;
         let valid = tag.len() <= 30
             && tag.len() % 2 == 0
-            && tag.bytes().all(|byte| {
-                matches!(byte, b'0'..=b'9' | b'a'..=b'f')
-            });
+            && tag
+                .bytes()
+                .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'));
         let contains_nul = tag.as_bytes().chunks_exact(2).any(|pair| pair == b"00");
         if contains_nul {
             return Err("value_tag.hex must not encode a NUL byte".into());
@@ -998,31 +1006,35 @@ mod tests {
             unpublished_tail: None,
             error: problem,
         });
-        assert!(cleanup.get("identity").is_none(), "absent identity must be omitted");
+        assert!(
+            cleanup.get("identity").is_none(),
+            "absent identity must be omitted"
+        );
         assert!(super::super::publication_evidence::decode_cleanup_artifact(&cleanup).is_ok());
 
-        let housekeeping = super::housekeeping_artifact(&iprange_livedb::publication::HousekeepingArtifact {
-            state: iprange_livedb::publication::HousekeepingState::Inert,
-            directory_role: iprange_livedb::publication::DirectoryRole::MainFile,
-            directory_identity: artifact_identity(1, 3),
-            basename_encoding: 1,
-            attempt_id: [7; 16],
-            ordinal: 4,
-            envelope_basename: b"e".to_vec().into_boxed_slice(),
-            envelope_identity: artifact_identity(1, 4),
-            source_basename: b"s".to_vec().into_boxed_slice(),
-            inert_basename: b"i".to_vec().into_boxed_slice(),
-            source_presence: iprange_livedb::publication::ArtifactPresence::Unclassified,
-            source_identity: None,
-            inert_presence: iprange_livedb::publication::ArtifactPresence::Unclassified,
-            inert_identity: None,
-            kind: iprange_livedb::publication::ArtifactKind::OwnedMain,
-            creation_security: iprange_livedb::publication::CreationSecurity {
-                kind: 1,
-                commitment: [9; 32],
-            },
-            selected_envelope_sequence: 11,
-        });
+        let housekeeping =
+            super::housekeeping_artifact(&iprange_livedb::publication::HousekeepingArtifact {
+                state: iprange_livedb::publication::HousekeepingState::Inert,
+                directory_role: iprange_livedb::publication::DirectoryRole::MainFile,
+                directory_identity: artifact_identity(1, 3),
+                basename_encoding: 1,
+                attempt_id: [7; 16],
+                ordinal: 4,
+                envelope_basename: b"e".to_vec().into_boxed_slice(),
+                envelope_identity: artifact_identity(1, 4),
+                source_basename: b"s".to_vec().into_boxed_slice(),
+                inert_basename: b"i".to_vec().into_boxed_slice(),
+                source_presence: iprange_livedb::publication::ArtifactPresence::Unclassified,
+                source_identity: None,
+                inert_presence: iprange_livedb::publication::ArtifactPresence::Unclassified,
+                inert_identity: None,
+                kind: iprange_livedb::publication::ArtifactKind::OwnedMain,
+                creation_security: iprange_livedb::publication::CreationSecurity {
+                    kind: 1,
+                    commitment: [9; 32],
+                },
+                selected_envelope_sequence: 11,
+            });
         assert!(housekeeping.get("source_identity").is_none());
         assert!(housekeeping.get("inert_identity").is_none());
         let artifacts = serde_json::json!([housekeeping]);
@@ -1280,12 +1292,54 @@ mod local_basename_tests {
         }
     }
 
+    #[cfg(not(windows))]
     #[test]
     fn posix_encoding_renders_raw_bytes_lossy() {
         let name = std::env::temp_dir().join("live.iprange");
         let local = iprange_livedb::LocalBasename::from_path(&name).unwrap();
         assert_eq!(local.encoding(), 1);
         assert_eq!(local_basename_text(&local), "live.iprange");
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_encoding_renders_utf16le_text() {
+        let name = std::env::temp_dir().join("live.iprange");
+        let local = iprange_livedb::LocalBasename::from_path(&name).unwrap();
+        assert_eq!(local.encoding(), 2);
+        assert_eq!(local_basename_text(&local), "live.iprange");
+    }
+
+    #[test]
+    fn artifact_basename_wire_preserves_every_byte() {
+        // The opaque per-byte wire form (iprange-jsonrpc-v1.md):
+        // UTF-16LE units for "é" are E9 00; rendering must keep both
+        // bytes as the U+00E9 U+0000 characters, never collapse them
+        // through UTF-8 lossy, and decoding returns the exact units.
+        let units = [0xe9, 0x00];
+        let rendered = basename(&units);
+        assert_eq!(rendered, "\u{e9}\u{0}");
+        for (byte, ch) in units.iter().zip(rendered.chars()) {
+            assert_eq!(*byte as u32, ch as u32);
+        }
+        assert_eq!(String::from_utf8_lossy(&units), "\u{fffd}\u{0}");
+    }
+
+    #[test]
+    fn posix_artifact_basename_wire_preserves_every_byte() {
+        // The per-byte wire form keeps every stored byte exactly: an
+        // ASCII name renders unchanged, and multi-byte UTF-8 text
+        // renders as the same-numbered U+00xx characters (the opaque
+        // documented form), never through UTF-8 lossy.
+        let ascii = b"live.iprange";
+        assert_eq!(basename(ascii), "live.iprange");
+        let bytes = "größe.iprange".as_bytes();
+        let rendered = basename(bytes);
+        let projected: Vec<u32> = rendered.chars().map(|ch| ch as u32).collect();
+        assert_eq!(
+            projected,
+            bytes.iter().map(|&b| b as u32).collect::<Vec<_>>()
+        );
     }
 
     #[test]

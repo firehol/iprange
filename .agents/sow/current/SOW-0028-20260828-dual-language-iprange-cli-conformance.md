@@ -109,7 +109,8 @@ SOW-0030; milestone 5 (delivery step 6, dual-language CLI conformance
 benchmarks) remains unstarted per user decision 1A.  The wave-13
 Linux product identities are Go `7f88bb7c…` and Rust `24733db0…`; the
 Windows housekeeping evidence is at Go `42173bb7…` / Rust
-`6dcf2cb2…` built at `5346f716`.
+`de902a73…` built at `5346f716` (the recorded identity of the
+wave-13 committed report).
 
 Wave-14 state (2026-09-07): the external whole-milestone control
 review of the wave-13 revision returned NEEDS CHANGES with nine

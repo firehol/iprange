@@ -36,27 +36,33 @@ use serde_json::Value;
 // ---------------------------------------------------------------------------
 
 pub(crate) fn hex16(value: &Value, field: &str) -> Result<[u8; 16], String> {
-    let text = value.as_str().ok_or_else(|| format!("{field} must be a string"))?;
-    let bytes = decode_hex(text, 16).ok_or_else(|| {
-        format!("{field} must be 32 lowercase hexadecimal characters")
-    })?;
+    let text = value
+        .as_str()
+        .ok_or_else(|| format!("{field} must be a string"))?;
+    let bytes = decode_hex(text, 16)
+        .ok_or_else(|| format!("{field} must be 32 lowercase hexadecimal characters"))?;
     bytes
         .try_into()
         .map_err(|_| format!("{field} must be 32 lowercase hexadecimal characters"))
 }
 
 pub(crate) fn hex32(value: &Value, field: &str) -> Result<[u8; 32], String> {
-    let text = value.as_str().ok_or_else(|| format!("{field} must be a string"))?;
-    let bytes = decode_hex(text, 32).ok_or_else(|| {
-        format!("{field} must be 64 lowercase hexadecimal characters")
-    })?;
+    let text = value
+        .as_str()
+        .ok_or_else(|| format!("{field} must be a string"))?;
+    let bytes = decode_hex(text, 32)
+        .ok_or_else(|| format!("{field} must be 64 lowercase hexadecimal characters"))?;
     bytes
         .try_into()
         .map_err(|_| format!("{field} must be 64 lowercase hexadecimal characters"))
 }
 
 pub(crate) fn decode_hex(text: &str, length: usize) -> Option<Vec<u8>> {
-    if text.len() != length * 2 || !text.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase()) {
+    if text.len() != length * 2
+        || !text
+            .bytes()
+            .all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+    {
         return None;
     }
     let mut bytes = Vec::with_capacity(length);
@@ -69,14 +75,19 @@ pub(crate) fn decode_hex(text: &str, length: usize) -> Option<Vec<u8>> {
 }
 
 pub(crate) fn decimal_u64(value: &Value, field: &str) -> Result<u64, String> {
-    let text = value.as_str().ok_or_else(|| format!("{field} must be a string"))?;
+    let text = value
+        .as_str()
+        .ok_or_else(|| format!("{field} must be a string"))?;
     if text == "0" {
         return Ok(0);
     }
     if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) || text.starts_with('0') {
-        return Err(format!("{field} must be a canonical unsigned decimal string"));
+        return Err(format!(
+            "{field} must be a canonical unsigned decimal string"
+        ));
     }
-    text.parse().map_err(|_| format!("{field} must be a canonical unsigned decimal string"))
+    text.parse()
+        .map_err(|_| format!("{field} must be a canonical unsigned decimal string"))
 }
 
 pub(crate) fn u32_integer(value: &Value, field: &str) -> Result<u32, String> {
@@ -87,15 +98,24 @@ pub(crate) fn u32_integer(value: &Value, field: &str) -> Result<u32, String> {
 }
 
 pub(crate) fn boolean(value: &Value, field: &str) -> Result<bool, String> {
-    value.as_bool().ok_or_else(|| format!("{field} must be a boolean"))
+    value
+        .as_bool()
+        .ok_or_else(|| format!("{field} must be a boolean"))
 }
 
 pub(crate) fn string<'a>(value: &'a Value, field: &str) -> Result<&'a str, String> {
-    value.as_str().ok_or_else(|| format!("{field} must be a string"))
+    value
+        .as_str()
+        .ok_or_else(|| format!("{field} must be a string"))
 }
 
-pub(crate) fn object<'a>(value: &'a Value, field: &str) -> Result<&'a serde_json::Map<String, Value>, String> {
-    value.as_object().ok_or_else(|| format!("{field} must be an object"))
+pub(crate) fn object<'a>(
+    value: &'a Value,
+    field: &str,
+) -> Result<&'a serde_json::Map<String, Value>, String> {
+    value
+        .as_object()
+        .ok_or_else(|| format!("{field} must be an object"))
 }
 
 pub(crate) fn exact_members(
@@ -118,7 +138,10 @@ pub(crate) fn exact_members(
 }
 
 /// Decode the wire volume/file pair into a kind-1 SDK local identity.
-pub(crate) fn decode_file_identity(value: &Value, field: &str) -> Result<LocalFileIdentity, String> {
+pub(crate) fn decode_file_identity(
+    value: &Value,
+    field: &str,
+) -> Result<LocalFileIdentity, String> {
     let identity = object(value, field)?;
     exact_members(identity, &["volume", "file"], &[], field)?;
     let volume = decimal_u64(&identity["volume"], &format!("{field}.volume"))?;
@@ -126,7 +149,8 @@ pub(crate) fn decode_file_identity(value: &Value, field: &str) -> Result<LocalFi
     let mut bytes = [0u8; 32];
     bytes[0..8].copy_from_slice(&volume.to_le_bytes());
     bytes[8..16].copy_from_slice(&file.to_le_bytes());
-    Ok(LocalFileIdentity { kind: 1, bytes })
+    let kind = if cfg!(windows) { 2 } else { 1 };
+    Ok(LocalFileIdentity { kind, bytes })
 }
 
 pub(crate) fn optional_file_identity(
@@ -142,6 +166,31 @@ pub(crate) fn optional_file_identity(
         Some(identity) => decode_file_identity(identity, field).map(Some),
         None => Ok(None),
     }
+}
+
+/// Decode one artifact basename wire string back to its stored bytes.
+///
+/// Artifact basenames travel in the documented opaque per-byte wire
+/// form (iprange-jsonrpc-v1.md): encoding 2 (Windows UTF-16LE units)
+/// maps every stored byte to the same-numbered U+00xx character, and
+/// encoding 1 keeps the bytes as the text's UTF-8 encoding.  The
+/// per-byte form is exact for every byte value; decoding maps the
+/// wire characters back without loss.
+fn decode_artifact_basename(text: &str, encoding: u16, field: &str) -> Result<Box<[u8]>, String> {
+    if encoding == 1 {
+        return Ok(text.as_bytes().to_vec().into_boxed_slice());
+    }
+    let mut bytes = Vec::with_capacity(text.len());
+    for ch in text.chars() {
+        let code_point = ch as u32;
+        if code_point > 0xff {
+            return Err(format!(
+                "{field} has a character outside the per-byte wire form"
+            ));
+        }
+        bytes.push(code_point as u8);
+    }
+    Ok(bytes.into_boxed_slice())
 }
 
 /// Verify the wire basename against the destination path and return the
@@ -164,7 +213,9 @@ fn decode_value_tag(value: &Value, field: &str) -> Result<ValueTag, String> {
     let text = string(&tag["hex"], &format!("{field}.hex"))?;
     let bytes = decode_hex(text, text.len() / 2)
         .filter(|decoded| decoded.len() <= 15)
-        .ok_or_else(|| format!("{field}.hex must be even lowercase hex encoding at most 15 bytes"))?;
+        .ok_or_else(|| {
+            format!("{field}.hex must be even lowercase hex encoding at most 15 bytes")
+        })?;
     ValueTag::new(&bytes).ok_or_else(|| format!("{field} encodes an invalid value tag"))
 }
 
@@ -238,7 +289,10 @@ fn commit_durability(value: &Value) -> Result<CommitDurability, String> {
     }
 }
 
-pub(crate) fn coordination_cleanup(value: &Value, field: &str) -> Result<CoordinationCleanup, String> {
+pub(crate) fn coordination_cleanup(
+    value: &Value,
+    field: &str,
+) -> Result<CoordinationCleanup, String> {
     let cleanup = object(value, field)?;
     match cleanup.get("kind").and_then(Value::as_str) {
         None => {
@@ -284,7 +338,9 @@ pub(crate) fn decode_housekeeping(value: &Value, field: &str) -> Result<Housekee
     }
 }
 
-pub(crate) fn decode_housekeeping_artifacts(value: &Value) -> Result<Box<[HousekeepingArtifact]>, String> {
+pub(crate) fn decode_housekeeping_artifacts(
+    value: &Value,
+) -> Result<Box<[HousekeepingArtifact]>, String> {
     let artifacts = value
         .as_array()
         .ok_or("visible_housekeeping must be an array")?;
@@ -319,27 +375,49 @@ fn decode_housekeeping_artifact(value: &Value) -> Result<HousekeepingArtifact, S
         &["source_identity", "inert_identity"],
         "housekeeping artifact",
     )?;
+    let basename_encoding = u16_encoding(&artifact["basename_encoding"])?;
     Ok(HousekeepingArtifact {
         state: housekeeping_state(&artifact["state"])?,
         directory_role: directory_role(&artifact["directory_role"])?,
-        directory_identity: decode_file_identity(&artifact["directory_identity"], "directory_identity")?,
-        basename_encoding: u16_encoding(&artifact["basename_encoding"])?,
+        directory_identity: decode_file_identity(
+            &artifact["directory_identity"],
+            "directory_identity",
+        )?,
+        basename_encoding,
         attempt_id: hex16(&artifact["attempt_id"], "attempt_id")?,
         ordinal: u32_integer(&artifact["ordinal"], "ordinal")?,
-        envelope_basename: string(&artifact["envelope_basename"], "envelope_basename")
-            .map(|text| text.as_bytes().to_vec().into_boxed_slice())?,
-        envelope_identity: decode_file_identity(&artifact["envelope_identity"], "envelope_identity")?,
-        source_basename: string(&artifact["source_basename"], "source_basename")
-            .map(|text| text.as_bytes().to_vec().into_boxed_slice())?,
-        inert_basename: string(&artifact["inert_basename"], "inert_basename")
-            .map(|text| text.as_bytes().to_vec().into_boxed_slice())?,
+        envelope_basename: decode_artifact_basename(
+            string(&artifact["envelope_basename"], "envelope_basename")?,
+            basename_encoding,
+            "envelope_basename",
+        )?,
+        envelope_identity: decode_file_identity(
+            &artifact["envelope_identity"],
+            "envelope_identity",
+        )?,
+        source_basename: decode_artifact_basename(
+            string(&artifact["source_basename"], "source_basename")?,
+            basename_encoding,
+            "source_basename",
+        )?,
+        inert_basename: decode_artifact_basename(
+            string(&artifact["inert_basename"], "inert_basename")?,
+            basename_encoding,
+            "inert_basename",
+        )?,
         source_presence: artifact_presence(&artifact["source_presence"])?,
-        source_identity: optional_file_identity(artifact.get("source_identity"), "source_identity")?,
+        source_identity: optional_file_identity(
+            artifact.get("source_identity"),
+            "source_identity",
+        )?,
         inert_presence: artifact_presence(&artifact["inert_presence"])?,
         inert_identity: optional_file_identity(artifact.get("inert_identity"), "inert_identity")?,
         kind: artifact_kind(&artifact["kind"])?,
         creation_security: decode_creation_security(&artifact["creation_security"])?,
-        selected_envelope_sequence: decimal_u64(&artifact["selected_envelope_sequence"], "selected_envelope_sequence")?,
+        selected_envelope_sequence: decimal_u64(
+            &artifact["selected_envelope_sequence"],
+            "selected_envelope_sequence",
+        )?,
     })
 }
 
@@ -436,14 +514,23 @@ fn decode_commit_cleanup_artifact(value: &Value) -> Result<CommitCleanupArtifact
     )?;
     let basename = string(&artifact["main_basename"], "main_basename")?;
     Ok(CommitCleanupArtifact {
-        directory_identity: decode_file_identity(&artifact["directory_identity"], "directory_identity")?,
+        directory_identity: decode_file_identity(
+            &artifact["directory_identity"],
+            "directory_identity",
+        )?,
         main_basename: LocalBasename::from_path(Path::new(basename))
             .map_err(|_| "main_basename is not a valid basename".to_string())?,
         main_identity: decode_file_identity(&artifact["main_identity"], "main_identity")?,
         expected_database_id: hex16(&artifact["expected_database_id"], "expected_database_id")?,
-        target_transaction_id: decimal_u64(&artifact["target_transaction_id"], "target_transaction_id")?,
+        target_transaction_id: decimal_u64(
+            &artifact["target_transaction_id"],
+            "target_transaction_id",
+        )?,
         target_commit_nonce: hex16(&artifact["target_commit_nonce"], "target_commit_nonce")?,
-        committed_target_length: decimal_u64(&artifact["committed_target_length"], "committed_target_length")?,
+        committed_target_length: decimal_u64(
+            &artifact["committed_target_length"],
+            "committed_target_length",
+        )?,
         observed_tail_end_exclusive: match artifact.get("observed_tail_end_exclusive") {
             Some(value) if value.is_null() => {
                 return Err(
@@ -455,7 +542,9 @@ fn decode_commit_cleanup_artifact(value: &Value) -> Result<CommitCleanupArtifact
             None => None,
         },
         cleanup_error: error_code_from_wire(string(&artifact["cleanup_error"], "cleanup_error")?)
-            .ok_or_else(|| "cleanup_error is not a canonical SDK error name".to_string())?,
+            .ok_or_else(|| {
+            "cleanup_error is not a canonical SDK error name".to_string()
+        })?,
     })
 }
 
@@ -567,13 +656,22 @@ pub(crate) fn commit_result_from_wire(value: &Value) -> Result<CommitResult, Str
     )?;
     Ok(CommitResult {
         attempted_database_id: hex16(&commit["attempted_database_id"], "attempted_database_id")?,
-        directory_identity: decode_file_identity(&commit["directory_identity"], "directory_identity")?,
+        directory_identity: decode_file_identity(
+            &commit["directory_identity"],
+            "directory_identity",
+        )?,
         main_identity: decode_file_identity(&commit["main_identity"], "main_identity")?,
-        attempted_transaction_id: decimal_u64(&commit["attempted_transaction_id"], "attempted_transaction_id")?,
+        attempted_transaction_id: decimal_u64(
+            &commit["attempted_transaction_id"],
+            "attempted_transaction_id",
+        )?,
         attempted_commit_nonce: hex16(&commit["attempted_commit_nonce"], "attempted_commit_nonce")?,
         durability: commit_durability(&commit["durability"])?,
         cleanup: decode_commit_cleanup(&commit["cleanup"])?,
-        coordination_cleanup: coordination_cleanup(&commit["coordination_cleanup"], "coordination_cleanup")?,
+        coordination_cleanup: coordination_cleanup(
+            &commit["coordination_cleanup"],
+            "coordination_cleanup",
+        )?,
         cause: None,
     })
 }
@@ -609,10 +707,16 @@ pub(crate) fn create_result_from_wire(value: &Value, path: &str) -> Result<Creat
         database_id: hex16(&create["database_id"], "database_id")?,
         commit_nonce: hex16(&create["commit_nonce"], "commit_nonce")?,
         sidecar_id: hex16(&create["sidecar_id"], "sidecar_id")?,
-        directory_identity: optional_file_identity(create.get("directory_identity"), "directory_identity")?,
+        directory_identity: optional_file_identity(
+            create.get("directory_identity"),
+            "directory_identity",
+        )?,
         main_basename: decode_main_basename(&create["main_basename"], path)?,
         main_identity: optional_file_identity(create.get("main_identity"), "main_identity")?,
-        sidecar_identity: optional_file_identity(create.get("sidecar_identity"), "sidecar_identity")?,
+        sidecar_identity: optional_file_identity(
+            create.get("sidecar_identity"),
+            "sidecar_identity",
+        )?,
         reader_capacity: u32_integer(&create["reader_capacity"], "reader_capacity")?,
         state: creation_state(&create["state"])?,
         residue_possible: boolean(&create["residue_possible"], "residue_possible")?,
@@ -672,7 +776,10 @@ pub(crate) fn live_transition_result_from_wire(
         database_id: hex16(&transition["database_id"], "database_id")?,
         transaction_id: decimal_u64(&transition["transaction_id"], "transaction_id")?,
         commit_nonce: hex16(&transition["commit_nonce"], "commit_nonce")?,
-        directory_identity: decode_file_identity(&transition["directory_identity"], "directory_identity")?,
+        directory_identity: decode_file_identity(
+            &transition["directory_identity"],
+            "directory_identity",
+        )?,
         main_identity: decode_file_identity(&transition["main_identity"], "main_identity")?,
         main_basename: decode_main_basename(&transition["main_basename"], path)?,
         reader_capacity: u32_integer(&transition["reader_capacity"], "reader_capacity")?,
@@ -691,4 +798,34 @@ pub(crate) fn live_transition_result_from_wire(
         visible_housekeeping: decode_housekeeping_artifacts(&transition["visible_housekeeping"])?,
         cause: None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode_artifact_basename;
+
+    #[test]
+    fn artifact_basename_encoding1_keeps_utf8_bytes() {
+        let text = "größe.iprange";
+        let bytes =
+            decode_artifact_basename(text, 1, "source_basename").expect("encoding 1 decode");
+        assert_eq!(&*bytes, text.as_bytes());
+    }
+
+    #[test]
+    fn artifact_basename_encoding2_recovers_utf16le_units() {
+        // "é" in UTF-16LE is E9 00; the per-byte wire form renders it
+        // as U+00E9 U+0000 and the decoder must recover the exact
+        // units (a UTF-8-based round trip would produce EF BF BD 00).
+        let rendered = "\u{e9}\u{0}";
+        let bytes =
+            decode_artifact_basename(rendered, 2, "source_basename").expect("encoding 2 decode");
+        assert_eq!(&*bytes, &[0xe9, 0x00]);
+    }
+
+    #[test]
+    fn artifact_basename_encoding2_rejects_non_byte_characters() {
+        let result = decode_artifact_basename("caf\u{100}", 2, "source_basename");
+        assert!(result.is_err());
+    }
 }

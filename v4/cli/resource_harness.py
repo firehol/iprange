@@ -313,6 +313,9 @@ def read_responses(proc, expect, deadline_seconds,
             if raw_lines is not None:
                 raw_lines.append(line)
             payload = buf[:line_end]
+            if payload.endswith(b"\r"):
+                raise ResourceFailure(
+                    "response uses CRLF instead of LF")
             if len(payload) > frame.RESPONSE_OBJECT_LIMIT:
                 raise ResourceFailure(
                     f"response object of {len(payload)} bytes exceeds "
@@ -334,6 +337,22 @@ def read_responses(proc, expect, deadline_seconds,
     if buf:
         _PENDING_STDOUT_BYTES[proc.pid] = buf
     return responses
+
+
+def require_clean_drain(proc, proof, drained, eof):
+    """The expected responses must be the product's complete answer:
+    zero trailing bytes and a real EOF within the drain deadline.
+    Both proofs and the self-test share this gate so removing either
+    requirement is detectable."""
+    if drained:
+        raise ResourceFailure(
+            f"proof {proof}: {len(drained)} trailing stdout bytes after "
+            f"the expected responses; the response stream must be "
+            f"exactly the expected set")
+    if not eof:
+        raise ResourceFailure(
+            f"proof {proof}: stdout did not reach EOF within the drain "
+            f"deadline; trailing bytes could still follow undetected")
 
 
 def write_all_bounded(proc, payload, deadline_seconds, proof):
@@ -493,16 +512,18 @@ def proof_a(binary, label, work_dir, outcome):
 
         responses = read_responses(proc, 20, PROOF_A_READ_DEADLINE_SECONDS)
         outcome["responses"] = len(responses)
+        described_ids = [str(i) for i in range(2, 2 + PROOF_A_DESCRIBES)]
         outcome["busy_ids"] = sorted(
             (str(r.get("id")) for r in responses
-             if r.get("error", {}).get("code") == -32002),
+             if r.get("id") in set(described_ids)
+             and r.get("error", {}).get("code") == -32002),
             key=lambda value: int(value))
         outcome["ok_ids"] = sorted(
             (str(r.get("id")) for r in responses
-             if "result" in r and str(r.get("id")) != "1"),
+             if r.get("id") in set(described_ids) and "result" in r),
             key=lambda value: int(value))
         outcome["export_ids"] = [
-            r for r in responses if str(r.get("id")) == "1"]
+            r for r in responses if r.get("id") == "1"]
         outcome["export_code"] = (
             outcome["export_ids"][0].get("error", {}).get("code")
             if outcome["export_ids"] and "error" in outcome["export_ids"][0]
@@ -510,7 +531,6 @@ def proof_a(binary, label, work_dir, outcome):
         outcome["killed"] = False
         outcome["exit_code"] = None
 
-        described_ids = [str(i) for i in range(2, 2 + PROOF_A_DESCRIBES)]
         answered = outcome["busy_ids"] + outcome["ok_ids"]
         if len(responses) != 1 + PROOF_A_DESCRIBES:
             raise ResourceFailure(
@@ -539,12 +559,8 @@ def proof_a(binary, label, work_dir, outcome):
         # trailing frame (duplicate or malformed): drain to EOF and
         # require zero residue (external review finding).  The normal
         # EOF shutdown emits nothing else and exits 0.
-        drained, _ = drain_stdout(proc, PROOF_AD_DRAIN_DEADLINE_SECONDS)
-        if drained:
-            raise ResourceFailure(
-                f"proof a: {len(drained)} trailing stdout bytes after "
-                f"the {len(responses)} expected responses; the response "
-                f"stream must be exactly the expected set")
+        drained, eof = drain_stdout(proc, PROOF_AD_DRAIN_DEADLINE_SECONDS)
+        require_clean_drain(proc, "a", drained, eof)
         # EOF shutdown must terminate the process by itself with
         # exit code 0; a product that stays alive after all
         # responses is killed (recorded) and the proof fails.
@@ -637,6 +653,9 @@ def proof_b(binary, label, work_dir, outcome):
         # client validation, run.py decode_response_line) and the
         # 1,048,576-byte frame ceiling.  A malformed or oversized
         # response fails the proof instead of being accepted.
+        if raw_lines[0].rstrip(b"\n").endswith(b"\r"):
+            raise ResourceFailure(
+                "over-limit close response uses CRLF instead of LF")
         try:
             frame.decode_response(raw_lines[0].rstrip(b"\n").decode("utf-8"))
         except (frame.FrameError, UnicodeDecodeError) as exc:
@@ -943,7 +962,7 @@ def proof_d(binary, label, work_dir, outcome):
         outcome["responses"] = len(responses)
         outcome["killed"] = False
         outcome["exit_code"] = None
-        by_id = {str(r.get("id")): r for r in responses}
+        by_id = {r.get("id"): r for r in responses}
         if set(by_id) - {"1", "2"}:
             raise ResourceFailure(
                 f"unexpected response ids: {sorted(by_id)}")
@@ -977,12 +996,8 @@ def proof_d(binary, label, work_dir, outcome):
         # Any stdout byte after the expected responses is a stray
         # trailing frame (duplicate or malformed): drain to EOF and
         # require zero residue (external review finding).
-        drained, _ = drain_stdout(proc, PROOF_AD_DRAIN_DEADLINE_SECONDS)
-        if drained:
-            raise ResourceFailure(
-                f"proof d: {len(drained)} trailing stdout bytes after "
-                f"the expected responses; the response stream must be "
-                f"exactly the expected set")
+        drained, eof = drain_stdout(proc, PROOF_AD_DRAIN_DEADLINE_SECONDS)
+        require_clean_drain(proc, "d", drained, eof)
         # EOF shutdown must terminate the process by itself with
         # exit code 0 (same contract as proof a).
         try:
@@ -1225,6 +1240,39 @@ def self_test():
     finally:
         _kill_process_group(stub)
         stub.stdout.close()
+
+    # Proofs a/d drain-eof control: a product that answers the
+    # expected responses and then stays silent with stdout still open
+    # past the drain deadline must fail require_clean_drain (the same
+    # gate proofs a and d use).  Without the EOF requirement a late
+    # trailing frame could pass unnoticed after the drain deadline.
+    silent = subprocess.Popen(
+        ["/bin/sh", "-c",
+         "printf '%s\\n' '{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{}}' ; sleep 30"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, start_new_session=True)
+    record_spawn(silent)
+    try:
+        responses = read_responses(silent, 1, 2.0)
+        drained, reached_eof = drain_stdout(silent, 1.0)
+        if len(responses) != 1:
+            failures.append(
+                f"drain-eof control read {len(responses)} responses")
+        if reached_eof:
+            failures.append(
+                "drain-eof control reached EOF on a still-alive stub")
+        try:
+            require_clean_drain(silent, "control", drained, reached_eof)
+        except ResourceFailure:
+            pass
+        else:
+            failures.append(
+                "drain-eof control: require_clean_drain accepted a "
+                "non-EOF drain; proofs a/d would miss a late trailing "
+                "frame")
+    finally:
+        _kill_process_group(silent)
+        silent.stdout.close()
 
     # Proof-b controls: the single -32001 answer must satisfy the
     # server response envelope (shared frame.decode_response plus the

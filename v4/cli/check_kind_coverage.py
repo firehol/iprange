@@ -679,7 +679,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
             f"{sorted(REQUIRED_MATRICES)}")
         empty_stats = {"cases": len(report.get("cases", [])),
                        "fail_cases": 0, "pass_cases": 0, "contributing": 0}
-        return matrix, {}, empty_stats, problems
+        return matrix, {}, empty_stats, problems, None
     failed = report.get("failed", 0)
     if failed:
         problems.append(f"matrix {path}: report records {failed} failed case(s)")
@@ -777,6 +777,11 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                     f"{fixture!r} does not name the fixture binary the "
                     f"battery's crash report records "
                     f"({sorted(fixture_paths) or '<none>'})")
+    command_fixture = None
+    if namespace is not None:
+        named = namespace.fixture_tool
+        if named is not None:
+            command_fixture = os.path.realpath(named)
     cases = report.get("cases", [])
     # Counter cross-validation: the per-case status list is the truth;
     # a doctored aggregate can claim any number.  Cases that are not
@@ -1135,7 +1140,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                 bucket["opened"].add(implementations.get(actor, "?"))
     stats = {"cases": len(cases), "fail_cases": fail_cases,
              "pass_cases": pass_cases, "contributing": contributing}
-    return matrix, evidence, stats, problems
+    return matrix, evidence, stats, problems, command_fixture
 
 
 def _matrix_ref(entry):
@@ -1707,7 +1712,7 @@ def assess(matrix_paths, crash_paths):
         report = _load_report(path, problems)
         if report is None:
             continue
-        matrix, evidence, stats, _ = matrix_evidence(
+        matrix, evidence, stats, _, command_fixture = matrix_evidence(
             path, report, implementation_of, fixture_paths, problems)
         if matrix in REQUIRED_MATRICES:
             if matrix in seen_matrices:
@@ -1730,6 +1735,17 @@ def assess(matrix_paths, crash_paths):
             if isinstance(fixture_path, str) and isinstance(
                     fixture_sha, str):
                 real = os.path.realpath(fixture_path)
+                if command_fixture is not None and real != command_fixture:
+                    # The matrix's fixture facts must describe the
+                    # fixture its recorded command selected; a
+                    # different valid fixture path is contradictory
+                    # provenance even when both are crash-recorded
+                    # (external review finding).
+                    problems.append(
+                        f"matrix {path}: fixture_tool metadata names "
+                        f"{fixture_path!r} but the report command "
+                        f"selected {command_fixture!r}")
+                    continue
                 if real not in fixture_paths:
                     problems.append(
                         f"matrix {path}: fixture_tool {fixture_path!r} "
@@ -3211,15 +3227,53 @@ def _self_test():
             path = os.path.join(work, f"fixture-conflict-{index}.json")
             assign(path, report)
             paths.append(path)
-        crash_first = os.path.join(work, "fixture-conflict-crash-1.json")
-        crash_second = os.path.join(work, "fixture-conflict-crash-2.json")
-        assign(crash_first, crash)
-        assign(crash_second, crash_conflict)
-        problems, _c, _s = assess(paths, [crash_first, crash_second])
-        assert problems, (
-            "cross-crash fixture sha conflict did not fail the gate")
+        for label, first, second in (
+                ("conflict-first", crash_conflict, crash),
+                ("genuine-first", crash, crash_conflict)):
+            crash_first = os.path.join(
+                work, f"fixture-conflict-{label}-1.json")
+            crash_second = os.path.join(
+                work, f"fixture-conflict-{label}-2.json")
+            assign(crash_first, first)
+            assign(crash_second, second)
+            problems, _c, _s = assess(
+                paths, [crash_first, crash_second])
+            assert any("contradicts the earlier identity" in problem
+                       for problem in problems), (
+                f"cross-crash fixture sha conflict ({label}) did not "
+                f"fail the gate: {problems}")
 
-        # 44. Positive control for the explicit-actor contract
+        # 44. Matrix fixture facts bound to the command-selected
+        #     fixture (external review finding): a matrix whose
+        #     command selects fixture A but whose fixture_tool
+        #     metadata claims a different crash-recorded fixture B
+        #     (path and hash) is contradictory provenance and must
+        #     fail the gate.
+        matrices, crash = load_genuine()
+        crash_other = _copy.deepcopy(crash)
+        crash_other["binaries"]["fixture_tool"] = "/tmp/v4-fixture-b"
+        crash_other["binaries"]["fixture_tool_sha256"] = "4" * 64
+        other_command = crash_other["command"]
+        other_command[other_command.index("--fixture-tool") + 1] = \
+            "/tmp/v4-fixture-b"
+        matrices[2]["fixture_tool"] = {
+            "path": "/tmp/v4-fixture-b", "sha256": "4" * 64}
+        paths = []
+        for index, report in enumerate(matrices):
+            path = os.path.join(work, f"fixture-bound-{index}.json")
+            assign(path, report)
+            paths.append(path)
+        crash_bound = os.path.join(work, "fixture-bound-crash.json")
+        crash_other_path = os.path.join(work, "fixture-bound-crash-2.json")
+        assign(crash_bound, crash)
+        assign(crash_other_path, crash_other)
+        problems, _c, _s = assess(
+            paths, [crash_bound, crash_other_path])
+        assert any("metadata names" in problem for problem in problems), (
+            f"matrix fixture facts claiming a fixture the command did "
+            f"not select did not fail the gate: {problems}")
+
+        # 45. Positive control for the explicit-actor contract
         #     (external review finding): capability is a property of
         #     the method, not of the actor who executes it.  The
         #     role-inverted database.metadata workflow (the consumer

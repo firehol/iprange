@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"unsafe"
 
@@ -172,6 +173,26 @@ func u16IntegerFromWire(object rawObject, field string) (uint16, error) {
 
 // decodeFileIdentity decodes one wire volume/file identity pair into
 // the kind-1 SDK identity (Rust decode_file_identity).
+// decodeArtifactBasename decodes one artifact basename wire string
+// back to its stored bytes. Artifact basenames travel in the
+// documented opaque per-byte wire form (iprange-jsonrpc-v1.md):
+// encoding 2 (Windows UTF-16LE units) maps every stored byte to the
+// same-numbered U+00xx character, and encoding 1 keeps the bytes as
+// the text's UTF-8 encoding.
+func decodeArtifactBasename(text string, encoding uint16, field string) ([]byte, error) {
+	if encoding == 1 {
+		return []byte(text), nil
+	}
+	bytes := make([]byte, 0, len(text))
+	for _, ch := range text {
+		if ch > 0xff {
+			return nil, fmt.Errorf("%s has a character outside the per-byte wire form", field)
+		}
+		bytes = append(bytes, byte(ch))
+	}
+	return bytes, nil
+}
+
 func decodeFileIdentity(object rawObject, field string) (iprangedb.FileIdentity, error) {
 	var identity iprangedb.FileIdentity
 	if err := exactMembers(object, []string{"volume", "file"}, nil, field); err != nil {
@@ -188,6 +209,9 @@ func decodeFileIdentity(object rawObject, field string) (iprangedb.FileIdentity,
 	binary.LittleEndian.PutUint64(identity.Bytes[0:8], volume)
 	binary.LittleEndian.PutUint64(identity.Bytes[8:16], file)
 	identity.Kind = 1
+	if runtime.GOOS == "windows" {
+		identity.Kind = 2
+	}
 	return identity, nil
 }
 
@@ -768,10 +792,22 @@ func decodeHousekeepingArtifact(object rawObject) (iprangedb.HousekeepingArtifac
 	artifact.BasenameEncoding = basenameEncoding
 	artifact.AttemptID = attemptID
 	artifact.Ordinal = ordinal
-	artifact.EnvelopeBasename = []byte(envelopeBasename)
+	envelopeBasenameBytes, err := decodeArtifactBasename(envelopeBasename, basenameEncoding, "envelope_basename")
+	if err != nil {
+		return artifact, err
+	}
+	artifact.EnvelopeBasename = envelopeBasenameBytes
 	artifact.EnvelopeIdentity = envelopeIdentity
-	artifact.SourceBasename = []byte(sourceBasename)
-	artifact.InertBasename = []byte(inertBasename)
+	sourceBasenameBytes, err := decodeArtifactBasename(sourceBasename, basenameEncoding, "source_basename")
+	if err != nil {
+		return artifact, err
+	}
+	artifact.SourceBasename = sourceBasenameBytes
+	inertBasenameBytes, err := decodeArtifactBasename(inertBasename, basenameEncoding, "inert_basename")
+	if err != nil {
+		return artifact, err
+	}
+	artifact.InertBasename = inertBasenameBytes
 	artifact.SourcePresence = sourcePresence
 	artifact.SourceIdentity = sourceIdentity
 	artifact.InertPresence = inertPresence
