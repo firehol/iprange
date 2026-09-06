@@ -300,7 +300,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "4b9683b5b89b029f0cc9ef040611d8b5cf5806b57f2c8f43187f34b8d28e78ae"
+      "sha256": "de597e187afbd7ee8108794273cbc1e32b429e495432d8a053fa8dc7f552da8a"
     }
   },
   "cases": [
@@ -2015,9 +2015,9 @@
     "--matrix",
     "go",
     "--work-dir",
-    "/tmp/qualsvc/ev17/work4/m-go",
+    "/tmp/qualsvc/ev17/work5/m-go",
     "--json-report",
-    "/tmp/qualsvc/ev17/reports4/matrix-go.json"
+    "/tmp/qualsvc/ev17/reports5/matrix-go.json"
   ],
   "environment_allowlist": [
     "PATH",

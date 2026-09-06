@@ -26,19 +26,20 @@ sections.
   rustc 1.91.1) staged as
   `/tmp/qualsvc/ev17/bin/rust/{iprange,iprange-v4-worker,v4-fixture}`:
   - product SHA-256
-    `4b9683b5b89b029f0cc9ef040611d8b5cf5806b57f2c8f43187f34b8d28e78ae`
-    (changed by the second wave-10 repair round in
-    `v4/rust/iprange-cli/src/rpc/session.rs`: the signal watcher
-    force-exits non-zero 1 s after signal consumption as a
-    process-lifetime bound, independent of fatal-event delivery, so
-    a partially-filled or fully-wedged transport can no longer
-    ignore SIGINT/SIGTERM, and the EOF path reports non-zero when a
-    signal raced EOF; the first round's wedged-transport watchdog,
-    the ninth-wave shutdown-abortable bounded retry, the
-    eighth-wave writer-guard scope, the seventh-wave per-member
-    cancellation, bounded transport channels, immediate
-    all-rejected batch answers, and non-zero framing-failure exit
-    are included);
+    `de597e187afbd7ee8108794273cbc1e32b429e495432d8a053fa8dc7f552da8a`
+    (changed by the third wave-10 role round in
+    `v4/rust/iprange-cli/src/rpc/session.rs`: the EOF tail now
+    polls the watcher's recorded flag for the same 25 ms grace
+    window Go uses, so the supervisor eof-first shape (close stdin,
+    signal back-to-back) is deterministic non-zero instead of ~3/4
+    exit-zero; the second round's process-lifetime 1 s force-exit
+    bound, independent of fatal-event delivery, so a partially-filled
+    or fully-wedged transport can no longer ignore SIGINT/SIGTERM;
+    the first round's wedged-transport watchdog, the ninth-wave
+    shutdown-abortable bounded retry, the eighth-wave writer-guard
+    scope, the seventh-wave per-member cancellation, bounded
+    transport channels, immediate all-rejected batch answers, and
+    non-zero framing-failure exit are included);
   - worker SHA-256
     `cb9ad6cd82a03b7933d706de9e1b4e4c707836962b7f00e194c5d50cd4511e94`
     (unchanged; build-proven identity, not pinned by the committed
@@ -74,12 +75,12 @@ sections.
     pinned by the committed reports).
 - Windows qualification binaries (built on the authorized Windows
   validation host at the wave-10 product-source revision
-  `7bc59597`, clean working tree, staged under `C:/Temp/qualsvc-win/`):
+  `e13be7ea`, clean working tree, staged under `C:/Temp/qualsvc-win/`):
   - Go product SHA-256
     `984d0e9d7636aac1a82786416d1ad33dbb0fb28b1aebadc748ac850001395454`
     (go1.26.5 windows/amd64, `-buildvcs=false`);
   - Rust product SHA-256
-    `8fb912b733706add1c64994c5f0fa0fe1523169cbef79836ef22d7b0022c2edd`
+    `877824f019ec4b460ce4ac8dde08eb13d4c694e5a647080a8b795f7a01245614`
     (rustc 1.97.1).
   Build commands, toolchain, and source revision are recorded in
   the report's `build_provenance` block.
@@ -142,7 +143,7 @@ under `nice` with work dirs under `/tmp/qualsvc/ev17/work2/`
 are invoked with `--allow-skips` (recorded truthfully in each
 report command) so every battery command exits 0.  The Windows
 housekeeping evidence is regenerated at the wave-10 product sources
-(`7bc59597`) on the authorized Windows validation host with the
+(`e13be7ea`) on the authorized Windows validation host with the
 deadline-bounded client running in its Windows thread mode; the
 report schema is v3 with the exact 50-record removal log and
 build provenance.
