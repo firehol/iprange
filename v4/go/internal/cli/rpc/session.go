@@ -266,9 +266,16 @@ func (s *Session) Run(reader io.Reader, writer io.Writer) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
-	sigDone := make(chan struct{})
+	// sigRecorded closes the moment the watcher has recorded the
+	// signal in the control plane.  The EOF exit path observes this
+	// channel (never sigCh itself: Go serves channel receivers FIFO
+	// and the watcher has been parked on sigCh since session start,
+	// so an EOF-path receive could never win and the recorded signal
+	// would be invisible to the exit-zero decision).  The close
+	// happens before the graceful delivery, so a receive on
+	// sigRecorded also orders the flag write.
+	sigRecorded := make(chan struct{})
 	go func() {
-		defer close(sigDone)
 		sig := <-sigCh
 		err := errors.New("terminated by signal " + sig.String())
 		st := s.state
@@ -278,6 +285,7 @@ func (s *Session) Run(reader io.Reader, writer io.Writer) error {
 			st.control.fatalWrite = err
 		}
 		st.controlMu.Unlock()
+		close(sigRecorded)
 		go reportFatal(events, s, err)
 		time.Sleep(signalForceExitTimeout)
 		// Reached only when the process did not exit through the
@@ -340,43 +348,19 @@ loop:
 	// cannot happen without shutdown) this wait still terminates.
 	<-s.workerDone
 	if runErr == nil {
-		// A termination signal observed before or during EOF always
-		// wins over the exit-zero EOF path (termination signals are
-		// fatal transport failures; the EOF branch may have raced the
-		// watcher's event delivery with the EOF event).
-		st := s.state
-		st.controlMu.Lock()
-		terminated := st.control.terminationSignal
-		err := st.control.fatalWrite
-		st.controlMu.Unlock()
-		if terminated && err != nil {
+		// A termination signal recorded before or during the shutdown
+		// tail always wins over the exit-zero EOF path.  The watcher
+		// closed sigRecorded after writing the control plane, so a
+		// signal recorded at any earlier point makes this receive
+		// return immediately; a signal recorded while this select is
+		// waiting closes the channel within the grace window.  The
+		// only unobservable residual is a signal the runtime delivers
+		// after the grace window and before the process exits — the
+		// same sub-millisecond TOCTOU class the Rust implementation
+		// has with its process-mask sigwait.
+		if err := s.waitSignalRecorded(sigRecorded, signalEofGracePoll); err != nil {
 			runErr = err
-		} else {
-			// Go delivers signals to Notify channels asynchronously;
-			// a termination signal sent together with EOF (the
-			// supervisor stop sequence) can still be pending in the
-			// runtime when the flag check above ran.  Poll the signal
-			// channel briefly before accepting the exit-zero EOF
-			// outcome so the pending signal is consumed and wins
-			// (Rust cannot lose this race: the signal sits pending in
-			// the process mask until sigwait consumes it).
-			select {
-			case sig := <-sigCh:
-				sigErr := errors.New("terminated by signal " + sig.String())
-				st.controlMu.Lock()
-				st.control.terminationSignal = true
-				if st.control.fatalWrite == nil {
-					st.control.fatalWrite = sigErr
-				}
-				st.controlMu.Unlock()
-				runErr = sigErr
-			case <-time.After(signalEofGracePoll):
-			}
 		}
-	}
-	select {
-	case <-sigDone:
-	default:
 	}
 	if runErr != nil {
 		return runErr
@@ -495,12 +479,31 @@ func (s *Session) fatal(err error, _ io.Writer, _ *FrameWriter) error {
 // fatal event delivery can block (second role-round finding).
 const signalForceExitTimeout = 1 * time.Second
 
-// signalEofGracePoll is how long the clean-EOF exit path waits for a
-// termination signal that may be pending in the runtime (Go delivers
-// signals to Notify channels asynchronously).  Enough for the runtime
-// to wake the watcher; the concurrent signal+EOF supervisor pattern
-// is then consumed before the exit-zero result is accepted.
+// signalEofGracePoll is how long the clean-EOF exit path waits for
+// the watcher's signal recording after the worker joined.  Go
+// delivers signals to Notify channels asynchronously, so a
+// supervisor that closes stdin and signals together may still have
+// the signal pending in the runtime; the grace window lets the
+// watcher consume and record it before the exit-zero result is
+// accepted.
 const signalEofGracePoll = 25 * time.Millisecond
+
+// waitSignalRecorded waits up to grace for the termination-signal
+// watcher's recording and returns the recorded fatal error, or nil
+// when no signal was recorded within the window. It never receives
+// from sigCh itself, for the FIFO reason documented at the watcher.
+func (s *Session) waitSignalRecorded(sigRecorded <-chan struct{}, grace time.Duration) error {
+	select {
+	case <-sigRecorded:
+		st := s.state
+		st.controlMu.Lock()
+		err := st.control.fatalWrite
+		st.controlMu.Unlock()
+		return err
+	case <-time.After(grace):
+		return nil
+	}
+}
 
 // reportFatal delivers the worker's terminal failure to the main
 // loop without ever blocking past shutdown. The main loop stops

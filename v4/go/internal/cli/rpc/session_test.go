@@ -1167,3 +1167,34 @@ func TestEOFReachesActiveSlowRequest(t *testing.T) {
 	assertFactualCancellation(t, got[0], "slow")
 	assertResultID(t, got[1], "fill")
 }
+
+// TestWaitSignalRecordedPinsEOFExitZero pins the primitive the
+// clean-EOF path uses to give a recorded termination signal priority
+// over the exit-zero outcome: a closed sigRecorded channel yields the
+// watcher's recorded error, an open channel times out to nil.  The
+// FIFO dead-receive defect (EOF path receiving from sigCh directly)
+// cannot regress because this helper never receives from sigCh.
+func TestWaitSignalRecordedPinsEOFExitZero(t *testing.T) {
+	state := NewSessionState()
+	recorded := make(chan struct{})
+	errProbe := errors.New("terminated by signal terminated")
+	session := &Session{state: state}
+
+	// Open channel: no signal was recorded; the wait returns nil.
+	state.controlMu.Lock()
+	state.control.fatalWrite = nil
+	state.controlMu.Unlock()
+	if err := session.waitSignalRecorded(recorded, 10*time.Millisecond); err != nil {
+		t.Fatalf("open channel: got %v, want nil", err)
+	}
+
+	// Closed channel after a recording: the recorded error wins the
+	// exit-zero decision.
+	state.controlMu.Lock()
+	state.control.fatalWrite = errProbe
+	state.controlMu.Unlock()
+	close(recorded)
+	if err := session.waitSignalRecorded(recorded, 10*time.Millisecond); err != errProbe {
+		t.Fatalf("closed channel: got %v, want the recorded signal error", err)
+	}
+}
