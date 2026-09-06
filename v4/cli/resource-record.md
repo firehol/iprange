@@ -132,4 +132,7 @@ revision; the worker and fixture identities are build-proven there
 as well).
 
 Deferred to delivery step 6: latency/throughput and engine RSS
-ceilings only.
+ceilings only.  Wave-10 note: the D1-A signal contract adds a
+deliberate ~25 ms grace wait to every clean-EOF exit in both
+products (measured ~31 ms total per session); milestone 5 must treat
+that as the per-session floor in latency benchmarks.

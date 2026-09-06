@@ -79,10 +79,19 @@ Wave-10 state (2026-09-06): the first role-based review round
 FAILed with eleven verified findings; all four user decisions
 (D1-A, D2-A, D3-A, D4-A) were approved; the second round FAILed with
 ten verified findings, all repaired and validated; the third round
-found and closed the Go clean-EOF signal race and one committed-test
-coverage gap.  Linux evidence and the Windows-host regeneration at
-the final identities are recorded in the Tenth wave section; the
-third-round verdicts are being finalized at the wave HEAD.
+found and closed the Go clean-EOF signal race and the Rust
+eof-first contract gap (the Rust EOF tail now polls the watcher's
+recorded flag for the same 25 ms grace Go uses), plus one
+committed-test coverage gap.  ALL SEVEN ROLES PASS the final
+revision `ca3fad02` (tester, operations, parity, portability,
+security, performance, and the glm-5.3-responses whole-milestone
+validator; verdicts recorded in the Tenth wave section).  Linux
+evidence and the Windows-host regeneration at the final identities
+(`de597e18…` rust, `b3a359c8…` go, Windows `877824f0…`/`984d0e9d…`)
+are committed; the only shared residual is a signal the runtime
+delivers after the 25 ms grace window and before process exit — the
+bounded TOCTOU class now identical in both products, disclosed in
+code and records.
 
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
