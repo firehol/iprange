@@ -26,17 +26,19 @@ sections.
   rustc 1.91.1) staged as
   `/tmp/qualsvc/ev17/bin/rust/{iprange,iprange-v4-worker,v4-fixture}`:
   - product SHA-256
-    `2315e28a3667da1ec17d5c877b5018a39cc2f10b0a1eb41db0c493137877ae04`
-    (changed by the tenth-wave termination-signal scope in
+    `4b9683b5b89b029f0cc9ef040611d8b5cf5806b57f2c8f43187f34b8d28e78ae`
+    (changed by the second wave-10 repair round in
     `v4/rust/iprange-cli/src/rpc/session.rs`: the signal watcher
-    records the consumed signal in the control plane, retries the
-    fatal report with explicit yields, and force-exits non-zero when
-    the events channel stays full; the EOF path reports non-zero when
-    a signal raced EOF; the ninth-wave shutdown-abortable bounded
-    retry, the eighth-wave writer-guard scope, the seventh-wave
-    per-member cancellation, bounded transport channels, immediate
-    all-rejected batch answers, and non-zero framing-failure exit are
-    included);
+    force-exits non-zero 1 s after signal consumption as a
+    process-lifetime bound, independent of fatal-event delivery, so
+    a partially-filled or fully-wedged transport can no longer
+    ignore SIGINT/SIGTERM, and the EOF path reports non-zero when a
+    signal raced EOF; the first round's wedged-transport watchdog,
+    the ninth-wave shutdown-abortable bounded retry, the
+    eighth-wave writer-guard scope, the seventh-wave per-member
+    cancellation, bounded transport channels, immediate
+    all-rejected batch answers, and non-zero framing-failure exit
+    are included);
   - worker SHA-256
     `cb9ad6cd82a03b7933d706de9e1b4e4c707836962b7f00e194c5d50cd4511e94`
     (unchanged; build-proven identity, not pinned by the committed
@@ -49,17 +51,19 @@ sections.
   pair (go1.26 linux/amd64, no embedded vcs revision) staged as
   `/tmp/qualsvc/ev17/bin/go/{iprange,iprange-v4-worker}`:
   - product SHA-256
-    `3bf33dfddc12d6ec8d19be2f914250ad29c414acd1bcb12e3f87d866da323824`
-    (changed by the tenth-wave termination-signal scope in
-    `v4/go/internal/cli/rpc/session.go`: the signal watcher no longer
-    selects on reader EOF, records the signal in the control plane,
-    and arms a watchdog that force-exits non-zero when the events
-    channel stays full, so a wedged transport can never ignore
-    SIGINT/SIGTERM; the EOF exit path reports non-zero when a signal
-    raced EOF; the ninth-wave fatal-report select, the seventh-wave
-    per-member cancellation, bounded transport channels, immediate
-    all-rejected batch answers, and non-zero framing-failure exit are
-    included);
+    `42270270d40c634b48c3642e0bb229aeee9d59b89f92e351b8dadab3b96ae198`
+    (changed by the second wave-10 repair round in
+    `v4/go/internal/cli/rpc/session.go`: the signal watcher
+    force-exits non-zero 1 s after signal consumption as a
+    process-lifetime bound, independent of fatal-event delivery, so
+    a partially-filled or fully-wedged transport can no longer
+    ignore SIGINT/SIGTERM, and the clean-EOF path polls 25 ms for a
+    pending signal so the runtime-delivery race cannot win over the
+    signal-wins-over-EOF contract; the first round's
+    wedged-transport watchdog, the ninth-wave fatal-report select,
+    the seventh-wave per-member cancellation, bounded transport
+    channels, immediate all-rejected batch answers, and non-zero
+    framing-failure exit are included);
   - worker SHA-256
     `202a83ac92f5c8b85b44068a1553aef0dbf25a81fb2d888022592292d03b6141`
     (the worker source tree is unchanged since the eighth wave and
