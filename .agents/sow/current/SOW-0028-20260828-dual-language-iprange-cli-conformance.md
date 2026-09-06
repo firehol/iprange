@@ -111,6 +111,27 @@ Linux product identities are Go `7f88bb7c…` and Rust `24733db0…`; the
 Windows housekeeping evidence is at Go `42173bb7…` / Rust
 `6dcf2cb2…` built at `5346f716`.
 
+Wave-14 state (2026-09-07): the external whole-milestone control
+review of the wave-13 revision returned NEEDS CHANGES with nine
+findings (held-open LIMIT+1 non-CR frames wedged both products
+without the -32001 + close; the Rust Windows `main_basename`
+round-trip emitted NUL-interleaved UTF-16LE bytes; the full-stderr
+signal tests no longer exercised the watchdog; a Rust full-stderr
+fixture read past a one-byte buffer; kind-gate and proof-a/d gate
+gaps; Go StdoutPipe/Wait test races; two record P3s).  All repair
+work is recorded in the "Wave 14" section below; the wave-14
+product-source revision is `e272c990` with Linux identities Go
+`d228ebe5…` and Rust `6ab63dfd…` (worker and fixture are
+`202a83ac…`/`cb9ad6cd…`/`d615488f…`), Windows identities Go
+`fb6b503a…` and Rust `a6ec5b45…`, and every battery gate green at
+the wave-14 revision (matrices 38/38 single, 14+24 mixed; crash
+16/16; resource 8/8; golden 55; sensitivity 14; kind gate PASS;
+Windows housekeeping 2/2 with clean `main_basename` from both
+products).  The milestone-4 closure recorded at `b947d8a6` is
+re-opened pending the wave-14 role round and external control
+re-review; milestone 5 remains unstarted per user decision 1A.
+
+
 
 User decision (2026-09-06, recorded before the milestone-4 closure
 record below): milestone 4 (delivery step 5) is CLOSED at the final
@@ -6536,3 +6557,128 @@ is not waived; engine-level performance residuals remain owned by
 SOW-0030; this SOW-0028 remains open for delivery step 6
 (dual-language CLI conformance benchmarks, milestone 5) which stays
 unstarted per user decision 1A.
+
+### Wave 14 (2026-09-07) — external whole-milestone control review FAIL (held-over-limit framing, Windows basename round-trip, watchdog coverage) and repair
+
+The external whole-milestone control review of the wave-13 revision
+(`b947d8a6`) returned NEEDS CHANGES.  The findings and their
+disposition:
+
+1. P1 — a held-open frame of exactly LIMIT+1 bytes whose last byte
+   is not the CR of a CRLF terminator wedged both products: the
+   readers retained the bytes and awaited another one forever, so a
+   peer holding stdin open never saw the -32001 + close (Go
+   `framing.go`, Rust `framing.rs`).  The one-extra-byte allowance
+   now applies only when the last byte is CR; any other LIMIT+1-th
+   byte makes the payload definitively over the ceiling and is
+   reported immediately, without waiting for the terminator or EOF.
+   Regression tests: Go `TestOversizedHeldNonCRFrameAnswersAndExits`,
+   Rust `oversized_held_non_cr_frame_answers_and_exits` (held-open
+   stdin, -32001 + exit 1); unit tests pin the non-CR immediate
+   shape (`held_limit_plus_one_non_cr_is_immediate`) and the CR-tail
+   /LF legal boundary (`held_limit_plus_one_cr_tail_resolves_on_lf`).
+   Measured: both products exit 1 in ~0.02 s on the held shape.
+
+2. P1 — the Rust Windows `main_basename` round-trip was broken:
+   `LocalBasename` stores UTF-16LE units (encoding 2) on Windows but
+   the wire rendering passed the raw units through UTF-8 lossy,
+   emitting NUL-interleaved mojibake that the resolvers rejected
+   (`decode_main_basename` compares against the clean destination
+   basename).  `create_result`, `commit_cleanup_artifact`, and the
+   live transition now render `LocalBasename` through an
+   encoding-aware decoder (encoding 2 -> UTF-16LE text, else UTF-8
+   lossy) in `handlers/lifecycle.rs` and `handlers/live.rs`.  The
+   Go product always stores encoding-1 bytes and was unaffected.
+   Regression tests: the encoding-2 decode path is exercised on
+   Linux with raw UTF-16LE units (`utf16le_encoding_renders_to_clean_text`,
+   lossy odd-tail, and encoding-1 from_path).
+
+3. P1 — the full-stderr signal tests signalled an idle session,
+   which exits through the graceful path before the watchdog fires;
+   the wedged-session force-exit that the tests claim was not
+   exercised.  The Go helper gained a `full-stderr-wedged` mode and
+   the Rust spawn now wedges the session (fill stdout, never
+   drained) before signalling, so the process-lifetime watchdog's
+   detached-diagnostic path is genuinely tested.
+
+4. P2 — the Rust full-stderr fixture read 4096 bytes from a
+   one-byte buffer and treated any write error as full-pipe proof.
+   It now fills from a real buffer and requires EAGAIN at the
+   terminal error.
+
+5. P2 — the kind gate's fixture-identity anchor was bypassable: a
+   fixture path recorded without a sha256 skipped the matrix
+   comparison, and two crash reports naming the same path with
+   different hashes silently overwrote.  The gate now fails both
+   shapes and adds the corresponding records checks.
+
+6. P2 — resource proofs a and d ignored stdout residue after the
+   expected responses: a stray duplicate or malformed trailing
+   frame could pass.  Both proofs now drain stdout to EOF and
+   require zero trailing bytes; a new `resource_harness.py
+   --self-test` control pins the detection.
+
+7. P2 — the Go signal tests raced `Wait()` against `StdoutPipe`
+   reads (the StdoutPipe contract forbids it), and the full-stderr
+   tests closed raw pipe fds behind an `*os.File` whose finalizer
+   could later close a reused fd number, causing intermittent EBADF
+   flakes across the suite under load (reproduced at the wave-13
+   revision).  The oversized-frame tests now read the response
+   before starting `Wait`, and both full-stderr tests close through
+   the `*os.File` rather than a raw `syscall.Close`.
+
+8. P3 — `v4/cli/README.md` still said 53 golden exchanges; the
+   corpus has 55.  Fixed.
+
+9. P3 — historical commit messages contain AI tool names.  History
+   is not rewritten (needs user approval); noted here for the
+   record.
+
+#### Validated fixes, before the wave-14 role-round delta
+
+- Go: `go vet` clean, `gofmt` clean, `go test ./...` PASS at the
+  wave-14 revision, including the new held-open non-CR test and the
+  wedged full-stderr signal test; the full-stderr suite ran three
+  consecutive clean `-count=2` full-suite passes with the fd
+  finalizer repair (previously ~50% flaky under load).
+- Rust: `cargo test` workspace PASS (880 suites), including the
+  framing unit tests, the new held-open non-CR integration test, the
+  wedged full-stderr test, and the basename decode tests.
+- Framework self-tests: `resource_harness.py --self-test` PASS
+  (read, write, duplicate-id, drain-flood, and the new
+  trailing-residue controls); kind-gate `--self-test` PASS.
+- Product identity (release, staged, recorded), Linux: Rust
+  `6ab63dfd…` (framing + basename rendering), Go `d228ebe5…`
+  (framing), worker `202a83ac…` (go) / `cb9ad6cd…` (rust, unchanged),
+  fixture `d615488f…` (fresh canonical release build at the wave-14
+  revision; the earlier recorded fixture identity predated the
+  current release toolchain).  HEAD `e272c990` reproduces every
+  staged identity byte-for-byte.
+- Full battery at the wave-14 revision (sequential, one host,
+  staged under `/tmp/qualsvc/ev21/`): matrices rust 38/38, go
+  38/38, rust_to_go 14+24, go_to_rust 14+24; crash positive 16/16
+  both directions, /bin/false negative control 16/16 failed;
+  resource 8/8; golden 55 exchanges; sensitivity 14 modes; kind gate
+  PASS on the regenerated evidence.
+- Windows housekeeping on the authorized Windows validation host at
+  the wave-14 revision `e272c990` (go1.26.5 / rustc 1.97.1, clean
+  archived tree, staged under `C:/Temp/qualsvc-win/ev20/`, native
+  Python 3.14.6): 2/2 PASS; the recorded `database.create`
+  `main_basename` is clean text from BOTH products now (Rust
+  previously recorded NUL-interleaved units); the maintenance-list
+  artifact basenames keep the documented opaque UTF-16LE-per-byte
+  wire form and its exact 50-row / ordinal validation.
+
+#### Sensitive-data and artifact gate (wave 14)
+
+No personal paths, host aliases, or secrets in the regenerated
+evidence or in this SOW; evidence JSONs were scanned for personal
+tokens.  Specs: no spec amendment (the framing reader now enforces
+the already-specified ceiling for the held-open shape; the
+`main_basename` wire contract for create/transition results is the
+documented unchanged round-trip).  End-user docs: `v4/cli/README.md`
+golden count corrected to 55.  Evidence:
+`v4/cli/evidence/*.json` regenerated at the wave-14 revision with
+`evidence/README.md` updated.  Framework records: wave-14 section
+and Status appended.
+

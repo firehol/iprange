@@ -1,24 +1,48 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The thirteenth-wave (role-round delta repair) evidence is
-regenerated at the wave 2026-09-06 revision after the wave-12
-closure: the role-round delta failed the wave-12 revision on the
-EOF framing boundary (Rust exited 0 on a final unterminated frame
-of exactly LIMIT+1 bytes at EOF while Go exited 1, with
-byte-identical -32001 wire output) and on a missing detecting
-control for the drain byte cap.  Both are repaired: the Rust reader
-now checks the ceiling at EOF exactly like the Go reader, the new
-LIMIT+1-at-EOF process tests pin the non-zero exit in both
-products, and the drain-flood self-test control pins the drain
-ceiling.  Both products answer an over-limit input frame with
--32001 (id null) and exit non-zero in every shape (held-open
-unterminated, LF-terminated, and EOF-resolved), the graceful fatal
-path exits within ~60 ms even with a full undrained stderr pipe,
-and the harness self-tests cover the read, write, duplicate-id, and
-drain-flood controls.  Linux reports record the product identities
-`24733db0…` (rust) and `7f88bb7c…` (go); the Windows housekeeping
-report is regenerated at the same product source revision (recorded
-below).
+The fourteenth-wave (external whole-milestone control review
+FAIL and repair) evidence is regenerated at the wave-14 revision
+`e272c990` after the external control review of the wave-13
+revision.  The reviewed findings and their repairs:
+
+- held-open over-limit frames: a peer that wrote exactly LIMIT+1
+  bytes whose last byte was not the CR of a CRLF terminator held
+  both readers waiting for another byte forever (stdin open, no
+  -32001, no exit).  The one-extra-byte allowance now applies only
+  when the last byte is CR; any other LIMIT+1-th byte is already
+  over the ceiling and is reported immediately (both products;
+  held-open and CR-tail boundary tests in both languages);
+- Windows basename round-trip: `LocalBasename` on Windows stores
+  UTF-16LE units (encoding 2), but the Rust wire rendering passed
+  the raw units through UTF-8 lossy and emitted NUL-interleaved
+  mojibake that the resolvers reject.  `create_result`,
+  `commit_cleanup_artifact`, and the live transition now render
+  `LocalBasename` through an encoding-aware decoder (encoding 2 ->
+  UTF-16LE text, else UTF-8 lossy); the Go product always stores
+  encoding 1 and was unaffected.  The Windows report re-qualified
+  at the new revision and now records a clean `main_basename` from
+  both products;
+- watchdog coverage: the full-stderr signal tests signalled an idle
+  session and only exercised the graceful exit; they now wedge the
+  session so the process-lifetime watchdog's detached-diagnostic
+  path is genuinely exercised (Go helper mode + Rust wedged spawn);
+  the Rust full-stderr fixture also wrote 4096 bytes from a
+  one-byte buffer and treated any error as full-pipe proof and now
+  fills from a real buffer requiring EAGAIN;
+- proof and gate hardening: the resource proofs a/d drain stdout
+  after the expected responses and require zero trailing bytes (a
+  stray duplicate or malformed frame fails; new self-test control),
+  and the kind gate rejects fixture identities recorded without a
+  sha256 or contradicting an earlier identity for the same path;
+- test-race repair: the Go signal tests no longer run `Wait`
+  concurrently with `StdoutPipe` reads, and the full-stderr tests no
+  longer close raw pipe fds behind an `*os.File` whose finalizer can
+  then close a reused fd number (the pre-existing EBADF flakes
+  across the suite under load).
+
+Linux reports record the product identities `6ab63dfd…` (rust) and
+`d228ebe5…` (go); the Windows housekeeping report is regenerated at
+the same product source revision (recorded below).
 
 Produced 2026-09-06 on the Linux workstation (x86_64) from staged
 binary copies (no personal paths in the committed evidence) plus the
@@ -44,31 +68,29 @@ sections.
   (rustc 1.97.1) staged as
   `/tmp/qualsvc/ev19/bin/rust/{iprange,iprange-v4-worker,v4-fixture}`:
   - product SHA-256
-    `24733db004b0d7a7c068f6f00b1535d9f0ced53ca6f5f44cbe13df14b6def5f0`
-    (shipped in the twelfth wave: the graceful-fatal diagnostic
-    detached in `mod.rs` with the forced exit's 50 ms bound and the
-    immediate over-limit report in `framing.rs`; changed by the
-    thirteenth wave in `framing.rs`: the EOF arm now checks the
-    ceiling like the Go reader, so a final unterminated frame of
-    LIMIT+1 bytes at EOF is a framing failure with a non-zero exit;
-    the wave-11 session.rs fixes are included);
+    `6ab63dfd72f498a4d2a41b856e2d94750adaa6598c16968c2489fcbe75ff8d93`
+    (wave-14 build: the immediate held-over-limit report in
+    `framing.rs`, the encoding-aware `LocalBasename` rendering in
+    `handlers/lifecycle.rs` and `handlers/live.rs`, plus all earlier
+    wave fixes);
   - worker SHA-256
     `cb9ad6cd82a03b7933d706de9e1b4e4c707836962b7f00e194c5d50cd4511e94`
     (unchanged; build-proven identity, not pinned by the committed
     reports);
   - fixture SHA-256
-    `7c6167933d802fab89f33520198e35286dbdf7bd6e0e348ee03fea5457c93459`
-    (source unchanged since the fixture-qualification wave; identity
-    is build-proven at this revision with the recorded command).
+    `d615488f038fa59deea87e0ce3340b780380fe0f2122e8e1ad65edeb25d861f1`
+    (source unchanged since the fixture-qualification wave; the
+    identity is a fresh canonical release build at the wave-14
+    revision with the recorded command - the earlier recorded
+    identity predated the current release toolchain).
 - Go product + worker: the documented `-buildvcs=false` qualification
   pair (go1.26 linux/amd64, no embedded vcs revision) staged as
   `/tmp/qualsvc/ev18/bin/go/{iprange,iprange-v4-worker}`:
   - product SHA-256
-    `7f88bb7c63e994ca41845da667c69bc67158ddbcc5082a658b6c21dd2131b47c`
-    (unchanged by the thirteenth wave; shipped in the twelfth wave:
-    the graceful-fatal diagnostic detached in rpc.go, the immediate
-    over-limit report in framing.go, plus the wave-11 session.go
-    fixes);
+    `d228ebe5c024e9f8dc8cccfc31295f73f0ddf87a83fb2ee4c01a52336ef3467d`
+    (wave-14 build: the immediate held-over-limit report in
+    `framing.go`, plus all earlier wave fixes; the worker tree is
+    unchanged since the eighth wave);
   - worker SHA-256
     `202a83ac92f5c8b85b44068a1553aef0dbf25a81fb2d888022592292d03b6141`
     (the worker source tree is unchanged since the eighth wave and
@@ -77,16 +99,17 @@ sections.
     byte-reproducible across toolchains or build paths, and not
     pinned by the committed reports).
 - Windows qualification binaries (built on the authorized Windows
-  validation host at the wave-13 product-source revision
-  `5346f716`, clean tracked tree, staged under
-  `C:/Temp/qualsvc-win/ev19/`):
+  validation host at the wave-14 product-source revision
+  `e272c990`, clean tracked tree, staged under
+  `C:/Temp/qualsvc-win/ev20/`):
   - Go product SHA-256
-    `42173bb7a14e37c22b2e37ba2f028535b1243a1088f434f10312c7048a90ce20`
-    (go1.26.5 windows/amd64, `-buildvcs=false`; unchanged since the
-    wave-12 revision);
+    `fb6b503a46d151e0b52498e72041602782032b2a3e055f1284e8605a3b4318e5`
+    (go1.26.5 windows/amd64, `-buildvcs=false`);
   - Rust product SHA-256
-    `de902a73f628f57cf807e211122d2b5db39c4b7ca2a038ea1ff4b8aa3b4f0c15`
-    (rustc 1.97.1; carries the EOF ceiling check).
+    `a6ec5b45427fe7e3af9cf27d567ad9aa7f09e65a45faa1cbb94985d915befc48`
+    (rustc 1.97.1; carries the encoding-aware basename rendering and
+    the immediate over-limit report, so the recorded Windows flow
+    `main_basename` is now clean text from both products).
   Build commands, toolchain, and source revision are recorded in
   the report's `build_provenance` block; the harness runs under the
   native Windows Python 3.14.6 (embeddable distribution staged on
