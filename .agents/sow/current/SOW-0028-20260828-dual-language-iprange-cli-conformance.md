@@ -5908,14 +5908,25 @@ operations, parity, and the glm validator PASSed the delta; the
 portability role PASSed with one P2 — no committed regression test
 exercised the eof-first supervisor shape (close stdin + signal
 back-to-back), so the sigCh-poll defect could silently return.
-That P2 is fixed by committed tests in both languages
+That P2 was first addressed by committed tests in both languages
 (commit `383c7d42`, test-only; product binaries unaffected):
 - Go: `TestTerminationSignalEOFFirstWinsOverExitZero` — the helper
   writes the describe response on stdout and the parent signals the
-  moment the response line appears, i.e. inside the EOF tail
-  (pre-fix exit 0 ~100%; now 3/3 in the committed test).
-- Rust: `eof_first_signal_wins_over_exit_zero` process test
-  (2 signals x 2 trials; now 4/4).
+  moment the response line appears, i.e. inside the EOF tail.  Kept:
+  the Go EOF tail's 25 ms grace window makes the shape deterministic
+  (pre-fix exit 0 ~100%; committed test 3/3).
+- Rust: an `eof_first_signal_wins_over_exit_zero` process test was
+  committed at `383c7d42` and REMOVED at `5dd1ac6d` (security role
+  finding; lead reproduced 1/3 full-suite failures): the assertion
+  was stronger than the product guarantee — the Rust EOF tail checks
+  the recorded signal after the worker join with no grace window, so
+  a parent kill landing after the check legitimately observes exit 0
+  (sub-millisecond TOCTOU, measured 6/20 single-test failures under
+  load).  The deterministic Rust detections are the in-process unit
+  test `signal_recorded_during_eof_drain_wins_over_exit_zero`, the
+  wedge/drain-wedge force-exit process tests, and the Go eof-first
+  process test; the rationale is recorded in
+  `v4/rust/iprange-cli/tests/termination_signals.rs`.
 
 tester, security, and performance were still reviewing the earlier
 delta; their re-verdicts at the final revision `383c7d42` are
