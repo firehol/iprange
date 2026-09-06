@@ -122,7 +122,7 @@ The Linux qualification binary hashes at that wave changed to
 `2f1d2bba…` (Go) and `86056181…` (Rust); behavior on Linux was
 unchanged outside the round-trip acceptance.  The current canonical
 Linux identities are recorded in `evidence/README.md` (Go product
-`85488a0f…`, Rust product `807d5295…` at the eighth fix wave; the
+`f3e9f1e4…`, Rust product `58036aee…` at the ninth fix wave; the
 worker and fixture identities are build-proven there as well).
 
 Deferred to delivery step 6: latency/throughput and engine RSS

@@ -310,6 +310,38 @@ func TestBrokenStdoutIsFatal(t *testing.T) {
 	}
 }
 
+func TestBrokenStdoutWithPipelinedInputTerminates(t *testing.T) {
+	// A failing writer plus pipelined input fills the bounded events
+	// channel; the worker's terminal failure report must never block
+	// the shutdown join (regression: both product binaries could hang
+	// indefinitely when stdout failed while input was under pressure;
+	// the pre-fix session blocked in shutdown/fatal waiting for the
+	// worker while the worker blocked sending its fatal event into
+	// the full channel). Every iteration must terminate promptly and
+	// report the fatal transport failure.
+	input := strings.Builder{}
+	for i := 0; i < 512; i++ {
+		input.WriteString(
+			`{"jsonrpc":"2.0","id":` + strconv.Itoa(i) +
+				`,"method":"iprange.v1.system.describe","params":{}}` + "\n")
+	}
+	for iteration := 0; iteration < 10; iteration++ {
+		session := NewSession()
+		done := make(chan error, 1)
+		go func() {
+			done <- session.Run(strings.NewReader(input.String()), failingWriter{})
+		}()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatalf("iteration %d: broken stdout must be a fatal transport failure", iteration)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatalf("iteration %d: session did not terminate after stdout failed", iteration)
+		}
+	}
+}
+
 // failingWriter never accepts bytes, like stdout on a broken pipe.
 type failingWriter struct{}
 

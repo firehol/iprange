@@ -81,8 +81,10 @@ producer Go with consumer Rust).  The report (schema
 ``iprange-cli-crash-report-v1``) records per-scenario marker timing,
 kill method, destination state, inspect/resolve/reopen outcomes,
 bounded-residue evidence, the additive per-role executed-operation
-lists (``operations``) and live-reader-open facts
-(``live_reader_opens``/``adapter_output_opens``) that the kind gate's
+lists (``operations``) and open/creation facts that carry the
+executing operation's ordinal (``live_reader_opens`` /
+``adapter_output_opens`` / ``created_ordinals`` /
+``reopen_outcome.consumer_main_open_ordinal``) that the kind gate's
 lineage validation consumes, and the pass verdict.  Exit status is 0
 only when every scenario passes and no owned process remains.
 """
@@ -181,6 +183,19 @@ def _record_service_call(service, method):
     role = _service_role(service.argv)
     if role is not None:
         OPERATIONS[role].append(method)
+
+
+def _current_ordinal(actor):
+    """Index of the in-flight (or just-finished) service call of a role.
+
+    ``_record_service_call`` appends the method name BEFORE the call
+    executes, so while the request is being processed -- and right
+    after it returns, before the same role issues another call -- the
+    call's ordinal in the scenario's additive operation list is
+    ``len(OPERATIONS[actor]) - 1``.
+    """
+
+    return len(OPERATIONS[actor]) - 1
 
 
 def record_spawn(proc):
@@ -295,8 +310,11 @@ class KillableJsonRpcService(run.JsonRpcService):
 class HarnessJsonRpcService(run.JsonRpcService):
     """Plain JsonRpcService (no process-group session) with PID tracking."""
 
-    def __init__(self, argv, implementation, *, cwd=None):
-        super().__init__(argv, implementation, cwd=cwd)
+    def __init__(self, argv, implementation, *, cwd=None,
+                 read_deadline=None, write_deadline=None):
+        super().__init__(argv, implementation, cwd=cwd,
+                         read_deadline=read_deadline,
+                         write_deadline=write_deadline)
         record_spawn(self.proc)
 
     def call(self, request_id, method, params):
@@ -688,12 +706,17 @@ def probe_consumer_open(consumer, work, dest, scenario_report,
             reader is not None,
             f"reader.open must return a handle, got {reader_open}",
             scenario_report)
+        # The successful open's operation ordinal is the v4_main
+        # consumer open credit; captured before the close call so the
+        # ordinal cannot drift to reader.close.
+        main_open_ordinal = _current_ordinal("consumer")
         consumer_service.call("rc", "iprange.v1.reader.close",
                               {"reader": reader})
         scenario_report["reopen_outcome"] = {
             "before_resolution": {
                 "opened_complete_destination": True,
                 "reader_closed": True},
+            "consumer_main_open_ordinal": main_open_ordinal,
         }
     finally:
         consumer_service.close()
@@ -843,6 +866,12 @@ def resolve_interrupted_publication(producer, consumer, work, dest,
                 "database_id": info.get("database_id"),
                 "transaction_id": info.get("transaction_id"),
             }
+            # The consumer main-open credit names this successful
+            # reopen's operation ordinal (the failed A1 probe open is
+            # never credited).
+            scenario_report["reopen_outcome"][
+                "consumer_main_open_ordinal"] = _current_ordinal(
+                    "consumer")
         finally:
             consumer_service.close()
     finally:
@@ -874,6 +903,11 @@ def scenario_a1(direction, producer, consumer, work_dir, scenario_report):
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
         thread.join(timeout=5)
+        # The crashed publish created the retained reservation, the
+        # private publication output, and the (attempted) main; its
+        # operation ordinal is the creation credit for those kinds.
+        _record_creation(scenario_report, (
+            "publication_reservation", "publication_temp", "v4_main"))
 
         # No partial replacement; the documented private artifacts are
         # the bounded residue.
@@ -966,6 +1000,12 @@ def scenario_a2(direction, producer, consumer, work_dir, scenario_report):
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
         thread.join(timeout=5)
+        # The crashed replace publish created the retained reservation,
+        # the private publication output, and the (attempted) main;
+        # its operation ordinal is the creation credit for those kinds
+        # (the prior publish is a different, earlier operation).
+        _record_creation(scenario_report, (
+            "publication_reservation", "publication_temp", "v4_main"))
 
         residue = private_artifact_names(work)
         assert_truthful(
@@ -1181,6 +1221,11 @@ def scenario_a3(direction, producer, consumer, work_dir, fixture_tool,
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
         thread.join(timeout=5)
+        # The crashed replace publish created the retained reservation,
+        # the private publication output, and the (attempted) main;
+        # its operation ordinal is the creation credit for those kinds.
+        _record_creation(scenario_report, (
+            "publication_reservation", "publication_temp", "v4_main"))
         residue = private_artifact_names(work)
         assert_truthful(
             len(residue["reservation"]) == 1,
@@ -1258,6 +1303,10 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
         thread.join(timeout=5)
+        # The crashed initialize_live created the sidecar; its
+        # operation ordinal is the live_sidecar creation credit (the
+        # main itself came from the external v4-fixture tool).
+        _record_creation(scenario_report, ("live_sidecar",))
 
         assert_truthful(
             sha256_file(main) == main_sha256,
@@ -1365,6 +1414,7 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
                     f"live reader must reopen after resolution, got "
                     f"{open_live}", scenario_report)
                 _record_live_open(scenario_report, "consumer")
+                main_open_ordinal = _current_ordinal("consumer")
                 reopen_info = open_live["result"].get("info", {})
                 assert_truthful(
                     reopen_info.get("database_id") == info_facts.get(
@@ -1392,6 +1442,7 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
                 "immutable": {
                     "code": immutable_error.get("code"),
                     "outcome": immutable_error.get("outcome")},
+                "consumer_main_open_ordinal": main_open_ordinal,
             }
         finally:
             resolver.close()
@@ -1433,6 +1484,9 @@ def scenario_c(direction, producer, consumer, work_dir, scenario_report):
         assert_truthful(
             "error" not in built,
             f"big publish must succeed, got {built}", scenario_report)
+        # The completed big publish created the damaged-main source;
+        # its operation ordinal is the v4_main creation credit.
+        _record_creation(scenario_report, ("v4_main",))
     finally:
         builder.close()
     # Damage the immutable main by cutting its final page; recovery is
@@ -1473,6 +1527,13 @@ def scenario_c(direction, producer, consumer, work_dir, scenario_report):
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
         thread.join(timeout=5)
+        # The crashed recover created the authorized scratch (and, if
+        # the kill landed in its output phase, the recovery-output
+        # reservation/publication temp); its operation ordinal is the
+        # creation credit for those kinds.
+        _record_creation(scenario_report, (
+            "authorized_scratch", "publication_temp",
+            "publication_reservation"))
         scenario_report["kill_method"] = (
             "SIGKILL process group at authorized-scratch marker")
 
@@ -1761,6 +1822,10 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
             "error" not in initialized,
             f"initialize_live must succeed, got {initialized}",
             scenario_report)
+        # The interrupted database's sidecar was created by THIS
+        # initialize_live (a later operation than the control run's);
+        # its ordinal is the live_sidecar creation credit.
+        _record_creation(scenario_report, ("live_sidecar",))
         info0 = producer_service.call(
             "2", "iprange.v1.database.info",
             {"source": {"path": interrupted_main, "mode": "live"}})
@@ -1930,6 +1995,7 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                     f"consumer live reader must open, got {open_live}",
                     scenario_report)
                 _record_live_open(scenario_report, "consumer")
+                main_open_ordinal = _current_ordinal("consumer")
                 reopen_info = open_live["result"].get("info", {})
                 assert_truthful(
                     reopen_info.get("transaction_id") == t0,
@@ -1942,7 +2008,8 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
                     {"reader": open_live["result"]["reader"]})
                 scenario_report["reopen_outcome"] = {
                     "consumer_live_reader_transaction_id":
-                        reopen_info.get("transaction_id")}
+                        reopen_info.get("transaction_id"),
+                    "consumer_main_open_ordinal": main_open_ordinal}
             finally:
                 consumer_service.close()
 
@@ -2052,6 +2119,9 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
         assert_truthful(
             "error" not in built,
             f"big publish must succeed, got {built}", scenario_report)
+        # The completed big publish created the source main; its
+        # operation ordinal is the v4_main creation credit.
+        _record_creation(scenario_report, ("v4_main",))
     finally:
         builder.close()
 
@@ -2088,6 +2158,10 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
         scenario_report["marker_seen_ms"] = round(seen_ms, 1)
         producer_service.kill_process_group()
         thread.join(timeout=5)
+        # The crashed export created the observed adapter-output orphan
+        # (its O_EXCL private temp); its operation ordinal is the
+        # adapter_output creation credit.
+        _record_creation(scenario_report, ("adapter_output",))
         scenario_report["kill_method"] = (
             "SIGKILL process group at export partial-output marker "
             "(real flushed output: the 64 KiB-buffered temp is 0 bytes "
@@ -2327,6 +2401,9 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
         assert_truthful(
             "error" not in built,
             f"big publish must succeed, got {built}", scenario_report)
+        # The completed big publish created the damaged main; its
+        # operation ordinal is the v4_main creation credit.
+        _record_creation(scenario_report, ("v4_main",))
     finally:
         builder.close()
     # Deterministic damage: zero the last F_DAMAGED_LEAF_PAGES
@@ -2601,11 +2678,15 @@ def _record_live_open(scenario_report, actor):
     live_sidecar.rs:170-191; Go live_reader.go:68 -> sidecar.go:146),
     so every successful live-mode ``reader.open`` / ``database.info``
     call the scenario executes is the sidecar-open lineage evidence.
-    Idempotent; ``observed_kinds`` derives the ``live_sidecar``
-    opened lineage from this record.
+    The record stores the ordinal of the service call that performed
+    the open (``_current_ordinal`` at the call site), so the emitted
+    opened refs name the exact executed operation.  Idempotent;
+    ``observed_kinds`` derives the ``live_sidecar`` opened lineage
+    from this record.
     """
 
-    scenario_report.setdefault("live_reader_opens", {})[actor] = True
+    scenario_report.setdefault("live_reader_opens", {})[actor] = \
+        _current_ordinal(actor)
 
 
 def _record_adapter_open(scenario_report, actor):
@@ -2615,24 +2696,51 @@ def _record_adapter_open(scenario_report, actor):
     the writer's private ``.<handle>.export.tmp``) is opened by the
     export/validate WRITER of the producing actor; ``observed_kinds``
     derives the ``adapter_output`` opened lineage from this record.
+    The record stores the ordinal of the service call that performed
+    the open (the crashed export/validate writer), so the emitted
+    opened ref names the exact executed operation.
     """
 
-    scenario_report.setdefault("adapter_output_opens", {})[actor] = True
+    scenario_report.setdefault("adapter_output_opens", {})[actor] = \
+        _current_ordinal(actor)
+
+
+def _record_creation(scenario_report, kinds):
+    """Record the producer operation ordinal that created artifact kinds.
+
+    Called at the creation call site once the observable marker proves
+    the call's durable work created the artifacts; ``observed_kinds``
+    emits the created refs from these records, so a kind is credited to
+    the operation that actually produced it, never to a hardcoded
+    first call.  Scenarios whose v4 main came from the external
+    v4-fixture tool keep recording no v4_main creation
+    (``fixture_created_main``).
+    """
+
+    ordinal = _current_ordinal("producer")
+    for kind in kinds:
+        scenario_report.setdefault("created_ordinals", {})[kind] = ordinal
 
 
 def _opened_by_actors(scenario_report, field):
-    """``actor.0`` opened refs for every actor that recorded an open.
+    """``actor.<ordinal>`` opened refs for every actor that recorded an open.
 
-    The ordinals follow the crash lineage convention (index 0 of the
-    actor's recorded operation list); the full method-level truth is
-    the scenario's additive ``operations`` field.
+    The ordinal is the index of the service call that performed the
+    open in the actor's recorded operation list (the call sites store
+    it via ``_record_live_open``/``_record_adapter_open``), so each
+    lineage ref names the exact executed operation, never a hardcoded
+    first call.  Pre-ordinal evidence records (plain ``True``) keep
+    the legacy ``actor.0`` convention.
     """
 
     refs = []
     opens = scenario_report.get(field) or {}
     for actor in ("producer", "consumer"):
-        if opens.get(actor):
+        ordinal = opens.get(actor)
+        if ordinal is True:
             refs.append(f"{actor}.0")
+        elif isinstance(ordinal, int) and not isinstance(ordinal, bool):
+            refs.append(f"{actor}.{ordinal}")
     return refs
 
 
@@ -2674,46 +2782,66 @@ def observed_kinds(scenario_report):
     ledgers: publication crashes observe the retained reservation and
     private publication output, the live-transition crashes observe
     the sidecar, and the recovery crash observes authorized scratch.
+
+    Lineage ordinals are recorded at the call sites
+    (``_record_creation`` for creations, ``_record_live_open`` /
+    ``_record_adapter_open`` / the consumer main-open recording for
+    opens) and name the exact executed operation of the producer /
+    consumer operation lists, never a hardcoded first call.  A
+    scenario that fails to record the ordinal it needs emits no ref
+    for that credit, so a harness gap is a loud missing-lineage
+    defect, not a silently wrong ``.0`` ref.
     """
 
-    def kind(opened):
-        created = ([] if scenario_report.get("fixture_created_main")
-                   else ["producer.0"])
-        return {"created_by": created,
-                "opened_by": ["consumer.0"] if opened else []}
+    def kind(kind_name, opened):
+        created = []
+        if not (kind_name == "v4_main"
+                and scenario_report.get("fixture_created_main")):
+            ordinal = (scenario_report.get("created_ordinals") or {}).get(
+                kind_name)
+            if isinstance(ordinal, int) and not isinstance(ordinal, bool):
+                created = [f"producer.{ordinal}"]
+        opened_by = []
+        main_open_ordinal = (
+            scenario_report.get("reopen_outcome") or {}).get(
+            "consumer_main_open_ordinal")
+        if (opened and isinstance(main_open_ordinal, int)
+                and not isinstance(main_open_ordinal, bool)):
+            opened_by = [f"consumer.{main_open_ordinal}"]
+        return {"created_by": created, "opened_by": opened_by}
 
     kinds = {}
     state = scenario_report.get("destination_state") or {}
     if state.get("reservation_basenames") or state.get("reservation_basename"):
-        kinds["publication_reservation"] = kind(False)
+        kinds["publication_reservation"] = kind(
+            "publication_reservation", False)
     if state.get("publish_temp_basenames"):
-        kinds["publication_temp"] = kind(False)
+        kinds["publication_temp"] = kind("publication_temp", False)
     if state.get("scratch_basenames"):
-        kinds["authorized_scratch"] = kind(False)
+        kinds["authorized_scratch"] = kind("authorized_scratch", False)
     if state.get("class") in (
             "absent_after_crash", "attempt_complete_after_crash",
             "scratch_residue") or state.get("exists"):
-        kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
-    if state.get("class") == "main_unchanged_sidecar_present":
+        kinds["v4_main"] = kind("v4_main",
+                                _consumer_opened_main(scenario_report))
+    if state.get("class") in ("main_unchanged_sidecar_present",
+                              "live_dataset_with_uncommitted_write"):
         kinds["live_sidecar"] = {
-            "created_by": ["producer.0"],
+            "created_by": kind("live_sidecar", False)["created_by"],
             "opened_by": _opened_by_actors(
                 scenario_report, "live_reader_opens")}
-        kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
-    if state.get("class") == "live_dataset_with_uncommitted_write":
-        kinds["live_sidecar"] = {
-            "created_by": ["producer.0"],
-            "opened_by": _opened_by_actors(
-                scenario_report, "live_reader_opens")}
-        kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
+        kinds["v4_main"] = kind("v4_main",
+                                _consumer_opened_main(scenario_report))
     if state.get("class") == "export_partial_output":
         kinds["adapter_output"] = {
-            "created_by": ["producer.0"],
+            "created_by": kind("adapter_output", False)["created_by"],
             "opened_by": _opened_by_actors(
                 scenario_report, "adapter_output_opens")}
-        kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
+        kinds["v4_main"] = kind("v4_main",
+                                _consumer_opened_main(scenario_report))
     if state.get("class") == "validate_findings_aborted":
-        kinds["v4_main"] = kind(_consumer_opened_main(scenario_report))
+        kinds["v4_main"] = kind("v4_main",
+                                _consumer_opened_main(scenario_report))
     return kinds
 
 

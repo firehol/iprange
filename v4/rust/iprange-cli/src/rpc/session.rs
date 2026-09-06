@@ -584,12 +584,33 @@ fn worker_loop<W: Write + Send + 'static>(
             w.write_line(&text)
         };
         if let Err(err) = write_result {
-            // Broken stdout is a fatal transport failure: record it,
-            // report it to the main loop (after releasing the writer
-            // lock, so the main loop can always drain the bounded
-            // event channel), and stop executing.
+            // Broken stdout is a fatal transport failure: record it
+            // (the writer lock was already released above), report it
+            // to the main loop, and stop executing.  The report must
+            // never block past shutdown: the main loop stops draining
+            // the bounded event channel when it begins shutdown and
+            // then joins this worker, so a send blocked on a full
+            // channel would deadlock the join (the worker waits for a
+            // drained slot, the main loop waits for the worker).
+            // try_send retries with the shutdown flag checked each
+            // round: lossless before shutdown, abortable after it,
+            // while the recorded fatal_error still drives the
+            // non-zero exit.
             control.lock().unwrap().fatal_error = Some((err.kind(), err.to_string()));
-            let _ = events.send(SessionEvent::Fatal(err));
+            let mut fatal_err = io::Error::new(err.kind(), err.to_string());
+            loop {
+                if control.lock().unwrap().shutting_down {
+                    break;
+                }
+                match events.try_send(SessionEvent::Fatal(fatal_err)) {
+                    Ok(()) => break,
+                    Err(std::sync::mpsc::TrySendError::Full(returned)) => match returned {
+                        SessionEvent::Fatal(returned_err) => fatal_err = returned_err,
+                        _ => break, // only Fatal is ever sent here; defensive
+                    },
+                    Err(std::sync::mpsc::TrySendError::Disconnected(_)) => break,
+                }
+            }
             return;
         }
     }
@@ -2783,6 +2804,44 @@ mod tests {
             "admitted unit must flush its factual response: {text}"
         );
         assert!(lines.next().is_none(), "no extra output: {text}");
+    }
+
+    #[test]
+    fn broken_stdout_with_pipelined_input_terminates() {
+        // P1 regression: a failing stdout plus pipelined input fills
+        // the bounded events channel; the worker's terminal Fatal
+        // report must never block the shutdown join.  Pre-fix run()
+        // hung forever: the main loop stopped draining events and
+        // joined the worker while the worker blocked sending Fatal
+        // into the full channel.  A fresh session per iteration makes
+        // the hang deterministic in at least one iteration pre-fix
+        // and proves prompt, fatal termination post-fix.
+        for iteration in 0..10 {
+            let mut input = Vec::new();
+            for id in 0..512 {
+                input.extend_from_slice(
+                    format!(
+                        "{{\"jsonrpc\":\"2.0\",\"id\":\"{id}\",\"method\":\"iprange.v1.system.describe\",\"params\":{{}}}}\n"
+                    )
+                    .as_bytes(),
+                );
+            }
+            let reader = std::io::BufReader::new(std::io::Cursor::new(input));
+            let session = Session::new();
+            let (done_tx, done_rx) = std::sync::mpsc::channel::<io::Result<()>>();
+            std::thread::spawn(move || {
+                let _ = done_tx.send(session.run(reader, FailingWriter));
+            });
+            match done_rx.recv_timeout(std::time::Duration::from_secs(3)) {
+                Ok(Ok(())) => panic!(
+                    "iteration {iteration}: broken stdout must fail run(), not succeed"
+                ),
+                Ok(Err(_)) => {}
+                Err(_) => panic!(
+                    "iteration {iteration}: run() hung after stdout failed with pipelined input"
+                ),
+            }
+        }
     }
 
 }

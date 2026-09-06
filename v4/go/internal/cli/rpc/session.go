@@ -186,14 +186,24 @@ type Session struct {
 	// workerDone is closed when the worker goroutine exits; shutdown
 	// and fatal wait on it before closing connection resources.
 	workerDone chan struct{}
+	// shutdownDone is closed by beginShutdown. The worker's terminal
+	// failure report selects on it: once the main loop stops draining
+	// events for shutdown, a blocking send into the full events
+	// channel would deadlock the worker join.
+	shutdownDone chan struct{}
+	// shutdownOnce guards the single close of workTx/shutdownDone:
+	// shutdown and fatal are mutually exclusive per Run, but a
+	// re-entrant close must stay impossible.
+	shutdownOnce sync.Once
 }
 
 // NewSession creates a service with one worker.
 func NewSession() *Session {
 	return &Session{
-		state:      NewSessionState(),
-		workTx:     make(chan workUnit, QueuedLimit),
-		workerDone: make(chan struct{}),
+		state:        NewSessionState(),
+		workTx:       make(chan workUnit, QueuedLimit),
+		workerDone:   make(chan struct{}),
+		shutdownDone: make(chan struct{}),
 	}
 }
 
@@ -240,7 +250,14 @@ func (s *Session) Run(reader io.Reader, writer io.Writer) error {
 		defer close(sigDone)
 		select {
 		case sig := <-sigCh:
-			events <- sessionEvent{fatal: errors.New("terminated by signal " + sig.String())}
+			err := errors.New("terminated by signal " + sig.String())
+			st := s.state
+			st.controlMu.Lock()
+			if st.control.fatalWrite == nil {
+				st.control.fatalWrite = err
+			}
+			st.controlMu.Unlock()
+			reportFatal(events, s, err)
 		case <-readerDone:
 		}
 	}()
@@ -354,7 +371,10 @@ func (s *Session) beginShutdown() {
 	st.control.shuttingDown = true
 	st.control.token.Cancel()
 	st.controlMu.Unlock()
-	close(s.workTx)
+	s.shutdownOnce.Do(func() {
+		close(s.workTx)
+		close(s.shutdownDone)
+	})
 }
 
 // closeRegisteredResources closes every connection resource after the
@@ -403,6 +423,22 @@ func (s *Session) fatal(err error, _ io.Writer, _ *FrameWriter) error {
 		return errors.New(err.Error() + "; " + closeErr.Error())
 	}
 	return err
+}
+
+// reportFatal delivers the worker's terminal failure to the main
+// loop without ever blocking past shutdown. The main loop stops
+// draining events once it enters its terminal path and then joins the
+// worker; if the events channel were full at that moment, a blocking
+// send would deadlock the join (the worker waits for a drained slot,
+// the main loop waits for the worker). Selecting on shutdownDone
+// makes the report abortable exactly when the main loop stops
+// receiving, while the recorded control.fatalWrite error still
+// determines the non-zero exit.
+func reportFatal(events chan<- sessionEvent, s *Session, err error) {
+	select {
+	case events <- sessionEvent{fatal: err}:
+	case <-s.shutdownDone:
+	}
 }
 
 // workerLoop executes work units until the work channel closes.
@@ -487,7 +523,7 @@ func workerLoop(s *Session, fw *FrameWriter, writerMu *sync.Mutex, events chan<-
 			st.controlMu.Lock()
 			st.control.fatalWrite = err
 			st.controlMu.Unlock()
-			events <- sessionEvent{fatal: err}
+			reportFatal(events, s, err)
 			return
 		}
 		writerMu.Lock()
@@ -498,7 +534,7 @@ func workerLoop(s *Session, fw *FrameWriter, writerMu *sync.Mutex, events chan<-
 			st.controlMu.Lock()
 			st.control.fatalWrite = err
 			st.controlMu.Unlock()
-			events <- sessionEvent{fatal: err}
+			reportFatal(events, s, err)
 			return
 		}
 	}

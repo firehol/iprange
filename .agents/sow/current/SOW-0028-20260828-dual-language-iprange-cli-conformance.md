@@ -14,6 +14,63 @@
 5. Running workers are never stopped by these rules; spawn in parallel
    instead.
 
+### Role-based review protocol (user-approved 2026-09-06; overrides
+the generic swarm template for SOW-0028 rounds)
+
+Seven standing reviewer roles, each with a permanent sandbox under
+`.local/<role>/` (gitignored) and a `ROLE.md` containing its mission,
+responsibilities, way of working (adversarial audit), and instructions.
+The lead writes each ROLE.md once and reminds the role to read it in
+whole on every invocation:
+
+- `.local/tester/ROLE.md` — tester: milestone acceptance criteria and
+  core claims; every claimed contract needs a test that would fail if
+  the claim were false (missing detecting test = P1); mutation battery
+  of the gates/harnesses; coverage floor measured and reported.
+- `.local/operations/ROLE.md` — operations: what can go wrong that is
+  not handled; transport failure composition, process lifecycle and
+  crash windows, deadlines and stalls, boundary and
+  resource-exhaustion conditions.
+- `.local/parity/ROLE.md` — parity: Go/Rust wire-format and semantic
+  equivalence; queue/cancellation/exit-code parity; spec authority.
+- `.local/portability/ROLE.md` — portability: native-language idioms
+  (Go goroutines/mutexes, Rust ownership, no unsafe beyond approved
+  boundaries), cross-OS behavior (Windows host, FreeBSD, macOS), the
+  mmap-only/zero-copy/test-only-observability policies.
+- `.local/security/ROLE.md` — security: untrusted-input handling,
+  temp-file and identity races, fault containment, secrets in durable
+  artifacts; records: evidence/SOW/README truthfulness, SHAs,
+  verification of exact-revision verdicts, documentation completeness.
+- `.local/performance/ROLE.md` — performance: allocations, copies,
+  mmap policy, adapter-level overhead (SOW-0028 scope), benchmark
+  methodology for milestone 5; engine residuals are SOW-0030-owned.
+- `.local/glm/ROLE.md` — glm-5.3-responses final whole-milestone
+  validator: redundant adversarial validation of the entire milestone
+  at the exact revision after the six roles report; same sandbox
+  rights.
+
+Shared, read-only review material lives under `.local/shared/`
+(`binaries/` with SHASUMS, `probes/` with the accumulated failure
+reproducers, `README.md`).  The tree is read-only for every role;
+roles run probes, stub products, and mutate evidence only inside their
+own sandbox.  The repository reviewers' own-model roles are spawned
+with the lead's model except `.local/glm/`, which uses
+glm-5.3-responses.
+
+Binding severity convention for all roles (from the user): P0 = data
+corruption/crash/security; P1 = wrong behavior on valid input, OR a
+contract the milestone explicitly claims with no test that would
+detect its violation (weak assertions that accept invalid input count);
+P2 = contract/records/measurable-performance defects or bypassable
+gates; P3 = cosmetic.  The static-only clause of older reviewer
+briefs is repealed: every role may run anything inside its sandbox.
+
+Every role's verdict and numbered findings are recorded in the SOW
+wave section (lead verifies each finding independently before fixing,
+as before).  glm's verdict closes or reopens the milestone gate; a
+sol/astra-style external control review may still be requested by the
+user as an independent check.
+
 ## Status
 
 Status: in-progress
@@ -143,9 +200,19 @@ Implementation status (2026-09-01):
   Windows qualification); the delta five-reviewer round and the
   glm-5.3-responses whole-milestone review both PASSed at the exact
   final revision `f73968a2` with zero P1/P2 findings (verbatim
-  verdicts in the wave section below).  Milestone 4 (delivery step
-  5) is closure-ready at `f73968a2`; closure and the start of
-  milestone 5 await the user decision recorded below.
+  verdicts in the wave section below).  The external whole-milestone
+  gate review of the record revision `700e7de9` then returned FAIL
+  with one P1 transport defect and six P2 qualification defects, all
+  independently reproduced and repaired in the ninth fix wave below:
+  the broken-stdout shutdown deadlock in both session
+  implementations, the proof-b forced-kill acceptance and
+  response-envelope gaps, the missing deadlines in the shared
+  JSON-RPC client path, the abbreviated command-override provenance
+  bypass, the crash operation-ordinal attribution, and the Windows
+  cross-listing `source_basename` comparison.  A new five-reviewer
+  + glm-5.3-responses round runs at the exact final revision of the
+  ninth wave; milestone 4 is NOT closed and awaits both that round
+  and the user decision recorded below.
 
 
 ## Requirements
@@ -5134,3 +5201,204 @@ as the deferred-item ledger.  The milestone-4 closure and the start
 of milestone 5 (delivery step 6: consolidated benchmark harness and
 measured ceilings, scope recorded above) require the user decision
 recorded in the Status section.
+
+
+## Ninth wave (2026-09-06) — external gate review of the record revision: broken-stdout deadlock and six qualification gaps
+
+The external whole-milestone gate review of the exact revision
+`700e7de9` (the eighth-wave record commit) returned FAIL with one P1
+product defect and six P2 qualification defects.  The lead
+independently reproduced every finding before recording this wave;
+the review's own reproducers are preserved under
+`/tmp/iprange-final-review.gifaf4/` and
+`/tmp/iprange-crash-recheck-sPgsEj/` (temporary, not committed).
+
+### Verified findings
+
+1. P1 — broken stdout deadlocks both products under input pressure.
+   Pipelining 2,000 `system.describe` requests while stdout writes to
+   `/dev/full` left both binaries alive indefinitely (reproduced on
+   the first trial in both languages).  The Go stack proves the
+   cycle: the main loop waits for the worker in
+   `Session.fatal`/`shutdown` (`v4/go/internal/cli/rpc/session.go`)
+   while the worker blocks sending its fatal event into the full
+   64-slot events channel; the Rust worker blocks on the bounded
+   `events.send` for the same reason.  Shutdown stops draining
+   events, but worker termination depends on one more successful
+   send.
+2. P2 — the oversized-frame proof treated a forced kill as a
+   successful product exit (`v4/cli/resource_harness.py` proof b):
+   a stub that answered the -32001 envelope and then slept was
+   accepted after 10 s with exit -9.
+3. P2 — the same proof accepted a response missing the JSON-RPC
+   envelope (`{"error":{"code":-32001}}`) and a 2,100,072-byte
+   response above the 1 MiB frame ceiling and 65,000-byte object
+   ceiling.
+4. P2 — ordinary RPC phases bypassed the resource harness's bounded
+   deadlines: source preparation, maintenance listing, and removal
+   used the shared client's blocking `stdout.readline()`
+   (`v4/cli/run.py`); a stub that answered `{` and stalled blocked
+   proof a far beyond the configured 0.1 s read bound.
+5. P2 — command provenance accepted abbreviated overrides: the
+   runners' argparse accepts unambiguous prefixes, so `--mat go`,
+   `--g /bin/false`, `--prod /bin/false`, and a forged
+   `--fixture-tool /bin/false` changed the effective executables
+   while the gate's literal `--flag` scan still PASSed the reports.
+6. P2 — artifact-operation attribution referenced the wrong
+   operations: `v4/cli/crash_harness.py` wrote ordinal zero for
+   every open and creation, so the committed evidence credited
+   scenario E's exports to `producer.0` (`current.publish`),
+   scenario C's `recover` scratch to `producer.0`, and scenario
+   A1's failed initial open as a successful main open; the gate also
+   accepted empty operation lists with positive step counts and
+   invented `legacy` operations.
+7. P2 — the Windows cross-listing comparison ignored the required
+   `artifact.source_basename` field: changing the inert artifact's
+   source basename to a different schema-valid name passed both row
+   validators in both committed directions.
+
+### Repairs (minimal-complete)
+
+Production transports (P1):
+
+- Go `v4/go/internal/cli/rpc/session.go`: the session now has a
+  shutdown signal channel closed by `beginShutdown`; the worker's
+  terminal failure report and the termination-signal report select
+  on it, so a full events channel can never deadlock the
+  shutdown/fatal join.  New regression
+  `TestBrokenStdoutWithPipelinedInputTerminates` fails pre-fix
+  (3 s hang) and passes post-fix (<10 ms); the product-level flood
+  probe (2,000 pipelined describes into `/dev/full`) is now 30/30
+  clean per language with a non-zero exit on every run.
+- Rust `v4/rust/iprange-cli/src/rpc/session.rs`: the worker's fatal
+  report retries `try_send` while checking the recorded shutdown
+  flag, so the wakeup is lossless before shutdown and abortable
+  after it; `fatal_error` in the control record still drives the
+  non-zero exit.  New regression
+  `broken_stdout_with_pipelined_input_terminates` fails pre-fix
+  (3 s hang) and passes post-fix.
+
+Resource harness (P2 1-3):
+
+- proof b: a `proc.wait` timeout now fails the proof (the harness
+  kill is recorded as cleanup, never as the product exit); the
+  single -32001 answer is validated with the shared
+  `frame.decode_response` plus the 65,000-byte object ceiling, and
+  `read_responses` bounds one accumulated line at the 1,048,576-byte
+  output ceiling.  `--self-test` gained four proof-b stub controls
+  (missing-envelope, oversized-response, hang-after-close must fail;
+  valid-envelope must pass).
+- Shared client deadlocks (P2 3): `JsonRpcService` accepts optional
+  `read_deadline`/`write_deadline`; when configured, the raw pipe
+  fds are read/written under selectors with monotonic deadlines and
+  a bounded cleanup wait, so `current.publish` preparation and
+  `maintenance.list`/`remove` can no longer block past the
+  harness-configured bounds.  proof a/c/d services pass the resource
+  harness deadlines.  `--self-test` gained shared-path read and
+  write deadline controls (a partial-line stub fails in ~0.2 s; a
+  non-draining child fails the bounded write in ~0.25 s).
+- The resource battery is 8/8 for both products with real work
+  recorded (500,000-line feed publish, 20-response admission split,
+  -32010 cancellation, exact reservation removal).
+
+Kind gate and crash lineage (P2 4-5):
+
+- `v4/cli/check_kind_coverage.py` replays every recorded command
+  through the runner's own argparse construction (mechanically
+  lifted from `run.py`/`crash_harness.py` `main()`) with
+  `allow_abbrev=False`: any abbreviated or unknown option makes the
+  command non-canonical and fails the report; the effective
+  rust/go/matrix values bind to the report's binary records and the
+  `--fixture-tool` argument must name the battery's crash-recorded
+  fixture binary.  The `legacy` operation exemption is removed,
+  empty operation lists with positive executed steps fail, crash
+  ordinal refs are range-checked, and `v4_main` open refs must index
+  an open-capable method.  `--self-test` gained the eight mutation
+  controls (all previously accepted mutations exit 1).
+- `v4/cli/crash_harness.py` records the actual executed-operation
+  ordinal at every open/creation call site (successful consumer main
+  opens only), and `observed_kinds` emits `actor.<ordinal>` refs
+  with the real values; the regenerated evidence shows A1 opening at
+  `consumer.1`, C scratch at `producer.2` (`recover`), E
+  adapter-output at `producer.2`, B live sidecar at `producer.5` +
+  `consumer.0`.
+
+Windows comparison (P2 6):
+
+- `v4/cli/windows_housekeeping_harness.py` now compares
+  `artifact.source_basename` against the synthesized source name
+  (UTF-16LE wire) in the pair validator and across local/cross
+  listings; the required-field sweep added the remaining missing
+  schema members (`directory_role`, `kind`, `source_presence`,
+  `inert_presence`, `creation_security`,
+  `selected_envelope_sequence`) to the equality checks.  The
+  self-test gained control M6 (mutated source_basename must fail);
+  the previously accepted mutation now fails for both producers.
+
+### Validation (this wave)
+
+- Go: `go test ./...` green under the recorded toolchain
+  (`GOTOOLCHAIN=go1.26.4`); the new broken-stdout regression fails
+  pre-fix and passes post-fix.
+- Rust: `cargo test -p iprange-cli --all-features` 267 passed
+  (266 + the new regression); workspace 867 passed (866 + 1).
+- Product probes: oversized-inflight 3/3 per language (exit 1, one
+  -32001 id:null, sentinel never answered); broken-output flood
+  30/30 per language with zero timeouts and non-zero exits.
+- Resource harness: `--self-test` PASS (read/write controls + four
+  proof-b controls + shared-path deadline controls); proof-b stub
+  triads REJECT (missing-envelope via envelope validation,
+  oversized via the frame ceiling, hang-after-close via the
+  self-exit requirement); proof a stall fails in ~0.30 s with the
+  configured 0.1 s bounds; real-product battery 8/8.
+- Kind gate: `--self-test` exit 0 (48 original asserts + 9 new
+  controls); all eight follow-up mutations REJECT with the intended
+  reasons; genuine regenerated evidence PASSes (all 7 kinds, both
+  languages).
+- Crash harness: 16/16 PASS on the regenerated battery; the
+  `/bin/false` negative is 0/16; the regenerated
+  `v4/cli/evidence/crash.json` carries truthful per-kind ordinals.
+- Matrices: rust 38/38, go 38/38, rust_to_go 14 executed + 24
+  skipped (with `--allow-skips`), go_to_rust 14 + 24.
+- Golden corpus 53; sensitivity gate 14 modes; Windows harness
+  self-test PASS.
+- Binary identities at the wave's canonical staging paths: Rust
+  product `58036aee…`, Go product `f3e9f1e4…`, Go worker
+  `202a83ac…` (changed with the product: it links
+  `internal/cli/rpc`), Rust worker `cb9ad6cd…` and fixture
+  `7c616793…` unchanged.
+- Windows host qualification for this wave is regenerated on the
+  authorized Windows validation host with provenance in the report.
+
+### Pre-existing environment finding (not caused by this wave)
+
+With the machine's default `go1.27.0` toolchain,
+`TestMetadataDeflateHeapOverheadCoversWorkspace`
+(`v4/go/internal/writer`) fails at HEAD unchanged: go1.27's flate
+workspace measures ~1.06-1.08 MiB against the declared 840 KiB
+honest charge.  The same test passes under the recorded canonical
+toolchain `go1.26.4` (`GOTOOLCHAIN=go1.26.4`), which is also what
+the staged qualification binaries are built with.  The constant
+lives in the writer engine (SOW-0025 scope), not in SOW-0028's
+transport/harness scope; it is recorded here and flagged to the
+user, and the wave's Go validation runs under the canonical
+toolchain.
+
+### Sensitive-data gate
+
+The regenerated evidence and this SOW contain no personal paths and
+no host alias; the historical done/ SOW alias debt remains recorded
+as the open user decision above.
+
+### Artifact gate
+
+`v4/cli/evidence/README.md` (ninth-wave narrative + new identity
+block), `v4/cli/resource-record.md` (current hashes), this SOW
+updated; no spec change is required (the fixes conform to the
+framing-failure, envelope, and boundedness contracts); no project
+skill change is required.
+
+The five own-model scope reviews and the glm-5.3-responses
+whole-milestone review run at the exact final revision of this wave
+with no later repository commits; their verdicts and the
+milestone-4 close decision are recorded here when they land.

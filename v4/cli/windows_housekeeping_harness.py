@@ -684,6 +684,22 @@ def synthesize_gc_pair(directory):
         "source_name": source_name,
         "envelope_name": envelope_name,
         "inert_name": inert_name,
+        # Deterministic housekeeping artifact facts (gc_codec.go
+        # gcCodec / gc_codec.rs): kind private_output, destination
+        # role, source absent (the publish name is never created),
+        # inert present, the single committed sequence-1 block, and
+        # the creator-only commitment embedded in the envelope; the
+        # products must surface exactly these in every housekeeping
+        # artifact row.
+        "directory_role": "destination",
+        "kind": "private_output",
+        "source_presence": "absent",
+        "inert_presence": "present",
+        "selected_envelope_sequence": "1",
+        "creation_security": {
+            "kind": 2,
+            "commitment": commitment.hex(),
+        },
         "directory_identity": {
             "kind": 2,
             "volume": dir_volume,
@@ -1057,8 +1073,9 @@ def check_synthesized_pair_rows(rows, directory, synth):
     - carry the synthesized row identity (envelope row: the envelope
       file's identity; inert row: the artifact identity) and a nested
       ``artifact`` object whose attempt, ordinal, state, basenames,
-      and envelope/inert/directory identities equal the synthesis
-      facts;
+      source name, and every other required schema member (role,
+      kind, presence, creation security, selected sequence) equal the
+      synthesis facts;
     - when the envelope file exists, its sha256 must equal the
       synthesized envelope sha256.
 
@@ -1151,6 +1168,12 @@ def check_synthesized_pair_rows(rows, directory, synth):
                 f"{row_kind} row carries no artifact object")
             continue
         artifact_checks = (
+            # (label, expected, got) or (label, expected, got, custom
+            # failure text); every required HOUSEKEEPING_ARTIFACT
+            # schema member is compared against the synthesis facts.
+            # Facts the synth record does not carry are skipped, so
+            # evidence recorded before the facts existed still
+            # validates.
             ("attempt_id", str((synth or {}).get("attempt")),
              str(artifact.get("attempt_id"))),
             ("ordinal", (synth or {}).get("ordinal"),
@@ -1173,14 +1196,35 @@ def check_synthesized_pair_rows(rows, directory, synth):
              _utf16le_wire((synth or {}).get("inert_name"))
              if (synth or {}).get("inert_name") else None,
              artifact.get("inert_basename")),
+            ("source_basename",
+             _utf16le_wire((synth or {}).get("source_name"))
+             if (synth or {}).get("source_name") else None,
+             artifact.get("source_basename"),
+             "artifact source_basename does not equal the synthesized "
+             "source name"),
+            ("directory_role", (synth or {}).get("directory_role"),
+             artifact.get("directory_role")),
+            ("kind", (synth or {}).get("kind"), artifact.get("kind")),
+            ("source_presence", (synth or {}).get("source_presence"),
+             artifact.get("source_presence")),
+            ("inert_presence", (synth or {}).get("inert_presence"),
+             artifact.get("inert_presence")),
+            ("selected_envelope_sequence",
+             (synth or {}).get("selected_envelope_sequence"),
+             artifact.get("selected_envelope_sequence")),
+            ("creation_security", (synth or {}).get("creation_security"),
+             artifact.get("creation_security")),
         )
-        for label, want, got in artifact_checks:
+        for label, want, got, *custom in artifact_checks:
             if want is None:
                 continue
             if got != want:
-                failures.append(
-                    f"{row_kind} artifact {label} is {got!r}, "
-                    f"expected {want!r}")
+                if custom:
+                    failures.append(f"{row_kind} {custom[0]}")
+                else:
+                    failures.append(
+                        f"{row_kind} artifact {label} is {got!r}, "
+                        f"expected {want!r}")
     envelope_name = (synth or {}).get("envelope_name")
     if synth and envelope_name and os.path.isdir(directory):
         envelope_path = os.path.join(directory, envelope_name)
@@ -1199,9 +1243,9 @@ def check_cross_rows_match(local_rows, cross_rows):
     Both products list the same synthesized pair directory, so every
     cross row must equal the local row of the same candidate kind on
     the complete candidate facts -- candidate kind, decoded basename,
-    identity, directory identity, and the nested artifact identities
-    (envelope/inert/directory identity plus attempt and ordinal) --
-    not merely on the directory identity.  Returns failures.
+    identity, directory identity, and the nested artifact object on
+    every required HOUSEKEEPING_ARTIFACT schema member -- not merely
+    on the directory identity.  Returns failures.
     """
 
     failures = []
@@ -1245,7 +1289,12 @@ def check_cross_rows_match(local_rows, cross_rows):
                 f"{kind!r} row artifact object missing on one listing")
             continue
         for member in ("envelope_identity", "inert_identity",
-                       "directory_identity", "attempt_id", "ordinal"):
+                       "directory_identity", "attempt_id", "ordinal",
+                       "state", "directory_role", "basename_encoding",
+                       "envelope_basename", "inert_basename",
+                       "source_basename", "source_presence",
+                       "inert_presence", "kind", "creation_security",
+                       "selected_envelope_sequence"):
             if local_artifact.get(member) != cross_artifact.get(member):
                 failures.append(
                     f"cross {kind!r} artifact {member} "
@@ -1317,12 +1366,19 @@ def _synthetic_pair(directory):
         stream.write("synthetic envelope payload\n")
     with open(inert_path, "w", encoding="ascii", newline="") as stream:
         stream.write(MARKER_TEXT)
+    commitment_hex = sha256_file(envelope_path)
     synth = {
         "attempt": attempt,
         "ordinal": ordinal,
         "envelope_name": envelope_name,
         "inert_name": inert_name,
         "source_name": source_name,
+        "directory_role": "destination",
+        "kind": "private_output",
+        "source_presence": "absent",
+        "inert_presence": "present",
+        "selected_envelope_sequence": "1",
+        "creation_security": {"kind": 2, "commitment": commitment_hex},
         "directory_identity": {"kind": 2, "volume": volume,
                                "inode": dir_inode},
         "artifact_identity": {"kind": 2, "volume": volume,
@@ -1353,9 +1409,14 @@ def _synthetic_pair(directory):
                 "kind": "private_output",
                 "ordinal": ordinal,
                 "state": "inert",
+                "source_presence": "absent",
                 "inert_presence": "present",
                 "selected_envelope_sequence": "1",
                 "directory_role": "destination",
+                "creation_security": {
+                    "kind": 2,
+                    "commitment": commitment_hex,
+                },
                 "envelope_identity": identity(envelope_inode),
                 "inert_identity": identity(inert_inode),
                 "directory_identity": identity(dir_inode),
@@ -1375,8 +1436,10 @@ def _self_test():
     """Doctored-record regression tests for the strict validation.
 
     Runs the two check families on this platform (no Windows host and
-    no product binaries needed): the five P2-5 pair-row mutations and
-    the P2-6 removal-log mutations must fail, and the synthetic
+    no product binaries needed): the six P2-5 pair-row mutations
+    (M1-M6, the last doctoring the required artifact
+    source_basename) and the P2-6 removal-log mutations must fail,
+    and the synthetic
     complete record sets must pass.  Returns 0 on success, 1 on any
     failure; the lead runs ``--self-test`` at integration.
     """
@@ -1490,6 +1553,20 @@ def _self_test():
         expect_fail(
             "P2-5 M5 different pair (cross equality)",
             check_cross_rows_match(rows, other))
+
+        # M6: a schema-valid mutation of the required artifact
+        # source_basename (P2-6) must fail both the pair-row proof
+        # and the cross equality proof.
+        m6 = [dict(row) for row in rows]
+        m6[inert_idx]["artifact"] = dict(m6[inert_idx]["artifact"])
+        m6[inert_idx]["artifact"]["source_basename"] = _utf16le_wire(
+            ".iprange-publish-" + "0" * 32 + ".tmp")
+        expect_fail(
+            "P2-5 M6 source_basename changed (pair rows)",
+            check_synthesized_pair_rows(m6, scratch, synth))
+        expect_fail(
+            "P2-5 M6 source_basename changed (cross equality)",
+            check_cross_rows_match(rows, m6))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

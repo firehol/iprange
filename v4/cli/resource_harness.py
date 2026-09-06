@@ -85,10 +85,14 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from schema import frame  # noqa: E402  (shared response validator)
+import run  # noqa: E402  (side-effect free; normal JSON-RPC client)
 
 from crash_harness import (  # noqa: E402  (side-effect free)
     HarnessJsonRpcService,
@@ -222,7 +226,8 @@ def stderr_tail(path, limit=1200):
 _PENDING_STDOUT_BYTES = {}
 
 
-def read_responses(proc, expect, deadline_seconds):
+def read_responses(proc, expect, deadline_seconds,
+                   max_line_bytes=None, raw_lines=None):
     """Read up to ``expect`` complete LF-terminated response lines.
 
     Reads are non-blocking under a monotonic deadline: the stdout fd
@@ -237,6 +242,14 @@ def read_responses(proc, expect, deadline_seconds):
     the deadline expires or EOF arrives -- are retained in
     ``_PENDING_STDOUT_BYTES`` under ``proc.pid`` for ``drain_stdout``
     byte accounting and are never parsed.
+
+    ``max_line_bytes`` bounds one accumulated line: a response
+    frame that grows past the ceiling without a terminator raises
+    ``ResourceFailure`` instead of buffering a peer's unbounded
+    output.  ``raw_lines``, when supplied, receives the exact wire
+    bytes of every decoded line (LF included) so callers can apply
+    the shared server-response envelope validator, which operates on
+    raw text.
 
     Returns the list of decoded response objects read so far (the
     caller asserts the count); a product that stays alive without
@@ -268,7 +281,18 @@ def read_responses(proc, expect, deadline_seconds):
         while len(responses) < expect:
             line_end = buf.find(b"\n")
             if line_end < 0:
+                if max_line_bytes is not None and len(buf) > max_line_bytes:
+                    raise ResourceFailure(
+                        f"response frame exceeded {max_line_bytes} bytes "
+                        f"without a terminator (output ceiling)")
                 break
+            line = buf[:line_end + 1]
+            if max_line_bytes is not None and len(line) > max_line_bytes:
+                raise ResourceFailure(
+                    f"response frame of {len(line)} bytes exceeds the "
+                    f"{max_line_bytes} byte output ceiling")
+            if raw_lines is not None:
+                raw_lines.append(line)
             responses.append(json.loads(buf[:line_end]))
             buf = buf[line_end + 1:]
     if buf:
@@ -388,7 +412,10 @@ def proof_a(binary, label, work_dir, outcome):
     outcome["feed_lines"] = PROOF_A_FEED_LINES
 
     source = os.path.join(work, "big.iprange")
-    pub = HarnessJsonRpcService([binary, "--jsonrpc"], label, cwd=work)
+    pub = HarnessJsonRpcService(
+        [binary, "--jsonrpc"], label, cwd=work,
+        read_deadline=PROOF_A_READ_DEADLINE_SECONDS,
+        write_deadline=PROOF_WRITE_DEADLINE_SECONDS)
     try:
         pub.call("1", "iprange.v1.current.publish",
                  publish_params(feed, source, "fail_if_exists"))
@@ -533,11 +560,32 @@ def proof_b(binary, label, work_dir, outcome):
                           "proof b")
         proc.stdin.close()
 
-        responses = read_responses(proc, 1, 30)
+        raw_lines = []
+        responses = read_responses(
+            proc, 1, 30,
+            max_line_bytes=frame.OUTPUT_FRAME_LIMIT,
+            raw_lines=raw_lines)
         outcome["response_lines"] = len(responses)
         if len(responses) != 1:
             raise ResourceFailure(
                 f"expected 1 response line, got {len(responses)}")
+        # The single -32001 answer must satisfy the exact server
+        # response contract before any proof assertion: jsonrpc 2.0,
+        # null id blessed only for the framing error, a well-formed
+        # error object, the 65,000-byte object ceiling (shared
+        # client validation, run.py decode_response_line) and the
+        # 1,048,576-byte frame ceiling.  A malformed or oversized
+        # response fails the proof instead of being accepted.
+        try:
+            frame.decode_response(raw_lines[0].rstrip(b"\n").decode("utf-8"))
+        except (frame.FrameError, UnicodeDecodeError) as exc:
+            raise ResourceFailure(
+                f"over-limit close response failed server-envelope "
+                f"validation: {exc}") from exc
+        if len(raw_lines[0].rstrip(b"\n")) > frame.RESPONSE_OBJECT_LIMIT:
+            raise ResourceFailure(
+                f"over-limit close response of {len(raw_lines[0])} bytes "
+                f"exceeds the 65,000-byte response-object ceiling")
         response = responses[0]
         outcome["response"] = response
         error = response.get("error") or {}
@@ -565,11 +613,23 @@ def proof_b(binary, label, work_dir, outcome):
                 f"single -32001 response, got {len(drained)} bytes: "
                 f"{drained[:120]!r}")
     finally:
+        # Snapshot the primary failure before waiting: if an earlier
+        # check already failed (the killed child was often blocked
+        # producing that failure) it stays the reported defect.
+        primary_failure = sys.exc_info()[0]
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=5)
+            # A forced kill is the harness cleaning up, never the
+            # product's exit: a service that does not terminate on
+            # its own fails the proof regardless of cleanup success.
+            if primary_failure is None:
+                raise ResourceFailure(
+                    "product process did not exit on its own after the "
+                    "over-limit close; the harness killed it after 10 s "
+                    "(a forced kill is not a product exit)")
     outcome["exit_code"] = proc.returncode
     if proc.returncode == 0:
         raise ResourceFailure(
@@ -679,7 +739,10 @@ def proof_c(binary, label, work_dir, outcome):
         producer.kill_process_group()
         producer.close()
 
-    listed = HarnessJsonRpcService([binary, "--jsonrpc"], f"c-{label}", cwd=work)
+    listed = HarnessJsonRpcService(
+        [binary, "--jsonrpc"], f"c-{label}", cwd=work,
+        read_deadline=PROOF_A_READ_DEADLINE_SECONDS,
+        write_deadline=PROOF_WRITE_DEADLINE_SECONDS)
     try:
         out_path = os.path.join(work, "list.jsonl")
         reports, error = maintenance_reports(
@@ -765,7 +828,10 @@ def proof_d(binary, label, work_dir, outcome):
     outcome["feed_lines"] = PROOF_A_FEED_LINES
 
     source = os.path.join(work, "big.iprange")
-    pub = HarnessJsonRpcService([binary, "--jsonrpc"], label, cwd=work)
+    pub = HarnessJsonRpcService(
+        [binary, "--jsonrpc"], label, cwd=work,
+        read_deadline=PROOF_A_READ_DEADLINE_SECONDS,
+        write_deadline=PROOF_WRITE_DEADLINE_SECONDS)
     try:
         pub.call("1", "iprange.v1.current.publish",
                  publish_params(feed, source, "fail_if_exists"))
@@ -893,6 +959,9 @@ def self_test():
 
     import selectors
 
+    global spawn_jsonrpc  # proof_b resolves this module global
+
+    root = tempfile.mkdtemp(prefix="iprange-self-test-proofb-")
     failures = []
 
     # Read control: partial line plus a sleeping child.
@@ -959,6 +1028,132 @@ def self_test():
     finally:
         _kill_process_group(stub)
         stub.stdin.close()
+
+    # Proof-b controls: the single -32001 answer must satisfy the
+    # server response envelope (shared frame.decode_response plus the
+    # response-object ceiling), the frame must stay under the output
+    # ceiling, and the product must terminate on its own.  A valid
+    # stub passes; malformed, oversized, and hang-after-close stubs
+    # must fail proof_b instead of being accepted.
+    original_spawn = spawn_jsonrpc
+    proof_b_controls = [
+        ("missing-envelope",
+         "import sys,json;sys.stdin.buffer.read();"
+         "print(json.dumps({'error':{'code':-32001}}),flush=True);sys.exit(1)",
+         False),
+        ("oversized-response",
+         "import sys,json;sys.stdin.buffer.read();"
+         "print(json.dumps({'jsonrpc':'2.0','id':None,'error':"
+         "{'code':-32001,'message':'a'*2100000}}),flush=True);sys.exit(1)",
+         False),
+        ("hang-after-stdout-close",
+         "import sys,json,os,time;sys.stdin.buffer.read();"
+         "print(json.dumps({'jsonrpc':'2.0','id':None,'error':"
+         "{'code':-32001,'message':'frame too large'}}),flush=True);"
+         "os.close(1);time.sleep(30)",
+         False),
+        ("valid-envelope",
+         "import sys,json;sys.stdin.buffer.read();"
+         "print(json.dumps({'jsonrpc':'2.0','id':None,'error':"
+         "{'code':-32001,'message':'frame too large'}}),flush=True);"
+         "sys.exit(1)",
+         True),
+    ]
+    for label, body, should_pass in proof_b_controls:
+        def spawn_stub(binary, cwd, stderr_log, _body=body):
+            child = subprocess.Popen(
+                [sys.executable, "-c", _body],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, cwd=cwd)
+            record_spawn(child)
+            return child
+        spawn_jsonrpc = spawn_stub
+        outcome = {}
+        started = time.monotonic()
+        try:
+            proof_b("/unused", label, root, outcome)
+        except ResourceFailure as exc:
+            failed_now = str(exc)
+        else:
+            failed_now = None
+        elapsed = time.monotonic() - started
+        print(f"self-test proof-b {label}: "
+              f"{failed_now or 'accepted'} in {elapsed:.2f} s")
+        if should_pass and failed_now is not None:
+            failures.append(f"proof-b {label}: valid stub rejected: "
+                            f"{failed_now}")
+        if not should_pass and failed_now is None:
+            failures.append(f"proof-b {label}: defective stub accepted")
+        if elapsed >= 15:
+            failures.append(f"proof-b {label}: took {elapsed:.2f} s "
+                            "(bounded window 15 s)")
+    spawn_jsonrpc = original_spawn
+
+    # Shared-path read-deadline control: JsonRpcService with a bounded
+    # read deadline must fail a service that answers a partial line
+    # and stalls, instead of blocking on readline forever.
+    service_root = tempfile.mkdtemp(prefix="iprange-self-test-rpc-")
+    partial_stub = ('import sys,os,time;sys.stdin.readline();'
+                    'os.write(1,b"{");time.sleep(60)')
+    stalled_read = run.JsonRpcService(
+        [sys.executable, "-c", partial_stub], "stub",
+        cwd=service_root, read_deadline=0.2, write_deadline=0.2)
+    started = time.monotonic()
+    try:
+        stalled_read.call("1", "iprange.v1.current.publish", {})
+    except AssertionError as exc:
+        read_failure = str(exc)
+    except Exception as exc:  # noqa: BLE001 - control reports any exit
+        read_failure = f"{type(exc).__name__}: {exc}"
+    else:
+        read_failure = None
+    elapsed = time.monotonic() - started
+    stalled_read.close()
+    print(f"self-test shared-path read deadline: "
+          f"{read_failure or 'unexpected success'} in {elapsed:.2f} s")
+    if read_failure is None:
+        failures.append("shared-path read control: stalled service "
+                        "answered (unexpected)")
+    elif "deadline" not in read_failure:
+        failures.append(f"shared-path read control: {read_failure}")
+    elif elapsed >= 1.5:
+        failures.append(f"shared-path read control: {elapsed:.2f} s "
+                        "(bounded window 1.5 s)")
+    shutil.rmtree(service_root, ignore_errors=True)
+
+    # Shared-path write-deadline control: a child that never drains
+    # stdin must fail a bounded-write request instead of blocking on
+    # the full pipe.
+    service_root = tempfile.mkdtemp(prefix="iprange-self-test-write-")
+    stalled_write = run.JsonRpcService(
+        ["/bin/sh", "-c", "sleep 2"], "stub",
+        cwd=service_root, read_deadline=0.2, write_deadline=0.25)
+    started = time.monotonic()
+    try:
+        stalled_write.call(
+            "1", "iprange.v1.system.describe",
+            {"pad": "a" * 900_000})
+    except AssertionError as exc:
+        write_failure = str(exc)
+    except Exception as exc:  # noqa: BLE001 - control reports any exit
+        write_failure = f"{type(exc).__name__}: {exc}"
+    else:
+        write_failure = None
+    elapsed = time.monotonic() - started
+    stalled_write.close()
+    print(f"self-test shared-path write deadline: "
+          f"{write_failure or 'unexpected success'} in {elapsed:.2f} s")
+    if write_failure is None:
+        failures.append("shared-path write control: stalled service "
+                        "accepted the request (unexpected)")
+    elif "deadline" not in write_failure:
+        failures.append(f"shared-path write control: {write_failure}")
+    elif elapsed >= 1.5:
+        failures.append(f"shared-path write control: {elapsed:.2f} s "
+                        "(bounded window 1.5 s)")
+    shutil.rmtree(service_root, ignore_errors=True)
+
+    shutil.rmtree(root, ignore_errors=True)
 
     leftover = no_leftover_processes()
     if leftover:

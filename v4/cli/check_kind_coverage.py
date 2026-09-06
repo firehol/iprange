@@ -52,24 +52,34 @@ Evidence integrity rules:
   binary executed) and every PASS crash scenario must record a
   per-actor ``operations`` map (``{role: [method, ...]}``).  Lineage
   refs are checked against these records: a matrix ref
-  ``actor.operation`` must name an operation in that actor's list (or
-  the always-allowed ``legacy`` marker) and a crash ref
-  ``actor.ordinal`` must index that actor's list.  Unknown actors,
-  unknown operations, and out-of-range ordinals fail the gate.
+  ``actor.operation`` must name a real recorded operation of that
+  actor (there is no free ``legacy`` marker) and a crash ref
+  ``actor.ordinal`` must index that actor's list; an opened crash ref
+  must index an open-capable method of the kind (v4_main opens are
+  ``iprange.v1.reader.open``).  Unknown actors, unknown operations,
+  out-of-range ordinals, fabricated opens, and empty operation lists
+  on actors that recorded executed work fail the gate.
 - Mixed matrices (``rust_to_go``, ``go_to_rust``) execute both
   binaries in every PASS case: producer and consumer must each
   record at least one executed step independently.  Single-language
   matrices keep the aggregate step rule (one actor may legitimately
   be idle).
-- Command provenance is final-value and bound to the report's own
-  binary records: repeated identity options (``--matrix``,
+- Command provenance is single-authority and bound to the report's
+  own binary records: every recorded command is replayed through the
+  exact argparse option definitions of the runner that executed it
+  (``run.py main()`` for matrices, ``crash_harness main()`` for
+  crashes) with abbreviations disabled, so an abbreviated identity
+  flag (``--mat``, ``--g``, ``--prod``, ``--fixture``) is rejected as
+  non-canonical; repeated identity options (``--matrix``,
   ``--producer``, ``--consumer``, ``--rust``, ``--go``,
   ``--fixture-tool``) fail; the effective (final) ``--matrix`` value
   must equal the report matrix; the matrix command's ``--rust`` /
   ``--go`` paths and the crash command's ``--producer`` /
   ``--consumer`` paths must name binaries the report records, and
   those binaries must resolve through the global sha256 ->
-  implementation map to the language the flag names.
+  implementation map to the language the flag names; every command's
+  ``--fixture-tool`` value must name the fixture binary the battery's
+  crash report records.
 - Crash scenarios must keep their artifact evidence: every PASS
   scenario records a non-empty ``destination_state`` object and a
   ``reopen_outcome`` object; emptied or missing state is a report
@@ -135,6 +145,11 @@ import shlex
 import sys
 import tempfile
 
+# The parser derivation imports the runner modules (run, crash_harness)
+# for their exact globals; they live next to this gate.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+
 REQUIRED_KINDS = [
     "v4_main",
     "live_sidecar",
@@ -166,6 +181,21 @@ CRASH_ONLY_KINDS = (
 # opened coverage is mandatory; empty opened coverage is a FAIL, not a
 # vacuous pass.
 REQUIRED_OPENED_KINDS = ("live_sidecar", "adapter_output")
+# Open-capable methods per crash-opened kind.  The harness records the
+# method that performed each open in the per-actor operation list; an
+# opened ref must index such a method, not merely an in-range ordinal
+# (``reader.close`` at the right index is a fabricated open).  Kinds
+# not listed here have multi-writer open contracts (live_sidecar is
+# opened by reader.open and by live-mode database.info; adapter_output
+# by the export/validate writer) and keep the recorded-list plus
+# backing-fact checks.
+CRASH_OPEN_METHODS = {
+    "v4_main": ("iprange.v1.reader.open",),
+}
+
+# Parser caches for the single-authority command replay (lazy).
+_RUN_PARSER = None
+_CRASH_PARSER = None
 # Matrix label -> the actor-language pair that the executed binaries must
 # have produced.  Used only as the consistency probe against the global
 # identities of the executed shas, never for attribution.
@@ -220,6 +250,20 @@ def _crash_consumer_opened_main(scenario):
     if outcome.get("consumer_live_reader_transaction_id") is not None:
         return True
     return False
+
+
+def _open_fact_backed(facts, actor):
+    """True when a scenario recorded an open fact for one actor.
+
+    The crash harness records the open's operation ordinal at the call
+    site (an int; 0 is a valid ordinal) and the committed pre-fix
+    evidence records a plain True; both are backing evidence, while a
+    missing record is not.
+    """
+
+    value = facts.get(actor) if isinstance(facts, dict) else None
+    return value is True or (isinstance(value, int)
+                             and not isinstance(value, bool))
 
 
 def _crash_path_to_sha(report):
@@ -319,20 +363,101 @@ def _argv_pairs(argv):
             yield token, argv[index + 1]
 
 
-def _argv_value(argv, flag):
-    """Return the FINAL value of one ``--flag value`` (or ``--flag=value``).
+def _lift_main_parser(runner_name, extra_env):
+    """Derive a runner's argparse from its own ``main()`` function.
 
-    The runner records the replayed ``sys.argv``; argparse scalar
-    options keep the last occurrence, so the effective value is the
-    final one.  A trailing override therefore wins, exactly as it did
-    in the executed run.
+    Single-authority option semantics: the gate replays a recorded
+    command through the exact option definitions the runner itself
+    executes, lifted mechanically from the runner's ``main()`` so the
+    two can never drift.  The runners accept abbreviated flags
+    (argparse default), so a forged command can append a short flag
+    (``--mat``, ``--g``, ``--prod``, ``--fixture``) whose effective
+    value the real runner honors but a literal last-value scan never
+    sees; the gate parses the lifted parser with ``allow_abbrev=False``,
+    which makes every abbreviated token unrecognized and the command
+    non-canonical.  If a runner's ``main()`` shape ever changes such
+    that the lift fails, callers record a report problem instead of
+    silently skipping the command check.
     """
 
-    value = None
-    for seen_flag, seen_value in _argv_pairs(argv):
-        if seen_flag == flag:
-            value = seen_value
-    return value
+    import ast
+    runner_path = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), runner_name)
+    with open(runner_path, encoding="utf-8") as stream:
+        tree = ast.parse(stream.read(), runner_path)
+    main_fn = next(node for node in tree.body
+                   if isinstance(node, ast.FunctionDef)
+                   and node.name == "main")
+    statements = []
+    for node in main_fn.body:
+        if (isinstance(node, ast.Assign)
+                and any(isinstance(target, ast.Name)
+                        and target.id == "args"
+                        for target in node.targets)):
+            break
+        statements.append(node)
+    env = dict(extra_env)
+    env.setdefault("argparse", argparse)
+    exec(compile(ast.Module(body=statements, type_ignores=[]),
+                 f"{runner_path}:main[parser]", "exec"), env)
+    parser = env["parser"]
+    parser.allow_abbrev = False
+    return parser
+
+
+def _run_parser():
+    """The run.py matrix-runner argparse with abbreviations off."""
+
+    global _RUN_PARSER
+    if _RUN_PARSER is None:
+        import run as _run
+        _RUN_PARSER = _lift_main_parser(
+            "run.py",
+            {"__doc__": _run.__doc__,
+             "DEFAULT_CASE_DIR": _run.DEFAULT_CASE_DIR})
+    return _RUN_PARSER
+
+
+def _crash_parser():
+    """The crash-harness argparse with abbreviations off."""
+
+    global _CRASH_PARSER
+    if _CRASH_PARSER is None:
+        _CRASH_PARSER = _lift_main_parser("crash_harness.py", {})
+    return _CRASH_PARSER
+
+
+def _parse_recorded_command(parser, argv, label, problems):
+    """Replay one recorded command through a runner-exact argparse.
+
+    Returns the parsed namespace, or None after recording a problem.
+    The runner executes argparse with abbreviations enabled, so an
+    abbreviated flag token in the recorded command is either a replay
+    defect or a forgery whose effective value the naive last-value
+    scan would miss; with ``allow_abbrev=False`` the same token is
+    unrecognized and the command is rejected as non-canonical.  The
+    whole argv is replayed, so every literal flag occurrence is
+    canonical too.  argparse diagnostics are suppressed; only the
+    gate's own problem records surface.
+    """
+
+    import contextlib
+    import io
+    try:
+        with contextlib.redirect_stderr(io.StringIO()):
+            namespace, unknown = parser.parse_known_args(argv[1:])
+    except SystemExit:
+        problems.append(
+            f"{label}: recorded command does not parse with the "
+            f"runner's exact argparse (allow_abbrev=False)")
+        return None
+    if unknown:
+        problems.append(
+            f"{label}: recorded command carries non-canonical argparse "
+            f"tokens {unknown} (abbreviated or unknown options are "
+            f"rejected)")
+        return None
+    return namespace
 
 
 def _argv_duplicates(argv, flags):
@@ -382,7 +507,8 @@ def _global_implementation_map(matrix_paths, crash_paths, problems):
     return implementation_of
 
 
-def matrix_evidence(path, report, implementation_of, problems):
+def matrix_evidence(path, report, implementation_of, fixture_paths,
+                      problems):
     """Kind -> created/opened language sets observed by one matrix.
 
     Returns ``(matrix, evidence, stats, problems)``.  ``stats`` holds
@@ -437,38 +563,72 @@ def matrix_evidence(path, report, implementation_of, problems):
             problems.append(
                 f"matrix {path}: report command supplies the identity "
                 f"option(s) {sorted(duplicated)} more than once")
-        command_matrix = _argv_value(argv, "--matrix")
-        if command_matrix is None:
+        # Single-authority replay: the recorded command must parse with
+        # the matrix runner's exact argparse and abbreviations off, so
+        # an appended ``--mat``/``--g``/``--fixture`` override that the
+        # real runner honors is a non-canonical command.
+        try:
+            runner_parser = _run_parser()
+        except Exception as exc:
             problems.append(
-                f"matrix {path}: report command records no --matrix "
-                f"argument (report matrix is {matrix!r})")
-        elif command_matrix != matrix:
-            problems.append(
-                f"matrix {path}: report command --matrix "
-                f"{command_matrix!r} does not match report matrix "
-                f"{matrix!r}")
-        report_shas = _matrix_path_to_sha(report)
-        for flag, language in (("--rust", "rust"), ("--go", "go")):
-            named = _argv_value(argv, flag)
-            if named is None:
+                f"matrix {path}: cannot derive the matrix-runner parser "
+                f"from run.py main(): {exc}")
+            runner_parser = None
+        namespace = None
+        if runner_parser is not None:
+            namespace = _parse_recorded_command(
+                runner_parser, argv, f"matrix {path}", problems)
+        if namespace is not None:
+            command_matrix = namespace.matrix
+            if command_matrix is None:
                 problems.append(
-                    f"matrix {path}: report command records no {flag} "
-                    f"argument")
-                continue
-            bound_path = os.path.realpath(named)
-            bound_sha = report_shas.get(bound_path)
-            if bound_sha is None:
+                    f"matrix {path}: report command records no --matrix "
+                    f"argument (report matrix is {matrix!r})")
+            elif command_matrix != matrix:
                 problems.append(
-                    f"matrix {path}: report command {flag} {named!r} "
-                    f"does not name any binary record of the report")
-                continue
-            bound_implementation = implementation_of.get(bound_sha)
-            if bound_implementation != language:
+                    f"matrix {path}: report command --matrix "
+                    f"{command_matrix!r} does not match report matrix "
+                    f"{matrix!r}")
+            report_shas = _matrix_path_to_sha(report)
+            for flag, language, attr in (
+                    ("--rust", "rust", "rust_binary"),
+                    ("--go", "go", "go_binary")):
+                named = getattr(namespace, attr)
+                if named is None:
+                    problems.append(
+                        f"matrix {path}: report command records no {flag} "
+                        f"argument")
+                    continue
+                bound_path = os.path.realpath(named)
+                bound_sha = report_shas.get(bound_path)
+                if bound_sha is None:
+                    problems.append(
+                        f"matrix {path}: report command {flag} {named!r} "
+                        f"does not name any binary record of the report")
+                    continue
+                bound_implementation = implementation_of.get(bound_sha)
+                if bound_implementation != language:
+                    problems.append(
+                        f"matrix {path}: report command {flag} {named!r} "
+                        f"names binary {bound_path!r} (sha256 {bound_sha!r}) "
+                        f"whose global implementation is "
+                        f"{bound_implementation!r}, not {language!r}")
+            # The fixture tool has no per-matrix binary record, so its
+            # identity is anchored in the mandatory crash report's root
+            # binaries table; a value that names no crash-recorded
+            # fixture (e.g. /bin/false) changes the effective fixture
+            # and fails the command binding.
+            fixture = namespace.fixture_tool
+            if fixture is None:
                 problems.append(
-                    f"matrix {path}: report command {flag} {named!r} "
-                    f"names binary {bound_path!r} (sha256 {bound_sha!r}) "
-                    f"whose global implementation is "
-                    f"{bound_implementation!r}, not {language!r}")
+                    f"matrix {path}: report command records no "
+                    f"--fixture-tool argument")
+            elif os.path.realpath(fixture) not in fixture_paths:
+                problems.append(
+                    f"matrix {path}: report command --fixture-tool "
+                    f"{fixture!r} does not name the fixture binary the "
+                    f"battery's crash report records "
+                    f"({sorted(fixture_paths) or '<none>'})")
     cases = report.get("cases", [])
     # Counter cross-validation: the per-case status list is the truth;
     # a doctored aggregate can claim any number.  Cases that are not
@@ -617,6 +777,18 @@ def matrix_evidence(path, report, implementation_of, problems):
                 actor_operations[actor] = []
             else:
                 actor_operations[actor] = operations
+                executed = actor_steps.get(actor)
+                if (isinstance(executed, int)
+                        and not isinstance(executed, bool)
+                        and executed > 0 and not operations):
+                    # Executed work without any recorded operation is a
+                    # report defect: lineage refs could not be checked
+                    # against the actor's executed methods even if the
+                    # refs were stripped to hide the emptiness.
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} actor "
+                        f"{actor!r} records an empty executed-operation "
+                        f"list despite {executed} executed step(s)")
         if steps_complete and steps_sum < 1:
             problems.append(
                 f"matrix {path}: PASS case {case_name!r} records zero "
@@ -679,13 +851,13 @@ def matrix_evidence(path, report, implementation_of, problems):
                         f"operation")
                     bucket["created"].add("?")
                     continue
-                if operation != "legacy" and \
-                        operation not in actor_operations.get(actor, ()):
+                if operation not in actor_operations.get(actor, ()):
                     problems.append(
                         f"matrix {path}: PASS case {case_name!r} kind "
                         f"{facts['kind']!r} created_by ref {entry!r} names "
                         f"an operation not recorded in actor {actor!r} "
-                        f"executed operations")
+                        f"executed operations (there is no free 'legacy' "
+                        f"marker)")
                     bucket["created"].add("?")
                     continue
                 if actor_steps.get(actor) == 0:
@@ -708,13 +880,13 @@ def matrix_evidence(path, report, implementation_of, problems):
                         f"operation")
                     bucket["opened"].add("?")
                     continue
-                if operation != "legacy" and \
-                        operation not in actor_operations.get(actor, ()):
+                if operation not in actor_operations.get(actor, ()):
                     problems.append(
                         f"matrix {path}: PASS case {case_name!r} kind "
                         f"{facts['kind']!r} opened_by ref {entry!r} names "
                         f"an operation not recorded in actor {actor!r} "
-                        f"executed operations")
+                        f"executed operations (there is no free 'legacy' "
+                        f"marker)")
                     bucket["opened"].add("?")
                     continue
                 if actor_steps.get(actor) == 0:
@@ -836,34 +1008,42 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
             problems.append(
                 f"crash {path}: report command supplies the identity "
                 f"option(s) {sorted(duplicated)} more than once")
-        for role in ("producer", "consumer", "fixture_tool"):
-            table_path = root_binaries.get(role)
-            flag = role_flags[role]
-            named = _argv_value(argv, flag)
-            if not isinstance(table_path, str):
-                problems.append(
-                    f"crash {path}: report root binaries table records "
-                    f"no {role} path")
-            elif (not isinstance(named, str)
-                  or os.path.realpath(named) != table_path):
-                problems.append(
-                    f"crash {path}: report command {flag} {named!r} does "
-                    f"not name the report root binaries table path "
-                    f"{table_path!r}")
-            elif role != "fixture_tool":
-                # The same path -> sha -> implementation binding the
-                # scenarios use: the named binary must resolve through
-                # the global map to a product language.
-                bound_sha = path_to_sha.get(table_path)
-                bound_implementation = None
-                if isinstance(bound_sha, str):
-                    bound_implementation = implementation_of.get(bound_sha)
-                if bound_implementation not in PRODUCT_LANGUAGES:
+        # Single-authority replay: the recorded command must parse with
+        # the crash runner's exact shared argparse and abbreviations
+        # off, so an appended ``--prod``/``--fixture`` override that
+        # the real runner honors is a non-canonical command.
+        namespace = _parse_recorded_command(
+            _crash_parser(), argv, f"crash {path}", problems)
+        if namespace is not None:
+            for role in ("producer", "consumer", "fixture_tool"):
+                table_path = root_binaries.get(role)
+                flag = role_flags[role]
+                named = getattr(namespace, role)
+                if not isinstance(table_path, str):
                     problems.append(
-                        f"crash {path}: report command {flag} {named!r} "
-                        f"names binary {table_path!r} sha256 "
-                        f"{bound_sha!r} which does not resolve through "
-                        f"the global implementation map")
+                        f"crash {path}: report root binaries table records "
+                        f"no {role} path")
+                elif (not isinstance(named, str)
+                      or os.path.realpath(named) != table_path):
+                    problems.append(
+                        f"crash {path}: report command {flag} {named!r} does "
+                        f"not name the report root binaries table path "
+                        f"{table_path!r}")
+                elif role != "fixture_tool":
+                    # The same path -> sha -> implementation binding the
+                    # scenarios use: the named binary must resolve through
+                    # the global map to a product language.
+                    bound_sha = path_to_sha.get(table_path)
+                    bound_implementation = None
+                    if isinstance(bound_sha, str):
+                        bound_implementation = implementation_of.get(
+                            bound_sha)
+                    if bound_implementation not in PRODUCT_LANGUAGES:
+                        problems.append(
+                            f"crash {path}: report command {flag} {named!r} "
+                            f"names binary {table_path!r} sha256 "
+                            f"{bound_sha!r} which does not resolve through "
+                            f"the global implementation map")
     scenarios = report.get("scenarios", [])
     # Counter cross-validation: the per-scenario pass flags are the
     # truth for the failed counter.
@@ -1097,6 +1277,26 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                         f"operation ordinal {ordinal} beyond the recorded "
                         f"executed operations of actor {actor!r}")
                     continue
+                # Open refs must be semantically compatible with the
+                # kind: the operation at the ordinal must be an
+                # open-capable method, not merely in range (a
+                # ``reader.close`` at the right index is a fabricated
+                # open).  Kinds with a single open contract are listed
+                # in CRASH_OPEN_METHODS; the multi-writer kinds keep
+                # the recorded-list membership plus the backing-fact
+                # checks below.
+                if (scenario_operations is not None
+                        and kind in CRASH_OPEN_METHODS
+                        and scenario_operations.get(actor, ())[ordinal]
+                        not in CRASH_OPEN_METHODS[kind]):
+                    problems.append(
+                        f"crash {path}: PASS scenario {scenario_name!r} "
+                        f"kind {kind!r} opened_by ref {entry!r} names "
+                        f"operation "
+                        f"{scenario_operations.get(actor, ())[ordinal]!r} "
+                        f"which is not an open-capable method for this "
+                        f"kind")
+                    continue
                 # Open refs must be backed by the scenario's recorded
                 # open facts: live_sidecar opens require the actor in
                 # live_reader_opens, adapter_output opens require the
@@ -1109,7 +1309,8 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                 open_facts = scenario.get("live_reader_opens") or {}
                 adapter_facts = scenario.get(
                     "adapter_output_opens") or {}
-                if kind == "live_sidecar" and not open_facts.get(actor):
+                if kind == "live_sidecar" and \
+                        not _open_fact_backed(open_facts, actor):
                     problems.append(
                         f"crash {path}: PASS scenario {scenario_name!r} "
                         f"kind {kind!r} opened_by ref {entry!r} is not "
@@ -1117,7 +1318,7 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                         f"actor {actor!r}")
                     continue
                 if kind == "adapter_output" and \
-                        not adapter_facts.get(actor):
+                        not _open_fact_backed(adapter_facts, actor):
                     problems.append(
                         f"crash {path}: PASS scenario {scenario_name!r} "
                         f"kind {kind!r} opened_by ref {entry!r} is not "
@@ -1168,6 +1369,19 @@ def assess(matrix_paths, crash_paths):
     kind_sources = {}
     implementation_of = _global_implementation_map(
         matrix_paths, crash_paths, problems)
+    # Fixture identity of the battery: the crash report root binaries
+    # table is the only record of the v4-fixture tool every report's
+    # command names, so it is the authority for the matrix commands'
+    # ``--fixture-tool`` binding.
+    fixture_paths = set()
+    for path in crash_paths:
+        report = _load_report(path, [])
+        if not isinstance(report, dict):
+            continue
+        binaries = report.get("binaries")
+        if isinstance(binaries, dict) and isinstance(
+                binaries.get("fixture_tool"), str):
+            fixture_paths.add(os.path.realpath(binaries["fixture_tool"]))
 
     seen_matrices = {}
     matrix_stats = {}
@@ -1176,7 +1390,7 @@ def assess(matrix_paths, crash_paths):
         if report is None:
             continue
         matrix, evidence, stats, _ = matrix_evidence(
-            path, report, implementation_of, problems)
+            path, report, implementation_of, fixture_paths, problems)
         if matrix in REQUIRED_MATRICES:
             if matrix in seen_matrices:
                 problems.append(
@@ -2171,6 +2385,115 @@ def _self_test():
                                 for p in problems), (
             f"unmarked empty v4_main creator did not fail the gate: "
             f"{problems}")
+
+        # 34. P2-4/P2-5 regression controls: every mutation that the
+        #     pre-fix gate accepted on GENUINE evidence must now fail,
+        #     and the genuine committed evidence must keep passing.
+        evidence_dir = os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "evidence")
+        genuine_paths = [os.path.join(evidence_dir, f"matrix-{m}.json")
+                         for m in REQUIRED_MATRICES]
+        genuine_crash = os.path.join(evidence_dir, "crash.json")
+
+        def load_genuine():
+            matrices = []
+            for path in genuine_paths:
+                with open(path, encoding="utf-8") as stream:
+                    matrices.append(_json.load(stream))
+            with open(genuine_crash, encoding="utf-8") as stream:
+                crash = _json.load(stream)
+            return matrices, crash
+
+        problems, _c, _s = assess(genuine_paths, [genuine_crash])
+        assert not problems, (
+            f"genuine evidence failed the gate: {problems}")
+
+        def genuine_mutation_fails(label, mutator):
+            matrices, crash = load_genuine()
+            mutator(matrices, crash)
+            paths = []
+            for index, report in enumerate(matrices):
+                path = os.path.join(
+                    work, f"genuine-{label}-{index}.json")
+                assign(path, report)
+                paths.append(path)
+            crash_mutated = os.path.join(
+                work, f"genuine-{label}-crash.json")
+            assign(crash_mutated, crash)
+            problems, _c, _s = assess(paths, [crash_mutated])
+            assert problems, (
+                f"mutation {label!r} did not fail the gate: {problems}")
+            return problems
+
+        # Abbreviated overrides: the real runners select these values
+        # with argparse abbreviations enabled, so the mutated command
+        # executes a different effective identity than the gate's
+        # literal last-value scan could see.
+        genuine_mutation_fails(
+            "abbrev-matrix",
+            lambda matrices, crash: matrices[0]["command"].extend(
+                ["--mat", "go"]))
+        genuine_mutation_fails(
+            "abbrev-go",
+            lambda matrices, crash: matrices[2]["command"].extend(
+                ["--g", "/bin/false"]))
+        genuine_mutation_fails(
+            "abbrev-producer",
+            lambda matrices, crash: crash["command"].extend(
+                ["--prod", "/bin/false"]))
+        genuine_mutation_fails(
+            "abbrev-fixture",
+            lambda matrices, crash: matrices[0]["command"].extend(
+                ["--fixture", "/bin/false"]))
+
+        # Fixture-tool substitution: replacing the matrix command's
+        # recorded fixture path changes the effective fixture binary.
+        def swap_matrix_fixture(matrices, crash):
+            command = matrices[0]["command"]
+            command[command.index("--fixture-tool") + 1] = "/bin/false"
+        genuine_mutation_fails("fixture-substitution",
+                               swap_matrix_fixture)
+
+        # Empty consumer operation lists on actors with executed steps:
+        # the consumer refs were stripped to hide the emptiness.
+        def empty_consumer_ops(matrices, crash):
+            for report in matrices[2:]:
+                for case in report["cases"]:
+                    if case.get("status") != "PASS":
+                        continue
+                    case["actors"]["consumer"]["operations"] = []
+                    for facts in case.get("file_kinds", {}).values():
+                        for field in ("created_by", "opened_by"):
+                            facts[field] = [
+                                ref for ref in facts[field]
+                                if not ref.startswith("consumer.")]
+        genuine_mutation_fails("empty-consumer-ops", empty_consumer_ops)
+
+        # Invented legacy marker: every matrix ref rewritten to
+        # actor.legacy, which the pre-fix gate exempted from the
+        # recorded-operations check.
+        def invented_legacy(matrices, crash):
+            for report in matrices:
+                for case in report["cases"]:
+                    if case.get("status") != "PASS":
+                        continue
+                    for facts in case.get("file_kinds", {}).values():
+                        for field in ("created_by", "opened_by"):
+                            facts[field] = [
+                                ref.split(".", 1)[0] + ".legacy"
+                                for ref in facts[field]]
+        genuine_mutation_fails("invented-legacy", invented_legacy)
+
+        # False main-open operation: the A2 v4_main open ref indexes
+        # reader.close, an in-range ordinal that is not an open-capable
+        # method of the kind.
+        def false_main_open(matrices, crash):
+            for scenario in crash["scenarios"]:
+                if scenario["scenario"].startswith("A2."):
+                    scenario["kinds"]["v4_main"]["opened_by"] = [
+                        "consumer.1"]
+        genuine_mutation_fails("false-main-open-operation",
+                               false_main_open)
 
 
 if __name__ == "__main__":

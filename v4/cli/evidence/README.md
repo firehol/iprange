@@ -1,10 +1,18 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-Produced 2026-09-05 (eighth fix wave) on the Linux workstation
+Produced 2026-09-06 (ninth fix wave) on the Linux workstation
 (x86_64) with staged binary copies (no personal paths in the
 committed evidence) plus the Windows-host housekeeping proof on the
 authorized Windows validation host (access authorized for SOW-0028
-qualification only):
+qualification only).  The ninth wave repairs the broken-stdout
+shutdown deadlock in both session implementations (a failing stdout
+plus pipelined input could hang the process forever), the proof-b
+forced-kill acceptance and response-envelope validation gaps, the
+deadline bypass in the shared JSON-RPC client path, the abbreviated
+command-override provenance bypass and crash operation-ordinal
+attribution in the kind gate, and the Windows cross-listing
+`source_basename` comparison; the full finding list is recorded in
+SOW-0028's ninth-wave section.
 
 - Rust product + worker + fixture tool: clean-release builds of
   `v4/rust/target/release/{iprange,iprange-v4-worker,examples/v4-fixture}`
@@ -13,11 +21,12 @@ qualification only):
   rustc 1.91.1) staged as
   `/tmp/qualsvc-a8/rust/{iprange,iprange-v4-worker,v4-fixture}`:
   - product SHA-256
-    `807d52952197cd3046feb39ed30f8aa09681524cccaeadd2a3b8fc140d98cec3`
-    (changed by the eighth-wave writer-guard scope on the
-    frame-over-limit close path in
-    `v4/rust/iprange-cli/src/rpc/session.rs`, which eliminated a
-    deadlock with admitted work in flight; the seventh-wave
+    `58036aeea69b7ad6f93a8b7b782be6e2954369bf7a234fcf4b4455e2c182d25a`
+    (changed by the ninth-wave terminal-failure reporting scope in
+    `v4/rust/iprange-cli/src/rpc/session.rs`: the worker now reports
+    a broken-stdout fatal through a shutdown-abortable bounded
+    retry, so a full event queue can no longer deadlock the worker
+    join; the eighth-wave writer-guard scope, the seventh-wave
     per-member cancellation, bounded transport channels, immediate
     all-rejected batch answers, and non-zero framing-failure exit are
     included);
@@ -33,15 +42,18 @@ qualification only):
   pair (go1.26 linux/amd64, no embedded vcs revision) staged as
   `/tmp/qualsvc/go/{iprange,iprange-v4-worker}`:
   - product SHA-256
-    `85488a0f26c85f85c243dbd3d19b10a86e18e14d842696f111a7ac689d49ae68`
-    (changed by the seventh-wave per-member cancellation scope and
-    the non-zero framing-failure exit in
-    `v4/go/internal/cli/rpc/session.go`; unchanged by the eighth
-    wave);
+    `f3e9f1e409f48539f053e736a980197674341c7ffde8993019c85e3138a5530f`
+    (changed by the ninth-wave terminal-failure reporting scope in
+    `v4/go/internal/cli/rpc/session.go`: the worker's fatal report
+    selects on the shutdown signal, so a full events channel can no
+    longer deadlock the shutdown join; the seventh-wave per-member
+    cancellation, bounded transport channels, immediate all-rejected
+    batch answers, and non-zero framing-failure exit are included);
   - worker SHA-256
-    `16236608325cb189e0fbe05603886bbe150fd1ae83e4a8b532bfb7dd07054b1e`
-    (unchanged; build-proven identity, not pinned by the committed
-    reports).
+    `202a83ac92f5c8b85b44068a1553aef0dbf25a81fb2d888022592292d03b6141`
+    (changed with the product: the worker links
+    `v4/go/internal/cli/rpc`; build-proven identity, not pinned by
+    the committed reports).
 - Windows qualification binaries (built on the authorized Windows
   validation host at the eighth-wave product-source revision
   `90a935b2`, clean working tree, staged under `C:/Temp/qualsvc-win/`
@@ -94,13 +106,27 @@ fabricated cross-process opens, every harness deadline uses
 `time.monotonic()`, resource proof a waits for the export's private
 temp before pipelining the describes, and resource proof c kills
 only after the reservation file reached its full 8,192-byte block
-(2 x 4,096-byte v4 pages).  All Linux commands ran under `nice`
-with work dirs under `/tmp/qualsvc/ev11/` (matrices and crash) and
-`/tmp/qualsvc/ev12/` (resource); the mixed matrices are invoked with
-`--allow-skips` (recorded truthfully in each report command) so
-every battery command exits 0.  The Windows evidence for this wave
-is produced on the authorized Windows validation host at the final
-product sources and recorded in the report with build provenance.
+(2 x 4,096-byte v4 pages).  The ninth fix wave (2026-09-06)
+repairs the broken-stdout shutdown deadlock in both session
+implementations, the proof-b forced-kill acceptance (a harness kill
+is never a product exit), the proof-b server-envelope and output-
+ceiling validation (shared `frame.decode_response`), the missing
+deadlines in the shared JSON-RPC client path (bounded read/write
+with selectors when the resource harness configures bounds), the
+kind-gate command-provenance bypass via argparse abbreviations
+(recorded commands are replayed through the runner's own parser
+with `allow_abbrev=False`; the fixture-tool argument is bound to the
+battery's crash-recorded fixture), the crash operation-ordinal
+attribution (opens and creations now reference the actual executed
+operation, never a fabricated ordinal zero), and the Windows
+cross-listing `source_basename` equality.  All Linux commands ran
+under `nice` with work dirs under `/tmp/qualsvc/ev16/` (matrices
+and crash) and `/tmp/qualsvc/ev15/` (resource); the mixed matrices
+are invoked with `--allow-skips` (recorded truthfully in each
+report command) so every battery command exits 0.  The Windows
+evidence for this wave is produced on the authorized Windows
+validation host at the final product sources and recorded in the
+report with build provenance.
 
 ## Files
 

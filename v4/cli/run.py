@@ -35,6 +35,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -1222,7 +1223,8 @@ class JsonRpcService:
     """Strict JSON-RPC stdio client over one persistent subprocess."""
 
     def __init__(self, argv, implementation, *, cwd=None,
-                 start_new_session=False):
+                 start_new_session=False, read_deadline=None,
+                 write_deadline=None):
         self.argv = list(argv)
         self.implementation = implementation
         self.proc = subprocess.Popen(
@@ -1234,6 +1236,19 @@ class JsonRpcService:
             cwd=cwd,
             start_new_session=start_new_session,
         )
+        # Deadline-bounded mode reads and writes the raw pipe fds
+        # under selectors; the buffered wrappers cannot be time-boxed
+        # and would hide bytes from the selector loops, so they are
+        # detached (the raw owners are kept in the service object).
+        self.read_deadline = read_deadline
+        self.write_deadline = write_deadline
+        self._read_buf = b""
+        self._raw_stdin = None
+        self._raw_stdout = None
+        if write_deadline is not None:
+            self._raw_stdin = self.proc.stdin.detach()
+        if read_deadline is not None:
+            self._raw_stdout = self.proc.stdout.detach()
         self.lock = threading.Lock()
         self.stderr_tail = []
 
@@ -1257,12 +1272,27 @@ class JsonRpcService:
             if len(wire_bytes) > frame.INPUT_FRAME_LIMIT:
                 raise AssertionError("client request frame over limit")
             try:
-                self.proc.stdin.write(wire_bytes + b"\n")
-                self.proc.stdin.flush()
+                if self.write_deadline is None:
+                    self.proc.stdin.write(wire_bytes + b"\n")
+                    self.proc.stdin.flush()
+                else:
+                    self._write_bounded(wire_bytes + b"\n")
+            except TimeoutError as exc:
+                raise AssertionError(
+                    f"service did not accept the request within the "
+                    f"bounded write deadline: {exc}") from exc
             except (BrokenPipeError, OSError) as exc:
                 raise AssertionError(
                     f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
-            line = self.proc.stdout.readline()
+            if self.read_deadline is None:
+                line = self.proc.stdout.readline()
+            else:
+                try:
+                    line = self._readline_bounded()
+                except TimeoutError as exc:
+                    raise AssertionError(
+                        f"service did not answer within the bounded read "
+                        f"deadline: {exc}") from exc
             if not line:
                 raise AssertionError(
                     f"service closed stdout; stderr={''.join(self.stderr_tail[-5:])}")
@@ -1291,8 +1321,15 @@ class JsonRpcService:
             if len(wire_bytes) > frame.INPUT_FRAME_LIMIT:
                 raise AssertionError("client notification frame over limit")
             try:
-                self.proc.stdin.write(wire_bytes + b"\n")
-                self.proc.stdin.flush()
+                if self.write_deadline is None:
+                    self.proc.stdin.write(wire_bytes + b"\n")
+                    self.proc.stdin.flush()
+                else:
+                    self._write_bounded(wire_bytes + b"\n")
+            except TimeoutError as exc:
+                raise AssertionError(
+                    f"service did not accept the notification within the "
+                    f"bounded write deadline: {exc}") from exc
             except (BrokenPipeError, OSError) as exc:
                 raise AssertionError(
                     f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
@@ -1317,13 +1354,99 @@ class JsonRpcService:
                 f"response id {response.get('id')!r} != request id {request_id!r}")
         return response
 
+    def _write_bounded(self, payload):
+        """Write one request frame under ``self.write_deadline``.
+
+        The raw stdin fd is switched to non-blocking once; a selector
+        waits for writability only up to the remaining deadline, so a
+        child that stops draining stdin raises TimeoutError instead
+        of blocking the harness forever on a full pipe.
+        """
+
+        import selectors
+
+        fd = self._raw_stdin.fileno()
+        os.set_blocking(fd, False)
+        sel = selectors.DefaultSelector()
+        sel.register(fd, selectors.EVENT_WRITE)
+        deadline = time.monotonic() + self.write_deadline
+        view = memoryview(payload)
+        written = 0
+        try:
+            while written < len(view):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"write deadline {self.write_deadline:.3f} s "
+                        "expired")
+                if not sel.select(remaining):
+                    continue
+                try:
+                    written += os.write(fd, view[written:])
+                except BlockingIOError:
+                    continue
+        finally:
+            sel.close()
+
+    def _readline_bounded(self):
+        """Read one LF-terminated response frame under the deadline.
+
+        Raw fd with non-blocking reads under a selector; only complete
+        LF-terminated frames are returned adequate to the caller, and
+        bytes already read stay in ``_read_buf`` across calls.  A peer
+        that holds a partial line open cannot block the client past
+        the deadline (TimeoutError); EOF returns the remaining bytes.
+        """
+
+        import selectors
+
+        fd = self._raw_stdout.fileno()
+        os.set_blocking(fd, False)
+        sel = selectors.DefaultSelector()
+        sel.register(fd, selectors.EVENT_READ)
+        deadline = time.monotonic() + self.read_deadline
+        try:
+            while True:
+                line_end = self._read_buf.find(b"\n")
+                if line_end >= 0:
+                    line = self._read_buf[:line_end + 1]
+                    self._read_buf = self._read_buf[line_end + 1:]
+                    return line
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"read deadline {self.read_deadline:.3f} s "
+                        "expired")
+                if not sel.select(remaining):
+                    continue
+                try:
+                    chunk = os.read(fd, 65536)
+                except (BlockingIOError, InterruptedError):
+                    continue
+                if not chunk:
+                    remaining_buf, self._read_buf = self._read_buf, b""
+                    return remaining_buf
+                self._read_buf += chunk
+        finally:
+            sel.close()
+
     def close(self):
         """Close stdin and wait for this owned subprocess to terminate."""
 
         try:
-            if self.proc.stdin and not self.proc.stdin.closed:
+            if self._raw_stdin is not None:
+                self._raw_stdin.close()
+            elif self.proc.stdin and not self.proc.stdin.closed:
                 self.proc.stdin.close()
-            self.proc.wait(timeout=30)
+            if self.read_deadline is None and self.write_deadline is None:
+                self.proc.wait(timeout=30)
+            else:
+                # A deadline-bounded service belongs to a harness whose
+                # every exchange is bounded; a stalled child must not
+                # pin the proof in cleanup either.  Real products exit
+                # at stdin EOF in milliseconds, so the short grace only
+                # affects stalled peers.
+                self.proc.wait(timeout=0.2)
         except Exception:
             self.proc.kill()
             self.proc.wait(timeout=5)
