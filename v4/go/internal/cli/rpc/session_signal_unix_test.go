@@ -103,6 +103,24 @@ func TestTerminationSignalHelperProcess(t *testing.T) {
 		// signalled, within the bounded watchdog window.
 		r, _ := io.Pipe()
 		err = NewSession().Run(r, io.Discard)
+	case "graceful-fatal-full-stderr":
+		// Graceful-fatal-path independence (role-round finding): the
+		// session fails because its response write fails (the parent
+		// gives fd 1 a stdout that fails every write), and rpc.Run's
+		// best-effort diagnostic then cannot be written either (the
+		// parent gives fd 2 a full, never-drained pipe).  The process
+		// must still exit 1 within the bounded grace window, without
+		// any signal.
+		os.Exit(Run())
+	case "oversized-unterminated":
+		// Over-limit frame without a terminator (role-round finding):
+		// the parent writes more than InputFrameLimit bytes with no LF
+		// and holds stdin open.  The frame is already invalid once the
+		// accumulated bytes exceed the ceiling, so the reader must not
+		// wait for LF or EOF: the session answers -32001 with id null
+		// and exits non-zero (spec iprange-jsonrpc-v1.md framing
+		// section).
+		err = NewSession().Run(os.Stdin, os.Stdout)
 	case "eof-first":
 		// Supervisor stop sequence: the response for one request is
 		// written, EOF follows immediately, and the termination
@@ -201,6 +219,203 @@ func TestTerminationSignalDrainWedgeForcesNonZeroExit(t *testing.T) {
 	// process-lifetime watchdog can serve the signal.
 	runSignalTrials(t, "drain-wedge", syscall.SIGTERM, 1)
 	runSignalTrials(t, "drain-wedge", syscall.SIGINT, 1)
+}
+
+func TestGracefulFatalFullStderrForcedExit(t *testing.T) {
+	// Role-round finding: the graceful fatal path (rpc.Run's
+	// diagnostic on a session error) must never depend on a blocking
+	// stderr write.  The helper runs the real Run() with a stdout
+	// that fails every write (/dev/full); the failed response write
+	// fails the session.  With stderr a full, undrained pipe the
+	// process must still exit 1 within the bounded grace window, with
+	// no signal at all.
+	devfull, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
+	if err != nil {
+		t.Skipf("/dev/full not available: %v", err)
+	}
+	defer devfull.Close()
+	for iteration := 0; iteration < 2; iteration++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestTerminationSignalHelperProcess$")
+		cmd.Env = append(os.Environ(), signalTestHelperEnv+"=graceful-fatal-full-stderr")
+		var fds [2]int
+		if err := syscall.Pipe(fds[:]); err != nil {
+			t.Fatalf("pipe: %v", err)
+		}
+		if err := syscall.SetNonblock(fds[1], true); err != nil {
+			t.Fatalf("setnonblock: %v", err)
+		}
+		fill := make([]byte, 65536)
+		for {
+			if _, werr := syscall.Write(fds[1], fill); werr != nil {
+				break
+			}
+		}
+		if err := syscall.SetNonblock(fds[1], false); err != nil {
+			t.Fatalf("restore blocking: %v", err)
+		}
+		cmd.Stderr = os.NewFile(uintptr(fds[1]), "stderr-full-pipe")
+		cmd.Stdout = devfull
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			syscall.Close(fds[1])
+			syscall.Close(fds[0])
+			t.Fatalf("stdin pipe: %v", err)
+		}
+		if err := cmd.Start(); err != nil {
+			syscall.Close(fds[1])
+			syscall.Close(fds[0])
+			t.Fatalf("start helper: %v", err)
+		}
+		syscall.Close(fds[1])
+		io.WriteString(stdin, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n")
+		stdin.Close()
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case err := <-done:
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 {
+				syscall.Close(fds[0])
+				t.Fatalf("graceful-fatal full stderr: exit = %v, want 1", err)
+			}
+		case <-time.After(3 * time.Second):
+			cmd.Process.Kill()
+			cmd.Wait()
+			syscall.Close(fds[0])
+			t.Fatalf("graceful-fatal full stderr: helper did not terminate within 3s")
+		}
+		syscall.Close(fds[0])
+	}
+}
+
+func TestGracefulFatalDiagnosticStillReported(t *testing.T) {
+	// Control for the graceful-fatal fix: with a drained stderr the
+	// best-effort diagnostic must still land before the process exits
+	// (only the blocked write is abandoned, not the message).
+	devfull, err := os.OpenFile("/dev/full", os.O_WRONLY, 0)
+	if err != nil {
+		t.Skipf("/dev/full not available: %v", err)
+	}
+	defer devfull.Close()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestTerminationSignalHelperProcess$")
+	cmd.Env = append(os.Environ(), signalTestHelperEnv+"=graceful-fatal-full-stderr")
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	cmd.Stdout = devfull
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("stdin pipe: %v", err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start helper: %v", err)
+	}
+	io.WriteString(stdin, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n")
+	stdin.Close()
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		exit, ok := err.(*exec.ExitError)
+		if !ok || exit.ExitCode() != 1 {
+			t.Fatalf("control: exit = %v, want 1", err)
+		}
+	case <-time.After(3 * time.Second):
+		cmd.Process.Kill()
+		cmd.Wait()
+		t.Fatalf("control: helper did not terminate within 3s")
+	}
+	if !strings.Contains(stderr.String(), "iprange:") {
+		t.Fatalf("diagnostic missing from drained stderr: %q", stderr.String())
+	}
+}
+
+func TestOversizedUnterminatedFrameAnswersAndExits(t *testing.T) {
+	// Role-round finding: an over-limit frame that never receives a
+	// terminator must still produce the -32001 response (id null) and
+	// a non-zero exit (spec iprange-jsonrpc-v1.md framing section);
+	// the reader must not wait for LF or EOF once the ceiling is
+	// exceeded.
+	for iteration := 0; iteration < 2; iteration++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestTerminationSignalHelperProcess$")
+		cmd.Env = append(os.Environ(), signalTestHelperEnv+"=oversized-unterminated")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatalf("stdin pipe: %v", err)
+		}
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			stdin.Close()
+			t.Fatalf("stdout pipe: %v", err)
+		}
+		cmd.Stderr = &bytes.Buffer{}
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start helper: %v", err)
+		}
+		// LIMIT+2 bytes without LF; stdin stays open on purpose.
+		buf := make([]byte, 65536)
+		for i := range buf {
+			buf[i] = 'x'
+		}
+		written := 0
+		for written < InputFrameLimit+2 {
+			take := len(buf)
+			if left := InputFrameLimit + 2 - written; left < take {
+				take = left
+			}
+			n, werr := stdin.Write(buf[:take])
+			written += n
+			if werr != nil {
+				t.Fatalf("write oversized bytes: %v", werr)
+			}
+		}
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		lineCh := make(chan string, 1)
+		errCh := make(chan error, 1)
+		go func() {
+			line, rerr := bufio.NewReader(stdout).ReadString('\n')
+			if rerr != nil {
+				errCh <- rerr
+				return
+			}
+			lineCh <- line
+		}()
+		select {
+		case line := <-lineCh:
+			var payload map[string]any
+			if err := json.Unmarshal([]byte(line), &payload); err != nil {
+				t.Fatalf("bad -32001 json: %v (%q)", err, line)
+			}
+			if payload["id"] != nil {
+				t.Fatalf("expected null id, got %v", payload["id"])
+			}
+			errorObj, _ := payload["error"].(map[string]any)
+			if code, _ := errorObj["code"].(float64); int(code) != -32001 {
+				t.Fatalf("expected -32001, got %v", payload["error"])
+			}
+		case rerr := <-errCh:
+			t.Fatalf("read -32001: %v", rerr)
+		case <-time.After(3 * time.Second):
+			cmd.Process.Kill()
+			cmd.Wait()
+			stdin.Close()
+			t.Fatalf("no -32001 response within 3s")
+		}
+		select {
+		case err := <-done:
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 {
+				stdin.Close()
+				t.Fatalf("oversized-unterminated: exit = %v, want 1", err)
+			}
+		case <-time.After(3 * time.Second):
+			cmd.Process.Kill()
+			cmd.Wait()
+			stdin.Close()
+			t.Fatalf("oversized-unterminated: helper did not terminate within 3s")
+		}
+		stdin.Close()
+	}
 }
 
 func TestTerminationSignalFullStderrForcedExit(t *testing.T) {

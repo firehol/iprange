@@ -1,17 +1,24 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The eleventh-wave (whole-milestone control review fix) evidence is
-regenerated at the wave 2026-09-06 revision `155459b0` plus the
-full-stderr forced-exit repair: both products now force-exit
-non-zero even when their diagnostic pipe is full, the shared client
-has bounded/validated response ingestion and truthful bounded
-teardown, the kind gate enforces exact crash lineage ordinals and
-joins the command-selected executable with each actor, capability is
-actor-independent, fixture identity is cross-checked, and the Windows
-housekeeping checks compare the top-level removal ordinal.  Linux
-reports record the new product identities `eb08c3d4…` (rust) and
-`c0204ade…` (go); the Windows housekeeping report and hosts are
-regenerated at the same source revision (recorded below).
+The twelfth-wave (internal role-round repair) evidence is
+regenerated at the wave 2026-09-06 revision after the wave-11
+closure: the internal role round failed the wave-11 revision with
+one remaining P1 (the graceful fatal path still wrote the
+session-failure diagnostic synchronously, so a full diagnostic pipe
+blocked the exit outside the signal path), one new P1 (the frame
+readers waited for a terminator that may never arrive, so an
+unterminated over-limit frame never produced the required -32001 +
+close), two P2 harness ceilings (the stdout drain had no accumulated
+byte cap; the duplicate-id rejection had no detecting control), and
+three P3 repairs.  Both products now exit non-zero within ~60 ms on
+the graceful fatal path even with a full, undrained stderr pipe,
+an unterminated over-limit frame is answered -32001 (id null) and
+closed immediately, the drain is byte-bounded, and the harness
+self-tests cover the duplicate-id rejection and the
+already-exited poisoned-peer close.  Linux reports record the new
+product identities `f6926c1c…` (rust) and `7f88bb7c…` (go); the
+Windows housekeeping report is regenerated at the same product
+source revision (recorded below).
 
 Produced 2026-09-06 on the Linux workstation (x86_64) from staged
 binary copies (no personal paths in the committed evidence) plus the
@@ -34,29 +41,20 @@ sections.
 
 - Rust product + worker + fixture tool: clean-release builds of
   `v4/rust/target/release/{iprange,iprange-v4-worker,examples/v4-fixture}`
-  (`cargo build --release --all-features -p iprange-cli --bin iprange
-  -p iprange-livedb --bin iprange-v4-worker --example v4-fixture`,
-  rustc 1.91.1) staged as
-  `/tmp/qualsvc/ev17/bin/rust/{iprange,iprange-v4-worker,v4-fixture}`:
+  (rustc 1.97.1) staged as
+  `/tmp/qualsvc/ev18/bin/rust/{iprange,iprange-v4-worker,v4-fixture}`:
   - product SHA-256
-    `eb08c3d4e0d02729e7621393a0bf187a50a4f0d58fcba154e4208c95ebec4e4e`
-    (changed by the eleventh wave in
-    `v4/rust/iprange-cli/src/rpc/session.rs`: the forced-exit
-    diagnostics are now best-effort from a detached thread, so a full
-    stderr pipe can no longer block the watchdog's exit; the same
-    applies to the wedged-channel fatal diagnostic; plus the third
-    wave-10 role round's change: the EOF tail now
-    polls the watcher's recorded flag for the same 25 ms grace
-    window Go uses, so the supervisor eof-first shape (close stdin,
-    signal back-to-back) is deterministic non-zero instead of ~3/4
-    exit-zero; the second round's process-lifetime 1 s force-exit
-    bound, independent of fatal-event delivery, so a partially-filled
-    or fully-wedged transport can no longer ignore SIGINT/SIGTERM;
-    the first round's wedged-transport watchdog, the ninth-wave
-    shutdown-abortable bounded retry, the eighth-wave writer-guard
-    scope, the seventh-wave per-member cancellation, bounded
-    transport channels, immediate all-rejected batch answers, and
-    non-zero framing-failure exit are included);
+    `f6926c1c5b5ac503e1be38444f8b090da278937bfa7d83e1720321b089626a2d`
+    (changed by the twelfth wave in
+    `v4/rust/iprange-cli/src/rpc/mod.rs`: the graceful-fatal
+    diagnostic is now best-effort from a detached thread with the
+    same 50 ms bound the forced exit uses, so a full stderr pipe can
+    no longer block the exit on the graceful path either; and in
+    `v4/rust/iprange-cli/src/rpc/framing.rs`: an over-limit frame is
+    reported immediately at the byte that makes the payload
+    definitely over the ceiling, without waiting for a terminator
+    that may never arrive; the wave-11 session.rs fixes are
+    included);
   - worker SHA-256
     `cb9ad6cd82a03b7933d706de9e1b4e4c707836962b7f00e194c5d50cd4511e94`
     (unchanged; build-proven identity, not pinned by the committed
@@ -67,26 +65,16 @@ sections.
     is build-proven at this revision with the recorded command).
 - Go product + worker: the documented `-buildvcs=false` qualification
   pair (go1.26 linux/amd64, no embedded vcs revision) staged as
-  `/tmp/qualsvc/ev17/bin/go/{iprange,iprange-v4-worker}`:
+  `/tmp/qualsvc/ev18/bin/go/{iprange,iprange-v4-worker}`:
   - product SHA-256
-    `c0204ade05cdc34b11b78fa595a4b38891d18ede02301a47253dabe1376b36ee`
-    (changed by the eleventh wave in
-    `v4/go/internal/cli/rpc/session.go`: the forced-exit diagnostic
-    is now best-effort from a detached goroutine with a bounded
-    grace, so a full stderr pipe can no longer block the watchdog's
-    os.Exit; plus the third wave-10 role round's change: the clean-EOF
-    path now
-    waits on the watcher's sigRecorded channel instead of receiving
-    from sigCh, whose FIFO receiver queue made the earlier grace
-    poll dead code; every signal recorded up to the 25 ms grace
-    window wins over the exit-zero outcome; the second round's
-    process-lifetime 1 s force-exit bound, independent of
-    fatal-event delivery, so a partially-filled or fully-wedged
-    transport can no longer ignore SIGINT/SIGTERM; the first
-    round's wedged-transport watchdog, the ninth-wave fatal-report
-    select, the seventh-wave per-member cancellation, bounded
-    transport channels, immediate all-rejected batch answers, and
-    non-zero framing-failure exit are included);
+    `7f88bb7c63e994ca41845da667c69bc67158ddbcc5082a658b6c21dd2131b47c`
+    (changed by the twelfth wave in
+    `v4/go/internal/cli/rpc/rpc.go`: the graceful-fatal diagnostic is
+    now best-effort from a detached goroutine with the same 50 ms
+    bound the forced exit uses; and in
+    `v4/go/internal/cli/rpc/framing.go`: an over-limit frame is
+    reported immediately without waiting for a terminator; the
+    wave-11 session.go fixes are included);
   - worker SHA-256
     `202a83ac92f5c8b85b44068a1553aef0dbf25a81fb2d888022592292d03b6141`
     (the worker source tree is unchanged since the eighth wave and
@@ -95,13 +83,11 @@ sections.
     byte-reproducible across toolchains or build paths, and not
     pinned by the committed reports).
 - Windows qualification binaries (built on the authorized Windows
-  validation host at the wave-11 product-source revision
-  `b7be670b`, clean tracked tree, staged under `C:/Temp/qualsvc-win/`):
+  validation host at the wave-12 product-source revision, clean
+  tracked tree, staged under `C:/Temp/qualsvc-win/`):
   - Go product SHA-256
-    `fce7acf5b5dd8259bb218a99c9b3ec8c9bfea177859d36fabcfdcf0d94ea0648`
     (go1.26.5 windows/amd64, `-buildvcs=false`);
   - Rust product SHA-256
-    `19474f1462f6c832bba497c91b95e7b6c11c2719b7140f0e34be31cd2870e5d9`
     (rustc 1.97.1).
   Build commands, toolchain, and source revision are recorded in
   the report's `build_provenance` block.

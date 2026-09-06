@@ -1177,7 +1177,7 @@ def check_synthesized_pair_rows(rows, directory, synth):
         # ordinal pass (external review finding).
         row_ordinal = row.get("ordinal")
         want_ordinal = (synth or {}).get("ordinal")
-        if isinstance(want_ordinal, int) and                 not isinstance(want_ordinal, bool):
+        if isinstance(want_ordinal, int) and not isinstance(want_ordinal, bool):
             if row_ordinal != want_ordinal:
                 failures.append(
                     f"{row_kind} row ordinal {row_ordinal!r} does not "

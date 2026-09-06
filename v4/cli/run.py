@@ -1618,9 +1618,14 @@ class JsonRpcService:
             # child first: its death fails the blocked write (releasing
             # the lock) and ends a blocked read with EOF; then the
             # wrapped streams can be closed without waiting on a
-            # worker whose bytes can no longer be correlated.
-            forced = True
-            self.proc.kill()
+            # worker whose bytes can no longer be correlated.  If the
+            # child already exited (a poisoned peer self-terminated
+            # before close), only reap it: kill() on a dead child
+            # would escape close() and mask the original failure
+            # (role-round finding), and this call did not force it.
+            if self.proc.poll() is None:
+                self.proc.kill()
+                forced = True
             self.proc.wait(timeout=5)
         else:
             try:
@@ -1886,7 +1891,13 @@ def describe_capabilities(binary):
                 record["result"] = response["result"]
         finally:
             service.close()
-    except (AssertionError, OSError):
+    except (AssertionError, OSError) as exc:
+        if "force-terminated" in str(exc):
+            # A probe service that ran and then had to be
+            # force-terminated by close() is not a legacy-only signal:
+            # it is a stalled JSON-RPC service and must fail loudly
+            # instead of being misclassified (role-round finding).
+            raise
         # Legacy-only executables do not expose --jsonrpc.  A returned describe
         # result that fails the strict schema propagates ValidationError.
         record["methods"] = []

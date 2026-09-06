@@ -6226,3 +6226,149 @@ section and re-CLOSED once the internal role round passes the exact
 final revision of this wave; milestone 5 (delivery step 6) remains
 unstarted per user decision 1A.  The role round's verdicts are
 recorded in the next section.
+
+### Wave 12 (2026-09-06) — internal role round FAIL (graceful fatal path and harness ceilings) and repair
+
+The wave-11 closure was submitted to the seven standing role
+reviewers at HEAD `41f66ccf`; all seven returned.  Three roles
+returned PASS (glm-5.3 whole-milestone validator, parity, security);
+four roles returned FAIL (performance, operations, portability,
+tester) with one P1 closed-loop defect, one new P1 framing defect,
+two P2 harness ceilings, and three P3 repairs:
+
+1. **P1 — graceful fatal path still blocked on a full diagnostic
+   pipe (both products, performance + operations + tester roles).**
+   `rpc.Run` (Go `v4/go/internal/cli/rpc/rpc.go`) and `rpc::run`
+   (Rust `v4/rust/iprange-cli/src/rpc/mod.rs`) wrote the
+   session-failure diagnostic synchronously on the main thread
+   before exiting.  A session failure (broken stdout, framing
+   failure) with a full undrained stderr pipe blocked the exit
+   forever: the wave-11 repair covered only the signal/wedged fatal
+   paths.  Reproduced at `41f66ccf` by the lead: both products
+   stayed alive past 4 s (killed), while a readable-stderr control
+   exited in ~3 ms — isolating the blocked diagnostic write.  The
+   spec (`.agents/sow/specs/iprange-jsonrpc-v1.md` shutdown
+   section) requires unrecoverable stdout failure to exit non-zero.
+   Repair: the diagnostic is now emitted from a detached
+   goroutine/thread and the exit is bounded by the same 50 ms grace
+   the forced signal path uses (Go `forceExitDiagnosticGrace`, Rust
+   50 ms sleep).  Regression tests: Go
+   `TestGracefulFatalFullStderrForcedExit` (helper runs the real
+   `Run()` with stdout=/dev/full and a full stderr pipe; exits 1
+   within 3 s) plus `TestGracefulFatalDiagnosticStillReported`
+   (drained-stderr control: the message still lands); Rust
+   `graceful_fatal_full_stderr_exits_nonzero` (stdout whose read end
+   is closed) plus `graceful_fatal_diagnostic_still_reported`.
+   Measured: both products exit 1 in ~0.06 s on this path (was an
+   indefinite hang); the signal-path forced exit remains ~1.05-1.07
+   s (1 s watchdog + 50 ms grace), and the wave-11 ~1.05 s
+   full-stderr claim is scoped to the signal path in the records.
+
+2. **P1 — unterminated over-limit frame wedged both sessions
+   indefinitely (tester role).**  The frame readers
+   (`v4/go/internal/cli/rpc/framing.go`, Rust
+   `v4/rust/iprange-cli/src/rpc/framing.rs`) waited for LF or EOF
+   after the ceiling was exceeded (discard-the-rest).  A peer
+   streaming more than 1 MiB without LF and holding stdin open
+   pinned the session forever: no -32001, no exit (memory bounded,
+   time unbounded).  The spec (`.agents/sow/specs/iprange-jsonrpc-v1.md`
+   framing section) requires a frame over the limit to produce
+   -32001 with id null and then close; the frame is invalid once
+   the accumulated bytes exceed the ceiling even if never
+   terminated.  Repair: both readers report `FrameTooLarge`
+   immediately at the byte that makes the payload definitely over
+   the ceiling (after the CRLF CR-strip allowance); the session's
+   existing -32001 + close path then runs, and the remaining bytes
+   are dropped by process close (never parsed — the spec's
+   shutdown-discard rule).  Regression tests: Go
+   `TestOversizedUnterminatedFrameAnswersAndExits`, Rust
+   `oversized_unterminated_frame_answers_and_exits` (LIMIT+2 bytes,
+   no LF, stdin held open: exactly one null-id -32001 response and
+   exit 1 within 3 s).  Consequence for proof b: the product now
+   closes its stdin side before the harness finishes writing a
+   >1 MiB frame, so `resource_harness.py` proof b accepts the
+   resulting EPIPE on the oversized-frame write — the remainder of
+   the frame and the sentinel are dropped by the closed pipe, which
+   is exactly the contract; the proof still verifies the single
+   -32001 response, stdout EOF, zero further bytes and the non-zero
+   exit.
+
+3. **P2 — `drain_stdout` had no accumulated-byte ceiling
+   (operations role).**  `v4/cli/resource_harness.py` `drain_stdout`
+   accumulated every byte until its 15 s deadline; a flooding peer
+   that never reached EOF could accumulate gigabytes (host OOM).
+   Repair: the drain is now byte-capped at the residue already
+   retained by the caller's last `read_responses` plus one output
+   frame; overflow raises `ResourceFailure` (the same ceiling
+   pattern `read_responses` uses).  Probe with a 3 MB flooding stub:
+   rejected at the ceiling in <0.01 s.
+
+4. **P2 — the duplicate-id rejection had no detecting control
+   (portability role).**  The check exists but a regression would
+   pass silently.  Repair: `resource_harness.py --self-test` now
+   runs a duplicate-id negative control (two identical-id responses
+   to one expect=2 read must raise "duplicate response id").
+
+5. **P3 — `run.py` threaded-poisoned `close()` called `kill()`
+   without a `poll()` guard (portability role).**  A poisoned peer
+   that self-exited before `close()` made `kill()` raise and mask
+   the original failure.  Repair: kill only when `poll()` is None;
+   the forced flag is set only when this call actually killed.
+
+6. **P3 — `run.py` `describe_capabilities` swallowed the
+   forced-close `AssertionError` as "legacy-only" (tester note).**
+   Repair: a force-terminated probe re-raises instead of
+   misclassifying a stalled JSON-RPC service as legacy-only.
+
+7. **P3 — `windows_housekeeping_harness.py` pair-row check had
+   mangled spacing** (readability only).
+
+#### Validated fixes, before the role-round delta
+
+- Go: `go test ./...` (go1.26.4) PASS, including the four new
+  wave-12 regression tests; Rust: `cargo test` (workspace) PASS,
+  including the three new wave-12 process tests.
+- Product identities (release, staged, recorded), Linux:
+  Rust `f6926c1c…`, Go `7f88bb7c…`; worker and fixture identities
+  unchanged (`cb9ad6cd…`, `202a83ac…`, `7c616793…`); the Linux
+  evidence is regenerated at the new identities in
+  `v4/cli/evidence/`.
+- Full battery at the new identity (sequential, one host, staged
+  under `/tmp/qualsvc/ev18/`, every matrix invoked with both
+  product binaries in argv per the command-to-actor join):
+  matrices rust 38/38, go 38/38, rust_to_go 14+24, go_to_rust
+  14+24; crash positive 16/16 both directions, /bin/false negative
+  control 16/16 failed (the sensitivity artifact is never a
+  kind-gate source; the gate consumes the positive crash report
+  only, per `v4/cli/README.md`); resource 8/8 (proof b now
+  tolerates the product's spec-conformant early stdin close);
+  golden 55 exchanges; sensitivity 14 modes; kind gate PASS on the
+  regenerated evidence.
+- Framework self-tests: resource_harness `--self-test` PASS (now
+  including the duplicate-id control), windows_housekeeping_harness
+  `--self-test` PASS (M1-M7), kind-gate `--self-test` controls
+  1-42 PASS, run.py protocol self-tests PASS (run at every matrix
+  start).
+
+#### Sensitive-data and artifact gate (wave 12)
+
+No personal paths, host aliases, or secrets in the regenerated
+evidence or in this SOW; the committed evidence uses the staged
+binary paths under `/tmp/qualsvc/ev18/` and the neutral "authorized
+Windows validation host" wording.  Specs: no spec amendment (the
+transport contract is unchanged; the framing reader now simply
+enforces the already-specified over-limit close without waiting for
+a terminator that may never arrive).  End-user docs: none affected.
+Evidence: `v4/cli/evidence/*.json` regenerated at the new
+identities and `README.md` / `resource-record.md` updated with the
+wave narrative.  Project skills (project-final-review,
+project-v4-rust): unchanged.  SOW lifecycle: this section records
+the role round and the repair; the role-round delta verdicts at the
+final wave-12 revision are recorded in the next section.
+
+Closure statement: milestone 4 acceptance was REOPENED by the
+wave-11 section pending the internal role round; the role round
+failed the wave-11 revision, this section repairs every verified
+finding, and milestone 4 is re-CLOSED once the role-round delta
+passes the exact final revision of this wave.  Milestone 5
+(delivery step 6) remains unstarted per user decision 1A.

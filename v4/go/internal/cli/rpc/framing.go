@@ -114,20 +114,14 @@ func (lr *LineReader) ReadLine() (line []byte, ok bool, err *LineReadError) {
 			continue
 		}
 		// A (LIMIT+2)-th accumulated byte can never be part of a
-		// legal frame; consume and discard the rest of the line so
-		// shutdown stays deterministic, then report the failure once.
-		discardRest(lr.r)
+		// legal frame, even after stripping one CR of a CRLF
+		// terminator.  Report the failure immediately without waiting
+		// for the line terminator or EOF: the peer may hold stdin
+		// open forever, and the -32001 + close (spec
+		// iprange-jsonrpc-v1.md) must not depend on the frame being
+		// terminated (role-round finding).  Bytes after the limit are
+		// never parsed: the caller shuts the session down.
 		return nil, false, &LineReadError{FrameTooLarge: true}
-	}
-}
-
-// discardRest consumes the remainder of an oversized line.
-func discardRest(r *bufio.Reader) {
-	for {
-		b, err := r.ReadByte()
-		if err != nil || b == '\n' {
-			return
-		}
 	}
 }
 

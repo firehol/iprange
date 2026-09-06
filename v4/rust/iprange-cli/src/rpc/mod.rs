@@ -32,8 +32,19 @@ pub fn run() -> i32 {
         Ok(()) => 0,
         Err(err) => {
             // Startup/framing failure and unrecoverable stdout failure
-            // exit non-zero (documented transport behavior).
-            let _ = writeln!(io::stderr(), "iprange: {err}");
+            // exit non-zero (documented transport behavior).  The
+            // diagnostic write is best-effort (role-round finding): a
+            // detached thread emits it and the main thread exits after
+            // a bounded grace, so a full, undrained stderr pipe can
+            // never block the process exit on the graceful fatal path
+            // either (the same bound the forced signal exit uses).
+            // The message may be cut off when stderr is writable but
+            // slower, which is accepted.
+            let message = format!("iprange: {err}");
+            std::thread::spawn(move || {
+                let _ = writeln!(io::stderr(), "{message}");
+            });
+            std::thread::sleep(std::time::Duration::from_millis(50));
             1
         }
     }

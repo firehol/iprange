@@ -584,9 +584,24 @@ def proof_b(binary, label, work_dir, outcome):
                                "method": "iprange.v1.system.describe",
                                "params": {}})
         payload = (big + "\n" + sentinel + "\n").encode()
-        write_all_bounded(proc, payload, PROOF_WRITE_DEADLINE_SECONDS,
-                          "proof b")
-        proc.stdin.close()
+        try:
+            write_all_bounded(proc, payload, PROOF_WRITE_DEADLINE_SECONDS,
+                              "proof b")
+        except BrokenPipeError:
+            # The product closes its stdin side as soon as the frame
+            # exceeds the ceiling (role-round fix: the reader reports
+            # FrameTooLarge immediately instead of waiting for the
+            # terminator).  The rest of the frame and the sentinel are
+            # then dropped by the closed pipe -- exactly the spec
+            # contract ("bytes after the limit are discarded as part
+            # of process shutdown, never parsed").  The proof still
+            # verifies the single -32001 response, stdout EOF, zero
+            # further bytes, and the non-zero exit below.
+            pass
+        try:
+            proc.stdin.close()
+        except BrokenPipeError:
+            pass
 
         raw_lines = []
         responses = read_responses(
@@ -683,6 +698,13 @@ def drain_stdout(proc, deadline_seconds):
     ``select(min(remaining, 5.0))``; the stdout fd may already be
     non-blocking from ``read_responses``, so a spurious EAGAIN/INTR
     wake is retried, never fatal.
+
+    The drain is byte-bounded as well as deadline-bounded (role-round
+    finding): the caller's last ``read_responses`` already retained a
+    bounded residue, and at most one further output frame may arrive
+    before EOF.  A peer flooding stdout without EOF raises
+    ``ResourceFailure`` once the accumulated bytes pass that ceiling
+    instead of accumulating memory for the whole deadline.
     """
 
     import selectors
@@ -692,6 +714,8 @@ def drain_stdout(proc, deadline_seconds):
     sel.register(proc.stdout, selectors.EVENT_READ)
     deadline = time.monotonic() + deadline_seconds
     chunks = [pending] if pending else []
+    total = len(pending)
+    accumulated_cap = len(pending) + frame.OUTPUT_FRAME_LIMIT + 1
     reached_eof = False
     while True:
         remaining = deadline - time.monotonic()
@@ -708,6 +732,11 @@ def drain_stdout(proc, deadline_seconds):
         if not chunk:
             reached_eof = True
             break
+        total += len(chunk)
+        if total > accumulated_cap:
+            raise ResourceFailure(
+                f"drain accumulated {total} bytes past the "
+                f"{accumulated_cap} byte ceiling (output ceiling)")
         chunks.append(chunk)
     return b"".join(chunks), reached_eof
 
@@ -979,8 +1008,12 @@ def self_test():
        ``write_all_bounded`` of 1 MiB with a 0.5 s deadline must raise
        ``ResourceFailure`` within the window instead of blocking on
        the full 64 KiB pipe.
+    3. Duplicate-id control: a child answering two identical-id
+       responses to one ``expect=2`` read must be rejected
+       (role-round finding: the duplicate-id rejection previously had
+       no detecting control, so a regression could pass unnoticed).
 
-    Prints one line per control and returns 0 only when both controls
+    Prints one line per control and returns 0 only when all controls
     pass and no owned child survives.  The lead runs this with
     ``--self-test`` during integration.
     """
@@ -1056,6 +1089,40 @@ def self_test():
     finally:
         _kill_process_group(stub)
         stub.stdin.close()
+
+    # Duplicate-id control: two identical-id responses to one
+    # expect=2 read must fail with the duplicate-id rejection.
+    stub = subprocess.Popen(
+        ["/bin/sh", "-c",
+         r"""printf '%s
+' '{"jsonrpc":"2.0","id":7,"result":{}}' '{"jsonrpc":"2.0","id":7,"result":{}}'"""],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, start_new_session=True)
+    record_spawn(stub)
+    try:
+        started = time.monotonic()
+        try:
+            read_responses(stub, 2, 2.0)
+            failure_text = None
+        except ResourceFailure as exc:
+            failure_text = str(exc)
+        elapsed = time.monotonic() - started
+        print(f"self-test duplicate-id control: "
+              f"{failure_text or 'unexpected success'} in {elapsed:.3f} s")
+        if failure_text is None:
+            failures.append("duplicate-id control: read_responses "
+                            "accepted two identical ids")
+        elif "duplicate response id" not in failure_text:
+            failures.append(
+                f"duplicate-id control failed for the wrong reason: "
+                f"{failure_text}")
+        elif elapsed >= 1.5:
+            failures.append(
+                f"duplicate-id control raised in {elapsed:.3f} s "
+                "(bounded window 1.5 s)")
+    finally:
+        _kill_process_group(stub)
+        stub.stdout.close()
 
     # Proof-b controls: the single -32001 answer must satisfy the
     # server response envelope (shared frame.decode_response plus the

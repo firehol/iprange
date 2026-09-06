@@ -8,6 +8,7 @@ package rpc
 import (
 	"fmt"
 	"os"
+	"time"
 )
 
 // Run executes the JSON-RPC transport until EOF or fatal error and
@@ -15,7 +16,16 @@ import (
 func Run() int {
 	session := NewSession()
 	if err := session.Run(os.Stdin, os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "iprange: %v\n", err)
+		// Best-effort diagnostic (role-round finding): the write runs
+		// detached and the exit is bounded by forceExitDiagnosticGrace,
+		// so a full, undrained stderr pipe can never block the process
+		// exit on the graceful fatal path either (the same bound the
+		// forced signal exit uses).  The message may be cut off when
+		// stderr is writable but slower, which is accepted.
+		go func() {
+			fmt.Fprintf(os.Stderr, "iprange: %v\n", err)
+		}()
+		time.Sleep(forceExitDiagnosticGrace)
 		return 1
 	}
 	return 0

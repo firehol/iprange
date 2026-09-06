@@ -92,23 +92,15 @@ impl<R: BufRead> LineReader<R> {
                     // the limit even after stripping one byte is
                     // definitely over the ceiling here.
                     if self.buf.len() + b.len() > INPUT_FRAME_LIMIT + 1 {
-                        // Consume and discard the rest of the line so
-                        // shutdown stays deterministic.
-                        let take = INPUT_FRAME_LIMIT + 1 - self.buf.len();
-                        self.buf.extend_from_slice(&b[..take]);
-                        self.inner.consume(take);
-                        loop {
-                            let rest = self.inner.fill_buf().unwrap_or(&[]);
-                            if rest.is_empty() {
-                                break;
-                            }
-                            if let Some(pos) = rest.iter().position(|&ch| ch == b'\n') {
-                                self.inner.consume(pos + 1);
-                                break;
-                            }
-                            let n = rest.len();
-                            self.inner.consume(n);
-                        }
+                        // The accumulated line is over the ceiling even
+                        // after stripping one CR of a CRLF terminator.
+                        // Report the failure immediately without waiting
+                        // for the terminator or EOF: the peer may hold
+                        // stdin open forever, and the -32001 + close
+                        // (spec iprange-jsonrpc-v1.md) must not depend
+                        // on the frame being terminated (role-round
+                        // finding).  Bytes after the limit are never
+                        // parsed; the caller shuts the session down.
                         return Err(LineReadError::FrameTooLarge);
                     }
                     self.buf.extend_from_slice(b);
