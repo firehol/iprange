@@ -78,10 +78,11 @@ Status: in-progress
 Wave-10 state (2026-09-06): the first role-based review round
 FAILed with eleven verified findings; all four user decisions
 (D1-A, D2-A, D3-A, D4-A) were approved; the second round FAILed with
-ten verified findings, all repaired and validated; the regenerated
-Linux evidence and the Windows-host regeneration are recorded in the
-Tenth wave section.  The second wave-10 role round at the repaired
-HEAD is in progress.
+ten verified findings, all repaired and validated; the third round
+found and closed the Go clean-EOF signal race and one committed-test
+coverage gap.  Linux evidence and the Windows-host regeneration at
+the final identities are recorded in the Tenth wave section; the
+third-round verdicts are being finalized at the wave HEAD.
 
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
@@ -5858,15 +5859,23 @@ dangling pointer.
   wrong-name-budget repro: both products `-32602`, trailing describe
   answered, no panic.
 - Kind gate: `--self-test` exit 0 (controls updated to the
-  unconditional semantics); genuine committed evidence PASS;
-  `.local/parity/wave10/forged-consistent-argv.json` and
-  `.local/parity/wave10/forged-consistent-noargv.json` FAIL (exit 1).
+  unconditional semantics); genuine committed evidence PASS; the
+  argv-strip and pathless-record mutations FAIL (self-test controls
+  35/35b/35c).  Caveat recorded after the third round: the
+  `.local/parity/wave10/forged-consistent-*.json` probes are
+  pre-argv-era clones whose actor maps predate the executed-identity
+  schema; substituted into the 'go' slot they fail only by
+  label/duplicate composition, and in their own declared slot they
+  PASS — that residual (a fully consistent one-report fork with
+  rewritten shas, argv, and paths) is the gate's documented
+  limitation, mitigated by the battery reruns and the adversarial
+  rounds, not by the mechanical gate.
 - Evidence regeneration with the re-fixed binaries and the D4
   Windows run are completed (recorded below).
 
 #### D4 — Windows qualification regeneration (completed 2026-09-06)
 
-On the authorized Windows validation host (`costa-win11`, SOW-0028
+On the authorized Windows validation host (SOW-0028
 qualification only), the wave-10 product sources at `7bc59597`
 (clean tracked tree; initially `f67fc728`, Go rebuilt after the
 third-role-round signal fix) built:

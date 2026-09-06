@@ -72,7 +72,7 @@ func TestTerminationSignalHelperProcess(t *testing.T) {
 		err = NewSession().Run(strings.NewReader(input), io.Discard)
 	case "partial-wedge":
 		// The client pipelines a few dozen frames, stops, keeps stdin
-		// openainer and never reads stdout: the worker blocks on the
+		// open and never reads stdout: the worker blocks on the
 		// full stdout pipe, the main loop blocks on the full work
 		// queue, but the events channel is only PARTIALLY filled, so a
 		// delivered Fatal event could never be processed and a

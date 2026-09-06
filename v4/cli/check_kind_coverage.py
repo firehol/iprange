@@ -688,7 +688,7 @@ def _global_implementation_map(matrix_paths, crash_paths, problems):
 
 
 def matrix_evidence(path, report, implementation_of, fixture_paths,
-                      argv_required, problems):
+                      problems):
     """Kind -> created/opened language sets observed by one matrix.
 
     Returns ``(matrix, evidence, stats, problems)``.  ``stats`` holds
@@ -736,7 +736,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
     # evidence revision is argv-era, and the pre-regen escape hatch
     # (strip argv everywhere -> battery looks pre-argv -> pass) is a
     # closed bypass (second role-round finding).
-    argv_required_here = True
+    argv_required_here = True  # noqa: F841 - documents the rule
     argv = _command_argv(report)
     if argv is None:
         problems.append(
@@ -1635,13 +1635,6 @@ def assess(matrix_paths, crash_paths):
                 binaries.get("fixture_tool"), str):
             fixture_paths.add(os.path.realpath(binaries["fixture_tool"]))
 
-    # argv-era detection at the battery level: the post-regen runner
-    # writes per-case actor argv; if ANY supplied matrix report is
-    # argv-era, every matrix report of the revision must carry argv on
-    # every PASS case (a future report without argv fails after regen;
-    # the fully pre-argv committed evidence passes until regen).
-    battery_argv_era = True  # unconditional (second role-round finding)
-
     seen_matrices = {}
     matrix_stats = {}
     for path in matrix_paths:
@@ -1649,8 +1642,7 @@ def assess(matrix_paths, crash_paths):
         if report is None:
             continue
         matrix, evidence, stats, _ = matrix_evidence(
-            path, report, implementation_of, fixture_paths,
-            battery_argv_era, problems)
+            path, report, implementation_of, fixture_paths, problems)
         if matrix in REQUIRED_MATRICES:
             if matrix in seen_matrices:
                 problems.append(

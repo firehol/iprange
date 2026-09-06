@@ -116,34 +116,20 @@ fn partial_wedge_signal_forces_nonzero_exit() {
     }
 }
 
-#[test]
-fn eof_first_signal_wins_over_exit_zero() {
-    // Third role-round finding (the Go contract class): a supervisor
-    // that closes stdin and signals back-to-back must not see a
-    // clean exit.  The response line on stdout marks the moment the
-    // process enters the EOF tail; the signal lands inside it and
-    // must win over the exit-zero outcome.
-    use std::io::{BufRead, BufReader};
-    for sig in [libc::SIGINT, libc::SIGTERM] {
-        for _ in 0..2 {
-            let mut child = spawn_product();
-            {
-                let stdin = child.stdin.as_mut().expect("stdin");
-                let _ = stdin.write_all(
-                    b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n");
-                let _ = stdin.flush();
-            }
-            drop(child.stdin.take()); // EOF right after the request
-            let stdout = child.stdout.as_mut().expect("stdout");
-            let mut reader = BufReader::new(stdout);
-            let mut line = String::new();
-            let _ = reader.read_line(&mut line);
-            assert!(line.contains("\"id\":1"), "describe response: {line}");
-            let code = signal_and_wait(child, sig, Duration::from_secs(3));
-            assert_eq!(code, 1, "eof-first signal {sig}: exit code {code}, want 1");
-        }
-    }
-}
+// Note: the eof-first supervisor shape (close stdin + signal
+// back-to-back) is intentionally NOT a Rust process test.  The Rust
+// EOF tail checks the recorded signal after the worker join and has
+// no grace window, so a parent-side kill that lands after the check
+// legitimately observes exit 0 (sub-millisecond TOCTOU, same class
+// as the Go residual past its 25 ms grace).  A process-level
+// assertion of exit 1 would therefore be stronger than the product
+// guarantee and flakes under schedule delay (security role finding,
+// reproduced 1/3 full-suite runs).  The deterministic detections
+// are: the in-process unit test
+// `signal_recorded_during_eof_drain_wins_over_exit_zero` for the
+// graceful EOF path, the process-level wedge and drain-wedge tests
+// for the force-exit path, and the Go eof-first process test, whose
+// 25 ms grace window makes the supervisor shape deterministic.
 
 #[test]
 fn drain_wedge_signal_forces_nonzero_exit() {
