@@ -1,6 +1,43 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
+The fifteenth-wave evidence is regenerated at the final wave-15
+revision `e21784ce` after the external whole-milestone control
+review of the wave-14 revision (turn 2 review of the wave-15 fixes:
+lifecycle identity platform kind, artifact-basename wire mapping,
+drain-EOF, matrix fixture binding, conflict-order control, and
+strict response-id correlation — all recorded in SOW-0028's
+wave-15 section) plus the native Windows verification wave:
+
+- the Rust CLI test suite now runs fully green natively on the
+  authorized Windows validation host (711 tests across
+  `iprange-livedb` and `iprange-cli`; the canonical
+  `cargo test -p iprange-livedb -p iprange-cli` invocation builds
+  the version-matched validation worker that the live-source
+  identity inspection spawns — the previous
+  `-p iprange-cli --bin iprange` form neither built nor matched the
+  worker).  Test temp names no longer embed `SystemTime` debug
+  output (colons are invalid in Windows path components), the
+  publication-evidence round trips pin the platform identity kind,
+  the legacy parse error test asserts the platform-neutral parts of
+  the missing-file contract on Windows, and the immutable snapshot
+  wire test pins the documented per-platform housekeeping state;
+- worker availability: when no validation-worker candidate exists
+  beside the running binary, requests now report the worker as
+  unavailable instead of a raw file-not-found I/O error (matches
+  the SDK `worker_availability` probe semantics);
+- Windows housekeeping re-qualified at `e21784ce` on the
+  authorized Windows validation host: 2/2 PASS with the native
+  Windows Python 3.14.6.
+
+Linux reports record the product identities `15a6ce76…` (rust) and
+`a6148994…` (go), workers `9fd36146…` / `8fa44afa…`, fixture
+`6c2c56b9…` (staged in `.local/shared/binaries/SHASUMS.txt`);
+the Windows housekeeping report records the Windows-host products
+`dd2d0668…` (rust) and `eec23536…` (go) at the same source
+revision (detailed below).
+
 The fourteenth-wave (external whole-milestone control review
+ (external whole-milestone control review
 FAIL and repair) evidence is regenerated at the wave-14 revision
 `e272c990` after the external control review of the wave-13
 revision.  The reviewed findings and their repairs:

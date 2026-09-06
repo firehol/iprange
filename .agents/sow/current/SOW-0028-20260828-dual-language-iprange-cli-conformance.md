@@ -292,6 +292,34 @@ Implementation status (2026-09-01):
   ninth wave; milestone 4 is NOT closed and awaits both that round
   and the user decision recorded below.
 
+Wave-15 state (2026-09-07): the external whole-milestone control
+turn-2 review of the wave-14 revision returned NEEDS CHANGES with
+seven product/gate findings and one record P3; all are repaired in
+commit `2ddeb751` (lifecycle identity platform kind in both
+products, byte-preserving artifact-basename wire mapping and its
+decoders, drain-EOF proof enforcement, matrix fixture-identity
+binding with control #44, conflict-order control #43 hardening,
+strict response-id correlation, and the wave-13 Windows identity
+record correction).  A follow-up native-Windows verification wave
+then made the Rust CLI suite fully green on the authorized Windows
+validation host (711 tests across `iprange-livedb` and
+`iprange-cli`; test temp names are Windows-valid, evidence tests
+pin the platform identity kind, the missing-file parse error test
+is platform-aware, and the snapshot wire test pins the documented
+per-platform housekeeping state), reported the validation worker as
+unavailable instead of a raw file-not-found I/O error when no
+matching worker executable exists, and re-qualified Windows
+housekeeping 2/2 at the final wave-15 revision `e21784ce` (Go
+`eec23536…`, Rust `dd2d0668…`).  Final Linux identities at
+`e21784ce`: Go `a6148994…`, Rust `15a6ce76…`, workers
+`8fa44afa…`/`9fd36146…`, fixture `6c2c56b9…`; every battery gate is
+green at these identities (matrices 38/38 single and 14+24 mixed,
+crash 16/16 both directions with the /bin/false negative control
+failing as designed, resource 8/8, golden 55, sensitivity 14, kind
+gate PASS, all harness self-tests).  The closure record and the
+role-round delta verdicts at `e21784ce` are recorded in the
+"Wave 15" section below.
+
 
 ## Requirements
 
@@ -6785,3 +6813,122 @@ undrained stdout.  The closure records commit below adds the
 and records this PASS set; the roles and the external control
 re-review that exact final revision.
 
+
+### Wave 15 (2026-09-07) — external control turn-2 repairs and native-Windows verification
+
+The wave-14 closure at `874d3566` was submitted to the external
+whole-milestone control (session b5dd923d…).  Turn 2 returned NEEDS
+CHANGES; every verified finding is repaired in commit `2ddeb751`:
+
+1. **P1 — Windows identity kind mismatch.**  Rust
+   `handlers/lifecycle_live.rs decode_file_identity` and Go
+   `handlers/lifecycle_live.go decodeFileIdentity` hardcoded kind 1
+   for the local file identity; the Windows SDK records kind 2, so
+   unchanged create/transition facts failed
+   `DirectoryIdentityMismatch`.  Repair: platform kind in both
+   decoders, pinned by `decode_file_identity_kind_is_posix` /
+   `decode_file_identity_kind_is_windows` (Rust) and
+   `TestDecodeFileIdentityKind` (Go).
+2. **P2 — basename round-trip test failed natively on Windows.**
+   The POSIX raw-bytes rendering assertion was `#[test]`-only;
+   split into `#[cfg(not(windows))]` and a Windows UTF-16LE twin in
+   `handlers/lifecycle.rs`.
+3. **P2 — housekeeping artifact basenames were lossy for
+   UTF-16LE.**  Rust `basename()` used `String::from_utf8_lossy`
+   (replacement characters for non-ASCII units) and Go
+   `publication_evidence.go` used a raw string.  Repair:
+   byte-preserving per-byte wire mapping
+   (`char::from(byte)`, encoding 1 = raw UTF-8 bytes, encoding 2 =
+   per-byte, rejecting values above 0xff) with decode-side
+   `decode_artifact_basename` / `decodeArtifactBasename` in both
+   products, wired for envelope/source/inert basenames; eight new
+   round-trip and rejection tests across the two languages.
+4. **P2 — proofs A/D discarded the drain EOF flag.**  A
+   deadline-only drain could end without EOF and let late frames
+   pass.  Repair: shared `require_clean_drain` (zero residue AND
+   real EOF) used by proofs A/D; the new "drain-eof control"
+   self-test keeps the peer alive and must fail.
+5. **P2 — kind-gate matrix fixture metadata was not bound to the
+   command-selected fixture.**  Repair: `matrix_evidence` returns
+   the command fixture realpath and `assess()` fails on any report
+   whose fixture metadata path differs; new control #44 (a
+   doctored internally-consistent fixture-B crash report combined
+   with a matrix claiming fixture B must fail).
+6. **P2 — control #43 was only detective in genuine-first order.**
+   Repair: both orders (`conflict-first` and `genuine-first`) must
+   produce the "contradicts the earlier identity" diagnostic;
+   removing the guard fails `--self-test`.
+7. **P2 — resource harness A/D response correlation and framing
+   were weak.**  Repair: `read_responses` rejects CRLF-terminated
+   payloads, proof-b rejects raw CRLF lines, and `by_id` keys by
+   the exact id type (numeric echo no longer satisfies a string
+   id); busy/ok/export classification requires exact id matches.
+8. **P3 — wave-13 Status recorded the pre-rebuild Windows Rust
+   identity `6dcf2cb2…`; the committed wave-13 evidence records
+   `de902a73…`.**  Corrected in `2ddeb751` (the wave-12 narrative
+   block keeps its own dated record).
+
+#### Native-Windows verification wave (final revision `e21784ce`)
+
+- The Rust CLI suite is now fully green on the authorized Windows
+  validation host: 711 tests across `iprange-livedb` and
+  `iprange-cli`, 0 failures.  The canonical invocation
+  `cargo test -p iprange-livedb -p iprange-cli` builds the
+  version-matched validation worker that live-source identity
+  inspection spawns; the earlier `--bin iprange` form failed on
+  Windows (worker missing) and on Linux with a stale worker
+  (version conflict).
+- Product-visible fixes in this wave:
+  - the live-source export failure for a missing worker previously
+    surfaced as `I/O error: ... (os error 2)`; the spawn fallback
+    now skips non-existent candidates and reports
+    `SDK validation/recovery worker is unavailable`
+    (`worker/client.rs`), matching the SDK `worker_availability`
+    probe;
+  - the immutable snapshot wire test asserts the shared
+    no-artifact fact on both platforms and pins the documented
+    per-platform housekeeping state (`crash_reappearance_possible`
+    on Windows: the GC pair removal is not power-loss durable, a
+    state both SDKs implement identically — Go
+    `v4/go/internal/live/gc_resolver.go
+    gcFinishHousekeeping`, Rust
+    `publication/gc/resolver.rs finish_housekeeping`);
+  - the legacy parse missing-file test is `#[cfg]`-split: POSIX
+    pins the exact C error text, Windows asserts the stable
+    path-identified contract with any system error code;
+  - eleven test temp names replaced `SystemTime` debug output
+    (invalid Windows path components) with epoch-nanos suffixes;
+  - the publication-evidence test identity helper uses the
+    platform kind.
+- Battery at the final identities (staged in
+  `.local/shared/binaries/SHASUMS.txt`): matrices rust 38/38,
+  go 38/38, rust_to_go 14 PASS + 24 legitimate skips, go_to_rust
+  14 + 24; crash positive 16/16 both directions; /bin/false
+  negative control failed as designed (rc 1); resource proofs
+  8/8; harness self-tests PASS (resource, kind-gate controls
+  1-44, sensitivity 14); kind gate PASS on the regenerated
+  evidence; golden 55 exchanges / 38 case files.
+- Windows housekeeping on the authorized validation host at
+  `e21784ce` (native Windows Python 3.14.6): 2/2 PASS; report
+  `v4/cli/evidence/windows-housekeeping.json` records Go
+  `eec23536…` and Rust `dd2d0668…` with build provenance
+  (go1.26.5 windows/amd64, rustc 1.97.1, clean tree).
+- Final Linux identities: Go product `a6148994…`, Go worker
+  `8fa44afa…`, Rust product `15a6ce76…`, Rust worker
+  `9fd36146…`, fixture `6c2c56b9…`; `v4/cli/evidence/*` and
+  `evidence/README.md` regenerated at these identities.
+
+#### Sensitive-data and artifact gate (wave 15)
+
+No personal paths or secrets: the regenerated evidence records
+staged binary paths and the neutral "authorized Windows validation
+host" wording (`C:/Temp/...` staging paths are non-personal).
+Specs: no spec amendment (worker availability and housekeeping
+state semantics are already recorded SDK behavior; the per-platform
+housekeeping pin is now pinned by tests).  End-user docs: none
+affected (CLI behavior unchanged; the improved missing-worker
+diagnostic is an error-message improvement).  Evidence:
+`v4/cli/evidence/*.json` regenerated and README updated.  Project
+skills (project-final-review, project-v4-rust): unchanged.  SOW
+lifecycle: this section records the wave; the role-round delta
+verdicts at `e21784ce` are recorded below.
