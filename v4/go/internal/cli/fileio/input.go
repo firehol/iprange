@@ -143,6 +143,7 @@ type activeBinary struct {
 type activeInput struct {
 	text   *activeText
 	binary *activeBinary
+	file   *os.File
 }
 
 // textInputCore is the family-generic streaming source state; the
@@ -305,8 +306,8 @@ func (c *textInputCore[K]) nextBatch() ([]K, error) {
 			if c.active != nil && c.active.text != nil {
 				dropped = c.active.text.droppedIPv6
 				hostnames = c.active.text.hostnames
-				c.active = nil
 			}
+			c.closeActive()
 			if len(hostnames) > 0 {
 				if err := c.resolveNames(hostnames); err != nil {
 					return nil, err
@@ -324,7 +325,7 @@ func (c *textInputCore[K]) nextBatch() ([]K, error) {
 				return nil, err
 			}
 		case stepBinaryEnd:
-			c.active = nil
+			c.closeActive()
 			c.activePath = ""
 		}
 	}
@@ -413,6 +414,18 @@ func (c *textInputCore[K]) readStep() (*step, error) {
 	return &step{kind: stepBinaryRecord, value: value}, nil
 }
 
+// closeActive closes the current input file deterministically.  The
+// core must never keep an input open past its end: on Windows an open
+// file blocks removal of the input path, and the tests remove their
+// temporary inputs right after the last batch (the wave-14
+// close-before-remove class).
+func (c *textInputCore[K]) closeActive() {
+	if c.active != nil && c.active.file != nil {
+		_ = c.active.file.Close()
+	}
+	c.active = nil
+}
+
 func (c *textInputCore[K]) openNext() (bool, error) {
 	for len(c.paths) > 0 {
 		path := c.paths[0]
@@ -453,7 +466,7 @@ func (c *textInputCore[K]) openNext() (bool, error) {
 				if c.options.Family == AddressFamilyInputIPv6 {
 					return false, c.formatError("IPv4 binary file cannot load in IPv6 mode")
 				}
-				if err := c.openBinary(reader, false); err != nil {
+				if err := c.openBinary(reader, file, false); err != nil {
 					return false, err
 				}
 				return true, nil
@@ -462,7 +475,7 @@ func (c *textInputCore[K]) openNext() (bool, error) {
 				if c.options.Family == AddressFamilyInputIPv4 {
 					return false, c.formatError("IPv6 binary file cannot load in IPv4 mode")
 				}
-				if err := c.openBinary(reader, true); err != nil {
+				if err := c.openBinary(reader, file, true); err != nil {
 					return false, err
 				}
 				return true, nil
@@ -476,7 +489,8 @@ func (c *textInputCore[K]) openNext() (bool, error) {
 			}
 			syntheticNewline = true
 		}
-		c.active = &activeInput{text: &activeText{reader: reader}}
+		c.active = &activeInput{text: &activeText{reader: reader},
+			file: file}
 		if syntheticNewline {
 			first = first[:len(first)-1]
 		}
@@ -492,7 +506,7 @@ func (c *textInputCore[K]) openNext() (bool, error) {
 	return false, nil
 }
 
-func (c *textInputCore[K]) openBinary(reader *bufio.Reader, ipv6 bool) error {
+func (c *textInputCore[K]) openBinary(reader *bufio.Reader, file *os.File, ipv6 bool) error {
 	recordSize := uint64(8)
 	if ipv6 {
 		recordSize = 32
