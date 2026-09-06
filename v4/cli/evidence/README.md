@@ -95,13 +95,13 @@ sections.
     byte-reproducible across toolchains or build paths, and not
     pinned by the committed reports).
 - Windows qualification binaries (built on the authorized Windows
-  validation host at the wave-10 product-source revision
-  `e13be7ea`, clean working tree, staged under `C:/Temp/qualsvc-win/`):
+  validation host at the wave-11 product-source revision
+  `b7be670b`, clean tracked tree, staged under `C:/Temp/qualsvc-win/`):
   - Go product SHA-256
-    `984d0e9d7636aac1a82786416d1ad33dbb0fb28b1aebadc748ac850001395454`
+    `fce7acf5b5dd8259bb218a99c9b3ec8c9bfea177859d36fabcfdcf0d94ea0648`
     (go1.26.5 windows/amd64, `-buildvcs=false`);
   - Rust product SHA-256
-    `877824f019ec4b460ce4ac8dde08eb13d4c694e5a647080a8b795f7a01245614`
+    `19474f1462f6c832bba497c91b95e7b6c11c2719b7140f0e34be31cd2870e5d9`
     (rustc 1.97.1).
   Build commands, toolchain, and source revision are recorded in
   the report's `build_provenance` block.

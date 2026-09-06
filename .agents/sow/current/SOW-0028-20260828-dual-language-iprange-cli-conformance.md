@@ -99,6 +99,17 @@ wave-10 revision; milestone 5 (delivery step 6, consolidated
 benchmark harness and measured ceilings) is NOT started; SOW-0028
 remains the sole active SOW.
 
+Wave-11 state (2026-09-06): the external whole-milestone control
+review of the wave-10 closure revision `155459b0` returned FAIL with
+one production shutdown defect and seven qualification-framework
+defects (recorded in the Eleventh-wave section below).  All eight
+findings are repaired, validated, and the Linux evidence and Windows
+host qualification are regenerated at the new product identities
+(`eb08c3d4…` rust linux / `19474f14…` rust windows, `c0204ade…` go
+linux / `fce7acf5…` go windows).  Milestone 4 acceptance is REOPENED
+by this wave and is re-closed by the Eleventh-wave record once the
+internal role round passes the exact final revision.
+
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -6048,3 +6059,170 @@ verdict is appended after it lands.
   next committed record is the external whole-milestone control
   review verdict at the exact revision of this record; the internal
   process claims no further repository change before that verdict.
+
+### Wave 11 (2026-09-06) — external whole-milestone control review FAIL and repair
+
+The external whole-milestone control review of the milestone-4
+closure revision `155459b0` returned FAIL with one production
+shutdown defect and seven qualification-framework defects.  All eight
+findings were independently verified (finding 1 reproduced against
+both canonical binaries with a full diagnostic pipe; findings 2-8
+reproduced through the review's probes against the committed code).
+No product-design decision was required: user decision 1A already
+governs (reopen M4 acceptance, keep M5 unstarted), and every repair
+is a bounded SOW-0028 qualification or durability defect inside the
+approved scope.  The milestone-4 closure record above is reopened by
+this section.
+
+#### Findings (control review at `155459b0`)
+
+1. P1 — both products hang at shutdown when the diagnostic pipe is
+   full: the watchdog writes the forced-exit message synchronously
+   to stderr before `os.Exit(1)` / `process::exit(1)` (Go
+   `v4/go/internal/cli/rpc/session.go:294-296`, Rust
+   `v4/rust/iprange-cli/src/rpc/session.rs:1071-1074`, and Rust's
+   wedged-channel fatal diagnostic at `session.rs:658`).  With an
+   8192-byte full stderr both remained alive past 2.5 s and exited
+   only after the pipe was drained, violating the recorded
+   termination bound.
+2. P2 — the threaded (Windows) client can hang in `close()` after a
+   write timeout: the timed-out writer still holds the buffered
+   stdin lock while `close()` closes that same buffered stream
+   (`v4/cli/run.py` `_write_bounded_thread` and `close`).
+3. P2 — response ingestion allows invalid qualification results:
+   `read_responses` is called without size/envelope/duplicate-id
+   enforcement (`v4/cli/resource_harness.py:867`), so a response
+   missing `jsonrpc`, a 2.1 MB response, and duplicate response ids
+   were all accepted by proof d; the shared client's unterminated
+   output accumulation (`v4/cli/run.py` no-deadline readline and
+   threaded `readline`) is unbounded.
+4. P2 — cleanup hides a failed EOF shutdown: `v4/cli/run.py`
+   waits 0.2 s, kills a stalled EOF peer, and returns success, so a
+   peer that did not finish its normal shutdown is reported clean
+   (observed returncode -9 accepted).
+5. P2 — the kind gate ignores exact operation ordinals: creation
+   and opening refs were checked only for list bounds and method
+   capability, so crediting a failed earlier operation, a ref that
+   contradicted the recorded open ordinal, a ref that contradicted
+   `created_ordinals`, and omitting `created_ordinals` entirely all
+   passed (`v4/cli/check_kind_coverage.py:1495,1564,1580`).
+6. P2 — command and actor executable identities can disagree: the
+   command binding and the actor binding were not joined, so a
+   report with two Go records passed when the command selected one
+   while the actor argv/sha named the other, and a contradictory
+   matrix fixture hash also passed (`check_kind_coverage.py:777,
+   :889, :963`).
+7. P2 — per-actor capability tables reject valid explicit-actor
+   workflows: the role-inverted `database.metadata` case (consumer
+   creates the database and replaces metadata, producer reads) runs
+   correctly on both real products in both directions, but the gate
+   reported five capability errors (`check_kind_coverage.py:282,
+   :328`).
+8. P2 — the Windows row comparison omits the top-level removal
+   ordinal: changing an envelope-row ordinal 1 to 42 passed both
+   checks (`windows_housekeeping_harness.py:1285,1298`); the ordinal
+   is parsed and passed to removal by
+   `v4/go/internal/cli/handlers/maintenance.go:1446,1485,1499`.
+
+#### Repairs (commit `b7be670b`)
+
+- Finding 1 (both products): the forced-exit diagnostics are now
+  best-effort.  Go emits the message from a detached goroutine and
+  `os.Exit(1)` runs after a bounded 50 ms grace
+  (`v4/go/internal/cli/rpc/session.go`, const
+  `forceExitDiagnosticGrace`); Rust spawns a detached thread for the
+  same write and exits after 50 ms, and the wedged-channel fatal
+  diagnostic (`session.rs`) uses the same pattern.  A full
+  diagnostic pipe can no longer block the forced exit; measured:
+  both products self-terminate within ~1.05 s with a full 8192-byte
+  stderr, exit 1 (pre-fix both hung past 2.5 s).  Committed
+  regressions: Go
+  `session_signal_unix_test.go` → `TestTerminationSignalFullStderrForcedExit`
+  (raw-pipe fill; the runtime poller must be bypassed with raw
+  syscalls) and Rust `tests/termination_signals.rs` →
+  `full_stderr_signal_forces_nonzero_exit` (both green).
+- Finding 2 (`v4/cli/run.py`): `close()` tracks deadline-thread
+  workers; for a poisoned threaded service it reaps the child before
+  touching the buffered wrappers whose locks a blocked worker may
+  still hold, then joins the workers and closes wrappers under
+  bounds.
+- Finding 3 (`v4/cli/run.py`, `v4/cli/resource_harness.py`): every
+  response read path enforces a per-frame and an accumulated byte
+  ceiling, the shared envelope validator (`jsonrpc 2.0`, exactly one
+  of result/error, well-formed error), the 65,000-byte
+  response-object ceiling, and unique ids; `read_responses` applies
+  the checks by default at every proof; the no-deadline readline is
+  bounded and an oversized frame poisons the service.
+- Finding 4: `close(allow_forced=False)` reports a peer that this
+  close had to force-terminate as a qualification failure;
+  deliberate-stall self-test controls pass `allow_forced=True`; a
+  peer already terminated externally (crash scenario process groups)
+  is reaped silently.
+- Finding 5: crash creation/opening refs must match the scenario's
+  recorded `created_ordinals` / `live_reader_opens` /
+  `adapter_output_opens` / `consumer_main_open_ordinal` exactly; a
+  report that omits `created_ordinals` fails.
+- Finding 6: each matrix actor must be the exact executable the
+  recorded command selected for its language; the matrix
+  `fixture_tool` sha256 must equal the crash report's recorded
+  identity for the same path.
+- Finding 7: capability maps are per-kind method sets independent of
+  actor role (creation, transformation, and reading may run on
+  either actor); the actor remains the execution and language
+  attribution authority.
+- Finding 8: the Windows housekeeping checks compare the top-level
+  row ordinal against the synthesized facts, the nested artifact
+  ordinal, and across listings; the self-test gains mutation M7.
+
+#### Validation (wave 11)
+
+- Go: `go test ./...` (go1.26.4) PASS, including the new full-stderr
+  signal test; Rust: `cargo test -p iprange-cli` PASS including the
+  new full-stderr process test.
+- Product identities (release, staged, recorded): Rust `eb08c3d4…`
+  (linux) and `19474f14…` (windows), Go `c0204ade…` (linux) and
+  `fce7acf5…` (windows); worker and fixture identities unchanged
+  (`cb9ad6cd…`, `202a83ac…`, `7c616793…`); the Linux evidence is
+  regenerated at the new identities in `v4/cli/evidence/`.
+- Full battery at the new identity (sequential, one host): matrices
+  rust 38/38, go 38/38, rust_to_go 14+24, go_to_rust 14+24; crash
+  positive 16/16 both directions, negative 0/16 (expected negative);
+  resource 8/8; golden 55 exchanges; sensitivity 14 modes; kind gate
+  PASS on the regenerated evidence.
+- Kind-gate adversarial probes (the control review's six forgery
+  classes) now REJECT on genuine evidence: failed main-open ordinal,
+  failed sidecar-open ordinal, wrong creation ordinal, missing
+  `created_ordinals`, alternate-actor-binary, and fixture-hash
+  contradiction; the actor-swapped `database.metadata` ledger
+  (finding 7 positive control) is ACCEPTED; controls 1-42 of the
+  gate `--self-test` pass.
+- Windows housekeeping on the authorized validation host at
+  `b7be670b` (go1.26.5 / rustc 1.97.1, clean tracked tree): 2/2
+  PASS with the deadline-bounded client; report schema v3 records
+  `fce7acf5…` (go) / `19474f14…` (rust), the exact 50-row removal
+  logs, and build provenance.
+- Framework self-tests: resource_harness `--self-test` PASS
+  (proof-b envelope/oversize/hang controls, deadline controls),
+  windows_housekeeping_harness `--self-test` PASS (M1-M7),
+  `run.py` protocol self-tests PASS.
+
+#### Sensitive-data and artifact gate (wave 11)
+
+No personal paths, host aliases, or secrets in the regenerated
+evidence or this SOW; the committed evidence uses the recorded staged
+binary paths and the neutral "authorized Windows validation host"
+wording.  Specs: no spec amendment (durability and qualification
+behavior only; the transport contract is unchanged).  End-user docs:
+none affected.  Evidence: `v4/cli/evidence/*.json` regenerated at
+the new identities and `README.md` / `resource-record.md` updated
+with the wave narrative.  Project skills (project-final-review,
+project-v4-rust): unchanged.  SOW lifecycle: this section reopens
+the milestone-4 acceptance and re-closes it at the final wave-11
+revision after the internal role round; the role verdicts and any
+re-repair are recorded after this section.
+
+Closure statement: milestone 4 acceptance is REOPENED by this
+section and re-CLOSED once the internal role round passes the exact
+final revision of this wave; milestone 5 (delivery step 6) remains
+unstarted per user decision 1A.  The role round's verdicts are
+recorded in the next section.
