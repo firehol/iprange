@@ -9,6 +9,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -415,6 +416,14 @@ func TestTableProbe(t *testing.T) {
 // be substituted by the open (the same regression class pinned in the
 // reader tests).
 func TestImmutableSourceRawPathThroughSymlinkParent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// POSIX kernel-resolution class: on Windows, reparse-point
+		// semantics decide how ".." after a link resolves, and both
+		// products pass the identical raw spelling to the same
+		// kernel, so parity cannot diverge there; the native Windows
+		// suite covers the platform pathname behaviors.
+		t.Skip("POSIX kernel-resolution class")
+	}
 	root := t.TempDir()
 	db, err := os.ReadFile(fixturePath(t, "direct-ipv4.iprdb"))
 	if err != nil {
