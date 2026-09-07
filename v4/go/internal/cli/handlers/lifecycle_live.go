@@ -23,10 +23,8 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
 	"runtime"
 	"strings"
-	"unsafe"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
@@ -266,59 +264,33 @@ func optionalFileIdentityFromWire(object rawObject, field string) (*iprangedb.Fi
 	return &identity, nil
 }
 
-// localBasenameLayout mirrors the private memory layout of
-// iprangedb.LocalBasename: two u16 header words followed by the fixed
-// 512-byte payload. The compile-time assertions below pin the layout
-// so the materialization cannot silently diverge.
-type localBasenameLayout struct {
-	encoding uint16
-	length   uint16
-	bytes    [512]byte
-}
-
-const (
-	_ = unsafe.Sizeof(iprangedb.LocalBasename{}) == unsafe.Sizeof(localBasenameLayout{})
-	_ = unsafe.Offsetof(localBasenameLayout{}.bytes) == 4
-)
-
 // pathBasename builds the SDK basename value for one database path
-// (Rust LocalBasename::from_path; POSIX bytes carry encoding 1). The
-// public SDK exposes no LocalBasename constructor, so the value is
-// materialized through the fixed-layout copy above. TODO: replace with
-// an exported SDK constructor when one exists; the removal criterion is
-// an exported BasenameFromPath constructor in lifecycle_public.go.
+// (Rust LocalBasename::from_path) through the exported SDK
+// constructor, so the platform bytes and encoding tag come from one
+// authoritative implementation.
 func pathBasename(path string) (iprangedb.LocalBasename, error) {
-	name := filepath.Base(path)
-	if name == "." || name == string(filepath.Separator) {
-		return iprangedb.LocalBasename{}, fmt.Errorf("database path has no file name")
-	}
-	if len(name) > 512 {
-		return iprangedb.LocalBasename{}, fmt.Errorf("database basename exceeds the portable result bound")
-	}
-	var out iprangedb.LocalBasename
-	layout := (*localBasenameLayout)(unsafe.Pointer(&out))
-	layout.encoding = 1
-	layout.length = uint16(len(name))
-	copy(layout.bytes[:], name)
-	return out, nil
+	return iprangedb.BasenameFromPath(path)
 }
 
 // decodeMainBasename verifies the wire main_basename against the
 // destination path and returns the path-derived SDK basename the
-// resolvers compare against (Rust decode_main_basename).
+// resolvers compare against (Rust decode_main_basename).  The
+// comparison uses the same rendered wire text the results emit
+// (encoding-aware lossy decode), so every path, including one with
+// invalid-UTF-8 bytes on POSIX, round-trips through its own result.
 func decodeMainBasename(object rawObject, path string) (iprangedb.LocalBasename, error) {
 	wire, ok := wireString(object, "main_basename")
 	if !ok {
 		return iprangedb.LocalBasename{}, fmt.Errorf("main_basename must be a string")
 	}
-	actual := filepath.Base(path)
-	if actual == "." || actual == string(filepath.Separator) {
-		return iprangedb.LocalBasename{}, fmt.Errorf("database path has no file name")
+	basename, err := pathBasename(path)
+	if err != nil {
+		return iprangedb.LocalBasename{}, err
 	}
-	if wire != actual {
+	if wire != LocalBasenameBytes(basename) {
 		return iprangedb.LocalBasename{}, fmt.Errorf("main_basename does not match the database path")
 	}
-	return pathBasename(path)
+	return basename, nil
 }
 
 // MainBasenameFromWire is the exported form of decodeMainBasename.

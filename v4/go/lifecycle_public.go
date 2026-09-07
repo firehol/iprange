@@ -28,6 +28,21 @@ type LocalBasename struct {
 	bytes    [512]byte
 }
 
+// BasenameFromPath copies the file-name component of path without
+// allocation (Rust LocalBasename::from_path): POSIX bytes carry
+// encoding 1 and Windows UTF-16LE units carry encoding 2, produced
+// by the canonical internal constructor so the SDK, the wire
+// renderers, and the resolve decoders share one implementation.
+// An absent or overlong name reports the Rust InvalidArgument
+// detail.
+func BasenameFromPath(path string) (LocalBasename, error) {
+	internal, err := live.LocalBasenameFromPath(path)
+	if err != nil {
+		return LocalBasename{}, err
+	}
+	return publicBasename(internal), nil
+}
+
 // Encoding returns the platform encoding tag of the basename (1 =
 // POSIX bytes).
 func (b LocalBasename) Encoding() uint16 { return b.encoding }

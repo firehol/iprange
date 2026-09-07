@@ -5,9 +5,10 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"runtime"
+	"strconv"
 	"testing"
 
-	iprangedb "github.com/firehol/iprange/v4/go/internal/publication"
+	iprangedb "github.com/firehol/iprange/v4/go"
 )
 
 // decodeArtifactBasename must keep encoding-1 bytes as the text's
@@ -215,5 +216,69 @@ func TestPrivateOutputAttemptValueBasenameWire(t *testing.T) {
 	}
 	if got := privateOutputAttemptValue(attemptPosix)["basename"]; got != "live.iprange" {
 		t.Fatalf("encoding 1 basename = %#v", got)
+	}
+}
+
+// The main_basename wire render and the resolve comparison must
+// round-trip every path, including POSIX names whose bytes are not
+// valid UTF-8: the create/transition result renders the lossy wire
+// text (Rust local_basename_text / from_utf8_lossy parity via
+// utf8Lossy) and decodeMainBasename compares against the same
+// rendered text (wave-15 round-4 finding: the Go compare used the
+// raw bytes, so Go rejected its own result for invalid-UTF-8 names
+// and emitted per-byte replacement text).
+func TestMainBasenameRoundTripInvalidUtf8(t *testing.T) {
+	path := "/tmp/x\xe2\x82"
+	basename, err := iprangedb.BasenameFromPath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := LocalBasenameBytes(basename)
+	if wire != "x\ufffd" {
+		t.Fatalf("wire = %q, want the Rust maximal-subpart text", wire)
+	}
+	object := rawObject{"main_basename": json.RawMessage(strconv.Quote(wire))}
+	decoded, err := decodeMainBasename(object, path)
+	if err != nil {
+		t.Fatalf("decodeMainBasename rejected the product's own result: %v", err)
+	}
+	if decoded.Encoding() != basename.Encoding() || string(decoded.Bytes()) != string(basename.Bytes()) {
+		t.Fatalf("decoded basename = % x/%d, want % x/%d",
+			decoded.Bytes(), decoded.Encoding(), basename.Bytes(), basename.Encoding())
+	}
+
+	// Valid non-ASCII and ASCII names keep the raw text and round-trip.
+	for _, name := range []string{"größe.iprange", "live.iprange"} {
+		p := "/tmp/" + name
+		b, err := iprangedb.BasenameFromPath(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := LocalBasenameBytes(b)
+		if _, err := decodeMainBasename(rawObject{"main_basename": json.RawMessage(strconv.Quote(w))}, p); err != nil {
+			t.Fatalf("%q round trip: %v", name, err)
+		}
+	}
+
+	// A mismatching wire is still rejected with the exact error.
+	if _, err := decodeMainBasename(rawObject{"main_basename": json.RawMessage(`"other.iprange"`)}, "/tmp/live.iprange"); err == nil {
+		t.Fatal("mismatching main_basename was accepted")
+	}
+}
+
+// utf16leText must decode UTF-16LE units exactly like Rust
+// String::from_utf16_lossy, including surrogate pairs.
+func TestUtf16leTextDecode(t *testing.T) {
+	got := utf16leText([]byte{0xe9, 0x00})
+	if got != "\u00e9" {
+		t.Fatalf("utf16leText(E9 00) = %q", got)
+	}
+	got = utf16leText([]byte{0x3d, 0xd8, 0x00, 0xde}) // U+1F600 surrogate pair
+	if got != "\U0001F600" {
+		t.Fatalf("utf16leText(pair) = %q", got)
+	}
+	got = utf16leText([]byte{0x00, 0xd8}) // lone high surrogate
+	if got != "\ufffd" {
+		t.Fatalf("utf16leText(lone) = %q", got)
 	}
 }

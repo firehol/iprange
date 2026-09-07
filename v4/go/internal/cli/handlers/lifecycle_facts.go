@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"unicode/utf16"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
@@ -212,9 +213,28 @@ func FileIdentityJSONOrError(identity *iprangedb.FileIdentity) any {
 	return value
 }
 
-// LocalBasenameBytes returns the basename content.
+// utf16leText decodes one raw UTF-16LE unit payload to text with
+// lossy invalid-unit replacement (Rust lifecycle::utf16le_text /
+// String::from_utf16_lossy).
+func utf16leText(bytes []byte) string {
+	units := make([]uint16, 0, len(bytes)/2)
+	for i := 0; i+1 < len(bytes); i += 2 {
+		units = append(units, uint16(bytes[i])|uint16(bytes[i+1])<<8)
+	}
+	return string(utf16.Decode(units))
+}
+
+// LocalBasenameBytes renders one SDK-local basename to its wire text,
+// honoring the platform encoding tag (Rust local_basename_text):
+// encoding 2 decodes the UTF-16LE units lossily, encoding 1 decodes
+// the bytes with the same maximal-subpart rule as Rust
+// from_utf8_lossy, and the resolve decoders compare against the same
+// rendered text so every path round-trips through its own result.
 func LocalBasenameBytes(basename iprangedb.LocalBasename) string {
-	return string(basename.Bytes())
+	if basename.Encoding() == 2 {
+		return utf16leText(basename.Bytes())
+	}
+	return utf8Lossy(basename.Bytes())
 }
 
 // CommitCleanupJSON converts the commit cleanup ledger to its wire
