@@ -7373,11 +7373,13 @@ again.
 The astra round-3 repair wave closed at `e3d7bf61` (records) with
 detached best-effort diagnostics; the role rounds below then pinned
 the sustained full-stderr contract and every regression class the
-bounded queue replaces.  The product source for all of these rounds
-is the astra round-3 repair source; every subsequent commit touches
-tests or records only, so the staged product identities remain valid
-throughout (Go `bd6dddb7…`, Go worker `f1311d96…`, Rust `daee4a92…`,
-Rust worker `9fd36146…`, fixture `947b94e9…`).
+bounded queue replaces.  The product source is
+unchanged since `ebfd2ff8` (the bounded 256-slot diagnostic queue
+landed at `fbdbc953` and its drainer spawn-retry at `ebfd2ff8`);
+every later commit touches tests or records only, so the staged
+product identities remain valid throughout the rounds (Go
+`bd6dddb7…`, Go worker `f1311d96…`, Rust `daee4a92…`, Rust worker
+`9fd36146…`, fixture `947b94e9…`).
 
 - **Round 9a (HEAD `e3d7bf61`, repairs at `fbdbc953`) — bounded
   diagnostic queue.**  Operations returned a P1: the astra-repair
@@ -7420,9 +7422,9 @@ Rust worker `9fd36146…`, fixture `947b94e9…`).
   the test comments overclaimed.  Repair: the Rust process tripwire
   asserts the child's live thread count on Linux (<= 12; 20 threads
   measured under the regression vs 5 fixed), and the comments now
-  state exactly which class each assertion detects.  In this round
-  the glm whole-milestone validator also first raised its P2
-  (below, closed at round 9e).
+  state exactly which class each assertion detects.  (the glm whole-milestone validator's queue-cap P2 below was
+  first raised at the `ebfd2ff8` review and remained open through
+  this round; it is closed at round 9e).
 
 - **Round 9d (HEAD `3502471e`/`0584203c`, repairs at `e9e7ce9a`
   and `0584203c`) — Go per-message goroutine class pinned and the
@@ -7443,8 +7445,9 @@ Rust worker `9fd36146…`, fixture `947b94e9…`).
 
 - **Round 9e (HEAD `e9e7ce9a`, repairs at `75b2c497`) — Rust
   queue-cap overflow boundary pinned.**  The glm whole-milestone
-  validator returned a P2 (first raised at round 9b, carried
-  through 9c/9d): the Rust tripwire emitted at most 16 diagnostics
+  validator returned a P2 (first raised at the `ebfd2ff8`
+  review, carried through the `0584203c` and `e9e7ce9a` reviews):
+  the Rust tripwire emitted at most 16 diagnostics
   (16 paths per request, `max_expanded_paths`), below
   `DIAG_QUEUE_CAP` (256), so a blocking bounded-channel send
   regression (the canonical `sync_channel(256)` idiom) passed every
@@ -7474,8 +7477,10 @@ Re-qualification at the closure revision: Go suite 22/22 packages
 PASS on Linux and natively on the Windows host; Rust workspace 51
 suites PASS; full battery PASS at the final staged identities
 (matrices 38/38 single and 14+24 mixed per direction; crash 16/16
-both directions with the real-producer negative control 0/16
-failing at the substituted-consumer stage; resource proofs 8/8;
+both directions with the negative control 0/16 (8 real-producer
+scenarios failing at the substituted-consumer stage and 8
+substituted-producer scenarios failing during setup); resource
+proofs 8/8;
 kind-coverage gate PASS with all 46 self-test controls; golden 55;
 sensitivity 14); Windows housekeeping 2/2 on the authorized Windows
 validation host (Go `6d9ba190…`, Rust `20165392…` at the wave-15

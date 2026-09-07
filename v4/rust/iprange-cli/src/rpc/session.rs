@@ -661,9 +661,15 @@ fn worker_loop<W: Write + Send + 'static>(
                     // never block the forced exit (external review
                     // finding); the detached write gets a bounded
                     // grace before process::exit runs regardless.
-                    std::thread::spawn(|| {
-                        eprintln!("iprange: fatal transport failure: events channel wedged, forcing exit");
-                    });
+                    // The diagnostic is best-effort: a failed
+                    // thread creation must not defeat the forced exit
+                    // (reviewer finding), so the spawn result is
+                    // ignored and process::exit runs regardless.
+                    let _ = std::thread::Builder::new()
+                        .name("iprange-wedge-diag".into())
+                        .spawn(|| {
+                            eprintln!("iprange: fatal transport failure: events channel wedged, forcing exit");
+                        });
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     std::process::exit(1);
                 }
@@ -1082,11 +1088,17 @@ mod signals {
                     // grace even if the write is still blocked; the
                     // message may be cut off when stderr is writable
                     // but slower, which is accepted.
-                    std::thread::spawn(move || {
-                        eprintln!(
-                            "iprange: terminated by signal {signal}: forcing exit"
-                        );
-                    });
+                    // Best-effort diagnostic: a failed thread
+                    // creation must not defeat the forced exit
+                    // (reviewer finding), so the spawn result is
+                    // ignored and process::exit runs regardless.
+                    let _ = std::thread::Builder::new()
+                        .name("iprange-signal-diag".into())
+                        .spawn(move || {
+                            eprintln!(
+                                "iprange: terminated by signal {signal}: forcing exit"
+                            );
+                        });
                     std::thread::sleep(std::time::Duration::from_millis(50));
                     std::process::exit(1);
                 } else {

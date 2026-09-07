@@ -281,13 +281,17 @@ build provenance.
   is a strict prefix of the successful reference; no destination
   replacement) — zero leftover processes, `failed: 0`, per-scenario
   per-kind actor lineage (`created_by`/`opened_by`).
-- `crash-negative.json` — the negative control with a real
-  producer and a substituted `/bin/false` consumer: 0/16 pass,
-  `failed: 16`, zero leftover processes; every scenario fails at
-  the consumer stage (the fake consumer closes stdout: "service
-  closed stdout"), so a substituted consumer can never be credited
-  with executed work; used as the harness sensitivity control,
-  never as a kind-gate source.
+- `crash-negative.json` — the negative control, 0/16 pass,
+  `failed: 16`, zero leftover processes.  Each of the eight crash
+  scenarios runs in both substitution directions: with the real
+  producer and a substituted `/bin/false` consumer the scenario
+  reaches the consumer stage and fails there (the fake consumer
+  closes stdout: "service closed stdout"), so a substituted
+  consumer can never be credited with executed work; with a
+  substituted `/bin/false` producer the scenario fails during
+  setup, because the fake producer never creates the artifact and
+  no consumer operation runs.  Used as the harness sensitivity
+  control, never as a kind-gate source.
 - `resource.json` — `iprange-cli-resource-report-v1`: the four
   Linux product-interface proofs for both binaries — (a) the
   >16-in-flight `server_busy` pipelining proof (one slow export + 19

@@ -36,3 +36,29 @@ func TestLocalBasenameFromPathRejectsDotComponents(t *testing.T) {
 		t.Fatalf("parent-relative path rejected: %v", err)
 	}
 }
+
+// Rust Path::file_name normalizes trailing separators and "."
+// components before taking the final component; the Go constructor
+// must accept the same shapes ("foo.txt/." yields "foo.txt" on
+// both platforms, verified against Rust on linux).
+func TestLocalBasenameFromPathNormalizesDotSuffix(t *testing.T) {
+	for _, path := range []string{
+		"foo.txt", "foo.txt/", "foo.txt/.", "foo.txt//.",
+		"a/../b", "a/b/./c.txt",
+	} {
+		basename, err := LocalBasenameFromPath(path)
+		if err != nil {
+			t.Fatalf("LocalBasenameFromPath(%q) rejected: %v", path, err)
+		}
+		if got := string(basename.bytesValue()); got != "c.txt" && got != "b" && got != "foo.txt" {
+			t.Fatalf("LocalBasenameFromPath(%q) = %q, want the normalized final component", path, got)
+		}
+	}
+	// A trailing parent component still has no file name (Rust
+	// Path::file_name("foo/..") is None).
+	for _, path := range []string{"foo/..", "foo.txt/../", "../../x/.."} {
+		if _, err := LocalBasenameFromPath(path); err == nil {
+			t.Fatalf("LocalBasenameFromPath(%q) succeeded, want the Rust InvalidArgument error", path)
+		}
+	}
+}

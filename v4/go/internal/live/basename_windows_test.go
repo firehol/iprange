@@ -29,6 +29,26 @@ func TestLocalBasenameFromPathWindowsUnits(t *testing.T) {
 	}
 }
 
+// Rust Path::file_name normalizes trailing separators and "."
+// components before taking the final component; the Go constructor
+// must accept the same shapes on Windows and store the UTF-16LE
+// units of the normalized name.
+func TestLocalBasenameFromPathNormalizesDotSuffixWindows(t *testing.T) {
+	for _, path := range []string{
+		"C:/Temp/foo.txt", "C:/Temp/foo.txt/", "C:/Temp/foo.txt/.",
+		"C:/Temp/foo.txt//.", "C:/Temp/a/../foo.txt",
+	} {
+		basename, err := LocalBasenameFromPath(path)
+		if err != nil {
+			t.Fatalf("LocalBasenameFromPath(%q) rejected: %v", path, err)
+		}
+		want := Utf16LEBytes("foo.txt")
+		if string(basename.bytesValue()) != string(want) {
+			t.Fatalf("bytes(%q) = % x, want % x", path, basename.bytesValue(), want)
+		}
+	}
+}
+
 // The Windows constructor must reject the same missing-component
 // shapes as Rust Path::file_name (".", "..", the separator, empty).
 func TestLocalBasenameFromPathRejectsDotComponentsWindows(t *testing.T) {

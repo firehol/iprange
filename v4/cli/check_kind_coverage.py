@@ -698,6 +698,15 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
     # an uncontrolled UnboundLocalError at the command_fixture check
     # below (external review finding).
     namespace = None
+    # Per-language command-selected executable: the path the recorded
+    # command names for each product language.  Each actor must be
+    # bound to exactly this executable (external review finding); a
+    # report that runs a different binary for a role while its command
+    # claims another contradicts the record.  Initialized before the
+    # argv branch so a report without command metadata records the
+    # argv problem instead of raising UnboundLocalError in the
+    # per-case checks below (external review finding, second site).
+    command_selected = {}
     if argv is None:
         problems.append(
             f"matrix {path}: report records no command argv")
@@ -722,13 +731,6 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
         if runner_parser is not None:
             namespace = _parse_recorded_command(
                 runner_parser, argv, f"matrix {path}", problems)
-        # Per-language command-selected executable: the path the
-        # recorded command names for each product language.  Each
-        # actor must be bound to exactly this executable (external
-        # review finding); a report that runs a different binary for a
-        # role while its command claims another contradicts the
-        # record.
-        command_selected = {}
         if namespace is not None:
             command_matrix = namespace.matrix
             if command_matrix is None:
@@ -3348,16 +3350,25 @@ def _self_test():
         # 46. A matrix report without command metadata must end with a
         #     recorded problem, not an uncontrolled exception
         #     (external review finding): the gate stays fail-closed
-        #     and the diagnosis is stable.
-        no_command = matrix_report("go", [], 0)
-        del no_command["command"]
-        no_command_path = os.path.join(work, "matrix-no-command.json")
-        assign(no_command_path, no_command)
-        problems, _c, _s = assess([no_command_path], [])
-        assert any("records no command argv" in problem
-                   for problem in problems), (
-            f"matrix report without command did not record the argv "
-            f"problem: {problems}")
+        #     and the diagnosis is stable.  Exercised with both an
+        #     empty case list and the populated report shape, because
+        #     the per-case executable-binding checks only run when
+        #     cases exist (second UnboundLocalError site).
+        for populated in (False, True):
+            if populated:
+                no_command = json.loads(json.dumps(green_report("go")))
+            else:
+                no_command = matrix_report("go", [], 0)
+            del no_command["command"]
+            no_command_path = os.path.join(
+                work, "matrix-no-command-%s.json" %
+                ("pop" if populated else "empty"))
+            assign(no_command_path, no_command)
+            problems, _c, _s = assess([no_command_path], [])
+            assert any("records no command argv" in problem
+                       for problem in problems), (
+                f"matrix report without command did not record the argv "
+                f"problem: {problems}")
 
 
 if __name__ == "__main__":

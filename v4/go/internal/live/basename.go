@@ -27,11 +27,17 @@ type LocalBasename struct {
 // unix and the UTF-16LE units on windows, each under its platform
 // encoding tag.
 func platformBasenameFromPath(path string) (LocalBasename, error) {
-	name := filepath.Base(path)
-	// Rust Path::file_name returns None for ".", "..", separators, and
-	// empty names; the Go constructor must reject the same component
-	// shapes so the SDK surface stays Rust-parity (external review
-	// finding: Go accepted "..").
+	// Rust Path::file_name normalizes trailing separators and "."
+	// components before taking the final component (for example
+	// "foo.txt/." yields "foo.txt"); filepath.Clean applies the same
+	// normalization so the Go constructor stays Rust-parity (external
+	// review finding: Go rejected "foo.txt/." and trailing-slash
+	// shapes that Rust accepts).
+	name := filepath.Base(filepath.Clean(path))
+	// Rust Path::file_name returns None for ".", "..", "foo/..",
+	// separators, and empty names; the Go constructor must reject the
+	// same component shapes so the SDK surface stays Rust-parity
+	// (external review finding: Go accepted "..").
 	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) {
 		return LocalBasename{}, &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
 	}
