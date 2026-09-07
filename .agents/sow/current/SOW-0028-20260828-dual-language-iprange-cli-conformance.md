@@ -359,7 +359,6 @@ Windows 23/23 natively, Windows housekeeping 2/2 PASS.  The
 milestone-4 closure record stands as qualified at this final
 revision; milestone 5 remains unstarted per user decision 1A; the
 round-4 P3 commit-subject history rewrite remains pending user
-approval.
 approval.  After this round, the closure proceeds to the external
 whole-milestone control review at exactly this revision, with no
 further commits expected after its verdict.

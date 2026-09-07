@@ -4,15 +4,15 @@ package pathname
 
 import "testing"
 
-// TestVerbatimPushComponentRules pins PathBuf::_push's verbatim
-// branch against native windows-host rustc 1.97.1 answers: the
-// pushed path's components fold into the verbatim base (repeated and
-// trailing separators collapse, CurDir vanishes, ParentDir pops the
-// last Normal component, RootDir truncates the buffer to its
-// prefix) and the buffer re-emits with the main separator.  Names
-// that carry their own prefix or are absolute replace the base in
-// Rust and are the documented Push deviation (no caller passes
-// them).
+// TestVerbatimPushComponentRules pins PathBuf::_push against
+// native windows-host rustc 1.97.1 answers: the pushed path's
+// components fold into a verbatim base (repeated and trailing
+// separators collapse, CurDir vanishes, ParentDir pops the last
+// Normal component, RootDir truncates the buffer to its prefix) and
+// the buffer re-emits with the main separator; absolute or
+// prefix-carrying names replace the base (std need_clear) and rooted
+// names without a prefix truncate the base to its prefix, as the
+// rows below pin.
 func TestVerbatimPushComponentRules(t *testing.T) {
 	rows := []struct{ base, name, want string }{
 		{`\\?\C:\x`, `n/`, `\\?\C:\x\n`},
