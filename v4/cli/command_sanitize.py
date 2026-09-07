@@ -24,6 +24,7 @@ accident.
 """
 
 import os
+import re
 import sys
 import tempfile
 
@@ -221,8 +222,10 @@ def _privacy_spellings(value):
     ``..`` parent segments and, on POSIX, doubled leading separators
     (the kernel resolves ``//home`` as ``/home``); a drive-relative
     spelling (``C:Users\\...``) is kept as-is so the profile's own
-    drive-relative comparison form can match it without depending on
-    the per-drive current directory that ``ntpath.abspath`` consults.
+    drive-relative comparison form can match it, and is additionally
+    anchored through ``os.path.abspath`` (native Windows resolution
+    consults the per-drive current directory) for the kernel's own
+    resolution semantics.
     """
     norm = value.replace("/", os.sep).replace("\\", os.sep)
     if "%" in norm or "$" in norm:
@@ -298,6 +301,29 @@ def personal_path_in_report(report):
 
     profile_abs = profile
     profile_term = profile_abs + os.sep
+    # Path-continuation and path-separator character sets for the
+    # mid-string boundary walk (frozensets avoid character-class
+    # range ambiguity for the dash and the separators).
+    _path_cont = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        "0123456789_.-")
+    _path_sep = frozenset("/" + chr(92))
+
+    def _boundary_occurrence(spelling):
+        """True when the profile appears in spelling bounded on both
+        sides by start/end or non-path characters (whitespace,
+        quotes, shell operators) -- ``cd /home/alice && make``."""
+        idx = spelling.find(profile_abs)
+        while idx != -1:
+            before_ok = idx == 0 or spelling[idx - 1] not in _path_cont
+            after = idx + len(profile_abs)
+            after_ok = (after == len(spelling)
+                        or (spelling[after] not in _path_cont
+                            and spelling[after] not in _path_sep))
+            if before_ok and after_ok:
+                return True
+            idx = spelling.find(profile_abs, idx + 1)
+        return False
 
     def visit(value):
         if isinstance(value, str):
@@ -307,12 +333,23 @@ def personal_path_in_report(report):
                     return
             # Mid-string occurrences: a build command or an option
             # value that embeds the profile path (``--cases=
-            # /home/alice/x``, ``cd /home/alice/x && make``) must
-            # also trip the scan.  The separator-terminated form
-            # keeps sibling names (``/home/alice-notes``) from
+            # /home/alice/x``, ``cd /home/alice && make``) must also
+            # trip the scan.  Three shapes are tested: the
+            # separator-terminated containment (``/home/alice/x``),
+            # the profile at the end of the string, and a
+            # boundary-delimited occurrence (profile followed by a
+            # non-path, non-separator character such as whitespace,
+            # a quote, or a shell operator).  Continuation
+            # characters (alnum, ``_``, ``-``, ``.``) and path
+            # separators are excluded from the boundary, so sibling
+            # names (``/home/alice-notes``) and different-root
+            # subpaths that merely contain the same segments cannot
             # false-positive.
             for spelling in _privacy_spellings(value):
                 if profile_term in spelling or spelling.endswith(profile_abs):
+                    hit.append(value)
+                    return
+                if _boundary_occurrence(spelling):
                     hit.append(value)
                     return
         elif isinstance(value, dict):

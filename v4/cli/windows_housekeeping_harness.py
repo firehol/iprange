@@ -1897,6 +1897,28 @@ def _self_test():
         problems.append("P2-7 mid-string profile spelling not detected")
     else:
         print("[P2-7] mid-string profile spelling detected")
+    # Shell-delimited occurrences (provenance build commands are
+    # operator-supplied free text recorded verbatim): the profile
+    # followed by whitespace, an assignment, or a shell operator must
+    # trip the scan, while sibling names stay clean.
+    shell_forms = [
+        "cd " + os.path.expanduser("~") + " && make",
+        "HOME=" + os.path.expanduser("~") + " make",
+        "build " + os.path.expanduser("~") + "; next",
+    ]
+    for form in shell_forms:
+        if personal_path_in_report(
+                {"build": form}) is None:
+            problems.append(
+                f"P2-7 shell-delimited profile spelling not detected: "
+                f"{form!r}")
+        else:
+            print("[P2-7] shell-delimited profile spelling detected")
+    sibling = os.path.expanduser("~") + "-notes/x"
+    if personal_path_in_report({"build": sibling}) is not None:
+        problems.append("P2-7 sibling spelling false-positives")
+    else:
+        print("[P2-7] sibling spelling stays clean")
     if personal_path_in_report(
             {os.path.expanduser("~"): "value"}) is None:
         problems.append("P2-7 dictionary-key profile spelling not "

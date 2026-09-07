@@ -2037,8 +2037,11 @@ def main():
                 "the authorized scratch area so committed evidence "
                 "cannot carry personal paths")
     # The explicit case corpus is recorded through the command array
-    # (``--cases=PATH``); the in-tree default stays usable.
-    if args.cases != DEFAULT_CASE_DIR and under_profile(args.cases):
+    # (``--cases=PATH``); any spelling that resolves to the in-tree
+    # default corpus stays usable (the relative ``v4/cli/cases``
+    # invocation included).
+    if (os.path.realpath(args.cases) != os.path.realpath(DEFAULT_CASE_DIR)
+            and under_profile(args.cases)):
         parser.error(
             f"cases path {args.cases} lives under the operator's "
             "profile; stage corpora under the authorized scratch area "

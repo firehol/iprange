@@ -9347,3 +9347,42 @@ harness/records files only).  Sensitive-data gate: the committed
 records now contain no operator-name spelling (grep-clean).  Artifact
 gate: end-user docs (README) updated in this wave; AGENTS.md, specs,
 and runtime project skills unchanged.
+
+#### Wave 16 follow-up round 16.5 (2026-09-08) — delimiter-aware profile scan and cases-guard exemption
+
+The re-anchored security role at `b9fcaf05` returned one P2: the
+mid-string scan was delimiter-blind — it caught the profile followed
+by a separator (`/home/alice/x`) but not the profile followed by
+whitespace, an assignment, or a shell operator (`cd /home/alice &&
+make`, `HOME=/home/alice make`, `build /home/alice; next`).
+`build_provenance.build_commands` are operator-supplied free text
+recorded verbatim, so the class is reachable through a genuine input
+surface, not only a forged report.  Repair, in
+`v4/cli/command_sanitize.py`:
+
+- the mid-string check now also walks every occurrence of the
+  profile and accepts it when bounded on both sides by start/end or
+  non-path characters (a frozenset-based scan avoids the
+  character-class range ambiguity a regex would introduce for the
+  dash and the separators); separators are excluded from the
+  following boundary so subpaths do not double-flag, and path-
+  continuation characters (alnum, `_`, `.`, `-`) keep sibling names
+  (`/home/alice-notes`) clean;
+- the Windows-housekeeping P2-7 self-test pins the three shell-
+  delimited forms plus a sibling negative.
+
+Also in this wave: the `--cases` guard now exempts any spelling that
+resolves to the in-tree default corpus (`--cases v4/cli/cases` from
+the checkout root works again; `os.path.realpath` comparison), and
+the `_privacy_spellings` docstring accurately describes the retained
+drive-relative `abspath` anchor.  Validation: Windows-housekeeping
+`--self-test` PASSes on Linux (checkout root and a subdirectory) and
+natively on the Windows host from the checkout CWD and the authorized
+scratch CWD with the shell-delimited and sibling pins; the structural
+scan over every committed evidence file returns clean; the boundary
+probe matrix (space/`=`/`;`/end delimiters, sibling and different-
+root negatives) passes; the full battery is green with byte-identical
+command arrays; product binaries byte-identical (SHASUMS 8/8).
+Sensitive-data gate: clean (SOW grep-clean of the operator name).
+Artifact gate: end-user docs already updated in round-16.4; AGENTS.md,
+specs, and runtime project skills unchanged.
