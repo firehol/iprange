@@ -226,13 +226,18 @@ type Components struct {
 // NewComponents constructs the walker over path (std
 // Path::components: front starts at Prefix on Windows, else StartDir;
 // back starts at Body).
+//
+// The physical-root check mirrors std has_physical_root, which uses
+// the static separator set even after a verbatim prefix: a "/" right
+// after the "\\?\\" prefix (hand-built long-path spelling) is the
+// root, while body components after it still split on "\\" only.
 func NewComponents(path string) *Components {
 	c := &Components{path: path, front: stateStartDir, back: stateBody}
 	if hasPrefixes {
 		c.front = statePrefix
 		c.prefix = classifyPrefix(path)
 	}
-	c.hasRoot = len(path) > c.prefix.length && c.isSepByte(path[c.prefix.length])
+	c.hasRoot = len(path) > c.prefix.length && isSepByte(path[c.prefix.length])
 	return c
 }
 
@@ -396,6 +401,66 @@ func (c *Components) nextBack() compKind {
 	}
 }
 
+// nextFront pops the first yielded component (std Components::next)
+// and returns its kind and raw bytes (separators excluded). Repeated
+// separators and skipped "." components are consumed silently, and a
+// physical root is consumed as exactly one byte (std
+// has_physical_root + StartDir). The Prefix component returns the raw
+// prefix bytes.
+func (c *Components) nextFront() (compKind, string) {
+	for {
+		if c.finished() {
+			return compNone, ""
+		}
+		switch c.front {
+		case stateBody:
+			if len(c.path) > 0 {
+				seps := separatorSet(c.prefix.verbatim())
+				extra := 0
+				var comp string
+				if i := strings.IndexAny(c.path, seps); i >= 0 {
+					comp = c.path[:i]
+					extra = 1
+				} else {
+					comp = c.path
+				}
+				kind := c.parseSingleComponent(comp)
+				c.path = c.path[len(comp)+extra:]
+				if kind != compNone {
+					return kind, comp
+				}
+				continue
+			}
+			c.front = stateDone
+		case stateStartDir:
+			c.front = stateBody
+			if c.hasRoot {
+				c.path = c.path[1:]
+				return compRootDir, ""
+			}
+			if hasPrefixes && c.prefix.length > 0 {
+				if c.prefix.hasImplicitRoot() && !c.prefix.verbatim() {
+					return compRootDir, ""
+				}
+			} else if c.includeCurDir() {
+				c.path = c.path[1:]
+				return compCurDir, "."
+			}
+		case statePrefix:
+			if c.prefix.length == 0 {
+				c.front = stateStartDir
+				continue
+			}
+			c.front = stateStartDir
+			raw := c.path[:c.prefix.length]
+			c.path = c.path[c.prefix.length:]
+			return compPrefix, raw
+		default:
+			return compNone, ""
+		}
+	}
+}
+
 // finished mirrors std finished: exhausted from either end.
 func (c *Components) finished() bool {
 	return c.front == stateDone || c.back == stateDone || c.front > c.back
@@ -433,25 +498,48 @@ func (c *Components) asPath() string {
 
 // FileName returns the final component of path exactly like Rust
 // Path::file_name: repeated and trailing separators collapse, trailing
-// "." components are dropped, mid-path ".." and ".."-prefixed names
-// are ordinary, and there is no name when the path is empty, is only a
-// root or prefix, is exactly ".", or ends in a ".." component. It is
+// "." components are dropped (except inside a verbatim prefix, where
+// "." stays a CurDir component and yields no name), mid-path ".." and
+// ".."-prefixed names are ordinary, and there is no name when the path
+// is empty, is only a root or prefix, is exactly ".", or ends in a
+// ".." component. A verbatim prefix may be followed by a "/" physical
+// root byte (std has_physical_root uses the static separator set even
+// for verbatim prefixes), which is consumed before body parsing. It is
 // equivalent to the Components state machine above (differentially
 // verified against rustc Path::file_name on a 375-shape corpus).
 func FileName(path string) (string, bool) {
 	seps := separatorSet(false)
 	body := path
+	verbatim := false
 	if hasPrefixes {
-		body = path[parsePrefix(path).length:]
-		if parsePrefix(path).verbatim() {
+		p := parsePrefix(path)
+		body = path[p.length:]
+		if p.verbatim() {
 			seps = `\\`
+			verbatim = true
+			// std has_physical_root uses the static separator set even
+			// for verbatim prefixes: a "/" directly after the prefix is
+			// the root byte, not the start of the first body component.
+			if len(body) > 0 && isSepByte(body[0]) {
+				body = body[1:]
+			}
 		}
 	}
 	parts := strings.FieldsFunc(body, func(r rune) bool {
 		return strings.ContainsRune(seps, r)
 	})
-	for len(parts) > 0 && parts[len(parts)-1] == "." {
-		parts = parts[:len(parts)-1]
+	if verbatim {
+		// Inside a verbatim prefix "." stays a CurDir component (std
+		// parse_single_component), so a trailing "." stops the back
+		// walk and the path has no file name; it is not normalized
+		// away like in ordinary paths.
+		if len(parts) > 0 && parts[len(parts)-1] == "." {
+			return "", false
+		}
+	} else {
+		for len(parts) > 0 && parts[len(parts)-1] == "." {
+			parts = parts[:len(parts)-1]
+		}
 	}
 	if len(parts) == 0 {
 		return "", false
@@ -513,22 +601,23 @@ func WithFileName(path, name string) string {
 	if path == "" {
 		return name
 	}
+	if hasPrefixes && name != "" {
+		if parsePrefix(path).verbatim() {
+			// Rust PathBuf::_push rebuilds verbatim-prefixed paths
+			// component by component with the main separator (RootDir
+			// is re-emitted as "\", the prefix raw bytes keep their
+			// parsed spelling, and a drive-only fast path never
+			// applies), so a "/" physical root or a share-less
+			// "\\?\\UNC\\" spelling is canonicalized exactly like
+			// native std::path (probe-verified).
+			return verbatimPushRebuild(path, name)
+		}
+	}
 	// push: a separator is needed unless the path already ends with a
 	// separator or is a bare drive prefix (Rust PathBuf::push; the
 	// separator check uses the ordinary separator set, not the
 	// verbatim one).
 	if isSepByte(path[len(path)-1]) {
-		if hasPrefixes {
-			// The share-less verbatim-UNC spelling is the one
-			// exception: its prefix raw bytes end with a separator
-			// (\\?\\UNC\\), and Rust's verbatim push rebuild writes
-			// the prefix, a separator, and the name, so the separator
-			// doubles (probe-verified against native Windows
-			// std::path).
-			if p := parsePrefix(path); p.kind == prefixVerbatimUNC && p.length == 8 {
-				return path[:8] + `\` + name
-			}
-		}
 		return path + name
 	}
 	if hasPrefixes {
@@ -542,4 +631,50 @@ func WithFileName(path, name string) string {
 		mainSep = `\`
 	}
 	return path + mainSep + name
+}
+
+// verbatimPushRebuild mirrors Rust PathBuf::_push's verbatim branch
+// for with_file_name: the base components plus the appended name are
+// re-emitted component by component with the main separator between
+// them. The prefix raw bytes are preserved exactly as parsed (they may
+// contain "/"), a physical root byte is re-emitted as the main
+// separator, and the appended name follows directly after a RootDir.
+func verbatimPushRebuild(path, name string) string {
+	type part struct {
+		kind compKind
+		raw  string
+	}
+	c := NewComponents(path)
+	var parts []part
+	for {
+		kind, raw := c.nextFront()
+		if kind == compNone {
+			break
+		}
+		parts = append(parts, part{kind, raw})
+	}
+	parts = append(parts, part{compNormal, name})
+
+	var sb strings.Builder
+	needSep := false
+	for _, p := range parts {
+		if needSep && p.kind != compRootDir {
+			sb.WriteByte('\\')
+		}
+		switch p.kind {
+		case compRootDir:
+			sb.WriteByte('\\') // std Component::RootDir::as_os_str
+			needSep = false
+		case compPrefix:
+			sb.WriteString(p.raw)
+			// std sets need_sep = !prefix.is_drive() && prefix.len() > 0;
+			// Prefix::is_drive is Disk(_) only, so a verbatim prefix
+			// always needs the following separator.
+			needSep = len(p.raw) > 0
+		default:
+			sb.WriteString(p.raw)
+			needSep = true
+		}
+	}
+	return sb.String()
 }

@@ -4,8 +4,9 @@
 // 1.97.1 std::path on the Windows host (Path::file_name,
 // Path::parent, PathBuf::with_file_name) over the same 162-shape
 // corpus plus the Windows prefix shapes (drive-relative, UNC,
-// verbatim, device namespaces). Generated from a native Windows
-// probe at the round-6 re-qualification (windows-host rustc).
+// verbatim, device namespaces, forward-slash spellings after
+// verbatim prefixes). Generated from native Windows probes
+// (windows-host rustc).
 package pathname
 
 import "testing"
@@ -198,6 +199,19 @@ func TestRustGoldenWindows(t *testing.T) {
 		{shape: "\\\\?\\UNC", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\N.readers"},
 		{shape: "\\\\?\\UNC\\", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\\\N.readers"},
 		{shape: "\\\\?\\UNC\\srv\\sh\\a\\..", name: "", nameOK: false, parent: "\\\\?\\UNC\\srv\\sh\\a", parentOK: true, wf: "\\\\?\\UNC\\srv\\sh\\a\\..\\N.readers"},
+		{shape: "\\\\?\\C:/x", name: "x", nameOK: true, parent: "\\\\?\\C:/", parentOK: true, wf: "\\\\?\\C:\\N.readers"},
+		{shape: "\\\\?\\C:/x/y", name: "x/y", nameOK: true, parent: "\\\\?\\C:/", parentOK: true, wf: "\\\\?\\C:\\N.readers"},
+		{shape: "\\\\?\\C:/", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\C:\\N.readers"},
+		{shape: "\\\\?\\C:/x\\..", name: "", nameOK: false, parent: "\\\\?\\C:/x", parentOK: true, wf: "\\\\?\\C:\\x\\..\\N.readers"},
+		{shape: "\\\\?\\UNC\\srv\\sh/a", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\srv\\sh/a\\N.readers"},
+		{shape: "\\\\?\\UNC\\srv\\sh/", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\srv\\sh/\\N.readers"},
+		{shape: "\\\\?\\C:x", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\C:x\\N.readers"},
+		{shape: "\\\\?\\foo/bar", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\foo/bar\\N.readers"},
+		{shape: "\\\\?\\foo\\bar", name: "bar", nameOK: true, parent: "\\\\?\\foo\\", parentOK: true, wf: "\\\\?\\foo\\N.readers"},
+		{shape: "\\\\?\\C:\\x\\.", name: "", nameOK: false, parent: "\\\\?\\C:\\x", parentOK: true, wf: "\\\\?\\C:\\x\\.\\N.readers"},
+		{shape: "\\\\?\\C:\\x\\.\\y", name: "y", nameOK: true, parent: "\\\\?\\C:\\x\\.", parentOK: true, wf: "\\\\?\\C:\\x\\.\\N.readers"},
+		{shape: "\\\\?\\C:\\x\\y\\..\\.", name: "", nameOK: false, parent: "\\\\?\\C:\\x\\y\\..", parentOK: true, wf: "\\\\?\\C:\\x\\y\\..\\.\\N.readers"},
+		{shape: "\\\\?\\C:/x/.", name: "x/.", nameOK: true, parent: "\\\\?\\C:/", parentOK: true, wf: "\\\\?\\C:\\N.readers"},
 		{shape: "\\\\?\\C:", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\C:\\N.readers"},
 		{shape: "\\\\?\\C", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\C\\N.readers"},
 		{shape: "\\\\server\\share", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\server\\share\\N.readers"},
