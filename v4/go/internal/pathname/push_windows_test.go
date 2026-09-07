@@ -19,7 +19,7 @@ func TestPushWindows(t *testing.T) {
 		{"C:\\dir", "n", `C:\dir\n`},
 		{`\\?\C:`, "n", `\\?\C:\n`},
 		{`\\?\C:/dir`, "n", `\\?\C:\dir\n`},
-		{`\\?\C:/dir/`, "n", `\\?\C:\dir\n`},
+		{`\\?\C:/dir/`, "n", `\\?\C:\dir/\n`},
 		{`\\?\UNC\srv\sh`, "n", `\\?\UNC\srv\sh\n`},
 		{`\\?\foo`, "n", `\\?\foo\n`},
 	}
