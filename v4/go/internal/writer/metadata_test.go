@@ -241,9 +241,20 @@ func TestMetadataStoredZlibFallback(t *testing.T) {
 // stream strictly smaller than the stored bound for repetitive payloads
 // and reads back byte-exact.
 func TestMetadataDeflatePathSmallPayload(t *testing.T) {
+	// The deflate workspace charge (deflateHeapOverhead) exceeds the
+	// generic testBudget() heap cap once the payload's stored-zlib bound
+	// is added, so this test declares a budget that admits the deflate
+	// path: bound + workspace, with nothing to spare (the admission
+	// check is >=). This pins the deflate branch across toolchains whose
+	// compress/flate workspace grew (go1.27.0 measured ~1.06 MiB).
 	path, _ := createDirect(t, format.AddressFamilyIPv4)
 	payload := bytes.Repeat([]byte("deflate-me-"), 1<<14)
-	r := commitMetadata(t, path, payload, testBudget())
+	budget := PageBudget{
+		MaxHeapBytes:    format.MetadataCompressedBound(uint64(len(payload))) + deflateHeapOverhead,
+		MaxPrivatePages: 4096,
+		MaxGrowthPages:  4096,
+	}
+	r := commitMetadata(t, path, payload, budget)
 	got, present, err := r.ReadMetadataJSON()
 	if err != nil || !present || !bytes.Equal(got, payload) {
 		t.Fatalf("deflate metadata mismatch: present %v err %v", present, err)

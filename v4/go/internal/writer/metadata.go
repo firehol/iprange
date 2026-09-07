@@ -21,14 +21,15 @@ import (
 )
 
 // deflateHeapOverhead is the heap charge for one bounded deflate attempt:
-// the pinned compress/flate DefaultCompression workspace (~0.8 MiB on the
-// Go stdlib), measured and enforced by
-// TestMetadataDeflateHeapOverheadCoversWorkspace. It deliberately does not
-// mirror Rust metadata.rs DEFLATE_HEAP_OVERHEAD (512 KiB): that constant
-// covers the miniz backend's workspace, which is smaller than the Go
-// stdlib's, and an under-charge would let deflate exceed the caller's
-// declared heap budget.
-const deflateHeapOverhead = 840 * 1024
+// the compress/flate DefaultCompression workspace, measured and enforced
+// by TestMetadataDeflateHeapOverheadCoversWorkspace. The workspace grew
+// between stdlib releases (~0.8 MiB on go1.26, ~1.06 MiB measured on
+// go1.27.0), so the charge carries headroom over the largest measured
+// value and is deliberately not mirrored to Rust metadata.rs
+// DEFLATE_HEAP_OVERHEAD (512 KiB): that constant covers the miniz
+// backend's smaller workspace, and an under-charge would let deflate
+// exceed the caller's declared heap budget.
+const deflateHeapOverhead = 1150 * 1024
 
 // SetMetadata stages one exact metadata replacement and reports whether
 // the draft changed (Rust DraftStore::set_metadata). The 20 MiB cap, the
