@@ -190,6 +190,25 @@ at this revision; milestone 5 remains unstarted per user decision
 1A, and the round-4 P3 commit-subject history rewrite remains
 pending user approval.
 
+Wave-16 follow-up round-2 state (2026-09-07): the re-anchored
+round-6 tester review proved the reader open still cleaned raw
+caller paths, refusing `<dir>/<symlink>/../<name>` databases that
+the Rust twin serves; the raw-path repair at `ae57845e` (product
+source `abfc2696`) removes every lexical normalization of
+caller-supplied paths on the open, verify, create, sidecar,
+snapshot preflight, export, removal, and metadata publication
+paths, and pins the class with reader and validation-source
+symlink+.. regression tests plus a dual-product live probe.  Go
+suite 23/23 on go1.26.4, host go1.27.0, and native Windows
+(go1.26.5); Linux identities at `ae57845e` are Go `a00b1307…` /
+worker `2d748be0…` and Rust `07c4e314…` / worker `77b6d086…` /
+fixture `df3623a6…`, Windows identities Go `2f5b5fac…` (worker
+`b0bb2a2b…`) and Rust `c960a64f…`; every battery gate is green at
+the revision.  The milestone-4 closure record stands as qualified
+at this revision; milestone 5 remains unstarted per user decision
+1A, and the round-4 P3 commit-subject history rewrite remains
+pending user approval.
+
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -7829,3 +7848,71 @@ the charge is an internal heap-accounting constant); end-user
 docs unchanged (no CLI surface change).  The round-4 P3 item
 (commit subjects `9374917e`/`e3d7bf61` naming the external review
 model) remains open pending user approval for the history rewrite.
+
+#### Wave 16 follow-up round 2 (2026-09-07) — the raw-path open repair at `ae57845e`
+
+The re-anchored round-6 tester review at the wave-16 records commit
+`5a008411` found one wire-reachable P1: `openMapping` at
+`v4/go/internal/mapping/mapping.go` still normalized the caller's raw
+path with `filepath.Clean`, so a database addressed as
+`<dir>/<symlink>/../<name>` was refused by Go while Rust opens it at
+the kernel-resolved location (the round-6 sweep's claim that the
+mapping opens were "outside the derivation class" was disproved
+empirically: lexical cleaning before the kernel changes which file is
+opened whenever an intermediate component is a symlink).  The same
+audit found the sibling class at `mapping.Verdict` sites:
+`VerifyIdentity`, the latent `mapping.Create`, the validation
+`ImmutableSource` source open (recovery/validate), the snapshot
+live-self preflight (`rejectLiveSelf`), the live `lockedMain` and
+`Sidecar` stored paths, and the export/removal/metadata publication
+temporary placement and directory-sync targets (Go `filepath.Dir` and
+`filepath.Join` clean, while Rust `Path::parent().to_path_buf()` and
+`push` keep the raw spelling).
+
+Repair at `abfc2696` + test-guard commit `ae57845e`: every one of
+these sites now passes the raw caller spelling to the kernel exactly
+like the Rust twin; only os-resolved executable-discovery paths keep
+`filepath` helpers.  New regression tests open a fixture through a
+symlinked intermediate plus `".."` in the immutable reader
+(`TestOpenImmutableRawPathThroughSymlinkParent`) and the validation
+source (`TestImmutableSourceRawPathThroughSymlinkParent`) and assert
+the cleaned spelling is refused; a live probe against the rebuilt
+products proves both products open, describe, lookup, and close the
+same database through the raw path and both refuse the cleaned
+spelling.  The tests are gated to POSIX kernel-resolution semantics
+(on Windows, reparse-point behavior applies identically to both
+products because both pass the identical raw spelling; the native
+Windows suite covers the platform pathname behaviors).
+
+Re-qualification at the final revision (`ae57845e`, product source
+`abfc2696`; the records commit changes tests only and the product
+binaries reproduce byte-identically): Go suite 23/23 packages PASS on
+Linux with the qualified go1.26.4 and with the host go1.27.0, and
+natively on the Windows host (go1.26.5, 23/23 packages); Rust
+workspace suites PASS on Linux (rustc 1.97.1, no Rust source change)
+and natively on Windows.  Full battery PASS at the final staged
+identities (matrices 38/38 single and 14 PASS + 24 legitimate skips
+per mixed direction; crash 16/16 both directions; the negative
+control 0/16 with 8 consumer-stage and 8 setup failures; resource
+proofs 8/8; kind-coverage gate PASS with all 46 self-test controls;
+golden corpus 55; sensitivity gate 14).  Windows housekeeping 2/2
+PASS at `ae57845e` on the authorized Windows validation host (native
+Python 3.14.6, Go `2f5b5fac…`, Rust `c960a64f…`, provenance
+recorded with tree_clean).  Final Linux identities at `ae57845e`
+(staged in `.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK):
+Go product `a00b1307…`, Go worker `2d748be0…` (rebuilt with
+`-buildvcs=false`), Rust product `07c4e314…`, Rust worker
+`77b6d086…`, fixture `df3623a6…` (Rust binaries carry from the
+round-4 qualified build at `ed29e437`).  `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated at
+these identities in the records commit so the record and the
+identities cannot drift.  Sensitive-data gate: no secrets,
+credentials, community/customer names, personal data, or private
+endpoints in this wave.  Artifact gate: AGENTS.md unchanged (no
+workflow change); runtime project skills unchanged (no new how-to
+knowledge); the v4 JSON-RPC spec unchanged (no contract change — the
+repair restores the already-specified Rust reference behavior);
+end-user docs unchanged (no CLI surface change).  The round-4 P3
+item (commit subjects `9374917e`/`e3d7bf61` naming the external
+review model) remains open pending user approval for the history
+rewrite.

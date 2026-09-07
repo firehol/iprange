@@ -134,15 +134,15 @@ then pinned and fixed the Windows prefix parser
 (`sys/path/windows_prefix.rs parse_prefix` port; `//a//b` is not a
 UNC prefix and `"C:."` has no file name or parent).  The current
 canonical Linux identities are recorded in `evidence/README.md`
-(Go product `7544ffc2…`, Go worker `4c8f50fa…`, Rust product
+(Go product `a00b1307…`, Go worker `2d748be0…`, Rust product
 `07c4e314…`, Rust worker `77b6d086…`, fixture `df3623a6…` at the
-round-6 follow-up product revision `06495eeb` — the Go binaries were
-rebuilt with `-buildvcs=false` at the follow-up after the portability
-review measured the go1.27.0 deflate workspace above the previous
-840 KiB charge, the Rust binaries carry from the round-4 qualified
-build at `ed29e437`); the Windows-host products are Go
-`a20bcb2d…` (worker `d1273d04…`) and Rust `c960a64f…` at the same
-revision.  The wave-13 role-round delta found the Rust EOF arm
+round-6 raw-path repair product revision `ae57845e` — the Go binaries
+were rebuilt with `-buildvcs=false` after the tester review proved
+`filepath.Clean` in the reader open refused raw paths through
+symlinked intermediates that the Rust twin serves, and the Rust
+binaries carry from the round-4 qualified build at `ed29e437`); the
+Windows-host products are Go `2f5b5fac…` (worker `b0bb2a2b…`) and
+Rust `c960a64f…` at the same revision.  The wave-13 role-round delta found the Rust EOF arm
 missing the ceiling check that Go has — a final unterminated frame
 of LIMIT+1 bytes at EOF now exits non-zero in both products; the
 wave-14 delta repaired held over-limit frame reporting, the Windows

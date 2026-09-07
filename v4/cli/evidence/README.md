@@ -1,5 +1,55 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
+The current evidence is regenerated at product revision `ae57845e`
+(the round-6 raw-path repair).  The re-anchored round-6 tester review
+at `5a008411` found a wire-reachable P1: the immutable reader open
+still normalized the caller's raw path with `filepath.Clean`
+(`v4/go/internal/mapping/mapping.go` `openMapping`), so a database
+addressed as `<dir>/<symlink>/../<name>` was refused by Go while the
+Rust twin serves it at the kernel-resolved location.  The repair at
+`abfc2696` removes every lexical normalization of caller-supplied
+paths on the open, verify, create, sidecar, snapshot preflight,
+export, removal, and metadata publication paths: raw spellings flow
+to the kernel exactly like the Rust `std::path` derivations, and only
+os-resolved executable-discovery paths keep `filepath` helpers.  New
+regression tests open a fixture through a symlinked intermediate plus
+`".."` in the immutable reader and the validation source and assert
+the cleaned spelling is refused (POSIX kernel-resolution class; the
+tests skip on Windows, where reparse-point semantics apply to both
+products equally because both pass the identical raw spelling).  A
+live probe against the rebuilt products proves both products open,
+describe, lookup, and close the same database through the raw path
+and both refuse the cleaned spelling.
+
+The Go suite is green on the qualified go1.26.4 and on the host
+go1.27.0 (23/23 packages on each), and natively on the Windows host
+(go1.26.5, 23/23 packages); the Rust workspace suites are green on
+Linux (rustc 1.97.1) and natively on Windows (without source
+change).  The full battery PASSes at the final staged identities:
+matrices 38/38 single and 14 PASS + 24 legitimate skips per mixed
+direction; crash 16/16 both directions; the negative control 0/16
+(8 real-producer scenarios failing at the substituted-consumer
+stage and 8 substituted-producer scenarios failing during setup);
+resource proofs 8/8; kind-coverage gate PASS with all 46 self-test
+controls; golden corpus 55; sensitivity gate 14.  Windows
+housekeeping re-qualified at `ae57845e` on the authorized Windows
+validation host: 2/2 PASS with native Windows Python 3.14.6
+(provenance: clean tree, go1.26.5 windows/amd64, rustc 1.97.1).
+The records commit `ae57845e` changes tests only; the product
+binaries reproduce byte-identically from `abfc2696`.
+
+Linux reports at `ae57845e` record the product identities
+`07c4e314…` (rust, unchanged since the round-4 qualified build) and
+`a00b1307…` (go, rebuilt with `-buildvcs=false`), workers
+`77b6d086…` (rust) / `2d748be0…` (go), fixture `df3623a6…` (all
+staged in `.local/shared/binaries/SHASUMS.txt` with sha256sum -c
+OK).  The Windows housekeeping report records the Windows-host
+products `c960a64f…` (rust) and `2f5b5fac…` (go); the Windows Go
+worker is `b0bb2a2b…`.
+
+---
+
+
 The current evidence is regenerated at product revision `06495eeb`
 (the round-6 follow-up that charges the cross-toolchain deflate
 workspace honestly).  The round-6 re-anchored portability review at
