@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
@@ -199,11 +200,15 @@ func TestCreateLiveCreatesCompletePair(t *testing.T) {
 	if len(result.VisibleHousekeeping) != 0 {
 		t.Fatalf("visible housekeeping = %v, want empty", result.VisibleHousekeeping)
 	}
-	if got := result.MainBasename.bytesValue(); string(got) != "db.iprdb" {
-		t.Fatalf("basename = %q, want db.iprdb", got)
+	// The machine stores the platform basename (Rust
+	// LocalBasename::from_path parity): raw bytes on POSIX, UTF-16LE
+	// units on Windows.
+	wantBytes, wantEncoding := platformBasenameWant("db.iprdb")
+	if got := result.MainBasename.bytesValue(); string(got) != wantBytes {
+		t.Fatalf("basename = % q, want % q", got, wantBytes)
 	}
-	if result.MainBasename.encodingValue() != 1 {
-		t.Fatalf("basename encoding = %d, want 1", result.MainBasename.encodingValue())
+	if result.MainBasename.encodingValue() != wantEncoding {
+		t.Fatalf("basename encoding = %d, want %d", result.MainBasename.encodingValue(), wantEncoding)
 	}
 
 	// The main is a complete empty txn-1 image: two pages, identical
@@ -368,8 +373,9 @@ func TestInitializeLiveConvertsQuiescentMain(t *testing.T) {
 	if result.ResiduePossible || result.Cause != nil {
 		t.Fatalf("unexpected residue facts: residue=%v cause=%v", result.ResiduePossible, result.Cause)
 	}
-	if got := result.MainBasename.bytesValue(); string(got) != "db.iprdb" {
-		t.Fatalf("basename = %q, want db.iprdb", got)
+	wantBytes, _ := platformBasenameWant("db.iprdb")
+	if got := result.MainBasename.bytesValue(); string(got) != wantBytes {
+		t.Fatalf("basename = % q, want % q", got, wantBytes)
 	}
 
 	after, err := os.ReadFile(main)
@@ -472,4 +478,15 @@ func TestInitializeLiveRequiresExactCommittedLength(t *testing.T) {
 	f.Close()
 	_, err = InitializeLive(main, 2, neverCheck)
 	expectCode(t, err, format.CodeWrongState)
+}
+
+// platformBasenameWant returns the machine-stored platform bytes and
+// encoding tag for one ASCII name (Rust LocalBasename::from_path
+// parity): raw bytes/encoding 1 on POSIX, UTF-16LE units/encoding 2
+// on Windows.
+func platformBasenameWant(name string) (string, uint16) {
+	if runtime.GOOS == "windows" {
+		return string(Utf16LEBytes(name)), 2
+	}
+	return name, 1
 }
