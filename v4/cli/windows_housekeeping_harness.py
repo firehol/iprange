@@ -194,6 +194,17 @@ def _sanitize_path_value(value, checkout, checkout_norm):
     return value
 
 
+def _looks_like_path(value):
+    """True when an argv element is path-shaped: it carries a path
+    separator or a drive prefix, or is a dot spelling.  Bare tokens
+    (``8``, option values that are not paths) stay verbatim and are
+    never cwd-resolved, so the sanitized command record and the
+    self-test are invariant to the invocation directory."""
+    return ("/" in value or "\\" in value
+            or len(value) >= 2 and value[1] == ":"
+            or value in (".", ".."))
+
+
 def sanitized_command(argv=None):
     """Return argv with every path-valued element rewritten to a
     checkout-relative spelling when it lives under the checkout, so
@@ -229,8 +240,11 @@ def sanitized_command(argv=None):
             else:
                 out.append(label + sep + _sanitize_path_value(
                     value, checkout, checkout_norm))
-        else:
+        elif _looks_like_path(arg):
             out.append(_sanitize_path_value(arg, checkout, checkout_norm))
+        else:
+            # Bare non-path token: never cwd-resolved, kept verbatim.
+            out.append(arg)
     return out
 
 
