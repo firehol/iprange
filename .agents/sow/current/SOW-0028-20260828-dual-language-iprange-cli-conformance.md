@@ -364,6 +364,29 @@ approval.  After this round, the closure proceeds to the external
 whole-milestone control review at exactly this revision, with no
 further commits expected after its verdict.
 
+Wave-16 follow-up round-15 state (2026-09-07, final): the
+external control turn-8 review of `2355b193` returned NEEDS CHANGES
+with one in-scope P2 and two P3 findings, all verified and repaired:
+the command sanitizer protected only `report.command` while the
+binary paths, outcome path/identity fields, and `work_dir` still
+carried absolute spellings (a run staged under the operator's
+profile would leak its home directory into committed evidence);
+the closure record claimed committed simulation checks that did not
+exist; and the round-14 record misattributed different-drive
+mishandling to the pre-review revision.  The harness now refuses
+every path-valued input at or under the operator's profile and
+scans the complete serialized report before writing it, refusing
+any string value that is or starts with the profile path; the
+harness self-test gains committed P2-7 sanitizer/privacy checks;
+the SOW claims are corrected.  The Windows evidence is regenerated
+at the unchanged identities (Go `02e7daa7...` / Rust `c960a64f...`)
+with the final harness; the self-test passes on Linux and natively
+on the Windows host; housekeeping 2/2 PASS natively.  Product
+binaries byte-identical (SHASUMS 8/8); the milestone-4 closure
+record stands as qualified at this revision; milestone 5 remains
+unstarted per user decision 1A; the commit-subject history rewrite
+item remains pending user approval.
+
 Wave-16 follow-up round-14 state (2026-09-07, final): the
 external control turn-7 review of `d083504f` returned NEEDS CHANGES
 with two in-scope P2 findings, both verified and repaired: the
@@ -8998,3 +9021,64 @@ skills unchanged; specs unchanged (the repairs restore spec'd
 behavior); end-user docs updated (removal wording scoped); the
 commit-subject history rewrite item remains open pending user
 approval.
+
+#### Wave 16 follow-up round 15 (2026-09-07) — the external control turn-8 repair wave
+
+The external whole-milestone control review (turn 8 of the same
+session) of `2355b193` returned NEEDS CHANGES with one in-scope P2
+and two P3 findings (plus the two pre-existing engine findings
+re-listed out of scope).  The lead verified each before repair:
+
+1. **P2 — sanitizing the command argument did not protect the
+   complete report.**  `sanitized_command()` rewrote only
+   `report.command`; the binary paths in `file_evidence()` (module
+   and per-outcome identities), the outcome `path` fields, and
+   `report.work_dir` were copied unchanged from the invocation, so
+   a supported qualification run staged under the operator's
+   profile would still expose the home directory through those
+   fields even though the commit was clean at the documented
+   `C:/Temp` staging.  Repair, in `v4/cli/
+   windows_housekeeping_harness.py`: (a) a staging guard refuses
+   every path-valued input (each `--binaries` value, `--work-dir`,
+   `--json-report`, `--provenance`) that lives at or under the
+   operator's profile (normcase prefix match); (b) a structural
+   scan of the complete serialized report runs immediately before
+   the write and refuses any string value that is or starts with
+   the profile path, so a future field cannot silently re-introduce
+   a personal path; (c) the harness self-test gains committed P2-7
+   checks covering token-aware sanitization, normcase containment,
+   the cross-drive guard, the profile staging refusal, and the
+   report scan (passes on Linux and natively on the Windows host).
+2. **P3 — the closure record claimed committed simulation checks.**
+   The round-14 record said the sanitizer scenarios "are covered by
+   the committed simulation checks recorded above"; the simulations
+   were manual and nothing was committed.  The claim now names the
+   committed P2-7 self-tests added in this wave.
+3. **P3 — different-drive misattribution.**  The round-14 record
+   said the pre-review revision "mis-handled" a different-drive
+   element, although the cross-drive ValueError guard already
+   existed at the reviewed revision; corrected to state the guard
+   existed and the remaining issues were the token/path-value and
+   case-sensitivity handling.
+
+Out-of-scope engine findings re-listed by the review (verified
+real, pre-existing, forwarded for the user's scope decision):
+Go Windows name limits count UTF-8 bytes instead of UTF-16 units
+(`v4/go/internal/publication/name.go`, `v4/go/internal/live/
+directory_windows.go`); Rust `is_windows_device_name` compares
+device stems without length equality (`v4/rust/iprange-livedb/
+src/path.rs`).
+
+Re-qualification: the harness self-test passes on Linux and
+natively on the Windows host; the full Windows housekeeping 2/2
+PASSes natively with the final harness and the regenerated evidence
+is clean of every personal-path pattern (structural scan + grep);
+Go suite 23/23, Rust workspace, and the full battery carry
+unchanged (product binaries byte-identical, SHASUMS 8/8).  Same-
+failure search: no other qualification script writes absolute
+path-valued fields into committed evidence without the same guard
+(the other harnesses record only the repository-relative command
+spellings already audited).  Sensitive-data gate: clean.  Artifact
+gate: AGENTS.md unchanged; runtime project skills unchanged; specs
+unchanged; end-user docs unchanged; the commit-subject history
+rewrite item remains open pending user approval.
