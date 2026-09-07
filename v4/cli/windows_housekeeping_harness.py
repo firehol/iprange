@@ -1957,6 +1957,36 @@ def _self_test():
                 f"{form!r}")
         else:
             print("[P2-7] non-ASCII sibling spelling stays clean")
+    # Round-16.8 class: fullwidth and ideographic punctuation (CJK
+    # IME substitutes for ASCII shell delimiters) must delimit;
+    # fullwidth alphanumerics and the fullwidth hyphen/underscore/
+    # period continue a sibling segment name.
+    fullwidth_delim = [
+        "cd " + profile_abs + "\uff1b&& make",
+        "cd " + profile_abs + "\uff1f&& make",
+        "cd " + profile_abs + "\uff0c&& make",
+        "cd " + profile_abs + "\u3001&& make",
+    ]
+    for form in fullwidth_delim:
+        if personal_path_in_report({"build": form}) is None:
+            problems.append(
+                "P2-7 fullwidth delimiter profile spelling not "
+                f"detected: {form!r}")
+        else:
+            print("[P2-7] fullwidth delimiter profile spelling "
+                  "detected")
+    fullwidth_sibling = [
+        profile_abs + "\uff21/x",
+        profile_abs + "\uff0d/x",
+    ]
+    for form in fullwidth_sibling:
+        if personal_path_in_report({"build": form}) is not None:
+            problems.append(
+                "P2-7 fullwidth sibling spelling false-positives: "
+                f"{form!r}")
+        else:
+            print("[P2-7] fullwidth sibling spelling stays clean")
+
     if os.sep == "/":
         parent = os.path.dirname(profile_abs)
         diff_root = os.path.join(

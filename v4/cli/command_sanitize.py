@@ -335,11 +335,13 @@ def personal_path_in_report(report):
         Alphanumerics in any script, ``_``, ``.``, ``-``, and every
         other non-ASCII character continue a segment, so sibling
         names on localized hosts (``/home/alice-notes``,
-        ``/home/alice\u03bb/x``) stay clean.  Whitespace and
-        quote-shaped characters delimit a shell word; a quote-shaped
-        character counts as continuation only when the character
-        after it is a path separator, which makes it part of a
-        sibling segment name (``/home/alice\u2019/x``)."""
+        ``/home/alice\u03bb/x``) stay clean.  Whitespace,
+        quote-shaped characters, fullwidth punctuation (a CJK IME
+        substitute for ``;?&|,!()``), and the CJK sentence marks
+        ``。``/``、`` delimit a shell word; a quote-shaped character
+        counts as continuation only when the character after it is a
+        path separator, which makes it part of a sibling segment name
+        (``/home/alice\u2019/x``)."""
         if ch.isalnum() or ch in "_.-":
             return True
         if ch.isspace():
@@ -348,6 +350,15 @@ def personal_path_in_report(report):
             return False
         if ch in _QUOTE_CHARS:
             return nxt is not None and _is_path_sep(nxt)
+        # Fullwidth/ideographic punctuation produced by CJK IME input
+        # (；？＆｜，！ and 、。) delimits like its ASCII counterpart;
+        # fullwidth alphanumerics (ＡＢＣ) remain path continuation
+        # through the earlier isalnum test.
+        if 0xFF01 <= ord(ch) <= 0xFF5E:
+            ascii_ch = chr(ord(ch) - 0xFEE0)
+            return ascii_ch.isalnum() or ascii_ch in "_.-"
+        if ch in "\u3001\u3002":
+            return False
         return True
 
     def _occurrence(spelling):
@@ -377,7 +388,6 @@ def personal_path_in_report(report):
                 if left_ok and right_ok:
                     return True
                 idx = spelling.find(form, idx + 1)
-        return False
         return False
 
     def visit(value):

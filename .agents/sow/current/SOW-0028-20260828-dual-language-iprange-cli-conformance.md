@@ -9474,3 +9474,36 @@ Unicode-property classification above.  Sensitive-data gate: clean.
 Artifact gate: AGENTS.md, specs, and runtime project skills unchanged;
 the sanitizer docstrings and comments describe the property-based
 classification and the unified occurrence walk.
+
+#### Wave 16 follow-up round 16.8 (2026-09-08) — fullwidth punctuation delimiters and dead-code cleanup
+
+The round-16.7 role round PASSed at `8b86249f` with two P3 notes,
+both closed in this wave.  Repair, in `v4/cli/command_sanitize.py`
+and `v4/cli/windows_housekeeping_harness.py`:
+
+- P3 (fullwidth delimiter gap): fullwidth/ideographic punctuation
+  produced by CJK IME input (U+FF1B `；`, U+FF1F `？`, U+FF06 `＆`,
+  U+FF5C `｜`, U+FF0C `，`, U+FF01 `！`, and the CJK sentence marks
+  `、`/`。`) was treated as path continuation, so a profile followed
+  by one (`cd /home/alice；&& make`) escaped the scan — the same
+  IME copy-paste family as the round-16.7 NBSP/smart-quote repair.
+  The classifier now maps every fullwidth-ASCII character back to
+  its ASCII counterpart and treats it as a delimiter unless the
+  counterpart is an alphanumeric or one of ``_``, ``.``, ``-``
+  (fullwidth letters, digits, and the fullwidth hyphen/underscore/
+  period continue sibling segment names); the CJK sentence marks
+  `、` and `。` delimit explicitly.
+- P3 (cosmetic): a dead duplicate `return False` left behind by the
+  round-16.7 occurrence-walk replacement is removed.
+
+Validation: the extended boundary probe matrix (45 cases) passes —
+fullwidth delimiter forms trip, fullwidth alphanumeric/hyphen/
+underscore/period siblings stay clean, all prior ASCII, Unicode,
+drive-relative, and different-root classes unchanged;
+Windows-housekeeping `--self-test` PASSes on Linux with the four new
+fullwidth delimiter pins and two fullwidth sibling negatives (and
+natively on the Windows host after this wave); the structural scan
+over every committed evidence file returns clean; product binaries
+byte-identical (SHASUMS 8/8).  Sensitive-data gate: clean.  Artifact
+gate: AGENTS.md, specs, and runtime project skills unchanged; the
+sanitizer docstring describes the fullwidth mapping.
