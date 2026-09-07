@@ -122,14 +122,25 @@ func parsePrefix(path string) prefixInfo {
 		}
 		rest := path[4:]
 		if len(rest) >= 4 && rest[:4] == "UNC\\" {
-			// \\?\\UNC\\server\\share
+			// \\?\\UNC\\server\\share.  Rust returns
+			// VerbatimUNC(server, share) unconditionally (windows_prefix.rs
+			// parse_prefix): a share-terminal path has no body, so it has
+			// no file name or parent, and with_file_name appends after the
+			// share.  Reparsing as a plain UNC (the previous guard) turned
+			// the share into a file name and dropped it from derived
+			// paths.
 			server, after := nextComponent(rest[4:], true)
-			share, after2 := nextComponent(after, true)
-			if server == "" || share == "" || after2 == "" {
-				return parseUNC(path)
+			share, _ := nextComponent(after, true)
+			// Rust Prefix::len for VerbatimUNC counts the separator
+			// before the share only when the share is non-empty.
+			consumed := 4 + 4 + len(server)
+			if share != "" {
+				consumed += 1 + len(share)
 			}
-			_ = after2
-			return prefixInfo{length: 4 + 4 + len(server) + 1 + len(share), kind: prefixVerbatimUNC}
+			if consumed > len(path) {
+				consumed = len(path)
+			}
+			return prefixInfo{length: consumed, kind: prefixVerbatimUNC}
 		}
 		if d := parseDriveExact(rest); d != 0 {
 			return prefixInfo{length: 4 + 2, kind: prefixVerbatimDisk}
@@ -507,6 +518,17 @@ func WithFileName(path, name string) string {
 	// separator check uses the ordinary separator set, not the
 	// verbatim one).
 	if isSepByte(path[len(path)-1]) {
+		if hasPrefixes {
+			// The share-less verbatim-UNC spelling is the one
+			// exception: its prefix raw bytes end with a separator
+			// (\\?\\UNC\\), and Rust's verbatim push rebuild writes
+			// the prefix, a separator, and the name, so the separator
+			// doubles (probe-verified against native Windows
+			// std::path).
+			if p := parsePrefix(path); p.kind == prefixVerbatimUNC && p.length == 8 {
+				return path[:8] + `\` + name
+			}
+		}
 		return path + name
 	}
 	if hasPrefixes {

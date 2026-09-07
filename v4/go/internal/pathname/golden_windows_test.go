@@ -191,6 +191,18 @@ func TestRustGoldenWindows(t *testing.T) {
 		{shape: "\\\\?\\C:\\x", name: "x", nameOK: true, parent: "\\\\?\\C:\\", parentOK: true, wf: "\\\\?\\C:\\N.readers"},
 		{shape: "\\\\?\\C:\\x\\..", name: "", nameOK: false, parent: "\\\\?\\C:\\x", parentOK: true, wf: "\\\\?\\C:\\x\\..\\N.readers"},
 		{shape: "\\\\?\\UNC\\srv\\sh\\a", name: "a", nameOK: true, parent: "\\\\?\\UNC\\srv\\sh\\", parentOK: true, wf: "\\\\?\\UNC\\srv\\sh\\N.readers"},
+		{shape: "\\\\?\\UNC\\srv\\sh", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\srv\\sh\\N.readers"},
+		{shape: "\\\\?\\UNC\\srv\\sh\\", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\srv\\sh\\N.readers"},
+		{shape: "\\\\?\\UNC\\srv", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\srv\\N.readers"},
+		{shape: "\\\\?\\UNC\\srv\\", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\srv\\N.readers"},
+		{shape: "\\\\?\\UNC", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\N.readers"},
+		{shape: "\\\\?\\UNC\\", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\\\N.readers"},
+		{shape: "\\\\?\\UNC\\srv\\sh\\a\\..", name: "", nameOK: false, parent: "\\\\?\\UNC\\srv\\sh\\a", parentOK: true, wf: "\\\\?\\UNC\\srv\\sh\\a\\..\\N.readers"},
+		{shape: "\\\\?\\C:", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\C:\\N.readers"},
+		{shape: "\\\\?\\C", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\C\\N.readers"},
+		{shape: "\\\\server\\share", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\server\\share\\N.readers"},
+		{shape: "\\\\server\\share\\", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\server\\share\\N.readers"},
+		{shape: "\\\\server", name: "server", nameOK: true, parent: "\\", parentOK: true, wf: "\\N.readers"},
 		{shape: "\\\\.\\pipe\\x", name: "x", nameOK: true, parent: "\\\\.\\pipe\\", parentOK: true, wf: "\\\\.\\pipe\\N.readers"},
 	}
 	for _, row := range rows {
