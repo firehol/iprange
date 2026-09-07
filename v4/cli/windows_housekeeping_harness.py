@@ -1919,6 +1919,69 @@ def _self_test():
         problems.append("P2-7 sibling spelling false-positives")
     else:
         print("[P2-7] sibling spelling stays clean")
+    # Round-16.7 classes: non-ASCII whitespace and quote characters
+    # delimit shell words (copy-pasted build commands carry NBSP,
+    # thin space, line separators, ideographic space, and smart
+    # quotes), so the profile followed by one must trip the scan;
+    # a quote-shaped character followed by a path separator belongs
+    # to a sibling segment name on a localized host and stays clean.
+    # Different-root subpaths that merely contain the same segments
+    # also stay clean, and Windows drive-relative mid-string
+    # occurrences must trip like the absolute forms.
+    profile_abs = os.path.normpath(os.path.abspath(
+        os.path.expanduser("~")))
+    unicode_delim = [
+        "cd " + profile_abs + "\u00a0&& make",
+        "cd " + profile_abs + "\u2009&& make",
+        "cd " + profile_abs + "\u2028&& make",
+        "cd " + profile_abs + "\u2019 && make",
+        "HOME=" + profile_abs + "\u3000 make",
+    ]
+    for form in unicode_delim:
+        if personal_path_in_report({"build": form}) is None:
+            problems.append(
+                "P2-7 non-ASCII delimiter profile spelling not "
+                f"detected: {form!r}")
+        else:
+            print("[P2-7] non-ASCII delimiter profile spelling "
+                  "detected")
+    unicode_sibling = [
+        profile_abs + "\u03bb/x",
+        profile_abs + "\u2019/x",
+        profile_abs + "\u0301/x",
+    ]
+    for form in unicode_sibling:
+        if personal_path_in_report({"build": form}) is not None:
+            problems.append(
+                "P2-7 non-ASCII sibling spelling false-positives: "
+                f"{form!r}")
+        else:
+            print("[P2-7] non-ASCII sibling spelling stays clean")
+    if os.sep == "/":
+        parent = os.path.dirname(profile_abs)
+        diff_root = os.path.join(
+            "/var/backups", parent.lstrip(os.sep),
+            os.path.basename(profile_abs), "x")
+        if personal_path_in_report(
+                {"build": "cd " + diff_root + " && make"}) is not None:
+            problems.append("P2-7 different-root subpath false-positives")
+        else:
+            print("[P2-7] different-root subpath stays clean")
+    if os.name == "nt" and len(profile_abs) >= 3 and profile_abs[1] == ":":
+        drive_relative = profile_abs[:2] + profile_abs[3:]
+        for form in [
+                "cd " + drive_relative + " && make",
+                "HOME=" + drive_relative + " make",
+                "--cases=" + drive_relative + "\\corpus",
+        ]:
+            if personal_path_in_report({"build": form}) is None:
+                problems.append(
+                    "P2-7 drive-relative mid-string profile spelling "
+                    f"not detected: {form!r}")
+            else:
+                print("[P2-7] drive-relative mid-string profile "
+                      "spelling detected")
+
     if personal_path_in_report(
             {os.path.expanduser("~"): "value"}) is None:
         problems.append("P2-7 dictionary-key profile spelling not "

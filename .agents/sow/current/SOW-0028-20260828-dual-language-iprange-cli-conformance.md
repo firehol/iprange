@@ -9422,3 +9422,55 @@ committed evidence file returns clean; product binaries byte-identical
 gate: AGENTS.md, specs, and runtime project skills unchanged; the
 sanitizer module docstring and comments describe the darwin
 case-folding and Unicode boundary behavior.
+
+#### Wave 16 follow-up round 16.7 (2026-09-08) — Unicode delimiter classification, drive-relative mid-string scan, and containment left boundary
+
+The re-anchored role round at `5c4affed` returned three findings,
+all repaired in one wave.  Repair, in `v4/cli/command_sanitize.py`
+and `v4/cli/windows_housekeeping_harness.py`:
+
+- P2 (operations): the round-16.6 catch-all (`ord(ch) >= 128`) also
+  classified non-ASCII delimiters as path continuation, so a profile
+  followed by NBSP, thin space, U+2028, ideographic space, or a smart
+  quote (`cd /home/alice\u00a0&& make`) bypassed the mid-string scan
+  even though copy-pasted build commands routinely carry those
+  characters.  The character class is now property-based: whitespace
+  (any script) and a committed set of quote-shaped Unicode characters
+  delimit a shell word; a quote-shaped character followed by a path
+  separator still belongs to a sibling segment name
+  (`/home/alice\u2019/x` stays clean, `cd /home/alice\u2019 && make`
+  trips); every other non-ASCII character continues the segment.
+- P2 (security, carried): the mid-string walk searched only the
+  absolute profile form, so a Windows drive-relative mid-string
+  occurrence (`cd C:Users\alice && make`, `--cases=
+  C:Users\alice\corpus`) escaped.  The occurrence walk now searches
+  every profile comparison form (`_profile_comparisons`: absolute
+  plus, on Windows, the drive-relative form), matching the full-string
+  `_matches_profile` semantics.
+- P2 (security, carried): the separator-terminated containment
+  (`profile_term in spelling`) had no left-boundary requirement, so a
+  different-root subpath that merely contains the same segments
+  (`/var/backups/home/alice/x`, `cd /opt/home/alice/x && make`)
+  false-positived, contradicting the docstring and SOW records.  One
+  unified occurrence walk now requires a word boundary on both sides:
+  the left side accepts start-of-string or a non-continuation,
+  non-separator character; the right side accepts end-of-string, a
+  path separator, or a non-continuation character.  This subsumes the
+  three earlier shapes (separator containment, endswith, boundary)
+  with identical behavior on all previously pinned classes.
+
+Validation: the boundary probe matrix (39 cases across POSIX and a
+realistic nt-path shim: absolute/drive-relative/verbatim occurrences,
+shell and non-ASCII delimiters, ASCII/Unicode/quoting/emoji siblings,
+different-root negatives) passes; Windows-housekeeping `--self-test`
+PASSes on Linux with the five new non-ASCII delimiter pins, three
+non-ASCII sibling negatives, the POSIX different-root negative, and
+the nt drive-relative mid-string pins (exercised natively on the
+Windows host); the resource-harness `--self-test` PASSes; the
+structural scan over every committed evidence file returns clean;
+product binaries byte-identical (SHASUMS 8/8); the round-16.6 record's
+"every existing delimiter form still trips" claim is corrected to the
+Unicode-property classification above.  Sensitive-data gate: clean.
+Artifact gate: AGENTS.md, specs, and runtime project skills unchanged;
+the sanitizer docstrings and comments describe the property-based
+classification and the unified occurrence walk.

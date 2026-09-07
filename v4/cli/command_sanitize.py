@@ -132,6 +132,17 @@ def sanitized_command(argv=None):
     return out
 
 
+# Quote-shaped Unicode characters that delimit a shell word when
+# they follow the profile (smart quotes, guillemets, CJK brackets).
+# Followed by a path separator they instead belong to a sibling
+# segment name on a localized host (``/home/alice’/x``).
+_QUOTE_CHARS = frozenset(
+    "\u2018\u2019\u201a\u201b\u201c\u201d\u201e\u201f"
+    "\u00ab\u00bb\u2039\u203a"
+    "\u300c\u300d\u300e\u300f\u301d\u301e"
+    "\uff02\uff07")
+
+
 def _normcase(path):
     """Case folding for path comparisons.
 
@@ -313,33 +324,60 @@ def personal_path_in_report(report):
         return None
     hit = []
 
-    profile_abs = profile
-    profile_term = profile_abs + os.sep
-    def _is_path_cont(ch):
-        """True for characters that can continue a path segment:
-        alphanumerics in any script, ``_``, ``.``, ``-``, and every
-        non-ASCII character (so a non-ASCII sibling or quote-shaped
-        character after the profile cannot false-positive the scan
-        on localized hosts)."""
-        return ch.isalnum() or ch in "_.-" or ord(ch) >= 128
+    profile_forms = _profile_comparisons(profile)
 
     def _is_path_sep(ch):
         return ch in ("/", chr(92))
 
-    def _boundary_occurrence(spelling):
-        """True when the profile appears in spelling bounded on both
-        sides by start/end or non-path characters (whitespace,
-        quotes, shell operators) -- ``cd /home/alice && make``."""
-        idx = spelling.find(profile_abs)
-        while idx != -1:
-            before_ok = idx == 0 or not _is_path_cont(spelling[idx - 1])
-            after = idx + len(profile_abs)
-            after_ok = (after == len(spelling)
-                        or (not _is_path_cont(spelling[after])
-                            and not _is_path_sep(spelling[after])))
-            if before_ok and after_ok:
-                return True
-            idx = spelling.find(profile_abs, idx + 1)
+    def _is_path_cont(ch, nxt=None):
+        """True when ch continues a path segment after the profile.
+
+        Alphanumerics in any script, ``_``, ``.``, ``-``, and every
+        other non-ASCII character continue a segment, so sibling
+        names on localized hosts (``/home/alice-notes``,
+        ``/home/alice\u03bb/x``) stay clean.  Whitespace and
+        quote-shaped characters delimit a shell word; a quote-shaped
+        character counts as continuation only when the character
+        after it is a path separator, which makes it part of a
+        sibling segment name (``/home/alice\u2019/x``)."""
+        if ch.isalnum() or ch in "_.-":
+            return True
+        if ch.isspace():
+            return False
+        if ord(ch) < 128:
+            return False
+        if ch in _QUOTE_CHARS:
+            return nxt is not None and _is_path_sep(nxt)
+        return True
+
+    def _occurrence(spelling):
+        """True when any profile comparison form appears in spelling
+        with a word boundary on the left and a segment end on the
+        right.
+
+        The left side accepts start-of-string or a character that is
+        neither a path continuation nor a path separator, so a
+        different-root subpath that merely contains the same segments
+        (``/var/backups/home/alice/x``) stays clean.  The right side
+        accepts end-of-string, a path separator
+        (``--cases=/home/alice/x``), or a non-continuation character
+        (``cd /home/alice && make``, ``HOME=C:Users\\alice
+        make``); sibling names (``/home/alice-notes``) stay clean."""
+        for form in profile_forms:
+            idx = spelling.find(form)
+            while idx != -1:
+                left_ok = idx == 0 or (
+                    not _is_path_cont(spelling[idx - 1])
+                    and not _is_path_sep(spelling[idx - 1]))
+                after = idx + len(form)
+                nxt = (spelling[after + 1]
+                       if after + 1 < len(spelling) else None)
+                right_ok = (after == len(spelling)
+                            or not _is_path_cont(spelling[after], nxt))
+                if left_ok and right_ok:
+                    return True
+                idx = spelling.find(form, idx + 1)
+        return False
         return False
 
     def visit(value):
@@ -349,24 +387,18 @@ def personal_path_in_report(report):
                     hit.append(value)
                     return
             # Mid-string occurrences: a build command or an option
-            # value that embeds the profile path (``--cases=
-            # /home/alice/x``, ``cd /home/alice && make``) must also
-            # trip the scan.  Three shapes are tested: the
-            # separator-terminated containment (``/home/alice/x``),
-            # the profile at the end of the string, and a
-            # boundary-delimited occurrence (profile followed by a
-            # non-path, non-separator character such as whitespace,
-            # a quote, or a shell operator).  Continuation
-            # characters (alnum, ``_``, ``-``, ``.``) and path
-            # separators are excluded from the boundary, so sibling
-            # names (``/home/alice-notes``) and different-root
+            # value that embeds any profile comparison form (``--cases=
+            # /home/alice/x``, ``cd /home/alice && make``, Windows
+            # ``cd C:Users\alice && make``) must also trip the
+            # scan.  One occurrence walk covers the separator-
+            # terminated containment, the profile at the end of the
+            # string, and every boundary-delimited form; the left
+            # boundary excludes path separators so different-root
             # subpaths that merely contain the same segments cannot
-            # false-positive.
+            # false-positive, and the right boundary excludes
+            # continuation characters so sibling names stay clean.
             for spelling in _privacy_spellings(value):
-                if profile_term in spelling or spelling.endswith(profile_abs):
-                    hit.append(value)
-                    return
-                if _boundary_occurrence(spelling):
+                if _occurrence(spelling):
                     hit.append(value)
                     return
         elif isinstance(value, dict):
