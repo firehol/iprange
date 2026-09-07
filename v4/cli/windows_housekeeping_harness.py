@@ -268,7 +268,14 @@ def _personal_path_in_report(report):
         if isinstance(value, str):
             norm = os.path.normcase(
                 value.replace("/", os.sep).replace("\\", os.sep))
-            if norm == profile or norm.startswith(profile + os.sep):
+            # Also test the `..`-resolved spelling so a path that
+            # resolves into the profile through parent segments is
+            # caught even when the raw spelling hides it.
+            resolved = os.path.normcase(os.path.normpath(norm)) \
+                if norm else norm
+            if (norm == profile or norm.startswith(profile + os.sep)
+                    or resolved == profile
+                    or resolved.startswith(profile + os.sep)):
                 hit.append(value)
         elif isinstance(value, dict):
             for item in value.values():
@@ -1882,6 +1889,19 @@ def _self_test():
         problems.append("P2-7 leaky report not detected")
     else:
         print("[P2-7] leaky report detected")
+    # A spelling whose `..` segments hide the profile must still be
+    # caught through its resolved form.
+    # Raw spelling whose `..` collapses into the profile: the raw
+    # form does not start with the profile path, its resolved form
+    # does.  Construction: <parent>/x/../<anchor>/scratch/x.
+    parent = os.path.dirname(os.path.normpath(os.path.expanduser("~")))
+    anchor = os.path.basename(os.path.normpath(os.path.expanduser("~")))
+    dotdot_leak = os.path.join(parent, "x", "..", anchor, "scratch", "x")
+    dotdot_report = dict(clean_report, work_dir=dotdot_leak)
+    if _personal_path_in_report(dotdot_report) is None:
+        problems.append("P2-7 dotdot-resolved leak not detected")
+    else:
+        print("[P2-7] dotdot-resolved leak detected")
 
     for problem in problems:
         print(f"FAIL: {problem}")
