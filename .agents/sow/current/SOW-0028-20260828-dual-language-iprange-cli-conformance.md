@@ -9553,3 +9553,43 @@ product binaries byte-identical (SHASUMS 8/8).  Sensitive-data
 gate: clean.  Artifact gate: AGENTS.md, specs, and runtime project
 skills unchanged; the sanitizer docstrings describe the
 category-based classification.
+
+#### Wave 16 follow-up round 16.10 (2026-09-08) — committed darwin case-fold pin and round-16.9 disposition correction
+
+The round-16.9 role round PASSed at `35e445be` for six roles
+(operations, parity, portability, security, performance, glm), but
+the tester role returned one carried P2: the darwin case-folding
+branch in `_normcase` (round-16.6) was pinned by no committed test.
+The fold is dead code on every CI-reachable host (Linux/Windows),
+so deleting it would silently reopen the macOS case-varied bypass
+(APFS resolves the spelling, normcase comparisons miss it) with all
+gates green.  Repair, in `v4/cli/windows_housekeeping_harness.py`:
+
+- a P2-7 pin now patches `sys.platform` to ``darwin``, feeds a
+  case-varied profile spelling, and requires the privacy scan to
+  trip; the negative control (fold removed) makes the pin fail, so
+  a regression cannot land green;
+- the pin is vacuous on Windows (ntpath.normcase already folds) and
+  exercises the real fold on macOS, but its detecting power is on
+  the Linux CI hosts, exactly where the branch is otherwise dead.
+
+Correction to round-16.9 wording: that record's "the tester/
+performance verdicts at `8b86249f` were superseded before delivery"
+mis-states the tester result — the tester role DID deliver its
+`8b86249f` FAIL (recorded at `.local/tester/report.md`: the darwin
+fold had no committed detecting test), and this wave dispositions
+that exact finding.  The performance verdict at `8b86249f` was
+interrupted mid-run by the following wave; its verdict at the
+round-16.9 HEAD is PASS.
+
+Validation: Windows-housekeeping `--self-test` PASSes on Linux with
+the new darwin pin (45 pins total in the privacy block), the
+fold-removal negative control fails the pin as required, the
+structural scan over every committed evidence file returns clean,
+and the native Windows self-test PASSes from the checkout and
+scratch CWDs (the darwin pin is vacuous there by construction, and
+the nt drive-relative pins stay live).  Product binaries
+byte-identical (SHASUMS 8/8).  Sensitive-data gate: clean.
+Artifact gate: AGENTS.md, specs, and runtime project skills
+unchanged; the harness comment documents the pin's detecting
+surface.

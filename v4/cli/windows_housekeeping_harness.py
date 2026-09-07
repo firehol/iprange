@@ -2022,6 +2022,28 @@ def _self_test():
                   "clean")
 
 
+    # Darwin case-folding pin (round-16.6 finding): the macOS default
+    # APFS volume is case-insensitive, so ``_normcase`` folds case on
+    # darwin; without the fold a case-varied profile spelling
+    # resolves to the real profile while every comparison misses it.
+    # The fold is dead code on every other CI-reachable host, so the
+    # pin patches ``sys.platform`` and requires the case-varied
+    # spelling to trip; removing the fold must fail this pin.
+    saved_platform = sys.platform
+    try:
+        sys.platform = "darwin"
+        case_varied = os.path.join(
+            os.path.expanduser("~").upper(), "scratch", "x")
+        if personal_path_in_report({"work_dir": case_varied}) is None:
+            problems.append(
+                "P2-7 darwin case fold not applied (case-varied "
+                "profile spelling clean under darwin)")
+        else:
+            print("[P2-7] darwin case fold detected the case-varied "
+                  "spelling")
+    finally:
+        sys.platform = saved_platform
+
     if os.sep == "/":
         parent = os.path.dirname(profile_abs)
         diff_root = os.path.join(
