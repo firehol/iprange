@@ -1,5 +1,55 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
+The current evidence is regenerated at product revision `a69eb53d`
+(the round-6 forward-slash-after-verbatim-prefix repair).  The
+re-anchored whole-milestone review found the Windows pathname port
+checked the physical root with the verbatim-aware separator set: a
+hand-built long-path spelling with a forward slash directly after a
+verbatim prefix (`\\?\\C:/x`) was parsed with the slash inside the
+first body component, so Go produced file names with a leading slash,
+accepted `\\?\\C:/` with a name, and kept the slash in
+`with_file_name` results, while Rust `has_physical_root` uses the
+static separator set (body components still split on the verbatim
+backslash only).  The repair at `a69eb53d` computes the physical root
+with the static separator, consumes the root byte in `FileName` after
+a verbatim prefix, keeps a trailing verbatim `"."` as a CurDir
+component (no file name, like Rust), and mirrors the `PathBuf::_push`
+verbatim rebuild in `WithFileName` (the root byte is re-emitted as the
+main separator and the prefix raw bytes keep their parsed spelling),
+replacing the share-less `\\?\\UNC\\` special case; the Windows golden
+corpus grew to 196 rows with forward-slash-after-prefix and
+trailing-dot verbatim shapes pinned against a native Windows rustc
+1.97.1 probe (the previous 183-row corpus had no shape with a
+separator after a verbatim prefix).
+
+The Go suite is green on the qualified go1.26.4 and on the host
+go1.27.0 (23/23 packages on each), and natively on the Windows host
+(go1.26.5, 23/23 packages including the extended golden); the Rust
+workspace suites are green on Linux (rustc 1.97.1) and natively on
+Windows (without source change).  The full battery PASSes at the
+final staged identities: matrices 38/38 single and 14 PASS + 24
+legitimate skips per mixed direction; crash 16/16 both directions;
+the negative control 0/16 (8 real-producer scenarios failing at the
+substituted-consumer stage and 8 substituted-producer scenarios
+failing during setup); resource proofs 8/8; kind-coverage gate PASS
+with all 46 self-test controls; golden exchanges 55; sensitivity gate
+14.  Windows housekeeping re-qualified at `a69eb53d` on the
+authorized Windows validation host: 2/2 PASS with native Windows
+Python 3.14.6 (provenance: clean tree, go1.26.5 windows/amd64,
+rustc 1.97.1).  The `@`-expansion, raw-path, and verbatim-UNC
+parity probes remain green on both products.
+
+Linux reports at `a69eb53d` record the product identities
+`07c4e314…` (rust, unchanged since the round-4 qualified build) and
+`1ed287a8…` (go, rebuilt with `-buildvcs=false`), workers
+`77b6d086…` (rust) / `3bb3180c…` (go), fixture `df3623a6…` (all
+staged in `.local/shared/binaries/SHASUMS.txt` with sha256sum -c
+OK).  The Windows housekeeping report records the Windows-host
+products `c960a64f…` (rust) and `5018f974…` (go); the Windows Go
+worker is `a91e548b…`.
+
+---
+
 The current evidence is regenerated at product revision `2c5d668b`
 (the round-6 @-directory expansion repair).  The re-anchored
 whole-milestone review found the last remaining lexical

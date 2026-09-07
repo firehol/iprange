@@ -247,6 +247,32 @@ at this revision; milestone 5 remains unstarted per user decision
 1A, and the round-4 P3 commit-subject history rewrite remains
 pending user approval.
 
+Wave-16 follow-up round-5 state (2026-09-07): the re-anchored
+whole-milestone review found the Windows pathname port checked the
+physical root with the verbatim-aware separator set: a hand-built
+long-path spelling with a forward slash directly after a verbatim
+prefix (`\\?\\C:/x`) parsed the slash as the start of the first body
+component, so Go produced file names with a leading slash, accepted
+`\\?\\C:/` with a name, and kept the slash in sidecar derivations,
+while Rust `has_physical_root` uses the static separator set (body
+components still split on the verbatim backslash only).  The repair
+at `a69eb53d` computes the physical root with the static separator,
+consumes the root byte in `FileName` after a verbatim prefix, keeps a
+trailing verbatim `"."` as a CurDir component (no file name), and
+mirrors the Rust verbatim push rebuild in `WithFileName` (the root
+byte is re-emitted as the main separator, the prefix raw bytes keep
+their parsed spelling, and the share-less `\\?\\UNC\\` special case
+is subsumed); the Windows golden corpus grew from 183 to 196 rows
+with forward-slash-after-prefix, `\\?\\foo`, and trailing-dot verbatim
+shapes pinned against a native rustc 1.97.1 probe.  Go suite 23/23
+on go1.26.4, host go1.27.0, and native Windows (go1.26.5); Linux
+identities at `a69eb53d` are Go `1ed287a8…` / worker `3bb3180c…` and
+Rust `07c4e314…` / worker `77b6d086…` / fixture `df3623a6…`, Windows
+identities Go `5018f974…` (worker `a91e548b…`) and Rust `c960a64f…`;
+every battery gate is green at the revision.  The milestone-4
+closure record stands as qualified at this revision; milestone 5
+remains unstarted per user decision 1A, and the round-4 P3
+commit-subject history rewrite remains pending user approval.
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -8066,6 +8092,78 @@ Python 3.14.6, Go `3b967437…`, Rust `c960a64f…`, provenance
 recorded with tree_clean).  Final Linux identities at `2c5d668b`
 (staged in `.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK):
 Go product `78cbd4c3…`, Go worker `114a7018…` (rebuilt with
+`-buildvcs=false`), Rust product `07c4e314…`, Rust worker
+`77b6d086…`, fixture `df3623a6…` (Rust binaries carry from the
+round-4 qualified build at `ed29e437`).  `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated at
+these identities in the records commit so the record and the
+identities cannot drift.  Sensitive-data gate: no secrets,
+credentials, community/customer names, personal data, or private
+endpoints in this wave.  Artifact gate: AGENTS.md unchanged (no
+workflow change); runtime project skills unchanged (no new how-to
+knowledge); the v4 JSON-RPC spec unchanged (no contract change —
+the repair restores the already-specified Rust reference
+behavior); end-user docs unchanged (no CLI surface change).  The
+round-4 P3 item (commit subjects `9374917e`/`e3d7bf61` naming the
+external review model) remains open pending user approval for the
+history rewrite.
+
+#### Wave 16 follow-up round 5 (2026-09-07) — the forward-slash-after-verbatim-prefix repair at `a69eb53d`
+
+The re-anchored whole-milestone review found the Windows pathname
+port checked the physical root with the verbatim-aware separator set
+(`v4/go/internal/pathname/pathname.go` `NewComponents`), while Rust
+`has_physical_root` (pinned `library/std/src/path.rs` at rustc
+1.97.1) uses the static `is_sep_byte` and only the body components
+split on the verbatim backslash.  A caller addressing the database
+with a hand-built long-path spelling such as `\\?\\C:/x` therefore got
+Go file names with a leading slash (`"/x"`), had `\\?\\C:/` accepted
+as a path with a name (Rust rejects), and received `with_file_name`
+results that kept the slash (wine and native probes reproduced the
+divergence; the 183-row golden corpus had no shape with a separator
+after a verbatim prefix, so no committed gate detected the class).
+
+Repair at `a69eb53d` (`v4/go/internal/pathname/pathname.go` plus the
+Windows golden corpus):
+- `NewComponents` computes `hasRoot` with the static separator;
+  the verbatim body split is unchanged, so `\\?\\C:/x/y` stays a
+  single `x/y` component exactly like Rust.
+- `FileName` consumes the physical-root byte after a verbatim
+  prefix and keeps a trailing verbatim `"."` as a CurDir component
+  (no file name), matching `file_name()` on `\\?\\C:\x\.` which the
+  simplified split previously normalized away.
+- `WithFileName` now mirrors the Rust `PathBuf::_push` verbatim
+  rebuild: the base components plus the appended name are re-emitted
+  with the main separator, the root byte is re-emitted as `"\\"`,
+  and the prefix raw bytes keep their parsed spelling (they may
+  contain `/` inside a verbatim share or name); the share-less
+  `\\?\\UNC\\` special case is subsumed by the rebuild.
+- The corpus grew from 183 to 196 rows with the
+  forward-slash-after-prefix shapes (`\\?\\C:/x`, `\\?\\C:/x/y`,
+  `\\?\\C:/`, `\\?\\C:/x\\..`), the `\\?\\foo/bar` and `\\?\\C:x`
+  verbatim-prefix spellings, the verbatim-UNC forward-slash shapes,
+  and the trailing-dot verbatim shapes, all pinned against a native
+  Windows rustc 1.97.1 probe run on the authorized Windows
+  validation host (the probe source and raw outputs are preserved in
+  the review sandbox).
+
+Re-qualification at the final revision (`a69eb53d`, product source;
+records committed together with this evidence): Go suite 23/23
+packages PASS on Linux with the qualified go1.26.4 and with the
+host go1.27.0, and natively on the Windows host (go1.26.5, 23/23
+packages including the 196-row golden); Rust workspace suites PASS
+on Linux (rustc 1.97.1, no Rust source change) and natively on
+Windows.  Full battery PASS at the final staged identities
+(matrices 38/38 single and 14 PASS + 24 legitimate skips per mixed
+direction; crash 16/16 both directions; the negative control 0/16
+with 8 consumer-stage and 8 setup failures; resource proofs 8/8;
+kind-coverage gate PASS with all 46 self-test controls; golden
+exchanges 55; sensitivity gate 14).  Windows housekeeping 2/2 PASS
+at `a69eb53d` on the authorized Windows validation host (native
+Python 3.14.6, Go `5018f974…`, Rust `c960a64f…`, provenance
+recorded with tree_clean).  Final Linux identities at `a69eb53d`
+(staged in `.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK):
+Go product `1ed287a8…`, Go worker `3bb3180c…` (rebuilt with
 `-buildvcs=false`), Rust product `07c4e314…`, Rust worker
 `77b6d086…`, fixture `df3623a6…` (Rust binaries carry from the
 round-4 qualified build at `ed29e437`).  `v4/cli/evidence/*`,
