@@ -37,7 +37,7 @@
       "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
       "destination_state": null,
       "failures": [
-        "reservation marker was not observed; worker outcome={'error': 'service closed stdout; stderr='}"
+        "reservation marker was not observed; worker outcome={'error': 'service closed stdin: '}"
       ],
       "fixture_created_main": false,
       "inspect_outcome": null,

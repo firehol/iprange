@@ -149,7 +149,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e"
+      "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676"
     },
     "rust": {
       "available": true,
@@ -300,7 +300,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec"
+      "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b"
     }
   },
   "cases": [
@@ -354,7 +354,7 @@
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 1
         },
         "producer": {
@@ -364,7 +364,7 @@
             "iprange.v1.database.create",
             "iprange.v1.database.metadata.replace"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 2
         }
       },
@@ -429,7 +429,7 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 5
         },
         "producer": {
@@ -441,7 +441,7 @@
             "iprange.v1.direct.replace",
             "iprange.v1.history.project"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 6
         }
       },
@@ -502,7 +502,7 @@
           "operations": [
             "iprange.v1.join.direct"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 1
         },
         "producer": {
@@ -512,7 +512,7 @@
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 2
         }
       },
@@ -563,7 +563,7 @@
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 1
         },
         "producer": {
@@ -577,7 +577,7 @@
             "iprange.v1.database.create.resolve",
             "iprange.v1.database.reset_live"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 6
         }
       },
@@ -631,7 +631,7 @@
           "operations": [
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 1
         },
         "producer": {
@@ -642,7 +642,7 @@
             "iprange.v1.database.create",
             "iprange.v1.database.reclaim"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 3
         }
       },
@@ -688,7 +688,7 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 7
         },
         "producer": {
@@ -698,7 +698,7 @@
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 2
         }
       },
@@ -740,7 +740,7 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 5
         },
         "producer": {
@@ -757,7 +757,7 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 13
         }
       },
@@ -809,7 +809,7 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 7
         },
         "producer": {
@@ -819,7 +819,7 @@
             "iprange.v1.database.create",
             "iprange.v1.feeds.create"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 2
         }
       },
@@ -860,7 +860,7 @@
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 4
         },
         "producer": {
@@ -870,7 +870,7 @@
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 2
         }
       },
@@ -917,7 +917,7 @@
           "operations": [
             "iprange.v1.publication.inspect"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 1
         },
         "producer": {
@@ -928,7 +928,7 @@
             "iprange.v1.publication.resolve",
             "iprange.v1.publication.residue.remove"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 3
         }
       },
@@ -1014,7 +1014,7 @@
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 5
         },
         "producer": {
@@ -1025,7 +1025,7 @@
             "iprange.v1.recover",
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 3
         }
       },
@@ -1090,7 +1090,7 @@
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 3
         },
         "producer": {
@@ -1100,7 +1100,7 @@
             "iprange.v1.snapshot",
             "iprange.v1.publication.resolve"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 2
         }
       },
@@ -1136,7 +1136,7 @@
             "iprange.v1.validate",
             "iprange.v1.recovery.inspect"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 2
         },
         "producer": {
@@ -1145,7 +1145,7 @@
           "operations": [
             "iprange.v1.recover"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 1
         }
       },
@@ -1181,7 +1181,7 @@
             "iprange.v1.recovery.inspect",
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "15a6ce76afbb3342904400448003edac74278b005d73d87b8e8061bc92153eec",
+          "sha256": "73cb06266763950c26bc4c30c68877c3bb561c7ec830cd198f2e027bbb54898b",
           "steps": 33
         },
         "producer": {
@@ -1202,7 +1202,7 @@
             "iprange.v1.snapshot",
             "iprange.v1.database.reclaim"
           ],
-          "sha256": "a61489942b0d32ac7d71a23839f475710bebd74937a658f7a05315edbaecad3e",
+          "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676",
           "steps": 20
         }
       },

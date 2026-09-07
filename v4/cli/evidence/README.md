@@ -29,12 +29,15 @@ wave-15 section) plus the native Windows verification wave:
   authorized Windows validation host: 2/2 PASS with the native
   Windows Python 3.14.6.
 
-Linux reports record the product identities `15a6ce76…` (rust) and
-`a6148994…` (go), workers `9fd36146…` / `8fa44afa…`, fixture
+Linux reports record the product identities `73cb0626…` (rust) and
+`9e78de86…` (go), workers `9fd36146…` / `6012ad6e…`, fixture
 `6c2c56b9…` (staged in `.local/shared/binaries/SHASUMS.txt`);
 the Windows housekeeping report records the Windows-host products
-`dd2d0668…` (rust) and `eec23536…` (go) at the same source
-revision (detailed below).
+`9f6107ae…` (rust) and `857b84af…` (go) at the same source
+revision.  These identities include the role-round delta repairs:
+the encoding-aware artifact-basename renderer, the Go
+worker-availability fallback, and the pinned resource-gate
+controls (all recorded in SOW-0028's wave-15 section).
 
 The fourteenth-wave (external whole-milestone control review
 FAIL and repair) evidence is regenerated at the wave-14 revision

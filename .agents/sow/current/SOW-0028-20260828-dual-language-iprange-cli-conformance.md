@@ -310,15 +310,22 @@ per-platform housekeeping state), reported the validation worker as
 unavailable instead of a raw file-not-found I/O error when no
 matching worker executable exists, and re-qualified Windows
 housekeeping 2/2 at the final wave-15 revision `e21784ce` (Go
-`eec23536…`, Rust `dd2d0668…`).  Final Linux identities at
-`e21784ce`: Go `a6148994…`, Rust `15a6ce76…`, workers
-`8fa44afa…`/`9fd36146…`, fixture `6c2c56b9…`; every battery gate is
-green at these identities (matrices 38/38 single and 14+24 mixed,
-crash 16/16 both directions with the /bin/false negative control
-failing as designed, resource 8/8, golden 55, sensitivity 14, kind
-gate PASS, all harness self-tests).  The closure record and the
-role-round delta verdicts at `e21784ce` are recorded in the
-"Wave 15" section below.
+`eec23536…`, Rust `dd2d0668…`).  The wave-15 role-round delta
+repaired four verified findings (encoding-aware artifact-basename
+rendering, Go worker-availability fallback parity, the pinned
+resource-gate self-test controls, and the refreshed
+resource-record identities).  Final Linux identities at the
+role-delta revision `13a1982e`: Go `9e78de86…`, Rust `73cb0626…`,
+workers `6012ad6e…`/`9fd36146…`, fixture `6c2c56b9…`, Windows Go
+`857b84af…` / Rust `9f6107ae…`; every battery gate is green at
+these identities (matrices 38/38 single and 14+24 mixed, crash
+16/16 both directions with the /bin/false negative control failing
+as designed, resource 8/8, golden 55, sensitivity 14, kind gate
+PASS, all harness self-tests including the new CRLF and
+id-correlation controls), and the Windows housekeeping harness
+passes 2/2 at the same revision.  The closure record and the
+role-round delta verdicts are recorded in the "Wave 15" section
+below.
 
 
 ## Requirements
@@ -6932,3 +6939,56 @@ diagnostic is an error-message improvement).  Evidence:
 skills (project-final-review, project-v4-rust): unchanged.  SOW
 lifecycle: this section records the wave; the role-round delta
 verdicts at `e21784ce` are recorded below.
+
+#### Role-round delta (wave 15) at `ac7291a1` — verified findings and repairs at `13a1982e`
+
+The wave-15 evidence revision `ac7291a1` was submitted to the seven
+standing role reviewers; tester, performance, and portability
+returned FAIL with four verified findings (the other four roles were
+interrupted with the verified list and reported no new distinct
+issues):
+
+1. **P2 — the Rust artifact-basename renderer was encoding-unaware
+   (tester, performance, portability independently).**
+   `lifecycle.rs basename()` mapped every stored byte to U+00xx for
+   all encodings, while the encoding-1 decoders
+   (`decode_artifact_basename` / `decodeArtifactBasename`) treat the
+   wire as the text's UTF-8 bytes; for stored bytes above 0x7f the
+   render/decoder pair was not an inverse (each U+00xx character
+   re-encoded as two UTF-8 bytes), and Go rendered the same
+   encoding-1 fact as raw text, so the products' wire output
+   diverged for this class.  Repair: `basename(bytes, encoding)`
+   now renders encoding 1 as the raw UTF-8 text and encoding 2 as
+   the per-byte projection at all four call sites (housekeeping
+   rows, maintenance/algebra/publish private-output attempts); new
+   round-trip tests compose render and decoder for non-ASCII names
+   under both encodings, and the POSIX test pins raw-text rendering.
+2. **P2 — the Go validation-worker spawn still surfaced a raw
+   file-not-found I/O error when no worker candidate exists
+   (portability), while Rust reports the worker unavailable.**
+   Repair: `worker/client.go SpawnWorker` skips on-disk candidates
+   that do not exist and returns the OS-unsupported worker-unavailable
+   class when none remains, matching the Rust fallback and the
+   `worker_availability` probe; new regression test
+   `TestSpawnWorkerUnavailableWhenAllCandidatesMissing`.
+3. **P2 — the resource harness CRLF rejection and exact-type
+   response-id correlation had no committed detecting control
+   (tester).**  Removing either guard still passed `--self-test`.
+   Repair: two new self-test controls — a CRLF-terminated response
+   stub must fail `read_responses`, and a numeric response id must
+   not satisfy the string id lookup of the proof classification;
+   both print result lines, and the drain-eof control now prints
+   too.
+4. **P2 — `resource-record.md` still carried the wave-14
+   identities (portability).**  Repair: refreshed to the wave-15
+   identities (Go `9e78de86…`, Rust `73cb0626…` at `13a1982e`).
+
+Re-qualification at `13a1982e`: Rust workspace and Go suites PASS;
+full battery PASS at the new staged identities (matrices 38/38
+single and 14+24 mixed; crash 16/16 both directions; resource 8/8;
+kind gate PASS on the regenerated evidence; golden 55; sensitivity
+14; harness self-tests PASS including the two new controls);
+Windows housekeeping 2/2 on the authorized Windows validation host
+(Go `857b84af…`, Rust `9f6107ae…`, native Python 3.14.6, clean
+tree at `13a1982e`).  Evidence and identity READMEs are regenerated
+at these identities.
