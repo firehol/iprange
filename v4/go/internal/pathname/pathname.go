@@ -121,7 +121,22 @@ func parsePrefix(path string) prefixInfo {
 			}
 		}
 		rest := path[4:]
-		if len(rest) >= 4 && rest[:4] == "UNC\\" {
+		// Rust PrefixParser::get_prefix normalizes the first eight
+		// bytes ( "/" -> "\\") before any strip_prefix, so a
+		// forward slash in the "UNC\\" header matches too
+		// ("\\?\\UNC/server/share" is still VerbatimUNC); the raw
+		// "/" rejection above covers only the first four bytes.
+		header := rest
+		if len(header) > 4 {
+			header = header[:4]
+		}
+		headerNorm := strings.Map(func(r rune) rune {
+			if r == '/' {
+				return '\\'
+			}
+			return r
+		}, header)
+		if len(rest) >= 4 && headerNorm == "UNC\\" {
 			// \\?\\UNC\\server\\share.  Rust returns
 			// VerbatimUNC(server, share) unconditionally (windows_prefix.rs
 			// parse_prefix): a share-terminal path has no body, so it has
@@ -167,11 +182,12 @@ func parseUNC(path string) prefixInfo {
 	if share == "" {
 		return prefixInfo{}
 	}
+	// Rust Prefix::len(UNC) = 2 + server + 1 + share: the share's
+	// trailing separator (when one follows) is not part of the prefix;
+	// it stays in the body where has_physical_root consumes it as the
+	// root byte. Absorbing it here kept doubled separators in derived
+	// parent and sidecar paths for doubled-separator share spellings.
 	consumed := 2 + len(server) + 1 + len(share)
-	// The share consumed its trailing separator only when one existed.
-	if len(after) > len(share) {
-		consumed++
-	}
 	if consumed > len(path) {
 		consumed = len(path)
 	}
@@ -525,30 +541,45 @@ func FileName(path string) (string, bool) {
 			}
 		}
 	}
-	parts := strings.FieldsFunc(body, func(r rune) bool {
-		return strings.ContainsRune(seps, r)
-	})
-	if verbatim {
-		// Inside a verbatim prefix "." stays a CurDir component (std
-		// parse_single_component), so a trailing "." stops the back
-		// walk and the path has no file name; it is not normalized
-		// away like in ordinary paths.
-		if len(parts) > 0 && parts[len(parts)-1] == "." {
+	// Backward component walk with no allocation (the SDK promises
+	// allocation-free basename construction): scan from the end over
+	// the body, skipping separator runs and (outside verbatim paths)
+	// trailing "." components, and return the last remaining
+	// component as a substring.  Equivalent to the FieldsFunc split
+	// plus the Rust back walk: a trailing "." inside a verbatim
+	// prefix is a CurDir component (no name), a trailing ".." has no
+	// name, and mid-path "." / ".." components are ordinary.
+	end := len(body)
+	for {
+		// Skip a trailing separator run.
+		for end > 0 && strings.IndexByte(seps, body[end-1]) >= 0 {
+			end--
+		}
+		if end == 0 {
 			return "", false
 		}
-	} else {
-		for len(parts) > 0 && parts[len(parts)-1] == "." {
-			parts = parts[:len(parts)-1]
+		start := end
+		for start > 0 && strings.IndexByte(seps, body[start-1]) < 0 {
+			start--
 		}
+		comp := body[start:end]
+		if comp == "." {
+			if verbatim {
+				// Trailing "." inside a verbatim prefix stays a
+				// CurDir component (std parse_single_component); the
+				// back walk stops there and the path has no name.
+				return "", false
+			}
+			// Ordinary paths normalize trailing "." away; keep
+			// walking backward.
+			end = start
+			continue
+		}
+		if comp == ".." {
+			return "", false
+		}
+		return comp, true
 	}
-	if len(parts) == 0 {
-		return "", false
-	}
-	last := parts[len(parts)-1]
-	if last == ".." {
-		return "", false
-	}
-	return last, true
 }
 
 // HasFileName reports whether path has a file name the way Rust

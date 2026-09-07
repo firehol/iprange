@@ -3,6 +3,7 @@ package handlers
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/live"
@@ -28,10 +29,11 @@ func TestPreflightFileNameParity(t *testing.T) {
 		"d.txt/", "d.txt/.", "d.txt//.", "a/./b.txt",
 	}
 	// Both preflights require the parent to exist, so run the
-	// file-name half against a parent that exists (t.TempDir).
+	// accept half against a parent that exists and let the raw
+	// spelling reach the handlers: filepath.Join would clean "."
+	// and ".." out of the very shapes this test must deliver
+	// verbatim.
 	parent := t.TempDir()
-	// Concatenate instead of filepath.Join: Join cleans the path and
-	// would resolve the very ".." components these shapes test.
 	withParent := func(name string) string {
 		if name == "" {
 			return ""
@@ -52,12 +54,48 @@ func TestPreflightFileNameParity(t *testing.T) {
 		}
 	}
 	for _, path := range accepts {
-		// The preflight may only fail with the parent error here;
-		// the file-name check must pass.
-		if err := requirePublicationParent(withParent(path)); err != nil {
-			if err.Code != "invalid_path" || err.Outcome != "not_started" {
-				t.Errorf("requirePublicationParent(%q) failed at the parent step (code=%s outcome=%s), want the valid file name to pass", path, err.Code, err.Outcome)
+		raw := withParent(path)
+		// The parent of the raw spelling must exist so the handler
+		// reaches the file-name step and must succeed afterwards;
+		// a trailing-dot or trailing-".." rejection would otherwise
+		// be masked by the parent-error envelope.
+		mkRawParent(t, raw)
+		if err := requirePublicationParent(raw); err != nil {
+			t.Errorf("requirePublicationParent(%q) failed: code=%s outcome=%s, want success for a valid file name under an existing parent", path, err.Code, err.Outcome)
+		}
+		if err := requireCreateDestinationParent(raw); err != nil {
+			t.Errorf("requireCreateDestinationParent(%q) failed: code=%s outcome=%s, want success for a valid file name under an existing parent", path, err.Code, err.Outcome)
+		}
+	}
+}
+
+// mkRawParent creates the raw parent spelling of path so the two
+// preflights' parent-existence step succeeds.  It mirrors the kernel
+// walk: each ordinary component between the existing root and the
+// raw parent is created; "." and ".." components are left to the
+// kernel, which resolves them against the components already made.
+func mkRawParent(t *testing.T, path string) {
+	t.Helper()
+	rawParent := live.FileParent(path)
+	sep := string(filepath.Separator)
+	// Walk from the root prefix toward the raw parent, creating the
+	// ordinary components in order so ".." components always resolve
+	// onto an existing directory.
+	parts := strings.Split(rawParent, sep)
+	acc := ""
+	for i, part := range parts {
+		if part == "" {
+			if i == 0 {
+				acc = sep
 			}
+			continue
+		}
+		if part == "." || part == ".." {
+			continue
+		}
+		acc = filepath.Join(acc, part)
+		if err := os.MkdirAll(acc, 0o755); err != nil {
+			t.Fatalf("mkRawParent(%q): create %q: %v", rawParent, acc, err)
 		}
 	}
 }
@@ -73,12 +111,15 @@ func TestPreflightParentParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	// "name/." inside an existing directory: the parent is the
-	// directory itself (Rust parent of "sub/x/." is "sub").
-	ok := filepath.Join(sub, "publish.iprange", ".")
+	// directory itself (Rust parent of "sub/x/." is "sub").  Build
+	// the spelling raw: filepath.Join cleans the trailing "." away
+	// and the handlers would never see the trailing-dot shape that
+	// the Rust reference accepts.
+	ok := sub + string(filepath.Separator) + "publish.iprange" + string(filepath.Separator) + "."
 	if err := requirePublicationParent(ok); err != nil {
 		t.Errorf("requirePublicationParent(%q) failed: %v", ok, err)
 	}
-	if err := requireCreateDestinationParent(filepath.Join(sub, "live.iprange", ".")); err != nil {
+	if err := requireCreateDestinationParent(sub + string(filepath.Separator) + "live.iprange" + string(filepath.Separator) + "."); err != nil {
 		t.Errorf("requireCreateDestinationParent(trailing dot) failed: %v", err)
 	}
 	// Parent extraction itself must mirror Rust:

@@ -16,6 +16,7 @@ import (
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 	"github.com/firehol/iprange/v4/go/internal/writer"
@@ -449,10 +450,18 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 	// any filesystem access (path::validate_main_name plus
 	// require_name_lengths); the writer's CreateAttempt applies the
 	// same rules at the attempt creation.
-	if !publication.ValidDestinationName(destinationPath) {
+	main, ok := live.FileName(destinationPath)
+	if !ok {
 		return &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
 	}
 	dir := live.FileParent(destinationPath)
+	// Rust Destination::bind opens the parent directory raw, then
+	// opens the bound main name relative to it; valid destination
+	// spellings may carry trailing separators or "." components after
+	// the main name, and the kernel open of the raw destination string
+	// would then fail with ENOTDIR.  Probe the bound spelling instead,
+	// preserving the raw parent traversal.
+	bound := pathname.Push(dir, main)
 	// Rust Destination::bind -> Directory::open proves the parent is a
 	// plain directory before any namespace operation; the class mapping
 	// is platform-split (publication.CheckPublicationParent): POSIX folds
@@ -470,7 +479,7 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 	// (Rust Directory::open_regular, read-only). An absent name is not
 	// a rejection; the attempt creation reports it with the exact
 	// publication class.
-	dst, err := os.Lstat(destinationPath)
+	dst, err := os.Lstat(bound)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -483,7 +492,7 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 	if !dst.Mode().IsRegular() {
 		return &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
 	}
-	file, err := openDestinationNoFollow(destinationPath)
+	file, err := openDestinationNoFollow(bound)
 	if err != nil {
 		var fe *format.Error
 		if errors.As(err, &fe) {

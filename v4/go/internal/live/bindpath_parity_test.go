@@ -46,14 +46,20 @@ func TestBindPathBareRelativeName(t *testing.T) {
 	// temp-dir path so the open reaches a real directory.
 	dir := t.TempDir()
 	probe := filepath.Join(dir, "name")
-	_, name, err := bindPath(probe)
+	bound, name, err := bindPath(probe)
+	if bound != nil {
+		defer bound.Close()
+	}
 	if err != nil {
 		t.Fatalf("bindPath(%q) rejected: %v", probe, err)
 	}
 	if name != "name" {
 		t.Fatalf("bindPath(%q) name = %q, want name", probe, name)
 	}
-	_, name, err = bindPath(probe + "//.")
+	bound, name, err = bindPath(probe + "//.")
+	if bound != nil {
+		defer bound.Close()
+	}
 	if err != nil {
 		t.Fatalf("bindPath(%q) rejected: %v", probe+"/.", err)
 	}
@@ -80,6 +86,9 @@ func TestBindPairParentParity(t *testing.T) {
 
 // A trailing-parent path must not be re-resolved to an ancestor by
 // the verify path (Rust verify_path_any_link calls bind_path raw).
+// The probe is built by raw concatenation: filepath.Join cleans the
+// trailing ".." onto the database path, and the handler would then
+// compare the database itself instead of rejecting the raw spelling.
 func TestVerifyRejectsTrailingParent(t *testing.T) {
 	dir := t.TempDir()
 	main := filepath.Join(dir, "main.iprange")
@@ -90,7 +99,18 @@ func TestVerifyRejectsTrailingParent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	probe := filepath.Join(dir, "sub", "main.iprange", "..")
+	sub := filepath.Join(dir, "sub")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The resolveable target exists (dir/sub/main.iprange), so a
+	// regression that re-resolves the trailing ".." would succeed
+	// and this rejection would fail.
+	target := filepath.Join(sub, "main.iprange")
+	if err := os.WriteFile(target, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	probe := sub + string(filepath.Separator) + "main.iprange" + string(filepath.Separator) + ".."
 	if err := verifyPath(probe, *identity); err == nil {
 		t.Error("verifyPath resolved a trailing .. onto the database, want rejection")
 	}

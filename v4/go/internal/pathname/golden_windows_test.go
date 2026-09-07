@@ -199,6 +199,12 @@ func TestRustGoldenWindows(t *testing.T) {
 		{shape: "\\\\?\\UNC", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\N.readers"},
 		{shape: "\\\\?\\UNC\\", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC\\\\N.readers"},
 		{shape: "\\\\?\\UNC\\srv\\sh\\a\\..", name: "", nameOK: false, parent: "\\\\?\\UNC\\srv\\sh\\a", parentOK: true, wf: "\\\\?\\UNC\\srv\\sh\\a\\..\\N.readers"},
+		{shape: "\\\\?\\UNC/server\\share", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\UNC/server\\share\\N.readers"},
+		{shape: "\\\\?\\UNC/server\\share\\a", name: "a", nameOK: true, parent: "\\\\?\\UNC/server\\share\\", parentOK: true, wf: "\\\\?\\UNC/server\\share\\N.readers"},
+		{shape: "\\\\server\\share\\\\a", name: "a", nameOK: true, parent: "\\\\server\\share\\", parentOK: true, wf: "\\\\server\\share\\N.readers"},
+		{shape: "\\\\server\\share\\\\", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\server\\share\\\\N.readers"},
+		{shape: "\\\\server\\share\\\\a\\..", name: "", nameOK: false, parent: "\\\\server\\share\\\\a", parentOK: true, wf: "\\\\server\\share\\\\a\\..\\N.readers"},
+
 		{shape: "\\\\?\\C:/x", name: "x", nameOK: true, parent: "\\\\?\\C:/", parentOK: true, wf: "\\\\?\\C:\\N.readers"},
 		{shape: "\\\\?\\C:/x/y", name: "x/y", nameOK: true, parent: "\\\\?\\C:/", parentOK: true, wf: "\\\\?\\C:\\N.readers"},
 		{shape: "\\\\?\\C:/", name: "", nameOK: false, parent: "", parentOK: false, wf: "\\\\?\\C:\\N.readers"},
