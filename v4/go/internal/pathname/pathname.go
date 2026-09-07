@@ -678,3 +678,33 @@ func verbatimPushRebuild(path, name string) string {
 	}
 	return sb.String()
 }
+
+// Push mirrors Rust PathBuf::push for the shape used by temporary
+// file and @-expansion entry placement: the base path plus one plain
+// name.  A separator is inserted unless the base is empty, already
+// ends with a path separator, or is a bare drive prefix (std
+// PathBuf::_push: need_sep is dropped for a drive-only base), and a
+// verbatim-prefixed base is rebuilt component by component with the
+// main separator exactly like _push's verbatim branch.  A pushed name
+// that is absolute or carries its own prefix would replace the base in
+// Rust; callers here always pass a plain name, and such a name is
+// appended verbatim.
+func Push(base, name string) string {
+	if hasPrefixes && name != "" && parsePrefix(base).verbatim() {
+		return verbatimPushRebuild(base, name)
+	}
+	needSep := len(base) > 0 && !isSepByte(base[len(base)-1])
+	if needSep && hasPrefixes {
+		if p := parsePrefix(base); p.isDrive() && p.length == len(base) {
+			needSep = false
+		}
+	}
+	if !needSep {
+		return base + name
+	}
+	mainSep := "/"
+	if runtime.GOOS == "windows" {
+		mainSep = `\`
+	}
+	return base + mainSep + name
+}

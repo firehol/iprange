@@ -21,6 +21,8 @@ import (
 	"net/netip"
 	"os"
 	"sort"
+
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 	"strings"
 	"sync"
 	"time"
@@ -814,16 +816,13 @@ func expandPaths(paths []string, expandAtPaths bool, maxExpandedPaths, maxLineBy
 				// Entry paths are built exactly like Rust read_dir
 				// entry.path() (PathBuf push): a separator is inserted
 				// only when the referenced spelling does not already end
-				// with one, so "@<dir>/" expands to "<dir>/name", never
-				// "<dir>//name".  Raw concatenation is kept: filepath.Join
-				// would lexically clean a symlinked intermediate plus ".."
-				// in the caller's referenced spelling and refuse or ingest
-				// a different directory.
-				sep := ""
-				if n := len(referenced); n > 0 && !os.IsPathSeparator(referenced[n-1]) {
-					sep = string(os.PathSeparator)
-				}
-				entryPath := referenced + sep + entry.Name()
+				// with one (and never after a bare drive prefix), so
+				// "@<dir>/" expands to "<dir>/name", never "<dir>//name".
+				// Raw concatenation is kept: filepath.Join would lexically
+				// clean a symlinked intermediate plus ".." in the
+				// caller's referenced spelling and refuse or ingest a
+				// different directory.
+				entryPath := pathname.Push(referenced, entry.Name())
 				entryInfo, statErr := os.Stat(entryPath)
 				if statErr == nil && entryInfo.Mode().IsRegular() {
 					files = append(files, entryPath)

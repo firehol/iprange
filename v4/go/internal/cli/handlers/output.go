@@ -13,6 +13,7 @@ import (
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 )
 
 // Base64Padded is the standard padded base64 alphabet (wire encoding
@@ -77,7 +78,7 @@ func publishMetadata(path string, bytes []byte, policy iprangedb.PublicationPoli
 	if herr != nil {
 		return herr
 	}
-	temporary := parent + string(os.PathSeparator) + "." + handle + ".metadata.tmp"
+	temporary := pathname.Push(parent, "."+handle+".metadata.tmp")
 	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
 		return outputFileError(err, "create metadata output")

@@ -27,6 +27,7 @@ import (
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 )
 
 // ExportBudget carries the caller-supplied export limits
@@ -100,7 +101,7 @@ func NewExportWriter(destination string, policy iprangedb.PublicationPolicy, bud
 	if herr != nil {
 		return nil, herr
 	}
-	temporary := parent + string(os.PathSeparator) + "." + handle + ".export.tmp"
+	temporary := pathname.Push(parent, "."+handle+".export.tmp")
 	raw, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
 		return nil, fileError(err, "create export output")

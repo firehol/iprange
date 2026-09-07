@@ -33,6 +33,7 @@ import (
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/live"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 )
 
 // RegisterLive installs the live lifecycle, resolution, direct
@@ -1323,7 +1324,7 @@ func newRemovalCollector(settings removalsSettings, refreshValue uint32) (*remov
 	if herr != nil {
 		return nil, herr
 	}
-	temporary := parent + string(os.PathSeparator) + "." + handle + ".removals.tmp"
+	temporary := pathname.Push(parent, "."+handle+".removals.tmp")
 	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
 		return nil, fileError(err, "create removal output")
