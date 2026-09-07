@@ -8020,3 +8020,64 @@ behavior); end-user docs unchanged (no CLI surface change).  The
 round-4 P3 item (commit subjects `9374917e`/`e3d7bf61` naming the
 external review model) remains open pending user approval for the
 history rewrite.
+
+#### Wave 16 follow-up round 4 (2026-09-07) — the @-directory expansion repair at `2c5d668b`
+
+The re-anchored whole-milestone review found the last remaining
+lexical normalization of a caller-supplied path: `expandPaths` in
+`v4/go/internal/cli/fileio/input.go` built each `@`-directory entry
+path with `filepath.Join(referenced, entry.Name())`, which lexically
+cleans a symlinked intermediate plus `".."` inside the caller's
+referenced spelling.  `os.ReadDir` had already read the
+kernel-resolved directory, but the per-entry stat then probed the
+cleaned spelling: Go refused the directory ("contains no regular
+files") or ingested a different one, while Rust `read_dir`'s
+`entry.path()` keeps the raw spelling (verified live on the staged
+binaries at the prior revision; the fileio package had no committed
+expansion test over anything but plain directories).
+
+Repair at `2c5d668b` (`v4/go/internal/cli/fileio/input.go`): the
+entry path is built by raw concatenation
+(`referenced + separator + entry.Name()`), exactly like the Rust
+`entry.path()` and the raw-path wave's temporary-placement pattern;
+`TestScratchAtExpansionRawPathThroughSymlinkParent` pins the class
+(POSIX kernel-resolution gate).  A live dual-product probe against
+the rebuilt binaries proves both products publish through
+`@<root>/<symlink>/../<realdir>` with the same `published` outcome;
+the same-failure grep now finds no remaining `filepath`
+Clean/Dir/Join/Base on caller paths (the residual sites are the
+documented os-resolved executable-discovery, codegen, and
+os.TempDir paths).
+
+Re-qualification at the final revision (`2c5d668b`, product
+source; records committed together with this evidence): Go suite
+23/23 packages PASS on Linux with the qualified go1.26.4 and with
+the host go1.27.0, and natively on the Windows host (go1.26.5,
+23/23 packages); Rust workspace suites PASS on Linux (rustc
+1.97.1, no Rust source change) and natively on Windows.  Full
+battery PASS at the final staged identities (matrices 38/38
+single and 14 PASS + 24 legitimate skips per mixed direction;
+crash 16/16 both directions; the negative control 0/16 with 8
+consumer-stage and 8 setup failures; resource proofs 8/8;
+kind-coverage gate PASS with all 46 self-test controls; golden
+corpus 55; sensitivity gate 14).  Windows housekeeping 2/2 PASS at
+`2c5d668b` on the authorized Windows validation host (native
+Python 3.14.6, Go `3b967437…`, Rust `c960a64f…`, provenance
+recorded with tree_clean).  Final Linux identities at `2c5d668b`
+(staged in `.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK):
+Go product `78cbd4c3…`, Go worker `114a7018…` (rebuilt with
+`-buildvcs=false`), Rust product `07c4e314…`, Rust worker
+`77b6d086…`, fixture `df3623a6…` (Rust binaries carry from the
+round-4 qualified build at `ed29e437`).  `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated at
+these identities in the records commit so the record and the
+identities cannot drift.  Sensitive-data gate: no secrets,
+credentials, community/customer names, personal data, or private
+endpoints in this wave.  Artifact gate: AGENTS.md unchanged (no
+workflow change); runtime project skills unchanged (no new how-to
+knowledge); the v4 JSON-RPC spec unchanged (no contract change —
+the repair restores the already-specified Rust reference
+behavior); end-user docs unchanged (no CLI surface change).  The
+round-4 P3 item (commit subjects `9374917e`/`e3d7bf61` naming the
+external review model) remains open pending user approval for the
+history rewrite.
