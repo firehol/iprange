@@ -17,7 +17,6 @@
 package pathname
 
 import (
-	"path/filepath"
 	"runtime"
 	"strings"
 )
@@ -48,12 +47,158 @@ const (
 // hasPrefixes reports whether this GOOS carries Windows-style prefixes.
 const hasPrefixes = runtime.GOOS == "windows"
 
-// prefixInfo is the classified Windows volume prefix (Rust Prefix:
-// drive, UNC, or verbatim forms).
+// prefixKind classifies the Windows prefix exactly like Rust
+// sys/path/windows_prefix.rs parse_prefix (Prefix::Disk, UNC,
+// Verbatim, VerbatimDisk, VerbatimUNC, DeviceNS).
+type prefixKind int
+
+const (
+	prefixNone prefixKind = iota
+	prefixDisk
+	prefixUNC
+	prefixVerbatim
+	prefixVerbatimDisk
+	prefixVerbatimUNC
+	prefixDeviceNS
+)
+
+// prefixInfo is the classified Windows volume prefix (Rust Prefix).
 type prefixInfo struct {
-	length          int
-	hasImplicitRoot bool // UNC-like prefixes are rooted without a separator
-	verbatim        bool // \\?\ forms parse backslash-only separators
+	length int
+	kind   prefixKind
+}
+
+// hasImplicitRoot mirrors Rust Prefix::has_implicit_root (!is_drive):
+// every non-drive prefix is rooted without a visible separator.
+func (p prefixInfo) hasImplicitRoot() bool {
+	return p.kind != prefixNone && p.kind != prefixDisk
+}
+
+// verbatim mirrors Rust Prefix::is_verbatim: these forms parse
+// backslash-only separators and never yield the implicit root.
+func (p prefixInfo) verbatim() bool {
+	return p.kind == prefixVerbatim || p.kind == prefixVerbatimDisk || p.kind == prefixVerbatimUNC
+}
+
+// isDrive mirrors Rust Prefix::is_drive (the push special case).
+func (p prefixInfo) isDrive() bool {
+	return p.kind == prefixDisk
+}
+
+// isSepByte reports one ordinary separator of the platform (both
+// separators on Windows, "/" on unix).
+func isSepByte(b byte) bool {
+	if runtime.GOOS != "windows" {
+		return b == '/'
+	}
+	return b == '/' || b == '\\'
+}
+
+// isAlpha reports Rust is_ascii_alphabetic for the drive check.
+func isAlpha(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+// parsePrefix mirrors Rust sys/path/windows_prefix.rs parse_prefix on
+// the raw path bytes; the Unix build keeps a zero prefix.
+func parsePrefix(path string) prefixInfo {
+	if runtime.GOOS != "windows" {
+		return prefixInfo{}
+	}
+	if len(path) < 2 || !isSepByte(path[0]) || !isSepByte(path[1]) {
+		return parseDrive(path)
+	}
+	// The verbatim and device branches start with "\" + one of
+	// "?\" or ".\" (Rust strips the leading "\\" first), and the
+	// verbatim forms additionally require no forward slash inside the
+	// recognized prefix header.
+	if len(path) >= 4 && path[2] == '?' && isSepByte(path[3]) {
+		// Rust rejects the verbatim form when any of the first four
+		// raw bytes is a forward slash.
+		for i := 0; i < 4; i++ {
+			if path[i] == '/' {
+				return parseUNC(path)
+			}
+		}
+		rest := path[4:]
+		if len(rest) >= 4 && rest[:4] == "UNC\\" {
+			// \\?\\UNC\\server\\share
+			server, after := nextComponent(rest[4:], true)
+			share, after2 := nextComponent(after, true)
+			if server == "" || share == "" || after2 == "" {
+				return parseUNC(path)
+			}
+			_ = after2
+			return prefixInfo{length: 4 + 4 + len(server) + 1 + len(share), kind: prefixVerbatimUNC}
+		}
+		if d := parseDriveExact(rest); d != 0 {
+			return prefixInfo{length: 4 + 2, kind: prefixVerbatimDisk}
+		}
+		comp, _ := nextComponent(rest, true)
+		return prefixInfo{length: 4 + len(comp), kind: prefixVerbatim}
+	}
+	if len(path) >= 4 && path[2] == '.' && isSepByte(path[3]) {
+		comp, _ := nextComponent(path[4:], false)
+		return prefixInfo{length: 4 + len(comp), kind: prefixDeviceNS}
+	}
+	return parseUNC(path)
+}
+
+// parseUNC mirrors the Rust UNC branch: server and share must both be
+// non-empty, and the prefix covers the share plus its trailing
+// separator when one follows.
+func parseUNC(path string) prefixInfo {
+	server, after := nextComponent(path[2:], false)
+	if server == "" {
+		return prefixInfo{}
+	}
+	share, _ := nextComponent(after, false)
+	if share == "" {
+		return prefixInfo{}
+	}
+	consumed := 2 + len(server) + 1 + len(share)
+	// The share consumed its trailing separator only when one existed.
+	if len(after) > len(share) {
+		consumed++
+	}
+	if consumed > len(path) {
+		consumed = len(path)
+	}
+	return prefixInfo{length: consumed, kind: prefixUNC}
+}
+
+// nextComponent mirrors Rust parse_next_component: it returns the
+// component and the remainder after its trailing separator; verbatim
+// parses backslash-only separators.
+func nextComponent(path string, verbatim bool) (string, string) {
+	seps := "/\\"
+	if verbatim {
+		seps = "\\"
+	}
+	if i := strings.IndexAny(path, seps); i >= 0 {
+		return path[:i], path[i+1:]
+	}
+	return path, ""
+}
+
+// parseDrive mirrors Rust parse_drive: one ASCII letter plus ":".
+func parseDrive(path string) prefixInfo {
+	if len(path) >= 2 && isAlpha(path[0]) && path[1] == ':' {
+		return prefixInfo{length: 2, kind: prefixDisk}
+	}
+	return prefixInfo{}
+}
+
+// parseDriveExact mirrors Rust parse_drive_exact: a drive whose
+// following byte is a separator or the end of the path; returns the
+// drive letter byte or zero.
+func parseDriveExact(path string) byte {
+	if len(path) >= 2 && isAlpha(path[0]) && path[1] == ':' {
+		if len(path) == 2 || isSepByte(path[2]) {
+			return path[0]
+		}
+	}
+	return 0
 }
 
 // Components walks one raw path exactly like std::path::Components.
@@ -83,20 +228,7 @@ func NewComponents(path string) *Components {
 // classifyPrefix mirrors the Windows parse_prefix classification used
 // by the state machine (meaningful only on Windows).
 func classifyPrefix(path string) prefixInfo {
-	vol := filepath.VolumeName(path)
-	if vol == "" {
-		return prefixInfo{}
-	}
-	switch {
-	case strings.HasPrefix(vol, `\\?\UNC\`):
-		return prefixInfo{length: len(vol), hasImplicitRoot: true, verbatim: true}
-	case strings.HasPrefix(vol, `\\?\`):
-		return prefixInfo{length: len(vol), verbatim: true}
-	case len(vol) >= 2 && vol[1] == ':':
-		return prefixInfo{length: len(vol)}
-	default: // \\server\share and other UNC forms
-		return prefixInfo{length: len(vol), hasImplicitRoot: true}
-	}
+	return parsePrefix(path)
 }
 
 // separatorSet is the separator character set for index scans.
@@ -112,12 +244,15 @@ func separatorSet(verbatim bool) string {
 
 // isSepByte reports one separator byte (std is_sep_byte).
 func (c *Components) isSepByte(b byte) bool {
-	return strings.ContainsRune(separatorSet(c.prefix.verbatim), rune(b))
+	if hasPrefixes && c.prefix.verbatim() {
+		return b == '\\'
+	}
+	return isSepByte(b)
 }
 
 // rooted mirrors std has_root: physical root or prefix implicit root.
 func (c *Components) rooted() bool {
-	return c.hasRoot || (hasPrefixes && c.prefix.hasImplicitRoot)
+	return c.hasRoot || (hasPrefixes && c.prefix.hasImplicitRoot())
 }
 
 // includeCurDir mirrors std include_cur_dir: only a non-rooted path
@@ -167,7 +302,7 @@ func (c *Components) lenBeforeBody() int {
 func (c *Components) parseSingleComponent(comp string) compKind {
 	switch {
 	case comp == ".":
-		if hasPrefixes && c.prefix.verbatim {
+		if hasPrefixes && c.prefix.verbatim() {
 			return compCurDir
 		}
 		return compNone
@@ -187,7 +322,7 @@ func (c *Components) parseSingleComponent(comp string) compKind {
 func (c *Components) parseNextComponentBack() (int, compKind) {
 	start := c.lenBeforeBody()
 	body := c.path[start:]
-	seps := separatorSet(c.prefix.verbatim)
+	seps := separatorSet(c.prefix.verbatim())
 	i := strings.LastIndexAny(body, seps)
 	var comp string
 	extra := 0
@@ -227,10 +362,16 @@ func (c *Components) nextBack() compKind {
 				c.path = c.path[:len(c.path)-1]
 				return compRootDir
 			}
-			if hasPrefixes && c.prefix.hasImplicitRoot && !c.prefix.verbatim {
-				return compRootDir
-			}
-			if c.includeCurDir() {
+			if hasPrefixes && c.prefix.length > 0 {
+				// Rust folds the prefix branch into the else-if chain:
+				// when a prefix is present, the implicit-root test is
+				// the only alternative and the CurDir branch is never
+				// reached (the drive-relative "C:." stays a bare
+				// prefix with no CurDir component).
+				if c.prefix.hasImplicitRoot() && !c.prefix.verbatim() {
+					return compRootDir
+				}
+			} else if c.includeCurDir() {
 				c.path = c.path[:len(c.path)-1]
 				return compCurDir
 			}
@@ -261,7 +402,7 @@ func (c *Components) asPath() string {
 	for len(path) > c.lenBeforeBody() {
 		start := c.lenBeforeBody()
 		body := path[start:]
-		seps := separatorSet(c.prefix.verbatim)
+		seps := separatorSet(c.prefix.verbatim())
 		i := strings.LastIndexAny(body, seps)
 		var comp string
 		extra := 0
@@ -290,8 +431,9 @@ func FileName(path string) (string, bool) {
 	seps := separatorSet(false)
 	body := path
 	if hasPrefixes {
-		if vol := filepath.VolumeName(path); vol != "" {
-			body = path[len(vol):]
+		body = path[parsePrefix(path).length:]
+		if parsePrefix(path).verbatim() {
+			seps = `\\`
 		}
 	}
 	parts := strings.FieldsFunc(body, func(r rune) bool {
@@ -360,29 +502,22 @@ func WithFileName(path, name string) string {
 	if path == "" {
 		return name
 	}
-	seps := separatorSet(hasPrefixes && isVerbatim(path))
-	if strings.ContainsRune(seps, rune(path[len(path)-1])) {
+	// push: a separator is needed unless the path already ends with a
+	// separator or is a bare drive prefix (Rust PathBuf::push; the
+	// separator check uses the ordinary separator set, not the
+	// verbatim one).
+	if isSepByte(path[len(path)-1]) {
 		return path + name
 	}
-	if hasPrefixes && isBareDrive(path) {
-		return path + name
+	if hasPrefixes {
+		p := parsePrefix(path)
+		if p.isDrive() && p.length == len(path) {
+			return path + name
+		}
 	}
 	mainSep := "/"
 	if runtime.GOOS == "windows" {
 		mainSep = `\`
 	}
 	return path + mainSep + name
-}
-
-// isVerbatim reports a verbatim-prefixed path (push separator rules).
-func isVerbatim(path string) bool {
-	vol := filepath.VolumeName(path)
-	return strings.HasPrefix(vol, `\\?\`)
-}
-
-// isBareDrive reports the exact "C:" shape (Rust push: no separator
-// after a bare drive prefix).
-func isBareDrive(path string) bool {
-	vol := filepath.VolumeName(path)
-	return len(vol) >= 2 && vol[1] == ':' && len(path) == len(vol)
 }

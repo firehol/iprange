@@ -1,3 +1,5 @@
+//go:build !windows
+
 package reader
 
 import (
@@ -32,8 +34,10 @@ func TestNamespaceChecksParity(t *testing.T) {
 }
 
 // sidecarPath derives parent + main-name + ".readers" on the raw path
-// (Rust Path::with_file_name): the trailing-dot shape keeps the real
-// name, and mid-path ".." survives into the derived sidecar path.
+// (Rust Path::with_file_name over the unix separator): the
+// trailing-dot shape keeps the real name, and mid-path ".." survives
+// into the derived sidecar path. The Windows twin records the native
+// backslash rendering (namespace_parity_windows_test.go).
 func TestSidecarPathParity(t *testing.T) {
 	for path, want := range map[string]string{
 		"a.iprange":        "a.iprange.readers",
@@ -44,8 +48,8 @@ func TestSidecarPathParity(t *testing.T) {
 		"dir/a.iprange/..": "", // no file name; the caller must refuse first
 	} {
 		if want == "" {
-			if _, ok := fileNames(path); ok {
-				t.Errorf("sidecarBase(%q) found a name, want none", path)
+			if _, ok := pathname.FileName(path); ok {
+				t.Errorf("FileName(%q) found a name, want none", path)
 			}
 			continue
 		}
@@ -53,9 +57,4 @@ func TestSidecarPathParity(t *testing.T) {
 			t.Errorf("sidecarPath(%q) = %q, want %q", path, got, want)
 		}
 	}
-}
-
-// fileNames reports the accepted main file name of an open path.
-func fileNames(path string) (string, bool) {
-	return pathname.FileName(path)
 }
