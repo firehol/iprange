@@ -7492,3 +7492,82 @@ record and the identities cannot drift; the fixture identity rotated
 predated the current release toolchain (a fresh canonical release
 build at the wave-15 revision; no fixture source changed).
 
+
+#### External control round 4 — fallible termination diagnostics, basename parity, and gate-truth repairs at `ed29e437`
+
+The external whole-milestone control (session `b5dd923d…`, turn 4,
+reviewed HEAD `9fd39ed1`) returned NEEDS CHANGES with three P2 and
+three P3 findings; the lead verified every finding independently
+before repairing (the P2s reproduced exactly; the P3-4 gate defect
+reproduced as an `UnboundLocalError` on a populated no-command
+report) and re-qualified at the final revision:
+
+1. **P2 — the forced-exit and graceful-fatal diagnostics used
+   `std::thread::spawn`, which panics when thread creation fails.**
+   A failed spawn could terminate the diagnostic thread without
+   executing the forced exit, leaving a wedged session alive with a
+   full stderr pipe blocking the panic report.  Repair at
+   `ed29e437`: the three diagnostic sites (wedged-events exit,
+   signal forced exit, graceful-fatal exit) now use
+   `std::thread::Builder::spawn` with the result ignored, so
+   process termination never depends on diagnostic delivery.  A
+   committed discipline tripwire (`tests/
+   thread_creation_discipline.rs`) fails on any reintroduced
+   panicking `std::thread::spawn` in `iprange-cli` product code;
+   verified with a negative control (the mutation is detected at
+   `session.rs` and the tripwire fails exactly as designed).
+2. **P2 — `BasenameFromPath` rejected trailing-slash and
+   trailing-dot shapes (`"foo.txt/."`) that Rust `Path::file_name`
+   accepts as `"foo.txt"`.**  The Go constructor now applies
+   `filepath.Clean` before taking the final component
+   (`v4/go/internal/live/basename.go`), with boundary tests on
+   both platforms (verified against the Rust `std::path` behavior
+   on linux and the UTF-16LE wire form in the Windows test).
+3. **P2 — the crash-negative record overclaimed "16 consumer-stage
+   failures".**  Each of the eight crash scenarios runs in both
+   substitution directions: the eight real-producer scenarios fail
+   at the substituted-consumer stage, and the eight
+   substituted-producer scenarios fail during setup because the
+   fake producer never creates the artifact (0/16 overall).  The
+   evidence README and the closure record now state both halves
+   truthfully; the harness itself is unchanged.
+4. **P3 — a second kind-gate `UnboundLocalError`
+   (`command_selected`) for a populated matrix report without
+   command metadata.**  The variable now initializes
+   unconditionally in `check_kind_coverage.py` and self-test 46
+   exercises both the empty and the populated report shapes.
+5. **P3 — the closure narrative claimed every post-repair commit
+   touched tests or records only; the bounded diagnostic queue
+   (`fbdbc953`) and its drainer spawn-retry (`ebfd2ff8`) are
+   product code.**  The narrative now states the product source is
+   unchanged since `ebfd2ff8`, and the validator-P2 round labels
+   (9c vs 9b) are reconciled ("first raised at the `ebfd2ff8`
+   review, carried through `0584203c` and `e9e7ce9a`").
+6. **P3 — commit subjects naming the external review model
+   (`9374917e`, `e3d7bf61`).**  Fixing requires rewriting local-
+   only history; the lead needs user approval for that operation
+   (history is otherwise not rewritten) and records the decision
+   in the closure records.
+
+Re-qualification at the final revision (`ed29e437`, product
+source; records committed together with this evidence): Go suite
+22/22 packages PASS on Linux (qualified go1.26.4) and natively on
+the Windows host (go1.26.5); Rust workspace suites PASS on Linux
+(rustc 1.97.1) and natively on Windows; full battery PASS at the
+final staged identities (matrices 38/38 single and 14+24 mixed per
+direction; crash 16/16 both directions; the negative control 0/16
+with 8 consumer-stage and 8 setup failures; resource proofs 8/8;
+kind-coverage gate PASS on the regenerated evidence with all 46
+self-test controls; golden 55; sensitivity 14); Windows housekeeping
+2/2 PASS at `ed29e437` on the authorized Windows validation host
+(native Python 3.14.6, Go `95b1727b…`, Rust `c960a64f…`,
+provenance recorded with tree_clean).  Final Linux identities at
+`ed29e437` (staged in `.local/shared/binaries/SHASUMS.txt`): Go
+product `e318842a…`, Go worker `66bf7ab6…`, Rust product
+`07c4e314…`, Rust worker `77b6d086…`, fixture `df3623a6…`; the
+worker and fixture identities rotated because those binaries were
+previously carried from an earlier default-stable build and are
+rebuilt here with the qualified rustc 1.97.1.  `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated at
+the final identities in the records commit so the record and the
+identities cannot drift.

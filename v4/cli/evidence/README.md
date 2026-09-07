@@ -1,22 +1,23 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
 The fifteenth-wave evidence is regenerated at the wave-15 final
-product revision `0584203c` (product source of the astra round-3
-repair wave and its closure deltas: bounded input-worker
-diagnostics with committed full-stderr, per-message-spawn, and
-above-cap queue-drop tripwires, input closure on every error path,
-the platform-correct main_basename test, the real-producer
-negative crash control, the shared trailing-residue rejection
-control, the `BasenameFromPath` component contract, and the
-worker-fixture wire-encoding repair; the wave-15 closure rounds
-9a-9e and the closure records are committed together with this
-evidence) after the external whole-milestone control turn-2
-review of the wave-14 revision (lifecycle identity platform kind,
-artifact-basename wire mapping, drain-EOF, matrix fixture binding,
-conflict-order control, and strict response-id correlation), the
-native Windows verification wave, the wave-15 role-round deltas
-2-4 (encoding-aware artifact-basename rendering, the
-maximal-subpart encoding-1 decode, and the Go `main_basename`
+product revision `ed29e437` (product source of the astra round-3
+and round-4 repair waves: bounded input-worker diagnostics with
+committed full-stderr, per-message-spawn, and above-cap queue-drop
+tripwires, fallible termination diagnostics, input closure on
+every error path, the platform-correct main_basename test, the
+Rust-parity basename normalization, the real-producer negative
+crash control, the shared trailing-residue rejection control, the
+`BasenameFromPath` component contract, the worker-fixture
+wire-encoding repair, and the kind-gate second-site fix; the
+wave-15 closure rounds 9a-9e and the closure records are committed
+together with this evidence) after the external whole-milestone
+control turn-2 review of the wave-14 revision (lifecycle identity
+platform kind, artifact-basename wire mapping, drain-EOF, matrix
+fixture binding, conflict-order control, and strict response-id
+correlation), the native Windows verification wave, the wave-15
+role-round deltas 2-4 (encoding-aware artifact-basename rendering,
+the maximal-subpart encoding-1 decode, and the Go `main_basename`
 invalid-UTF-8 round-trip repair), and the astra round-3 repair
 wave (non-blocking input-worker diagnostics, input closure on
 every error path, the platform-correct main_basename test, the
@@ -42,27 +43,29 @@ rejection control, and the `BasenameFromPath` component contract)
   unavailable instead of a raw file-not-found I/O error (matches
   the SDK `worker_availability` probe semantics);
 - Windows housekeeping re-qualified at source revision
-  `ebfd2ff8` (product source identical to `0584203c`; the later
-  commits touch test files only) on the authorized Windows
-  validation host: 2/2 PASS with the native Windows Python 3.14.6
-  (Go `6d9ba190…`, Rust `20165392…`, provenance recorded), and the
-  full Go suite passes natively there (22/22, including the
-  worker-fixture wire-encoding repair) alongside the green native
-  Rust suite.
+  `ed29e437` on the authorized Windows validation host: 2/2 PASS
+  with the native Windows Python 3.14.6 (Go `95b1727b…`, Rust
+  `c960a64f…`, provenance recorded: go1.26.5 windows/amd64, rustc
+  1.97.1, clean tree), and the full Go suite passes natively there
+  (22/22 packages, including the basename-parity repair)
+  alongside the green native Rust suite.
 
-Linux reports record the product identities `daee4a92…` (rust) and
-`bd6dddb7…` (go), workers `9fd36146…` / `f1311d96…`, fixture
-`947b94e9…` (a fresh canonical release build at the wave-15
-revision; the earlier staged fixture identity predated the current
-release toolchain; staged in `.local/shared/binaries/SHASUMS.txt`);
+Linux reports record the product identities `07c4e314…` (rust) and
+`e318842a…` (go), workers `77b6d086…` / `66bf7ab6…`, fixture
+`df3623a6…` (all rebuilt at the astra round-4 repair revision
+`ed29e437` with the qualified toolchains — go1.26.4 and rustc
+1.97.1; the worker and fixture identities rotated because they
+were previously carried from an earlier default-stable build;
+staged in `.local/shared/binaries/SHASUMS.txt`);
 the Windows housekeeping report records the Windows-host products
-`20165392…` (rust) and `6d9ba190…` (go) at source revision
-`ebfd2ff8` (the wave-15 astra round-3 repair wave and its closure
-deltas: the
+`c960a64f…` (rust) and `95b1727b…` (go) at source revision
+`ed29e437` (the wave-15 astra round-3 and round-4 repair waves:
+the
 input workers no longer write diagnostics synchronously to stderr,
-the Go input core closes its files on every error path with a
-deferred source Close, `BasenameFromPath` rejects the Rust
-missing-component shapes, the main_basename round-trip test is
+termination diagnostics no longer panic on thread-creation
+failure, the Go input core closes its files on every error path
+with a deferred source Close, `BasenameFromPath` matches the Rust
+component normalization, the main_basename round-trip test is
 platform-correct on Windows, the crash negative control runs a
 real producer against a substituted consumer, the trailing-residue
 self-test drives the shared drain rejection, and the kind gate
