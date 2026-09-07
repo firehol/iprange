@@ -9386,3 +9386,39 @@ command arrays; product binaries byte-identical (SHASUMS 8/8).
 Sensitive-data gate: clean (SOW grep-clean of the operator name).
 Artifact gate: end-user docs already updated in round-16.4; AGENTS.md,
 specs, and runtime project skills unchanged.
+
+#### Wave 16 follow-up round 16.6 (2026-09-08) — darwin case-folding and Unicode-aware sibling boundaries
+
+The re-anchored portability role at `9ec29f26` returned one P2 and
+one P3.  Repair, in `v4/cli/command_sanitize.py`:
+
+- P2: `os.path.normcase` is identity on POSIX, but the macOS default
+  volume (APFS) is case-insensitive.  On darwin a case-varied profile
+  spelling (for example `/USERS/alice/x`) still resolved to the real
+  profile directory while every normcase comparison missed it, so the
+  macOS path-name defenses were bypassable end-to-end.  A `_normcase`
+  helper now lowercases on darwin after `os.path.normcase` and is the
+  single comparison path for every profile/checkout containment check
+  (`sanitized_path_value`, `profile_path`, `_privacy_spellings`,
+  `under_profile`, `_inside_checkout`);
+- P3: the mid-string boundary walk was ASCII-only, so a non-ASCII
+  sibling or quote-shaped character after the profile
+  (`/home/aliceλ/x` on a Greek-localized host) falsely tripped the
+  scan.  `_is_path_cont` now accepts alphanumerics in any script plus
+  every non-ASCII character (ordinal >= 128) as path continuation,
+  and `_is_path_sep` is a separate helper; localized sibling names no
+  longer false-positive while every existing delimiter form still
+  trips.
+
+Validation: Windows-housekeeping `--self-test` PASSes from the
+checkout root and a subdirectory; the resource-harness `--self-test`
+PASSes (bounded read/write, oversized-frame, hang, duplicate-id, and
+drain controls); the boundary probe matrix (21 cases: separator,
+`=`, space, `;`, end-of-string, option-embedded and nested hits;
+alnum/underscore/dot/dash letter siblings; λ/curly-quote/ε non-ASCII
+siblings; unrelated paths) passes; the structural scan over every
+committed evidence file returns clean; product binaries byte-identical
+(SHASUMS 8/8 at `9ec29f26`).  Sensitive-data gate: clean.  Artifact
+gate: AGENTS.md, specs, and runtime project skills unchanged; the
+sanitizer module docstring and comments describe the darwin
+case-folding and Unicode boundary behavior.

@@ -58,8 +58,8 @@ def sanitized_path_value(value):
     if not value:
         return value
     abs_path = _resolve(value)
-    norm = os.path.normcase(abs_path)
-    checkout_norm = os.path.normcase(_CHECKOUT)
+    norm = _normcase(abs_path)
+    checkout_norm = _normcase(_CHECKOUT)
     try:
         under_checkout = (os.path.commonpath([norm, checkout_norm])
                           == checkout_norm)
@@ -132,13 +132,27 @@ def sanitized_command(argv=None):
     return out
 
 
+def _normcase(path):
+    """Case folding for path comparisons.
+
+    ``os.path.normcase`` lowercases on Windows and is identity on
+    POSIX, but the macOS default volume (APFS) is case-insensitive,
+    so darwin comparisons fold case on both sides; otherwise a
+    case-varied profile spelling would resolve to the real profile
+    directory while every comparison missed it."""
+    norm = os.path.normcase(path)
+    if sys.platform == "darwin":
+        norm = norm.lower()
+    return norm
+
+
 def profile_path():
     """Normcased operator profile root, or an empty string when the
     platform cannot determine it (never match in that case)."""
     home = os.path.expanduser("~")
     if not home:
         return ""
-    norm = os.path.normcase(os.path.normpath(home))
+    norm = _normcase(os.path.normpath(home))
     return norm if len(norm) >= 3 else ""
 
 
@@ -232,14 +246,14 @@ def _privacy_spellings(value):
         norm = _expand_env_vars(norm)
     if os.name == "nt":
         norm = _strip_device_prefix(norm)
-    out = [os.path.normcase(norm)]
-    resolved = os.path.normcase(os.path.normpath(norm)) if norm else norm
+    out = [_normcase(norm)]
+    resolved = _normcase(os.path.normpath(norm)) if norm else norm
     if os.sep == "/" and resolved.startswith("//"):
         resolved = "/" + resolved.lstrip("/")
     if resolved != out[0]:
         out.append(resolved)
     if os.name == "nt" and _is_drive_relative(norm):
-        anchored = os.path.normcase(os.path.normpath(os.path.abspath(norm)))
+        anchored = _normcase(os.path.normpath(os.path.abspath(norm)))
         if anchored not in out:
             out.append(anchored)
     return out
@@ -283,7 +297,7 @@ def under_profile(path):
         if _matches_profile(spelling, profile):
             return True
     try:
-        real = os.path.normcase(os.path.normpath(os.path.realpath(path)))
+        real = _normcase(os.path.normpath(os.path.realpath(path)))
     except OSError:
         return False
     return _matches_profile(real, profile)
@@ -301,13 +315,16 @@ def personal_path_in_report(report):
 
     profile_abs = profile
     profile_term = profile_abs + os.sep
-    # Path-continuation and path-separator character sets for the
-    # mid-string boundary walk (frozensets avoid character-class
-    # range ambiguity for the dash and the separators).
-    _path_cont = frozenset(
-        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "0123456789_.-")
-    _path_sep = frozenset("/" + chr(92))
+    def _is_path_cont(ch):
+        """True for characters that can continue a path segment:
+        alphanumerics in any script, ``_``, ``.``, ``-``, and every
+        non-ASCII character (so a non-ASCII sibling or quote-shaped
+        character after the profile cannot false-positive the scan
+        on localized hosts)."""
+        return ch.isalnum() or ch in "_.-" or ord(ch) >= 128
+
+    def _is_path_sep(ch):
+        return ch in ("/", chr(92))
 
     def _boundary_occurrence(spelling):
         """True when the profile appears in spelling bounded on both
@@ -315,11 +332,11 @@ def personal_path_in_report(report):
         quotes, shell operators) -- ``cd /home/alice && make``."""
         idx = spelling.find(profile_abs)
         while idx != -1:
-            before_ok = idx == 0 or spelling[idx - 1] not in _path_cont
+            before_ok = idx == 0 or not _is_path_cont(spelling[idx - 1])
             after = idx + len(profile_abs)
             after_ok = (after == len(spelling)
-                        or (spelling[after] not in _path_cont
-                            and spelling[after] not in _path_sep))
+                        or (not _is_path_cont(spelling[after])
+                            and not _is_path_sep(spelling[after])))
             if before_ok and after_ok:
                 return True
             idx = spelling.find(profile_abs, idx + 1)
@@ -393,10 +410,10 @@ def _inside_checkout(path):
     """True when path is at or under the checkout (normcase realpath
     containment)."""
     try:
-        norm = os.path.normcase(os.path.normpath(os.path.realpath(path)))
+        norm = _normcase(os.path.normpath(os.path.realpath(path)))
     except OSError:
         return False
-    checkout_norm = os.path.normcase(os.path.normpath(
+    checkout_norm = _normcase(os.path.normpath(
         os.path.realpath(_CHECKOUT)))
     return norm == checkout_norm or norm.startswith(checkout_norm + os.sep)
 
