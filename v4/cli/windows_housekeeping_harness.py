@@ -172,27 +172,62 @@ REFRESH_VALUE = 123456
 # removals_advertised) recorded by complete_native_refresh_exercise.
 REPORT_SCHEMA = "iprange-cli-windows-housekeeping-report-v3"
 
+def _sanitize_path_value(value, checkout, checkout_norm):
+    """Rewrite one path-valued argv element to a checkout-relative
+    spelling when it lives under the checkout; leave every other
+    value as it was passed.  The containment comparison uses normcase
+    so a case-varied checkout spelling cannot escape rewriting, the
+    relative rewrite uses the caller's original absolute spelling,
+    and a different-drive value (commonpath ValueError) is never
+    treated as under the checkout."""
+    if not value:
+        return value
+    abs_path = os.path.normpath(os.path.abspath(value))
+    norm = os.path.normcase(abs_path)
+    try:
+        under_checkout = (os.path.commonpath([norm, checkout_norm])
+                          == checkout_norm)
+    except ValueError:
+        under_checkout = False
+    if under_checkout:
+        return os.path.relpath(abs_path, checkout)
+    return value
+
+
 def sanitized_command():
-    """Return argv with every element under the checkout root rewritten
-    to a checkout-relative spelling, so the committed evidence never
-    records the operator's home directory (durable-artifact policy).
-    Paths outside the checkout (binary and work-dir paths under the
-    authorized validation host's scratch area) are kept as recorded."""
+    """Return argv with every path-valued element rewritten to a
+    checkout-relative spelling when it lives under the checkout, so
+    the committed evidence never records the operator's home
+    directory (durable-artifact policy).  Option tokens are kept
+    verbatim; ``--option=PATH`` and label-prefixed values (``rust=``,
+    ``go=``) sanitize only the embedded path value.  Paths outside
+    the checkout (binary and work-dir paths under the authorized
+    validation host's scratch area) are kept as recorded."""
     checkout = os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))))
+    checkout_norm = os.path.normcase(os.path.normpath(checkout))
     out = []
     for arg in sys.argv:
-        if arg:
-            norm = os.path.normpath(os.path.abspath(arg))
-            try:
-                under_checkout = (os.path.commonpath([norm, checkout])
-                                  == checkout)
-            except ValueError:
-                # Different drive (Windows): never under the checkout.
-                under_checkout = False
-            if under_checkout:
-                arg = os.path.relpath(norm, checkout)
-        out.append(arg)
+        if not arg:
+            out.append(arg)
+        elif arg.startswith("--") and "=" in arg:
+            key, sep, value = arg.partition("=")
+            out.append(key + sep + _sanitize_path_value(
+                value, checkout, checkout_norm))
+        elif arg.startswith("-"):
+            # Plain option token (also covers the harness's single
+            # dash options): never a path; keep verbatim.
+            out.append(arg)
+        elif "=" in arg:
+            label, sep, value = arg.partition("=")
+            if any(c in label for c in "/\\"):
+                out.append(_sanitize_path_value(
+                    arg, checkout, checkout_norm))
+            else:
+                out.append(label + sep + _sanitize_path_value(
+                    value, checkout, checkout_norm))
+        else:
+            out.append(_sanitize_path_value(arg, checkout, checkout_norm))
     return out
 
 

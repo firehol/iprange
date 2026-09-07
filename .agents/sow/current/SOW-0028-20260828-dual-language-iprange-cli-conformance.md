@@ -364,6 +364,31 @@ approval.  After this round, the closure proceeds to the external
 whole-milestone control review at exactly this revision, with no
 further commits expected after its verdict.
 
+Wave-16 follow-up round-14 state (2026-09-07, final): the
+external control turn-7 review of `d083504f` returned NEEDS CHANGES
+with two in-scope P2 findings, both verified and repaired: the
+command sanitizer treated every argv element as a filesystem path
+(`--option=PATH` and label-prefixed values could embed or leak
+absolute checkout paths, option tokens could be rewritten into
+directory-prefixed strings, and the containment comparison was
+case-sensitive), and the round-13 durability rewording incorrectly
+applied the Windows `crash_reappearance_possible` caveat to Linux
+proofs whose committed evidence records `cleanup_state: clean` with
+no housekeeping artifacts (POSIX directory-synced unlink).  The
+sanitizer now preserves option tokens and label prefixes, sanitizes
+only path values, compares with normcase, and guards the
+cross-drive case; the Linux durability claims are scoped to the
+recorded clean state and the Windows caveat stays Windows-only.  A
+P3 tripwire doc overstatement and a stale SOW-0030 status sentence
+are also repaired.  None of the changes touches product binaries
+(SHASUMS 8/8 at `5dd8e010`); the Windows evidence is regenerated at
+the unchanged identities with the final harness (Go `02e7daa7...` /
+Rust `c960a64f...`); Go suite 23/23, Rust workspace, full battery,
+and Windows housekeeping 2/2 all PASS.  The milestone-4 closure
+record stands as qualified at this revision; milestone 5 remains
+unstarted per user decision 1A; the commit-subject history rewrite
+item remains pending user approval.
+
 Wave-16 follow-up round-13 state (2026-09-07, final): the
 external control turn-6 review of `5bb649e1` returned NEEDS
 CHANGES with four in-scope P2 and two in-scope P3 findings: the
@@ -8904,3 +8929,66 @@ unchanged; runtime project skills unchanged; specs unchanged (the
 repairs restore spec'd behavior); end-user docs updated
 (`v4/cli/README.md` removal wording); the commit-subject history
 rewrite item remains open pending user approval.
+
+#### Wave 16 follow-up round 14 (2026-09-07) — the external control turn-7 repair wave
+
+The external whole-milestone control review (turn 7 of the same
+session) of `d083504f` returned NEEDS CHANGES with two in-scope P2
+and two P3 findings (plus the two pre-existing engine findings
+re-listed out of scope).  The lead verified each before repair:
+
+1. **P2 — command sanitization still permitted personal-path
+   disclosure and rewrote option tokens.**  The round-13
+   `sanitized_command` treated every argv element as a filesystem
+   path: an `--json-report=PATH` value inside the checkout kept its
+   embedded absolute path in the rewritten spelling, the containment
+   comparison was case-sensitive (a case-varied checkout spelling
+   could escape rewriting on Windows), running from a checkout
+   subdirectory rewrote plain option tokens such as `--binaries`
+   into directory-prefixed strings, and a different-drive element
+   was mis-handled.  The sanitizer now: keeps option tokens
+   verbatim; for `--option=PATH` sanitizes only the embedded path
+   value; for label-prefixed values (`rust=PATH`, `go=PATH`)
+   sanitizes only the value; compares containment with normcase so
+   case-varied checkout spellings cannot escape; rewrites using the
+   original absolute spelling; and guards the cross-drive
+   `commonpath` ValueError.  Verified against the reported
+   scenarios with an ntpath simulation (six scenarios, all PASS);
+   the regenerated evidence command is exactly the invocation
+   spelling with a checkout-relative script path.
+2. **P2 — the round-13 durability rewording was mis-scoped to
+   Linux.**  `resource-record.md`, `resource_harness.py` (both
+   proof-c docstrings), and `evidence/README.md` claimed Linux
+   scratch/reservation removal reports the documented
+   `crash_reappearance_possible` state, while the committed crash
+   evidence records `removal: {cleanup_state: clean, housekeeping:
+   {artifacts: []}}` (crash.json:505 and :1456): the POSIX unlink is
+   directory-synced under the standard filesystem contract and Rust
+   returns `Housekeeping::None`.  All four sites now state the
+   recorded clean state for Linux and keep the
+   `crash_reappearance_possible` caveat scoped to the Windows-only
+   housekeeping kind.
+3. **P3 — tripwire documentation overstatement.**  The module and
+   scanner docs said checked and skipped line numbers are keyed by
+   file, but the caller pools only the checked lines.  Narrowed to
+   the actual behavior.
+4. **P3 — stale SOW-0030 status.**  The pending performance SOW
+   still called SOW-0027 the sole active SOW; corrected to record
+   that SOW-0027 has closed and SOW-0028 is active.
+
+Re-qualification: Go suite 23/23, Rust workspace (the tripwire
+test), full battery, and native Windows housekeeping 2/2 with the
+final harness all PASS; the Windows evidence is regenerated at the
+unchanged identities (Go `02e7daa7...` / worker `1dac468e...`,
+Rust `c960a64f...`, provenance `5dd8e010`, tree_clean); personal
+path grep clean.  Identities unchanged (SHASUMS 8/8).  Same-failure
+search: no other argv-element rewriting exists in the
+qualification harnesses; the `crash_reappearance_possible` wording
+now appears only where the product truthfully reports it (the
+Windows housekeeping proofs); the sanitizer scenarios are covered
+by the committed simulation checks recorded above.  Sensitive-data
+gate: clean.  Artifact gate: AGENTS.md unchanged; runtime project
+skills unchanged; specs unchanged (the repairs restore spec'd
+behavior); end-user docs updated (removal wording scoped); the
+commit-subject history rewrite item remains open pending user
+approval.

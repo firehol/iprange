@@ -43,7 +43,11 @@ by the 65,000-byte response object and 1 MiB frame ceilings.
 
 ## PROVEN vs deferred
 
-PROVEN: advertised limits; `output_limit` on oversized inline results; reader/cursor 64+1 capacity (`server_busy`); frame-layer batch bound 1..16; bounded adapter memory by design and gates; `maintenance.list` reports the `scratch`/`reservation`/`publication_temp` kinds on Linux (case-backed); `maintenance.remove` against a real abandoned-scratch attempt ID (crash scenario C: list -> remove -> proved currently absent, both product languages; the removal result truthfully reports the documented `crash_reappearance_possible` state — no power-loss guarantee for the final unlink).
+PROVEN: advertised limits; `output_limit` on oversized inline results; reader/cursor 64+1 capacity (`server_busy`); frame-layer batch bound 1..16; bounded adapter memory by design and gates; `maintenance.list` reports the `scratch`/`reservation`/`publication_temp` kinds on Linux (case-backed); `maintenance.remove` against a real abandoned-scratch attempt ID
+(crash scenario C: list -> remove -> proved currently absent with
+`cleanup_state: clean` and no housekeeping artifacts, both product
+languages; on POSIX the unlink is directory-synced under the
+standard filesystem contract).
 
 The former NOT-PROVEN items are now proven at the product interface
 by `resource_harness.py` (evidence `evidence/resource.json`) and
@@ -75,8 +79,11 @@ Windows validation host):
    `maintenance.remove` (the opaque-entry contract: the removal
    entry is exactly what `maintenance.list` emitted, never rebuilt
    or decoded), `maintenance.remove` returns ok and the reservation
-   is proved currently absent in both products (both truthfully
-   report crash_reappearance_possible; the spec makes no
+   is proved currently absent in both products with
+   `cleanup_state: clean` and no housekeeping artifacts (the POSIX
+   unlink is directory-synced under the standard filesystem
+   contract; the Windows-only housekeeping kind truthfully reports
+   the documented `crash_reappearance_possible` state with no
    power-loss guarantee for the final unlink).
 4. CLI cancellation — one stdin blob pipelines a slow export
    (id 1), the `iprange.v1.cancel` notification naming it, and one

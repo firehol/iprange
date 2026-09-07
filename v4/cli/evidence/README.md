@@ -791,7 +791,8 @@ build provenance.
   `maintenance.remove` against a
   real reservation nonce (kill at the reservation marker, list,
   remove with the listed row passed unchanged and a
-  proved-currently-absent result, crash_reappearance_possible),
+  proved-currently-absent result: `cleanup_state: clean`, no
+  housekeeping artifacts, POSIX directory-synced unlink),
   (d) CLI cancellation (slow export id 1, `iprange.v1.cancel` naming
   it, `system.describe` id 2 in one stdin blob: the cancelled export
   never answers with a result — explicitly-cancelled ids are

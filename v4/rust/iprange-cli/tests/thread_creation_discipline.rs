@@ -10,9 +10,10 @@
 //! whose brace depth starts at the item that follows it, and the
 //! region ends when that item's own depth returns to zero.  This
 //! handles both a `#[cfg(test)]` method inside an impl and a
-//! `#[cfg(test)] mod tests` block.  Checked and skipped line numbers
-//! are keyed by file so a site pin cannot be satisfied by a same
-//! numbered line in another file.
+//! `#[cfg(test)] mod tests` block.  Checked line numbers are keyed
+//! by file so a site pin cannot be satisfied by a same numbered line
+//! in another file (skipped line numbers are returned by the scanner
+//! but not pooled).
 
 use std::path::{Path, PathBuf};
 
@@ -23,8 +24,9 @@ fn braces(line: &str) -> i64 {
 
 /// Returns (checked, skipped, checked_line_numbers, skipped_line_numbers,
 /// problems).  The line-number vectors are 1-based and belong to the
-/// scanned file; the caller keys them by file so the watchdog site pin
-/// cannot be satisfied by the same line number in another file.
+/// scanned file; the caller keys only the checked lines by file so
+/// the watchdog site pin cannot be satisfied by the same line number
+/// in another file.
 #[allow(clippy::type_complexity)]
 fn scan_file(
     path: &Path,

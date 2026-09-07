@@ -40,10 +40,10 @@ JSON-RPC stdio pipe):
   listed row passed unchanged (the opaque-entry contract: the
   removal entry is exactly what ``maintenance.list`` emitted, never
   rebuilt or decoded), and the reservation is proved currently absent
-  (the removal result truthfully reports the documented
-  ``crash_reappearance_possible`` state — no power-loss guarantee for
-  the final unlink).  The private publication temp may remain:
-  bounded residue, recorded.
+  with ``cleanup_state: clean`` and no housekeeping artifacts (the
+  POSIX unlink is directory-synced under the standard filesystem
+  contract).  The private publication temp may remain: bounded
+  residue, recorded.
 - Proof d -- cancellation through the real CLI.  One stdin blob
   pipelines a slow export request (id 1), the ``iprange.v1.cancel``
   notification naming request 1, and one ``system.describe`` request
@@ -807,9 +807,9 @@ def proof_c(binary, label, work_dir, outcome):
     listed row unchanged to ``maintenance.remove`` (the opaque-entry
     contract: the removal entry is exactly what ``maintenance.list``
     emitted, never rebuilt or decoded), and the reservation is
-    proved currently absent (the removal result truthfully reports
-    the documented ``crash_reappearance_possible`` state — no
-    power-loss guarantee for the final unlink).  The private
+    proved currently absent with ``cleanup_state: clean`` and no
+    housekeeping artifacts (the POSIX unlink is directory-synced
+    under the standard filesystem contract).  The private
     publication temp may remain: bounded residue, recorded.
 
     The kill waits for the reservation file's full block size, not

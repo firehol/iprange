@@ -6,10 +6,11 @@ Status: open
 
 Sub-state: pending; created 2026-08-29 to represent the measured
 Go-vs-Rust performance residuals of SOW-0027, rewritten 2026-08-30 to
-the actual final-identity numbers. SOW-0027 is the sole active SOW and
-remains in-progress until its measured-performance decision is recorded.
-This pending SOW starts only if the user chooses to continue
-optimization after that decision; if the user accepts the measured
+the actual final-identity numbers. SOW-0027 has closed (functional
+parity passed; the <=1.3x performance requirement failed and was not
+waived, with this SOW as its performance continuation) and SOW-0028 is
+the sole active SOW. This pending SOW starts only if the user chooses
+to continue optimization; if the user accepts the measured
 result, the residuals recorded here close as accepted limitations and
 this SOW is rejected with this record as the evidence. It has no
 dependency on SOW-0017 (snapshot signing); the earlier text saying it
