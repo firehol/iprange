@@ -134,15 +134,17 @@ then pinned and fixed the Windows prefix parser
 (`sys/path/windows_prefix.rs parse_prefix` port; `//a//b` is not a
 UNC prefix and `"C:."` has no file name or parent).  The current
 canonical Linux identities are recorded in `evidence/README.md`
-(Go product `a00b1307…`, Go worker `2d748be0…`, Rust product
+(Go product `85b71310…`, Go worker `114a7018…`, Rust product
 `07c4e314…`, Rust worker `77b6d086…`, fixture `df3623a6…` at the
-round-6 raw-path repair product revision `ae57845e` — the Go binaries
-were rebuilt with `-buildvcs=false` after the tester review proved
-`filepath.Clean` in the reader open refused raw paths through
-symlinked intermediates that the Rust twin serves, and the Rust
-binaries carry from the round-4 qualified build at `ed29e437`); the
-Windows-host products are Go `2f5b5fac…` (worker `b0bb2a2b…`) and
-Rust `c960a64f…` at the same revision.  The wave-13 role-round delta found the Rust EOF arm
+round-6 verbatim-UNC repair product revision `03b7d4ab` — the Go
+binaries were rebuilt with `-buildvcs=false` after the performance
+review proved the verbatim-UNC share-terminal class diverged from
+Rust std::path (FileName returned the share; WithFileName dropped
+it), now pinned by the extended Windows golden corpus against a
+native rustc 1.97.1 probe; the Rust binaries carry from the round-4
+qualified build at `ed29e437`); the Windows-host products are Go
+`38417180…` (worker `8338b58d…`) and Rust `c960a64f…` at the same
+revision.  The wave-13 role-round delta found the Rust EOF arm
 missing the ceiling check that Go has — a final unterminated frame
 of LIMIT+1 bytes at EOF now exits non-zero in both products; the
 wave-14 delta repaired held over-limit frame reporting, the Windows

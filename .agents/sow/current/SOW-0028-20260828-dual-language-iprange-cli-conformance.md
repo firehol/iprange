@@ -209,6 +209,26 @@ at this revision; milestone 5 remains unstarted per user decision
 1A, and the round-4 P3 commit-subject history rewrite remains
 pending user approval.
 
+Wave-16 follow-up round-3 state (2026-09-07): the re-anchored
+round-6 performance review found a P1 in the Windows pathname
+port: the verbatim-UNC branch re-parsed share-terminal paths as a
+plain UNC, so `FileName("\\?\\UNC\\srv\\sh")` returned the
+share as a file name and `WithFileName` dropped the share from
+derived sidecar paths, while Rust keeps VerbatimUNC
+unconditionally (no file name or parent); the repair at
+`03b7d4ab` mirrors Rust Prefix::len and the verbatim push rebuild
+and pins the class with the extended Windows golden corpus against
+a native rustc 1.97.1 probe.  Go suite 23/23 on go1.26.4, host
+go1.27.0, and native Windows (go1.26.5); Linux identities at
+`03b7d4ab` are Go `85b71310…` / worker `114a7018…` and Rust
+`07c4e314…` / worker `77b6d086…` / fixture `df3623a6…`, Windows
+identities Go `38417180…` (worker `8338b58d…`) and Rust
+`c960a64f…`; every battery gate is green at the revision.  The
+milestone-4 closure record stands as qualified at this revision;
+milestone 5 remains unstarted per user decision 1A, and the
+round-4 P3 commit-subject history rewrite remains pending user
+approval.
+
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -7916,3 +7936,69 @@ end-user docs unchanged (no CLI surface change).  The round-4 P3
 item (commit subjects `9374917e`/`e3d7bf61` naming the external
 review model) remains open pending user approval for the history
 rewrite.
+
+#### Wave 16 follow-up round 3 (2026-09-07) — the verbatim-UNC repair at `03b7d4ab`
+
+The re-anchored round-6 performance review found one P1 in the
+Windows pathname port: `parsePrefix`'s verbatim-UNC branch re-parsed
+the path as a plain UNC whenever the share was the final component
+(`server == "" || share == "" || after2 == ""` fallback), so
+`FileName("\\?\\UNC\\srv\\sh")` returned `("sh", true)` and
+`WithFileName` produced `"\\?\\UNC\\srv\\N.readers"` — the
+share was dropped from derived sidecar paths — while Rust 1.97.1
+returns `VerbatimUNC(server, share)` unconditionally and a
+share-terminal path has no file name or parent.  The committed
+Windows golden corpus contained only the `…\\share\\a` shape, so
+no committed gate could detect the class; the class was reproduced
+with a forced-Windows harness and verified against a native
+Windows-host rustc 1.97.1 probe (26 shapes in the finish: the
+verbatim-UNC share-terminal, prefix-terminal, trailing-separator,
+and plain-UNC share-terminal families, plus the verbatim-disk
+prefix corners).
+
+Repair at `03b7d4ab` (`v4/go/internal/pathname`): the VerbatimUNC
+branch now mirrors Rust exactly — `consumed` follows
+`Prefix::len` (the share separator counts only when the share is
+non-empty, clamped to the path), and `WithFileName`'s push
+reproduces the verbatim rebuild corner where the share-less
+`\\?\\UNC\\` prefix spelling ends with a separator and Rust
+writes prefix + separator + name (the separator doubles).  The
+Windows golden corpus gained 13 shapes with the native-probe
+answers (share-terminal verbatim-UNC with and without trailing
+separators, empty server/share, verbatim-UNC trailing-`..`,
+verbatim-disk prefix corners, plain-UNC share-terminal with and
+without a trailing separator, and the bare `\\server` shape).
+
+Re-qualification at the final revision (`03b7d4ab`, product
+source; records committed together with this evidence): Go suite
+23/23 packages PASS on Linux with the qualified go1.26.4 and with
+the host go1.27.0, and natively on the Windows host (go1.26.5,
+23/23 packages including the extended golden, which executes
+only on Windows); Rust workspace suites PASS on Linux (rustc
+1.97.1, no Rust source change) and natively on Windows.  Full
+battery PASS at the final staged identities (matrices 38/38
+single and 14 PASS + 24 legitimate skips per mixed direction;
+crash 16/16 both directions; the negative control 0/16 with 8
+consumer-stage and 8 setup failures; resource proofs 8/8;
+kind-coverage gate PASS with all 46 self-test controls; golden
+corpus 55; sensitivity gate 14).  Windows housekeeping 2/2 PASS at
+`03b7d4ab` on the authorized Windows validation host (native
+Python 3.14.6, Go `38417180…`, Rust `c960a64f…`, provenance
+recorded with tree_clean).  Final Linux identities at `03b7d4ab`
+(staged in `.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK):
+Go product `85b71310…`, Go worker `114a7018…` (rebuilt with
+`-buildvcs=false`), Rust product `07c4e314…`, Rust worker
+`77b6d086…`, fixture `df3623a6…` (Rust binaries carry from the
+round-4 qualified build at `ed29e437`).  `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated at
+these identities in the records commit so the record and the
+identities cannot drift.  Sensitive-data gate: no secrets,
+credentials, community/customer names, personal data, or private
+endpoints in this wave.  Artifact gate: AGENTS.md unchanged (no
+workflow change); runtime project skills unchanged (no new how-to
+knowledge); the v4 JSON-RPC spec unchanged (no contract change —
+the repair restores the already-specified Rust reference
+behavior); end-user docs unchanged (no CLI surface change).  The
+round-4 P3 item (commit subjects `9374917e`/`e3d7bf61` naming the
+external review model) remains open pending user approval for the
+history rewrite.

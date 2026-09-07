@@ -1,5 +1,51 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
+The current evidence is regenerated at product revision `03b7d4ab`
+(the round-6 verbatim-UNC repair).  The re-anchored round-6
+performance review found a P1 in the Windows pathname port: the
+verbatim-UNC branch re-parsed the path as a plain UNC whenever the
+share was the final component, so `FileName("\\?\\UNC\\srv\\sh")`
+returned the share as a file name and `WithFileName` dropped the share
+from derived sidecar paths, while Rust 1.97.1 keeps
+`VerbatimUNC(server, share)` unconditionally and a share-terminal path
+has no file name or parent.  The repair at `03b7d4ab` mirrors Rust
+`Prefix::len` for VerbatimUNC (the share separator counts only with a
+share) and the verbatim push rebuild (the share-less `\\?\\UNC\\`
+prefix doubles the separator), and extends the Windows golden corpus
+with the share-terminal, prefix-terminal, trailing-separator, and
+plain-UNC share shapes pinned against a native Windows rustc 1.97.1
+probe (the corpus previously contained no share-terminal shape, so no
+committed gate could detect the class).
+
+The Go suite is green on the qualified go1.26.4 and on the host
+go1.27.0 (23/23 packages on each), and natively on the Windows host
+(go1.26.5, 23/23 packages including the extended golden); the Rust
+workspace suites are green on Linux (rustc 1.97.1) and natively on
+Windows (without source change).  The full battery PASSes at the
+final staged identities: matrices 38/38 single and 14 PASS + 24
+legitimate skips per mixed direction; crash 16/16 both directions;
+the negative control 0/16 (8 real-producer scenarios failing at the
+substituted-consumer stage and 8 substituted-producer scenarios
+failing during setup); resource proofs 8/8; kind-coverage gate PASS
+with all 46 self-test controls; golden corpus 55; sensitivity gate
+14.  Windows housekeeping re-qualified at `03b7d4ab` on the
+authorized Windows validation host: 2/2 PASS with native Windows
+Python 3.14.6 (provenance: clean tree, go1.26.5 windows/amd64,
+rustc 1.97.1).  The symlink+`..` raw-path parity probe from the
+prior repair remains green on both products.
+
+Linux reports at `03b7d4ab` record the product identities
+`07c4e314…` (rust, unchanged since the round-4 qualified build) and
+`85b71310…` (go, rebuilt with `-buildvcs=false`), workers
+`77b6d086…` (rust) / `114a7018…` (go), fixture `df3623a6…` (all
+staged in `.local/shared/binaries/SHASUMS.txt` with sha256sum -c
+OK).  The Windows housekeeping report records the Windows-host
+products `c960a64f…` (rust) and `38417180…` (go); the Windows Go
+worker is `8338b58d…`.
+
+---
+
+
 The current evidence is regenerated at product revision `ae57845e`
 (the round-6 raw-path repair).  The re-anchored round-6 tester review
 at `5a008411` found a wire-reachable P1: the immutable reader open
