@@ -153,6 +153,28 @@ linux / `fce7acf5…` go windows).  Milestone 4 acceptance is REOPENED
 by this wave and is re-closed by the Eleventh-wave record once the
 internal role round passes the exact final revision.
 
+Wave-16 state (2026-09-07): the external round-5 control P1 (the
+Go publish destination preflight rejecting trailing-dot destinations
+that Rust accepts) is repaired by the std::path component-semantics
+sweep: the new internal/pathname package ports the Rust 1.97.1
+std::path state machine and every Go name/parent derivation site
+now uses it (handlers, publication binding, live namespace, sidecar
+paths, reader, recovery, worker/system deps); the native Windows
+suite additionally pinned and fixed the Windows prefix parser
+(`//a//b` is not a UNC prefix, `"C:."` has no file name or parent).
+The round-6 product-source revision is `ebbd0419` with Linux
+identities Go `34548919…` / worker `a7c9225a…` and Rust
+`07c4e314…` / worker `77b6d086…` / fixture `df3623a6…` (Rust
+carries from the round-4 qualified build), Windows identities Go
+`2156394a…` and Rust `c960a64f…`, every battery gate green at the
+revision (matrices 38/38 single, 14+24 mixed; crash 16/16; resource
+8/8; golden 55; sensitivity 14; kind gate PASS; Windows
+housekeeping 2/2; Go suite 23/23 on Linux and natively on
+Windows).  The milestone-4 closure record from the previous waves
+stands as qualified at this revision; milestone 5 remains unstarted
+per user decision 1A, and the round-4 P3 commit-subject history
+rewrite remains pending user approval.
+
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -7639,3 +7661,101 @@ the record and the identities cannot drift.  The round-4 P3 item
 (commit subjects `9374917e`/`e3d7bf61` naming the external review
 model) remains open pending user approval for the history rewrite;
 no repository commit is planned after this record.
+
+#### Wave 16 (2026-09-07) — the std::path component-semantics sweep (external round-5 P1) at `ebbd0419`
+
+The round-5 records commit (`8a9d11aa`) left the Go publish
+destination preflight on the pre-repair semantics.  The re-anchored
+role round found one verified P1 (tester, reproduced live on the
+staged binaries): `requirePublicationParent` at
+`v4/go/internal/cli/handlers/publish.go` used raw `filepath.Base`
+with the reject set `{"", ".", "..", "/"}`, so the Go product
+rejected a trailing-dot destination `"<parent>/name/."` with
+-32010 while the Rust product accepted it (Rust gates on
+`path.file_name().is_none()`); the same audit found the sibling
+class at `requireCreateDestinationParent` (lifecycle.go), the
+publication destination binding (`publication/destination.go`
+`mainComponent`/`parentOfPath`), the live namespace
+`bindPath`/`bindPair`/`parentOf` callers, `canonicalSidecarPath`/
+`liveTransitionTemp`, the immutable reader `namespaceChecks`/
+`sidecarPath`, the recovery basic/offline source openings, and the
+worker/system `deps` discovery — every Go site that derives a name
+or parent from a raw caller-supplied path the way a Rust twin
+derives it with `std::path`.
+
+Repair at `25b86f20` (product source; follow-up Windows parity fix
+at `ebbd0419`): a new `v4/go/internal/pathname` package ports the
+Rust 1.97.1 `std::path` component state machine (`Path::file_name`,
+`Path::parent`, `PathBuf::with_file_name`); all listed derivation
+sites now use it, and the raw path is passed through instead of
+`filepath.Clean`-normalizing before the bind (Rust binds raw paths).
+Golden differential tests pin the port against rustc output:
+`golden_unix_test.go` (162 shapes, generated from a native Linux
+rustc probe) and `golden_windows_test.go` (171 shapes, generated
+from a native Windows-host rustc probe).  The native Windows suite
+then caught two remaining gaps of the first port, fixed and pinned
+at `ebbd0419`: Go `filepath.VolumeName` classified `//a//b` as a
+UNC prefix although Rust's `parse_prefix` requires a non-empty
+share (so `//a//b` is a root-relative path), and the CurDir yield
+was reachable after a drive prefix although Rust's else-if chain
+in `Components::next_back` never reaches it (`"C:."` has no file
+name and no parent).  `classifyPrefix` now ports
+`sys/path/windows_prefix.rs parse_prefix` directly (Disk, UNC,
+Verbatim, VerbatimDisk, VerbatimUNC, DeviceNS with exact byte
+lengths, implicit-root, and verbatim flags).
+
+Live parity probe against the rebuilt products at `ebbd0419`: the
+trailing-dot destination `"<parent>/archive-go/rust.iprange/."`
+completes with `publication=published` in both products, and the
+trailing-parent `"<parent>/name/.."` is refused with the
+`invalid_path` class and the identical message in both products.
+
+Re-qualification at the final revision (`ebbd0419`, product
+source; records committed together with this evidence): Go suite
+23/23 packages PASS on Linux (qualified go1.26.4,
+`-buildvcs=false` binaries) and natively on the Windows host
+(go1.26.5, 23/23 packages); Rust workspace suites PASS on Linux
+(rustc 1.97.1) and natively on Windows (unchanged since round 4).
+Full battery PASS at the final staged identities (matrices 38/38
+single and 14 PASS + 24 legitimate skips per mixed direction;
+crash 16/16 both directions; the negative control 0/16 with 8
+consumer-stage and 8 setup failures; resource proofs 8/8;
+kind-coverage gate PASS with all 46 self-test controls; golden
+corpus 55; sensitivity gate 14).  Windows housekeeping 2/2 PASS at
+`ebbd0419` on the authorized Windows validation host (native
+Python 3.14.6, Go `2156394a…`, Rust `c960a64f…`, provenance
+recorded with tree_clean).  Final Linux identities at `ebbd0419`
+(staged in `.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK):
+Go product `34548919…`, Go worker `a7c9225a…` (rebuilt with
+`-buildvcs=false` so the identities are independent of the tree
+state), Rust product `07c4e314…`, Rust worker `77b6d086…`,
+fixture `df3623a6…` (Rust binaries carry from the round-4
+qualified build at `ed29e437`).  `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated at
+the final identities in the records commit so the record and the
+identities cannot drift.  Same-class search: every Go
+`filepath.Base`/`filepath.Clean` derivation site with a Rust
+`file_name()`/`parent()` twin is mapped in this wave
+(`live/namespace*.go`, `live/path.go`, `live/namespace_install*.go`,
+`live/unique_attempt_windows.go`, `live/remove_coordinated_*.go`,
+`live/require_available_windows.go`, `reader/reader.go`,
+`reader/snapshot_source.go`, `recovery/source_guard.go`,
+`recovery/inspection.go`, `worker/client.go`,
+`cli/handlers/system.go`, `publication/name.go`,
+`publication/destination_path_{posix,windows}.go`); the remaining
+`filepath.Clean` sites are syscall-level opens whose raw paths
+resolve identically in both languages (mapping, snapshot probe,
+recovery stat paths), outside the derivation class.  Sensitive-data
+gate: no secrets, credentials, community/customer names, personal
+data, or private endpoints in this wave; the Windows provenance
+records the authorized-validation-host path only as the build
+command and report path (the host alias is forward-sanitized as the
+authorized Windows validation host).  Artifact gate: AGENTS.md
+unchanged (no workflow change); runtime project skills unchanged
+(no new how-to knowledge beyond the committed code and tests); the
+v4 JSON-RPC spec unchanged (no contract change, the repair restores
+the already-specified Rust reference behavior); end-user docs
+unchanged (no CLI surface change).  The round-4 P3 item (commit
+subjects `9374917e`/`e3d7bf61` naming the external review model)
+remains open pending user approval for the history rewrite; no
+repository commit is planned after this record.

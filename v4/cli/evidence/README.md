@@ -1,30 +1,50 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The round-5 evidence is regenerated at the round-5 final product
-revision `4fad3836` (the basename-constructor repair: Go
-`BasenameFromPath` now mirrors Rust `Path::file_name` exactly —
-trailing separators and "." components are normalized away, a
-trailing ".." component has no file name, and mid-path ".."
-components are ordinary components that are never resolved, so
-`a/../b` yields `b` while `a/b/..` is rejected; the round-4
-`filepath.Clean`-based repair incorrectly resolved the trailing
-".." onto an ancestor and accepted it) after the external
-whole-milestone control turn-4 review of the wave-15 revision
-(three P2: fallible termination diagnostics, the truthful
-crash-negative 8+8 record, `BasenameFromPath` component parity;
-three P3: the kind-gate second site, the closure-narrative round
-labels, and the reviewer-model commit subjects — all repaired and
-recorded at `ed29e437`/`65ea9587` except the commit-subject
-history rewrite, which needs user approval and is recorded as an
-open decision).  The round-5 basename repair wave was qualified at
-`4fad3836` (product source):
+The round-6 evidence is regenerated at the round-6 final product
+revision `ebbd0419`.  The external round-5 control review found the
+Go publish destination preflight (`requirePublicationParent`) still
+using raw `filepath.Base`: it rejected a trailing-dot destination
+(`"<parent>/name/."`) that Rust `Path::file_name` accepts and
+resolved a trailing `..` onto an ancestor that Rust refuses.  The
+round-6 repair replaces every Go name/parent derivation that
+mirrors a Rust twin with one shared implementation, the new
+`internal/pathname` package that ports the Rust 1.97.1
+`std::path` component state machine (`Path::file_name`,
+`Path::parent`, `PathBuf::with_file_name`): raw paths are not
+normalized, "." components are dropped, ".." is an ordinary
+component that is never resolved, repeated and trailing separators
+collapse, and the Windows volume prefix is not a name or a parent.
+The port is pinned by golden differential tests against rustc
+output (162 unix shapes generated natively on Linux, and 171
+Windows shapes generated on the authorized Windows validation
+host, which added the drive-relative, UNC, verbatim, and device
+namespace classes).  Wired through every derivation site: the
+publish/lifecycle destination preflights, the publication
+destination binding, the live namespace bindPath/bindPair/
+parent-identity/sync-parent and all of their callers, the
+canonical sidecar and transition-temp derivation, the immutable
+reader namespace checks and sidecar path, the recovery
+basic/offline source openings, and the worker/system deps
+discovery.  The native Windows suite then caught two remaining
+parity gaps in the first port (Go filepath.VolumeName classified
+`//a//b` as a UNC prefix although Rust requires a non-empty share,
+and the CurDir yield after a drive prefix was permitted although
+Rust's else-if chain never reaches it — `"C:."` has no file name
+and no parent); classifyPrefix now ports
+`sys/path/windows_prefix.rs parse_prefix` directly (Disk, UNC,
+Verbatim, VerbatimDisk, VerbatimUNC, DeviceNS with their exact
+byte lengths).  The live products now accept `"<parent>/name/."`
+and refuse `".../.."` with identical error classes and messages
+(probe-verified against the rebuilt Go and carried Rust binaries).
+
+The round-6 repair wave was qualified at `ebbd0419` (product
+source):
 
 - the Go suite is green on Linux with the qualified go1.26.4
-  (22/22 packages; the default go1.27.0 fails the SOW-0025 writer
-  metadata deflate test — toolchain drift, not this change) and
-  natively on the Windows host (go1.26.5); the Rust workspace
-  suites are green on Linux (rustc 1.97.1) and natively on
-  Windows;
+  (23/23 packages including the new pathname package) and natively
+  on the Windows host (go1.26.5, 23/23 packages); the Rust
+  workspace suites are green on Linux (rustc 1.97.1) and natively
+  on Windows;
 - the full battery PASSes at the final staged identities:
   matrices 38/38 single and 14 PASS + 24 legitimate skips per
   mixed direction; crash 16/16 both directions; the negative
@@ -34,31 +54,24 @@ open decision).  The round-5 basename repair wave was qualified at
   PASS with all 46 self-test controls; golden corpus 55;
   sensitivity gate 14;
 - Windows housekeeping re-qualified at source revision
-  `4fad3836` on the authorized Windows validation host: 2/2 PASS
-  with the native Windows Python 3.14.6 (Go `3c6ea0a0…`, Rust
+  `ebbd0419` on the authorized Windows validation host: 2/2 PASS
+  with the native Windows Python 3.14.6 (Go `2156394a…`, Rust
   `c960a64f…` — the Rust product is unchanged since the round-4
   qualified build at `ed29e437`; provenance recorded: go1.26.5
   windows/amd64, rustc 1.97.1, clean tree), and the full Go suite
-  passes natively there (22/22 packages, including the new
-  trailing-parent basename tests) alongside the green native Rust
-  suite.
+  passes natively there (23/23 packages) alongside the green
+  native Rust suite.
 
 Linux reports record the product identities `07c4e314…` (rust,
-unchanged since the round-4 qualified build) and `fcf356ac…` (go,
-rebuilt with `-buildvcs=false` at the round-5 repair revision
-`4fad3836`), workers `77b6d086…` (rust) / `4028df96…` (go),
+unchanged since the round-4 qualified build) and `34548919…` (go,
+rebuilt with `-buildvcs=false` at the round-6 repair revision
+`ebbd0419`), workers `77b6d086…` (rust) / `a7c9225a…` (go),
 fixture `df3623a6…` (all staged in
 `.local/shared/binaries/SHASUMS.txt` with sha256sum -c OK; the Go
 worker was rebuilt with the qualified go1.26.4 because the worker
-links the basename constructor);
-the Windows housekeeping report records the Windows-host products
-`c960a64f…` (rust) and `3c6ea0a0…` (go) at source revision
-`4fad3836` (the round-5 repair wave: the basename constructor now
-matches Rust `Path::file_name` component semantics on both
-platforms — POSIX raw bytes and Windows UTF-16LE wire form,
-boundary tests including the trailing-parent class, and the
-Windows volume-prefix shapes verified by the cross-compiled
-suite).
+links the pathname helpers); the Windows housekeeping report
+records the Windows-host products `c960a64f…` (rust) and
+`2156394a…` (go) at source revision `ebbd0419`.
 
 The fourteenth-wave (external whole-milestone control review
 FAIL and repair) evidence is regenerated at the wave-14 revision

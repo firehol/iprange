@@ -123,16 +123,24 @@ and `problem` members that `maintenance.list` omits on clean rows
 `v4/rust/iprange-cli/src/rpc/handlers/maintenance.rs`); both now
 treat those members as optional, so the unchanged list row
 round-trips (spec `.agents/sow/specs/iprange-jsonrpc-v1.md:968`).
-The Linux qualification binary hashes at that wave changed to
-`2f1d2bba…` (Go) and `86056181…` (Rust); behavior on Linux was
-unchanged outside the round-trip acceptance.  The current canonical
-Linux identities are recorded in `evidence/README.md` (Go product
-`fcf356ac…`, Rust product `07c4e314…` at the round-5 final
-product revision `4fad3836` — the Go product was rebuilt with
-`-buildvcs=false` at the basename-constructor repair, the Rust
-product is unchanged since the round-4 qualified build at
-`ed29e437`; the worker and fixture identities are build-proven
-there as well).  The wave-13 role-round delta found the Rust EOF arm
+The round-6 std::path parity repair (external round-5 P1:
+`requirePublicationParent` used raw `filepath.Base` and rejected
+trailing-dot destinations Rust accepts) introduced the shared
+`internal/pathname` port of the Rust 1.97.1 `std::path` component
+machine and rewired every name/parent derivation site (handlers,
+publication binding, live namespace, sidecar paths, reader,
+recovery, worker/system deps discovery); the native Windows suite
+then pinned and fixed the Windows prefix parser
+(`sys/path/windows_prefix.rs parse_prefix` port; `//a//b` is not a
+UNC prefix and `"C:."` has no file name or parent).  The current
+canonical Linux identities are recorded in `evidence/README.md`
+(Go product `34548919…`, Go worker `a7c9225a…`, Rust product
+`07c4e314…`, Rust worker `77b6d086…`, fixture `df3623a6…` at the
+round-6 final product revision `ebbd0419` — the Go binaries were
+rebuilt with `-buildvcs=false` at the repair, the Rust binaries
+carry from the round-4 qualified build at `ed29e437`); the
+Windows-host products are Go `2156394a…` and Rust `c960a64f…` at
+the same revision.  The wave-13 role-round delta found the Rust EOF arm
 missing the ceiling check that Go has — a final unterminated frame
 of LIMIT+1 bytes at EOF now exits non-zero in both products; the
 wave-14 delta repaired held over-limit frame reporting, the Windows
