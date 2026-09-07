@@ -248,7 +248,7 @@ fn private_output_attempt(value: &iprange_livedb::publication::PrivateOutputAtte
         "directory_identity": lifecycle::file_identity(&value.directory_identity)
             .unwrap_or_else(|error| json!({"error": error.message})),
         "basename_encoding": value.basename_encoding,
-        "basename": lifecycle::basename(&value.basename),
+        "basename": lifecycle::basename(&value.basename, value.basename_encoding),
         "identity": value.identity.as_ref().map(|identity| {
             lifecycle::file_identity(identity)
                 .unwrap_or_else(|error| json!({"error": error.message}))

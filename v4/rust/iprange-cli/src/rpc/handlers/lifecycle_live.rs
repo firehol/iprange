@@ -137,7 +137,8 @@ pub(crate) fn exact_members(
     Ok(())
 }
 
-/// Decode the wire volume/file pair into a kind-1 SDK local identity.
+/// Decode the wire volume/file pair into the platform-kind SDK local
+/// identity (kind 1 on POSIX, kind 2 on Windows).
 pub(crate) fn decode_file_identity(
     value: &Value,
     field: &str,
@@ -855,5 +856,31 @@ mod tests {
     fn artifact_basename_encoding2_rejects_non_byte_characters() {
         let result = decode_artifact_basename("caf\u{100}", 2, "source_basename");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn artifact_basename_encoding1_render_round_trips_utf8_text() {
+        // The full render/decoder pair for a non-ASCII encoding-1
+        // name must be the identity: the renderer emits the raw UTF-8
+        // text and the decoder re-reads it as the text's UTF-8 bytes.
+        let name = "größe.iprange";
+        let rendered = crate::rpc::handlers::lifecycle::basename(name.as_bytes(), 1);
+        assert_eq!(rendered, name);
+        let bytes =
+            decode_artifact_basename(&rendered, 1, "source_basename").expect("encoding 1 decode");
+        assert_eq!(&*bytes, name.as_bytes());
+    }
+
+    #[test]
+    fn artifact_basename_encoding2_render_round_trips_units() {
+        // The full render/decoder pair for a non-ASCII encoding-2
+        // name must be the identity: UTF-16LE units render as the
+        // per-byte projection and the decoder re-reads each wire
+        // character as one stored byte.
+        let units = "é".encode_utf16().map(u16::to_le_bytes).flatten().collect::<Vec<u8>>();
+        let rendered = crate::rpc::handlers::lifecycle::basename(&units, 2);
+        let bytes =
+            decode_artifact_basename(&rendered, 2, "source_basename").expect("encoding 2 decode");
+        assert_eq!(&*bytes, &units);
     }
 }

@@ -511,14 +511,17 @@ fn abort_outcome(value: iprange_livedb::AbortOutcome) -> &'static str {
     }
 }
 
-/// Render one artifact basename to its documented opaque per-byte
-/// wire form (iprange-jsonrpc-v1.md): every stored byte becomes the
-/// same-numbered U+00xx character, so the JSON string preserves the
-/// exact stored bytes (UTF-16LE units on Windows, UTF-8 text on
-/// POSIX).  ASCII names therefore render unchanged, and non-ASCII
-/// names keep every unit instead of collapsing through UTF-8 lossy.
-pub(crate) fn basename(bytes: &[u8]) -> String {
-    bytes.iter().map(|&byte| char::from(byte)).collect()
+/// Render one artifact basename to its documented wire form
+/// (iprange-jsonrpc-v1.md), honoring the platform encoding tag:
+/// encoding 2 (Windows UTF-16LE units) maps every stored byte to the
+/// same-numbered U+00xx character (the opaque per-byte form), and
+/// encoding 1 keeps the bytes as the text's UTF-8 encoding.  ASCII
+/// names therefore render unchanged under both encodings.
+pub(crate) fn basename(bytes: &[u8], encoding: u16) -> String {
+    match encoding {
+        2 => bytes.iter().map(|&byte| char::from(byte)).collect(),
+        _ => String::from_utf8_lossy(bytes).into_owned(),
+    }
 }
 
 /// Render one SDK-local basename to its wire text, honoring the
@@ -596,10 +599,10 @@ pub(crate) fn housekeeping_artifact(value: &HousekeepingArtifact) -> Value {
         "basename_encoding": value.basename_encoding,
         "attempt_id": convert::hex_id(&value.attempt_id),
         "ordinal": value.ordinal,
-        "envelope_basename": basename(&value.envelope_basename),
+        "envelope_basename": basename(&value.envelope_basename, value.basename_encoding),
         "envelope_identity": file_identity_ok(&value.envelope_identity),
-        "source_basename": basename(&value.source_basename),
-        "inert_basename": basename(&value.inert_basename),
+        "source_basename": basename(&value.source_basename, value.basename_encoding),
+        "inert_basename": basename(&value.inert_basename, value.basename_encoding),
         "source_presence": artifact_presence(value.source_presence),
         "inert_presence": artifact_presence(value.inert_presence),
         "kind": artifact_kind(value.kind),
@@ -1323,7 +1326,7 @@ mod local_basename_tests {
         // bytes as the U+00E9 U+0000 characters, never collapse them
         // through UTF-8 lossy, and decoding returns the exact units.
         let units = [0xe9, 0x00];
-        let rendered = basename(&units);
+        let rendered = basename(&units, 2);
         assert_eq!(rendered, "\u{e9}\u{0}");
         for (byte, ch) in units.iter().zip(rendered.chars()) {
             assert_eq!(*byte as u32, ch as u32);
@@ -1332,20 +1335,14 @@ mod local_basename_tests {
     }
 
     #[test]
-    fn posix_artifact_basename_wire_preserves_every_byte() {
-        // The per-byte wire form keeps every stored byte exactly: an
-        // ASCII name renders unchanged, and multi-byte UTF-8 text
-        // renders as the same-numbered U+00xx characters (the opaque
-        // documented form), never through UTF-8 lossy.
+    fn posix_artifact_basename_wire_is_raw_utf8_text() {
+        // Encoding 1 keeps the bytes as the text's UTF-8 encoding: an
+        // ASCII name renders unchanged and multi-byte UTF-8 text stays
+        // as the same text (never the per-byte projection, which the
+        // encoding-1 decoder treats as UTF-8 bytes again).
         let ascii = b"live.iprange";
-        assert_eq!(basename(ascii), "live.iprange");
-        let bytes = "größe.iprange".as_bytes();
-        let rendered = basename(bytes);
-        let projected: Vec<u32> = rendered.chars().map(|ch| ch as u32).collect();
-        assert_eq!(
-            projected,
-            bytes.iter().map(|&b| b as u32).collect::<Vec<_>>()
-        );
+        assert_eq!(basename(ascii, 1), "live.iprange");
+        assert_eq!(basename("größe.iprange".as_bytes(), 1), "größe.iprange");
     }
 
     #[test]

@@ -1263,9 +1263,13 @@ def self_test():
                 "drain-eof control reached EOF on a still-alive stub")
         try:
             require_clean_drain(silent, "control", drained, reached_eof)
-        except ResourceFailure:
-            pass
+        except ResourceFailure as exc:
+            drain_eof_text = str(exc)
         else:
+            drain_eof_text = None
+        print(f"self-test drain-eof control: "
+              f"{drain_eof_text or 'unexpected acceptance of a non-EOF drain'}")
+        if drain_eof_text is None:
             failures.append(
                 "drain-eof control: require_clean_drain accepted a "
                 "non-EOF drain; proofs a/d would miss a late trailing "
@@ -1273,6 +1277,66 @@ def self_test():
     finally:
         _kill_process_group(silent)
         silent.stdout.close()
+
+    # CRLF rejection control: a peer that terminates its response
+    # with CRLF must fail read_responses (shared strict framing,
+    # wave-15 finding 7 repair) instead of letting json.loads accept
+    # the trailing carriage return.
+    crlf = subprocess.Popen(
+        ["/bin/sh", "-c",
+         "printf '%s\r\n' '{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"result\":{}}' ; sleep 2"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, start_new_session=True)
+    record_spawn(crlf)
+    try:
+        try:
+            responses = read_responses(crlf, 1, 2.0)
+        except ResourceFailure as exc:
+            crlf_text = str(exc)
+        else:
+            crlf_text = None
+            responses = responses
+        print(f"self-test CRLF control: "
+              f"{crlf_text or 'unexpected acceptance of a CRLF frame'}")
+        if crlf_text is None:
+            failures.append(
+                "CRLF control: read_responses accepted a CRLF-terminated "
+                "response; proofs a/d would accept frames conforming "
+                "clients reject")
+        elif "CRLF" not in crlf_text:
+            failures.append(
+                "CRLF control: read_responses rejected the frame with "
+                f"an unrelated error: {crlf_text}")
+    finally:
+        _kill_process_group(crlf)
+        crlf.stdout.close()
+
+    # Exact-type id correlation control: a response carrying the
+    # numeric id 1 must never satisfy a request sent with the string
+    # id "1" (wave-15 finding 7 repair).  The proofs classify by
+    # {response.get("id")}; if that lookup were normalized to
+    # str()/int() this control fails.
+    numeric = subprocess.Popen(
+        ["/bin/sh", "-c",
+         "printf '%s\n' '{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{}}' ; sleep 2"],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, start_new_session=True)
+    record_spawn(numeric)
+    try:
+        responses = read_responses(numeric, 1, 2.0)
+        by_id = {r.get("id"): r for r in responses}
+        matched = by_id.get("1")
+        print(f"self-test id-type control: numeric id 1 "
+              f"{'matched' if matched is not None else 'did not match'} "
+              "the string id lookup")
+        if matched is not None:
+            failures.append(
+                "id-type control: the numeric response id 1 satisfied "
+                "the string id \"1\" lookup; proofs a/d would accept "
+                "response streams conforming clients reject")
+    finally:
+        _kill_process_group(numeric)
+        numeric.stdout.close()
 
     # Proof-b controls: the single -32001 answer must satisfy the
     # server response envelope (shared frame.decode_response plus the

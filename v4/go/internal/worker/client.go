@@ -290,8 +290,18 @@ func SpawnWorker(control *Control) (*Process, error) {
 	if err != nil {
 		return nil, err
 	}
+	attempted := false
 	var lastNotFound error
 	for _, executable := range candidates {
+		// Skip candidates that do not exist (Rust spawn is_file
+		// skip): a broken install that carries no worker at all must
+		// report the worker unavailable, not a raw file-not-found
+		// I/O error, matching the worker_availability probe.
+		info, statErr := os.Stat(executable)
+		if statErr != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		attempted = true
 		cmd := exec.Command(executable, "--control", control.path)
 		// nil stdin/stdout/stderr connect to the null device
 		// (os/exec), exactly the Rust Stdio::null() triple.
@@ -308,6 +318,9 @@ func SpawnWorker(control *Control) (*Process, error) {
 			return nil, &format.Error{Code: format.CodeIO, Detail: "worker spawn: " + err.Error()}
 		}
 		return newProcess(cmd), nil
+	}
+	if !attempted {
+		return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "SDK validation/recovery worker is unavailable"}
 	}
 	if lastNotFound != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "worker spawn: " + lastNotFound.Error()}

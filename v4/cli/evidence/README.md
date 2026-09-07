@@ -37,7 +37,6 @@ the Windows housekeeping report records the Windows-host products
 revision (detailed below).
 
 The fourteenth-wave (external whole-milestone control review
- (external whole-milestone control review
 FAIL and repair) evidence is regenerated at the wave-14 revision
 `e272c990` after the external control review of the wave-13
 revision.  The reviewed findings and their repairs:

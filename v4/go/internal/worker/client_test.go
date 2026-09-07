@@ -94,6 +94,26 @@ func TestSpawnWorkerUnavailableWithoutCandidates(t *testing.T) {
 	wantOSUnsupportedDetail(t, err, "SDK validation/recovery worker is unavailable")
 }
 
+func TestSpawnWorkerUnavailableWhenAllCandidatesMissing(t *testing.T) {
+	// A broken install that carries no worker executable at all must
+	// report the worker unavailable (Rust spawn parity), not a raw
+	// file-not-found I/O error: both on-disk candidates are skipped.
+	workerCandidatesHook = func() ([]string, error) {
+		return []string{
+			filepath.Join(t.TempDir(), "missing-iprange-v4-worker"),
+			filepath.Join(t.TempDir(), "missing-iprange-v4-worker-2"),
+		}, nil
+	}
+	t.Cleanup(func() { workerCandidatesHook = nil })
+	control, err := CreateParent()
+	if err != nil {
+		t.Fatal("create parent:", err)
+	}
+	defer control.Close()
+	_, err = SpawnWorker(control)
+	wantOSUnsupportedDetail(t, err, "SDK validation/recovery worker is unavailable")
+}
+
 func TestSpawnWorkerNotFoundFallback(t *testing.T) {
 	t.Setenv(workerDoubleEnv, "hang")
 	workerCandidatesHook = func() ([]string, error) {
