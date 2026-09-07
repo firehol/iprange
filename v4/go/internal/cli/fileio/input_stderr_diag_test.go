@@ -5,10 +5,11 @@
 // even when stderr is a full, never-drained pipe.  The helper
 // process drains an IPv4-mode source made of IPv6-only files with
 // its stderr wired to a full pipe; a synchronous-write (or blocking
-// queue-send) regression makes the helper hang and this test fail.
-// Per-message detached writes are prevented structurally: stderrDiag
-// is the only write site and the bounded queue is the only delivery
-// path.  Mirrors the session-path full-stderr tests in
+// queue-send) regression makes the helper hang and this test fail,
+// and a per-message detached-write regression is caught by the
+// goroutine-count assertion after the drain rounds (the e3d7bf61
+// shape left one blocked goroutine per diagnostic).  Mirrors the
+// session-path full-stderr tests in
 // v4/go/internal/cli/rpc/session_signal_unix_test.go.
 
 package fileio
@@ -18,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"syscall"
 	"testing"
@@ -118,5 +120,12 @@ func TestInputStderrDiagHelperProcess(t *testing.T) {
 			}
 		}
 		source.Close()
+	}
+	// A per-message detached-write regression leaves one blocked
+	// goroutine per diagnostic behind (the fixed design keeps the
+	// single drainer); 320 diagnostics above the 256-slot cap then
+	// blow this bound instead of being dropped.
+	if n := runtime.NumGoroutine(); n > 32 {
+		t.Fatalf("helper goroutine count %d exceeds the bounded-queue bound: per-message diagnostic goroutines returned", n)
 	}
 }
