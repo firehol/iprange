@@ -141,14 +141,122 @@ def profile_path():
     return norm if len(norm) >= 3 else ""
 
 
+def _expand_env_vars(value):
+    """Expand %NAME% and $NAME/${NAME} environment references.
+
+    Unknown names stay literal so a comparison never misfires on a
+    non-path string that merely resembles a variable reference."""
+    try:
+        value = os.path.expandvars(value)
+    except (ValueError, TypeError):
+        pass
+    if "%" in value:
+        import re
+
+        def repl(match):
+            name = match.group(1)
+            return os.environ.get(name, match.group(0))
+
+        try:
+            value = re.sub(r"%([^%]+)%", repl, value)
+        except (ValueError, TypeError):
+            pass
+    return value
+
+
+# Windows device/verbatim prefix forms, built from chr(92) so the
+# trailing backslash cannot be mistaken for a source escape:
+# ``\\?\\UNC\`` rewrites a verbatim UNC path back to the ordinary
+# ``\\server\share`` form; the other prefixes are stripped away.
+_BS = chr(92)
+_DEVICE_UNC = _BS + _BS + "?" + _BS + "UNC"
+_DEVICE_PREFIXES = (_BS + _BS + "?" + _BS,
+                    _BS + _BS + "." + _BS,
+                    _BS + _BS + "?" + _BS + _BS,
+                    _BS + _BS + "?" + "?" + _BS)
+
+
+def _strip_device_prefix(value):
+    """Map Windows verbatim/device spellings back to ordinary path
+    spellings before comparison.  ``\\?\\UNC\\server\\share``
+    (any case) becomes ``\\server\\share``; the ``\\?\\``,
+    ``\\.\\`` and ``\\??\\`` prefixes are stripped.  Applied
+    only on Windows; other platforms keep the value unchanged."""
+    lowered = value.lower()
+    if lowered.startswith(_DEVICE_UNC.lower()):
+        return value[len(_DEVICE_UNC):]
+    for prefix in _DEVICE_PREFIXES:
+        if lowered.startswith(prefix.lower()):
+            return value[len(prefix):]
+    return value
+
+
+def _is_drive_relative(value):
+    """True for a drive-relative spelling such as ``C:foo`` (drive
+    prefix without a following separator), which resolves against the
+    current directory on that drive."""
+    return (len(value) >= 2 and value[1] == ":"
+            and (len(value) == 2
+                 or value[2] not in (os.sep, "/", "\\")))
+
+
+def _privacy_spellings(value):
+    """Candidate normcased spellings of one string used for the
+    operator-profile comparison.
+
+    Every candidate is separator-normalized, environment-expanded,
+    and (on Windows) device-prefix-stripped.  The direct spelling
+    catches the literal form; the lexically resolved spelling catches
+    ``..`` parent segments and, on POSIX, doubled leading separators
+    (the kernel resolves ``//home`` as ``/home``); a drive-relative
+    spelling (``C:Users\\...``) is additionally anchored through
+    ``os.path.abspath`` because it resolves against the current
+    directory on that drive, which only the runtime knows.
+    """
+    norm = value.replace("/", os.sep).replace("\\", os.sep)
+    if "%" in norm or "$" in norm:
+        norm = _expand_env_vars(norm)
+    if os.name == "nt":
+        norm = _strip_device_prefix(norm)
+    out = [os.path.normcase(norm)]
+    resolved = os.path.normcase(os.path.normpath(norm)) if norm else norm
+    if os.sep == "/" and resolved.startswith("//"):
+        resolved = "/" + resolved.lstrip("/")
+    if resolved != out[0]:
+        out.append(resolved)
+    if os.name == "nt" and _is_drive_relative(norm):
+        anchored = os.path.normcase(os.path.normpath(os.path.abspath(norm)))
+        if anchored not in out:
+            out.append(anchored)
+    return out
+
+
+def _matches_profile(spelling, profile):
+    """True when one normcased spelling is at or under the profile."""
+    return (spelling == profile
+            or spelling.startswith(profile + os.sep))
+
+
 def under_profile(path):
-    """True when an absolute path lives at or under the operator's
-    profile (normcase prefix match, both separator spellings)."""
+    """True when a path lives at or under the operator's profile.
+
+    Every candidate spelling of the path is compared --- the direct
+    form, the lexically resolved form, the drive-relative anchored
+    form, and the realpath (so a symlink or junction into the profile
+    is refused with the same spelling the evidence records will
+    carry).
+    """
     profile = profile_path()
     if not profile:
         return False
-    norm = os.path.normcase(os.path.normpath(os.path.abspath(path)))
-    return norm == profile or norm.startswith(profile + os.sep)
+    for spelling in _privacy_spellings(path):
+        if _matches_profile(spelling, profile):
+            return True
+    try:
+        real = os.path.normcase(os.path.normpath(os.path.realpath(path)))
+    except OSError:
+        return False
+    return _matches_profile(real, profile)
 
 
 def personal_path_in_report(report):
@@ -163,16 +271,8 @@ def personal_path_in_report(report):
 
     def visit(value):
         if isinstance(value, str):
-            norm = os.path.normcase(
-                value.replace("/", os.sep).replace("\\", os.sep))
-            # Also test the `..`-resolved spelling so a path that
-            # resolves into the profile through parent segments is
-            # caught even when the raw spelling hides it.
-            resolved = os.path.normcase(os.path.normpath(norm)) \
-                if norm else norm
-            if (norm == profile or norm.startswith(profile + os.sep)
-                    or resolved == profile
-                    or resolved.startswith(profile + os.sep)):
+            if any(_matches_profile(spelling, profile)
+                   for spelling in _privacy_spellings(value)):
                 hit.append(value)
         elif isinstance(value, dict):
             for item in value.values():

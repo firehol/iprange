@@ -1816,6 +1816,76 @@ def _self_test():
     else:
         print("[P2-7] dotdot-resolved leak detected")
 
+    # P2-7 spelling classes (round-16.2 security/portability findings):
+    # environment-variable, doubled-separator, verbatim/device-prefix,
+    # drive-relative, and symlink-resolved profile spellings must all
+    # trip the privacy net.
+    env_variable = "%USERPROFILE%" if os.name == "nt" else "$HOME"
+    env_report = dict(clean_report,
+                      work_dir=os.path.join(env_variable, "scratch", "x"))
+    if personal_path_in_report(env_report) is None:
+        problems.append("P2-7 env-var profile spelling not detected")
+    else:
+        print("[P2-7] env-var profile spelling detected")
+
+    doubled = None
+    if os.sep == "/":
+        profile_abs = os.path.normpath(os.path.abspath(
+            os.path.expanduser("~")))
+        doubled = "//" + profile_abs.lstrip("/")
+    if doubled is not None:
+        doubled_report = dict(clean_report,
+                              work_dir=os.path.join(doubled, "scratch", "x"))
+        if personal_path_in_report(doubled_report) is None:
+            problems.append(
+                "P2-7 doubled-separator profile spelling not detected")
+        else:
+            print("[P2-7] doubled-separator profile spelling detected")
+
+    if os.name == "nt":
+        profile_abs = os.path.normpath(os.path.abspath(
+            os.path.expanduser("~")))
+        verbatim = "\\\\?\\" + profile_abs
+        verbatim_report = dict(clean_report,
+                               work_dir=os.path.join(verbatim,
+                                                     "scratch", "x"))
+        if personal_path_in_report(verbatim_report) is None:
+            problems.append("P2-7 verbatim profile spelling not detected")
+        else:
+            print("[P2-7] verbatim profile spelling detected")
+        if len(profile_abs) >= 3 and profile_abs[1] == ":":
+            drive_relative = profile_abs[:2] + profile_abs[3:]
+            drivers_report = dict(clean_report,
+                                  work_dir=os.path.join(drive_relative,
+                                                        "scratch", "x"))
+            if personal_path_in_report(drivers_report) is None:
+                problems.append(
+                    "P2-7 drive-relative profile spelling not detected")
+            else:
+                print("[P2-7] drive-relative profile spelling detected")
+
+    # A symlink whose realpath lands under the profile must be
+    # refused by under_profile even when the link's own spelling is
+    # neutral (skip when the checkout itself is outside the profile,
+    # or when the platform cannot create links without privileges).
+    if under_profile(checkout):
+        link_root = owned_temp_dir("wh-selftest-link-")
+        try:
+            link = os.path.join(link_root, "linked")
+            try:
+                os.symlink(checkout, link)
+            except OSError:
+                print("[P2-7] symlink control skipped (privileges)")
+            else:
+                if not under_profile(link):
+                    problems.append(
+                        "P2-7 symlink-into-profile not refused")
+                else:
+                    print("[P2-7] symlink-into-profile refused")
+        finally:
+            shutil.rmtree(link_root, ignore_errors=True)
+
+
     # P2-3 scratch-root pin: an override that points the ambient temp
     # root inside the checkout must not place self-test scratch there
     # (a Windows-styled TEMP/--self-test run previously left profile-

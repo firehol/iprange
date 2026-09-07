@@ -9118,7 +9118,7 @@ makes the sanitizer genuinely cwd-invariant:
    back to a neutral platform root (`/tmp` on POSIX, drive-root
    `\Temp` on Windows, matching the documented authorized scratch
    convention).  The complete sweep of `tempfile` scratch uses in
-   `v4/cli/*.py` pins all six sites: the Windows-housekeeping pair and
+   `v4/cli/*.py` pins all nine scratch-create sites: the 
    removal self-tests, the three resource self-test roots, run.py's
    default per-case work directory, run.py's `_self_test`,
    `sensitivity_gate.py`'s per-mode work directory, and
@@ -9185,3 +9185,66 @@ normal environment and with `TMPDIR` pointed at the checkout, and zero
 `iprange-sens-*`/`C:*` entries appear at the checkout root in either
 mode.  Sensitive-data gate: clean.  Artifact gate: unchanged (harness
 CLA only).
+
+#### Wave 16 follow-up round 16.2 (2026-09-07) — profile-spelling hardening of the shared privacy net
+
+The re-anchored role round at `f1c7c3f2` returned three FAILs that
+share one root class: the profile-privacy comparisons in
+`v4/cli/command_sanitize.py` matched only a narrow set of literal
+spellings.  The security role found verbatim/device-path, drive-
+relative, 8.3, and `%VAR%` spellings bypassed both the staging guard
+and the write-time scan (`\\?\C:\Users\...`, `\\.\C:\...`,
+`\??\C:\...`, `C:Users\...`, `%USERPROFILE%\...`).  The portability
+role found the POSIX doubled-separator spelling `//home//costa/...`
+bypassed all three defenses (posixpath preserves `//` as a distinct
+root; the kernel resolves it as `/home`).  The operations role found
+a gate/record mismatch: a symlink or junction staged under the
+neutral scratch resolved (via the recorded realpath) into the
+profile, so the run completed and then failed at the write-time scan
+with a misleading late refusal.
+
+Repair, in the shared module (one authoritative implementation):
+
+1. `_privacy_spellings` builds every candidate spelling per string:
+   separator-normalized, environment-expanded (`%NAME%` and
+   `$NAME`/`${NAME}`, unknown names stay literal), Windows
+   device/verbatim prefixes stripped (`\\?\UNC\` -> `\\`, then
+   `\\?\`, `\\.\`, `\??\`, `\\??\\`), the lexically resolved form
+   (catching `..` parent segments and, on POSIX, doubled leading
+   separators), and for drive-relative spellings the abspath-anchored
+   form (drive current-directory semantics are runtime-only).
+2. `under_profile` additionally compares the realpath, so a
+   symlink/junction into the profile is refused up front with the
+   same spelling the evidence would record (the operations finding's
+   late-failure mode is gone).
+3. `personal_path_in_report` uses the same candidate spellings for
+   every string value.
+4. The Windows-housekeeping P2-7 self-test pins each new class:
+   `%USERPROFILE%`/`$HOME` expansion, the POSIX `//` spelling, the
+   verbatim and drive-relative Windows spellings, and a symlink whose
+   realpath lands under the profile (skipped when the checkout is
+   outside the profile or links need privileges).  All rows pass on
+   Linux (checkout root and subdirectory) and natively on the Windows
+   host.
+
+Short-name (8.3) resolution is intentionally not implemented: NTFS
+short-name generation is disabled by default on modern Windows, short
+names cannot be resolved from pure Python portably, and every
+documented staging path is long-form; the guard and scan cover the
+documented input surface.  A drive-relative spelling embedded in a
+report body (not as an input) is anchored through `abspath`, which
+resolves against the current directory on that drive at run time.
+
+Re-qualification: the structural scan over every committed evidence
+file returns clean (no false positives on the checkout-relative or
+scratch spellings the records carry); the four harnesses' in-profile
+refusals still fire immediately (direct and symlinked spellings); the
+sensitivity gate 14/14 and kind-gate self-test PASS under a normal
+environment and with `TMPDIR` pointed at the checkout; the full
+battery is green with regenerated report command arrays byte-identical
+to the committed evidence; the Windows-housekeeping qualification
+runs 2/2 PASS natively at the SHASUMS identities.  Sensitive-data
+gate: clean.  Artifact gate: unchanged (harness CLI behavior is
+additive refusal of policy-violating staging).  The round-16 record's
+sweep numeral is corrected (nine scratch-create sites, six grouped
+descriptions).
