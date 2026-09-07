@@ -1233,18 +1233,19 @@ def self_test():
     stub = subprocess.Popen(
         ["/bin/sh", "-c",
          r"""printf '%s
-' '{"jsonrpc":"2.0","id":1,"result":{}}' '{"jsonrpc":"2.0","id":2,"result":{}}' ; sleep 2"""],
+' '{"jsonrpc":"2.0","id":1,"result":{}}' '{"jsonrpc":"2.0","id":2,"result":{}}' ; exit 0"""],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL, start_new_session=True)
     record_spawn(stub)
     try:
         started = time.monotonic()
         responses = read_responses(stub, 1, 2.0)
-        drained, _reached_eof = drain_stdout(stub, 1.0)
+        drained, reached_eof = drain_stdout(stub, 1.0)
         elapsed = time.monotonic() - started
         print(f"self-test trailing-residue control: "
               f"{len(responses)} expected response plus "
-              f"{len(drained)} residue bytes in {elapsed:.3f} s")
+              f"{len(drained)} residue bytes "
+              f"(eof={reached_eof}) in {elapsed:.3f} s")
         if len(responses) != 1:
             failures.append(
                 f"trailing-residue control returned {len(responses)} "
@@ -1253,6 +1254,24 @@ def self_test():
             failures.append(
                 "trailing-residue control captured no trailing response; "
                 "the proof residue check would miss a stray frame")
+        if not reached_eof:
+            failures.append(
+                "trailing-residue control did not reach EOF; "
+                "the residue-rejection check needs a real EOF")
+        try:
+            require_clean_drain(
+                stub, "self-test-trailing", drained, reached_eof)
+        except ResourceFailure as exc:
+            if "trailing stdout bytes" not in str(exc):
+                failures.append(
+                    f"trailing-residue control rejected with the wrong "
+                    f"failure: {exc}")
+        else:
+            failures.append(
+                "trailing-residue control: require_clean_drain accepted "
+                "non-empty trailing bytes; the proof residue rejection "
+                "is missing (removing the require_clean_drain rejection "
+                "must fail this control)")
         if elapsed >= 3.0:
             failures.append(
                 f"trailing-residue control ran {elapsed:.3f} s "

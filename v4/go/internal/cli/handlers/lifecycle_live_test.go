@@ -234,8 +234,18 @@ func TestMainBasenameRoundTripInvalidUtf8(t *testing.T) {
 		t.Fatal(err)
 	}
 	wire := LocalBasenameBytes(basename)
-	if wire != "x\ufffd" {
-		t.Fatalf("wire = %q, want the Rust maximal-subpart text", wire)
+	// POSIX stores the two raw bytes and renders the Rust
+	// maximal-subpart text (one U+FFFD); Windows stores the UTF-16LE
+	// units of the name, and Go's string view already replaced each
+	// invalid byte with U+FFFD before the constructor ran, so the
+	// units decode to two replacement characters.  Both products
+	// round-trip their own rendered text on both platforms.
+	want := "x\ufffd"
+	if runtime.GOOS == "windows" {
+		want = "x\ufffd\ufffd"
+	}
+	if wire != want {
+		t.Fatalf("wire = %q, want %q", wire, want)
 	}
 	object := rawObject{"main_basename": json.RawMessage(strconv.Quote(wire))}
 	decoded, err := decodeMainBasename(object, path)
@@ -263,6 +273,14 @@ func TestMainBasenameRoundTripInvalidUtf8(t *testing.T) {
 	// A mismatching wire is still rejected with the exact error.
 	if _, err := decodeMainBasename(rawObject{"main_basename": json.RawMessage(`"other.iprange"`)}, "/tmp/live.iprange"); err == nil {
 		t.Fatal("mismatching main_basename was accepted")
+	}
+
+	// The Rust component-validation contract: ".", "..", and roots
+	// have no file name, so the path cannot resolve at all.
+	for _, bad := range []string{".", "..", "/"} {
+		if _, err := decodeMainBasename(rawObject{"main_basename": json.RawMessage(`"x"`)}, bad); err == nil {
+			t.Fatalf("decodeMainBasename accepted the component path %q", bad)
+		}
 	}
 }
 

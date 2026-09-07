@@ -508,10 +508,10 @@ impl<K: InputKey> TextInputSource<K> {
                             .map_err(input_sdk_error)?;
                     }
                     if dropped_ipv6 > 0 {
-                        eprintln!(
+                        stderr_diag(format!(
                             "iprange: {}: {dropped_ipv6} IPv6 entries dropped (use -6 for IPv6 mode)",
                             self.path_label()
-                        );
+                        ));
                     }
                     self.active_path = None;
                 }
@@ -1317,6 +1317,15 @@ fn resolve_hostnames(
     Ok(addresses)
 }
 
+/// Write one advisory diagnostic without ever blocking the caller:
+/// a full stderr pipe must not stall the input worker and wedge
+/// session shutdown (external review finding).  The write is
+/// best-effort from a detached thread and may be cut off at process
+/// exit; diagnostics are advisory, never error semantics.
+fn stderr_diag(message: String) {
+    std::thread::spawn(move || eprintln!("{message}"));
+}
+
 fn resolve_one(name: &str, silent: bool, output: &mut Vec<IpAddr>) -> Result<(), String> {
     for attempt in 1..=20 {
         match (name, 80).to_socket_addrs() {
@@ -1329,13 +1338,13 @@ fn resolve_one(name: &str, silent: bool, output: &mut Vec<IpAddr>) -> Result<(),
                 let temporary = message.contains("Temporary failure in name resolution");
                 if temporary && attempt < 20 {
                     if !silent {
-                        eprintln!("iprange: DNS: '{name}' will be retried: {error}");
+                        stderr_diag(format!("iprange: DNS: '{name}' will be retried: {error}"));
                     }
                     std::thread::sleep(std::time::Duration::from_secs(1));
                     continue;
                 }
                 if !silent {
-                    eprintln!("iprange: DNS: '{name}' failed permanently: {error}");
+                    stderr_diag(format!("iprange: DNS: '{name}' failed permanently: {error}"));
                 }
                 return Err(format!("DNS resolution failed for '{name}': {message}"));
             }

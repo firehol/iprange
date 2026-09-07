@@ -28,7 +28,11 @@ type LocalBasename struct {
 // encoding tag.
 func platformBasenameFromPath(path string) (LocalBasename, error) {
 	name := filepath.Base(path)
-	if name == "." || name == string(filepath.Separator) {
+	// Rust Path::file_name returns None for ".", "..", separators, and
+	// empty names; the Go constructor must reject the same component
+	// shapes so the SDK surface stays Rust-parity (external review
+	// finding: Go accepted "..").
+	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) {
 		return LocalBasename{}, &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
 	}
 	bytes := []byte(name)

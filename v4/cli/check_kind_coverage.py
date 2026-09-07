@@ -693,6 +693,11 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
     # closed bypass (second role-round finding).
     argv_required_here = True  # noqa: F841 - documents the rule
     argv = _command_argv(report)
+    # namespace is derived only when the recorded command exists; the
+    # no-command branch must still end with a recorded problem and not
+    # an uncontrolled UnboundLocalError at the command_fixture check
+    # below (external review finding).
+    namespace = None
     if argv is None:
         problems.append(
             f"matrix {path}: report records no command argv")
@@ -714,7 +719,6 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                 f"matrix {path}: cannot derive the matrix-runner parser "
                 f"from run.py main(): {exc}")
             runner_parser = None
-        namespace = None
         if runner_parser is not None:
             namespace = _parse_recorded_command(
                 runner_parser, argv, f"matrix {path}", problems)
@@ -3340,6 +3344,20 @@ def _self_test():
                 f"actor-swapped database.metadata ledger rejected: "
                 f"{problems}")
         actor_swapped_case()
+
+        # 46. A matrix report without command metadata must end with a
+        #     recorded problem, not an uncontrolled exception
+        #     (external review finding): the gate stays fail-closed
+        #     and the diagnosis is stable.
+        no_command = matrix_report("go", [], 0)
+        del no_command["command"]
+        no_command_path = os.path.join(work, "matrix-no-command.json")
+        assign(no_command_path, no_command)
+        problems, _c, _s = assess([no_command_path], [])
+        assert any("records no command argv" in problem
+                   for problem in problems), (
+            f"matrix report without command did not record the argv "
+            f"problem: {problems}")
 
 
 if __name__ == "__main__":

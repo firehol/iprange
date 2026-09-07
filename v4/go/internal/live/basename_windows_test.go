@@ -28,3 +28,13 @@ func TestLocalBasenameFromPathWindowsUnits(t *testing.T) {
 		}
 	}
 }
+
+// The Windows constructor must reject the same missing-component
+// shapes as Rust Path::file_name (".", "..", the separator, empty).
+func TestLocalBasenameFromPathRejectsDotComponentsWindows(t *testing.T) {
+	for _, path := range []string{".", "..", "C:/", "C:\\", ""} {
+		if _, err := LocalBasenameFromPath(path); err == nil {
+			t.Fatalf("LocalBasenameFromPath(%q) succeeded, want the Rust InvalidArgument error", path)
+		}
+	}
+}

@@ -143,6 +143,7 @@ func CurrentPublish(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Han
 		if serr != nil {
 			return nil, inputError(serr)
 		}
+		defer source.Close()
 		result, err = iprangedb.CreateImmutableFeedV4(destination, valueTag, feed, metadataJSON, policy, source, &budget, token)
 		sourceCode = source.LastInputErrorCode()
 		sourceMessage = source.LastInputErrorMessage()
@@ -151,6 +152,7 @@ func CurrentPublish(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Han
 		if serr != nil {
 			return nil, inputError(serr)
 		}
+		defer source.Close()
 		result, err = iprangedb.CreateImmutableFeedV6(destination, valueTag, feed, metadataJSON, policy, source, &budget, token)
 		sourceCode = source.LastInputErrorCode()
 		sourceMessage = source.LastInputErrorMessage()

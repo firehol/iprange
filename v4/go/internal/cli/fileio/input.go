@@ -215,6 +215,24 @@ func (s *TextInputSource6) NextBatch() ([]iprangedb.AddressRange6, error) {
 	return s.core.nextBatch()
 }
 
+// Close deterministically releases any input file the source still
+// holds (the iteration may have stopped early: an SDK build failure,
+// a budget or conflict abort, or a cancelled session).  Idempotent;
+// the caller must invoke it on every exit path.  The core also closes
+// its own file on every internal error, so Close mainly covers early
+// SDK termination (external review finding).
+func (s *TextInputSource4) Close() {
+	s.core.closeActive()
+	s.core.activePath = ""
+}
+
+// Close deterministically releases any input file the source still
+// holds; see TextInputSource4.Close.
+func (s *TextInputSource6) Close() {
+	s.core.closeActive()
+	s.core.activePath = ""
+}
+
 // LastInputErrorCode returns the adapter classification of the most
 // recent source failure ("" when none); the immutable-feed handler
 // reports it when the SDK build failed because the input source failed
@@ -245,6 +263,17 @@ func (c *textInputCore[K]) init(paths []string, options TextInputOptions, expand
 	c.options = options
 	c.lineBuf = make([]byte, 0, 1024)
 	return nil
+}
+
+// stderrDiag writes one advisory diagnostic without ever blocking the
+// caller: a full stderr pipe must not stall the input worker and wedge
+// session shutdown (external review finding).  The write is best-effort
+// from a detached goroutine and may be cut off when the process exits;
+// diagnostics are advisory, never durability or error semantics.
+func stderrDiag(format string, args ...any) {
+	go func() {
+		fmt.Fprintf(os.Stderr, format, args...)
+	}()
 }
 
 // familyMatches reports whether one parsed range can be advertised by
@@ -295,9 +324,11 @@ func (c *textInputCore[K]) nextBatch() ([]K, error) {
 		case stepTextLine:
 			line, err := parseTextLine(unit.text, c.options)
 			if err != nil {
+				c.closeAndClear()
 				return nil, c.formatError(err.Error())
 			}
 			if err := c.consumeParsed(line); err != nil {
+				c.closeAndClear()
 				return nil, err
 			}
 		case stepTextFinished:
@@ -310,11 +341,12 @@ func (c *textInputCore[K]) nextBatch() ([]K, error) {
 			c.closeActive()
 			if len(hostnames) > 0 {
 				if err := c.resolveNames(hostnames); err != nil {
+					c.activePath = ""
 					return nil, err
 				}
 			}
 			if dropped > 0 {
-				fmt.Fprintf(os.Stderr, "iprange: %s: %d IPv6 entries dropped (use -6 for IPv6 mode)\n", c.pathLabel(), dropped)
+				stderrDiag("iprange: %s: %d IPv6 entries dropped (use -6 for IPv6 mode)\n", c.pathLabel(), dropped)
 			}
 			c.activePath = ""
 		case stepBinaryRecord:
@@ -322,6 +354,7 @@ func (c *textInputCore[K]) nextBatch() ([]K, error) {
 				c.active.binary.remaining--
 			}
 			if err := c.pushRange(unit.value); err != nil {
+				c.closeAndClear()
 				return nil, err
 			}
 		case stepBinaryEnd:
@@ -348,7 +381,22 @@ type step struct {
 	value parsedRange
 }
 
+// readStep returns the next parser step, deterministically closing
+// the active input file on any error: a failed parse must never leave
+// the file open until garbage collection (external review finding; on
+// Windows an open file blocks removal of the input path).
 func (c *textInputCore[K]) readStep() (*step, error) {
+	value, err := c.readStepInner()
+	if err != nil {
+		c.closeActive()
+		c.activePath = ""
+	}
+	return value, err
+}
+
+// readStepInner implements one parser step while the active input is
+// healthy; readStep owns the close-on-error contract.
+func (c *textInputCore[K]) readStepInner() (*step, error) {
 	if c.active == nil {
 		return nil, c.formatError("input is not active")
 	}
@@ -426,6 +474,15 @@ func (c *textInputCore[K]) closeActive() {
 	c.active = nil
 }
 
+// closeAndClear deterministically releases the active input and its
+// path label on an error exit (external review finding: a parse or
+// range error must never leave the file open until garbage
+// collection).
+func (c *textInputCore[K]) closeAndClear() {
+	c.closeActive()
+	c.activePath = ""
+}
+
 func (c *textInputCore[K]) openNext() (bool, error) {
 	for len(c.paths) > 0 {
 		path := c.paths[0]
@@ -464,18 +521,26 @@ func (c *textInputCore[K]) openNext() (bool, error) {
 			}
 			if equalBytes(first, binaryV4Header) {
 				if c.options.Family == AddressFamilyInputIPv6 {
+					_ = file.Close()
+					c.activePath = ""
 					return false, c.formatError("IPv4 binary file cannot load in IPv6 mode")
 				}
 				if err := c.openBinary(reader, file, false); err != nil {
+					_ = file.Close()
+					c.activePath = ""
 					return false, err
 				}
 				return true, nil
 			}
 			if equalBytes(first, binaryV6Header) {
 				if c.options.Family == AddressFamilyInputIPv4 {
+					_ = file.Close()
+					c.activePath = ""
 					return false, c.formatError("IPv6 binary file cannot load in IPv4 mode")
 				}
 				if err := c.openBinary(reader, file, true); err != nil {
+					_ = file.Close()
+					c.activePath = ""
 					return false, err
 				}
 				return true, nil
@@ -496,9 +561,13 @@ func (c *textInputCore[K]) openNext() (bool, error) {
 		}
 		parsed, parseErr := parseTextLine(first, c.options)
 		if parseErr != nil {
+			c.closeActive()
+			c.activePath = ""
 			return false, c.formatError(parseErr.Error())
 		}
 		if err := c.consumeParsed(parsed); err != nil {
+			c.closeActive()
+			c.activePath = ""
 			return false, err
 		}
 		return true, nil
@@ -1522,13 +1591,13 @@ func resolveOne(name string, silent bool) ([]net.IP, error) {
 		}
 		if temporary && attempt < 20 {
 			if !silent {
-				fmt.Fprintf(os.Stderr, "iprange: DNS: '%s' will be retried: %v\n", name, err)
+				stderrDiag("iprange: DNS: '%s' will be retried: %v\n", name, err)
 			}
 			time.Sleep(time.Second)
 			continue
 		}
 		if !silent {
-			fmt.Fprintf(os.Stderr, "iprange: DNS: '%s' failed permanently: %v\n", name, err)
+			stderrDiag("iprange: DNS: '%s' failed permanently: %v\n", name, err)
 		}
 		return nil, fmt.Errorf("DNS resolution failed for '%s': %s", name, message)
 	}

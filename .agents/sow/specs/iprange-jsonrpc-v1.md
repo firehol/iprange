@@ -578,9 +578,12 @@ renders them as decoded Unicode text (lossy invalid-unit
 replacement), and a store that records single-byte path bytes
 renders them as text with the maximal-subpart rule — every
 ill-formed subsequence is replaced by one U+FFFD covering its
-maximal subpart (the longest prefix of the remaining bytes that
-could begin a well-formed UTF-8 sequence), and the bytes after that
-subpart re-scan from the next byte; this is exactly Rust
+maximal subpart — the longest prefix of the remaining bytes that
+could begin a well-formed UTF-8 sequence, or the single next byte
+when no such non-empty prefix exists (for example a lone
+continuation byte or a lead byte such as FF that can never begin a
+well-formed sequence) — and the bytes after that subpart re-scan
+from the next byte; this is exactly Rust
 `String::from_utf8_lossy` semantics.  The resolve methods compare
 against the same rendered text, so a result always round-trips
 through its destination path.
