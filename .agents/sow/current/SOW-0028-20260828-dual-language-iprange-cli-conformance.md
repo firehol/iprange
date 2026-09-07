@@ -8983,9 +8983,13 @@ unchanged identities (Go `02e7daa7...` / worker `1dac468e...`,
 Rust `c960a64f...`, provenance `5dd8e010`, tree_clean); personal
 path grep clean.  Identities unchanged (SHASUMS 8/8).  Same-failure
 search: no other argv-element rewriting exists in the
-qualification harnesses; the `crash_reappearance_possible` wording
-now appears only where the product truthfully reports it (the
-Windows housekeeping proofs); the sanitizer scenarios are covered
+qualification harnesses; a full-tree `crash_reappearance_possible`
+grep found one residual Linux-scoped comment in crash_harness.py
+(the round-13 repair's same-failure sweep had missed it), which is
+fixed here, and the wording now appears only in Windows-kind
+contexts where the products truthfully report it (the Windows
+housekeeping proofs, the schema enum) and in dated historical
+records; the sanitizer scenarios are covered
 by the committed simulation checks recorded above.  Sensitive-data
 gate: clean.  Artifact gate: AGENTS.md unchanged; runtime project
 skills unchanged; specs unchanged (the repairs restore spec'd
