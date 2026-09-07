@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -189,6 +190,43 @@ func TestScratchAtExpansion(t *testing.T) {
 	expanded, err := expandPaths([]string{"@" + dir}, true, 2, 1_048_576)
 	if err != nil || len(expanded) != 2 {
 		t.Fatalf("expand: %v %v", expanded, err)
+	}
+}
+
+// TestScratchAtExpansionRawPathThroughSymlinkParent pins the
+// @-directory expansion over a raw referenced spelling: entry paths
+// must be built by raw concatenation (Rust read_dir entry.path()),
+// never by filepath.Join, which lexically cleans a symlinked
+// intermediate plus ".." and would refuse the kernel-resolved
+// directory or ingest a different one.  POSIX kernel-resolution
+// class; on Windows both products pass the identical raw spelling to
+// the same kernel, so parity cannot diverge there.
+func TestScratchAtExpansionRawPathThroughSymlinkParent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX kernel-resolution class")
+	}
+	root := t.TempDir()
+	for _, d := range []string{"real", "work", "realdir"} {
+		if err := os.Mkdir(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_ = os.WriteFile(filepath.Join(root, "realdir", "01.txt"), []byte("1.2.3.4\n"), 0o644)
+	if err := os.Symlink("../real", filepath.Join(root, "work", "jump")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	sep := string(os.PathSeparator)
+	// Kernel resolution: work/jump -> root/real, then ".." -> root, so
+	// the referenced spelling names root/realdir.  filepath.Join on the
+	// referenced spelling would instead name root/work/realdir.
+	referenced := root + sep + "work" + sep + "jump" + sep + ".." + sep + "realdir"
+	expanded, err := expandPaths([]string{"@" + referenced}, true, 2, 1_048_576)
+	if err != nil {
+		t.Fatalf("expand raw referenced dir: %v", err)
+	}
+	want := referenced + sep + "01.txt"
+	if len(expanded) != 1 || expanded[0] != want {
+		t.Fatalf("expanded = %v, want [%s]", expanded, want)
 	}
 }
 

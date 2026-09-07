@@ -20,7 +20,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -812,7 +811,12 @@ func expandPaths(paths []string, expandAtPaths bool, maxExpandedPaths, maxLineBy
 			}
 			var files []string
 			for _, entry := range entries {
-				entryPath := filepath.Join(referenced, entry.Name())
+				// Entry paths are built by raw concatenation exactly like
+				// Rust read_dir entry.path(): filepath.Join would lexically
+				// clean a symlinked intermediate plus ".." in the caller's
+				// referenced spelling and refuse or ingest a different
+				// directory.
+				entryPath := referenced + string(os.PathSeparator) + entry.Name()
 				entryInfo, statErr := os.Stat(entryPath)
 				if statErr == nil && entryInfo.Mode().IsRegular() {
 					files = append(files, entryPath)
