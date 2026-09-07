@@ -332,9 +332,38 @@ unix rows; SHASUMS lockstep verified (`sha256sum -c` 8/8 OK).  The
 milestone-4 closure record stands as qualified at this final
 revision; milestone 5 remains unstarted per user decision 1A; the
 round-4 P3 commit-subject history rewrite remains pending user
+Wave-16 follow-up round-9 state (2026-09-07, final): the external
+whole-milestone control review of the round-8 revision
+(`732cf002`, product source `e54015d1`) returned NEEDS CHANGES
+with four P2 and four P3 verified findings: Go/Rust Windows
+prefix-parser divergences (`\\?\\UNC/server\share` is
+VerbatimUNC with no name; the share's trailing separator is not
+part of the UNC prefix, so doubled-separator share spellings
+doubled separators in derived paths), the snapshot live-self probe
+failing valid `main/` spellings (`rejectLiveSelf` opened the raw
+destination instead of the bound main-name spelling), the Rust
+thread-creation tripwire double-counting its scanner seed (it
+silently skipped the watchdog spawn region), destination-preflight
+tests masking trailing-dot rejection with `filepath.Clean`, and
+the P3 relabel of six superseded evidence README blocks.  All
+eight findings are repaired at product revision `01356600`
+(qualification HEAD `bfc60f96` adds one test-only raw-parent
+helper fix that makes the preflight suite pass natively on
+Windows); the five new golden rows were re-probed natively with
+windows-host rustc 1.97.1 and match.  Linux identities at
+`01356600` are Go `23e4730a...` / worker `d83854dc...` and carried
+Rust `07c4e314...` / worker `77b6d086...` / fixture `df3623a6...`;
+Windows identities Go `37a3e563...` (worker `c92b804b...`) and
+Rust `c960a64f...`; every battery gate is green at the revision,
+Windows 23/23 natively, Windows housekeeping 2/2 PASS.  The
+milestone-4 closure record stands as qualified at this final
+revision; milestone 5 remains unstarted per user decision 1A; the
+round-4 P3 commit-subject history rewrite remains pending user
+approval.
 approval.  After this round, the closure proceeds to the external
 whole-milestone control review at exactly this revision, with no
 further commits expected after its verdict.
+
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -8391,3 +8420,113 @@ behavior); end-user docs unchanged (no CLI surface change).  The
 round-4 P3 item (commit subjects `9374917e`/`e3d7bf61` naming the
 external review model) remains open pending user approval for the
 history rewrite.
+
+#### Wave 16 follow-up round 9 (2026-09-07) — the external-control turn-5 repair wave at `01356600`
+
+The round-8 closure revision `732cf002` was submitted to the
+external whole-milestone control (same session b5dd923d…).  Turn 5
+returned NEEDS CHANGES; every finding was independently verified
+and is repaired at product revision `01356600` (qualification HEAD
+`bfc60f96` adds one test-only raw-parent helper repair driven by
+the native Windows suite):
+
+1. **P2 — Go snapshot live-self probe opened the raw destination
+   spelling.**  `rejectLiveSelf` Lstat/open'ed the raw destination
+   path, so valid `main/` and `main/.` destination spellings failed
+   ENOTDIR where Rust `Destination::bind` (open parent + main)
+   succeeds.  Repair: bind `main = live.FileName(destinationPath)`,
+   `dir = live.FileParent(destinationPath)`,
+   `bound = pathname.Push(dir, main)`, and probe `bound`; pinned by
+   `v4/go/internal/snapshot/reject_live_self_test.go` (POSIX-gated,
+   two tests).
+2. **P2 — Windows prefix-parser divergences.**  (a)
+   `PrefixParser::get_prefix` normalizes the eight-byte header
+   (`/` -> `\`) before matching `UNC\`, so `\\?\UNC/server\share`
+   is VerbatimUNC with no name; the Go port matched the raw header
+   and returned a wrong name.  (b) `parseUNC` consumed the share's
+   trailing separator (prefix len 15) while Rust `Prefix::len` is 14,
+   keeping the separator in the body, so `\\server\share\\leaf`
+   doubled separators in Go derived parent/sidecar spellings.
+   Repair: header normalization before the VerbatimUNC match and no
+   `consumed++` in `parseUNC`; `FileName` rewritten as an
+   allocation-free backward walk (0 allocs/op verified.  The
+   worktree-based wine differential oracle shared the raw-header bug
+   and was corrected (`.local/parity/tmp-wine2/oracle2.py`); the
+   driver re-run passes 296/296 Windows and 417/417 POSIX shapes,
+   and the disputed shapes pass 15/15.  Golden corpus grows to 201
+   rows (five forward-slash UNC/verbatim-UNC shapes), all five
+   re-probed natively on the authorized Windows host with rustc
+   1.97.1 and byte-matching.
+3. **P2 — Rust thread-creation tripwire skipped the watchdog
+   region.**  The scanner seeded the decorated item's opening brace
+   and then counted it again, so session.rs lines 824-3087
+   (including the watchdog spawn) were never checked.  Repair: seed
+   consumed once; the scanner returns checked/skipped counts and the
+   test asserts the watchdog markers (`iprange-signal-diag`) are in
+   the checked region; the negative control (inject a spawn at the
+   watchdog) fails as designed.
+4. **P2 — preflight tests masked trailing-dot rejection.**
+   `destination_preflight_test.go` and `bindpath_parity_test.go`
+   joined accept shapes with `filepath.Join` (which cleans a
+   trailing dot) and tolerated the `invalid_path/not_started`
+   envelope.  Repair: accept shapes are delivered verbatim through
+   raw (uncleaned) parents (`mkRawParent`), both preflights must
+   return nil, and `TestVerifyRejectsTrailingParent` creates the
+   resolveable target so a re-resolving regression would succeed and
+   be caught.  `mkRawParent` anchors at the volume root; the native
+   Windows suite demanded this (drive-relative seeding made the
+   parent never exist) and is fixed at `bfc60f96`.
+5. **P3 — six superseded blocks in `v4/cli/evidence/README.md`
+   relabelled** "Historical wave record (superseded by the head
+   block)".
+6. **P3 — commit subject `65ea9587` ("astra round-4")** folded into
+   the recorded open history-rewrite item (`9374917e`/`e3d7bf61`),
+   pending user approval; history is not rewritten.
+7. **P3 — `bindpath_parity_test.go` bound-directory handle leak**
+   fixed (deferred Close on the bound dir handles).
+8. **P3 — the extra model-name commit subject** noted in the same
+   open rewrite item.
+
+#### Round-9 re-qualification at the final revision
+
+- Go suite 23/23 packages PASS on Linux (qualified go1.26.4 and
+  host go1.27.0) and natively on the authorized Windows host
+  (go1.26.5, 23/23 including the 201-row golden, the push tests,
+  and the preflight suite); Rust workspace PASS on Linux (rustc
+  1.97.1, no Rust product source change — the tripwire test repair
+  is test-only).
+- Full battery PASS at the final staged identities (matrices 38/38
+  single and 14 PASS + 24 legitimate skips per mixed direction;
+  crash 16/16 both directions; the negative control 0/16; resource
+  proofs 8/8; kind-coverage gate PASS with all 46 self-test
+  controls; golden exchanges 55; sensitivity gate 14).
+- Windows housekeeping 2/2 PASS at `bfc60f96` on the authorized
+  Windows validation host (native Windows Python 3.14.6; Go
+  `37a3e563…`, Rust `c960a64f…` carried; provenance with
+  tree_clean).
+- Final Linux identities at `01356600` (staged in
+  `.local/shared/binaries/SHASUMS.txt`, sha256sum -c 8/8 OK): Go
+  product `23e4730a…`, Go worker `d83854dc…` (rebuilt with
+  `-buildvcs=false`), Rust product `07c4e314…`, Rust worker
+  `77b6d086…`, fixture `df3623a6…` (Rust binaries carry from the
+  round-4 qualified build at `ed29e437`); Windows Go product
+  `37a3e563…`, Windows Go worker `c92b804b…`, Windows Rust product
+  `c960a64f…` (carried).
+- `v4/cli/evidence/*`, `evidence/README.md`, and
+  `resource-record.md` are regenerated at these identities in the
+  records commit so the record and the identities cannot drift.
+- Same-failure search: after the prefix-parser repair, no raw
+  verbatim-header match or share-separator absorption remains in
+  the Go pathname port (the round-6 record's rules are superseded
+  by this record's wider rule: the prefix parser mirrors
+  `get_prefix` byte-for-byte); `FileName` has no allocation.
+- Sensitive-data gate: no secrets, credentials, community/customer
+  names, personal data, or private endpoints in this wave.
+- Artifact gate: AGENTS.md unchanged (no workflow change); runtime
+  project skills unchanged (no new how-to knowledge); the v4
+  JSON-RPC spec unchanged (no contract change — the repairs restore
+  the already-specified Rust reference behavior); end-user docs
+  unchanged (no CLI surface change).  The round-4 P3 item (commit
+  subjects `9374917e`/`e3d7bf61`/`65ea9587` naming the external
+  review model) remains open pending user approval for the history
+  rewrite.

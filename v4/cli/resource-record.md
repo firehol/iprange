@@ -134,7 +134,7 @@ then pinned and fixed the Windows prefix parser
 (`sys/path/windows_prefix.rs parse_prefix` port; `//a//b` is not a
 UNC prefix and `"C:."` has no file name or parent).  The current
 canonical Linux identities are recorded in `evidence/README.md`
-(Go product `b4aedb1c…`, Go worker `11001b94…`, Rust product
+(Go product `23e4730a…`, Go worker `d83854dc…`, Rust product
 `07c4e314…`, Rust worker `77b6d086…`, fixture `df3623a6…` at the
 round-6 Rust push join repair product revision `e54015d1` — the Go
 binary was rebuilt with `-buildvcs=false` after the parity and tester
@@ -148,8 +148,9 @@ directly after a verbatim prefix (`\\?\\C:/x`) leaked into file names,
 accept-gate results, and sidecar derivations that Rust never produces
 (the repair also mirrors the Rust verbatim push rebuild for
 `with_file_name`); the Rust binaries carry from the round-4 qualified
-build at `ed29e437`); the Windows-host products are Go `3ec21b97…`
-(worker `71229191…`) and Rust `c960a64f…` at the same revision.  The wave-13 role-round delta found the Rust EOF arm
+build at `ed29e437`); the Windows-host products are Go `37a3e563…`
+(worker `c92b804b…`) and Rust `c960a64f…` at qualification HEAD
+`bfc60f96`.  The wave-13 role-round delta found the Rust EOF arm
 missing the ceiling check that Go has — a final unterminated frame
 of LIMIT+1 bytes at EOF now exits non-zero in both products; the
 wave-14 delta repaired held over-limit frame reporting, the Windows
@@ -171,3 +172,22 @@ ceilings only.  Wave-10 note: the D1-A signal contract adds a
 deliberate ~25 ms grace wait to every clean-EOF exit in both
 products (measured ~31 ms total per session); milestone 5 must treat
 that as the per-session floor in latency benchmarks.
+
+Wave-16, round 9 (external whole-milestone control repair): the
+Go Windows prefix parser again matches Rust std byte-for-byte —
+`parsePrefix` normalizes the eight-byte prefix header before the
+verbatim-UNC match (a `/` inside `UNC\` keeps VerbatimUNC, exactly
+like `PrefixParser::get_prefix`), `parseUNC` no longer absorbs the
+share's trailing separator (doubled-separator share spellings no
+longer double separators in derived parents), and the golden corpus
+grows to 201 rows (five forward-slash UNC/verbatim-UNC shapes
+probed natively on the Windows host).  `FileName` is an
+allocation-free backward walk; `rejectLiveSelf` probes the bound
+main-name spelling; the Rust thread-creation tripwire asserts the
+watchdog marker inside its checked region.  The destination
+preflight tests deliver accept shapes via raw parents, and the raw
+parent helper anchors at the volume root so the suite passes
+natively on Windows.  Re-qualified at `bfc60f96`: Linux Go
+`23e4730a…` / worker `d83854dc…`; Windows Go `37a3e563…` / worker
+`c92b804b…`; Rust carried `07c4e314…` / `c960a64f…`; full battery,
+Windows 23/23 suite, and Windows housekeeping 2/2 all PASS.

@@ -1,6 +1,66 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The current evidence is regenerated at product revision `e54015d1`
+The current evidence is regenerated at product revision `01356600`
+(the external-control repair wave; qualification HEAD `bfc60f96`
+adds one test-only raw-parent helper repair).  The wave repairs
+four Go/Rust divergence classes and two test-tripwire defects found
+by the external whole-milestone control:
+
+- Windows prefix parsing: `parsePrefix` normalizes the eight-byte
+  prefix header (`/` -> `\`) before matching the verbatim UNC
+  marker, so `\\?\\UNC/server/share` is VerbatimUNC with no name
+  exactly like Rust `PrefixParser::get_prefix`; `parseUNC` no
+  longer absorbs the share's trailing separator, so
+  `\\server\share\\leaf` keeps one separator in derived parent
+  and sidecar spellings.  `FileName` is rewritten as an
+  allocation-free backward component walk with identical
+  semantics (verified 0 allocs/op).  The Windows golden corpus
+  grows to 201 rows with five forward-slash UNC/verbatim-UNC
+  shapes, every row confirmed against native windows-host rustc
+  1.97.1.
+- snapshot live-self rejection: `rejectLiveSelf` probes the bound
+  destination spelling (main name + live parent), so valid
+  `main/` and `main/.` destination spellings no longer fail
+  ENOTDIR against the raw destination path; pinned by
+  `reject_live_self_test.go`.
+- Rust thread-creation tripwire: the scanner consumes its seeded
+  brace once and now asserts the watchdog spawn marker
+  (`iprange-signal-diag`) lies inside the checked region and
+  reports checked/skipped line counts; the negative control
+  (spawn injected at the watchdog) fails as designed.
+- destination-preflight tests: accept shapes are delivered
+  verbatim through raw (uncleaned) parents, so trailing-dot and
+  mid-path `..` shapes reach the handlers; the raw-parent helper
+  anchors at the volume/root and is Windows-correct.
+
+Re-qualification at the new identities: Go suite 23/23 packages
+PASS on Linux (go1.26.4 and host go1.27.0) and natively on the
+Windows host (go1.26.5, 23/23 including the 201-row golden and the
+push tests); Rust workspace PASS on Linux (rustc 1.97.1, no Rust
+product source change).  The full battery PASSes at the final
+staged identities: matrices 38/38 single and 14 PASS + 24
+legitimate skips per mixed direction; crash 16/16 both directions;
+the negative control 0/16; resource proofs 8/8; kind-coverage gate
+PASS with all 46 self-test controls; golden exchanges 55;
+sensitivity gate 14.  Windows housekeeping re-qualified at
+`bfc60f96`: 2/2 PASS with native Windows Python 3.14.6
+(provenance: clean tree, go1.26.5 windows/amd64, rustc 1.97.1).
+The wine differential against the Rust-1.97.1-derived Python
+oracle passes 296/296 Windows and 417/417 POSIX shapes with the
+corrected prefix-header normalization.
+
+Linux reports record the product identities `07c4e314...` (rust,
+unchanged since the round-4 qualified build) and `23e4730a...`
+(go, rebuilt with `-buildvcs=false`), workers `77b6d086...`
+(rust) / `d83854dc...` (go), fixture `df3623a6...` (all staged in
+`.local/shared/binaries/SHASUMS.txt` with sha256sum -c OK).  The
+Windows housekeeping report records the Windows-host products
+`c960a64f...` (rust) and `37a3e563...` (go); the Windows Go worker
+is `c92b804b...`.
+
+---
+
+Historical wave record (superseded by the head block): the current evidence is regenerated at product revision `e54015d1`
 (the round-6 Rust push join repair).  The re-anchored parity and
 tester reviews closed the last two path-spelling divergences:
 `expandPaths` and the export/metadata/removals temporary placement
@@ -47,7 +107,7 @@ worker is `71229191…`.
 
 ---
 
-The current evidence is regenerated at product revision `8061d80d`
+Historical wave record (superseded by the head block): evidence was regenerated at product revision `8061d80d`
 (the round-6 @-expansion separator repair).  The re-anchored parity
 review found `expandPaths` concatenated the entry separator
 unconditionally, so a trailing-separator referenced spelling
@@ -88,7 +148,7 @@ worker is `a91e548b…`.
 
 ---
 
-The current evidence is regenerated at product revision `a69eb53d`
+Historical wave record (superseded by the head block): evidence was regenerated at product revision `a69eb53d`
 (the round-6 forward-slash-after-verbatim-prefix repair).  The
 re-anchored whole-milestone review found the Windows pathname port
 checked the physical root with the verbatim-aware separator set: a
@@ -138,7 +198,7 @@ worker is `a91e548b…`.
 
 ---
 
-The current evidence is regenerated at product revision `2c5d668b`
+Historical wave record (superseded by the head block): evidence was regenerated at product revision `2c5d668b`
 (the round-6 @-directory expansion repair).  The re-anchored
 whole-milestone review found the last remaining lexical
 normalization of a caller-supplied path: `input.go` built each
@@ -179,7 +239,7 @@ worker is `8338b58d…`.
 ---
 
 
-The current evidence is regenerated at product revision `03b7d4ab`
+Historical wave record (superseded by the head block): evidence was regenerated at product revision `03b7d4ab`
 (the round-6 verbatim-UNC repair).  The re-anchored round-6
 performance review found a P1 in the Windows pathname port: the
 verbatim-UNC branch re-parsed the path as a plain UNC whenever the
@@ -225,7 +285,7 @@ worker is `8338b58d…`.
 ---
 
 
-The current evidence is regenerated at product revision `ae57845e`
+Historical wave record (superseded by the head block): evidence was regenerated at product revision `ae57845e`
 (the round-6 raw-path repair).  The re-anchored round-6 tester review
 at `5a008411` found a wire-reachable P1: the immutable reader open
 still normalized the caller's raw path with `filepath.Clean`
@@ -275,7 +335,7 @@ worker is `b0bb2a2b…`.
 ---
 
 
-The current evidence is regenerated at product revision `06495eeb`
+Historical wave record (superseded by the head block): evidence was regenerated at product revision `06495eeb`
 (the round-6 follow-up that charges the cross-toolchain deflate
 workspace honestly).  The round-6 re-anchored portability review at
 `5a008411` measured the Go `compress/flate` DefaultCompression
