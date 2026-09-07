@@ -292,6 +292,27 @@ identities Go `d013e0b5…` (worker `a91e548b…`) and Rust
 milestone-4 closure record stands as qualified at this revision;
 milestone 5 remains unstarted per user decision 1A, and the round-4
 P3 commit-subject history rewrite remains pending user approval.
+Wave-16 follow-up round-7 state (2026-09-07, final): the re-anchored
+parity and tester reviews closed the last two path-spelling
+divergences.  Parity proved `expandPaths` doubled the separator for
+trailing-separator referenced spellings (`"@<dir>/"`) and tester
+proved the export/metadata/removals temporaries placed a
+drive-relative temporary (`C:` parent) at the volume root instead of
+the drive-relative name Rust `PathBuf::push` produces; both stemmed
+from unconditional separator concatenation where Rust `_push`
+inserts a separator only when the base does not already end with one
+and never after a bare drive prefix.  The repair at `e54015d1` adds
+one authoritative `pathname.Push` mirror (bare-drive rule plus the
+verbatim `_push` rebuild) and routes the four join sites through it,
+pinned cross-platform and natively on Windows.  Go suite 23/23 on
+go1.26.4, host go1.27.0, and native Windows (go1.26.5); Linux
+identities at `e54015d1` are Go `b4aedb1c…` / worker `11001b94…`
+and Rust `07c4e314…` / worker `77b6d086…` / fixture `df3623a6…`,
+Windows identities Go `3ec21b97…` (worker `71229191…`) and Rust
+`c960a64f…`; every battery gate is green at the revision.  The
+milestone-4 closure record stands as qualified at this revision;
+milestone 5 remains unstarted per user decision 1A, and the round-4
+P3 commit-subject history rewrite remains pending user approval.
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -8263,3 +8284,88 @@ already-specified Rust reference behavior); end-user docs unchanged
 (no CLI surface change).  The round-4 P3 item (commit subjects
 `9374917e`/`e3d7bf61` naming the external review model) remains
 open pending user approval for the history rewrite.
+
+#### Wave 16 follow-up round 7 (2026-09-07) — the Rust push join repair at `e54015d1`
+
+The re-anchored parity review (at HEAD `ab816c3e`) confirmed the
+round-6 `@`-expansion separator finding it had graded at
+`38125ba9`, and the re-anchored tester review confirmed its round-6
+Windows drive-relative temporary-placement finding.  Both stem from
+the same source: the Go ports built joined child names with an
+unconditional `os.PathSeparator`, while Rust `PathBuf::_push` (pinned
+rustc 1.97.1) inserts a separator only when the base does not already
+end with `is_sep_byte` and never after a bare drive prefix
+(`prefix_len == path.len && prefix.is_drive()`), and a
+verbatim-prefixed base goes through the component-wise rebuild with
+the main separator.  Concretely:
+
+- Parity P2 (`input.go:817`): `expandPaths` expanded `"@<dir>/"` to
+  `"<dir>//01.txt"` ("@" to `"//01.txt"`), where Rust
+  `read_dir DirEntry::path()` (`referenced.join(name)`) singles it
+  (`"<dir>/01.txt"`).  Wire-silent today (the kernel collapses empty
+  components) but divergent in open-failure diagnostics and in any
+  consumer of the expanded spelling, and it made the round-4
+  record's "exactly like Rust entry.path()" claim false for this
+  valid spelling.  No committed test used a trailing-separator
+  referenced spelling.
+- Tester P2 (`export_writer.go:103`, `live.go:1326`, `output.go:80`):
+  the export/metadata/removals temporaries joined
+  `parent + os.PathSeparator + name`, so for a drive-relative
+  destination (`C:out.iprange`, parent `C:`) Go created
+  `C:\.h.export.tmp` at the volume root while Rust push creates
+  `C:.h.export.tmp` in the drive's current directory — different
+  open result class (root-permission failure) and different residue
+  placement.
+
+Repair at `e54015d1`:
+- `pathname.Push(base, name)` mirrors `PathBuf::_push` for the
+  join-a-plain-name shape: no separator after an empty base, a
+  trailing path separator, or a bare drive prefix; a verbatim
+  prefix triggers the existing `verbatimPushRebuild` (root
+  re-emitted as the main separator, prefix raw bytes preserved).
+- The four join sites (`expandPaths` `@`-expansion, export
+  temporary, removals temporary, metadata temporary) route through
+  `pathname.Push`.
+- Tests: `TestPushSeparatorRules` (cross-platform separator
+  decision), `TestPushWindows` (native Windows bare-drive and
+  verbatim shapes, including the probe-verified
+  `\\?\\C:/dir/` + name = `\\?\\C:\dir/\n` spelling where the
+  trailing `/` stays inside the verbatim Normal component),
+  `TestScratchAtExpansionTrailingSeparator` carries.
+
+Re-qualification at the final revision (`e54015d1`, product source;
+records committed together with this evidence): Go suite 23/23
+packages PASS on Linux with the qualified go1.26.4 and with the
+host go1.27.0, and natively on the Windows host (go1.26.5, 23/23
+packages including the 196-row golden and the push tests); Rust
+workspace suites PASS on Linux (rustc 1.97.1, no Rust source
+change) and natively on Windows.  Full battery PASS at the final
+staged identities (matrices 38/38 single and 14 PASS + 24
+legitimate skips per mixed direction; crash 16/16 both directions;
+the negative control 0/16 with 8 consumer-stage and 8 setup
+failures; resource proofs 8/8; kind-coverage gate PASS with all 46
+self-test controls; golden exchanges 55; sensitivity gate 14).
+Windows housekeeping 2/2 PASS at `e54015d1` on the authorized
+Windows validation host (native Python 3.14.6, Go `3ec21b97…`,
+Rust `c960a64f…`, provenance recorded with tree_clean).  Final
+Linux identities at `e54015d1` (staged in
+`.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK): Go product
+`b4aedb1c…`, Go worker `11001b94…` (rebuilt with
+`-buildvcs=false`), Rust product `07c4e314…`, Rust worker
+`77b6d086…`, fixture `df3623a6…` (Rust binaries carry from the
+round-4 qualified build at `ed29e437`).  `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated at
+these identities in the records commit so the record and the
+identities cannot drift.  Same-failure search: after the four sites
+were rewired, no remaining `parent + os.PathSeparator` join exists
+in Go product code (the round-6 record's same-failure note is
+superseded by this record's wider rule).  Sensitive-data gate: no
+secrets, credentials, community/customer names, personal data, or
+private endpoints in this wave.  Artifact gate: AGENTS.md unchanged
+(no workflow change); runtime project skills unchanged (no new
+how-to knowledge); the v4 JSON-RPC spec unchanged (no contract
+change — the repair restores the already-specified Rust reference
+behavior); end-user docs unchanged (no CLI surface change).  The
+round-4 P3 item (commit subjects `9374917e`/`e3d7bf61` naming the
+external review model) remains open pending user approval for the
+history rewrite.

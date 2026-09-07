@@ -1,5 +1,52 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
+The current evidence is regenerated at product revision `e54015d1`
+(the round-6 Rust push join repair).  The re-anchored parity and
+tester reviews closed the last two path-spelling divergences:
+`expandPaths` and the export/metadata/removals temporary placement
+built joins with an unconditional separator, while Rust
+`PathBuf::push` inserts a separator only when the base does not
+already end with one and never after a bare drive prefix, so
+`"@<dir>/"` expanded to a doubled separator and a drive-relative
+temporary (`C:` parent) was placed at the volume root instead of the
+drive-relative name.  The repair at `e54015d1` adds one authoritative
+`pathname.Push` mirror (bare-drive rule plus the verbatim `_push`
+rebuild) and routes the four join sites through it; the separator
+rule is pinned by `TestPushSeparatorRules` (cross-platform) and
+`TestPushWindows` (native Windows), and the trailing-separator
+`@`-spellings remain pinned by
+`TestScratchAtExpansionTrailingSeparator`.  The round-5
+physical-root repair (a69eb53d, forward slash after a verbatim
+prefix) carries unchanged.
+
+The Go suite is green on the qualified go1.26.4 and on the host
+go1.27.0 (23/23 packages on each), and natively on the Windows host
+(go1.26.5, 23/23 packages including the 196-row golden and the new
+push tests); the Rust workspace suites are green on Linux (rustc
+1.97.1) and natively on Windows (without source change).  The full
+battery PASSes at the final staged identities: matrices 38/38 single
+and 14 PASS + 24 legitimate skips per mixed direction; crash 16/16
+both directions; the negative control 0/16 (8 real-producer
+scenarios failing at the substituted-consumer stage and 8
+substituted-producer scenarios failing during setup); resource
+proofs 8/8; kind-coverage gate PASS with all 46 self-test controls;
+golden exchanges 55; sensitivity gate 14.  Windows housekeeping
+re-qualified at `e54015d1` on the authorized Windows validation
+host: 2/2 PASS with native Windows Python 3.14.6 (provenance: clean
+tree, go1.26.5 windows/amd64, rustc 1.97.1).  The `@`-expansion,
+raw-path, and verbatim parity probes remain green on both products.
+
+Linux reports at `e54015d1` record the product identities
+`07c4e314…` (rust, unchanged since the round-4 qualified build) and
+`b4aedb1c…` (go, rebuilt with `-buildvcs=false`), workers
+`77b6d086…` (rust) / `11001b94…` (go), fixture `df3623a6…` (all
+staged in `.local/shared/binaries/SHASUMS.txt` with sha256sum -c
+OK).  The Windows housekeeping report records the Windows-host
+products `c960a64f…` (rust) and `3ec21b97…` (go); the Windows Go
+worker is `71229191…`.
+
+---
+
 The current evidence is regenerated at product revision `8061d80d`
 (the round-6 @-expansion separator repair).  The re-anchored parity
 review found `expandPaths` concatenated the entry separator
