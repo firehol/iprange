@@ -1330,9 +1330,13 @@ fn stderr_diag(message: String) {
         // Best-effort single spawn; a failed spawn leaves the flag
         // false so a later diagnostic retries, and no worker path
         // ever panics on thread creation (operations finding).
-        let _ = std::thread::Builder::new()
+        if std::thread::Builder::new()
             .name("iprange-stderr-diag".to_owned())
-            .spawn(diag_loop);
+            .spawn(diag_loop)
+            .is_err()
+        {
+            DIAG_STARTED.store(false, std::sync::atomic::Ordering::Relaxed);
+        }
     }
     let Ok(mut queue) = DIAG_QUEUE.lock() else {
         return; // poisoned lock: drop the advisory diagnostic

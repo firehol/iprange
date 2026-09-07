@@ -9,7 +9,7 @@
 
 #![cfg(unix)]
 
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
@@ -516,4 +516,91 @@ fn drain_wedge_signal_forces_nonzero_exit() {
             wedge_trial(sig, 60, true);
         }
     }
+}
+
+#[test]
+fn input_worker_full_stderr_publish_completes_and_eof_exits() {
+    // Committed tripwire for the input-worker stderr contract
+    // (operations round-9 P1): the dropped-IPv6 diagnostic must
+    // never block the input worker or wedge EOF shutdown.  With
+    // stderr a full, never-drained pipe, a publish of IPv6-only
+    // files in IPv4 mode must still answer and the process must exit
+    // 0 at EOF.  A synchronous (or per-message) stderr write
+    // regression blocks the worker on the first diagnostic, the
+    // response never arrives, and this test fails.
+    let dir = std::env::temp_dir().join(format!(
+        "w15-stderr-diag-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos())
+            .unwrap_or(0)
+    ));
+    let _ = std::fs::create_dir_all(&dir);
+    let mut paths = Vec::new();
+    for i in 0..16usize {
+        let path = dir.join(format!("in-{i:04}.txt"));
+        std::fs::write(&path, "2001:db8::1\n").expect("write diag input");
+        paths.push(path.display().to_string());
+    }
+    let destination = dir.join("published.iprange");
+    let request = format!(
+        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.current.publish\",\"params\":{{\"input\":{{\"paths\":{paths:?},\"family\":\"ipv4\",\"fix_network\":true,\"default_prefix\":32,\"dns\":{{\"threads\":1,\"silent\":true}},\"expand_at_paths\":false,\"max_line_bytes\":1024,\"max_expanded_paths\":16}},\"feed\":\"pubfeed\",\"value_tag\":{{\"text\":\"pubtag\"}},\"metadata\":{{\"mode\":\"replace_utf8\",\"text\":\"published\"}},\"destination\":\"{dest}\",\"publication_policy\":\"fail_if_exists\",\"immutable_feed_budget\":{{\"max_heap_bytes\":\"16777216\",\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\",\"max_open_files\":3}}}}}}\n",
+        dest = destination.display(),
+    );
+    let (write_owned, _read_owned) = full_stderr_pipe();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_iprange"))
+        .arg("--jsonrpc")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::from(write_owned))
+        .spawn()
+        .expect("spawn iprange --jsonrpc with full stderr");
+    {
+        let stdin = child.stdin.as_mut().expect("stdin");
+        stdin
+            .write_all(request.as_bytes())
+            .expect("write publish request");
+        let _ = stdin.flush();
+    }
+    // Read the publish response before EOF: the session stays open
+    // while stdin is open (EOF cancels the in-flight unit).
+    let (tx, rx) = std::sync::mpsc::channel::<String>();
+    {
+        let stdout = child.stdout.take().expect("stdout");
+        std::thread::spawn(move || {
+            let mut reader = std::io::BufReader::new(stdout);
+            let mut line = String::new();
+            let _ = reader.read_line(&mut line);
+            let _ = tx.send(line);
+        });
+    }
+    match rx.recv_timeout(Duration::from_secs(20)) {
+        Ok(line) => assert!(
+            line.contains("\"result\""),
+            "publish did not complete under a full stderr pipe: {line}"
+        ),
+        Err(_) => {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_dir_all(&dir);
+            panic!("no publish response within 20s: input worker blocked on the full stderr pipe");
+        }
+    }
+    drop(child.stdin.take()); // EOF
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let code = loop {
+        if let Some(status) = child.try_wait().expect("try_wait") {
+            break status.code().unwrap_or(-1);
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_dir_all(&dir);
+            panic!("product did not exit at EOF within 10s");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(code, 0, "full-stderr publish EOF exit code {code}, want 0");
+    let _ = std::fs::remove_dir_all(&dir);
 }
