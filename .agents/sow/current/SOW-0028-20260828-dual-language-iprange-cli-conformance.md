@@ -9111,14 +9111,18 @@ makes the sanitizer genuinely cwd-invariant:
    any string value.  Negative controls verified all four harnesses
    reject in-profile binaries/work dirs and accept the scratch-area
    staging used by the committed evidence.
-2. **P2-3 — TEMP-honoring self-test scratch.**  Every harness scratch
-   directory now comes from `owned_temp_dir`/`owned_temp_root`, which
-   refuses an ambient temp root that is missing, relative, or inside
-   the checkout and falls back to a neutral platform root (`/tmp` on
-   POSIX, drive-root `\Temp` on Windows, matching the documented
-   authorized scratch convention).  Applied to the Windows-housekeeping
-   pair/removal self-tests, the resource self-test roots, run.py's
-   default per-case work directory, and run.py's `_self_test`.  The
+2. **P2-3 — TEMP-honoring self-test scratch.**  Every scratch
+   directory created by the qualification scripts now comes from
+   `owned_temp_dir`/`owned_temp_root`, which refuses an ambient temp
+   root that is missing, relative, or inside the checkout and falls
+   back to a neutral platform root (`/tmp` on POSIX, drive-root
+   `\Temp` on Windows, matching the documented authorized scratch
+   convention).  The complete sweep of `tempfile` scratch uses in
+   `v4/cli/*.py` pins all six sites: the Windows-housekeeping pair and
+   removal self-tests, the three resource self-test roots, run.py's
+   default per-case work directory, run.py's `_self_test`,
+   `sensitivity_gate.py`'s per-mode work directory, and
+   `check_kind_coverage.py`'s self-test work directory.  The
    Windows-housekeeping P2-7 self-test gains a committed control that
    points the ambient temp root at the checkout and requires the
    scratch to land elsewhere.
@@ -9161,3 +9165,23 @@ UTF-16 units (`v4/go/internal/publication/name.go`,
 `v4/go/internal/live/directory_windows.go`); Rust
 `is_windows_device_name` compares device stems without length equality
 (`v4/rust/iprange-livedb/src/path.rs`).
+
+#### Wave 16 follow-up round 16.1 (2026-09-07) — same-class sweep completion for the scratch-root pin
+
+The re-anchored tester role at `678faa6d` accepted the three carried
+findings as closed and found one new P2 in the same class: the
+round-16 record's "every harness scratch directory" claim was false,
+because `sensitivity_gate.py` (`tempfile.mkdtemp(prefix=
+"iprange-sens-")`) and `check_kind_coverage.py`
+(`tempfile.TemporaryDirectory()`) still created scratch without the
+owned-root pin.  A relative or inside-checkout ambient temp root
+(e.g. a Windows-styled TMPDIR override) would make those gates drop
+profile-named litter at the checkout root, exactly the P2-3 hazard.
+Repair: both gates now create scratch under `owned_temp_root()` from
+the shared `command_sanitize` module, and the round-16 record's sweep
+list is corrected to name all six pinned sites.  Validation: the
+sensitivity gate (14 modes) and the kind-gate self-test PASS with a
+normal environment and with `TMPDIR` pointed at the checkout, and zero
+`iprange-sens-*`/`C:*` entries appear at the checkout root in either
+mode.  Sensitive-data gate: clean.  Artifact gate: unchanged (harness
+CLA only).

@@ -27,6 +27,7 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from command_sanitize import owned_temp_root  # noqa: E402  (side-effect free)
 from run import CaseRunner, JsonRpcService  # noqa: E402
 from schema.engine import ValidationError  # noqa: E402
 
@@ -128,7 +129,8 @@ def run_mode(mode, steps):
         "fixtures": [],
         "steps": steps,
     }
-    work = tempfile.mkdtemp(prefix="iprange-sens-")
+    work = tempfile.mkdtemp(prefix="iprange-sens-",
+                             dir=owned_temp_root())
     runner = CaseRunner(binary=None, case=case, work_dir=work, implementation="fake")
     runner.service_argv = [sys.executable, FAKE_SERVER, mode]
     runner.service = JsonRpcService(runner.service_argv, "fake")

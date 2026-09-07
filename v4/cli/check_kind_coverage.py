@@ -179,6 +179,8 @@ import tempfile
 # for their exact globals; they live next to this gate.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from command_sanitize import owned_temp_root  # noqa: E402  (side-effect free)
+
 
 REQUIRED_KINDS = [
     "v4_main",
@@ -2159,7 +2161,7 @@ def _self_test():
         return report
 
 
-    with tempfile.TemporaryDirectory() as work:
+    with tempfile.TemporaryDirectory(dir=owned_temp_root()) as work:
         green = {}
         for m in REQUIRED_MATRICES:
             green[m] = os.path.join(work, f"{m}.json")
