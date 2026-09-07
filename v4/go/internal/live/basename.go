@@ -1,6 +1,7 @@
-// One platform basename copied without allocation (Rust
+// One platform basename copied into a fixed 512-byte buffer (Rust
 // live_writer/result.rs LocalBasename): the raw bytes plus their
-// encoding tag, bounded to the portable result bound.
+// encoding tag.  On POSIX the copy is allocation-free; on Windows
+// the UTF-16LE encoding pass allocates bounded scratch.
 
 package live
 

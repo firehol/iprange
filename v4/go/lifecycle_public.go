@@ -19,9 +19,10 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/publication"
 )
 
-// LocalBasename is one platform basename copied without allocation
-// (Rust live_writer::LocalBasename), bounded to the portable result
-// bound of 512 bytes.
+// LocalBasename is one platform basename copied into a fixed
+// 512-byte buffer (Rust live_writer::LocalBasename).  On POSIX the
+// copy is allocation-free; on Windows the UTF-16LE encoding pass
+// allocates bounded scratch.
 type LocalBasename struct {
 	encoding uint16
 	length   uint16
