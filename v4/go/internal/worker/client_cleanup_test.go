@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -66,7 +67,7 @@ func cleanupAttemptFixture(t *testing.T, directory string) (string, *publication
 		PublicationAttemptID: attemptID,
 		DirectoryIdentity:    publication.LocalFileIdentityFromDeviceInode(dirDevice, dirInode),
 		BasenameEncoding:     workerWireKind(),
-		Basename:             []byte(name),
+		Basename:             workerWireName(name),
 		Identity:             publication.LocalFileIdentityFromDeviceInode(fileDevice, fileInode),
 		IdentityPresent:      true,
 		CreationSecurity: publication.CreationSecurity{
@@ -499,4 +500,15 @@ func TestHandshakeRealBinarySanity(t *testing.T) {
 		t.Fatal("handshake:", err)
 	}
 	child.Abort()
+}
+
+// workerWireName renders one private-artifact basename in the worker
+// wire encoding (raw bytes on POSIX, UTF-16LE units on Windows); the
+// wire kind tag and the basename bytes must use the same platform
+// encoding (bindSecuredOutput compares the exact platform bytes).
+func workerWireName(name string) []byte {
+	if runtime.GOOS == "windows" {
+		return live.Utf16LEBytes(name)
+	}
+	return []byte(name)
 }
