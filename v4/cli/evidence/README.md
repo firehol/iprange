@@ -1,84 +1,64 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The fifteenth-wave evidence is regenerated at the wave-15 final
-product revision `ed29e437` (product source of the astra round-3
-and round-4 repair waves: bounded input-worker diagnostics with
-committed full-stderr, per-message-spawn, and above-cap queue-drop
-tripwires, fallible termination diagnostics, input closure on
-every error path, the platform-correct main_basename test, the
-Rust-parity basename normalization, the real-producer negative
-crash control, the shared trailing-residue rejection control, the
-`BasenameFromPath` component contract, the worker-fixture
-wire-encoding repair, and the kind-gate second-site fix; the
-wave-15 closure rounds 9a-9e and the closure records are committed
-together with this evidence) after the external whole-milestone
-control turn-2 review of the wave-14 revision (lifecycle identity
-platform kind, artifact-basename wire mapping, drain-EOF, matrix
-fixture binding, conflict-order control, and strict response-id
-correlation), the native Windows verification wave, the wave-15
-role-round deltas 2-4 (encoding-aware artifact-basename rendering,
-the maximal-subpart encoding-1 decode, and the Go `main_basename`
-invalid-UTF-8 round-trip repair), and the astra round-3 repair
-wave (non-blocking input-worker diagnostics, input closure on
-every error path, the platform-correct main_basename test, the
-real-producer negative crash control, the shared trailing-residue
-rejection control, and the `BasenameFromPath` component contract)
-— all recorded in SOW-0028's wave-15 section:
+The round-5 evidence is regenerated at the round-5 final product
+revision `4fad3836` (the basename-constructor repair: Go
+`BasenameFromPath` now mirrors Rust `Path::file_name` exactly —
+trailing separators and "." components are normalized away, a
+trailing ".." component has no file name, and mid-path ".."
+components are ordinary components that are never resolved, so
+`a/../b` yields `b` while `a/b/..` is rejected; the round-4
+`filepath.Clean`-based repair incorrectly resolved the trailing
+".." onto an ancestor and accepted it) after the external
+whole-milestone control turn-4 review of the wave-15 revision
+(three P2: fallible termination diagnostics, the truthful
+crash-negative 8+8 record, `BasenameFromPath` component parity;
+three P3: the kind-gate second site, the closure-narrative round
+labels, and the reviewer-model commit subjects — all repaired and
+recorded at `ed29e437`/`65ea9587` except the commit-subject
+history rewrite, which needs user approval and is recorded as an
+open decision).  The round-5 basename repair wave was qualified at
+`4fad3836` (product source):
 
-- the Rust CLI test suite now runs fully green natively on the
-  authorized Windows validation host (711 tests across
-  `iprange-livedb` and `iprange-cli`; the canonical
-  `cargo test -p iprange-livedb -p iprange-cli` invocation builds
-  the version-matched validation worker that the live-source
-  identity inspection spawns — the previous
-  `-p iprange-cli --bin iprange` form neither built nor matched the
-  worker).  Test temp names no longer embed `SystemTime` debug
-  output (colons are invalid in Windows path components), the
-  publication-evidence round trips pin the platform identity kind,
-  the legacy parse error test asserts the platform-neutral parts of
-  the missing-file contract on Windows, and the immutable snapshot
-  wire test pins the documented per-platform housekeeping state;
-- worker availability: when no validation-worker candidate exists
-  beside the running binary, requests now report the worker as
-  unavailable instead of a raw file-not-found I/O error (matches
-  the SDK `worker_availability` probe semantics);
+- the Go suite is green on Linux with the qualified go1.26.4
+  (22/22 packages; the default go1.27.0 fails the SOW-0025 writer
+  metadata deflate test — toolchain drift, not this change) and
+  natively on the Windows host (go1.26.5); the Rust workspace
+  suites are green on Linux (rustc 1.97.1) and natively on
+  Windows;
+- the full battery PASSes at the final staged identities:
+  matrices 38/38 single and 14 PASS + 24 legitimate skips per
+  mixed direction; crash 16/16 both directions; the negative
+  control 0/16 (8 real-producer scenarios failing at the
+  substituted-consumer stage and 8 substituted-producer scenarios
+  failing during setup); resource proofs 8/8; kind-coverage gate
+  PASS with all 46 self-test controls; golden corpus 55;
+  sensitivity gate 14;
 - Windows housekeeping re-qualified at source revision
-  `ed29e437` on the authorized Windows validation host: 2/2 PASS
-  with the native Windows Python 3.14.6 (Go `95b1727b…`, Rust
-  `c960a64f…`, provenance recorded: go1.26.5 windows/amd64, rustc
-  1.97.1, clean tree), and the full Go suite passes natively there
-  (22/22 packages, including the basename-parity repair)
-  alongside the green native Rust suite.
+  `4fad3836` on the authorized Windows validation host: 2/2 PASS
+  with the native Windows Python 3.14.6 (Go `3c6ea0a0…`, Rust
+  `c960a64f…` — the Rust product is unchanged since the round-4
+  qualified build at `ed29e437`; provenance recorded: go1.26.5
+  windows/amd64, rustc 1.97.1, clean tree), and the full Go suite
+  passes natively there (22/22 packages, including the new
+  trailing-parent basename tests) alongside the green native Rust
+  suite.
 
-Linux reports record the product identities `07c4e314…` (rust) and
-`e318842a…` (go), workers `77b6d086…` / `66bf7ab6…`, fixture
-`df3623a6…` (all rebuilt at the astra round-4 repair revision
-`ed29e437` with the qualified toolchains — go1.26.4 and rustc
-1.97.1; the worker and fixture identities rotated because they
-were previously carried from an earlier default-stable build;
-staged in `.local/shared/binaries/SHASUMS.txt`);
+Linux reports record the product identities `07c4e314…` (rust,
+unchanged since the round-4 qualified build) and `fcf356ac…` (go,
+rebuilt with `-buildvcs=false` at the round-5 repair revision
+`4fad3836`), workers `77b6d086…` (rust) / `4028df96…` (go),
+fixture `df3623a6…` (all staged in
+`.local/shared/binaries/SHASUMS.txt` with sha256sum -c OK; the Go
+worker was rebuilt with the qualified go1.26.4 because the worker
+links the basename constructor);
 the Windows housekeeping report records the Windows-host products
-`c960a64f…` (rust) and `95b1727b…` (go) at source revision
-`ed29e437` (the wave-15 astra round-3 and round-4 repair waves:
-the
-input workers no longer write diagnostics synchronously to stderr,
-termination diagnostics no longer panic on thread-creation
-failure, the Go input core closes its files on every error path
-with a deferred source Close, `BasenameFromPath` matches the Rust
-component normalization, the main_basename round-trip test is
-platform-correct on Windows, the crash negative control runs a
-real producer against a substituted consumer, the trailing-residue
-self-test drives the shared drain rejection, and the kind gate
-records a problem instead of raising for a command-less report).  These identities include the wave-15 role-round delta
-repairs: the encoding-aware artifact-basename renderer in both
-products, the Go worker-availability fallback, Go's proper UTF-16LE
-GC name store, the complete encoding-aware basename class at every
-Go fact site (output and seed inventories, basename lengths and
-binding/resume comparisons) and the Rust snapshot handoff surfaces,
-the maximal-subpart encoding-1 decode matching Rust
-from_utf8_lossy, the pinned resource-gate controls, and the single
-exact-type id-correlation authority of the resource proofs (all
-recorded in SOW-0028's wave-15 section).
+`c960a64f…` (rust) and `3c6ea0a0…` (go) at source revision
+`4fad3836` (the round-5 repair wave: the basename constructor now
+matches Rust `Path::file_name` component semantics on both
+platforms — POSIX raw bytes and Windows UTF-16LE wire form,
+boundary tests including the trailing-parent class, and the
+Windows volume-prefix shapes verified by the cross-compiled
+suite).
 
 The fourteenth-wave (external whole-milestone control review
 FAIL and repair) evidence is regenerated at the wave-14 revision

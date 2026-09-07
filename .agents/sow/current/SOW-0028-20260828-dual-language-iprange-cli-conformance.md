@@ -7571,3 +7571,71 @@ rebuilt here with the qualified rustc 1.97.1.  `v4/cli/evidence/*`,
 `evidence/README.md`, and `resource-record.md` are regenerated at
 the final identities in the records commit so the record and the
 identities cannot drift.
+
+#### External control round 5 — the basename sibling-class repair at `4fad3836`
+
+After the round-4 records commit (`65ea9587`), the seven standing
+in-repo role reviewers re-anchored at that revision and returned
+five PASS (tester, operations, parity, security, glm) plus two
+FAIL on the same verified P1 finding (portability, performance):
+the round-4 Go basename repair inverted a sibling class.  The
+repair had replaced the raw `filepath.Base` with
+`filepath.Base(filepath.Clean(path))` to accept `"foo.txt/."`;
+`filepath.Clean` also lexically resolves trailing `..` components,
+so `LocalBasenameFromPath("a/b/..")` returned OK `"a"` (the uncleaned
+ancestor) while Rust `Path::file_name` returns None for every path
+that terminates in `..` (`Component::ParentDir` is not a normal
+component; the std implementation maps `components().next_back()`
+through `Component::Normal`).  Both FAILs reproduced the class
+empirically with rustc vs. the Go constructor, and the committed
+tests could not detect it (their negative list only contained `..`
+shapes that `Clean` collapses to `"."`/`".."`, which the reject set
+still catches).  This is a wire-relevant SDK parity defect: Go
+create/transition/commit-cleanup would emit `main_basename` "a" for
+`a/b/..` while Rust rejects the same input, so a Rust client would
+reject a Go-produced result.
+
+Repair at `4fad3836` (`v4/go/internal/live/basename.go`): the Go
+constructor now computes the file name with an exact
+`Components`-equivalent (`rustFileName`): the Windows volume prefix
+is not a name, repeated separators collapse, trailing separators
+and trailing "." components are dropped, a final ".." component has
+no file name, and mid-path ".." components are ordinary components
+that are never resolved (`a/../b` -> `b`, `a/b/..` -> rejected).
+Boundary tests on both platforms now cover the trailing-parent
+class (`a/b/..`, `x/y/z/..`, `x/y/../z/..`, `a/./b/..`,
+`a/../b/c/..`, Windows `C:/x/..`, `C:\x\..`, `C:/a/../b/c/..`) and
+the mid-parent kept class (`a/../b`, `a/../../b`, `a/b/../c.txt`,
+Windows `C:/a/../b`, `C:/a/../../b`, `C:\a\..\b`), plus the
+`"..."`-name and `"..foo"` boundary shapes.  The Go implementation
+was verified differentially against the real Rust
+`std::path::Path::file_name` over 58 shapes on Linux (all match),
+and against the std `Components` source on the Windows-side volume
+and separator rules; the Windows suite cross-compiles and the full
+Go suite passes natively on the Windows host.
+
+Re-qualification at the final revision (`4fad3836`, product
+source; records committed together with this evidence): Go suite
+22/22 packages PASS on Linux (qualified go1.26.4, `-buildvcs=false`
+binaries) and natively on the Windows host (go1.26.5); Rust
+workspace suites PASS on Linux (rustc 1.97.1) and natively on
+Windows (unchanged since round 4).  Full battery PASS at the final
+staged identities (matrices 38/38 single and 14+24 mixed per
+direction; crash 16/16 both directions; the negative control 0/16
+with 8 consumer-stage and 8 setup failures; resource proofs 8/8;
+kind-coverage gate PASS with all 46 self-test controls; golden 55;
+sensitivity 14).  Windows housekeeping 2/2 PASS at `4fad3836` on
+the authorized Windows validation host (native Python 3.14.6, Go
+`3c6ea0a0…`, Rust `c960a64f…`, provenance recorded with
+tree_clean).  Final Linux identities at `4fad3836` (staged in
+`.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK): Go product
+`fcf356ac…` (rebuilt with `-buildvcs=false` so the identity is
+independent of the tree state), Go worker `4028df96…`, Rust product
+`07c4e314…`, Rust worker `77b6d086…`, fixture `df3623a6…` (Rust
+binaries carry from the round-4 qualified build at `ed29e437`).
+`v4/cli/evidence/*`, `evidence/README.md`, and `resource-record.md`
+are regenerated at the final identities in the records commit so
+the record and the identities cannot drift.  The round-4 P3 item
+(commit subjects `9374917e`/`e3d7bf61` naming the external review
+model) remains open pending user approval for the history rewrite;
+no repository commit is planned after this record.
