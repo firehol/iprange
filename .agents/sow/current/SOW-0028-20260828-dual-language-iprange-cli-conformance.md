@@ -7367,3 +7367,123 @@ fixture `6c2c56b9…` (unchanged); `v4/cli/evidence/*`,
 `evidence/README.md`, and `resource-record.md` are regenerated in
 the same commit so the record and the identities cannot drift
 again.
+
+#### Wave-15 closure rounds 9a–9e — bounded input-worker diagnostics pinned
+
+The astra round-3 repair wave closed at `e3d7bf61` (records) with
+detached best-effort diagnostics; the role rounds below then pinned
+the sustained full-stderr contract and every regression class the
+bounded queue replaces.  The product source for all of these rounds
+is the astra round-3 repair source; every subsequent commit touches
+tests or records only, so the staged product identities remain valid
+throughout (Go `bd6dddb7…`, Go worker `f1311d96…`, Rust `daee4a92…`,
+Rust worker `9fd36146…`, fixture `947b94e9…`).
+
+- **Round 9a (HEAD `e3d7bf61`, repairs at `fbdbc953`) — bounded
+  diagnostic queue.**  Operations returned a P1: the astra-repair
+  per-message detached diagnostics spawned one thread/goroutine per
+  message; a sustained full stderr pipe blocked each writer and the
+  Rust per-message spawn could panic the worker at the OS thread
+  limit, converting the withstand condition into a failed request.
+  Portability and performance returned a P2: the evidence README
+  head still named the superseded `c6145590`/`4cf0ff52` revisions,
+  recurring the records-provenance class.  Repair at `fbdbc953`:
+  both products now enqueue runtime diagnostics in a bounded 256-slot
+  queue drained by one dedicated writer (Go buffered channel with a
+  non-blocking `select` default-drop and one `diagLoop`; Rust
+  `Mutex<VecDeque>` with an explicit length check and one named
+  drainer that writes outside the lock); overflow drops the advisory
+  message, producers never block, and no per-message thread or
+  goroutine is ever spawned.  The README head names the astra
+  round-3 record point.
+
+- **Round 9b (HEAD `fbdbc953`, repairs at `ebfd2ff8`) — committed
+  full-stderr tripwires.**  At the round-9a re-anchor, tester
+  returned a P1 and parity a P2: no committed test fed input-worker
+  diagnostics through a full, never-drained stderr pipe, so the
+  wedge regression class could return undetected.  Repair: the Go
+  fileio helper drives an IPv4-mode source made of IPv6-only files
+  under a full stderr pipe (16 files per round, 20 rounds = 320
+  dropped-IPv6 diagnostics, above the 256-slot cap), and the Rust
+  process test publishes IPv6-only files through the real
+  `--jsonrpc` product with stderr full, then asserts the response
+  arrives (stderr stays open until the response is read) and EOF
+  exits 0.  Both fail under the synchronous-write regression; the
+  Rust drainer retries its single spawn after a failed attempt,
+  matching the documented best-effort behavior.
+
+- **Round 9c (HEAD `ebfd2ff8`, repairs at `3502471e`) — Rust
+  per-message detached class pinned.**  Parity returned a P2: the
+  tripwires detected the synchronous-write class but a per-message
+  detached-write regression (the `e3d7bf61` shape) kept both tests
+  green while accumulating one blocked writer per diagnostic, and
+  the test comments overclaimed.  Repair: the Rust process tripwire
+  asserts the child's live thread count on Linux (<= 12; 20 threads
+  measured under the regression vs 5 fixed), and the comments now
+  state exactly which class each assertion detects.  In this round
+  the glm whole-milestone validator also first raised its P2
+  (below, closed at round 9e).
+
+- **Round 9d (HEAD `3502471e`/`0584203c`, repairs at `e9e7ce9a`
+  and `0584203c`) — Go per-message goroutine class pinned and the
+  Windows worker fixture repaired.**  Parity returned a P2: the Go
+  side of the per-message detached class was unpinned (goroutine
+  count is unobservable from outside the process) and the Go
+  comment overclaimed.  Repair at `e9e7ce9a`: the Go helper asserts
+  its live goroutine count after the drain rounds (<= 32; 322
+  goroutines measured under the per-message regression vs 3 fixed),
+  making the Go tripwire detect all three named classes.  In the
+  same wave, `0584203c` repaired the worker cleanup fixture after
+  the native Windows run of the full Go suite exposed three
+  failures: the fixture declared the platform wire kind (UTF-16LE
+  on Windows) but sent raw ASCII basename bytes, so the exact
+  platform-byte comparison rejected the fixture facts; with the
+  fixture rendering the basename in the worker wire encoding the
+  full Go suite passes natively (22/22).
+
+- **Round 9e (HEAD `e9e7ce9a`, repairs at `75b2c497`) — Rust
+  queue-cap overflow boundary pinned.**  The glm whole-milestone
+  validator returned a P2 (first raised at round 9b, carried
+  through 9c/9d): the Rust tripwire emitted at most 16 diagnostics
+  (16 paths per request, `max_expanded_paths`), below
+  `DIAG_QUEUE_CAP` (256), so a blocking bounded-channel send
+  regression (the canonical `sync_channel(256)` idiom) passed every
+  committed gate even though production with more than 256
+  IPv6-only files would wedge the input worker at the 257th
+  diagnostic and never answer the publish.  Repair at `75b2c497`
+  (test-only): the Rust tripwire now issues 18 publish requests x
+  16 paths = 288 dropped-IPv6 diagnostics in one session under the
+  same full stderr pipe; the surplus must drop and every request
+  must still answer (each with its own 20 s response deadman)
+  before the Linux thread-count assertion and the EOF exit-0 check.
+  Verified with a blocking-push negative control applied to
+  `stderr_diag` (wait-for-space loop instead of drop-on-overflow):
+  the extended tripwire failed exactly as designed — request 17
+  (the 257th diagnostic) never answers within 20 s — while the old
+  tripwire stayed green under the same mutation, reproducing the
+  gap; with the bounded queue the tripwire passes in ~0.23 s.
+  Every failure path of the tripwire now kills the child and
+  removes the temp work directory.
+
+At the round-9e re-anchor all seven roles returned PASS at
+`75b2c497`; the closure records commit at the final revision (this record,
+the regenerated evidence, the evidence README, and the resource
+record) then became the final revision of the wave.
+
+Re-qualification at the closure revision: Go suite 22/22 packages
+PASS on Linux and natively on the Windows host; Rust workspace 51
+suites PASS; full battery PASS at the final staged identities
+(matrices 38/38 single and 14+24 mixed per direction; crash 16/16
+both directions with the real-producer negative control 0/16
+failing at the substituted-consumer stage; resource proofs 8/8;
+kind-coverage gate PASS with all 46 self-test controls; golden 55;
+sensitivity 14); Windows housekeeping 2/2 on the authorized Windows
+validation host (Go `6d9ba190…`, Rust `20165392…` at the wave-15
+product source; native Python 3.14.6, provenance recorded).
+`v4/cli/evidence/*`, `evidence/README.md`, and `resource-record.md`
+are regenerated at the final identities in the records commit so the
+record and the identities cannot drift; the fixture identity rotated
+`6c2c56b9…` -> `947b94e9…` because the earlier staged fixture
+predated the current release toolchain (a fresh canonical release
+build at the wave-15 revision; no fixture source changed).
+

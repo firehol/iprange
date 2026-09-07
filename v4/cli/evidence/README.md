@@ -1,9 +1,16 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The fifteenth-wave evidence is regenerated at the final wave-15
-revision `9374917e` (product source of the astra round-3 repair
-wave; test repairs `1afaf64a`/`2e4f184d`, records HEAD
-`e3d7bf61`) after the external whole-milestone control turn-2
+The fifteenth-wave evidence is regenerated at the wave-15 final
+product revision `0584203c` (product source of the astra round-3
+repair wave and its closure deltas: bounded input-worker
+diagnostics with committed full-stderr, per-message-spawn, and
+above-cap queue-drop tripwires, input closure on every error path,
+the platform-correct main_basename test, the real-producer
+negative crash control, the shared trailing-residue rejection
+control, the `BasenameFromPath` component contract, and the
+worker-fixture wire-encoding repair; the wave-15 closure rounds
+9a-9e and the closure records are committed together with this
+evidence) after the external whole-milestone control turn-2
 review of the wave-14 revision (lifecycle identity platform kind,
 artifact-basename wire mapping, drain-EOF, matrix fixture binding,
 conflict-order control, and strict response-id correlation), the
@@ -34,17 +41,24 @@ rejection control, and the `BasenameFromPath` component contract)
   beside the running binary, requests now report the worker as
   unavailable instead of a raw file-not-found I/O error (matches
   the SDK `worker_availability` probe semantics);
-- Windows housekeeping re-qualified at the astra round-3 repair
-  revision `2e4f184d` on the authorized Windows validation host:
-  2/2 PASS with the native Windows Python 3.14.6 (Go `436691f5…`,
-  Rust `d7deb242…`, provenance recorded).
+- Windows housekeeping re-qualified at source revision
+  `ebfd2ff8` (product source identical to `0584203c`; the later
+  commits touch test files only) on the authorized Windows
+  validation host: 2/2 PASS with the native Windows Python 3.14.6
+  (Go `6d9ba190…`, Rust `20165392…`, provenance recorded), and the
+  full Go suite passes natively there (22/22, including the
+  worker-fixture wire-encoding repair) alongside the green native
+  Rust suite.
 
-Linux reports record the product identities `14112702…` (rust) and
-`6606f4d4…` (go), workers `9fd36146…` / `f1311d96…`, fixture
-`6c2c56b9…` (staged in `.local/shared/binaries/SHASUMS.txt`);
+Linux reports record the product identities `daee4a92…` (rust) and
+`bd6dddb7…` (go), workers `9fd36146…` / `f1311d96…`, fixture
+`947b94e9…` (a fresh canonical release build at the wave-15
+revision; the earlier staged fixture identity predated the current
+release toolchain; staged in `.local/shared/binaries/SHASUMS.txt`);
 the Windows housekeeping report records the Windows-host products
-`d7deb242…` (rust) and `436691f5…` (go) at the same source
-revision `2e4f184d` (the wave-15 astra round-3 repair wave: the
+`20165392…` (rust) and `6d9ba190…` (go) at source revision
+`ebfd2ff8` (the wave-15 astra round-3 repair wave and its closure
+deltas: the
 input workers no longer write diagnostics synchronously to stderr,
 the Go input core closes its files on every error path with a
 deferred source Close, `BasenameFromPath` rejects the Rust
