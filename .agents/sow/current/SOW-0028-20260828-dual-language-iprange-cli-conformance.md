@@ -8891,8 +8891,15 @@ worker / carried Rust `07c4e314` / `77b6d086` / `df3623a6`, Windows
 search: no other committed evidence records absolute operator
 paths (`grep C:/Users /home/` clean across `v4/cli/evidence/` and
 the SOW); no other pooled-line-number pin exists in the tripwire;
-no other "durable absence" claim remains in the qualification
-tree.  Sensitive-data gate: clean.  Artifact gate: AGENTS.md
+the durability-wording class is
+searched across variants (`durable absence`, `durable absent`,
+`durably gone`) and no overclaim remains in the current
+qualification files: the re-anchored tester round found three
+additional sites (resource-record.md's PROVEN list,
+resource_harness.py's two proof-c docstrings, and the exact phrase
+in windows_housekeeping_harness.py:2099) which are repaired in the
+round-14 follow-up; dated historical wave records keep their
+original wording as history.  Sensitive-data gate: clean.  Artifact gate: AGENTS.md
 unchanged; runtime project skills unchanged; specs unchanged (the
 repairs restore spec'd behavior); end-user docs updated
 (`v4/cli/README.md` removal wording); the commit-subject history

@@ -43,7 +43,7 @@ by the 65,000-byte response object and 1 MiB frame ceilings.
 
 ## PROVEN vs deferred
 
-PROVEN: advertised limits; `output_limit` on oversized inline results; reader/cursor 64+1 capacity (`server_busy`); frame-layer batch bound 1..16; bounded adapter memory by design and gates; `maintenance.list` reports the `scratch`/`reservation`/`publication_temp` kinds on Linux (case-backed); `maintenance.remove` against a real abandoned-scratch attempt ID (crash scenario C: list -> remove -> durable absent, both product languages).
+PROVEN: advertised limits; `output_limit` on oversized inline results; reader/cursor 64+1 capacity (`server_busy`); frame-layer batch bound 1..16; bounded adapter memory by design and gates; `maintenance.list` reports the `scratch`/`reservation`/`publication_temp` kinds on Linux (case-backed); `maintenance.remove` against a real abandoned-scratch attempt ID (crash scenario C: list -> remove -> proved currently absent, both product languages; the removal result truthfully reports the documented `crash_reappearance_possible` state — no power-loss guarantee for the final unlink).
 
 The former NOT-PROVEN items are now proven at the product interface
 by `resource_harness.py` (evidence `evidence/resource.json`) and

@@ -184,7 +184,13 @@ def sanitized_command():
     for arg in sys.argv:
         if arg:
             norm = os.path.normpath(os.path.abspath(arg))
-            if os.path.commonpath([norm, checkout]) == checkout:
+            try:
+                under_checkout = (os.path.commonpath([norm, checkout])
+                                  == checkout)
+            except ValueError:
+                # Different drive (Windows): never under the checkout.
+                under_checkout = False
+            if under_checkout:
                 arg = os.path.relpath(norm, checkout)
         out.append(arg)
     return out
@@ -2096,9 +2102,12 @@ def main():
                         # the inert_payload row carries the payload
                         # identity and is listing/classification
                         # evidence (gc_maintenance.rs remove requires
-                        # the envelope identity).  Then prove durable
+                        # the envelope identity).  Then prove observed
                         # absence: the directory must contain nothing
-                        # at all after the removal.
+                        # at all after the removal (the removal result
+                        # truthfully reports
+                        # crash_reappearance_possible; no power-loss
+                        # durability is claimed).
                         envelope_row = next(
                             (r for r in rows
                              if r.get("candidate_kind") == "envelope"),
