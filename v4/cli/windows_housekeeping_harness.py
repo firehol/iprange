@@ -1986,6 +1986,41 @@ def _self_test():
                 f"{form!r}")
         else:
             print("[P2-7] fullwidth sibling spelling stays clean")
+    # Round-16.9 class: every remaining Unicode punctuation and
+    # control/format character delimits (copy-pasted prose carries
+    # ellipsis, dashes, wave dashes, halfwidth CJK marks, and
+    # zero-width characters), so the profile followed by one must
+    # trip the scan; combining marks, symbols, and number forms
+    # continue sibling segment names.
+    unicode_punct = [
+        "cd " + profile_abs + "\u2026&& make",
+        "cd " + profile_abs + "\u301c&& make",
+        "cd " + profile_abs + "\u2014&& make",
+        "cd " + profile_abs + "\uff61&& make",
+        "cd " + profile_abs + "\u30fb&& make",
+    ]
+    for form in unicode_punct:
+        if personal_path_in_report({"build": form}) is None:
+            problems.append(
+                "P2-7 unicode-punctuation delimiter profile spelling "
+                f"not detected: {form!r}")
+        else:
+            print("[P2-7] unicode-punctuation delimiter profile "
+                  "spelling detected")
+    symbol_sibling = [
+        profile_abs + "\U0001f680/x",
+        profile_abs + "\u0301/x",
+        profile_abs + "\u00b2",
+    ]
+    for form in symbol_sibling:
+        if personal_path_in_report({"build": form}) is not None:
+            problems.append(
+                "P2-7 mark/symbol/number sibling spelling "
+                f"false-positives: {form!r}")
+        else:
+            print("[P2-7] mark/symbol/number sibling spelling stays "
+                  "clean")
+
 
     if os.sep == "/":
         parent = os.path.dirname(profile_abs)

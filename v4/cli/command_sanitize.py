@@ -27,6 +27,7 @@ import os
 import re
 import sys
 import tempfile
+import unicodedata
 
 # Repository root that owns this module (v4/cli -> repo root).  All
 # relative spellings are resolved against this root, never against the
@@ -332,13 +333,14 @@ def personal_path_in_report(report):
     def _is_path_cont(ch, nxt=None):
         """True when ch continues a path segment after the profile.
 
-        Alphanumerics in any script, ``_``, ``.``, ``-``, and every
-        other non-ASCII character continue a segment, so sibling
-        names on localized hosts (``/home/alice-notes``,
-        ``/home/alice\u03bb/x``) stay clean.  Whitespace,
-        quote-shaped characters, fullwidth punctuation (a CJK IME
-        substitute for ``;?&|,!()``), and the CJK sentence marks
-        ``。``/``、`` delimit a shell word; a quote-shaped character
+        Alphanumerics in any script, ``_``, ``.``, ``-``, combining
+        marks, symbols, and number forms continue a segment, so
+        sibling names on localized hosts (``/home/alice-notes``,
+        ``/home/alice\u03bb/x``, an emoji or superscript suffix)
+        stay clean.  Whitespace, every Unicode punctuation category
+        (``P*``), control/format characters (``C*``), and
+        fullwidth punctuation (a CJK IME substitute for
+        ``;?&|,!()``) delimit a shell word; a quote-shaped character
         counts as continuation only when the character after it is a
         path separator, which makes it part of a sibling segment name
         (``/home/alice\u2019/x``)."""
@@ -350,16 +352,21 @@ def personal_path_in_report(report):
             return False
         if ch in _QUOTE_CHARS:
             return nxt is not None and _is_path_sep(nxt)
-        # Fullwidth/ideographic punctuation produced by CJK IME input
-        # (；？＆｜，！ and 、。) delimits like its ASCII counterpart;
-        # fullwidth alphanumerics (ＡＢＣ) remain path continuation
-        # through the earlier isalnum test.
+        # Fullwidth/ideographic forms produced by CJK IME input map
+        # back to their ASCII counterpart: alphanumerics and
+        # ``_``/``.``/``-`` continue a sibling segment, punctuation
+        # (；？＆｜，！ etc.) delimits like ASCII.
         if 0xFF01 <= ord(ch) <= 0xFF5E:
             ascii_ch = chr(ord(ch) - 0xFEE0)
             return ascii_ch.isalnum() or ascii_ch in "_.-"
-        if ch in "\u3001\u3002":
-            return False
-        return True
+        # Every remaining Unicode punctuation (P*) and control/format
+        # character (C*) delimits: copy-pasted prose carries
+        # ellipsis, dashes, wave dashes, halfwidth CJK marks, and
+        # zero-width characters the explicit lists cannot enumerate.
+        # Unassigned ``M`` marks, ``S`` symbols (emoji), ``No``
+        # number forms, and ``L`` letters (alnum above) continue a
+        # segment, so sibling names on localized hosts stay clean.
+        return not unicodedata.category(ch).startswith(("P", "C"))
 
     def _occurrence(spelling):
         """True when any profile comparison form appears in spelling

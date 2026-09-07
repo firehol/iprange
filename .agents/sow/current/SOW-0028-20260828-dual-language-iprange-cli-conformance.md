@@ -9507,3 +9507,49 @@ over every committed evidence file returns clean; product binaries
 byte-identical (SHASUMS 8/8).  Sensitive-data gate: clean.  Artifact
 gate: AGENTS.md, specs, and runtime project skills unchanged; the
 sanitizer docstring describes the fullwidth mapping.
+
+#### Wave 16 follow-up round 16.9 (2026-09-08) — Unicode-category delimiter classification and round-16.8 record correction
+
+The round-16.8 wave closed the explicit fullwidth list, but the
+classifier's residual catch-all ("every other non-ASCII character
+continues") still let unlisted prose and CJK punctuation bypass the
+scan: ellipsis U+2026, wave dash U+301C, em/en dash U+2013/U+2014,
+halfwidth ideographic stop U+FF61, halfwidth comma U+FF64, katakana
+middle dot U+30FB, and zero-width characters after the profile all
+returned clean.  The explicit-list approach cannot enumerate the
+delimiter universe, so `v4/cli/command_sanitize.py` `_is_path_cont`
+is now category-based:
+
+- delimiters: whitespace (any script), the committed quote set
+  (with the separator lookahead for sibling segment names), the
+  fullwidth-ASCII mapping (alphanumerics and ``_``/``.``/``-``
+  continue), every remaining Unicode punctuation category (`P*`),
+  and every control/format category (`C*` — including zero-width
+  characters);
+- continuation: alphanumerics in any script, ``_``/``.``/``-``,
+  combining marks (`M*`), symbols (`S*`, emoji), and number forms
+  (`No`), so localized sibling names stay clean.
+
+Correction to the round-16.8 record: that record's "the round-16.7
+role round PASSed at `8b86249f` with two P3 notes" wording was based
+only on the four PASS verdicts collected before the next wave
+(parity, portability, security, glm).  The operations role's
+round-16.7 verdict was in fact FAIL — the unlisted-punctuation class
+repaired here — and the tester/performance verdicts at `8b86249f`
+were superseded by the next wave before delivery.  All seven final
+verdicts are collected at the HEAD after this record.
+
+Validation: the boundary probe matrix (34 cases) passes — the eight
+unlisted delimiter forms trip, every prior delimiter class
+(ASCII, NBSP, smart quotes, fullwidth, CJK marks) is unchanged,
+every sibling class (letters, fullwidth alphanumerics/hyphen,
+emoji, combining marks, superscripts, circled digits, CJK letters)
+stays clean, and the different-root negatives hold;
+Windows-housekeeping `--self-test` PASSes on Linux with five new
+punctuation-delimiter pins and three mark/symbol/number sibling
+negatives (and natively on the Windows host after this wave); the
+structural scan over every committed evidence file returns clean;
+product binaries byte-identical (SHASUMS 8/8).  Sensitive-data
+gate: clean.  Artifact gate: AGENTS.md, specs, and runtime project
+skills unchanged; the sanitizer docstrings describe the
+category-based classification.
