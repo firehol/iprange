@@ -26,13 +26,13 @@ import (
 	"io"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
+	"github.com/firehol/iprange/v4/go/internal/live"
 )
 
 // RegisterLive installs the live lifecycle, resolution, direct
@@ -1305,10 +1305,7 @@ func newRemovalCollector(settings removalsSettings, refreshValue uint32) (*remov
 		return nil, rpc.NewHandlerError("invalid_argument", "not_started",
 			"removal output requires at least one open file")
 	}
-	parent := filepath.Dir(settings.destination)
-	if parent == "" {
-		parent = "."
-	}
+	parent := live.FileParent(settings.destination)
 	info, err := os.Stat(parent)
 	switch {
 	case err == nil && info.IsDir():
@@ -1326,7 +1323,7 @@ func newRemovalCollector(settings removalsSettings, refreshValue uint32) (*remov
 	if herr != nil {
 		return nil, herr
 	}
-	temporary := filepath.Join(parent, "."+handle+".removals.tmp")
+	temporary := parent + string(os.PathSeparator) + "." + handle + ".removals.tmp"
 	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
 		return nil, fileError(err, "create removal output")
@@ -1520,10 +1517,7 @@ func (c *removalCollector) publishInner() (map[string]any, *rpc.HandlerError) {
 			return nil, fileError(err, "publish removal output")
 		}
 	}
-	parent := filepath.Dir(c.destination)
-	if parent == "" {
-		parent = "."
-	}
+	parent := live.FileParent(c.destination)
 	if herr := syncOutputDirectory(parent); herr != nil {
 		return nil, herr
 	}

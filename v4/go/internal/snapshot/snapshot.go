@@ -13,7 +13,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
@@ -453,8 +452,7 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 	if !publication.ValidDestinationName(destinationPath) {
 		return &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
 	}
-	clean := filepath.Clean(destinationPath)
-	dir := filepath.Dir(clean)
+	dir := live.FileParent(destinationPath)
 	// Rust Destination::bind -> Directory::open proves the parent is a
 	// plain directory before any namespace operation; the class mapping
 	// is platform-split (publication.CheckPublicationParent): POSIX folds
@@ -472,7 +470,7 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 	// (Rust Directory::open_regular, read-only). An absent name is not
 	// a rejection; the attempt creation reports it with the exact
 	// publication class.
-	dst, err := os.Lstat(clean)
+	dst, err := os.Lstat(destinationPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -485,7 +483,7 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 	if !dst.Mode().IsRegular() {
 		return &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
 	}
-	file, err := openDestinationNoFollow(clean)
+	file, err := openDestinationNoFollow(destinationPath)
 	if err != nil {
 		var fe *format.Error
 		if errors.As(err, &fe) {

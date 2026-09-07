@@ -13,7 +13,6 @@ package live
 
 import (
 	"os"
-	"path/filepath"
 
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
 	"github.com/firehol/iprange/v4/go/internal/fault"
@@ -210,7 +209,7 @@ func openLockedMain(path string, check func() error) (*lockedMain, error) {
 	}
 	// require_main_available is a POSIX no-op (Windows GC custody
 	// verification only); the call keeps the Rust flow exact.
-	if err := requireAvailable(filepath.Clean(path), identity, cleanupAuthority{
+	if err := requireAvailable(path, identity, cleanupAuthority{
 		attemptID:     result.Meta.DatabaseID,
 		ordinal:       0,
 		kind:          ArtifactOwnedMain,
@@ -224,7 +223,7 @@ func openLockedMain(path string, check func() error) (*lockedMain, error) {
 		return nil, &format.Error{Code: format.CodeWrongState, Detail: "offline transition requires exact committed length"}
 	}
 	return &lockedMain{
-		path:              filepath.Clean(path),
+		path:              path,
 		file:              file,
 		identity:          identity,
 		directoryIdentity: directory,
@@ -413,7 +412,7 @@ func requireCapacity(capacity uint32) error {
 // its shape (Rust database_file::require_sidecar_absent: a plain
 // symlink_metadata presence check).
 func requireSidecarAbsent(path string) error {
-	_, err := os.Lstat(filepath.Clean(path))
+	_, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil

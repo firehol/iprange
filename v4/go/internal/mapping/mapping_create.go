@@ -2,7 +2,6 @@ package mapping
 
 import (
 	"os"
-	"path/filepath"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/work"
@@ -17,11 +16,10 @@ import (
 // inside the mapping owner; the descriptor never escapes it. The caller
 // writes the two meta pages through Page() and seals durability with
 // FlushRange + SyncFile (Rust write_empty), then closes.
-func Create(path string, size uint64, check func(clean string) error) (*Mapping, error) {
+func Create(path string, size uint64, check func(checked string) error) (*Mapping, error) {
 	if err := requireLiveCoordination(); err != nil {
 		return nil, err
 	}
-	clean := filepath.Clean(path)
 	if size < 2*format.PageSize {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "creation size smaller than two pages"}
 	}
@@ -31,7 +29,7 @@ func Create(path string, size uint64, check func(clean string) error) (*Mapping,
 	if size > uint64(^uint(0)>>1) {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "size larger than host address space"}
 	}
-	f, err := createNoFollow(clean)
+	f, err := createNoFollow(path)
 	if err != nil {
 		return nil, err
 	}
@@ -49,8 +47,8 @@ func Create(path string, size uint64, check func(clean string) error) (*Mapping,
 			// by our cleanup, and a path already removed means
 			// nothing to clean.
 			if statErr == nil {
-				if fi, err := os.Lstat(clean); err == nil && fi.Mode().IsRegular() && os.SameFile(fi, createdStat) {
-					_ = os.Remove(clean)
+				if fi, err := os.Lstat(path); err == nil && fi.Mode().IsRegular() && os.SameFile(fi, createdStat) {
+					_ = os.Remove(path)
 				}
 			}
 		}
@@ -63,7 +61,7 @@ func Create(path string, size uint64, check func(clean string) error) (*Mapping,
 		if !st.Mode().IsRegular() {
 			return &format.Error{Code: format.CodeInvalidArgument, Detail: "not a regular file"}
 		}
-		now, err := os.Lstat(clean)
+		now, err := os.Lstat(path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return &format.Error{Code: format.CodeNameNotFound, Detail: "path removed while creating"}
@@ -88,7 +86,7 @@ func Create(path string, size uint64, check func(clean string) error) (*Mapping,
 		return nil, err
 	}
 	if check != nil {
-		if err := check(clean); err != nil {
+		if err := check(path); err != nil {
 			return nil, err
 		}
 	}

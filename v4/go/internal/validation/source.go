@@ -13,7 +13,6 @@ package validation
 import (
 	"errors"
 	"os"
-	"path/filepath"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/live"
@@ -39,15 +38,14 @@ type ImmutableSource struct {
 // re-check. Every failure combines the unlock error exactly like the
 // Rust combine_errors arms.
 func OpenImmutableSource(path string, check func() error) (*ImmutableSource, error) {
-	clean := filepath.Clean(path)
-	sidecar, err := live.CanonicalSidecarPath(clean)
+	sidecar, err := live.CanonicalSidecarPath(path)
 	if err != nil {
 		return nil, err
 	}
 	if err := live.RequireSidecarAbsent(sidecar); err != nil {
 		return nil, err
 	}
-	file, err := openReadOnlyNoFollow(clean)
+	file, err := openReadOnlyNoFollow(path)
 	if err != nil {
 		var fe *format.Error
 		if errors.As(err, &fe) {
@@ -64,7 +62,7 @@ func OpenImmutableSource(path string, check func() error) (*ImmutableSource, err
 		file.Close()
 		return nil, err
 	}
-	source := &ImmutableSource{file: file, path: clean, sidecar: sidecar, identity: identity, locked: true}
+	source := &ImmutableSource{file: file, path: path, sidecar: sidecar, identity: identity, locked: true}
 	// The open verifies twice exactly like the Rust open: the inline
 	// path+sidecar check combined with the unlock error, then the
 	// source verify again before the open returns.

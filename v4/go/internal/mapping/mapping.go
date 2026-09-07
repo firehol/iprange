@@ -29,7 +29,6 @@ package mapping
 
 import (
 	"os"
-	"path/filepath"
 	"sort"
 	"unsafe"
 
@@ -80,8 +79,7 @@ type Mapping struct {
 // this predicate so the native matrix is honest.
 func CoordinationSupported() bool { return coordinationSupported }
 
-func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func(clean string) error) (*Mapping, error) {
-	clean := filepath.Clean(path)
+func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func(checked string) error) (*Mapping, error) {
 	// Refuse read-write live opens on platforms without proven live
 	// coordination before any path access, mirroring Rust
 	// require_live_supported (binary-format-v4.md platform table). The
@@ -99,7 +97,7 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 	// reopen with O_NOFOLLOW. The fd identity, not this first stat, is the
 	// reference for every later path identity check: the initial stat may
 	// already be stale, so it must never veto the opened file.
-	before, err := os.Stat(clean)
+	before, err := os.Stat(path)
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 	}
@@ -110,7 +108,7 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 	if rdwr {
 		prot = protRead | protWrite
 	}
-	f, err := openNoFollow(clean, rdwr)
+	f, err := openNoFollow(path, rdwr)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +130,7 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 		// Re-stat the path itself (no symlink following) and compare
 		// against the opened inode: this is the check that detects
 		// replacement after the fd was opened.
-		now, err := os.Lstat(clean)
+		now, err := os.Lstat(path)
 		if err != nil {
 			if os.IsNotExist(err) {
 				return &format.Error{Code: format.CodeNameNotFound, Detail: "path removed while opening"}
@@ -157,7 +155,7 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 		return nil, err
 	}
 	if check != nil {
-		if err := check(clean); err != nil {
+		if err := check(path); err != nil {
 			return nil, err
 		}
 	}
@@ -190,7 +188,7 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 		return nil, err
 	}
 	if check != nil {
-		if err := check(clean); err != nil {
+		if err := check(path); err != nil {
 			munmapShared(data)
 			return nil, err
 		}
@@ -204,7 +202,7 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 // maps exactly its committed extent read-only under a shared lifetime lock.
 // Geometry refusals carry CodeFormatInvalid; operating-system failures carry
 // CodeIO. See openMapping for the full identity and namespace contract.
-func OpenImmutable(path string, check func(clean string) error) (*Mapping, error) {
+func OpenImmutable(path string, check func(checked string) error) (*Mapping, error) {
 	return openMapping(path, false, lockLifetimeShared, check)
 }
 
@@ -217,7 +215,7 @@ func OpenImmutable(path string, check func(clean string) error) (*Mapping, error
 // and the mapping for allocations. Format and identity checks are identical
 // to OpenImmutable. Only this package may create and destroy mappings; the
 // descriptor never escapes it.
-func OpenMutable(path string, check func(clean string) error) (*Mapping, error) {
+func OpenMutable(path string, check func(checked string) error) (*Mapping, error) {
 	return openMapping(path, true, lockLifetimeExclusive, check)
 }
 
@@ -279,7 +277,7 @@ func (m *Mapping) VerifyIdentity(path string) error {
 	if err != nil {
 		return &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 	}
-	now, err := os.Lstat(filepath.Clean(path))
+	now, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return &format.Error{Code: format.CodeNameNotFound, Detail: "path removed while open"}

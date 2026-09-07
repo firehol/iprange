@@ -22,11 +22,11 @@ import (
 	"fmt"
 	"hash"
 	"os"
-	"path/filepath"
 	"runtime"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
+	"github.com/firehol/iprange/v4/go/internal/live"
 )
 
 // ExportBudget carries the caller-supplied export limits
@@ -95,15 +95,12 @@ func NewExportWriter(destination string, policy iprangedb.PublicationPolicy, bud
 		return nil, rpc.NewHandlerError("invalid_argument", "not_started",
 			"export requires at least one open file")
 	}
-	parent := filepath.Dir(destination)
-	if parent == "" {
-		parent = "."
-	}
+	parent := live.FileParent(destination)
 	handle, herr := rpc.NewHandle()
 	if herr != nil {
 		return nil, herr
 	}
-	temporary := filepath.Join(parent, "."+handle+".export.tmp")
+	temporary := parent + string(os.PathSeparator) + "." + handle + ".export.tmp"
 	raw, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
 		return nil, fileError(err, "create export output")
@@ -235,10 +232,7 @@ func (w *ExportWriter) publish() (*ExportFacts, *rpc.HandlerError) {
 		}
 		w.published = true
 	}
-	parent := filepath.Dir(w.destination)
-	if parent == "" {
-		parent = "."
-	}
+	parent := live.FileParent(w.destination)
 	// The destination is visible; a directory-sync failure means the
 	// namespace entry's durability is unproven (outcome_unknown).
 	if err := syncDirectory(parent); err != nil {

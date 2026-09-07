@@ -8,7 +8,6 @@ package live
 
 import (
 	"os"
-	"path/filepath"
 
 	"github.com/firehol/iprange/v4/go/internal/fault"
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -74,7 +73,7 @@ func reserveAt(path string, databaseID, sidecarID [16]byte, capacity uint32) (*S
 	}
 	return &Sidecar{
 		file:     created.file,
-		path:     filepath.Clean(path),
+		path:     path,
 		header:   header{capacity: capacity, databaseID: databaseID, sidecarID: sidecarID},
 		identity: created.identity,
 	}, nil
@@ -216,7 +215,7 @@ func openAny(path string) (*Sidecar, sidecarState, error) {
 		file.Close()
 		return nil, 0, err
 	}
-	return &Sidecar{file: file, path: filepath.Clean(path), header: h, identity: identity, mapping: m}, state, nil
+	return &Sidecar{file: file, path: path, header: h, identity: identity, mapping: m}, state, nil
 }
 
 // readSourceHeader reads and verifies the header page of an

@@ -378,3 +378,47 @@ func TestMembershipViewWords(t *testing.T) {
 		t.Fatalf("word1 bits %x", w1)
 	}
 }
+
+// TestOpenImmutableRawPathThroughSymlinkParent pins the raw-path open
+// contract (Rust open_immutable passes the caller path to the kernel
+// without lexical normalization): a database addressed through a
+// symlinked intermediate plus ".." must open at the kernel-resolved
+// location, exactly like Rust, and the lexically-cleaned spelling (the
+// regression class: filepath.Clean collapsed <symlink>/.. before the
+// stat/open) must not be substituted. The cleaned spelling control
+// fails only because the file genuinely does not live there.
+func TestOpenImmutableRawPathThroughSymlinkParent(t *testing.T) {
+	root := t.TempDir()
+	db, err := os.ReadFile(fixture(t, "direct-ipv4.iprdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "db.iprange"), db, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"real", "work"} {
+		if err := os.Mkdir(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("../real", filepath.Join(root, "work", "jump")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	// Kernel resolution: work/jump -> root/real, then ".." -> root, so
+	// the raw path names root/db.iprange. filepath.Clean would instead
+	// spell root/work/db.iprange, which does not exist.
+	sep := string(filepath.Separator)
+	// Build the spelling by hand: filepath.Join would lexically clean
+	// the symlink+.. pair before the kernel sees it.
+	raw := root + sep + "work" + sep + "jump" + sep + ".." + sep + "db.iprange"
+	cleaned := filepath.Join(root, "work", "db.iprange")
+	r, err := OpenImmutable(raw)
+	if err != nil {
+		t.Fatalf("raw path open failed: %v", err)
+	}
+	r.Close()
+	if r2, err := OpenImmutable(cleaned); err == nil {
+		r2.Close()
+		t.Fatal("cleaned spelling unexpectedly opened; the raw path was normalized")
+	}
+}

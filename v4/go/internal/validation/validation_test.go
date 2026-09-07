@@ -406,3 +406,43 @@ func TestTableProbe(t *testing.T) {
 		t.Fatal("huge table accepted")
 	}
 }
+
+// TestImmutableSourceRawPathThroughSymlinkParent pins the raw-path
+// source-open contract (Rust ImmutableSource::open passes the caller
+// path to the kernel without lexical normalization): the recovery and
+// validation source opens must resolve a symlinked intermediate plus
+// ".." exactly like Rust, and the lexically-cleaned spelling must not
+// be substituted by the open (the same regression class pinned in the
+// reader tests).
+func TestImmutableSourceRawPathThroughSymlinkParent(t *testing.T) {
+	root := t.TempDir()
+	db, err := os.ReadFile(fixturePath(t, "direct-ipv4.iprdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "db.iprange"), db, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{"real", "work"} {
+		if err := os.Mkdir(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink("../real", filepath.Join(root, "work", "jump")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	sep := string(filepath.Separator)
+	// Build the spelling by hand: filepath.Join would lexically clean
+	// the symlink+.. pair before the kernel sees it.
+	raw := root + sep + "work" + sep + "jump" + sep + ".." + sep + "db.iprange"
+	cleaned := filepath.Join(root, "work", "db.iprange")
+	src, err := OpenImmutableSource(raw, nil)
+	if err != nil {
+		t.Fatalf("raw-path source open failed: %v", err)
+	}
+	src.Close()
+	if src2, err := OpenImmutableSource(cleaned, nil); err == nil {
+		src2.Close()
+		t.Fatal("cleaned spelling unexpectedly opened; the raw path was normalized")
+	}
+}

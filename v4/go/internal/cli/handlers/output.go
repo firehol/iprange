@@ -8,11 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
+	"github.com/firehol/iprange/v4/go/internal/live"
 )
 
 // Base64Padded is the standard padded base64 alphabet (wire encoding
@@ -72,15 +72,12 @@ func MetadataOutput(path string, bytes []byte, policy iprangedb.PublicationPolic
 }
 
 func publishMetadata(path string, bytes []byte, policy iprangedb.PublicationPolicy) *rpc.HandlerError {
-	parent := filepath.Dir(path)
-	if parent == "" {
-		parent = "."
-	}
+	parent := live.FileParent(path)
 	handle, herr := rpc.NewHandle()
 	if herr != nil {
 		return herr
 	}
-	temporary := filepath.Join(parent, "."+handle+".metadata.tmp")
+	temporary := parent + string(os.PathSeparator) + "." + handle + ".metadata.tmp"
 	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
 	if err != nil {
 		return outputFileError(err, "create metadata output")
