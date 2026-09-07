@@ -332,13 +332,15 @@ workers `7784e830…`/`9fd36146…`, fixture `6c2c56b9…`, Windows Go
 again and Windows housekeeping 2/2.  The wave-15 round-3 delta at
 `3f156b22` then completed the encoding-aware basename class at
 every Go fact site and the Rust snapshot handoff surfaces, closed
-the encoding-1 invalid-UTF-8 render divergence, and made the
-resource-harness id-type control share the proofs' exact-id
-authority; final Linux identities there are Go `74d5ce2d…` /
-worker `1b12053d…` and Rust `40816ee2…` / worker `9fd36146…`,
-Windows Go `181c4308…` / Rust `33b02d82…`, every battery gate
-green, and the closure record and the role-round delta verdicts
-are recorded in the "Wave 15" section below.
+the encoding-1 invalid-UTF-8 render divergence with the exact
+maximal-subpart decode (verified against the Rust implementation
+over a 20k-case corpus), and made the resource-harness id-type
+control share the proofs' exact-id authority; final Linux
+identities there are Go `83134c1d…` / worker `1b12053d…` and Rust
+`40816ee2…` / worker `9fd36146…`, Windows Go `b7603d15…` / Rust
+`33b02d82…`, every battery gate green, and the closure record and
+the role-round delta verdicts are recorded in the "Wave 15"
+section below.
 
 
 ## Requirements
@@ -7090,12 +7092,21 @@ distinct P2 findings, all repaired in commit `3f156b22`:
    `lifecycle::housekeeping` / `lifecycle::visible_housekeeping` /
    `lifecycle::basename` renders (one authoritative implementation).
 3. **P2 — encoding-1 invalid-UTF-8 names rendered lossily but
-   differently per product (operations).**  Rust replaces each
-   maximal invalid run with one U+FFFD (from_utf8_lossy), Go's json
-   replaced each invalid byte, so an incomplete multibyte tail
-   diverged.  Repair: the Go renderer decodes encoding-1 bytes with
-   the same run-replacement (`strings.ToValidUTF8`), with a parity
-   test pinning the single-replacement wire.
+   differently per product (operations).**  Rust applies the
+   WHATWG maximal-subpart rule (from_utf8_lossy), Go's json
+   replaced each invalid byte, so incomplete, overlong, surrogate,
+   and out-of-range sequences diverged.  Repair round 1: the Go
+   renderer decoded encoding-1 bytes with `strings.ToValidUTF8`
+   (one U+FFFD per maximal invalid run), which still diverged for
+   structurally complete but invalid sequences (overlong C0 AF,
+   surrogate ED A0 80, out-of-range F4 90 80 80, and out-of-range
+   first continuations such as F4 BD); the operations role proved
+   the divergence by replica in the round-3 second delta.  Repair
+   round 2 at `7d4e31bf`: the Go renderer now walks the exact
+   maximal-subpart rule (`utf8Lossy`), verified byte-for-byte
+   against the Rust implementation over a 20,000-case random
+   corpus in addition to the table test pinning every divergent
+   class.
 4. **P2 — the resource-harness id-type control duplicated the
    proofs' correlation idiom instead of driving it (tester).**
    Removing the exact-type enforcement from proof a's
@@ -7111,21 +7122,23 @@ basename bytes of the output facts (raw on posix, UTF-16LE units on
 Windows), the Windows UTF-16LE commitment units, and Rust snapshot
 attempt-wire equality with the maintenance surface.
 
-Re-qualification at `3f156b22`: Go suite 22/22 packages and Rust
-workspace PASS (Linux); full battery PASS at the final staged
-identities (matrices 38/38 single and 14+24 mixed; crash 16/16
-both directions with the /bin/false negative failing as designed;
-resource 8/8; kind gate PASS on the regenerated evidence; golden
-55; sensitivity 14; harness self-tests PASS including the
-shared-authority id-type control verified against the str-coercion
-mutation); host Windows-native Go `internal/live`,
-`internal/publication`, `internal/cli` suites PASS and
-`cargo test -p iprange-livedb -p iprange-cli` PASS; Windows
-housekeeping 2/2 on the authorized Windows validation host (Go
-`181c4308…`, Rust `33b02d82…`, native Python 3.14.6, clean tree at
-`3f156b22`).  Final Linux identities at `3f156b22`: Go product
-`74d5ce2d…`, Go worker `1b12053d…`, Rust product `40816ee2…`,
-Rust worker `9fd36146…` (unchanged), fixture `6c2c56b9…`
-(unchanged); `v4/cli/evidence/*`, `evidence/README.md`, and
-`resource-record.md` are regenerated in the same commit so the
-record and the identities cannot drift again.
+Re-qualification at `7d4e31bf` (the round-3 final revision,
+carrying the maximal-subpart encoding-1 render): Go suite 22/22
+packages and Rust workspace PASS (Linux); full battery PASS at the
+final staged identities (matrices 38/38 single and 14+24 mixed;
+crash 16/16 both directions with the /bin/false negative failing
+as designed; resource 8/8; kind gate PASS on the regenerated
+evidence; golden 55; sensitivity 14; harness self-tests PASS
+including the shared-authority id-type control verified against
+the str-coercion mutation); host Windows-native Go
+`internal/live`, `internal/publication`, `internal/cli` suites
+PASS and `cargo test -p iprange-livedb -p iprange-cli` PASS;
+Windows housekeeping 2/2 on the authorized Windows validation host
+(Go `b7603d15…`, Rust `33b02d82…`, native Python 3.14.6, clean
+tree at `7d4e31bf`).  Final Linux identities at `7d4e31bf`: Go
+product `83134c1d…`, Go worker `1b12053d…`, Rust product
+`40816ee2…`, Rust worker `9fd36146…` (unchanged), fixture
+`6c2c56b9…` (unchanged); `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated in
+the same commit so the record and the identities cannot drift
+again.

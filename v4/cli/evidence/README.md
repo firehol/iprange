@@ -30,19 +30,20 @@ wave-15 section) plus the native Windows verification wave:
   Windows Python 3.14.6.
 
 Linux reports record the product identities `40816ee2…` (rust) and
-`74d5ce2d…` (go), workers `9fd36146…` / `1b12053d…`, fixture
+`83134c1d…` (go), workers `9fd36146…` / `1b12053d…`, fixture
 `6c2c56b9…` (staged in `.local/shared/binaries/SHASUMS.txt`);
 the Windows housekeeping report records the Windows-host products
-`33b02d82…` (rust) and `181c4308…` (go) at the same source
+`33b02d82…` (rust) and `b7603d15…` (go) at the same source
 revision.  These identities include the wave-15 role-round delta
 repairs: the encoding-aware artifact-basename renderer in both
 products, the Go worker-availability fallback, Go's proper UTF-16LE
 GC name store, the complete encoding-aware basename class at every
 Go fact site (output and seed inventories, basename lengths and
 binding/resume comparisons) and the Rust snapshot handoff surfaces,
-the pinned resource-gate controls, and the single exact-type
-id-correlation authority of the resource proofs (all recorded in
-SOW-0028's wave-15 section).
+the maximal-subpart encoding-1 decode matching Rust
+from_utf8_lossy, the pinned resource-gate controls, and the single
+exact-type id-correlation authority of the resource proofs (all
+recorded in SOW-0028's wave-15 section).
 
 The fourteenth-wave (external whole-milestone control review
 FAIL and repair) evidence is regenerated at the wave-14 revision
