@@ -173,6 +173,24 @@ func u16IntegerFromWire(object rawObject, field string) (uint16, error) {
 
 // decodeFileIdentity decodes one wire volume/file identity pair into
 // the kind-1 SDK identity (Rust decode_file_identity).
+// artifactBasename renders one artifact basename to its documented
+// wire form, honoring the platform encoding tag (Rust
+// lifecycle::basename): encoding 2 (Windows UTF-16LE units) maps
+// every stored byte to the same-numbered U+00xx character (the
+// opaque per-byte form), and encoding 1 keeps the bytes as the
+// text's UTF-8 encoding.  ASCII names render unchanged under both
+// encodings.
+func artifactBasename(bytes []byte, encoding uint16) string {
+	if encoding == 2 {
+		runes := make([]rune, len(bytes))
+		for i, b := range bytes {
+			runes[i] = rune(b)
+		}
+		return string(runes)
+	}
+	return string(bytes)
+}
+
 // decodeArtifactBasename decodes one artifact basename wire string
 // back to its stored bytes. Artifact basenames travel in the
 // documented opaque per-byte wire form (iprange-jsonrpc-v1.md):

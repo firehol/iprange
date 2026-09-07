@@ -2,8 +2,11 @@ package handlers
 
 import (
 	"encoding/binary"
+	"encoding/json"
 	"runtime"
 	"testing"
+
+	iprangedb "github.com/firehol/iprange/v4/go/internal/publication"
 )
 
 // decodeArtifactBasename must keep encoding-1 bytes as the text's
@@ -59,5 +62,84 @@ func TestDecodeFileIdentityKind(t *testing.T) {
 	}
 	if got := binary.LittleEndian.Uint64(identity.Bytes[8:16]); got != 456 {
 		t.Fatalf("file = %d, want 456", got)
+	}
+}
+
+// artifactBasename + decodeArtifactBasename must be mutual inverses
+// for both encodings on non-ASCII names (Rust lifecycle::basename
+// parity): encoding 2 renders every stored unit byte as the
+// same-numbered U+00xx character, encoding 1 keeps the bytes as the
+// text's UTF-8 encoding.
+func TestArtifactBasenameRenderRoundTrip(t *testing.T) {
+	// Encoding 1: raw UTF-8 text round trip.
+	posix := []byte("gr\u00f6\u00dfe.iprange")
+	rendered := artifactBasename(posix, 1)
+	if rendered != "gr\u00f6\u00dfe.iprange" {
+		t.Fatalf("encoding-1 render = %q", rendered)
+	}
+	got, err := decodeArtifactBasename(rendered, 1, "source_basename")
+	if err != nil {
+		t.Fatal("encoding-1 decode:", err)
+	}
+	if string(got) != string(posix) {
+		t.Fatalf("encoding-1 round trip = % x, want % x", got, posix)
+	}
+
+	// Encoding 2: per-byte wire form round trip (UTF-16LE units of
+	// "caf\u00e9" with no terminator).
+	units := []byte{'c', 0, 'a', 0, 'f', 0, 0xe9, 0x00}
+	rendered = artifactBasename(units, 2)
+	if rendered != "c\u0000a\u0000f\u0000\u00e9\u0000" {
+		t.Fatalf("encoding-2 render = %q", rendered)
+	}
+	got, err = decodeArtifactBasename(rendered, 2, "source_basename")
+	if err != nil {
+		t.Fatal("encoding-2 decode:", err)
+	}
+	if string(got) != string(units) {
+		t.Fatalf("encoding-2 round trip = % x, want % x", got, units)
+	}
+}
+
+// The full housekeeping row wire path must preserve encoding-2 unit
+// bytes: the row renderer emits the per-byte text, the response JSON
+// preserves it, and the strict decoder recovers the exact units (the
+// pre-fix Go renderer collapsed bytes >= 0x80 to U+FFFD and the
+// decoder then rejected the row).
+func TestHousekeepingRowBasenamesRoundTripJSON(t *testing.T) {
+	row := &iprangedb.HousekeepingArtifact{
+		State:            iprangedb.HousekeepingInert,
+		BasenameEncoding: 2,
+		EnvelopeBasename: []byte{'e', 0, 'v', 0, 0xe9, 0x00},
+		SourceBasename:   []byte{'s', 0, 'r', 0, 0xe9, 0x00},
+		InertBasename:    []byte{'i', 0, 'n', 0, 0xe9, 0x00},
+	}
+	wire, err := json.Marshal(HousekeepingArtifactJSON(row))
+	if err != nil {
+		t.Fatal("marshal:", err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(wire, &decoded); err != nil {
+		t.Fatal("unmarshal:", err)
+	}
+	for _, field := range []string{"envelope_basename", "source_basename", "inert_basename"} {
+		text, ok := decoded[field].(string)
+		if !ok {
+			t.Fatalf("%s is not a string: %#v", field, decoded[field])
+		}
+		units, err := decodeArtifactBasename(text, 2, field)
+		if err != nil {
+			t.Fatalf("%s decode of %q: %v", field, text, err)
+		}
+		want := row.EnvelopeBasename
+		switch field {
+		case "source_basename":
+			want = row.SourceBasename
+		case "inert_basename":
+			want = row.InertBasename
+		}
+		if string(units) != string(want) {
+			t.Fatalf("%s round trip = % x, want % x", field, units, want)
+		}
 	}
 }

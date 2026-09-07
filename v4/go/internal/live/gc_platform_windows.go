@@ -12,14 +12,11 @@ func gcBasenameEncodingValue() BasenameEncoding { return basenameEncodingWindows
 // namespace::CREATION_SECURITY_KIND on windows).
 func gcCreationSecurityKind() uint16 { return 2 }
 
-// gcNameBytesPlatform encodes one ASCII name as UTF-16LE units (Rust
-// Name::bytes on windows).
+// gcNameBytesPlatform encodes one name as UTF-16LE code units (Rust
+// Name::bytes on windows); the shared utf16LEBytes helper is tested
+// on every platform.
 func gcNameBytesPlatform(name string) []byte {
-	encoded := make([]byte, 0, len(name)*2)
-	for i := 0; i < len(name); i++ {
-		encoded = append(encoded, name[i], 0)
-	}
-	return encoded
+	return utf16LEBytes(name)
 }
 
 // gcFileSize reports one retained file's size from its handle
