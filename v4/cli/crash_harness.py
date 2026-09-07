@@ -104,6 +104,12 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from command_sanitize import (  # noqa: E402  (side-effect free)
+    personal_path_in_report,
+    sanitized_command,
+    under_profile,
+)
+
 import run  # noqa: E402  (normal JSON-RPC client; import is side-effect free)
 from schema import frame
 
@@ -2938,6 +2944,25 @@ def main():
 
     if not os.path.isdir(args.work_dir) or not os.path.isabs(args.work_dir):
         parser.error("--work-dir must be an absolute existing directory")
+    # Durable-artifact policy: committed evidence must never carry the
+    # operator's home directory.  Every path-valued input must live
+    # outside the profile (the documented authorized scratch area), so
+    # the whole serialized report is inherently personal-path-free;
+    # the write-time structural scan below is the second net.
+    for label, path in (("producer", args.producer),
+                        ("consumer", args.consumer),
+                        ("fixture tool", args.fixture_tool)):
+        if under_profile(path):
+            parser.error(
+                f"{label} executable {path} lives under the operator's "
+                "profile; stage binaries under the authorized scratch "
+                "area so committed evidence cannot carry personal paths")
+    for path in (args.work_dir, args.json_report):
+        if path and under_profile(path):
+            parser.error(
+                f"path {path} lives under the operator's profile; use "
+                "the authorized scratch area so committed evidence "
+                "cannot carry personal paths")
     try:
         _orphan_contract_self_test()
     except AssertionError as exc:
@@ -2948,7 +2973,7 @@ def main():
 
     report = {
         "schema": "iprange-cli-crash-report-v1",
-        "command": sys.argv,
+        "command": sanitized_command(),
         "platform": {
             "system": platform.system(),
             "release": platform.release(),
@@ -3069,6 +3094,17 @@ def main():
     if not args.keep_work:
         for work in work_dirs:
             shutil.rmtree(work, ignore_errors=True)
+
+    # Durable-artifact policy net: after every field is filled
+    # (including per-scenario paths), refuse to serialize a report
+    # that still carries the operator's profile path in any string
+    # value.
+    personal = personal_path_in_report(report)
+    if personal is not None:
+        raise SystemExit(
+            f"refusing to write evidence containing the operator's "
+            f"profile path: {personal!r}; stage all inputs outside "
+            "the profile")
 
     if args.json_report:
         with open(args.json_report, "w", encoding="utf-8") as stream:

@@ -9082,3 +9082,82 @@ spellings already audited).  Sensitive-data gate: clean.  Artifact
 gate: AGENTS.md unchanged; runtime project skills unchanged; specs
 unchanged; end-user docs unchanged; the commit-subject history
 rewrite item remains open pending user approval.
+
+#### Wave 16 follow-up round 16 (2026-09-07) — the round-15 role-round FAIL repair: shared command/evidence sanitization and pinned self-test scratch
+
+The round-15 role round at `ef28cd8d` returned FAIL from the tester
+role: the raw `sys.argv` recording in the three non-Windows harnesses
+was unguarded (P2-2), the Windows-housekeeping `--self-test` could
+leave profile-named scratch directories at the checkout root through a
+Windows-styled TEMP override (P2-3, observed as 24 `C:\Users\alice\...
+\wh-selftest-*` entries at the round-15 HEAD; they were gone from the
+tree before this wave committed), and the cwd-invariance claim for the
+command sanitizer was overbroad for value forms (P3).  This wave
+completes the same class of work the Windows harness already had and
+makes the sanitizer genuinely cwd-invariant:
+
+1. **P2-2 — raw `sys.argv` recording in `crash_harness.py`,
+   `resource_harness.py`, and `run.py`.**  The Windows harness already
+   refused profile-under inputs, sanitized its command record, and
+   scanned the completed report before writing; the other three
+   harnesses now share one authoritative implementation:
+   `v4/cli/command_sanitize.py` (moved from the Windows harness and
+   upgraded) provides `under_profile`, `sanitized_command`,
+   `personal_path_in_report`, and the scratch-root helpers.  All three
+   harnesses (a) refuse every path-valued input that lives at or under
+   the operator's profile before work starts, (b) record
+   `sanitized_command()` instead of `sys.argv`, and (c) refuse to
+   serialize a report whose structural scan finds the profile path in
+   any string value.  Negative controls verified all four harnesses
+   reject in-profile binaries/work dirs and accept the scratch-area
+   staging used by the committed evidence.
+2. **P2-3 — TEMP-honoring self-test scratch.**  Every harness scratch
+   directory now comes from `owned_temp_dir`/`owned_temp_root`, which
+   refuses an ambient temp root that is missing, relative, or inside
+   the checkout and falls back to a neutral platform root (`/tmp` on
+   POSIX, drive-root `\Temp` on Windows, matching the documented
+   authorized scratch convention).  Applied to the Windows-housekeeping
+   pair/removal self-tests, the resource self-test roots, run.py's
+   default per-case work directory, and run.py's `_self_test`.  The
+   Windows-housekeeping P2-7 self-test gains a committed control that
+   points the ambient temp root at the checkout and requires the
+   scratch to land elsewhere.
+3. **P3 — cwd-invariance for value forms.**  `rust=8` and `--opt=8`
+   were abspath-resolved against the process cwd and flipped spelling
+   from a checkout subdirectory.  Relative spellings are now resolved
+   against the checkout root, never the invocation directory, so every
+   form (bare tokens, option values, label values, relative path
+   values) is invariant to the invocation directory; the P2-7 case
+   list pins `8`, `rust=8`, `--opt=8`, `v4/cli`, `..`, and
+   `--work-dir v4/cli`.  The P2-7 negative probe now uses the
+   guaranteed-neutral root because the ambient Windows temp lives
+   under the profile in an interactive session.
+
+Re-qualification (binaries byte-identical, SHASUMS 8/8 unchanged; no
+product source touched): Windows-housekeeping `--self-test` PASSes from
+the checkout root and a checkout subdirectory on Linux and natively on
+the Windows host; resource `--self-test` PASSes; the full battery
+(matrices 38/38 and 14+24 per direction, crash positive and /bin/false
+negative, resource 8/8, kind gate controls 1-45, sensitivity 14,
+golden 55) is green; the regenerated reports' `command` arrays are
+byte-identical to the committed evidence (the only differences in any
+regenerated report are run-to-run nondeterministic fields: random
+reservation/attempt IDs, inode numbers, PIDs, elapsed times, and
+digests of generated feeds); the Windows housekeeping qualification
+runs 2/2 PASS natively at the SHASUMS identities (Go `02e7daa7…`,
+Rust `c960a64f…`).  Same-failure search: no other qualification script
+writes raw `sys.argv` or unbounded `mkdtemp` scratch into committed
+evidence (the remaining harnesses import the shared module or record
+no path-valued evidence).  Sensitive-data gate: clean (no personal
+paths in any evidence; the structural scan runs before every report
+write).  Artifact gate: AGENTS.md unchanged; runtime project skills
+unchanged (project-final-review's policy on later-commit invalidation
+is what drives the role re-anchor below); specs unchanged; end-user
+docs unchanged (harness CLI behavior is additive refusal of
+policy-violating staging); evidence unchanged.  Out-of-scope engine
+findings re-listed by the external control remain forwarded for the
+user's scope decision: Go Windows name limits count UTF-8 bytes not
+UTF-16 units (`v4/go/internal/publication/name.go`,
+`v4/go/internal/live/directory_windows.go`); Rust
+`is_windows_device_name` compares device stems without length equality
+(`v4/rust/iprange-livedb/src/path.rs`).

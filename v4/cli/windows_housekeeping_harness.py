@@ -134,6 +134,15 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from command_sanitize import (  # noqa: E402  (side-effect free)
+    checkout_root,
+    neutral_temp_root,
+    owned_temp_dir,
+    personal_path_in_report,
+    sanitized_command,
+    under_profile,
+)
+
 from crash_harness import (  # noqa: E402  (side-effect free)
     HarnessJsonRpcService,
     write_direct_csv_feed,
@@ -171,135 +180,6 @@ REFRESH_VALUE = 123456
 # exact removal-log facts (removals_log_rows, removals_log_sha256,
 # removals_advertised) recorded by complete_native_refresh_exercise.
 REPORT_SCHEMA = "iprange-cli-windows-housekeeping-report-v3"
-
-def _sanitize_path_value(value, checkout, checkout_norm):
-    """Rewrite one path-valued argv element to a checkout-relative
-    spelling when it lives under the checkout; leave every other
-    value as it was passed.  The containment comparison uses normcase
-    so a case-varied checkout spelling cannot escape rewriting, the
-    relative rewrite uses the caller's original absolute spelling,
-    and a different-drive value (commonpath ValueError) is never
-    treated as under the checkout."""
-    if not value:
-        return value
-    abs_path = os.path.normpath(os.path.abspath(value))
-    norm = os.path.normcase(abs_path)
-    try:
-        under_checkout = (os.path.commonpath([norm, checkout_norm])
-                          == checkout_norm)
-    except ValueError:
-        under_checkout = False
-    if under_checkout:
-        return os.path.relpath(abs_path, checkout)
-    return value
-
-
-def _looks_like_path(value):
-    """True when an argv element is path-shaped: it carries a path
-    separator or a drive prefix, or is a dot spelling.  Bare tokens
-    (``8``, option values that are not paths) stay verbatim and are
-    never cwd-resolved, so the sanitized command record and the
-    self-test are invariant to the invocation directory."""
-    return ("/" in value or "\\" in value
-            or len(value) >= 2 and value[1] == ":"
-            or value in (".", ".."))
-
-
-def sanitized_command(argv=None):
-    """Return argv with every path-valued element rewritten to a
-    checkout-relative spelling when it lives under the checkout, so
-    the committed evidence never records the operator's home
-    directory (durable-artifact policy).  Option tokens are kept
-    verbatim; ``--option=PATH`` and label-prefixed values (``rust=``,
-    ``go=``) sanitize only the embedded path value.  Paths outside
-    the checkout (binary and work-dir paths under the authorized
-    validation host's scratch area) are kept as recorded.  ``argv``
-    defaults to ``sys.argv`` and may be injected by the self-test."""
-    if argv is None:
-        argv = sys.argv
-    checkout = os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__))))
-    checkout_norm = os.path.normcase(os.path.normpath(checkout))
-    out = []
-    for arg in argv:
-        if not arg:
-            out.append(arg)
-        elif arg.startswith("--") and "=" in arg:
-            key, sep, value = arg.partition("=")
-            out.append(key + sep + _sanitize_path_value(
-                value, checkout, checkout_norm))
-        elif arg.startswith("-"):
-            # Plain option token (also covers the harness's single
-            # dash options): never a path; keep verbatim.
-            out.append(arg)
-        elif "=" in arg:
-            label, sep, value = arg.partition("=")
-            if any(c in label for c in "/\\"):
-                out.append(_sanitize_path_value(
-                    arg, checkout, checkout_norm))
-            else:
-                out.append(label + sep + _sanitize_path_value(
-                    value, checkout, checkout_norm))
-        elif _looks_like_path(arg):
-            out.append(_sanitize_path_value(arg, checkout, checkout_norm))
-        else:
-            # Bare non-path token: never cwd-resolved, kept verbatim.
-            out.append(arg)
-    return out
-
-
-def _profile_path():
-    """Normcased operator profile root, or an empty string when the
-    platform cannot determine it (never match in that case)."""
-    home = os.path.expanduser("~")
-    if not home:
-        return ""
-    norm = os.path.normcase(os.path.normpath(home))
-    return norm if len(norm) >= 3 else ""
-
-
-def _under_profile(path):
-    """True when an absolute path lives at or under the operator's
-    profile (normcase prefix match, both separator spellings)."""
-    profile = _profile_path()
-    if not profile:
-        return False
-    norm = os.path.normcase(os.path.normpath(os.path.abspath(path)))
-    return norm == profile or norm.startswith(profile + os.sep)
-
-
-def _personal_path_in_report(report):
-    """Return one string field that is or starts with the operator's
-    profile path, or None.  Structural scan over every string value so
-    a future report field cannot silently re-introduce a personal
-    path."""
-    profile = _profile_path()
-    if not profile:
-        return None
-    hit = []
-
-    def visit(value):
-        if isinstance(value, str):
-            norm = os.path.normcase(
-                value.replace("/", os.sep).replace("\\", os.sep))
-            # Also test the `..`-resolved spelling so a path that
-            # resolves into the profile through parent segments is
-            # caught even when the raw spelling hides it.
-            resolved = os.path.normcase(os.path.normpath(norm)) \
-                if norm else norm
-            if (norm == profile or norm.startswith(profile + os.sep)
-                    or resolved == profile
-                    or resolved.startswith(profile + os.sep)):
-                hit.append(value)
-        elif isinstance(value, dict):
-            for item in value.values():
-                visit(item)
-        elif isinstance(value, list):
-            for item in value:
-                visit(item)
-
-    visit(report)
-    return hit[0] if hit else None
 
 
 WRITER_BUDGET = {"max_heap_bytes": "16777216", "max_private_pages": "20000",
@@ -1620,7 +1500,7 @@ def _self_test():
         else:
             print(f"[{label}] passed")
 
-    scratch = tempfile.mkdtemp(prefix="wh-selftest-pair-")
+    scratch = owned_temp_dir("wh-selftest-pair-")
     try:
         synth, rows = _synthetic_pair(scratch)
         expect_pass(
@@ -1749,7 +1629,7 @@ def _self_test():
     # P2-6: exact removal-log proof over doctored logs.
     def run_removal_case(log_lines, advertised=None,
                          flow_steps=None):
-        live = tempfile.mkdtemp(prefix="wh-selftest-removal-")
+        live = owned_temp_dir("wh-selftest-removal-")
         try:
             with open(os.path.join(live, "removals.jsonl"), "w",
                       encoding="utf-8", newline="") as stream:
@@ -1852,22 +1732,24 @@ def _self_test():
     # regression cannot silently re-introduce personal paths into
     # committed evidence.
     script = os.path.abspath(__file__)
-    checkout = os.path.dirname(os.path.dirname(os.path.dirname(script)))
+    checkout = checkout_root()
     probe = {"under": os.path.normpath(os.path.expanduser("~")), "ok": []}
-    if not _under_profile(probe["under"]):
+    if not under_profile(probe["under"]):
         problems.append("P2-7 _under_profile failed on the real profile")
     else:
-        print("[P2-7] _under_profile(real profile) passed")
+        print("[P2-7] under_profile(real profile) passed")
     outside = os.path.dirname(os.path.dirname(script)) if os.sep == "/" \
         else os.path.join(os.path.dirname(os.path.dirname(script)), "..")
     # The checkout may itself live under the operator's profile (a
     # home-directory clone); the negative probe must be a path that
-    # is neither the checkout nor under the profile.
-    outside = tempfile.gettempdir()
-    if _under_profile(outside):
+    # is neither the checkout nor under the profile.  The ambient
+    # Windows temp root lives under the profile in an interactive
+    # session, so the probe uses the guaranteed-neutral root instead.
+    outside = neutral_temp_root()
+    if under_profile(outside):
         problems.append(f"P2-7 _under_profile false-positive on {outside}")
     else:
-        print("[P2-7] _under_profile(outside) passed")
+        print("[P2-7] under_profile(outside) passed")
 
     cases = [
         # (argv, expected) evaluated against the platform path rules.
@@ -1878,6 +1760,23 @@ def _self_test():
          [f"--json-report={os.path.relpath(os.path.join(checkout, 'ev', 'out.json'), checkout)}"]),
         ([f"rust={os.path.join(outside, 'scratch', 'x.exe')}"],
          [f"rust={os.path.join(outside, 'scratch', 'x.exe')}"]),
+        # Value-position invariance: a non-path option/label value is
+        # resolved against the checkout root (never the invocation
+        # directory), so its spelling is stable from any cwd.  From a
+        # checkout subdirectory, the pre-fix sanitizer rewrote these
+        # values to subdirectory-relative spellings.
+        (["rust=8"], ["rust=8"]),
+        (["--opt=8"], ["--opt=8"]),
+        # Relative path-shaped values: checkout-relative when they
+        # resolve under the checkout, verbatim otherwise, from every
+        # invocation directory.  The rewritten spelling uses the
+        # platform's native separators (os.path.join), so the pin
+        # builds its input and expectation from the running
+        # platform's path rules.
+        ([os.path.join("v4", "cli")], [os.path.join("v4", "cli")]),
+        ([".."], [".."]),
+        (["--work-dir", os.path.join("v4", "cli")],
+         ["--work-dir", os.path.join("v4", "cli")]),
     ]
     for argv, want in cases:
         got = sanitized_command(argv)
@@ -1894,12 +1793,12 @@ def _self_test():
 
     clean_report = {"command": ["--self-test"], "work_dir": "/tmp",
                     "binaries": {}, "outcomes": []}
-    if _personal_path_in_report(clean_report) is not None:
+    if personal_path_in_report(clean_report) is not None:
         problems.append("P2-7 clean report flagged as personal")
     else:
         print("[P2-7] clean report passed")
     leaky_report = dict(clean_report, work_dir=os.path.expanduser("~"))
-    if _personal_path_in_report(leaky_report) is None:
+    if personal_path_in_report(leaky_report) is None:
         problems.append("P2-7 leaky report not detected")
     else:
         print("[P2-7] leaky report detected")
@@ -1912,10 +1811,35 @@ def _self_test():
     anchor = os.path.basename(os.path.normpath(os.path.expanduser("~")))
     dotdot_leak = os.path.join(parent, "x", "..", anchor, "scratch", "x")
     dotdot_report = dict(clean_report, work_dir=dotdot_leak)
-    if _personal_path_in_report(dotdot_report) is None:
+    if personal_path_in_report(dotdot_report) is None:
         problems.append("P2-7 dotdot-resolved leak not detected")
     else:
         print("[P2-7] dotdot-resolved leak detected")
+
+    # P2-3 scratch-root pin: an override that points the ambient temp
+    # root inside the checkout must not place self-test scratch there
+    # (a Windows-styled TEMP/--self-test run previously left profile-
+    # named directories at the checkout root).  owned_temp_dir falls
+    # back to the neutral platform temp root in that case.
+    saved_tempdir = tempfile.tempdir
+    try:
+        tempfile.tempdir = checkout
+        pinned = owned_temp_dir("wh-selftest-pinned-")
+        try:
+            norm = os.path.normcase(os.path.normpath(pinned))
+            checkout_norm = os.path.normcase(os.path.normpath(checkout))
+            if (norm == checkout_norm
+                    or norm.startswith(checkout_norm + os.sep)):
+                problems.append(
+                    "P2-3 owned_temp_dir placed scratch inside the "
+                    "checkout")
+            else:
+                print("[P2-3] owned_temp_dir refused the checkout-root "
+                      "override")
+        finally:
+            shutil.rmtree(pinned, ignore_errors=True)
+    finally:
+        tempfile.tempdir = saved_tempdir
 
     for problem in problems:
         print(f"FAIL: {problem}")
@@ -1976,13 +1900,13 @@ def main():
     # outside the profile (the documented authorized scratch area),
     # so the whole serialized report is inherently personal-path-free.
     for label, path in parse_binaries(args.binaries).items():
-        if _under_profile(path):
+        if under_profile(path):
             parser.error(
                 f"{label} binary {path} lives under the operator's "
                 "profile; stage binaries under the authorized scratch "
                 "area so committed evidence cannot carry personal paths")
     for path in (args.work_dir, args.json_report, args.provenance):
-        if path and _under_profile(path):
+        if path and under_profile(path):
             parser.error(
                 f"path {path} lives under the operator's profile; use "
                 "the authorized scratch area so committed evidence "
@@ -2396,7 +2320,7 @@ def main():
     # Durable-artifact policy net: after every field (including the
     # outcomes) is filled, refuse to serialize a report that still
     # carries the operator's profile path in any string value.
-    personal = _personal_path_in_report(report)
+    personal = personal_path_in_report(report)
     if personal is not None:
         raise SystemExit(
             f"refusing to write evidence containing the operator's "

@@ -94,6 +94,13 @@ import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from command_sanitize import (  # noqa: E402  (side-effect free)
+    owned_temp_root,
+    personal_path_in_report,
+    sanitized_command,
+    under_profile,
+)
+
 from schema import frame  # noqa: E402  (shared response validator)
 import run  # noqa: E402  (side-effect free; normal JSON-RPC client)
 
@@ -1094,7 +1101,8 @@ def self_test():
 
     global spawn_jsonrpc  # proof_b resolves this module global
 
-    root = tempfile.mkdtemp(prefix="iprange-self-test-proofb-")
+    root = tempfile.mkdtemp(prefix="iprange-self-test-proofb-",
+                             dir=owned_temp_root())
     failures = []
 
     # Read control: partial line plus a sleeping child.
@@ -1444,7 +1452,8 @@ def self_test():
     # Shared-path read-deadline control: JsonRpcService with a bounded
     # read deadline must fail a service that answers a partial line
     # and stalls, instead of blocking on readline forever.
-    service_root = tempfile.mkdtemp(prefix="iprange-self-test-rpc-")
+    service_root = tempfile.mkdtemp(prefix="iprange-self-test-rpc-",
+                                    dir=owned_temp_root())
     partial_stub = ('import sys,os,time;sys.stdin.readline();'
                     'os.write(1,b"{");time.sleep(60)')
     stalled_read = run.JsonRpcService(
@@ -1479,7 +1488,8 @@ def self_test():
     # Shared-path write-deadline control: a child that never drains
     # stdin must fail a bounded-write request instead of blocking on
     # the full pipe.
-    service_root = tempfile.mkdtemp(prefix="iprange-self-test-write-")
+    service_root = tempfile.mkdtemp(prefix="iprange-self-test-write-",
+                                    dir=owned_temp_root())
     stalled_write = run.JsonRpcService(
         ["/bin/sh", "-c", "sleep 2"], "stub",
         cwd=service_root, read_deadline=0.2, write_deadline=0.25)
@@ -1554,6 +1564,23 @@ def main():
         parser.error("--work-dir is required unless --self-test is given")
     if not os.path.isdir(args.work_dir) or not os.path.isabs(args.work_dir):
         parser.error("--work-dir must be an absolute existing directory")
+    # Durable-artifact policy: committed evidence must never carry the
+    # operator's home directory.  Every path-valued input must live
+    # outside the profile (the documented authorized scratch area), so
+    # the whole serialized report is inherently personal-path-free;
+    # the write-time structural scan below is the second net.
+    for label, path in parse_binaries(args.binaries).items():
+        if under_profile(path):
+            parser.error(
+                f"{label} binary {path} lives under the operator's "
+                "profile; stage binaries under the authorized scratch "
+                "area so committed evidence cannot carry personal paths")
+    for path in (args.work_dir, args.json_report):
+        if path and under_profile(path):
+            parser.error(
+                f"path {path} lives under the operator's profile; use "
+                "the authorized scratch area so committed evidence "
+                "cannot carry personal paths")
 
     binaries = {}
     for label, path in parse_binaries(args.binaries).items():
@@ -1561,7 +1588,7 @@ def main():
 
     report = {
         "schema": "iprange-cli-resource-report-v1",
-        "command": sys.argv,
+        "command": sanitized_command(),
         "platform": {
             "system": platform.system(),
             "release": platform.release(),
@@ -1612,6 +1639,16 @@ def main():
         shutil.rmtree(run_root, ignore_errors=True)
 
     report["failed"] = failed
+    # Durable-artifact policy net: after every field is filled
+    # (including per-proof paths), refuse to serialize a report that
+    # still carries the operator's profile path in any string value.
+    personal = personal_path_in_report(report)
+    if personal is not None:
+        raise SystemExit(
+            f"refusing to write evidence containing the operator's "
+            f"profile path: {personal!r}; stage all inputs outside "
+            "the profile")
+
     if args.json_report:
         with open(args.json_report, "w", encoding="utf-8") as stream:
             json.dump(report, stream, indent=2, sort_keys=True)
