@@ -9593,3 +9593,39 @@ byte-identical (SHASUMS 8/8).  Sensitive-data gate: clean.
 Artifact gate: AGENTS.md, specs, and runtime project skills
 unchanged; the harness comment documents the pin's detecting
 surface.
+
+#### Wave 16 follow-up round 16.11 (2026-09-08) — records-only correction of the 8b86249f verdict disposition and pin count
+
+The round-16.10 role round PASSed at `0913e22f` for all seven roles
+(tester, operations, parity, portability, security, performance, glm)
+with one P3 records note, corrected here — a records-only wave with
+no code change:
+
+- the round-16.10 parenthetical "the performance verdict at
+  `8b86249f` was interrupted mid-run" mis-states the trail: the
+  performance role delivered a complete PASS at `8b86249f`
+  (`.local/performance/report.md`, round 37); only the main-session
+  collection of that verdict was interrupted.  The corrected
+  disposition: all seven roles delivered `8b86249f` verdicts
+  (tester FAIL — the unpinned darwin fold, closed in round 16.10;
+  operations FAIL — the unlisted-punctuation class, closed in
+  round 16.9; parity/portability/security/glm PASS; performance
+  PASS), and every one of the seven was re-collected at the final
+  HEAD after each repair wave;
+- the round-16.10 "45 pins in the privacy block" undercounted: the
+  P2-7 privacy block executes 49 checks on the Linux host (the
+  plus-16.10 darwin fold pin included) and the nt-only rows
+  (verbatim, drive-relative, native-NT, three drive-relative
+  mid-string) additionally on the Windows host;
+- recorded non-blocker (portability P3): an all-uppercase home
+  directory would pass the darwin fold pin even without the fold
+  (no lowercase to vary); no such host exists in the qualification
+  set, and the negative control (fold removed) fails the pin on the
+  actual hosts.
+
+No code or evidence changed in this wave; product binaries
+byte-identical (SHASUMS 8/8); the structural evidence scan is clean;
+the Windows-housekeeping `--self-test` result and the sensitive-data
+gate carry from round 16.10 (this wave touches only the SOW record).
+Artifact gate: AGENTS.md, specs, end-user docs, and runtime project
+skills unchanged.
