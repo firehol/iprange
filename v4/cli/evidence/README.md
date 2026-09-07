@@ -1,6 +1,66 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The current evidence is regenerated at product revision `01356600`
+The current evidence is regenerated at product revision `016010fc`
+(the round-10 repair wave: destination name-rule gates and the
+verbatim push fold).  The round-9 revision was re-anchored through
+all seven role reviews; the portability role then FAILed with one
+P1 and one P2, both independently verified and repaired:
+
+- P1 — `rejectLiveSelf` dropped the `ValidDestinationName` gate in
+  the round-9 wave (to probe the bound main-name spelling) and an
+  overlong destination name surfaced the kernel error of the
+  main-name Lstat as `io` (wire `code": "io"`) where Rust
+  `Destination::bind` answers `name_invalid` via
+  `require_name_lengths` before `open_regular`.  Repair: the
+  preflight mirrors the Rust bind error order — the main-name
+  component rule answers `name_invalid` before any parent access,
+  the length rule answers `name_invalid` after the parent open and
+  before the main-name open, and a missing parent still wins the
+  class when both fail.  Pinned by `TestRejectLiveSelfNameRules`;
+  live-probed: both products now answer `name_invalid`
+  byte-identically for the 300-byte destination.
+- P2 — `verbatimPushRebuild` appended the pushed name raw instead
+  of folding its components like `PathBuf::_push`'s verbatim
+  branch: a trailing separator stayed in the result, `"."` added a
+  CurDir component, `".."` appended instead of popping the last
+  Normal component, and `"a/b"` stayed one component.  Repair:
+  CurDir vanishes, ParentDir pops the last Normal, RootDir
+  truncates the buffer to its prefix, and the re-emission applies
+  the disk-prefix need_sep rule; pinned by
+  `TestVerbatimPushComponentRules` (37 native-rustc-derived rows,
+  windows-gated) and the corrected wine oracle differential:
+  WINDOWS 324/324 and POSIX 431/431, zero mismatches.
+
+No current product call site passes a `.`/`..`/separator-carrying
+name to the verbatim push, so the P2 class was latent; the P1 class
+was reachable at the JSON-RPC snapshot surface and is now at parity.
+
+Re-qualification at the new identities: Go suite 23/23 packages
+PASS on Linux (go1.26.4 and host go1.27.0) and natively on the
+Windows host (go1.26.5, 23/23 including the 201-row golden, the
+push tests, and the new verbatim push fold test); Rust workspace
+PASS on Linux (rustc 1.97.1, no Rust product source change).  The
+full battery PASSes at the final staged identities: matrices 38/38
+single and 14 PASS + 24 legitimate skips per mixed direction;
+crash 16/16 both directions; the negative control 0/16; resource
+proofs 8/8; kind-coverage gate PASS with all 46 self-test
+controls; golden exchanges 55; sensitivity gate 14.  Windows
+housekeeping re-qualified at `016010fc`: 2/2 PASS with native
+Windows Python 3.14.6 (provenance: clean tree, go1.26.5
+windows/amd64, rustc 1.97.1).
+
+Linux reports record the product identities `07c4e314...` (rust,
+unchanged since the round-4 qualified build) and `eab62a09...`
+(go, rebuilt with `-buildvcs=false`), workers `77b6d086...`
+(rust) / `2148bc0e...` (go), fixture `df3623a6...` (all staged in
+`.local/shared/binaries/SHASUMS.txt` with sha256sum -c OK).  The
+Windows housekeeping report records the Windows-host products
+`c960a64f...` (rust) and `64854dfa...` (go); the Windows Go worker
+is `06128e96...`.
+
+---
+
+Historical wave record (superseded by the head block): the current evidence is regenerated at product revision `01356600`
 (the external-control repair wave; qualification HEAD `bfc60f96`
 adds one test-only raw-parent helper repair).  The wave repairs
 four Go/Rust divergence classes and two test-tripwire defects found

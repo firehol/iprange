@@ -364,6 +364,35 @@ approval.  After this round, the closure proceeds to the external
 whole-milestone control review at exactly this revision, with no
 further commits expected after its verdict.
 
+Wave-16 follow-up round-10 state (2026-09-07, final): the full
+seven-role round at the round-9 revision `742bc0db` returned six
+PASSes and one FAIL (portability): P1 — the round-9 rejectLiveSelf
+rewrite dropped the destination name-rule gate, so an overlong
+live-snapshot destination answered `io` instead of `name_invalid`
+(Rust Destination::bind answers name_invalid via require_name_lengths
+before open_regular); P2 — verbatimPushRebuild appended a pushed
+name raw instead of folding its components (.. popped nothing, a
+trailing separator stayed, "." added a CurDir).  Both are repaired at
+product revision `016010fc` and re-qualified: the preflight mirrors
+the Rust bind error order (component rule before the parent open,
+length rule after the parent open and before the main-name open),
+live-probed byte-identical `name_invalid` on both products; the
+verbatim push fold matches PathBuf::_push (CurDir vanishes, ParentDir
+pops the last Normal, RootDir truncates to the prefix) pinned by 37
+native-rustc rows and the wine oracle differential 324/324 Windows +
+431/431 POSIX.  Linux identities at `016010fc` are Go `eab62a09...` /
+worker `2148bc0e...` and carried Rust `07c4e314...` / worker
+`77b6d086...` / fixture `df3623a6...`; Windows identities Go
+`64854dfa...` (worker `06128e96...`) and Rust `c960a64f...`; every
+battery gate is green at the revision, Windows 23/23 natively,
+Windows housekeeping 2/2 PASS.  The milestone-4 closure record
+stands as qualified at this final revision; milestone 5 remains
+unstarted per user decision 1A; the round-4 P3 commit-subject
+history rewrite remains pending user approval.  After this round,
+the closure proceeds to the external whole-milestone control review
+at exactly this revision, with no further commits expected after its
+verdict.
+
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -8532,3 +8561,103 @@ the native Windows suite):
   subjects `9374917e`/`e3d7bf61`/`65ea9587` naming the external
   review model) remains open pending user approval for the history
   rewrite.
+
+#### Wave 16 follow-up round 10 (2026-09-07) — the role-round FAIL repair at `016010fc`
+
+The complete seven-role round at the round-9 revision `742bc0db`
+returned six PASS verdicts; the portability role FAILed with one P1
+and one P2, both independently verified by the lead before repair:
+
+1. **P1 — the live-snapshot preflight dropped the destination
+   name-rule gate (wire class regression).**  The round-9 wave
+   replaced `publication.ValidDestinationName(destinationPath)` in
+   `rejectLiveSelf` with a bare `live.FileName` check so the bound
+   main-name spelling could be probed.  `ValidDestinationName` also
+   carried the Rust `path::validate_main_name` component rule and
+   the `require_name_lengths` bound; with the gate gone, an
+   overlong destination name (>= 256 bytes) reached
+   `os.Lstat(bound)` and surfaced the kernel ENAMETOOLONG as
+   `io` before the writer's `CreateAttempt` could classify it.
+   Rust `Destination::bind` validates the main name before any
+   filesystem access and applies `require_name_lengths` after the
+   parent open and before `open_regular`, answering `name_invalid`
+   (namespace.rs bind; snapshot/api.rs reject_live_self).  Live
+   probe at the round-9 binaries: Rust `name_invalid`, Go `io`.
+   Repair at `016010fc` mirrors the Rust error order exactly:
+   `publication.ValidMainName` (component rule + reserved prefix
+   and suffix) before the parent access, `publication.ValidMainNameLength`
+   after `CheckPublicationParent`/`directoryIdentityOf` and before
+   the bound Lstat; a missing parent still wins the class when both
+   fail (Rust `Directory::open` precedes `require_name_lengths`).
+   `ValidDestinationName` composes the two helpers unchanged for
+   the attempt-creation callers.  Pinned by
+   `TestRejectLiveSelfNameRules` (overlong under an existing
+   parent, reserved name, overlong + missing parent precedence);
+   live wire probe after the repair: Go and Rust both answer
+   `name_invalid` byte-identically.
+2. **P2 — the verbatim push rebuild appended the name raw.**  The
+   round-7 `verbatimPushRebuild` appended the pushed name as one
+   Normal component, while Rust `PathBuf::_push`'s verbatim branch
+   folds the pushed path's components: repeated and trailing
+   separators collapse, CurDir vanishes, ParentDir pops the last
+   Normal component, and RootDir truncates the buffer to its
+   prefix (path.rs _push verbatim branch).  Real-rustc-under-wine
+   and native windows-host probes showed `push("\\\\?\\C:\\x",
+   "n/") = "\\\\?\\C:\\x\\n"` (Go appended `n/`), `"." = base`,
+   `".." = "\\\\?\\C:\\"`, `"a/b" = "\\\\?\\C:\\x\\a\\b"`.  No
+   current product call site passes such names (all callers pass
+   plain separator-free entry names), so the class was latent.
+   Repair: the rebuild now folds components exactly like the Rust
+   branch (CurDir skip, ParentDir pop of the last Normal, RootDir
+   truncate-to-prefix) and the re-emission applies the
+   disk-prefix need_sep rule for pushed prefix components; the
+   documented deviation for pushed absolute/prefix-carrying names
+   is unchanged.  Pinned by `TestVerbatimPushComponentRules`
+   (37 native-rustc-derived rows, windows-gated); the wine oracle
+   differential passes WINDOWS 324/324 and POSIX 431/431 with the
+   oracle's own verbatim rebuild corrected to the fold semantics.
+3. **P3 — the "0 allocs" FileName claim.**  Already qualified in
+   round 9; the performance role measured 0 allocs for all classes
+   except exactly one allocation for a `/` inside the 8-byte
+   verbatim header (the `strings.Map` normalization), consistent
+   with the recorded wording.
+
+Re-qualification at the final revision (`016010fc`, product source;
+records committed together with this evidence): Go suite 23/23
+packages PASS on Linux with the qualified go1.26.4 and with the
+host go1.27.0, and natively on the Windows host (go1.26.5, 23/23
+including the 201-row golden, the push tests, and the new verbatim
+fold test); Rust workspace suites PASS on Linux (rustc 1.97.1, no
+Rust product source change).  Full battery PASS at the final staged
+identities (matrices 38/38 single and 14 PASS + 24 legitimate skips
+per mixed direction; crash 16/16 both directions; the negative
+control 0/16; resource proofs 8/8; kind-coverage gate PASS with all
+46 self-test controls; golden exchanges 55; sensitivity gate 14).
+Windows housekeeping 2/2 PASS at `016010fc` on the authorized
+Windows validation host (native Windows Python 3.14.6, Go
+`64854dfa…`, Rust `c960a64f…` carried, provenance with tree_clean).
+Final Linux identities at `016010fc` (staged in
+`.local/shared/binaries/SHASUMS.txt`, sha256sum -c 8/8 OK): Go
+product `eab62a09…`, Go worker `2148bc0e…` (rebuilt with
+`-buildvcs=false`), Rust product `07c4e314…`, Rust worker
+`77b6d086…`, fixture `df3623a6…` (Rust binaries carry from the
+round-4 qualified build at `ed29e437`); Windows Go product
+`64854dfa…`, Windows Go worker `06128e96…`, Windows Rust product
+`c960a64f…` (carried).  `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated at
+these identities in the records commit so the record and the
+identities cannot drift.  Same-failure search: the
+name-rule/length-gate class is now present in both preflights that
+open a destination main name before the attempt (rejectLiveSelf),
+and the writer attempt keeps its own gates; no other raw-name
+append remains in the pathname port (the push fold is the single
+verbatim join).  Sensitive-data gate: no secrets, credentials,
+community/customer names, personal data, or private endpoints in
+this wave.  Artifact gate: AGENTS.md unchanged (no workflow
+change); runtime project skills unchanged (no new how-to
+knowledge); the v4 JSON-RPC spec unchanged (no contract change —
+the repairs restore the already-specified Rust reference behavior);
+end-user docs unchanged (no CLI surface change).  The round-4 P3
+item (commit subjects `9374917e`/`e3d7bf61`/`65ea9587` naming the
+external review model) remains open pending user approval for the
+history rewrite.

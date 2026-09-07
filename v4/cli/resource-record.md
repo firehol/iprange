@@ -134,10 +134,9 @@ then pinned and fixed the Windows prefix parser
 (`sys/path/windows_prefix.rs parse_prefix` port; `//a//b` is not a
 UNC prefix and `"C:."` has no file name or parent).  The current
 canonical Linux identities are recorded in `evidence/README.md`
-(Go product `23e4730a…`, Go worker `d83854dc…`, Rust product
+(Go product `eab62a09…`, Go worker `2148bc0e…`, Rust product
 `07c4e314…`, Rust worker `77b6d086…`, fixture `df3623a6…` at the
-external-control repair product revision `01356600` (qualification
-HEAD `bfc60f96`) — the Go
+round-10 repair product revision `016010fc` — the Go
 binary was rebuilt with `-buildvcs=false` after the parity and tester
 reviews proved the temporary and `@`-expansion path joins used an
 unconditional separator where Rust `PathBuf::push` inserts one only
@@ -149,9 +148,9 @@ directly after a verbatim prefix (`\\?\\C:/x`) leaked into file names,
 accept-gate results, and sidecar derivations that Rust never produces
 (the repair also mirrors the Rust verbatim push rebuild for
 `with_file_name`); the Rust binaries carry from the round-4 qualified
-build at `ed29e437`); the Windows-host products are Go `37a3e563…`
-(worker `c92b804b…`) and Rust `c960a64f…` at qualification HEAD
-`bfc60f96`.  The wave-13 role-round delta found the Rust EOF arm
+build at `ed29e437`); the Windows-host products are Go `64854dfa…`
+(worker `06128e96…`) and Rust `c960a64f…` at the same
+revision.  The wave-13 role-round delta found the Rust EOF arm
 missing the ceiling check that Go has — a final unterminated frame
 of LIMIT+1 bytes at EOF now exits non-zero in both products; the
 wave-14 delta repaired held over-limit frame reporting, the Windows
@@ -193,4 +192,23 @@ parent helper anchors at the volume root so the suite passes
 natively on Windows.  Re-qualified at `bfc60f96`: Linux Go
 `23e4730a…` / worker `d83854dc…`; Windows Go `37a3e563…` / worker
 `c92b804b…`; Rust carried `07c4e314…` / `c960a64f…`; full battery,
+Windows 23/23 suite, and Windows housekeeping 2/2 all PASS.
+
+Wave-16, round 10 (role-round FAIL repair): the portability role
+proved two classes at the round-9 revision and both are repaired at
+`016010fc`.  (1) P1 — the round-9 `rejectLiveSelf` rewrite dropped
+the destination name-rule gate and an overlong live-snapshot
+destination answered `io` instead of `name_invalid`; the preflight
+now mirrors the Rust `Destination::bind` error order (component rule
+before the parent open, length rule after the parent open and before
+the main-name open, parent error winning when both fail) and both
+products answer `name_invalid` byte-identically on the live wire.
+(2) P2 — `verbatimPushRebuild` now folds the pushed path's
+components exactly like `PathBuf::_push`'s verbatim branch (CurDir
+vanishes, ParentDir pops the last Normal, RootDir truncates to the
+prefix) with the disk-prefix need_sep rule; 37 native-rustc-derived
+rows pinned and the wine oracle differential passes 324/324 Windows
+and 431/431 POSIX.  Re-qualified at `016010fc`: Linux Go
+`eab62a09…` / worker `2148bc0e…`; Windows Go `64854dfa…` / worker
+`06128e96…`; Rust carried `07c4e314…` / `c960a64f…`; full battery,
 Windows 23/23 suite, and Windows housekeeping 2/2 all PASS.
