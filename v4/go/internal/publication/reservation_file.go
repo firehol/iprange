@@ -600,7 +600,7 @@ func reservationHeaderFor(output *preparedOutput, identity live.FileIdentity) *r
 		outputByteLength:    output.byteLength,
 		outputIdentity:      reservationIdentityBytes(output.attempt.identityOf()),
 		outputSHA512:        output.sha512,
-		basenameLen:         uint32(len(destination.mainName())),
+		basenameLen:         uint32(len(platformEncodedBytes(destination.mainName()))),
 		basenameCommitment:  destination.basenameCommitmentValue(),
 		securityCommitment:  destination.securityCommitment(),
 		sequence:            1,

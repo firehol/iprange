@@ -2,9 +2,8 @@
 
 use iprange_livedb::error::ErrorCode;
 use iprange_livedb::publication::{
-    CleanupArtifact, CleanupArtifacts, CoordinationCleanup, Housekeeping, HousekeepingArtifact,
-    PublicationPolicy,
-    PublicationResult, PublicationStatus,
+    CleanupArtifact, CleanupArtifacts, CoordinationCleanup, PublicationPolicy, PublicationResult,
+    PublicationStatus,
 };
 use iprange_livedb::snapshot::{
     snapshot_to, SnapshotBudget, SnapshotPreparationFailure, SnapshotPublicationPolicy,
@@ -15,6 +14,7 @@ use serde_json::{json, Map, Value};
 
 use super::super::dispatch::HandlerError;
 use super::super::session::SessionState;
+use super::lifecycle;
 use super::publication_evidence;
 use super::reader::{
     bounded_result, member_object, positive_u32, positive_u64_string, publication_policy, sdk_code,
@@ -166,8 +166,11 @@ fn preparation_details(failure: &SnapshotPreparationFailure) -> Value {
         "cleanup_state": cleanup_state(failure.cleanup_state()),
         "cleanup": cleanup_artifacts(&failure.cleanup),
         "coordination_cleanup": coordination_cleanup(failure.coordination_cleanup),
-        "housekeeping": housekeeping(&failure.housekeeping, &failure.visible_housekeeping),
-        "visible_housekeeping": visible_housekeeping(&failure.visible_housekeeping),
+        "housekeeping": lifecycle::housekeeping(
+            failure.housekeeping.clone(),
+            &failure.visible_housekeeping,
+        ),
+        "visible_housekeeping": lifecycle::visible_housekeeping(&failure.visible_housekeeping),
         "output": failure.output.as_ref().map(private_attempt),
     })
 }
@@ -275,65 +278,6 @@ fn coordination_cleanup(value: CoordinationCleanup) -> Value {
     }
 }
 
-fn housekeeping(value: &Housekeeping, artifacts: &[HousekeepingArtifact]) -> Value {
-    let listed = visible_housekeeping(artifacts);
-    match value {
-        Housekeeping::None => json!({"artifacts": []}),
-        Housekeeping::CrashReappearancePossible => {
-            json!({"state": "crash_reappearance_possible", "artifacts": listed})
-        }
-        Housekeeping::Visible => json!({"state": "visible", "artifacts": listed}),
-    }
-}
-
-fn visible_housekeeping(artifacts: &[HousekeepingArtifact]) -> Value {
-    Value::Array(artifacts.iter().map(housekeeping_artifact).collect())
-}
-
-fn housekeeping_artifact(artifact: &HousekeepingArtifact) -> Value {
-    use iprange_livedb::publication::ArtifactPresence as Presence;
-    json!({
-        "state": housekeeping_state(artifact.state),
-        "directory_role": directory_role(artifact.directory_role),
-        "directory_identity": file_identity(&artifact.directory_identity),
-        "basename_encoding": artifact.basename_encoding,
-        "attempt_id": hex16(&artifact.attempt_id),
-        "ordinal": artifact.ordinal,
-        "envelope_basename": hex(&artifact.envelope_basename),
-        "envelope_identity": file_identity(&artifact.envelope_identity),
-        "source_basename": hex(&artifact.source_basename),
-        "inert_basename": hex(&artifact.inert_basename),
-        "source_presence": match artifact.source_presence {
-            Presence::Absent => "absent",
-            Presence::Present => "present",
-            Presence::Unclassified => "unclassified",
-        },
-        "source_identity": artifact.source_identity.as_ref().map(file_identity),
-        "inert_presence": match artifact.inert_presence {
-            Presence::Absent => "absent",
-            Presence::Present => "present",
-            Presence::Unclassified => "unclassified",
-        },
-        "inert_identity": artifact.inert_identity.as_ref().map(file_identity),
-        "kind": artifact_kind(artifact.kind),
-        "creation_security": {
-            "kind": artifact.creation_security.kind,
-            "commitment": hex(&artifact.creation_security.commitment),
-        },
-        "selected_envelope_sequence": artifact.selected_envelope_sequence.to_string(),
-    })
-}
-
-fn housekeeping_state(value: iprange_livedb::publication::HousekeepingState) -> &'static str {
-    use iprange_livedb::publication::HousekeepingState as State;
-    match value {
-        State::MovePending => "move_pending",
-        State::MoveAmbiguous => "move_ambiguous",
-        State::Inert => "inert",
-        State::Conflict => "conflict",
-    }
-}
-
 fn cleanup_state(value: iprange_livedb::publication::CleanupState) -> &'static str {
     match value {
         iprange_livedb::publication::CleanupState::Clean => "clean",
@@ -352,7 +296,10 @@ fn private_attempt(attempt: &iprange_livedb::publication::PrivateOutputAttempt) 
         file_identity(&attempt.directory_identity),
     );
     converted.insert("basename_encoding".into(), json!(attempt.basename_encoding));
-    converted.insert("basename".into(), json!(hex(&attempt.basename)));
+    converted.insert(
+        "basename".into(),
+        json!(lifecycle::basename(&attempt.basename, attempt.basename_encoding)),
+    );
     if let Some(identity) = attempt.identity.as_ref() {
         converted.insert("identity".into(), file_identity(identity));
     }
@@ -630,6 +577,76 @@ mod tests {
         let mut dash = valid.clone();
         dash["destination"] = json!("-");
         assert!(validate_snapshot(&dash).is_err());
+    }
+}
+
+#[cfg(test)]
+mod attempt_wire_tests {
+    use super::*;
+    use iprange_livedb::publication::PrivateOutputAttempt;
+    use iprange_livedb::validation::LocalFileIdentity;
+
+    // The snapshot preparation-failure ``output`` member must render
+    // the attempt basename with the same encoding-aware wire form as
+    // every other private-output surface (maintenance, publish,
+    // algebra, recovery): encoding 2 is the opaque per-byte wire form
+    // of the stored UTF-16LE units, not a hex digest (wave-15
+    // round-3 parity finding; the pre-fix renderer emitted hex).
+    #[test]
+    fn private_attempt_basename_uses_the_encoding_aware_wire_form() {
+        let attempt = PrivateOutputAttempt {
+            publication_attempt_id: [7; 16],
+            directory_identity: LocalFileIdentity {
+                kind: 2,
+                bytes: [0; 32],
+            },
+            basename_encoding: 2,
+            basename: vec![0xe9, 0x00].into_boxed_slice(),
+            identity: None,
+            creation_security: iprange_livedb::publication::CreationSecurity {
+                kind: 2,
+                commitment: [0; 32],
+            },
+        };
+        let wire = private_attempt(&attempt);
+        assert_eq!(wire["basename_encoding"], json!(2));
+        // The per-byte form of the UTF-16LE units E9 00 is the two
+        // characters U+00E9 U+0000, never a hex string and never
+        // U+FFFD.
+        assert_eq!(wire["basename"], json!("\u{e9}\u{0}"));
+        // Identical facts must produce the identical wire on the
+        // maintenance surface (the shared rendering authority).
+        let maintenance_wire = super::super::maintenance::private_output_attempt_value(&attempt);
+        assert_eq!(
+            wire["basename"],
+            maintenance_wire["basename"]
+        );
+        assert_eq!(
+            wire["basename_encoding"],
+            maintenance_wire["basename_encoding"]
+        );
+    }
+
+    // Encoding 1 (posix raw bytes) renders as the raw text, exactly
+    // like the maintenance surface.
+    #[test]
+    fn private_attempt_encoding_one_keeps_the_raw_text() {
+        let attempt = PrivateOutputAttempt {
+            publication_attempt_id: [8; 16],
+            directory_identity: LocalFileIdentity {
+                kind: 1,
+                bytes: [0; 32],
+            },
+            basename_encoding: 1,
+            basename: b"live.iprange".to_vec().into_boxed_slice(),
+            identity: None,
+            creation_security: iprange_livedb::publication::CreationSecurity {
+                kind: 1,
+                commitment: [0; 32],
+            },
+        };
+        let wire = private_attempt(&attempt);
+        assert_eq!(wire["basename"], json!("live.iprange"));
     }
 }
 

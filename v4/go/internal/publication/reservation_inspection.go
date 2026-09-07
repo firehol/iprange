@@ -353,7 +353,7 @@ func requireBound(destination *destination, header reservationHeader, identity l
 	}
 	// The basename length is bounded by the destination name-max proof
 	// at bind, so the Rust try_from overflow arm is unreachable in Go.
-	basenameLen := uint32(len(destination.mainName()))
+	basenameLen := uint32(len(platformEncodedBytes(destination.mainName())))
 	if header.basenameLen != basenameLen || header.basenameCommitment != destination.basenameCommitmentValue() {
 		return destinationNameMismatchProblem()
 	}

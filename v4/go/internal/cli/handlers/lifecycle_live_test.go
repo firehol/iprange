@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"runtime"
@@ -141,5 +142,78 @@ func TestHousekeepingRowBasenamesRoundTripJSON(t *testing.T) {
 		if string(units) != string(want) {
 			t.Fatalf("%s round trip = % x, want % x", field, units, want)
 		}
+	}
+}
+
+// artifactBasename must render encoding-1 bytes with the same lossy
+// UTF-8 decode as the Rust renderer (one U+FFFD per maximal invalid
+// run, from_utf8_lossy semantics): before the wave-15 round-3 repair
+// Go's json marshal replaced each invalid byte separately and the
+// products' wire text diverged for incomplete multibyte sequences.
+func TestArtifactBasenameEncodingOneInvalidUtf8MatchesRust(t *testing.T) {
+	// One incomplete two-byte run decodes to exactly one replacement
+	// character on the Rust side; a per-byte replacement would emit
+	// two.
+	rendered := artifactBasename([]byte{0xe2, 0x82}, 1)
+	if rendered != "\ufffd" {
+		t.Fatalf("artifactBasename(E2 82, 1) = %q, want one U+FFFD", rendered)
+	}
+	wire, err := json.Marshal(rendered)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if !bytes.Contains(wire, []byte("\xef\xbf\xbd")) {
+		t.Fatalf("wire %q has no U+FFFD", wire)
+	}
+	// Valid UTF-8 passes through unchanged under encoding 1.
+	if got := artifactBasename([]byte("caf\xc3\xa9.iprange"), 1); got != "caf\u00e9.iprange" {
+		t.Fatalf("encoding 1 valid text = %q", got)
+	}
+}
+
+// privateOutputAttemptValue must render the attempt basename with
+// the encoding-aware wire form at every failure surface (snapshot,
+// publish, recovery, algebra): encoding 2 unit bytes survive JSON
+// without U+FFFD collapse and decode back to the exact stored bytes,
+// and encoding 1 keeps the raw text (wave-15 round-3 finding: the Go
+// renderer emitted string(bytes) raw).
+func TestPrivateOutputAttemptValueBasenameWire(t *testing.T) {
+	attempt := &iprangedb.PrivateOutputAttempt{
+		PublicationAttemptID: [16]byte{7},
+		BasenameEncoding:     2,
+		Basename:             []byte{0xe9, 0x00},
+	}
+	value := privateOutputAttemptValue(attempt)
+	text, ok := value["basename"].(string)
+	if !ok {
+		t.Fatalf("basename is not a string: %#v", value["basename"])
+	}
+	decoded, err := decodeArtifactBasename(text, 2, "basename")
+	if err != nil {
+		t.Fatalf("encoding 2 decode of %q: %v", text, err)
+	}
+	if len(decoded) != 2 || decoded[0] != 0xe9 || decoded[1] != 0x00 {
+		t.Fatalf("encoding 2 round trip = % x, want e9 00", decoded)
+	}
+	wire, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if bytes.Contains(wire, []byte("\xef\xbf\xbd")) {
+		t.Fatalf("wire %q contains U+FFFD, the pre-repair corruption", wire)
+	}
+	// The wire carries the raw UTF-8 of U+00E9 followed by the
+	// escaped NUL unit of the per-byte form, never U+FFFD.
+	if !bytes.Contains(wire, []byte("\xc3\xa9\\u0000")) {
+		t.Fatalf("wire %q lacks the rendering of the E9 00 units", wire)
+	}
+	// Encoding 1 renders the raw UTF-8 text.
+	attemptPosix := &iprangedb.PrivateOutputAttempt{
+		PublicationAttemptID: [16]byte{8},
+		BasenameEncoding:     1,
+		Basename:             []byte("live.iprange"),
+	}
+	if got := privateOutputAttemptValue(attemptPosix)["basename"]; got != "live.iprange" {
+		t.Fatalf("encoding 1 basename = %#v", got)
 	}
 }

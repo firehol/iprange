@@ -178,8 +178,11 @@ func u16IntegerFromWire(object rawObject, field string) (uint16, error) {
 // lifecycle::basename): encoding 2 (Windows UTF-16LE units) maps
 // every stored byte to the same-numbered U+00xx character (the
 // opaque per-byte form), and encoding 1 keeps the bytes as the
-// text's UTF-8 encoding.  ASCII names render unchanged under both
-// encodings.
+// text's UTF-8 encoding.  Encoding-1 bytes that are not valid UTF-8
+// decode with the same run replacement as Rust from_utf8_lossy (one
+// U+FFFD per maximal invalid run), so both products emit the same
+// wire text for every stored byte sequence.  ASCII names render
+// unchanged under both encodings.
 func artifactBasename(bytes []byte, encoding uint16) string {
 	if encoding == 2 {
 		runes := make([]rune, len(bytes))
@@ -188,7 +191,7 @@ func artifactBasename(bytes []byte, encoding uint16) string {
 		}
 		return string(runes)
 	}
-	return string(bytes)
+	return strings.ToValidUTF8(string(bytes), "\ufffd")
 }
 
 // decodeArtifactBasename decodes one artifact basename wire string

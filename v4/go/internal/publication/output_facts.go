@@ -23,7 +23,7 @@ func outputFacts(d *destination, attemptID [16]byte, name string, identity *live
 		PublicationAttemptID: attemptID,
 		DirectoryIdentity:    directoryLocalIdentity(d),
 		BasenameEncoding:     basenameEncodingKind,
-		Basename:             []byte(name),
+		Basename:             platformEncodedBytes(name),
 		Identity:             local,
 		IdentityPresent:      present,
 		CreationSecurity: CreationSecurity{

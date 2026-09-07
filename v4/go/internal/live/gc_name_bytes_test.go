@@ -2,7 +2,7 @@ package live
 
 import "testing"
 
-// utf16LEBytes must produce the OS name's UTF-16 code units in
+// Utf16LEBytes must produce the OS name's UTF-16 code units in
 // little-endian order with no terminator (Rust Name::bytes on
 // windows, Python "utf-16-le"): ASCII names become one NUL-bounded
 // byte pair per character and non-ASCII names use the proper UTF-16
@@ -17,9 +17,9 @@ func TestUTF16LEBytes(t *testing.T) {
 		{"\u03b4", []byte{0xb4, 0x03}},
 	}
 	for _, c := range cases {
-		got := utf16LEBytes(c.name)
+		got := Utf16LEBytes(c.name)
 		if string(got) != string(c.want) {
-			t.Errorf("utf16LEBytes(%q) = % x, want % x", c.name, got, c.want)
+			t.Errorf("Utf16LEBytes(%q) = % x, want % x", c.name, got, c.want)
 		}
 	}
 }

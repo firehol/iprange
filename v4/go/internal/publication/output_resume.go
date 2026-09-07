@@ -126,7 +126,7 @@ func bindSecuredOutput(destinationPath string, facts *PrivateOutputAttempt) (*de
 		return nil, "", live.FileIdentity{}, err
 	}
 	if directoryLocalIdentity(d) != facts.DirectoryIdentity ||
-		!bytes.Equal([]byte(name), facts.Basename) ||
+		!bytes.Equal(platformEncodedBytes(name), facts.Basename) ||
 		d.securityCommitment() != facts.CreationSecurity.Commitment {
 		return nil, "", live.FileIdentity{}, &live.NamespaceError{Kind: live.NamespaceIdentityChanged}
 	}

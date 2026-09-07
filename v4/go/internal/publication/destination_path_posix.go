@@ -52,7 +52,7 @@ func platformBasenameEncoding() basenameEncoding {
 	return basenameEncodingPosixBytes
 }
 
-// platformEncodedBytes keeps the ASCII name bytes raw on unix.
+// platformEncodedBytes keeps one name's bytes raw on unix.
 func platformEncodedBytes(name string) []byte {
 	return []byte(name)
 }

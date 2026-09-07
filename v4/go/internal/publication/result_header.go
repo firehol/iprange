@@ -7,6 +7,8 @@
 package publication
 
 import (
+	"bytes"
+
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
@@ -43,7 +45,7 @@ func resultHeaderFor(result *PublicationResult, destination *destination) (reser
 		outputSHA512:        result.Attempt.OutputSHA512,
 		previous:            previous,
 		previousPresent:     previousPresent,
-		basenameLen:         uint32(len(destination.mainName())),
+		basenameLen:         uint32(len(platformEncodedBytes(destination.mainName()))),
 		basenameCommitment:  destination.basenameCommitmentValue(),
 		securityCommitment:  result.Attempt.CreationSecurity.Commitment,
 		sequence:            uint64(state),
@@ -58,7 +60,7 @@ func requireResultBinding(result *PublicationResult, destination *destination) e
 		return problem(format.CodeDirectoryIdentityMismatch, "caller publication result belongs to another directory")
 	}
 	if result.Attempt.DestinationBasenameEncoding != basenameEncodingKind ||
-		string(result.Attempt.DestinationBasename) != destination.mainName() {
+		!bytes.Equal(result.Attempt.DestinationBasename, platformEncodedBytes(destination.mainName())) {
 		return problem(format.CodeDestinationNameMismatch, "caller publication result belongs to another destination name")
 	}
 	if result.Attempt.OutputIdentity.Kind != identityKind ||

@@ -234,6 +234,23 @@ def stderr_tail(path, limit=1200):
 _PENDING_STDOUT_BYTES = {}
 
 
+def exact_id_response(responses, request_id):
+    """The response whose id member equals request_id exactly, type
+    included; None without one.  This is the single id-correlation
+    authority of the proofs and the self-test controls: a numeric
+    response id never satisfies a string request id (wave-15
+    finding 7 repair), and every correlation site shares the same
+    lookup so a loosening regression fails the controls too.
+
+    Responses are already duplicate-free (read_responses rejects
+    repeated ids), so at most one response can match.
+    """
+    for response in responses:
+        if response.get("id") == request_id:
+            return response
+    return None
+
+
 def read_responses(proc, expect, deadline_seconds,
                    max_line_bytes=frame.OUTPUT_FRAME_LIMIT, raw_lines=None):
     """Read up to ``expect`` complete LF-terminated response lines.
@@ -514,20 +531,21 @@ def proof_a(binary, label, work_dir, outcome):
         outcome["responses"] = len(responses)
         described_ids = [str(i) for i in range(2, 2 + PROOF_A_DESCRIBES)]
         outcome["busy_ids"] = sorted(
-            (str(r.get("id")) for r in responses
-             if r.get("id") in set(described_ids)
-             and r.get("error", {}).get("code") == -32002),
+            (request_id for request_id in described_ids
+             if (response := exact_id_response(responses, request_id))
+             is not None
+             and response.get("error", {}).get("code") == -32002),
             key=lambda value: int(value))
         outcome["ok_ids"] = sorted(
-            (str(r.get("id")) for r in responses
-             if r.get("id") in set(described_ids) and "result" in r),
+            (request_id for request_id in described_ids
+             if (response := exact_id_response(responses, request_id))
+             is not None and "result" in response),
             key=lambda value: int(value))
-        outcome["export_ids"] = [
-            r for r in responses if r.get("id") == "1"]
+        export = exact_id_response(responses, "1")
+        outcome["export_ids"] = [export] if export is not None else []
         outcome["export_code"] = (
-            outcome["export_ids"][0].get("error", {}).get("code")
-            if outcome["export_ids"] and "error" in outcome["export_ids"][0]
-            else ("result" if outcome["export_ids"] else None))
+            export["error"]["code"] if export is not None and "error" in export
+            else ("result" if export is not None else None))
         outcome["killed"] = False
         outcome["exit_code"] = None
 
@@ -962,11 +980,14 @@ def proof_d(binary, label, work_dir, outcome):
         outcome["responses"] = len(responses)
         outcome["killed"] = False
         outcome["exit_code"] = None
-        by_id = {r.get("id"): r for r in responses}
-        if set(by_id) - {"1", "2"}:
+        export = exact_id_response(responses, "1")
+        describe = exact_id_response(responses, "2")
+        unexpected = [
+            r.get("id") for r in responses
+            if r is not export and r is not describe]
+        if unexpected:
             raise ResourceFailure(
-                f"unexpected response ids: {sorted(by_id)}")
-        export = by_id.get("1")
+                f"unexpected response ids: {sorted(unexpected)}")
         outcome["export_answered"] = export is not None
         if export is not None:
             if "result" in export:
@@ -980,7 +1001,6 @@ def proof_d(binary, label, work_dir, outcome):
                     "cancelled")
         # The describe must still be served: the dispatcher stays
         # responsive after the cancellation.
-        describe = by_id.get("2")
         if describe is None:
             raise ResourceFailure(
                 "the system.describe after the cancellation never "
@@ -1324,8 +1344,7 @@ def self_test():
     record_spawn(numeric)
     try:
         responses = read_responses(numeric, 1, 2.0)
-        by_id = {r.get("id"): r for r in responses}
-        matched = by_id.get("1")
+        matched = exact_id_response(responses, "1")
         print(f"self-test id-type control: numeric id 1 "
               f"{'matched' if matched is not None else 'did not match'} "
               "the string id lookup")

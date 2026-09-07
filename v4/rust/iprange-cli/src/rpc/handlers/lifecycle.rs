@@ -591,6 +591,10 @@ pub(crate) fn housekeeping(state: Housekeeping, artifacts: &[HousekeepingArtifac
     }
 }
 
+pub(crate) fn visible_housekeeping(artifacts: &[HousekeepingArtifact]) -> Value {
+    Value::Array(artifacts.iter().map(housekeeping_artifact).collect())
+}
+
 pub(crate) fn housekeeping_artifact(value: &HousekeepingArtifact) -> Value {
     let mut result = json!({
         "state": housekeeping_state(value.state),

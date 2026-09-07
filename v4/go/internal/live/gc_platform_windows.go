@@ -13,10 +13,10 @@ func gcBasenameEncodingValue() BasenameEncoding { return basenameEncodingWindows
 func gcCreationSecurityKind() uint16 { return 2 }
 
 // gcNameBytesPlatform encodes one name as UTF-16LE code units (Rust
-// Name::bytes on windows); the shared utf16LEBytes helper is tested
+// Name::bytes on windows); the shared Utf16LEBytes helper is tested
 // on every platform.
 func gcNameBytesPlatform(name string) []byte {
-	return utf16LEBytes(name)
+	return Utf16LEBytes(name)
 }
 
 // gcFileSize reports one retained file's size from its handle

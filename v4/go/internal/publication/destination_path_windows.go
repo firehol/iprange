@@ -62,14 +62,12 @@ func platformBasenameEncoding() basenameEncoding {
 	return basenameEncodingWindowsUtf16Le
 }
 
-// platformEncodedBytes encodes one ASCII name as UTF-16LE units for
-// the basename commitment (Rust Name::bytes on Windows).
+// platformEncodedBytes encodes one name as UTF-16LE code units for
+// the basename commitment and platform name facts (Rust Name::bytes
+// on Windows); the shared helper produces the same units for ASCII
+// and non-ASCII names.
 func platformEncodedBytes(name string) []byte {
-	encoded := make([]byte, 0, len(name)*2)
-	for i := 0; i < len(name); i++ {
-		encoded = append(encoded, name[i], 0)
-	}
-	return encoded
+	return live.Utf16LEBytes(name)
 }
 
 // destinationCreate creates one private name with the protected

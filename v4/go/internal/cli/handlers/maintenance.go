@@ -1519,7 +1519,7 @@ func privateOutputAttemptValue(attempt *iprangedb.PrivateOutputAttempt) map[stri
 		"publication_attempt_id": HexID(&attempt.PublicationAttemptID),
 		"directory_identity":     FileIdentityJSONOrError(&attempt.DirectoryIdentity),
 		"basename_encoding":      attempt.BasenameEncoding,
-		"basename":               string(attempt.Basename),
+		"basename":               artifactBasename(attempt.Basename, attempt.BasenameEncoding),
 		"creation_security":      CreationSecurityJSON(&attempt.CreationSecurity),
 	}
 	if attempt.IdentityPresent {
