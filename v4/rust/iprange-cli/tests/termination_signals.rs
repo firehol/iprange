@@ -518,19 +518,38 @@ fn drain_wedge_signal_forces_nonzero_exit() {
     }
 }
 
+
+/// Kill a still-running product child (ignoring errors when it
+/// already exited) and remove the per-test work directory, so every
+/// failure path of the tripwire releases the child and its temp
+/// files (reviewer hygiene finding).
+fn kill_and_cleanup(child: &mut Child, dir: &std::path::Path) {
+    let _ = child.kill();
+    let _ = child.wait();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 #[test]
 fn input_worker_full_stderr_publish_completes_and_eof_exits() {
     // Committed tripwire for the input-worker stderr contract
     // (operations round-9 P1): the dropped-IPv6 diagnostic must
     // never block the input worker or wedge EOF shutdown.  With
-    // stderr a full, never-drained pipe, a publish of IPv6-only
-    // files in IPv4 mode must still answer and the process must exit
-    // 0 at EOF.  A synchronous stderr-write regression blocks the
-    // worker on the first diagnostic, the response never arrives,
-    // and this test fails; a per-message detached-write regression
-    // keeps the worker running but leaves one blocked thread per
-    // diagnostic, which the Linux thread-count assertion below
-    // catches.
+    // stderr a full, never-drained pipe, publishes of IPv6-only
+    // files in IPv4 mode must still answer and the process must
+    // exit 0 at EOF.  Three regression classes are detected:
+    //
+    // - a synchronous stderr-write blocks the worker on the first
+    //   diagnostic, the first response never arrives, and the
+    //   20 s response deadman fails;
+    // - a blocking bounded-channel send (the canonical
+    //   `sync_channel(256)` idiom) blocks the worker when the
+    //   256-slot queue is full: 18 requests x 16 paths = 288
+    //   diagnostics exceed the cap, the 257th blocks request 17,
+    //   and its response never arrives (the surplus must drop,
+    //   never block);
+    // - a per-message detached-write keeps the worker running but
+    //   leaves one blocked thread per diagnostic, which the Linux
+    //   thread-count assertion below catches.
     let dir = std::env::temp_dir().join(format!(
         "w15-stderr-diag-{}-{}",
         std::process::id(),
@@ -546,11 +565,6 @@ fn input_worker_full_stderr_publish_completes_and_eof_exits() {
         std::fs::write(&path, "2001:db8::1\n").expect("write diag input");
         paths.push(path.display().to_string());
     }
-    let destination = dir.join("published.iprange");
-    let request = format!(
-        "{{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.current.publish\",\"params\":{{\"input\":{{\"paths\":{paths:?},\"family\":\"ipv4\",\"fix_network\":true,\"default_prefix\":32,\"dns\":{{\"threads\":1,\"silent\":true}},\"expand_at_paths\":false,\"max_line_bytes\":1024,\"max_expanded_paths\":16}},\"feed\":\"pubfeed\",\"value_tag\":{{\"text\":\"pubtag\"}},\"metadata\":{{\"mode\":\"replace_utf8\",\"text\":\"published\"}},\"destination\":\"{dest}\",\"publication_policy\":\"fail_if_exists\",\"immutable_feed_budget\":{{\"max_heap_bytes\":\"16777216\",\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\",\"max_open_files\":3}}}}}}\n",
-        dest = destination.display(),
-    );
     let (write_owned, _read_owned) = full_stderr_pipe();
     let mut child = Command::new(env!("CARGO_BIN_EXE_iprange"))
         .arg("--jsonrpc")
@@ -559,14 +573,7 @@ fn input_worker_full_stderr_publish_completes_and_eof_exits() {
         .stderr(Stdio::from(write_owned))
         .spawn()
         .expect("spawn iprange --jsonrpc with full stderr");
-    {
-        let stdin = child.stdin.as_mut().expect("stdin");
-        stdin
-            .write_all(request.as_bytes())
-            .expect("write publish request");
-        let _ = stdin.flush();
-    }
-    // Read the publish response before EOF: the session stays open
+    // Read the publish responses before EOF: the session stays open
     // while stdin is open (EOF cancels the in-flight unit).
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     {
@@ -574,20 +581,54 @@ fn input_worker_full_stderr_publish_completes_and_eof_exits() {
         std::thread::spawn(move || {
             let mut reader = std::io::BufReader::new(stdout);
             let mut line = String::new();
-            let _ = reader.read_line(&mut line);
-            let _ = tx.send(line);
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {
+                        if tx.send(line.clone()).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
         });
     }
-    match rx.recv_timeout(Duration::from_secs(20)) {
-        Ok(line) => assert!(
-            line.contains("\"result\""),
-            "publish did not complete under a full stderr pipe: {line}"
-        ),
-        Err(_) => {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = std::fs::remove_dir_all(&dir);
-            panic!("no publish response within 20s: input worker blocked on the full stderr pipe");
+    // 18 requests x 16 paths = 288 dropped-IPv6 diagnostics, above
+    // the 256-slot queue cap: the surplus must drop and every
+    // request must still be answered while the drainer is blocked on
+    // the full pipe.
+    for seq in 0..18usize {
+        let destination = dir.join(format!("pub-{seq:04}.iprange"));
+        let request = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":{id},\"method\":\"iprange.v1.current.publish\",\"params\":{{\"input\":{{\"paths\":{paths:?},\"family\":\"ipv4\",\"fix_network\":true,\"default_prefix\":32,\"dns\":{{\"threads\":1,\"silent\":true}},\"expand_at_paths\":false,\"max_line_bytes\":1024,\"max_expanded_paths\":16}},\"feed\":\"pubfeed\",\"value_tag\":{{\"text\":\"pubtag\"}},\"metadata\":{{\"mode\":\"replace_utf8\",\"text\":\"published\"}},\"destination\":\"{dest}\",\"publication_policy\":\"fail_if_exists\",\"immutable_feed_budget\":{{\"max_heap_bytes\":\"16777216\",\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\",\"max_open_files\":3}}}}}}\n",
+            id = seq + 1,
+            paths = paths,
+            dest = destination.display(),
+        );
+        {
+            let stdin = child.stdin.as_mut().expect("stdin");
+            stdin
+                .write_all(request.as_bytes())
+                .expect("write publish request");
+            let _ = stdin.flush();
+        }
+        match rx.recv_timeout(Duration::from_secs(20)) {
+            Ok(line) if line.contains("\"result\"") => {}
+            Ok(line) => {
+                kill_and_cleanup(&mut child, &dir);
+                panic!(
+                    "publish request {} did not complete under a full stderr pipe: {line}",
+                    seq + 1
+                );
+            }
+            Err(_) => {
+                kill_and_cleanup(&mut child, &dir);
+                panic!(
+                    "no response for publish request {} within 20s: input worker blocked on the full stderr pipe",
+                    seq + 1
+                );
+            }
         }
     }
     // A per-message detached-write regression leaves one blocked
@@ -604,10 +645,10 @@ fn input_worker_full_stderr_publish_completes_and_eof_exits() {
             .find_map(|line| line.strip_prefix("Threads:"))
             .and_then(|value| value.trim().parse::<usize>().ok())
             .expect("child Threads field");
-        assert!(
-            threads <= 12,
-            "child thread count {threads} exceeds the single-drainer bound: per-message diagnostic spawns returned"
-        );
+        if threads > 12 {
+            kill_and_cleanup(&mut child, &dir);
+            panic!("child thread count {threads} exceeds the single-drainer bound: per-message diagnostic spawns returned");
+        }
     }
     drop(child.stdin.take()); // EOF
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -623,6 +664,6 @@ fn input_worker_full_stderr_publish_completes_and_eof_exits() {
         }
         std::thread::sleep(Duration::from_millis(20));
     };
-    assert_eq!(code, 0, "full-stderr publish EOF exit code {code}, want 0");
     let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 0, "full-stderr publish EOF exit code {code}, want 0");
 }
