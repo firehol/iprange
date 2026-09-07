@@ -7265,4 +7265,5 @@ the rounds (spec parenthetical corners, the `runtime.GOOS` branch
 style in `live/basename.go`, and the SOW kind-gate control count,
 corrected here to 1-45) do not block the gate.  The wave-15
 closure record below therefore reflects the final identities at
-`c6145590` (product source) with records at `885f3e10`.
+`c6145590` (product source), with records extended from
+`885f3e10` here at `ac84662d`.
