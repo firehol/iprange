@@ -14,8 +14,8 @@ mismatches):
   (`if let Some(Normal) = buf.last()`): a trailing `..` or `.`
   component of the base stayed in Rust (`Push("\\?\\C:\\x\\..",
   "..")` = `\\?\\C:\\x\\..`) and was deleted in Go.  One-line
-  pop rule fix; 20 new pinned rows plus 4 `with_file_name` rows
-  cover the trailing-CurDir/ParentDir cells.
+  pop rule fix; 21 new pinned Push rows plus 4 `with_file_name`
+  rows cover the trailing-CurDir/ParentDir cells.
 - P2 — `Push` still documented (and implemented) a deviation for
   absolute or prefix-carrying pushed names, and missed the
   rooted-name-truncates-to-prefix arm (`push("C:\\x", "\\n")` =
@@ -33,7 +33,7 @@ reachable input.
 Re-qualification at the new identities: Go suite 23/23 packages
 PASS on Linux (go1.26.4 and host go1.27.0) and natively on the
 Windows host (go1.26.5, 23/23 including the 201-row golden, the
-push tests, and the extended 62-row verbatim fold test); Rust
+push tests, and the 69-row verbatim fold test); Rust
 workspace PASS on Linux (rustc 1.97.1, no Rust product source
 change).  The full battery PASSes at the final staged identities:
 matrices 38/38 single and 14 PASS + 24 legitimate skips per mixed

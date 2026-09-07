@@ -223,7 +223,7 @@ absolute/prefix-carrying names, the verbatim component fold, the
 rooted-name truncate to the base prefix, and the separator rules),
 and `WithFileName` routes through `Push` like `set_file_name`.  The
 wine oracle differential passes WINDOWS 591/591 and POSIX 437/437
-(zero mismatches) with 34 committed pinned rows.  Re-qualified at
+(zero mismatches) with 69 committed pinned rows.  Re-qualified at
 `5dd8e010`: Linux Go `5095c208…` / worker `795362f2…`; Windows Go
 `02e7daa7…` / worker `1dac468e…`; Rust carried `07c4e314…` /
 `c960a64f…`; full battery, Windows 23/23 suite, and Windows

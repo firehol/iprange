@@ -374,7 +374,7 @@ repair at `5dd8e010` completes the `PathBuf::_push` mirror: the pop
 rule is one-line Rust-exact, `Push` implements need_clear replacement,
 the verbatim component fold, the rooted-name truncate to the base
 prefix, and the separator rules; `WithFileName` routes through `Push`
-exactly like `set_file_name`; 34 pinned rows (native rustc answers)
+exactly like `set_file_name`; 69 pinned rows (native rustc answers)
 and the wine oracle differential now pass WINDOWS 591/591 and POSIX
 437/437 with zero mismatches.  No current product call site reaches
 the new arms (join sites pass plain separator-free names).  Linux
@@ -8705,7 +8705,7 @@ windows-host rustc 1.97.1 before repair:
    committed golden row), a pushed `..` deleted the trailing
    component in Go and stayed in Rust: 27 byte-level
    counterexamples measured.  Repair: one-line pop-last-only
-   rule; 20 new pinned Push rows plus 4 WithFileName rows cover
+   rule; 21 new pinned Push rows plus 4 WithFileName rows cover
    the trailing-CurDir/ParentDir cells with native answers.
 2. **P2 — `Push` still documented a deviation and missed a
    rooted arm.**  Rust `_push` checks `need_clear` (an absolute or
@@ -8716,8 +8716,8 @@ windows-host rustc 1.97.1 before repair:
    the complete `_push` contract — need_clear replacement, the
    verbatim component fold, the rooted-name truncate to the base
    prefix, and the separator rules; `WithFileName` routes through
-   `Push` exactly like `set_file_name`.  Seven new pinned rows
-   (native answers) cover the new arms.  No current product call
+   `Push` exactly like `set_file_name`.  Seven more pinned rows
+   (native answers) cover the new arms (69 row tuples total).  No current product call
    site passes names that reach the new arms (the four join sites
    pass plain separator-free entry names), so the delta is
    parity-completeness, not a behavior change on any reachable
@@ -8729,8 +8729,8 @@ Re-qualification at the final revision (`5dd8e010`, product source;
 records committed together with this evidence): Go suite 23/23
 packages PASS on Linux with the qualified go1.26.4 and with the
 host go1.27.0, and natively on the Windows host (go1.26.5, 23/23
-including the 201-row golden, the push tests, and the extended
-62-row verbatim fold test); Rust workspace suites PASS on Linux
+including the 201-row golden, the push tests, and the 69-row
+verbatim fold test); Rust workspace suites PASS on Linux
 (rustc 1.97.1, no Rust product source change).  Full battery PASS
 at the final staged identities (matrices 38/38 single and 14 PASS +
 24 legitimate skips per mixed direction; crash 16/16 both
