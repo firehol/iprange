@@ -149,7 +149,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "9e78de86b5a8a9f5b99a5583c895db6a00abf2016f0379baa720be3f8efe8676"
+      "sha256": "bdd06f6c6604a7897220529d86873e1ea9f9ce95b8d05c8d8d4dd46b3ec87b9e"
     },
     "rust": {
       "available": true,

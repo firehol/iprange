@@ -323,7 +323,13 @@ these identities (matrices 38/38 single and 14+24 mixed, crash
 as designed, resource 8/8, golden 55, sensitivity 14, kind gate
 PASS, all harness self-tests including the new CRLF and
 id-correlation controls), and the Windows housekeeping harness
-passes 2/2 at the same revision.  The closure record and the
+passes 2/2 at the same revision.  The wave-15 round-2 delta
+repaired the Go artifact-basename wire emission (encoding-aware
+render plus the proper UTF-16LE GC name store) at `43ebfb6b`;
+final Linux identities there: Go `bdd06f6c…`, Rust `73cb0626…`,
+workers `7784e830…`/`9fd36146…`, fixture `6c2c56b9…`, Windows Go
+`6b1540e1…` / Rust `9f6107ae…`, with every battery gate green
+again and Windows housekeeping 2/2.  The closure record and the
 role-round delta verdicts are recorded in the "Wave 15" section
 below.
 
@@ -6992,3 +6998,46 @@ Windows housekeeping 2/2 on the authorized Windows validation host
 (Go `857b84af…`, Rust `9f6107ae…`, native Python 3.14.6, clean
 tree at `13a1982e`).  Evidence and identity READMEs are regenerated
 at these identities.
+
+#### Role-round delta round 2 (wave 15) — Go wire parity repair at `43ebfb6b`
+
+The round-2 delta at `b106d0ab` drew three more verified findings:
+
+1. **P1 — Go artifact-basename wire emission corrupts bytes above
+   0x7f (security role).**  Go rendered artifact basenames as raw
+   strings (`publication_evidence.go`, `maintenance.go`); for
+   stored unit bytes above 0x7f — a Rust-created Windows artifact or
+   Go's own Windows store for a non-ASCII name — the JSON writers
+   emitted U+FFFD (rustjson range-over-invalid-UTF-8), and the
+   strict encoding-2 decoders then rejected the row: valid-input
+   hard failure on Windows and cross-product wire divergence.
+   Additionally, Go's Windows GC name encoder emitted
+   per-UTF-8-byte projections (`name[i], 0`) instead of proper
+   UTF-16LE code units, so Go stored different bytes than Rust for
+   the same non-ASCII name.  Repair at `43ebfb6b`: the Go renderer
+   `artifactBasename(bytes, encoding)` mirrors the Rust renderer
+   (encoding 2 per-byte, encoding 1 raw text) at every artifact
+   render site; `gcNameBytesPlatform` delegates to the shared
+   `utf16LEBytes` helper (proper UTF-16LE, Rust parity); new tests
+   pin the UTF-16LE helper, both render/decode round trips, and a
+   full housekeeping-row JSON round trip.
+2. **P2 — `resource-record.md` carried the intermediate wave-15a
+   identities (parity and glm independently).**  Repair at
+   `9a6fae53` refreshed the record's canonical identity sentence to
+   the final binaries.
+3. **P2 (recurrence discipline)** — the same stale-record class:
+   the record is refreshed in the same commit that rotates the
+   identities so the two cannot drift again in this wave.  Note for
+   the follow-up SOW: the record has no automated lockstep check
+   against `evidence/*.json`; a future wave should consider one.
+
+Re-qualification at `43ebfb6b`: Go suite (all packages, Linux) and
+Rust workspace PASS; host Windows-native Go `internal/cli` suites
+4/4 PASS; full battery PASS at the final staged identities
+(matrices 38/38 single and 14+24 mixed; crash 16/16 both
+directions; resource 8/8; kind gate PASS on the regenerated
+evidence; golden 55; sensitivity 14; harness self-tests PASS);
+Windows housekeeping 2/2 on the authorized Windows validation host
+(Go `6b1540e1…`, Rust `9f6107ae…`, native Python 3.14.6, clean
+tree at `43ebfb6b`).  Evidence and identity READMEs are
+regenerated at these identities.
