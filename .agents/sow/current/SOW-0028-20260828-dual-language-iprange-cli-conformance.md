@@ -9248,3 +9248,26 @@ gate: clean.  Artifact gate: unchanged (harness CLI behavior is
 additive refusal of policy-violating staging).  The round-16 record's
 sweep numeral is corrected (nine scratch-create sites, six grouped
 descriptions).
+
+#### Wave 16 follow-up round 16.3 (2026-09-07) — cwd-independent drive-relative profile matching
+
+The re-anchored security role at `983267cc` accepted the verbatim,
+device-prefix, env-var, doubled-separator, and symlink classes as
+closed and returned one P2: the drive-relative detection and its
+committed pin were ambient-CWD-dependent.  `os.path.abspath` cannot
+observe the per-drive current directory, so `C:Users\alice\...`
+anchored to the process CWD: the pin matched only from a
+profile-under CWD, and a cross-drive session left the report-body
+scan green for a profile-resolving spelling.  Repair, in
+`v4/cli/command_sanitize.py`: `_matches_profile` now compares every
+candidate against the profile's comparison forms — the absolute form
+and, on Windows, the profile's own drive-relative form
+(`C:Users\costa`), so a drive-relative candidate matches without any
+process-CWD dependency.  Validation: the Windows-housekeeping P2-7
+drive-relative row PASSes natively on the Windows host from the
+checkout CWD and from the authorized scratch CWD (the pin is
+invariant to the invocation directory, matching the milestone's own
+cwd-invariance requirement); all other pins carry; the structural
+scan over the complete committed evidence tree returns clean;
+SHASUMS 8/8 unchanged (no product source touched).  Sensitive-data
+gate: clean.  Artifact gate: unchanged.

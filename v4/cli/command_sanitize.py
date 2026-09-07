@@ -231,10 +231,25 @@ def _privacy_spellings(value):
     return out
 
 
+def _profile_comparisons(profile):
+    """Profile spellings to match candidates against.
+
+    The absolute form and, on Windows, its drive-relative form
+    (``C:\\Users\\alice`` for ``C:\\Users\\alice``): a
+    drive-relative candidate (``C:Users\\alice\\...``) then
+    matches without depending on the process current directory on
+    that drive, which ``os.path.abspath`` cannot observe."""
+    forms = [profile]
+    if os.name == "nt" and len(profile) >= 3 and profile[1] == ":":
+        forms.append(profile[:2] + profile[3:])
+    return forms
+
+
 def _matches_profile(spelling, profile):
-    """True when one normcased spelling is at or under the profile."""
-    return (spelling == profile
-            or spelling.startswith(profile + os.sep))
+    """True when one normcased spelling is at or under any of the
+    profile's comparison forms."""
+    return any(spelling == form or spelling.startswith(form + os.sep)
+               for form in _profile_comparisons(profile))
 
 
 def under_profile(path):
