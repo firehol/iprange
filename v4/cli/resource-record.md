@@ -136,7 +136,8 @@ UNC prefix and `"C:."` has no file name or parent).  The current
 canonical Linux identities are recorded in `evidence/README.md`
 (Go product `23e4730a…`, Go worker `d83854dc…`, Rust product
 `07c4e314…`, Rust worker `77b6d086…`, fixture `df3623a6…` at the
-round-6 Rust push join repair product revision `e54015d1` — the Go
+external-control repair product revision `01356600` (qualification
+HEAD `bfc60f96`) — the Go
 binary was rebuilt with `-buildvcs=false` after the parity and tester
 reviews proved the temporary and `@`-expansion path joins used an
 unconditional separator where Rust `PathBuf::push` inserts one only
@@ -182,7 +183,9 @@ share's trailing separator (doubled-separator share spellings no
 longer double separators in derived parents), and the golden corpus
 grows to 201 rows (five forward-slash UNC/verbatim-UNC shapes
 probed natively on the Windows host).  `FileName` is an
-allocation-free backward walk; `rejectLiveSelf` probes the bound
+allocation-free backward walk (one allocation only in the
+8-byte verbatim-header normalization for `\\?\\`-prefixed
+spellings); `rejectLiveSelf` probes the bound
 main-name spelling; the Rust thread-creation tripwire asserts the
 watchdog marker inside its checked region.  The destination
 preflight tests deliver accept shapes via raw parents, and the raw

@@ -8449,7 +8449,9 @@ the native Windows suite):
    doubled separators in Go derived parent/sidecar spellings.
    Repair: header normalization before the VerbatimUNC match and no
    `consumed++` in `parseUNC`; `FileName` rewritten as an
-   allocation-free backward walk (0 allocs/op verified.  The
+   allocation-free backward walk (0 allocs/op on the probed
+   corpus; the 8-byte verbatim-header normalization allocates
+   once per call only for `\\?\\`-prefixed spellings).  The
    worktree-based wine differential oracle shared the raw-header bug
    and was corrected (`.local/parity/tmp-wine2/oracle2.py`); the
    driver re-run passes 296/296 Windows and 417/417 POSIX shapes,
@@ -8519,7 +8521,7 @@ the native Windows suite):
   verbatim-header match or share-separator absorption remains in
   the Go pathname port (the round-6 record's rules are superseded
   by this record's wider rule: the prefix parser mirrors
-  `get_prefix` byte-for-byte); `FileName` has no allocation.
+  `get_prefix` byte-for-byte); `FileName` allocates only inside the 8-byte verbatim-header normalization for `\\?\\`-prefixed spellings.
 - Sensitive-data gate: no secrets, credentials, community/customer
   names, personal data, or private endpoints in this wave.
 - Artifact gate: AGENTS.md unchanged (no workflow change); runtime

@@ -12,9 +12,11 @@ by the external whole-milestone control:
   exactly like Rust `PrefixParser::get_prefix`; `parseUNC` no
   longer absorbs the share's trailing separator, so
   `\\server\share\\leaf` keeps one separator in derived parent
-  and sidecar spellings.  `FileName` is rewritten as an
+  and sidecar spellings.`FileName` is rewritten as an
   allocation-free backward component walk with identical
-  semantics (verified 0 allocs/op).  The Windows golden corpus
+  semantics (0 allocs/op on the probed corpus; the 8-byte
+  verbatim-header normalization allocates once per call only
+  for `\\?\\`-prefixed spellings).  The Windows golden corpus
   grows to 201 rows with five forward-slash UNC/verbatim-UNC
   shapes, every row confirmed against native windows-host rustc
   1.97.1.
