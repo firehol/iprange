@@ -1,6 +1,61 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The current evidence is regenerated at product revision `016010fc`
+The current evidence is regenerated at product revision `5dd8e010`
+(the round-11 repair wave: the completed `PathBuf::_push` mirror).
+The round-10 revision passed six of seven roles; the portability
+role FAILed again on the verbatim fold's ParentDir rule, and glm
+confirmed the same cell as a latent P3.  Repairs, all verified
+against real windows-host rustc 1.97.1 and the wine oracle
+differential (now WINDOWS 591/591 and POSIX 437/437, zero
+mismatches):
+
+- P2 — the fold popped the last Normal component anywhere in the
+  buffer, while Rust pops only when the *last* element is Normal
+  (`if let Some(Normal) = buf.last()`): a trailing `..` or `.`
+  component of the base stayed in Rust (`Push("\\?\\C:\\x\\..",
+  "..")` = `\\?\\C:\\x\\..`) and was deleted in Go.  One-line
+  pop rule fix; 20 new pinned rows plus 4 `with_file_name` rows
+  cover the trailing-CurDir/ParentDir cells.
+- P2 — `Push` still documented (and implemented) a deviation for
+  absolute or prefix-carrying pushed names, and missed the
+  rooted-name-truncates-to-prefix arm (`push("C:\\x", "\\n")` =
+  `C:\\n`).  `Push` now implements the complete std `_push`
+  contract: `need_clear` replacement, the verbatim component fold,
+  the rooted truncate, and the separator rules; `WithFileName`
+  routes through `Push` exactly like `set_file_name`.  Seven new
+  pinned rows (native answers) cover the new arms.
+
+No current product call site passes names that reach the new arms
+(the four join sites pass plain separator-free entry names), so the
+round-11 delta is parity-completeness, not a behavior change on any
+reachable input.
+
+Re-qualification at the new identities: Go suite 23/23 packages
+PASS on Linux (go1.26.4 and host go1.27.0) and natively on the
+Windows host (go1.26.5, 23/23 including the 201-row golden, the
+push tests, and the extended 62-row verbatim fold test); Rust
+workspace PASS on Linux (rustc 1.97.1, no Rust product source
+change).  The full battery PASSes at the final staged identities:
+matrices 38/38 single and 14 PASS + 24 legitimate skips per mixed
+direction; crash 16/16 both directions; the negative control 0/16;
+resource proofs 8/8; kind-coverage gate PASS with all 46
+self-test controls; golden exchanges 55; sensitivity gate 14.
+Windows housekeeping re-qualified at `5dd8e010`: 2/2 PASS with
+native Windows Python 3.14.6 (provenance: clean tree, go1.26.5
+windows/amd64, rustc 1.97.1).
+
+Linux reports record the product identities `07c4e314...` (rust,
+unchanged since the round-4 qualified build) and `5095c208...`
+(go, rebuilt with `-buildvcs=false`), workers `77b6d086...`
+(rust) / `795362f2...` (go), fixture `df3623a6...` (all staged in
+`.local/shared/binaries/SHASUMS.txt` with sha256sum -c OK).  The
+Windows housekeeping report records the Windows-host products
+`c960a64f...` (rust) and `02e7daa7...` (go); the Windows Go worker
+is `1dac468e...`.
+
+---
+
+Historical wave record (superseded by the head block): the current evidence is regenerated at product revision `016010fc`
 (the round-10 repair wave: destination name-rule gates and the
 verbatim push fold).  The round-9 revision was re-anchored through
 all seven role reviews; the portability role then FAILed with one
@@ -72,7 +127,7 @@ by the external whole-milestone control:
   exactly like Rust `PrefixParser::get_prefix`; `parseUNC` no
   longer absorbs the share's trailing separator, so
   `\\server\share\\leaf` keeps one separator in derived parent
-  and sidecar spellings.`FileName` is rewritten as an
+  and sidecar spellings.  `FileName` is rewritten as an
   allocation-free backward component walk with identical
   semantics (0 allocs/op on the probed corpus; the 8-byte
   verbatim-header normalization allocates once per call only

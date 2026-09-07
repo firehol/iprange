@@ -134,9 +134,9 @@ then pinned and fixed the Windows prefix parser
 (`sys/path/windows_prefix.rs parse_prefix` port; `//a//b` is not a
 UNC prefix and `"C:."` has no file name or parent).  The current
 canonical Linux identities are recorded in `evidence/README.md`
-(Go product `eab62a09…`, Go worker `2148bc0e…`, Rust product
+(Go product `5095c208…`, Go worker `795362f2…`, Rust product
 `07c4e314…`, Rust worker `77b6d086…`, fixture `df3623a6…` at the
-round-10 repair product revision `016010fc` — the Go
+round-11 repair product revision `5dd8e010` — the Go
 binary was rebuilt with `-buildvcs=false` after the parity and tester
 reviews proved the temporary and `@`-expansion path joins used an
 unconditional separator where Rust `PathBuf::push` inserts one only
@@ -148,8 +148,8 @@ directly after a verbatim prefix (`\\?\\C:/x`) leaked into file names,
 accept-gate results, and sidecar derivations that Rust never produces
 (the repair also mirrors the Rust verbatim push rebuild for
 `with_file_name`); the Rust binaries carry from the round-4 qualified
-build at `ed29e437`); the Windows-host products are Go `64854dfa…`
-(worker `06128e96…`) and Rust `c960a64f…` at the same
+build at `ed29e437`); the Windows-host products are Go `02e7daa7…`
+(worker `1dac468e…`) and Rust `c960a64f…` at the same
 revision.  The wave-13 role-round delta found the Rust EOF arm
 missing the ceiling check that Go has — a final unterminated frame
 of LIMIT+1 bytes at EOF now exits non-zero in both products; the
@@ -212,3 +212,19 @@ and 431/431 POSIX.  Re-qualified at `016010fc`: Linux Go
 `eab62a09…` / worker `2148bc0e…`; Windows Go `64854dfa…` / worker
 `06128e96…`; Rust carried `07c4e314…` / `c960a64f…`; full battery,
 Windows 23/23 suite, and Windows housekeeping 2/2 all PASS.
+
+Wave-16, round 11 (role-round FAIL repair): the round-10 revision
+passed six of seven roles; portability FAILed again on the verbatim
+fold's ParentDir rule (Go popped the last Normal anywhere, Rust only
+when the last buffer element is Normal) and glm confirmed the same
+cell.  The fold now pops exactly like Rust, `Push` implements the
+complete `PathBuf::_push` contract (need_clear replacement for
+absolute/prefix-carrying names, the verbatim component fold, the
+rooted-name truncate to the base prefix, and the separator rules),
+and `WithFileName` routes through `Push` like `set_file_name`.  The
+wine oracle differential passes WINDOWS 591/591 and POSIX 437/437
+(zero mismatches) with 34 committed pinned rows.  Re-qualified at
+`5dd8e010`: Linux Go `5095c208…` / worker `795362f2…`; Windows Go
+`02e7daa7…` / worker `1dac468e…`; Rust carried `07c4e314…` /
+`c960a64f…`; full battery, Windows 23/23 suite, and Windows
+housekeeping 2/2 all PASS.

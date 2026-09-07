@@ -364,6 +364,32 @@ approval.  After this round, the closure proceeds to the external
 whole-milestone control review at exactly this revision, with no
 further commits expected after its verdict.
 
+Wave-16 follow-up round-11 state (2026-09-07, final): the full
+seven-role round at the round-10 revision `ad156c8a` returned six
+PASSes and one FAIL (portability): the verbatim fold popped the last
+Normal component anywhere while Rust pops only when the last buffer
+element is Normal, and `Push` still carried the documented deviation
+for absolute/prefix-carrying names plus a missing rooted-arm.  The
+repair at `5dd8e010` completes the `PathBuf::_push` mirror: the pop
+rule is one-line Rust-exact, `Push` implements need_clear replacement,
+the verbatim component fold, the rooted-name truncate to the base
+prefix, and the separator rules; `WithFileName` routes through `Push`
+exactly like `set_file_name`; 34 pinned rows (native rustc answers)
+and the wine oracle differential now pass WINDOWS 591/591 and POSIX
+437/437 with zero mismatches.  No current product call site reaches
+the new arms (join sites pass plain separator-free names).  Linux
+identities at `5dd8e010` are Go `5095c208...` / worker
+`795362f2...` and carried Rust `07c4e314...` / worker `77b6d086...` /
+fixture `df3623a6...`; Windows identities Go `02e7daa7...` (worker
+`1dac468e...`) and Rust `c960a64f...`; every battery gate is green at
+the revision, Windows 23/23 natively, Windows housekeeping 2/2 PASS.
+The milestone-4 closure record stands as qualified at this final
+revision; milestone 5 remains unstarted per user decision 1A; the
+round-4 P3 commit-subject history rewrite remains pending user
+approval.  After this round, the closure proceeds to the external
+whole-milestone control review at exactly this revision, with no
+further commits expected after its verdict.
+
 Wave-16 follow-up round-10 state (2026-09-07, final): the full
 seven-role round at the round-9 revision `742bc0db` returned six
 PASSes and one FAIL (portability): P1 — the round-9 rejectLiveSelf
@@ -8652,6 +8678,81 @@ open a destination main name before the attempt (rejectLiveSelf),
 and the writer attempt keeps its own gates; no other raw-name
 append remains in the pathname port (the push fold is the single
 verbatim join).  Sensitive-data gate: no secrets, credentials,
+community/customer names, personal data, or private endpoints in
+this wave.  Artifact gate: AGENTS.md unchanged (no workflow
+change); runtime project skills unchanged (no new how-to
+knowledge); the v4 JSON-RPC spec unchanged (no contract change —
+the repairs restore the already-specified Rust reference behavior);
+end-user docs unchanged (no CLI surface change).  The round-4 P3
+item (commit subjects `9374917e`/`e3d7bf61`/`65ea9587` naming the
+external review model) remains open pending user approval for the
+history rewrite.
+
+#### Wave 16 follow-up round 11 (2026-09-07) — the completed `PathBuf::_push` mirror at `5dd8e010`
+
+The complete seven-role round at the round-10 revision `ad156c8a`
+returned six PASS verdicts; the portability role FAILed again, and
+the glm validator independently confirmed the same cell as a latent
+P3.  Both findings were verified by the lead against real
+windows-host rustc 1.97.1 before repair:
+
+1. **P2 — the verbatim fold's ParentDir pop was not Rust-exact.**
+   Go popped the last Normal component anywhere in the buffer;
+   Rust pops only when the last buffer element is Normal (`path.rs`
+   `if let Some(Component::Normal(_)) = buf.last()`).  For a base
+   whose component stream trails `.` or `..` after the last Normal
+   (`\\\\?\\C:\\x\\..`, `\\\\?\\UNC\\srv\\sh\\a\\..` — the latter a
+   committed golden row), a pushed `..` deleted the trailing
+   component in Go and stayed in Rust: 27 byte-level
+   counterexamples measured.  Repair: one-line pop-last-only
+   rule; 20 new pinned Push rows plus 4 WithFileName rows cover
+   the trailing-CurDir/ParentDir cells with native answers.
+2. **P2 — `Push` still documented a deviation and missed a
+   rooted arm.**  Rust `_push` checks `need_clear` (an absolute or
+   prefix-carrying pushed name replaces the base) before the
+   verbatim fold, and a rooted pushed name without a prefix
+   truncates the base to its prefix (`push("C:\\x", "\\n")` =
+   `C:\\n`); Go appended verbatim.  Repair: `Push` now implements
+   the complete `_push` contract — need_clear replacement, the
+   verbatim component fold, the rooted-name truncate to the base
+   prefix, and the separator rules; `WithFileName` routes through
+   `Push` exactly like `set_file_name`.  Seven new pinned rows
+   (native answers) cover the new arms.  No current product call
+   site passes names that reach the new arms (the four join sites
+   pass plain separator-free entry names), so the delta is
+   parity-completeness, not a behavior change on any reachable
+   input.
+3. **P3 — evidence README spacing typo** (`spellings.`FileName``)
+   fixed.
+
+Re-qualification at the final revision (`5dd8e010`, product source;
+records committed together with this evidence): Go suite 23/23
+packages PASS on Linux with the qualified go1.26.4 and with the
+host go1.27.0, and natively on the Windows host (go1.26.5, 23/23
+including the 201-row golden, the push tests, and the extended
+62-row verbatim fold test); Rust workspace suites PASS on Linux
+(rustc 1.97.1, no Rust product source change).  Full battery PASS
+at the final staged identities (matrices 38/38 single and 14 PASS +
+24 legitimate skips per mixed direction; crash 16/16 both
+directions; the negative control 0/16; resource proofs 8/8;
+kind-coverage gate PASS with all 46 self-test controls; golden
+exchanges 55; sensitivity gate 14).  Windows housekeeping 2/2 PASS
+at `5dd8e010` on the authorized Windows validation host (native
+Windows Python 3.14.6, Go `02e7daa7…`, Rust `c960a64f…` carried,
+provenance with tree_clean).  Final Linux identities at `5dd8e010`
+(staged in `.local/shared/binaries/SHASUMS.txt`, sha256sum -c 8/8
+OK): Go product `5095c208…`, Go worker `795362f2…` (rebuilt with
+`-buildvcs=false`), Rust product `07c4e314…`, Rust worker
+`77b6d086…`, fixture `df3623a6…` (Rust binaries carry from the
+round-4 qualified build at `ed29e437`); Windows Go product
+`02e7daa7…`, Windows Go worker `1dac468e…`, Windows Rust product
+`c960a64f…` (carried).  `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated at
+these identities in the records commit so the record and the
+identities cannot drift.  Same-failure search: the only push-like
+joins in Go now route through `pathname.Push` (the four join sites
+plus the snapshot bound probe), and `Push` is the single `_push`
+mirror.  Sensitive-data gate: no secrets, credentials,
 community/customer names, personal data, or private endpoints in
 this wave.  Artifact gate: AGENTS.md unchanged (no workflow
 change); runtime project skills unchanged (no new how-to
