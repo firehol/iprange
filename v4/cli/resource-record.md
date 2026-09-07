@@ -134,18 +134,21 @@ then pinned and fixed the Windows prefix parser
 (`sys/path/windows_prefix.rs parse_prefix` port; `//a//b` is not a
 UNC prefix and `"C:."` has no file name or parent).  The current
 canonical Linux identities are recorded in `evidence/README.md`
-(Go product `1ed287a8…`, Go worker `3bb3180c…`, Rust product
+(Go product `5383917e…`, Go worker `3bb3180c…`, Rust product
 `07c4e314…`, Rust worker `77b6d086…`, fixture `df3623a6…` at the
-round-6 forward-slash-after-verbatim-prefix repair product revision
-`a69eb53d` — the Go binary was rebuilt with `-buildvcs=false` after
-the whole-milestone review proved the Windows pathname port checked
-the physical root with the verbatim separator set, so a `/` directly
-after a verbatim prefix (`\\?\\C:/x`) leaked into file names,
-accept-gate results, and sidecar derivations that Rust never
-produces; the repair also mirrors the Rust verbatim push rebuild for
-`with_file_name`; the Rust binaries carry from the round-4 qualified
-build at `ed29e437`); the Windows-host products are Go `5018f974…`
-(worker `a91e548b…`) and Rust `c960a64f…` at the same revision.  The wave-13 role-round delta found the Rust EOF arm
+round-6 @-expansion separator + verbatim-prefix repair product
+revision `8061d80d` — the Go binary was rebuilt with `-buildvcs=false`
+after the parity review proved `expandPaths` doubled the separator
+for trailing-separator referenced spellings (`"@<dir>/"`) that Rust
+`entry.path()` singles, and the round-5 whole-milestone review proved
+the Windows pathname port checked the physical root with the
+verbatim separator set, so a `/` directly after a verbatim prefix
+(`\\?\\C:/x`) leaked into file names, accept-gate results, and
+sidecar derivations that Rust never produces (the repair also mirrors
+the Rust verbatim push rebuild for `with_file_name`); the Rust
+binaries carry from the round-4 qualified build at `ed29e437`); the
+Windows-host products are Go `d013e0b5…` (worker `a91e548b…`) and
+Rust `c960a64f…` at the same revision.  The wave-13 role-round delta found the Rust EOF arm
 missing the ceiling check that Go has — a final unterminated frame
 of LIMIT+1 bytes at EOF now exits non-zero in both products; the
 wave-14 delta repaired held over-limit frame reporting, the Windows
