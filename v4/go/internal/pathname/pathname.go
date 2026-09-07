@@ -541,14 +541,15 @@ func FileName(path string) (string, bool) {
 			}
 		}
 	}
-	// Backward component walk with no allocation (the SDK promises
-	// allocation-free basename construction): scan from the end over
-	// the body, skipping separator runs and (outside verbatim paths)
-	// trailing "." components, and return the last remaining
+	// Backward component walk with no allocation: scan from the end
+	// over the body, skipping separator runs and (outside verbatim
+	// paths) trailing "." components, and return the last remaining
 	// component as a substring.  Equivalent to the FieldsFunc split
 	// plus the Rust back walk: a trailing "." inside a verbatim
 	// prefix is a CurDir component (no name), a trailing ".." has no
 	// name, and mid-path "." / ".." components are ordinary.
+	// (The Windows prefix parse above may allocate once for a
+	// forward-slash verbatim header; the walk itself never does.)
 	end := len(body)
 	for {
 		// Skip a trailing separator run.

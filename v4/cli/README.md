@@ -256,7 +256,10 @@ table:
   and inert payload, both clean, UTF-16LE basename encoding,
   authenticated directory identity equal across both products) and
   that `maintenance.remove` with the listed envelope row passed
-  unchanged removes the pair with durable absence.  On other
+  unchanged removes the pair with a proved-currently-absent
+  result (both products truthfully report
+  crash_reappearance_possible; no power-loss durability is
+  claimed).  On other
   platforms it records the truthful `os_unsupported`/
   `read_only_failure` negative.  Committed Windows evidence:
   `evidence/windows-housekeeping.json` (produced on the authorized

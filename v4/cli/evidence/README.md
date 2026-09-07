@@ -790,7 +790,8 @@ build provenance.
   bytes, exit non-zero (startup/framing failure)), (c)
   `maintenance.remove` against a
   real reservation nonce (kill at the reservation marker, list,
-  remove with the listed row passed unchanged, durable absence),
+  remove with the listed row passed unchanged and a
+  proved-currently-absent result, crash_reappearance_possible),
   (d) CLI cancellation (slow export id 1, `iprange.v1.cancel` naming
   it, `system.describe` id 2 in one stdin blob: the cancelled export
   never answers with a result — explicitly-cancelled ids are
@@ -816,7 +817,10 @@ build provenance.
   candidate rows (envelope and inert payload), cross-listed by the
   other product with an equal authenticated directory identity over
   every listing row, then removed with the listed envelope row
-  passed unchanged, with durable absence and a zero-row
+  passed unchanged, with a proved-currently-absent result
+  (both products truthfully report
+  crash_reappearance_possible; the spec's Clean contract makes
+  no power-loss guarantee for the final unlink) and a zero-row
   after-listing — and (4) build provenance (source revision, clean
   tree, build commands, toolchain) with per-binary mtime/size.  The
   pair is built by `gc_envelope_windows.py` from the committed

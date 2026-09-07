@@ -75,7 +75,9 @@ Windows validation host):
    `maintenance.remove` (the opaque-entry contract: the removal
    entry is exactly what `maintenance.list` emitted, never rebuilt
    or decoded), `maintenance.remove` returns ok and the reservation
-   is durably absent in both products.
+   is proved currently absent in both products (both truthfully
+   report crash_reappearance_possible; the spec makes no
+   power-loss guarantee for the final unlink).
 4. CLI cancellation — one stdin blob pipelines a slow export
    (id 1), the `iprange.v1.cancel` notification naming it, and one
    `system.describe` (id 2): the cancelled export never answers with
@@ -102,7 +104,8 @@ Windows validation host):
    directory — entries == listed rows, UTF-16LE basename encoding,
    authenticated directory identity equal across both products —
    and `maintenance.remove` with the listed envelope row passed
-   unchanged removes the pair with durable absence and a zero-row
+   unchanged removes the pair with a proved-currently-absent
+   result (crash_reappearance_possible) and a zero-row
    after-listing.  On non-Windows platforms both products truthfully
    refuse with `os_unsupported`/`read_only_failure` (Linux negative
    recorded by the same script over the same refresh-built

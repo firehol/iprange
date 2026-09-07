@@ -10,7 +10,9 @@
 //! whose brace depth starts at the item that follows it, and the
 //! region ends when that item's own depth returns to zero.  This
 //! handles both a `#[cfg(test)]` method inside an impl and a
-//! `#[cfg(test)] mod tests` block.
+//! `#[cfg(test)] mod tests` block.  Checked and skipped line numbers
+//! are keyed by file so a site pin cannot be satisfied by a same
+//! numbered line in another file.
 
 use std::path::{Path, PathBuf};
 
@@ -19,11 +21,10 @@ fn braces(line: &str) -> i64 {
         - line.bytes().filter(|b| *b == b'}').count() as i64
 }
 
-/// Returns (checked_lines, skipped_lines, checked_line_numbers,
-/// problems).  checked_line_numbers and skipped_line_numbers are
-/// 1-based; the test uses them to pin specific production sites as
-/// checked so a region-skip regression cannot silently widen a
-/// `#[cfg(test)]` region over product code.
+/// Returns (checked, skipped, checked_line_numbers, skipped_line_numbers,
+/// problems).  The line-number vectors are 1-based and belong to the
+/// scanned file; the caller keys them by file so the watchdog site pin
+/// cannot be satisfied by the same line number in another file.
 #[allow(clippy::type_complexity)]
 fn scan_file(
     path: &Path,
@@ -108,27 +109,24 @@ fn no_panicking_thread_spawn_in_product_code() {
         problems: &mut Vec<String>,
         checked: &mut usize,
         skipped: &mut usize,
-        checked_lines: &mut Vec<usize>,
-        skipped_lines: &mut Vec<usize>,
+        checked_by_file: &mut std::collections::HashMap<PathBuf, Vec<usize>>,
     ) {
         for entry in std::fs::read_dir(dir).expect("read src dir") {
             let entry = entry.expect("dir entry");
             let path = entry.path();
             if path.is_dir() {
-                walk(&path, problems, checked, skipped, checked_lines, skipped_lines);
+                walk(&path, problems, checked, skipped, checked_by_file);
             } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
-                let (c, s, cl, sl) = scan_file(&path, problems);
+                let (c, s, cl, _sl) = scan_file(&path, problems);
                 *checked += c;
                 *skipped += s;
-                checked_lines.extend(cl);
-                skipped_lines.extend(sl);
+                checked_by_file.insert(path.clone(), cl);
             }
         }
     }
-    let mut checked_lines = Vec::new();
-    let mut skipped_lines = Vec::new();
-    walk(&src, &mut problems, &mut checked, &mut skipped,
-         &mut checked_lines, &mut skipped_lines);
+    let mut checked_by_file: std::collections::HashMap<PathBuf, Vec<usize>> =
+        Default::default();
+    walk(&src, &mut problems, &mut checked, &mut skipped, &mut checked_by_file);
     // The scan must actually observe product code; a parser regression
     // that skips whole files would make the tripwire vacuous.
     assert!(
@@ -152,9 +150,11 @@ fn no_panicking_thread_spawn_in_product_code() {
         !watchdog.is_empty(),
         "session.rs signal watchdog marker not found; the pin is stale"
     );
+    let session_checked = checked_by_file.get(&session).expect(
+        "session.rs was not scanned by the thread-discipline tripwire");
     for line in &watchdog {
         assert!(
-            checked_lines.contains(line),
+            session_checked.contains(line),
             "session.rs:{line} (signal watchdog) is inside a skipped region; \
              the thread-discipline tripwire would not detect a panicking \
              spawn reintroduced there"

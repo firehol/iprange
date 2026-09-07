@@ -332,6 +332,7 @@ unix rows; SHASUMS lockstep verified (`sha256sum -c` 8/8 OK).  The
 milestone-4 closure record stands as qualified at this final
 revision; milestone 5 remains unstarted per user decision 1A; the
 round-4 P3 commit-subject history rewrite remains pending user
+approval.
 Wave-16 follow-up round-9 state (2026-09-07, final): the external
 whole-milestone control review of the round-8 revision
 (`732cf002`, product source `e54015d1`) returned NEEDS CHANGES
@@ -362,6 +363,42 @@ round-4 P3 commit-subject history rewrite remains pending user
 approval.  After this round, the closure proceeds to the external
 whole-milestone control review at exactly this revision, with no
 further commits expected after its verdict.
+
+Wave-16 follow-up round-13 state (2026-09-07, final): the
+external control turn-6 review of `5bb649e1` returned NEEDS
+CHANGES with four in-scope P2 and two in-scope P3 findings: the
+committed Windows evidence exposed the operator's personal home
+path in its command metadata, the trailing-parent verify
+regression test still passed for the cleaned-path behavior, the
+thread-creation tripwire pooled checked line numbers across files
+so a same-numbered line in another file could satisfy the
+session.rs watchdog pin, the Windows removal qualification
+overclaimed power-loss durability while both products truthfully
+report `crash_reappearance_possible`, the public allocation-free
+basename promise is inaccurate on Windows, and the round-9
+finding list recorded the model-name commit subject twice with a
+truncated round-8 sentence.  All six are repaired in this wave:
+the harness records checkout-relative command paths and the
+Windows evidence is regenerated at the unchanged final identities
+(Go `02e7daa7...` / Rust `c960a64f...`); `TestVerifyRejectsTrailingParent`
+probes a spelling whose cleaned form is exactly the identity
+file; the tripwire keys checked lines by file; the qualification
+records name observed absence with the documented
+`crash_reappearance_possible` state; the SDK promise is qualified;
+the SOW record is repaired.  Only test, harness, comment, and
+record files change — the product binaries are byte-identical
+(SHASUMS 8/8 at `5dd8e010`).  Go suite 23/23 and Rust workspace
+PASS; the full battery PASSes at the final staged identities
+(battery-r23.log); Windows housekeeping 2/2 PASS natively with the
+sanitized harness; the regenerated evidence names the same
+identities.  The milestone-4 closure record stands as qualified at
+this revision; milestone 5 remains unstarted per user decision 1A;
+the round-4 P3 commit-subject history rewrite remains pending user
+approval.  Two pre-existing engine P2 findings from the same
+review (Go Windows name limits count UTF-8 bytes instead of UTF-16
+units; Rust `is_windows_device_name` compares device stems without
+length equality) are outside this milestone's blast radius and are
+forwarded for the user's scope decision.
 
 Wave-16 follow-up round-11 state (2026-09-07, final): the full
 seven-role round at the round-10 revision `ad156c8a` returned six
@@ -8536,12 +8573,11 @@ the native Windows suite):
    relabelled** "Historical wave record (superseded by the head
    block)".
 6. **P3 — commit subject `65ea9587` ("astra round-4")** folded into
-   the recorded open history-rewrite item (`9374917e`/`e3d7bf61`),
-   pending user approval; history is not rewritten.
+   the recorded open history-rewrite item (`9374917e`/`e3d7bf61`,
+   now also naming `65ea9587`), pending user approval; history is
+   not rewritten.
 7. **P3 — `bindpath_parity_test.go` bound-directory handle leak**
    fixed (deferred Close on the bound dir handles).
-8. **P3 — the extra model-name commit subject** noted in the same
-   open rewrite item.
 
 #### Round-9 re-qualification at the final revision
 
@@ -8761,3 +8797,103 @@ end-user docs unchanged (no CLI surface change).  The round-4 P3
 item (commit subjects `9374917e`/`e3d7bf61`/`65ea9587` naming the
 external review model) remains open pending user approval for the
 history rewrite.
+
+#### Wave 16 follow-up round 13 (2026-09-07) — the external control turn-6 repair wave
+
+The external whole-milestone control review (turn 6 of the same
+session) of the round-12 revision `5bb649e1` returned NEEDS CHANGES.
+Six in-scope findings and two out-of-scope engine findings were
+reported; the lead verified every one before repair.
+
+In-scope repairs (no product binary change; all are test, harness,
+comment, or record edits):
+
+1. **P2 — committed Windows evidence exposed a personal home
+   path.**  `v4/cli/evidence/windows-housekeeping.json` recorded the
+   harness invocation as `C:/Users/<operator>/iprange-qual/v4/cli/
+   windows_housekeeping_harness.py`.  The harness now records
+   `sanitized_command()`: every argv element under the checkout root
+   is rewritten to a checkout-relative spelling
+   (`v4/cli/windows_housekeeping_harness.py`), so committed evidence
+   can never carry the operator's home directory.  The Windows
+   evidence is regenerated at the unchanged final identities (Go
+   `02e7daa7...`, Rust `c960a64f...`, provenance `5dd8e010`,
+   tree_clean) and the personal path is absent from the whole
+   evidence tree (`grep` clean).
+2. **P2 — the trailing-parent regression test did not
+   discriminate.**  `v4/go/internal/live/bindpath_parity_test.go`
+   probed `<dir>/sub/main.iprange/..`, whose cleaned form is the
+   *directory* `<dir>/sub`; reintroducing lexical cleaning still
+   errored there (non-regular destination) and the assertion passed
+   for the broken behavior.  The probe is now `<identity-file>/x/..`
+   whose cleaned form is exactly the regular identity file, so a
+   cleaning regression would succeed and the test fails; the intended
+   rejection (InvalidArgument, no-file-name class) is asserted
+   explicitly.  A throwaway discrimination probe confirmed the
+   cleaned form succeeds under the regression shape.
+3. **P2 — the tripwire watchdog pin lost file identity.**
+   `v4/rust/iprange-cli/tests/thread_creation_discipline.rs` pooled
+   checked line numbers from every scanned file, so a same-numbered
+   checked line in another file (e.g. `rpc/handlers/live.rs:1096`)
+   could satisfy the session.rs watchdog pin while session.rs itself
+   was skipped.  Checked lines are now keyed by file
+   (`HashMap<PathBuf, Vec<usize>>`) and the pin reads only
+   session.rs's own checked set.
+4. **P2 — the Windows removal qualification overclaimed
+   durability.**  `resource-record.md`, `evidence/README.md`, the
+   harness docstring/comments, `v4/cli/README.md`, and
+   `gc_envelope_windows.py` claimed "durable absence", while the
+   committed evidence and the products truthfully report
+   `crash_reappearance_possible` (the spec's `Clean` contract makes
+   no power-loss guarantee for the final unlink).  The wording now
+   names observed absence with the documented state.
+5. **P3 — the public allocation-free promise is qualified.**
+   `v4/go/lifecycle_public.go` now states the POSIX walk is
+   allocation-free and the Windows UTF-16LE encoding pass allocates a
+   bounded scratch buffer; the pathname walk comment states the walk
+   itself never allocates (the Windows verbatim-header normalization
+   may allocate once).
+6. **P3 — SOW record defects.**  The round-8 status sentence that
+   ended mid-sentence at "pending user" before the round-9 paragraph
+   is restored ("approval."), and the round-9 finding list recorded
+   the same model-name commit subject twice; the duplicate item is
+   removed and the folded item now names all three commits
+   (`9374917e`/`e3d7bf61`/`65ea9587`).
+
+Out-of-scope engine findings (verified real, pre-existing, outside
+this milestone's qualification blast radius; forwarded for the
+user's scope decision — they are parity defects in the Windows
+name machinery, tracked here so they cannot be lost):
+
+- **P2 — Go Windows name limits count UTF-8 bytes instead of
+  UTF-16 units.**  `v4/go/internal/publication/name.go`
+  (`ValidMainNameLength`) and `v4/go/internal/live/
+  directory_windows.go` (`RequireNameLengths`) use `len(name)`;
+  Rust counts UTF-16 units (`component_len`).  A 90-`界` basename
+  fits NTFS in units but is rejected by Go.
+- **P2 — Rust `is_windows_device_name` compares stems without
+  length equality.**  `v4/rust/iprange-livedb/src/path.rs`
+  `wide_ascii_eq` zips the stem against `CON`/`PRN`/`AUX`/`NUL`
+  without requiring equal lengths, so `config.iprange` matches
+  `CON` and is refused as a device name.
+
+Re-qualification at the final revision: Go suite 23/23 packages
+PASS (Linux go1.26.4 + host go1.27.0; natively on the Windows host
+go1.26.5), Rust workspace PASS (the changed file is the tripwire
+test), full battery PASS at the final staged identities
+(`battery-r23.log`: matrices 38/38 single, 14 PASS + 24 legitimate
+skips per mixed direction; crash 16/16; negative control 0/16;
+resource 8/8; kind gate + 46 self-tests; golden 55; sensitivity
+14), Windows housekeeping 2/2 PASS natively with the sanitized
+harness.  Identities unchanged (`5095c208` go product / `795362f2`
+worker / carried Rust `07c4e314` / `77b6d086` / `df3623a6`, Windows
+`02e7daa7` / `1dac468e` / `c960a64f`; SHASUMS 8/8).  Same-failure
+search: no other committed evidence records absolute operator
+paths (`grep C:/Users /home/` clean across `v4/cli/evidence/` and
+the SOW); no other pooled-line-number pin exists in the tripwire;
+no other "durable absence" claim remains in the qualification
+tree.  Sensitive-data gate: clean.  Artifact gate: AGENTS.md
+unchanged; runtime project skills unchanged; specs unchanged (the
+repairs restore spec'd behavior); end-user docs updated
+(`v4/cli/README.md` removal wording); the commit-subject history
+rewrite item remains open pending user approval.

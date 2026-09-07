@@ -11,7 +11,9 @@ byte-exact with the product codecs, and creates the paired inert
 payload file with the same protected creator-only DACL the product
 installs (``security_windows.go buildDescriptor``), so the product's
 own ``maintenance.list`` accepts the pair with no cleanup problem and
-``maintenance.remove`` can resolve it to durable absence.
+``maintenance.remove`` can resolve it to a proved-currently-absent
+result (the documented ``crash_reappearance_possible`` state;
+the spec makes no power-loss guarantee for the final unlink).
 
 The format and the ownership-security contract are public product
 contracts; the module contains no test-only product hook.  All

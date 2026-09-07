@@ -34,9 +34,13 @@ boundaries:
    ``maintenance.list`` kind ``windows_housekeeping`` lists the pair
    with a valid authenticated directory identity and
    ``maintenance.remove`` removes it with the listed row passed
-   unchanged, with durable absence afterwards.  This is a product
-   artifact, not a test hook: both products validate it through their
-   ordinary GC codec and creator-only security checks.
+   unchanged, with a proved-currently-absent result afterwards
+   (both products truthfully report the documented
+   ``crash_reappearance_possible`` state; the spec's ``Clean``
+   contract makes no power-loss guarantee for the final unlink).
+   This is a product artifact, not a test hook: both products validate
+   it through their ordinary GC codec and creator-only security
+   checks.
 
 On any non-Windows platform the run records the truthful negative --
 both products answer ``os_unsupported``/``read_only_failure`` for
@@ -167,6 +171,24 @@ REFRESH_VALUE = 123456
 # exact removal-log facts (removals_log_rows, removals_log_sha256,
 # removals_advertised) recorded by complete_native_refresh_exercise.
 REPORT_SCHEMA = "iprange-cli-windows-housekeeping-report-v3"
+
+def sanitized_command():
+    """Return argv with every element under the checkout root rewritten
+    to a checkout-relative spelling, so the committed evidence never
+    records the operator's home directory (durable-artifact policy).
+    Paths outside the checkout (binary and work-dir paths under the
+    authorized validation host's scratch area) are kept as recorded."""
+    checkout = os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__))))
+    out = []
+    for arg in sys.argv:
+        if arg:
+            norm = os.path.normpath(os.path.abspath(arg))
+            if os.path.commonpath([norm, checkout]) == checkout:
+                arg = os.path.relpath(norm, checkout)
+        out.append(arg)
+    return out
+
 
 WRITER_BUDGET = {"max_heap_bytes": "16777216", "max_private_pages": "20000",
                  "max_growth_pages": "20000", "max_open_files": 4}
@@ -1779,7 +1801,7 @@ def main():
 
     report = {
         "schema": REPORT_SCHEMA,
-        "command": sys.argv,
+        "command": sanitized_command(),
         "platform": {
             "system": platform.system(),
             "release": platform.release(),
@@ -1936,7 +1958,9 @@ def main():
                 # Deterministic GC pair proof: one format-valid
                 # synthesized pair in a dedicated directory, listed,
                 # cross-listed, removed with the listed row unchanged,
-                # and proven durably absent.
+                # and proved currently absent (the products
+                # truthfully report crash_reappearance_possible;
+                # no power-loss durability is claimed).
                 gc_dir = os.path.join(args.work_dir, f"gc-{label}")
                 shutil.rmtree(gc_dir, ignore_errors=True)
                 outcome["synth"] = synthesize_gc_pair(gc_dir)

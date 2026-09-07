@@ -87,31 +87,30 @@ func TestBindPairParentParity(t *testing.T) {
 // A trailing-parent path must not be re-resolved to an ancestor by
 // the verify path (Rust verify_path_any_link calls bind_path raw).
 // The probe is built by raw concatenation: filepath.Join cleans the
-// trailing ".." onto the database path, and the handler would then
-// compare the database itself instead of rejecting the raw spelling.
+// trailing ".." onto the target itself, and the handler would then
+// verify the cleaned target instead of rejecting the raw spelling.
 func TestVerifyRejectsTrailingParent(t *testing.T) {
 	dir := t.TempDir()
-	main := filepath.Join(dir, "main.iprange")
-	if err := os.WriteFile(main, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	identity, err := pathIdentity(main)
-	if err != nil {
-		t.Fatal(err)
-	}
 	sub := filepath.Join(dir, "sub")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The resolveable target exists (dir/sub/main.iprange), so a
-	// regression that re-resolves the trailing ".." would succeed
-	// and this rejection would fail.
+	// The cleaned form of the probe is exactly target, so a
+	// regression that lexically re-resolves the trailing ".." would
+	// succeed (target is the regular file whose identity is
+	// expected) and the assertion below would fail.
 	target := filepath.Join(sub, "main.iprange")
 	if err := os.WriteFile(target, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	probe := sub + string(filepath.Separator) + "main.iprange" + string(filepath.Separator) + ".."
-	if err := verifyPath(probe, *identity); err == nil {
-		t.Error("verifyPath resolved a trailing .. onto the database, want rejection")
+	identity, err := pathIdentity(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	probe := target + string(filepath.Separator) + "x" + string(filepath.Separator) + ".."
+	err = verifyPath(probe, *identity)
+	fe, ok := err.(*format.Error)
+	if err == nil || !ok || fe.Code != format.CodeInvalidArgument {
+		t.Fatalf("verifyPath(%q) error = %v, want InvalidArgument no-file-name class", probe, err)
 	}
 }

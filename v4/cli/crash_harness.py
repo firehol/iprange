@@ -1630,7 +1630,9 @@ def scenario_c(direction, producer, consumer, work_dir, scenario_report):
             }
 
             # Removal returns the directory to empty; a second list
-            # proves durable absence.
+            # proves observed absence (the removal outcome itself
+            # truthfully reports the documented
+            # crash_reappearance_possible state).
             for row in rows:
                 removed = resolver.call(
                     "4", "iprange.v1.maintenance.remove", {"entry": row})
