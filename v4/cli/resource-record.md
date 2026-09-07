@@ -127,9 +127,9 @@ The Linux qualification binary hashes at that wave changed to
 `2f1d2bba…` (Go) and `86056181…` (Rust); behavior on Linux was
 unchanged outside the round-trip acceptance.  The current canonical
 Linux identities are recorded in `evidence/README.md` (Go product
-`90cadcf3…`, Rust product `40816ee2…` at the wave-15 round-4
-revision `c6145590`; the worker and fixture identities are
-build-proven there as well).  The wave-13 role-round delta found the Rust EOF arm
+`6606f4d4…`, Rust product `14112702…` at the wave-15 astra
+round-3 repair revision `2e4f184d`; the worker and fixture
+identities are build-proven there as well).  The wave-13 role-round delta found the Rust EOF arm
 missing the ceiling check that Go has — a final unterminated frame
 of LIMIT+1 bytes at EOF now exits non-zero in both products; the
 wave-14 delta repaired held over-limit frame reporting, the Windows

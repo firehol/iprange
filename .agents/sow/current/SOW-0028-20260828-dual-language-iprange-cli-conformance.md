@@ -351,6 +351,17 @@ identities there are Go `90cadcf3…` / worker `8ae5e0ba…` and Rust
 `40816ee2…` / worker `9fd36146…` (unchanged), Windows Go
 `7bd65e6a…` / Rust `33b02d82…` (unchanged), every battery gate
 green again, and Windows housekeeping 2/2 at the same revision.
+The external whole-milestone control turn-3 review (session
+b5dd923d…) then returned NEEDS CHANGES with six product/gate
+findings and two P3s — non-blocking runtime diagnostics, input
+closure on every error path, the Windows-shaped main_basename test,
+the real-producer negative crash control, the trailing-residue
+self-test gate, and the BasenameFromPath component contract — all
+repaired in the astra-round-3 wave; final Linux identities there
+are Go `6606f4d4…` / worker `f1311d96…` and Rust `14112702…` /
+worker `9fd36146…` (unchanged), Windows Go `436691f5…` / Rust
+`d7deb242…`, every battery gate green and Windows housekeeping 2/2
+at the same revision `2e4f184d`.
 
 
 ## Requirements
@@ -7267,3 +7278,92 @@ corrected here to 1-45) do not block the gate.  The wave-15
 closure record below therefore reflects the final identities at
 `c6145590` (product source), with records extended from
 `885f3e10` here at `ac84662d`.
+
+
+#### Role-round astra round-3 repair wave — external control findings at `444cc8fa` repaired at `2e4f184d`
+
+The external whole-milestone control (session `b5dd923d…`, turn
+3, reviewed HEAD `444cc8fa` after the seven-role PASS) returned
+NEEDS CHANGES with eight findings; the lead verified every finding
+independently (finding 7 reproduced exactly: a matrix report
+without command metadata raised `UnboundLocalError`), repaired all
+eight, and re-qualified at the final revision:
+
+1. **P1 — runtime diagnostics can still block graceful shutdown
+   (both products).**  The input workers wrote dropped-IPv6 and
+   DNS warnings synchronously to stderr
+   (`v4/go/internal/cli/fileio/input.go`, `v4/rust/iprange-cli/
+   src/io/input.rs`), so a full stderr pipe blocked the active
+   worker and EOF shutdown waited on it forever.  Repair: every
+   runtime diagnostic now goes through a detached best-effort
+   writer (`stderrDiag` / `stderr_diag`), matching the watchdog
+   policy; a full-stderr probe of both products exits cleanly at
+   EOF in ~30 ms.
+2. **P2 — the new Go main_basename test fails on Windows.**  The
+   unrestricted test asserted the POSIX maximal-subpart wire text
+   for bytes E2 82 while the Windows constructor stores the
+   UTF-16LE units of the (already per-byte replaced) name, which
+   decode to two replacement characters.  Repair: the round-trip
+   test now asserts the platform-correct wire text and keeps the
+   universal round-trip and mismatch-rejection assertions; the
+   full Go suite passes natively on the Windows host.
+3. **P2 — input ownership: parse failures, binary-header
+   failures, and early SDK termination left input files open
+   until garbage collection.**  The Go text input core closed
+   files only at the normal end-of-input steps.  Repair: every
+   error exit in `openNext`, `nextBatch`, and `readStep` now
+   closes the active file deterministically; the
+   `TextInputSource4/6` adapters expose an idempotent `Close`
+   that the `current.publish` handler defers, covering early SDK
+   termination; new ownership tests force the parse-error,
+   header-mismatch, mid-stream, and partially-drained paths.
+   (Rust already closes by RAII when the source is dropped.)
+4. **P2 — the committed crash negative control used a fake
+   producer too, so it never exercised the substituted-consumer
+   stage.**  Repair: the battery negative now runs the real Rust
+   producer against `/bin/false`; all 16 scenarios fail at the
+   consumer stage ("service closed stdout"), and the evidence
+   README describes the control truthfully.
+5. **P2 — the trailing-residue self-test control never drove the
+   shared residue rejection.**  Removing the `require_clean_drain`
+   trailing-byte check left the control green.  Repair: the
+   control's stub now exits after the residue, the drain must
+   reach EOF, and `require_clean_drain` must raise the trailing-
+   bytes failure (deleting the rejection fails the control).
+6. **P2 — `BasenameFromPath` accepted `..` while Rust
+   `LocalBasename::from_path` rejects it (Path::file_name
+   returns None).**  Repair: the Go constructor rejects the same
+   missing-component shapes (empty, `.`, `..`, separators) with
+   the Rust InvalidArgument detail; boundary tests added on both
+   platforms and through the resolve decoder.
+7. **P3 — the kind-coverage gate raised an uncontrolled
+   `UnboundLocalError` for a matrix report without command
+   metadata** (`namespace` initialized only in the argv-present
+   branch).  Repair: the variable initializes unconditionally and
+   the report ends with the recorded "records no command argv"
+   problem; new self-test control 46 pins it (control count is
+   now 1-46).
+8. **P3 — the normative maximal-subpart definition omitted the
+   single-byte fallback.**  Repair: the spec now states that a
+   byte that cannot begin any well-formed sequence consumes one
+   byte (e.g. FF or a lone continuation) before re-scanning.
+
+Re-qualification at `2e4f184d` (product source `9374917e` plus
+the platform-aware test repairs): Go suite 22/22 packages PASS on
+Linux and the touched suites PASS natively on the Windows host
+(handlers, live, fileio, publication, rpc, root package); Rust
+workspace 51 suites PASS; full battery PASS at the final staged
+identities (matrices 38/38 single and 14+24 mixed; crash 16/16
+both directions; the real-producer negative control 0/16 failing
+at the consumer stage as designed; resource 8/8; kind gate PASS
+with the 46 self-test controls; golden 55; sensitivity 14);
+Windows housekeeping 2/2 on the authorized Windows validation
+host (Go `436691f5…`, Rust `d7deb242…`, native Python 3.14.6,
+clean tree at `2e4f184d`, provenance recorded).  Final Linux
+identities at `2e4f184d`: Go product `6606f4d4…`, Go worker
+`f1311d96…`, Rust product `14112702…` (changed by the
+non-blocking diagnostics), Rust worker `9fd36146…` (unchanged),
+fixture `6c2c56b9…` (unchanged); `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated in
+the same commit so the record and the identities cannot drift
+again.

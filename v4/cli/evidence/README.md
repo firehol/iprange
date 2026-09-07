@@ -29,20 +29,25 @@ wave-15 section:
   beside the running binary, requests now report the worker as
   unavailable instead of a raw file-not-found I/O error (matches
   the SDK `worker_availability` probe semantics);
-- Windows housekeeping re-qualified at the final wave-15
-  revision `c6145590` on the authorized Windows validation host:
-  2/2 PASS with the native Windows Python 3.14.6.
+- Windows housekeeping re-qualified at the astra round-3 repair
+  revision `2e4f184d` on the authorized Windows validation host:
+  2/2 PASS with the native Windows Python 3.14.6 (Go `436691f5…`,
+  Rust `d7deb242…`, provenance recorded).
 
-Linux reports record the product identities `40816ee2…` (rust) and
-`90cadcf3…` (go), workers `9fd36146…` / `8ae5e0ba…`, fixture
+Linux reports record the product identities `14112702…` (rust) and
+`6606f4d4…` (go), workers `9fd36146…` / `f1311d96…`, fixture
 `6c2c56b9…` (staged in `.local/shared/binaries/SHASUMS.txt`);
 the Windows housekeeping report records the Windows-host products
-`33b02d82…` (rust) and `7bd65e6a…` (go) at the same source
-revision `c6145590` (the wave-15 round-4 re-qualification: the Go
-`main_basename` wire render now decodes encoding-1 bytes with the
-Rust maximal-subpart rule and encoding-2 units lossily, and the
-resolve comparison uses the same rendered text, so Go round-trips
-its own result for POSIX paths with invalid-UTF-8 bytes).  These identities include the wave-15 role-round delta
+`d7deb242…` (rust) and `436691f5…` (go) at the same source
+revision `2e4f184d` (the wave-15 astra round-3 repair wave: the
+input workers no longer write diagnostics synchronously to stderr,
+the Go input core closes its files on every error path with a
+deferred source Close, `BasenameFromPath` rejects the Rust
+missing-component shapes, the main_basename round-trip test is
+platform-correct on Windows, the crash negative control runs a
+real producer against a substituted consumer, the trailing-residue
+self-test drives the shared drain rejection, and the kind gate
+records a problem instead of raising for a command-less report).  These identities include the wave-15 role-round delta
 repairs: the encoding-aware artifact-basename renderer in both
 products, the Go worker-availability fallback, Go's proper UTF-16LE
 GC name store, the complete encoding-aware basename class at every
