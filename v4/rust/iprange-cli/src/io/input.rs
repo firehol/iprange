@@ -1319,11 +1319,48 @@ fn resolve_hostnames(
 
 /// Write one advisory diagnostic without ever blocking the caller:
 /// a full stderr pipe must not stall the input worker and wedge
-/// session shutdown (external review finding).  The write is
-/// best-effort from a detached thread and may be cut off at process
-/// exit; diagnostics are advisory, never error semantics.
+/// session shutdown (external review finding).  One dedicated
+/// drainer thread writes the queue; per-diagnostic threads are never
+/// spawned, so a sustained full pipe can at most drop diagnostics
+/// (and block the single drainer) instead of accumulating one
+/// blocked thread per message until a spawn panics.  Diagnostics are
+/// advisory, never error semantics.
 fn stderr_diag(message: String) {
-    std::thread::spawn(move || eprintln!("{message}"));
+    if !DIAG_STARTED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        // Best-effort single spawn; a failed spawn leaves the flag
+        // false so a later diagnostic retries, and no worker path
+        // ever panics on thread creation (operations finding).
+        let _ = std::thread::Builder::new()
+            .name("iprange-stderr-diag".to_owned())
+            .spawn(diag_loop);
+    }
+    let Ok(mut queue) = DIAG_QUEUE.lock() else {
+        return; // poisoned lock: drop the advisory diagnostic
+    };
+    if queue.len() < DIAG_QUEUE_CAP {
+        queue.push_back(message);
+    }
+}
+
+const DIAG_QUEUE_CAP: usize = 256;
+
+static DIAG_QUEUE: std::sync::Mutex<std::collections::VecDeque<String>> =
+    std::sync::Mutex::new(std::collections::VecDeque::new());
+
+static DIAG_STARTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+fn diag_loop() {
+    loop {
+        let message = match DIAG_QUEUE.lock() {
+            Ok(mut queue) => queue.pop_front(),
+            Err(_) => None, // poisoned lock: keep the drainer alive
+        };
+        match message {
+            Some(text) => eprintln!("{text}"),
+            None => std::thread::sleep(std::time::Duration::from_millis(20)),
+        }
+    }
 }
 
 fn resolve_one(name: &str, silent: bool, output: &mut Vec<IpAddr>) -> Result<(), String> {

@@ -265,15 +265,31 @@ func (c *textInputCore[K]) init(paths []string, options TextInputOptions, expand
 	return nil
 }
 
-// stderrDiag writes one advisory diagnostic without ever blocking the
-// caller: a full stderr pipe must not stall the input worker and wedge
-// session shutdown (external review finding).  The write is best-effort
-// from a detached goroutine and may be cut off when the process exits;
-// diagnostics are advisory, never durability or error semantics.
+// stderrDiag enqueues one advisory diagnostic without ever blocking
+// the caller: a full stderr pipe must not stall the input worker and
+// wedge session shutdown (external review finding).  One writer
+// goroutine drains a bounded queue, so a sustained full pipe can at
+// most drop diagnostics (and keep one writer blocked) instead of
+// accumulating one blocked goroutine per message.  Diagnostics are
+// advisory, never durability or error semantics.
 func stderrDiag(format string, args ...any) {
-	go func() {
-		fmt.Fprintf(os.Stderr, format, args...)
-	}()
+	diagOnce.Do(func() { go diagLoop() })
+	select {
+	case diagQueue <- fmt.Sprintf(format, args...):
+	default: // queue full: drop the advisory diagnostic
+	}
+}
+
+// diagQueue bounds the pending advisory diagnostics; diagLoop owns
+// the stderr writes.
+var diagQueue = make(chan string, 256)
+
+var diagOnce sync.Once
+
+func diagLoop() {
+	for message := range diagQueue {
+		fmt.Fprint(os.Stderr, message)
+	}
 }
 
 // familyMatches reports whether one parsed range can be advertised by

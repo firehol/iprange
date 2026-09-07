@@ -1,16 +1,21 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
 The fifteenth-wave evidence is regenerated at the final wave-15
-revision `c6145590` (product source of the round-4 delta; HEAD
-`4cf0ff52`) after the external whole-milestone control turn-2
+revision `9374917e` (product source of the astra round-3 repair
+wave; test repairs `1afaf64a`/`2e4f184d`, records HEAD
+`e3d7bf61`) after the external whole-milestone control turn-2
 review of the wave-14 revision (lifecycle identity platform kind,
 artifact-basename wire mapping, drain-EOF, matrix fixture binding,
 conflict-order control, and strict response-id correlation), the
-native Windows verification wave, and the wave-15 role-round
-deltas 2-4 (encoding-aware artifact-basename rendering, the
+native Windows verification wave, the wave-15 role-round deltas
+2-4 (encoding-aware artifact-basename rendering, the
 maximal-subpart encoding-1 decode, and the Go `main_basename`
-invalid-UTF-8 round-trip repair) — all recorded in SOW-0028's
-wave-15 section:
+invalid-UTF-8 round-trip repair), and the astra round-3 repair
+wave (non-blocking input-worker diagnostics, input closure on
+every error path, the platform-correct main_basename test, the
+real-producer negative crash control, the shared trailing-residue
+rejection control, and the `BasenameFromPath` component contract)
+— all recorded in SOW-0028's wave-15 section:
 
 - the Rust CLI test suite now runs fully green natively on the
   authorized Windows validation host (711 tests across
