@@ -329,9 +329,16 @@ render plus the proper UTF-16LE GC name store) at `43ebfb6b`;
 final Linux identities there: Go `bdd06f6c…`, Rust `73cb0626…`,
 workers `7784e830…`/`9fd36146…`, fixture `6c2c56b9…`, Windows Go
 `6b1540e1…` / Rust `9f6107ae…`, with every battery gate green
-again and Windows housekeeping 2/2.  The closure record and the
-role-round delta verdicts are recorded in the "Wave 15" section
-below.
+again and Windows housekeeping 2/2.  The wave-15 round-3 delta at
+`3f156b22` then completed the encoding-aware basename class at
+every Go fact site and the Rust snapshot handoff surfaces, closed
+the encoding-1 invalid-UTF-8 render divergence, and made the
+resource-harness id-type control share the proofs' exact-id
+authority; final Linux identities there are Go `74d5ce2d…` /
+worker `1b12053d…` and Rust `40816ee2…` / worker `9fd36146…`,
+Windows Go `181c4308…` / Rust `33b02d82…`, every battery gate
+green, and the closure record and the role-round delta verdicts
+are recorded in the "Wave 15" section below.
 
 
 ## Requirements
@@ -7041,3 +7048,84 @@ Windows housekeeping 2/2 on the authorized Windows validation host
 (Go `6b1540e1…`, Rust `9f6107ae…`, native Python 3.14.6, clean
 tree at `43ebfb6b`).  Evidence and identity READMEs are
 regenerated at these identities.
+
+#### Role-round delta round 3 (wave 15) — the complete basename fact class at `3f156b22`
+
+The round-3 re-anchored delta at HEAD `94b5f8a9` (records-only
+identity refresh) drew seven verdicts; the security role returned
+PASS, the other six returned FAIL with one unanimous P1 and four
+distinct P2 findings, all repaired in commit `3f156b22`:
+
+1. **P1 — Go private-output attempt rows still rendered basenames
+   encoding-unaware (parity, operations, portability, performance,
+   glm, tester).**  `v4/go/internal/cli/handlers/maintenance.go
+   privateOutputAttemptValue` emitted `string(attempt.Basename)`
+   at the shared failure-output render site (snapshot, publish,
+   recovery, algebra), so encoding-2 unit bytes collapsed to U+FFFD
+   in the JSON writers and Go's own strict decoder rejected the row,
+   while the wave-15 round-2 record claimed the renderer was
+   encoding-aware "at every artifact render site".  Repair: the Go
+   render site now calls `artifactBasename(attempt.Basename,
+   attempt.BasenameEncoding)`, mirroring every Rust private-output
+   surface.  The same round exposed the deeper fact divergence the
+   renderer masked: Go stored destination and private-output
+   basename facts as raw UTF-8 bytes while tagging them encoding 2
+   on Windows (Rust records the proper UTF-16LE units), so even
+   ASCII private names diverged (13 vs 26 stored bytes).  Repair:
+   Go now stores and compares platform name bytes at every fact
+   site — `outputFacts`, the seed inventory (destination, private
+   output, reservation, coordination slots), the reservation
+   basename length, the result binding check, and the resume
+   comparison — via the shared `platformEncodedBytes` helper, whose
+   Windows arm delegates to the live `Utf16LEBytes` units
+   (previously it NUL-paired UTF-8 bytes, corrupting non-ASCII
+   basename commitments).
+2. **P2 — the Rust snapshot preparation-failure surfaces used a
+   third wire form (portability).**  `snapshot.rs` rendered
+   housekeeping artifact basenames and the private attempt basename
+   as hex while every other Rust handler and both Go surfaces use
+   the encoding-aware form; the local `housekeeping` render also
+   emitted null identities where the wire rule requires absent.
+   Repair: the snapshot surfaces delegate to the shared
+   `lifecycle::housekeeping` / `lifecycle::visible_housekeeping` /
+   `lifecycle::basename` renders (one authoritative implementation).
+3. **P2 — encoding-1 invalid-UTF-8 names rendered lossily but
+   differently per product (operations).**  Rust replaces each
+   maximal invalid run with one U+FFFD (from_utf8_lossy), Go's json
+   replaced each invalid byte, so an incomplete multibyte tail
+   diverged.  Repair: the Go renderer decodes encoding-1 bytes with
+   the same run-replacement (`strings.ToValidUTF8`), with a parity
+   test pinning the single-replacement wire.
+4. **P2 — the resource-harness id-type control duplicated the
+   proofs' correlation idiom instead of driving it (tester).**
+   Removing the exact-type enforcement from proof a's
+   classification alone left `--self-test` green.  Repair: one
+   shared `exact_id_response` authority now serves proof a, proof d,
+   and the control; a str-coercion mutation of the lookup now fails
+   the control (verified in the repair battery).
+
+New detecting tests: Go renderer/decode round trips for the
+private-output attempt wire under both encodings (no U+FFFD
+collapse), the encoding-1 lossy-decode parity, the platform
+basename bytes of the output facts (raw on posix, UTF-16LE units on
+Windows), the Windows UTF-16LE commitment units, and Rust snapshot
+attempt-wire equality with the maintenance surface.
+
+Re-qualification at `3f156b22`: Go suite 22/22 packages and Rust
+workspace PASS (Linux); full battery PASS at the final staged
+identities (matrices 38/38 single and 14+24 mixed; crash 16/16
+both directions with the /bin/false negative failing as designed;
+resource 8/8; kind gate PASS on the regenerated evidence; golden
+55; sensitivity 14; harness self-tests PASS including the
+shared-authority id-type control verified against the str-coercion
+mutation); host Windows-native Go `internal/live`,
+`internal/publication`, `internal/cli` suites PASS and
+`cargo test -p iprange-livedb -p iprange-cli` PASS; Windows
+housekeeping 2/2 on the authorized Windows validation host (Go
+`181c4308…`, Rust `33b02d82…`, native Python 3.14.6, clean tree at
+`3f156b22`).  Final Linux identities at `3f156b22`: Go product
+`74d5ce2d…`, Go worker `1b12053d…`, Rust product `40816ee2…`,
+Rust worker `9fd36146…` (unchanged), fixture `6c2c56b9…`
+(unchanged); `v4/cli/evidence/*`, `evidence/README.md`, and
+`resource-record.md` are regenerated in the same commit so the
+record and the identities cannot drift again.
