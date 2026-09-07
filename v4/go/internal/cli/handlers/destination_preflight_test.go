@@ -78,22 +78,28 @@ func mkRawParent(t *testing.T, path string) {
 	t.Helper()
 	rawParent := live.FileParent(path)
 	sep := string(filepath.Separator)
-	// Walk from the root prefix toward the raw parent, creating the
-	// ordinary components in order so ".." components always resolve
-	// onto an existing directory.
-	parts := strings.Split(rawParent, sep)
-	acc := ""
-	for i, part := range parts {
-		if part == "" {
-			if i == 0 {
-				acc = sep
-			}
+	// Anchor at the absolute volume + separator (Windows "C:\",
+	// UNC "\\server\share\", POSIX "/") so every ordinary
+	// component is created under the real anchor; filepath.Join
+	// seeds would go drive-relative on Windows ("C:Users\..." in
+	// the process cwd).
+	acc := filepath.VolumeName(rawParent)
+	if acc != "" {
+		if len(rawParent) == len(acc) || rawParent[len(acc)] != filepath.Separator {
+			acc += sep
+		}
+	} else if strings.HasPrefix(rawParent, sep) {
+		acc = sep
+	}
+	rest := rawParent[len(acc):]
+	for _, part := range strings.Split(rest, sep) {
+		if part == "" || part == "." || part == ".." {
 			continue
 		}
-		if part == "." || part == ".." {
-			continue
+		if !strings.HasSuffix(acc, sep) {
+			acc += sep
 		}
-		acc = filepath.Join(acc, part)
+		acc += part
 		if err := os.MkdirAll(acc, 0o755); err != nil {
 			t.Fatalf("mkRawParent(%q): create %q: %v", rawParent, acc, err)
 		}
