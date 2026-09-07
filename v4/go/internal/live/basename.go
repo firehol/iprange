@@ -7,6 +7,7 @@ package live
 import (
 	"path/filepath"
 	"runtime"
+	"strings"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -22,23 +23,56 @@ type LocalBasename struct {
 	bytes    [maxBasenameBytes]byte
 }
 
+// rustFileName computes the final path component the way Rust
+// Path::file_name does through Components: repeated separators
+// collapse, trailing separators are trimmed, "." components are
+// normalized away everywhere, but ".." components are never resolved
+// against earlier components (Rust Components keeps ParentDir as an
+// ordinary component).  The result is the last normal component, or
+// false when the path ends in ".." or has none (Rust
+// Component::ParentDir / RootDir / Prefix / no-component are all
+// mapped to None by file_name).
+func rustFileName(path string) (string, bool) {
+	if path == "" {
+		return "", false
+	}
+	// The Windows volume prefix (Rust Component::Prefix) is not a
+	// file-name component.  filepath.VolumeName returns "" on unix,
+	// so this block is a no-op there.
+	body := path
+	if vol := filepath.VolumeName(path); vol != "" {
+		body = path[len(vol):]
+	}
+	separators := "/"
+	if runtime.GOOS == "windows" {
+		separators = `/\`
+	}
+	parts := strings.FieldsFunc(body, func(r rune) bool {
+		return strings.ContainsRune(separators, r)
+	})
+	// Rust normalizes "." components away (parse_single_component
+	// maps b"." to None in body position), so a trailing "." never
+	// becomes the final component.
+	for len(parts) > 0 && parts[len(parts)-1] == "." {
+		parts = parts[:len(parts)-1]
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	last := parts[len(parts)-1]
+	if last == ".." {
+		return "", false
+	}
+	return last, true
+}
+
 // platformBasenameFromPath copies the platform encoding of the
 // file-name component (Rust LocalBasename::from_path): bytes:raw on
 // unix and the UTF-16LE units on windows, each under its platform
 // encoding tag.
 func platformBasenameFromPath(path string) (LocalBasename, error) {
-	// Rust Path::file_name normalizes trailing separators and "."
-	// components before taking the final component (for example
-	// "foo.txt/." yields "foo.txt"); filepath.Clean applies the same
-	// normalization so the Go constructor stays Rust-parity (external
-	// review finding: Go rejected "foo.txt/." and trailing-slash
-	// shapes that Rust accepts).
-	name := filepath.Base(filepath.Clean(path))
-	// Rust Path::file_name returns None for ".", "..", "foo/..",
-	// separators, and empty names; the Go constructor must reject the
-	// same component shapes so the SDK surface stays Rust-parity
-	// (external review finding: Go accepted "..").
-	if name == "" || name == "." || name == ".." || name == string(filepath.Separator) {
+	name, ok := rustFileName(path)
+	if !ok {
 		return LocalBasename{}, &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
 	}
 	bytes := []byte(name)
@@ -78,7 +112,8 @@ func (b LocalBasename) encodingValue() uint16 {
 	return b.encoding
 }
 
-// bytes returns the copied basename bytes (Rust LocalBasename::as_bytes).
+// bytesValue returns the copied basename bytes (Rust
+// LocalBasename::as_bytes).
 func (b LocalBasename) bytesValue() []byte {
 	return b.bytes[:b.length]
 }

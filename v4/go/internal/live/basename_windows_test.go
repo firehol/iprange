@@ -37,6 +37,7 @@ func TestLocalBasenameFromPathNormalizesDotSuffixWindows(t *testing.T) {
 	for _, path := range []string{
 		"C:/Temp/foo.txt", "C:/Temp/foo.txt/", "C:/Temp/foo.txt/.",
 		"C:/Temp/foo.txt//.", "C:/Temp/a/../foo.txt",
+		`C:\Temp\foo.txt`, `C:\Temp\foo.txt\.`,
 	} {
 		basename, err := LocalBasenameFromPath(path)
 		if err != nil {
@@ -50,11 +51,53 @@ func TestLocalBasenameFromPathNormalizesDotSuffixWindows(t *testing.T) {
 }
 
 // The Windows constructor must reject the same missing-component
-// shapes as Rust Path::file_name (".", "..", the separator, empty).
+// shapes as Rust Path::file_name (".", "..", the separator, empty),
+// including a bare volume and a volume root (Rust maps the Prefix
+// and RootDir components to None).
 func TestLocalBasenameFromPathRejectsDotComponentsWindows(t *testing.T) {
-	for _, path := range []string{".", "..", "C:/", "C:\\", ""} {
+	for _, path := range []string{".", "..", "C:/", "C:\\", "C:", ""} {
 		if _, err := LocalBasenameFromPath(path); err == nil {
 			t.Fatalf("LocalBasenameFromPath(%q) succeeded, want the Rust InvalidArgument error", path)
+		}
+	}
+}
+
+// Rust Path::file_name is None for every path that terminates in
+// ".." on Windows too ("C:/x/.." terminates in ParentDir; the
+// volume root is not a name).  The cleaned ancestor directory must
+// not be returned as the basename (external review round 5 finding:
+// filepath.Clean resolved "C:/x/.." to "C:" and the constructor
+// accepted the volume).
+func TestLocalBasenameFromPathRejectsTrailingParentWindows(t *testing.T) {
+	for _, path := range []string{
+		"C:/x/..", "C:/Temp/a/b/..", "C:/a/../b/c/..",
+		`C:\x\..`, `C:\Temp\..\b\..`, "C:/x/./..",
+	} {
+		if _, err := LocalBasenameFromPath(path); err == nil {
+			t.Fatalf("LocalBasenameFromPath(%q) succeeded, want the Rust InvalidArgument error for a trailing ..", path)
+		}
+	}
+}
+
+// Mid-path ".." components are ordinary components for Rust
+// Path::file_name on Windows: never resolved, so the final component
+// after them is still the basename.
+func TestLocalBasenameFromPathMidParentKeptWindows(t *testing.T) {
+	for path, want := range map[string]string{
+		"C:/a/../b":       "b",
+		"C:/a/../../b":    "b",
+		`C:\a\..\b`:       "b",
+		"C:/a/b/../c.txt": "c.txt",
+		"C:/a/../b/../c":  "c",
+	} {
+		basename, err := LocalBasenameFromPath(path)
+		if err != nil {
+			t.Fatalf("LocalBasenameFromPath(%q) rejected: %v", path, err)
+		}
+		got := string(basename.bytesValue())
+		wb := Utf16LEBytes(want)
+		if got != string(wb) {
+			t.Fatalf("LocalBasenameFromPath(%q) = % x, want % x", path, got, wb)
 		}
 	}
 }
