@@ -7,9 +7,8 @@
 package live
 
 import (
-	"path/filepath"
-
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 )
 
 // sidecarSuffix is the canonical sidecar name suffix (spec section 15).
@@ -20,14 +19,16 @@ const sidecarSuffix = ".readers"
 // path component that does not itself use the reserved coordination
 // suffix or the reserved .iprange- prefix.
 func canonicalSidecarPath(main string) (string, error) {
-	name := filepath.Base(main)
-	if name == "." || name == string(filepath.Separator) {
+	name, ok := pathname.FileName(main)
+	if !ok {
 		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
 	}
 	if invalidCoordinationName(name) {
 		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: invalidCoordinationDetail(name)}
 	}
-	return filepath.Join(filepath.Dir(main), name+sidecarSuffix), nil
+	// The raw parent prefix is preserved (Rust with_file_name keeps
+	// mid-path ".." and repeated interiors separators un-resolved).
+	return pathname.WithFileName(main, name+sidecarSuffix), nil
 }
 
 // invalidCoordinationName mirrors Rust path::validate_main_name: one
@@ -62,14 +63,14 @@ func invalidCoordinationDetail(name string) string {
 // path component that does not itself use the reserved coordination
 // suffix or the reserved .iprange- prefix.
 func liveTransitionTemp(main string) (string, error) {
-	name := filepath.Base(main)
-	if name == "." || name == string(filepath.Separator) {
+	name, ok := pathname.FileName(main)
+	if !ok {
 		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
 	}
 	if invalidCoordinationName(name) {
 		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: invalidCoordinationDetail(name)}
 	}
-	return filepath.Join(filepath.Dir(main), name+transitionTempSuffix), nil
+	return pathname.WithFileName(main, name+transitionTempSuffix), nil
 }
 
 // transitionTempSuffix is the private reset sidecar name suffix (Rust

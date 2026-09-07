@@ -5,11 +5,10 @@
 package live
 
 import (
-	"path/filepath"
 	"runtime"
-	"strings"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 )
 
 // maxBasenameBytes is the portable result bound (Rust
@@ -23,47 +22,13 @@ type LocalBasename struct {
 	bytes    [maxBasenameBytes]byte
 }
 
-// rustFileName computes the final path component the way Rust
-// Path::file_name does through Components: repeated separators
-// collapse, trailing separators are trimmed, "." components are
-// normalized away everywhere, but ".." components are never resolved
-// against earlier components (Rust Components keeps ParentDir as an
-// ordinary component).  The result is the last normal component, or
-// false when the path ends in ".." or has none (Rust
-// Component::ParentDir / RootDir / Prefix / no-component are all
-// mapped to None by file_name).
+// rustFileName returns the final path component the way Rust
+// Path::file_name does; the canonical implementation is the shared
+// pathname package (v4/go/internal/pathname), which mirrors the Rust
+// std::path component state machine and is differentially tested
+// against rustc.
 func rustFileName(path string) (string, bool) {
-	if path == "" {
-		return "", false
-	}
-	// The Windows volume prefix (Rust Component::Prefix) is not a
-	// file-name component.  filepath.VolumeName returns "" on unix,
-	// so this block is a no-op there.
-	body := path
-	if vol := filepath.VolumeName(path); vol != "" {
-		body = path[len(vol):]
-	}
-	separators := "/"
-	if runtime.GOOS == "windows" {
-		separators = `/\`
-	}
-	parts := strings.FieldsFunc(body, func(r rune) bool {
-		return strings.ContainsRune(separators, r)
-	})
-	// Rust normalizes "." components away (parse_single_component
-	// maps b"." to None in body position), so a trailing "." never
-	// becomes the final component.
-	for len(parts) > 0 && parts[len(parts)-1] == "." {
-		parts = parts[:len(parts)-1]
-	}
-	if len(parts) == 0 {
-		return "", false
-	}
-	last := parts[len(parts)-1]
-	if last == ".." {
-		return "", false
-	}
-	return last, true
+	return pathname.FileName(path)
 }
 
 // platformBasenameFromPath copies the platform encoding of the
@@ -116,4 +81,37 @@ func (b LocalBasename) encodingValue() uint16 {
 // LocalBasename::as_bytes).
 func (b LocalBasename) bytesValue() []byte {
 	return b.bytes[:b.length]
+}
+
+// FileName returns the final path component with exact Rust
+// Path::file_name semantics (Rust LocalBasename::from_path and the
+// publication/live_namespace bind sites): the raw path is not
+// normalized, trailing separators and trailing "." components are
+// dropped, mid-path ".." is an ordinary component that is never
+// resolved, a ".."-terminated path has no name, and the Windows
+// volume prefix is not a name.
+func FileName(path string) (string, bool) {
+	return pathname.FileName(path)
+}
+
+// HasFileName reports whether the path has a file-name component the
+// way Rust Path::file_name does (Rust require_publication_parent and
+// require_creatable_parent both gate on file_name().is_none()):
+// empty, ".", "..", separator-only, volume-only, and ".."-terminated
+// paths have no file name; mid-path ".." is an ordinary component.
+func HasFileName(path string) bool {
+	_, ok := pathname.FileName(path)
+	return ok
+}
+
+// FileParent returns the parent path the way Rust Path::parent does
+// on the same component stream as Path::file_name: trailing
+// separators and trailing "." components are dropped first, the
+// final component and its preceding separator run are removed, a
+// remaining all-separator prefix reduces to the root separator, and
+// an empty parent becomes "." (the handler default that mirrors
+// Rust's filter-empty + unwrap_or(".") at require_publication_parent
+// and require_creatable_parent call sites).
+func FileParent(path string) string {
+	return pathname.ParentOrDot(path)
 }

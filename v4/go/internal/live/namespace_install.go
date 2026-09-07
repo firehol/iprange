@@ -14,28 +14,32 @@ package live
 import (
 	"errors"
 	"os"
-	"path/filepath"
 
 	"golang.org/x/sys/unix"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 )
 
 // bindPair binds one retained directory and the two final names of
 // private and canonical, which must share one directory (Rust
-// live_namespace::bind_pair: the parents must be equal, both names
-// must be valid Name components).
+// live_namespace::bind_pair: the raw parents must be equal, both
+// names must be valid Name components).
 func bindPair(private, canonical string) (*Directory, string, string, error) {
-	private = filepath.Clean(private)
-	canonical = filepath.Clean(canonical)
-	if filepath.Dir(private) != filepath.Dir(canonical) {
+	privateParent, privateParentOK := pathname.Parent(private)
+	canonicalParent, canonicalParentOK := pathname.Parent(canonical)
+	if !privateParentOK || !canonicalParentOK || privateParent != canonicalParent {
 		return nil, "", "", &format.Error{Code: format.CodeInvalidArgument, Detail: "live transition names must share one directory"}
 	}
 	dir, name, err := bindPath(private)
 	if err != nil {
 		return nil, "", "", nsMap(err)
 	}
-	canonicalName := filepath.Base(canonical)
+	canonicalName, ok := pathname.FileName(canonical)
+	if !ok {
+		dir.Close()
+		return nil, "", "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
+	}
 	if err := validNameComponent(canonicalName); err != nil {
 		dir.Close()
 		return nil, "", "", nsMap(nsInvalidNameError())

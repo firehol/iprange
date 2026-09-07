@@ -13,7 +13,6 @@ package recovery
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"runtime"
 
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
@@ -416,7 +415,7 @@ func openBasicSource(path string, candidate *RecoveryCandidate, immutable bool, 
 // (Rust BasicSource::open_current: sidecar refused, read-only open,
 // shared lock, the proven-current bind, and the mapped extent).
 func openBasicSourceCurrent(path string, check func() error) (*basicSource, error) {
-	sidecar, err := live.CanonicalSidecarPath(filepath.Clean(path))
+	sidecar, err := live.CanonicalSidecarPath(path)
 	if err != nil {
 		return nil, err
 	}
@@ -436,7 +435,7 @@ func openBasicSourceCurrent(path string, check func() error) (*basicSource, erro
 		file.Close()
 		return nil, err
 	}
-	source := &basicSource{file: file, path: filepath.Clean(path), sidecar: sidecar, hasSidecar: true, identity: identity, lifetimeLocked: true}
+	source := &basicSource{file: file, path: path, sidecar: sidecar, hasSidecar: true, identity: identity, lifetimeLocked: true}
 	meta, err := bindCurrent(source, check)
 	if err != nil {
 		unlockErr := source.release()
@@ -461,7 +460,7 @@ func sidecarPath(path string, immutable bool) (string, bool, error) {
 	if !immutable {
 		return "", false, nil
 	}
-	sidecar, err := live.CanonicalSidecarPath(filepath.Clean(path))
+	sidecar, err := live.CanonicalSidecarPath(path)
 	if err != nil {
 		return "", false, err
 	}
@@ -476,7 +475,7 @@ func openSourceFile(path string, immutable bool) (*os.File, error) {
 	if immutable {
 		flags = os.O_RDONLY
 	}
-	file, err := openSourceFilePlatform(filepath.Clean(path), flags)
+	file, err := openSourceFilePlatform(path, flags)
 	if err != nil {
 		var fe *format.Error
 		if errors.As(err, &fe) {
@@ -490,7 +489,7 @@ func openSourceFile(path string, immutable bool) (*os.File, error) {
 // finishBasicOpen binds and maps one opened basic source (Rust
 // finish_open).
 func finishBasicOpen(file *os.File, path, sidecar string, hasSidecar bool, identity live.FileIdentity, candidate *RecoveryCandidate, check func() error) (*basicSource, error) {
-	source := &basicSource{file: file, path: filepath.Clean(path), sidecar: sidecar, hasSidecar: hasSidecar, identity: identity, lifetimeLocked: true}
+	source := &basicSource{file: file, path: path, sidecar: sidecar, hasSidecar: hasSidecar, identity: identity, lifetimeLocked: true}
 	meta, err := bindCandidate(source, candidate, check)
 	if err != nil {
 		unlockErr := source.release()

@@ -14,12 +14,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/fileio"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/live"
 )
 
 // RegisterPublish installs the current.publish handler family.
@@ -183,15 +183,11 @@ func asPreparationFailure(err error, target **iprangedb.ImmutableFeedPreparation
 // name inside an existing directory before any SDK work runs (Rust
 // publish.rs require_publication_parent).
 func requirePublicationParent(destination string) *rpc.HandlerError {
-	base := filepath.Base(destination)
-	if base == "" || base == "." || base == ".." || base == "/" {
+	if !live.HasFileName(destination) {
 		return rpc.NewHandlerError("invalid_path", "not_started",
 			fmt.Sprintf("publication destination has no file name: %s", destination))
 	}
-	parent := filepath.Dir(destination)
-	if parent == "" {
-		parent = "."
-	}
+	parent := live.FileParent(destination)
 	info, err := os.Stat(parent)
 	if err != nil {
 		if os.IsNotExist(err) {

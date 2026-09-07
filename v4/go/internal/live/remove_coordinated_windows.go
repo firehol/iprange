@@ -4,7 +4,6 @@ package live
 
 import (
 	"os"
-	"path/filepath"
 
 	"github.com/firehol/iprange/v4/go/internal/security"
 )
@@ -14,8 +13,7 @@ import (
 // commitment of the retained handle is captured and the artifact moves
 // to its authenticated inert name before any unlink).
 func removeCoordinated(path string, file *os.File, identity FileIdentity, authority cleanupAuthority) cleanupOutcome {
-	clean := filepath.Clean(path)
-	dir, name, err := bindPath(clean)
+	dir, name, err := bindPath(path)
 	if err != nil {
 		return cleanupOutcomeFailed(gcNamespaceProblem(err))
 	}

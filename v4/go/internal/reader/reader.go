@@ -9,12 +9,12 @@ package reader
 import (
 	"errors"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 	"github.com/firehol/iprange/v4/go/internal/work"
 )
 
@@ -67,7 +67,7 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 	// with the WrongState class, not an IO stat failure. The
 	// under-lock sidecar check inside the mapping open stays
 	// authoritative.
-	if err := sidecarAbsentUnderLock(filepath.Clean(path)); err != nil {
+	if err := sidecarAbsentUnderLock(path); err != nil {
 		return nil, err
 	}
 	m, err := mapping.OpenImmutable(path, sidecarAbsentUnderLock)
@@ -99,7 +99,7 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 		m.Close()
 		return nil, err
 	}
-	if err := sidecarAbsentUnderLock(filepath.Clean(path)); err != nil {
+	if err := sidecarAbsentUnderLock(path); err != nil {
 		m.Close()
 		return nil, err
 	}
@@ -116,8 +116,8 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 // symlink still exists as a namespace entry and therefore refuses the open.
 // A present sidecar is the WrongState class (Rust WrongMode maps to code
 // 11), not a coordination error.
-func sidecarAbsentUnderLock(clean string) error {
-	_, err := os.Lstat(sidecarPath(clean))
+func sidecarAbsentUnderLock(path string) error {
+	_, err := os.Lstat(sidecarPath(path))
 	switch {
 	case err == nil:
 		return &format.Error{Code: format.CodeWrongState, Detail: "external sidecar present; immutable open of a live database is refused"}
@@ -128,20 +128,26 @@ func sidecarAbsentUnderLock(clean string) error {
 	}
 }
 
-// sidecarPath returns the canonical external sidecar component: the accepted
-// main basename plus lowercase ".readers".
-func sidecarPath(clean string) string {
-	return filepath.Join(filepath.Dir(clean), filepath.Base(clean)+format.CoordinationSuffix)
+// sidecarPath returns the canonical external sidecar component: the
+// accepted main file name plus lowercase ".readers", derived exactly
+// like Rust path::canonical_sidecar (Path::with_file_name on the raw
+// path, so mid-path ".." and repeated separators are not resolved).
+// The caller has already validated the main file name (namespaceChecks).
+func sidecarPath(path string) string {
+	// The caller proved the file name exists (namespaceChecks); the
+	// WithFileName pop keeps the raw parent prefix (Rust
+	// with_file_name).
+	name, _ := pathname.FileName(path)
+	return pathname.WithFileName(path, name+format.CoordinationSuffix)
 }
 
 // namespaceChecks applies the section-3 basename rules and the sidecar
 // component-limit rule before opening; the authoritative absence check runs
 // again under the lifetime lock (sidecarAbsentUnderLock).
 func namespaceChecks(path string) error {
-	clean := filepath.Clean(path)
-	base := filepath.Base(clean)
-	if base == "." || base == string(filepath.Separator) {
-		return &format.Error{Code: format.CodeInvalidArgument, Detail: "no basename"}
+	base, ok := pathname.FileName(path)
+	if !ok {
+		return &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
 	}
 	if strings.IndexByte(base, 0) >= 0 {
 		return &format.Error{Code: format.CodeInvalidArgument, Detail: "basename contains NUL"}

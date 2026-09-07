@@ -4,46 +4,30 @@ package publication
 
 import (
 	"os"
-	"strings"
 
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
-// mainComponent returns the final path component of path with Rust
-// Path::file_name semantics over the unix separator: the raw path is
-// not normalized (no Clean), trailing separators are ignored, and a
-// path terminating in ".." has no component.
+// mainComponent returns the final path component of path with exact
+// Rust Path::file_name semantics (the canonical live helper): the
+// raw path is not normalized, trailing separators and trailing "."
+// components are ignored, mid-path ".." is an ordinary component,
+// and a path terminating in ".." has no component.  This is the
+// single authoritative component split for publication destinations
+// (external review round 5 finding: the previous hand-rolled split
+// returned the trailing "." itself, so "archive.iprange/." was
+// rejected while Rust accepts it).
 func mainComponent(path string) (string, bool) {
-	p := trimTrailingSeparators(path)
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		p = p[i+1:]
-	}
-	if p == "" || p == ".." {
-		return "", false
-	}
-	return p, true
+	return live.FileName(path)
 }
 
-// parentOfPath returns the parent directory of path with Rust Path::
-// parent semantics over the unix separator (Rust namespace::parent):
-// paths without a directory component bind the current directory.
+// parentOfPath returns the parent directory of path with exact Rust
+// Path::parent semantics over the unix separator (the canonical live
+// helper; Rust namespace::parent): paths without a directory
+// component bind the current directory.
 func parentOfPath(path string) string {
-	p := trimTrailingSeparators(path)
-	if i := strings.LastIndexByte(p, '/'); i >= 0 {
-		if i == 0 {
-			return "/"
-		}
-		return p[:i]
-	}
-	return "."
-}
-
-func trimTrailingSeparators(path string) string {
-	for len(path) > 1 && path[len(path)-1] == '/' {
-		path = path[:len(path)-1]
-	}
-	return path
+	return live.FileParent(path)
 }
 
 // platformBasenameEncoding is the unix PosixBytes tag (Rust

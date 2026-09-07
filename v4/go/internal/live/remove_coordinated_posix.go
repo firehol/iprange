@@ -4,7 +4,6 @@ package live
 
 import (
 	"os"
-	"path/filepath"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -14,8 +13,7 @@ import (
 // live_cleanup::remove POSIX arm: live_namespace::remove_exact; the
 // file and authority feed only the Windows GC transition).
 func removeCoordinated(path string, _ *os.File, expected FileIdentity, _ cleanupAuthority) cleanupOutcome {
-	clean := filepath.Clean(path)
-	dir, name, err := bindPath(clean)
+	dir, name, err := bindPath(path)
 	if err != nil {
 		return cleanupOutcomeFailed(nsMap(err))
 	}

@@ -9,7 +9,6 @@ package recovery
 
 import (
 	"os"
-	"path/filepath"
 
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
 	"github.com/firehol/iprange/v4/go/internal/format"
@@ -472,8 +471,7 @@ type offlineSource struct {
 // OfflineSource::open: open_rw, identity_any_link, the exclusive
 // lifetime lock, then the path identity re-check).
 func openOfflineSource(path string, check func() error) (*offlineSource, error) {
-	clean := filepath.Clean(path)
-	file, err := openSourceFile(clean, false)
+	file, err := openSourceFile(path, false)
 	if err != nil {
 		return nil, err
 	}
@@ -486,7 +484,7 @@ func openOfflineSource(path string, check func() error) (*offlineSource, error) 
 		file.Close()
 		return nil, err
 	}
-	source := &offlineSource{file: file, path: clean, identity: identity, locked: true}
+	source := &offlineSource{file: file, path: path, identity: identity, locked: true}
 	if err := live.VerifyPathAnyLink(source.path, source.identity); err != nil {
 		unlockErr := source.unlock()
 		file.Close()

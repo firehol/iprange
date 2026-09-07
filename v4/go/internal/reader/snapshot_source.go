@@ -9,8 +9,6 @@ package reader
 // survived the build before the publish rename.
 
 import (
-	"path/filepath"
-
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
@@ -67,7 +65,7 @@ func (r *ImmutableReader) ConfirmUnchanged(path string, check func() error) erro
 	if err := r.m.VerifyIdentity(path); err != nil {
 		return candidateChanged()
 	}
-	if err := sidecarAbsentUnderLock(filepath.Clean(path)); err != nil {
+	if err := sidecarAbsentUnderLock(path); err != nil {
 		return candidateChanged()
 	}
 	// bind_current's cancellation checkpoint between the first path
@@ -95,7 +93,7 @@ func (r *ImmutableReader) ConfirmUnchanged(path string, check func() error) erro
 	if err := r.m.VerifyIdentity(path); err != nil {
 		return candidateChanged()
 	}
-	if err := sidecarAbsentUnderLock(filepath.Clean(path)); err != nil {
+	if err := sidecarAbsentUnderLock(path); err != nil {
 		return candidateChanged()
 	}
 	return nil

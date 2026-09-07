@@ -13,6 +13,7 @@ import (
 	"runtime"
 
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 )
 
 // productVersion is the product-executable version string reported by
@@ -104,7 +105,7 @@ func faultWorkerAvailable() bool {
 	if isFile(filepath.Join(directory, name)) {
 		return true
 	}
-	if filepath.Base(directory) == "deps" {
+	if depsComponent, ok := pathname.FileName(directory); ok && depsComponent == "deps" {
 		return isFile(filepath.Join(filepath.Dir(directory), name))
 	}
 	return false

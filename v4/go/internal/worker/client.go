@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 )
 
 // startLimit bounds the version handshake and the cleanup release
@@ -405,7 +406,7 @@ func workerCandidates() ([]string, error) {
 	}
 	directory := filepath.Dir(current)
 	candidates := []string{filepath.Join(directory, name)}
-	if filepath.Base(directory) == "deps" {
+	if depsComponent, ok := pathname.FileName(directory); ok && depsComponent == "deps" {
 		candidates = append(candidates, filepath.Join(filepath.Dir(directory), name))
 	}
 	if len(candidates) == 2 && candidates[1] == candidates[0] {

@@ -14,12 +14,11 @@ package live
 
 import (
 	"os"
-	"path/filepath"
-	"strings"
 
 	"golang.org/x/sys/windows"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
@@ -52,31 +51,18 @@ func identityOf(f *os.File) (FileIdentity, error) {
 	return identity, nil
 }
 
-// parentOf mirrors Rust Path::parent: a single-component path has the
-// empty parent (whose open reports Missing), "." and ".." have no
-// parent at all.
-func parentOf(clean string) (string, error) {
-	if clean == "." || clean == ".." {
-		return "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no parent directory"}
-	}
-	if !strings.ContainsRune(clean, filepath.Separator) {
-		return "", nil
-	}
-	return filepath.Dir(clean), nil
-}
-
 // bindPath binds the parent directory of path and its final component
-// (Rust live_namespace::bind_path: Path::parent/file_name,
+// on the raw caller-supplied path, exactly like Rust
+// live_namespace::bind_path (Path::parent/file_name,
 // Directory::open, Name::from_component with the Windows component
 // rules).
 func bindPath(path string) (*Directory, string, error) {
-	clean := filepath.Clean(path)
-	parent, err := parentOf(clean)
-	if err != nil {
-		return nil, "", err
+	parent, ok := pathname.Parent(path)
+	if !ok {
+		return nil, "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no parent directory"}
 	}
-	name := filepath.Base(clean)
-	if name == "." || name == string(filepath.Separator) {
+	name, ok := pathname.FileName(path)
+	if !ok {
 		return nil, "", &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no file name"}
 	}
 	dir, err := OpenDirectory(parent)
@@ -117,8 +103,7 @@ func verifyPath(path string, expected FileIdentity) error {
 // caller selects the single-link rule (verify_path) or the any-link
 // rule (verify_path_any_link, the validation source).
 func verifyPathInner(path string, expected FileIdentity, requireSingleLink bool) error {
-	clean := filepath.Clean(path)
-	dir, name, err := bindPath(clean)
+	dir, name, err := bindPath(path)
 	if err != nil {
 		return nsMap(err)
 	}
@@ -144,8 +129,7 @@ func verifyPathInner(path string, expected FileIdentity, requireSingleLink bool)
 // live_namespace::open_rw: bind_path + Directory::open_regular with
 // the single-link and cross-volume rules).
 func openRw(path string) (*os.File, FileIdentity, error) {
-	clean := filepath.Clean(path)
-	dir, name, err := bindPath(clean)
+	dir, name, err := bindPath(path)
 	if err != nil {
 		return nil, FileIdentity{}, nsMap(err)
 	}
@@ -168,11 +152,10 @@ func openRw(path string) (*os.File, FileIdentity, error) {
 // and the identity of the artifact when it was proven and then failed
 // the creator-only proof).
 func createPrivate(path string, authority cleanupAuthority) (createdPrivate, *privateCreationFailure) {
-	clean := filepath.Clean(path)
 	cleanFailure := func(cause error) *privateCreationFailure {
 		return &privateCreationFailure{cause: cause}
 	}
-	dir, name, err := bindPath(clean)
+	dir, name, err := bindPath(path)
 	if err != nil {
 		return createdPrivate{}, cleanFailure(nsMap(err))
 	}
@@ -205,7 +188,7 @@ func createPrivate(path string, authority cleanupAuthority) (createdPrivate, *pr
 		f.Close()
 		return createdPrivate{}, &privateCreationFailure{
 			cause:    liveSecurityError(err),
-			cleanup:  removeCoordinated(clean, f, identity, authority),
+			cleanup:  removeCoordinated(path, f, identity, authority),
 			identity: &identity,
 		}
 	}
@@ -217,8 +200,7 @@ func createPrivate(path string, authority cleanupAuthority) (createdPrivate, *pr
 // live_cleanup::remove windows remove_exact: verify_name,
 // unlink_exact, Directory.sync, require_absent).
 func removeExact(path string, expected FileIdentity) cleanupOutcome {
-	clean := filepath.Clean(path)
-	dir, name, err := bindPath(clean)
+	dir, name, err := bindPath(path)
 	if err != nil {
 		return cleanupOutcomeFailed(nsMap(err))
 	}
@@ -247,10 +229,9 @@ func removeExact(path string, expected FileIdentity) cleanupOutcome {
 // Directory::sync = verify; Windows exposes no directory name-sync
 // primitive).
 func syncParent(path string) error {
-	clean := filepath.Clean(path)
-	parent, err := parentOf(clean)
-	if err != nil {
-		return err
+	parent, ok := pathname.Parent(path)
+	if !ok {
+		return &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no parent directory"}
 	}
 	dir, err := OpenDirectory(parent)
 	if err != nil {
@@ -276,10 +257,9 @@ func publicIdentity(identity FileIdentity) (device uint64, inode uint64) {
 // parent reports the Io(NotFound) class, unlike the namespace helpers
 // that map Missing to NameNotFound).
 func parentIdentity(path string) (FileIdentity, error) {
-	clean := filepath.Clean(path)
-	parent, err := parentOf(clean)
-	if err != nil {
-		return FileIdentity{}, err
+	parent, ok := pathname.Parent(path)
+	if !ok {
+		return FileIdentity{}, &format.Error{Code: format.CodeInvalidArgument, Detail: "database path has no parent directory"}
 	}
 	dir, err := OpenDirectory(parent)
 	if err != nil {
@@ -293,8 +273,7 @@ func parentIdentity(path string) (FileIdentity, error) {
 // regular single-link file, nil when it is absent, and WrongMode
 // otherwise (Rust live_namespace::path_identity).
 func pathIdentity(path string) (*FileIdentity, error) {
-	clean := filepath.Clean(path)
-	dir, name, err := bindPath(clean)
+	dir, name, err := bindPath(path)
 	if err != nil {
 		if nerr, ok := AsNamespaceError(err); ok && nerr.Kind == NamespaceMissing {
 			return nil, nil

@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"path/filepath"
 	"strings"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
@@ -1732,16 +1731,6 @@ func withSourceCloses(report map[string]any, herr *rpc.HandlerError, closeFact a
 
 // requirePublicationParent enforces that the destination has a file
 // name and its parent is an existing directory (Rust
-
-// pathHasFileName mirrors Rust Path::file_name().is_none(): the empty
-// string, ".", "..", and separator-only paths name no file.
-func pathHasFileName(path string) bool {
-	switch filepath.Base(path) {
-	case "", ".", "..", "/":
-		return false
-	}
-	return true
-}
 
 // ---------------------------------------------------------------------------
 // Query handlers.

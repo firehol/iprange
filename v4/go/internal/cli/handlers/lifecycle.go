@@ -19,11 +19,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
+	"github.com/firehol/iprange/v4/go/internal/live"
 )
 
 // ValidateDatabaseCreateParams enforces the strict database.create
@@ -412,14 +412,11 @@ func creationStateName(state iprangedb.CreationState) string {
 // missing or non-directory parent is a product error before any SDK
 // work, so a typo never creates private artifacts next to the target.
 func requireCreateDestinationParent(path string) *rpc.HandlerError {
-	if filepath.Base(path) == "." || filepath.Base(path) == string(filepath.Separator) || path == "" {
+	if !live.HasFileName(path) {
 		return rpc.NewHandlerError("invalid_path", "not_started",
 			fmt.Sprintf("database destination has no file name: %s", path))
 	}
-	parent := filepath.Dir(path)
-	if parent == "" {
-		parent = "."
-	}
+	parent := live.FileParent(path)
 	info, err := os.Stat(parent)
 	switch {
 	case err == nil && info.IsDir():

@@ -3,8 +3,6 @@
 package live
 
 import (
-	"path/filepath"
-
 	"github.com/firehol/iprange/v4/go/internal/random"
 )
 
@@ -13,8 +11,7 @@ import (
 // directory (Rust live_cleanup::unique_attempt_id windows arm: the
 // collision loop over the exact GC names).
 func uniqueAttemptID(path string, ordinal uint32) ([16]byte, error) {
-	clean := filepath.Clean(path)
-	dir, _, err := bindPath(clean)
+	dir, _, err := bindPath(path)
 	if err != nil {
 		return [16]byte{}, gcNamespaceProblem(err)
 	}
@@ -51,8 +48,7 @@ func uniqueAttemptID(path string, ordinal uint32) ([16]byte, error) {
 // exact source unclaimed (Rust live_cleanup::fresh_cleanup_attempt
 // windows arm over publication::gc::fresh_attempt).
 func freshCleanupAttempt(path string, identity FileIdentity, ordinal uint32, kind ArtifactKind, directoryRole DirectoryRole) ([16]byte, error) {
-	clean := filepath.Clean(path)
-	dir, name, err := bindPath(clean)
+	dir, name, err := bindPath(path)
 	if err != nil {
 		return [16]byte{}, gcNamespaceProblem(err)
 	}

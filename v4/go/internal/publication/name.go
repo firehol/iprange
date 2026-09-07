@@ -9,9 +9,8 @@
 package publication
 
 import (
-	"path/filepath"
-
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/live"
 )
 
 // ValidDestinationName reports whether one destination path satisfies
@@ -21,8 +20,14 @@ import (
 // apply it before any filesystem access, exactly like Rust, which
 // binds and validates the destination before opening anything.
 func ValidDestinationName(destination string) bool {
-	clean := filepath.Clean(destination)
-	name := filepath.Base(clean)
+	// The final component uses exact Rust Path::file_name semantics
+	// (live.FileName): trailing separators and trailing "." are
+	// normalized away, mid-path ".." is ordinary, ".."-terminated and
+	// volume-only paths have no name.
+	name, ok := live.FileName(destination)
+	if !ok {
+		return false
+	}
 	if invalidMainName(name) {
 		return false
 	}
