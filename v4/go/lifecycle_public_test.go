@@ -9,11 +9,29 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"unicode/utf16"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 )
+
+// platformBasenameWant returns the machine-stored platform bytes and
+// encoding tag for one ASCII name (Rust LocalBasename::from_path
+// parity): raw bytes/encoding 1 on POSIX, UTF-16LE units/encoding 2
+// on Windows.
+func platformBasenameWant(name string) (string, uint16) {
+	if runtime.GOOS == "windows" {
+		units := utf16.Encode([]rune(name))
+		buf := make([]byte, 0, len(units)*2)
+		for _, unit := range units {
+			buf = append(buf, byte(unit), byte(unit>>8))
+		}
+		return string(buf), 2
+	}
+	return name, 1
+}
 
 // lifecycleCode extracts one error's own class: the exported Error
 // type when it is the outermost type (the boundary authority for the
@@ -76,11 +94,12 @@ func TestPublicCreateLiveAndInitializeRoundTrip(t *testing.T) {
 	if created.DirectoryIdentity.Bytes == [32]byte{} || created.MainIdentity.Bytes == [32]byte{} || created.SidecarIdentity.Bytes == [32]byte{} {
 		t.Fatal("identity bytes empty")
 	}
-	if got := created.MainBasename.Bytes(); string(got) != "db.iprdb" {
-		t.Fatalf("basename = %q, want db.iprdb", got)
+	wantBytes, wantEncoding := platformBasenameWant("db.iprdb")
+	if got := created.MainBasename.Bytes(); string(got) != wantBytes {
+		t.Fatalf("basename = % q, want % q", got, wantBytes)
 	}
-	if created.MainBasename.Encoding() != 1 {
-		t.Fatalf("basename encoding = %d, want 1", created.MainBasename.Encoding())
+	if created.MainBasename.Encoding() != wantEncoding {
+		t.Fatalf("basename encoding = %d, want %d", created.MainBasename.Encoding(), wantEncoding)
 	}
 	if created.ReaderCapacity != 2 {
 		t.Fatalf("capacity = %d, want 2", created.ReaderCapacity)
@@ -135,8 +154,9 @@ func TestPublicCreateLiveAndInitializeRoundTrip(t *testing.T) {
 	if transitioned.MainIdentity == nil || transitioned.DirectoryIdentity == nil {
 		t.Fatal("main or directory identity missing")
 	}
-	if transitioned.MainBasename.Bytes() == nil || string(transitioned.MainBasename.Bytes()) != "db.iprdb" {
-		t.Fatalf("main basename = %q, want db.iprdb", transitioned.MainBasename.Bytes())
+	wantBytes, _ = platformBasenameWant("db.iprdb")
+	if transitioned.MainBasename.Bytes() == nil || string(transitioned.MainBasename.Bytes()) != wantBytes {
+		t.Fatalf("main basename = % q, want % q", transitioned.MainBasename.Bytes(), wantBytes)
 	}
 	if transitioned.ResiduePossible || transitioned.Cause != nil {
 		t.Fatalf("unexpected transition residue: %v %v", transitioned.ResiduePossible, transitioned.Cause)
