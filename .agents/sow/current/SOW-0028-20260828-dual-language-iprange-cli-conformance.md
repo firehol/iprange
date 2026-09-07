@@ -340,7 +340,17 @@ identities there are Go `83134c1d…` / worker `1b12053d…` and Rust
 `40816ee2…` / worker `9fd36146…`, Windows Go `b7603d15…` / Rust
 `33b02d82…`, every battery gate green, and the closure record and
 the role-round delta verdicts are recorded in the "Wave 15"
-section below.
+section below.  The wave-15 round-4 delta at `c6145590` repaired
+the Go `main_basename` invalid-UTF-8 round-trip (the create and
+transition results now render encoding-1 bytes with the Rust
+maximal-subpart rule and encoding-2 units lossily, and the resolve
+comparison uses the same rendered text, so Go accepts its own
+result for POSIX paths with invalid-UTF-8 bytes; the SDK exposes
+the authoritative `BasenameFromPath` constructor); final Linux
+identities there are Go `90cadcf3…` / worker `8ae5e0ba…` and Rust
+`40816ee2…` / worker `9fd36146…` (unchanged), Windows Go
+`7bd65e6a…` / Rust `33b02d82…` (unchanged), every battery gate
+green again, and Windows housekeeping 2/2 at the same revision.
 
 
 ## Requirements
@@ -7142,3 +7152,71 @@ product `83134c1d…`, Go worker `1b12053d…`, Rust product
 `evidence/README.md`, and `resource-record.md` are regenerated in
 the same commit so the record and the identities cannot drift
 again.
+
+#### Role-round delta round 4 (wave 15) — the Go `main_basename` invalid-UTF-8 round-trip at `c6145590`
+
+At the round-3 final revision `141d03f4`, the security role
+returned FAIL with one P1 (the only non-PASS verdict of the round;
+tester, parity, and performance returned PASS):
+
+1. **P1 — Go `main_basename` could not round-trip its own result
+   for POSIX paths with invalid-UTF-8 bytes (security).**  The
+   create/transition/commit-cleanup results rendered encoding-1
+   basenames with `string(basename.Bytes())` (per-byte U+FFFD via
+   rustjson), while `decodeMainBasename` compared the wire against
+   the raw `filepath.Base(path)` — so Go rejected its own result
+   for valid POSIX names containing invalid-UTF-8 multi-byte runs
+   (e.g. bytes E2 82) and the wire text diverged from Rust (one
+   U+FFFD per maximal subpart).  References:
+   `v4/go/internal/cli/handlers/lifecycle_facts.go`
+   `LocalBasenameBytes`; `v4/go/internal/cli/handlers/
+   lifecycle_live.go` `decodeMainBasename`; Rust parity at
+   `v4/rust/iprange-cli/src/rpc/handlers/lifecycle.rs`
+   `local_basename_text` and `lifecycle_live.rs`
+   `decode_main_basename`.
+
+Repair at `c6145590`:
+
+- SDK authority: the exported `BasenameFromPath(path)`
+  (`v4/go/lifecycle_public.go`) delegates to the canonical
+  internal constructor `live.LocalBasenameFromPath`, which carries
+  POSIX raw bytes under encoding 1 and Windows UTF-16LE units
+  under encoding 2 (`Utf16LEBytes`); the CLI adapter's unsafe
+  fixed-layout fabrication was removed and its `pathBasename`
+  now calls the exported constructor.
+- Wire render: `LocalBasenameBytes` is encoding-aware — encoding 2
+  decodes the UTF-16LE units lossily (`utf16.Decode` = Rust
+  `from_utf16_lossy`) and encoding 1 decodes with the exact
+  maximal-subpart rule already shipped at `7d4e31bf`
+  (`utf8Lossy` = Rust `from_utf8_lossy`).
+- Decode: `decodeMainBasename` compares the wire against the same
+  rendered text and returns the path-derived platform basename, so
+  every path — including invalid-UTF-8 POSIX names — round-trips
+  through its own result.
+- Parity ledger: the previously-removed `LocalBasename::from_path`
+  row flipped to `present` with the Go `BasenameFromPath` symbol,
+  so the new public surface is recorded in the same commit.
+
+New detecting tests: `TestMainBasenameRoundTripInvalidUtf8`
+(path bytes E2 82 -> wire text `x` plus one U+FFFD, decode round-trip,
+mismatch rejection), `TestUtf16leTextDecode` (E9 00, surrogate
+pair, lone high surrogate), and constructor tests for POSIX raw
+bytes (`basename_test.go`) and Windows UTF-16LE units
+(`basename_windows_test.go`).
+
+Re-qualification at `c6145590`: Go suite 22/22 packages PASS
+(including the parity gate with the new surface); full battery
+PASS at the final staged identities (matrices 38/38 single and
+14+24 mixed; crash 16/16 both directions with the /bin/false
+negative failing as designed; resource 8/8; kind gate PASS on the
+regenerated evidence; golden 55; sensitivity 14; harness
+self-tests PASS); Windows housekeeping 2/2 on the authorized
+Windows validation host (Go `7bd65e6a…`, Rust `33b02d82…`
+unchanged, native Python 3.14.6, clean tree at `c6145590`, with
+the round-4 build provenance recorded).  Final Linux identities at
+`c6145590`: Go product `90cadcf3…`, Go worker `8ae5e0ba…`, Rust
+product `40816ee2…` (unchanged), Rust worker `9fd36146…`
+(unchanged), fixture `6c2c56b9…` (unchanged);
+`v4/cli/evidence/*`, `evidence/README.md`, and
+`resource-record.md` are regenerated in the same commit so the
+record and the identities cannot drift again.
