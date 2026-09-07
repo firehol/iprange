@@ -1,5 +1,46 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
+The current evidence is regenerated at product revision `2c5d668b`
+(the round-6 @-directory expansion repair).  The re-anchored
+whole-milestone review found the last remaining lexical
+normalization of a caller-supplied path: `input.go` built each
+`@`-directory entry path with `filepath.Join`, which lexically
+cleaned a symlinked intermediate plus `".."` inside the caller's
+referenced spelling, so Go refused the kernel-resolved directory (or
+ingested a different one) while Rust's `read_dir entry.path()` keeps
+the raw spelling.  The repair at `2c5d668b` builds the entry path by
+raw concatenation and pins the class with a POSIX-gated `@`-expansion
+regression test; a live dual-product probe proves both products
+publish through `@<dir>/<symlink>/../<realdir>` with the same
+`published` outcome.
+
+The Go suite is green on the qualified go1.26.4 and on the host
+go1.27.0 (23/23 packages on each), and natively on the Windows host
+(go1.26.5, 23/23 packages); the Rust workspace suites are green on
+Linux (rustc 1.97.1) and natively on Windows (without source
+change).  The full battery PASSes at the final staged identities:
+matrices 38/38 single and 14 PASS + 24 legitimate skips per mixed
+direction; crash 16/16 both directions; the negative control 0/16
+(8 real-producer scenarios failing at the substituted-consumer
+stage and 8 substituted-producer scenarios failing during setup);
+resource proofs 8/8; kind-coverage gate PASS with all 46 self-test
+controls; golden corpus 55; sensitivity gate 14.  Windows
+housekeeping re-qualified at `2c5d668b` on the authorized Windows
+validation host: 2/2 PASS with native Windows Python 3.14.6
+(provenance: clean tree, go1.26.5 windows/amd64, rustc 1.97.1).
+
+Linux reports at `2c5d668b` record the product identities
+`07c4e314…` (rust, unchanged since the round-4 qualified build) and
+`78cbd4c3…` (go, rebuilt with `-buildvcs=false`), workers
+`77b6d086…` (rust) / `114a7018…` (go), fixture `df3623a6…` (all
+staged in `.local/shared/binaries/SHASUMS.txt` with sha256sum -c
+OK).  The Windows housekeeping report records the Windows-host
+products `c960a64f…` (rust) and `3b967437…` (go); the Windows Go
+worker is `8338b58d…`.
+
+---
+
+
 The current evidence is regenerated at product revision `03b7d4ab`
 (the round-6 verbatim-UNC repair).  The re-anchored round-6
 performance review found a P1 in the Windows pathname port: the
@@ -13,9 +54,9 @@ has no file name or parent.  The repair at `03b7d4ab` mirrors Rust
 share) and the verbatim push rebuild (the share-less `\\?\\UNC\\`
 prefix doubles the separator), and extends the Windows golden corpus
 with the share-terminal, prefix-terminal, trailing-separator, and
-plain-UNC share shapes pinned against a native Windows rustc 1.97.1
-probe (the corpus previously contained no share-terminal shape, so no
-committed gate could detect the class).
+plain-UNC share shapes (12 corpus rows) pinned against a native
+Windows rustc 1.97.1 probe (the corpus previously contained no
+share-terminal shape, so no committed gate could detect the class).
 
 The Go suite is green on the qualified go1.26.4 and on the host
 go1.27.0 (23/23 packages on each), and natively on the Windows host
