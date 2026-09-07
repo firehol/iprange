@@ -309,7 +309,7 @@ is platform-aware, and the snapshot wire test pins the documented
 per-platform housekeeping state), reported the validation worker as
 unavailable instead of a raw file-not-found I/O error when no
 matching worker executable exists, and re-qualified Windows
-housekeeping 2/2 at the final wave-15 revision `e21784ce` (Go
+housekeeping 2/2 at the then-final wave-15 revision `e21784ce` (Go
 `eec23536…`, Rust `dd2d0668…`).  The wave-15 role-round delta
 repaired four verified findings (encoding-aware artifact-basename
 rendering, Go worker-availability fallback parity, the pinned
@@ -6938,7 +6938,7 @@ CHANGES; every verified finding is repaired in commit `2ddeb751`:
   14 + 24; crash positive 16/16 both directions; /bin/false
   negative control failed as designed (rc 1); resource proofs
   8/8; harness self-tests PASS (resource, kind-gate controls
-  1-44, sensitivity 14); kind gate PASS on the regenerated
+  1-45, sensitivity 14); kind gate PASS on the regenerated
   evidence; golden 55 exchanges / 38 case files.
 - Windows housekeeping on the authorized validation host at
   `e21784ce` (native Windows Python 3.14.6): 2/2 PASS; report
@@ -7220,3 +7220,49 @@ product `40816ee2…` (unchanged), Rust worker `9fd36146…`
 `v4/cli/evidence/*`, `evidence/README.md`, and
 `resource-record.md` are regenerated in the same commit so the
 record and the identities cannot drift again.
+
+
+#### Role-round delta rounds 5-6 (wave 15) — records and spec corrections at `885f3e10`
+
+The round-4 re-anchored delta at HEAD `4cf0ff52` (product fix
+`c6145590` plus the regenerated evidence, README, and
+resource-record identities) drew six PASS and one FAIL; the
+portability role returned a verified P2 records defect: the
+evidence README head still named the superseded wave-15a revision
+`e21784ce` as the final wave-15 revision, while the identity
+paragraph, the Windows report provenance, and `resource-record.md`
+already recorded the round-4 source.  Repair at `210ce830`
+(records-only, three files): the README head and the Windows
+sentence now name the round-4 product source `c6145590` (HEAD
+`4cf0ff52`); the `utf8Lossy` table gained the overlong `E0 9F 80`
+and out-of-range `F4 BD C5` rows (measured from Rust
+`from_utf8_lossy`, three U+FFFD each) that the round-3 record
+claimed but had not pinned; and the JSON-RPC spec now states the
+encoding-1 maximal-subpart rule and the encoding-2 lossy
+invalid-unit rule normatively.
+
+The round-5 re-anchored delta at HEAD `210ce830` drew five PASS
+and two FAIL (security and operations) on one verified P2 spec
+defect: the new normative sentence defined "every maximal run of
+bytes that is not valid UTF-8 renders as exactly one U+FFFD",
+which literally describes the per-run replacement of the round-3
+product bug and contradicts the implemented and table-pinned
+maximal-subpart counts for structurally-complete-but-invalid
+classes (C0 AF -> two U+FFFD; E0 9F 80 and F4 BD C5 -> three;
+F4 90 80 80 -> four).  Repair at `885f3e10` (records-only, one
+file): the spec now defines the rule exactly — every ill-formed
+subsequence is replaced by one U+FFFD covering its maximal subpart
+(the longest prefix of the remaining bytes that could begin a
+well-formed UTF-8 sequence), the bytes after that subpart re-scan
+from the next byte, exactly Rust `String::from_utf8_lossy`
+semantics.
+
+The round-6 re-anchored delta at HEAD `885f3e10` drew seven PASS:
+tester, operations, parity, portability, security, performance,
+and the glm-5.3 whole-milestone validator all returned PASS with
+no P0-P2 findings.  Standing non-blocking P3 notes carried across
+the rounds (spec parenthetical corners, the `runtime.GOOS` branch
+style in `live/basename.go`, and the SOW kind-gate control count,
+corrected here to 1-45) do not block the gate.  The wave-15
+closure record below therefore reflects the final identities at
+`c6145590` (product source) with records at `885f3e10`.
