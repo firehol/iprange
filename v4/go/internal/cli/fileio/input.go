@@ -811,12 +811,19 @@ func expandPaths(paths []string, expandAtPaths bool, maxExpandedPaths, maxLineBy
 			}
 			var files []string
 			for _, entry := range entries {
-				// Entry paths are built by raw concatenation exactly like
-				// Rust read_dir entry.path(): filepath.Join would lexically
-				// clean a symlinked intermediate plus ".." in the caller's
-				// referenced spelling and refuse or ingest a different
-				// directory.
-				entryPath := referenced + string(os.PathSeparator) + entry.Name()
+				// Entry paths are built exactly like Rust read_dir
+				// entry.path() (PathBuf push): a separator is inserted
+				// only when the referenced spelling does not already end
+				// with one, so "@<dir>/" expands to "<dir>/name", never
+				// "<dir>//name".  Raw concatenation is kept: filepath.Join
+				// would lexically clean a symlinked intermediate plus ".."
+				// in the caller's referenced spelling and refuse or ingest
+				// a different directory.
+				sep := ""
+				if n := len(referenced); n > 0 && !os.IsPathSeparator(referenced[n-1]) {
+					sep = string(os.PathSeparator)
+				}
+				entryPath := referenced + sep + entry.Name()
 				entryInfo, statErr := os.Stat(entryPath)
 				if statErr == nil && entryInfo.Mode().IsRegular() {
 					files = append(files, entryPath)

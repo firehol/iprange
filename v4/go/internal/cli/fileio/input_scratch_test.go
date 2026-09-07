@@ -230,6 +230,27 @@ func TestScratchAtExpansionRawPathThroughSymlinkParent(t *testing.T) {
 	}
 }
 
+// TestScratchAtExpansionTrailingSeparator pins the @-directory
+// expansion separator rule: entry paths are built like Rust read_dir
+// entry.path() (PathBuf push), which inserts a separator only when
+// the referenced spelling does not already end with one, so a
+// trailing-separator "@<dir>/" spelling never doubles the separator.
+func TestScratchAtExpansionTrailingSeparator(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "01.txt"), []byte("1.2.3.4\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sep := string(os.PathSeparator)
+	plain, err := expandPaths([]string{"@" + root}, true, 2, 1_048_576)
+	if err != nil || len(plain) != 1 || plain[0] != root+sep+"01.txt" {
+		t.Fatalf("plain expansion = %v (err %v), want [%s]", plain, err, root+sep+"01.txt")
+	}
+	trailing, err := expandPaths([]string{"@" + root + sep}, true, 2, 1_048_576)
+	if err != nil || len(trailing) != 1 || trailing[0] != root+sep+"01.txt" {
+		t.Fatalf("trailing-separator expansion = %v (err %v), want [%s]", trailing, err, root+sep+"01.txt")
+	}
+}
+
 func TestScratchEndToEndV6(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "in.txt")
 	_ = os.WriteFile(path, []byte("# comment\n2001:db8::10\n2001:db8::1\n"), 0o644)
