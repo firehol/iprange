@@ -65,8 +65,9 @@ Facts:
 
 - The user decision 2 (2026-08-30) bounded the continuation to
   direction items 1-6 and required returning to the user for the
-  measured-performance decision; that decision has NOT been recorded yet
-  (SOW-0027 stays in-progress).
+  measured-performance decision; that decision is recorded in
+  SOW-0027's closure (the performance requirement was NOT waived and
+  this SOW owns the residual).
 - Per-width probe specialization (the original cheapest-fix estimate
   of the 2026-08-28 review) is implemented in SOW-0027 and measured
   NEUTRAL on the read bench (the reader uses its own direct search

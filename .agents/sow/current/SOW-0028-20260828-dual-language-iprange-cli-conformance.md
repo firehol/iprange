@@ -9080,7 +9080,8 @@ path-valued fields into committed evidence without the same guard
 (the other harnesses record only the repository-relative command
 spellings already audited).  Sensitive-data gate: clean.  Artifact
 gate: AGENTS.md unchanged; runtime project skills unchanged; specs
-unchanged; end-user docs unchanged; the commit-subject history
+unchanged; end-user docs unchanged (the round-16 README staging
+correction is recorded in the round-16.4 note); the commit-subject history
 rewrite item remains open pending user approval.
 
 #### Wave 16 follow-up round 16 (2026-09-07) — the round-15 role-round FAIL repair: shared command/evidence sanitization and pinned self-test scratch
@@ -9118,7 +9119,7 @@ makes the sanitizer genuinely cwd-invariant:
    back to a neutral platform root (`/tmp` on POSIX, drive-root
    `\Temp` on Windows, matching the documented authorized scratch
    convention).  The complete sweep of `tempfile` scratch uses in
-   `v4/cli/*.py` pins all nine scratch-create sites: the 
+   `v4/cli/*.py` pins all nine scratch-create sites: the
    removal self-tests, the three resource self-test roots, run.py's
    default per-case work directory, run.py's `_self_test`,
    `sensitivity_gate.py`'s per-mode work directory, and
@@ -9140,7 +9141,10 @@ makes the sanitizer genuinely cwd-invariant:
 Re-qualification (binaries byte-identical, SHASUMS 8/8 unchanged; no
 product source touched): Windows-housekeeping `--self-test` PASSes from
 the checkout root and a checkout subdirectory on Linux and natively on
-the Windows host; resource `--self-test` PASSes; the full battery
+the Windows host; resource `--self-test` PASSes on Linux (its
+bounded-I/O controls are POSIX-only: they spawn /bin/sh and use
+selectors pipes, so the native Windows surface is covered by the
+Windows-housekeeping qualification instead); the full battery
 (matrices 38/38 and 14+24 per direction, crash positive and /bin/false
 negative, resource 8/8, kind gate controls 1-45, sensitivity 14,
 golden 55) is green; the regenerated reports' `command` arrays are
@@ -9157,8 +9161,9 @@ paths in any evidence; the structural scan runs before every report
 write).  Artifact gate: AGENTS.md unchanged; runtime project skills
 unchanged (project-final-review's policy on later-commit invalidation
 is what drives the role re-anchor below); specs unchanged; end-user
-docs unchanged (harness CLI behavior is additive refusal of
-policy-violating staging); evidence unchanged.  Out-of-scope engine
+docs unchanged until round-16.4 (the README qualification commands
+needed staging-outside-the-profile corrections once the refusals
+landed, recorded there); evidence unchanged.  Out-of-scope engine
 findings re-listed by the external control remain forwarded for the
 user's scope decision: Go Windows name limits count UTF-8 bytes not
 UTF-16 units (`v4/go/internal/publication/name.go`,
@@ -9195,7 +9200,7 @@ spellings.  The security role found verbatim/device-path, drive-
 relative, 8.3, and `%VAR%` spellings bypassed both the staging guard
 and the write-time scan (`\\?\C:\Users\...`, `\\.\C:\...`,
 `\??\C:\...`, `C:Users\...`, `%USERPROFILE%\...`).  The portability
-role found the POSIX doubled-separator spelling `//home//costa/...`
+role found the POSIX doubled-separator spelling `//home//alice/...`
 bypassed all three defenses (posixpath preserves `//` as a distinct
 root; the kernel resolves it as `/home`).  The operations role found
 a gate/record mismatch: a symlink or junction staged under the
@@ -9227,13 +9232,18 @@ Repair, in the shared module (one authoritative implementation):
    Linux (checkout root and subdirectory) and natively on the Windows
    host.
 
-Short-name (8.3) resolution is intentionally not implemented: NTFS
-short-name generation is disabled by default on modern Windows, short
-names cannot be resolved from pure Python portably, and every
-documented staging path is long-form; the guard and scan cover the
-documented input surface.  A drive-relative spelling embedded in a
-report body (not as an input) is anchored through `abspath`, which
-resolves against the current directory on that drive at run time.
+Short-name (8.3) resolution: the input guard's `under_profile`
+comparison includes `os.path.realpath`, and native Windows
+`os.path.realpath` resolves existing 8.3 short names, so a staged
+input spelled with a short name is refused with the long-form
+profile comparison.  The write-time structural scan remains a
+string-only lexical check (it cannot stat every report field) and is
+the documented 8.3 residual; NTFS short-name generation is disabled
+by default on modern Windows and the documented staging surface is
+long-form.  A drive-relative spelling embedded in a report body (not
+as an input) matches the profile's own drive-relative comparison
+form (`C:Users\alice`), so detection does not depend on the
+per-drive current directory.
 
 Re-qualification: the structural scan over every committed evidence
 file returns clean (no false positives on the checkout-relative or
@@ -9262,7 +9272,7 @@ scan green for a profile-resolving spelling.  Repair, in
 `v4/cli/command_sanitize.py`: `_matches_profile` now compares every
 candidate against the profile's comparison forms — the absolute form
 and, on Windows, the profile's own drive-relative form
-(`C:Users\costa`), so a drive-relative candidate matches without any
+(`C:Users\alice`), so a drive-relative candidate matches without any
 process-CWD dependency.  Validation: the Windows-housekeeping P2-7
 drive-relative row PASSes natively on the Windows host from the
 checkout CWD and from the authorized scratch CWD (the pin is
@@ -9271,3 +9281,69 @@ cwd-invariance requirement); all other pins carry; the structural
 scan over the complete committed evidence tree returns clean;
 SHASUMS 8/8 unchanged (no product source touched).  Sensitive-data
 gate: clean.  Artifact gate: unchanged.
+
+#### Wave 16 follow-up round 16.4 (2026-09-08) — astra turn-10 NEEDS CHANGES repairs
+
+The external whole-milestone control (same session, turn 10) reviewed
+`c64fe9fc` and returned NEEDS CHANGES with four in-scope P2 findings,
+all verified and repaired in this wave:
+
+1. **P2 — committed personal-path spellings in the SOW records.**
+   The round-16.2/16.3 records used the operator's real account name
+   in spelling examples (doubled-separator and drive-relative
+   forms of the profile path).
+   Redacted to neutral placeholders (`alice`); the technical pattern
+   description is unchanged.  The records' earlier clean
+   sensitive-data claims are corrected to note this retrofit.
+2. **P2 — the complete-report scan missed mid-string occurrences,
+   dictionary keys, and the `run.py --cases` input.**  A build
+   command or an equals-joined option value embedding the profile
+   path mid-string (e.g. `--cases=/home/alice/x`, `cd /home/alice/x
+   && make`) passed the whole-value prefix scan, and dictionary keys
+   were never visited.  The scan now also tests the
+   separator-terminated profile containment (sibling names such as
+   `/home/alice-notes` cannot false-positive) and `endswith(profile)`
+   spellings, visits dictionary keys, and `run.py --cases` is refused
+   up front when it differs from the in-tree default.  P2-7 pins:
+   mid-string and dictionary-key rows (both platforms).
+3. **P2 — the verbatim-UNC and native-NT prefix repairs were
+   wrong/incomplete.**  `\\?\UNC\server\share` normalized to a
+   single-leading-backslash path, losing the UNC root, and the
+   one-leading-backslash native NT prefix `\??\` was missing from
+   the strip table.  The UNC form now restores the ordinary
+   `\\server\share` root and `\??\` is stripped; P2-7 pins the
+   neutral verbatim-UNC path (must not trip) and the native-NT
+   profile spelling (must trip).
+4. **P2 — the new staging refusals rejected the documented
+   qualification commands.**  `v4/cli/README.md` instructed selecting
+   products and the fixture tool from the checkout
+   (`$PWD/v4/rust/target/release/...`), which a home-directory
+   checkout places under the operator's profile; the refusals stop
+   those commands before they start.  The README now documents
+   staging products, version-matched workers, and the fixture tool
+   outside the profile for both the matrix and crash qualification
+   commands, and this wave's record corrects the earlier
+   "end-user docs unchanged" claims.
+
+Also corrected in this wave (astra P3s): the Windows path-handling
+rationale in the SOW (native `abspath` consults the per-drive current
+directory; native `realpath` resolves existing 8.3 short names in the
+input guard, while the write-time scan remains a string-only lexical
+check by design); `check_kind_coverage.py`'s stale "records
+`sys.argv`" docstring (the runner records the sanitized command); a
+trailing-whitespace defect in this SOW; and the stale SOW-0030
+status claim that SOW-0027 remained in progress.
+
+Validation: Windows-housekeeping `--self-test` PASSes on Linux
+(checkout root and a subdirectory) with the new pins (mid-string,
+dictionary-key, native-NT, verbatim-UNC neutral) and PASSes natively
+on the Windows host from the checkout CWD and the authorized scratch
+CWD; the structural scan over the complete committed evidence tree
+returns clean with the containment rules (no false positives on
+sibling spellings or checkout-relative records); the full battery is
+green with regenerated report command arrays byte-identical; product
+binaries byte-identical (SHASUMS 8/8; the README and SOW-0030 are
+harness/records files only).  Sensitive-data gate: the committed
+records now contain no operator-name spelling (grep-clean).  Artifact
+gate: end-user docs (README) updated in this wave; AGENTS.md, specs,
+and runtime project skills unchanged.

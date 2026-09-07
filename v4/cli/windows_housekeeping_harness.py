@@ -1863,6 +1863,46 @@ def _self_test():
                     "P2-7 drive-relative profile spelling not detected")
             else:
                 print("[P2-7] drive-relative profile spelling detected")
+            # Verbatim-UNC normalization: ``\\?\\UNC\\server
+            # \\share`` must normalize to the ordinary
+            # ``\\server\\share`` root, which is outside the
+            # profile and must not trip the scan.
+            raw_unc = "\\?\\UNC\\server\\share"
+            if personal_path_in_report({"work_dir": raw_unc}) is not None:
+                problems.append(
+                    "P2-7 verbatim-UNC prefix normalization tripped "
+                    "on a neutral UNC path")
+            else:
+                print("[P2-7] verbatim-UNC neutral path passed")
+            # The native NT prefix with one leading backslash.
+            ntns_report = dict(clean_report,
+                               work_dir=os.path.join(
+                                   "\\??\\" + profile_abs,
+                                   "scratch", "x"))
+            if personal_path_in_report(ntns_report) is None:
+                problems.append(
+                    "P2-7 native-NT-prefix profile spelling not "
+                    "detected")
+            else:
+                print("[P2-7] native-NT-prefix profile spelling "
+                      "detected")
+
+    # Mid-string occurrences and dictionary keys must trip the scan
+    # (build commands, equals-joined option values, and key fields).
+    embedded = dict(clean_report,
+                    work_dir=os.path.join("share", "x"),
+                    command=["--cases=" + os.path.expanduser("~")
+                             + "/corpus"])
+    if personal_path_in_report(embedded) is None:
+        problems.append("P2-7 mid-string profile spelling not detected")
+    else:
+        print("[P2-7] mid-string profile spelling detected")
+    if personal_path_in_report(
+            {os.path.expanduser("~"): "value"}) is None:
+        problems.append("P2-7 dictionary-key profile spelling not "
+                        "detected")
+    else:
+        print("[P2-7] dictionary-key profile spelling detected")
 
     # A symlink whose realpath lands under the profile must be
     # refused by under_profile even when the link's own spelling is

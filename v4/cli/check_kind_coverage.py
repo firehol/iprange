@@ -468,9 +468,10 @@ def _load_report(path, problems):
 def _command_argv(report):
     """Return the report ``command`` argv as a list, or None.
 
-    The runner records ``sys.argv`` for every matrix and crash
-    report, so the replayed invocation is part of the evidence: a
-    forger must make the recorded command agree with the report.
+    The runner records the sanitized command (check_kind_coverage and
+    run.py share the command_sanitize module) for every matrix and
+    crash report, so the replayed invocation is part of the evidence:
+    a forger must make the recorded command agree with the report.
     Both list argv (the runner output) and a string command
     (whitespace separated) are accepted.
     """

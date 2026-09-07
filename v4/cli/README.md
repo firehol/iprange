@@ -50,9 +50,13 @@ the worker process when one is installed beside the product binary).
 independent scalar-interval oracle:
 
 ```bash
-RUST_IPRANGE=$PWD/v4/rust/target/release/iprange
-GO_IPRANGE=/tmp/iprange-go
-FIXTURE_TOOL=$PWD/v4/rust/target/release/examples/v4-fixture
+# Durable-artifact policy: committed evidence must never carry the
+# operator's home directory, and the checkout normally lives under it.
+# Stage the products (and their version-matched iprange-v4-worker
+# siblings) and the fixture tool outside the profile before running:
+RUST_IPRANGE=/tmp/qualsvc/bin/rust/iprange
+GO_IPRANGE=/tmp/qualsvc/bin/go/iprange
+FIXTURE_TOOL=/tmp/qualsvc/bin/rust/v4-fixture
 nice python3 v4/cli/run.py --matrix rust --rust "$RUST_IPRANGE" \
   --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w
 nice python3 v4/cli/run.py --matrix go --go "$GO_IPRANGE" \
@@ -266,9 +270,11 @@ table:
   Windows validation host).
 
 ```bash
-RUST_IPRANGE=$PWD/v4/rust/target/release/iprange
-GO_IPRANGE=/tmp/iprange-go
-FIXTURE_TOOL=$PWD/v4/rust/target/release/examples/v4-fixture
+# Products and fixture staged outside the profile (same policy as the
+# run.py matrix commands above).
+RUST_IPRANGE=/tmp/qualsvc/bin/rust/iprange
+GO_IPRANGE=/tmp/qualsvc/bin/go/iprange
+FIXTURE_TOOL=/tmp/qualsvc/bin/rust/v4-fixture
 nice python3 v4/cli/crash_harness.py --producer "$RUST_IPRANGE" --consumer "$GO_IPRANGE" \
   --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w-crash --json-report /tmp/crash-report.json
 nice python3 v4/cli/crash_harness.py --producer "$GO_IPRANGE" --consumer "$RUST_IPRANGE" \

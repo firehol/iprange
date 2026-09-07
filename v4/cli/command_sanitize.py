@@ -169,11 +169,18 @@ def _expand_env_vars(value):
 # ``\\?\\UNC\`` rewrites a verbatim UNC path back to the ordinary
 # ``\\server\share`` form; the other prefixes are stripped away.
 _BS = chr(92)
-_DEVICE_UNC = _BS + _BS + "?" + _BS + "UNC"
+# ``\\?\\UNC\\`` (with its trailing separator): the verbatim form
+# of a UNC path; stripping it and re-adding the double-separator
+# prefix restores the ordinary ``\\server\\share`` root.
+_DEVICE_UNC = _BS + _BS + "?" + _BS + "UNC" + _BS
+# Device/verbatim prefixes stripped before comparison: ``\\?\\``,
+# ``\\.\\``, the W32 namespace ``\\??\\`` (two and one leading
+# backslash spellings), and the native NT prefix ``\??\\``.
 _DEVICE_PREFIXES = (_BS + _BS + "?" + _BS,
                     _BS + _BS + "." + _BS,
                     _BS + _BS + "?" + _BS + _BS,
-                    _BS + _BS + "?" + "?" + _BS)
+                    _BS + _BS + "?" + "?" + _BS,
+                    _BS + "?" + "?" + _BS)
 
 
 def _strip_device_prefix(value):
@@ -184,7 +191,11 @@ def _strip_device_prefix(value):
     only on Windows; other platforms keep the value unchanged."""
     lowered = value.lower()
     if lowered.startswith(_DEVICE_UNC.lower()):
-        return value[len(_DEVICE_UNC):]
+        # ``\\?\\UNC\\server\\share`` -> ``\\\\server\\share``:
+        # the second leading separator is spelled by the ``UNC``
+        # component, so re-add the double-separator prefix after
+        # stripping the verbatim marker.
+        return _BS + _BS + value[len(_DEVICE_UNC):].lstrip(_BS)
     for prefix in _DEVICE_PREFIXES:
         if lowered.startswith(prefix.lower()):
             return value[len(prefix):]
@@ -209,9 +220,9 @@ def _privacy_spellings(value):
     catches the literal form; the lexically resolved spelling catches
     ``..`` parent segments and, on POSIX, doubled leading separators
     (the kernel resolves ``//home`` as ``/home``); a drive-relative
-    spelling (``C:Users\\...``) is additionally anchored through
-    ``os.path.abspath`` because it resolves against the current
-    directory on that drive, which only the runtime knows.
+    spelling (``C:Users\\...``) is kept as-is so the profile's own
+    drive-relative comparison form can match it without depending on
+    the per-drive current directory that ``ntpath.abspath`` consults.
     """
     norm = value.replace("/", os.sep).replace("\\", os.sep)
     if "%" in norm or "$" in norm:
@@ -235,10 +246,11 @@ def _profile_comparisons(profile):
     """Profile spellings to match candidates against.
 
     The absolute form and, on Windows, its drive-relative form
-    (``C:\\Users\\alice`` for ``C:\\Users\\alice``): a
+    (``C:Users\\alice`` for ``C:\\Users\\alice``): a
     drive-relative candidate (``C:Users\\alice\\...``) then
-    matches without depending on the process current directory on
-    that drive, which ``os.path.abspath`` cannot observe."""
+    matches without depending on the per-drive current directory
+    (native Windows resolution consults the drive's current
+    directory, which the comparison must not rely on)."""
     forms = [profile]
     if os.name == "nt" and len(profile) >= 3 and profile[1] == ":":
         forms.append(profile[:2] + profile[3:])
@@ -284,14 +296,29 @@ def personal_path_in_report(report):
         return None
     hit = []
 
+    profile_abs = profile
+    profile_term = profile_abs + os.sep
+
     def visit(value):
         if isinstance(value, str):
-            if any(_matches_profile(spelling, profile)
-                   for spelling in _privacy_spellings(value)):
-                hit.append(value)
+            for spelling in _privacy_spellings(value):
+                if _matches_profile(spelling, profile):
+                    hit.append(value)
+                    return
+            # Mid-string occurrences: a build command or an option
+            # value that embeds the profile path (``--cases=
+            # /home/alice/x``, ``cd /home/alice/x && make``) must
+            # also trip the scan.  The separator-terminated form
+            # keeps sibling names (``/home/alice-notes``) from
+            # false-positive.
+            for spelling in _privacy_spellings(value):
+                if profile_term in spelling or spelling.endswith(profile_abs):
+                    hit.append(value)
+                    return
         elif isinstance(value, dict):
-            for item in value.values():
-                visit(item)
+            for item in value.items():
+                visit(item[0])
+                visit(item[1])
         elif isinstance(value, list):
             for item in value:
                 visit(item)
