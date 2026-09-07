@@ -5,6 +5,7 @@ package snapshot
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 
@@ -83,6 +84,38 @@ func TestRejectLiveSelfBindsDestination(t *testing.T) {
 	missing := filepath.Join(dir, "missing.iprange") + "/."
 	if err := rejectLiveSelf(other, SourceLive, missing, publication.PolicyReplaceExisting); err != nil {
 		t.Errorf("rejectLiveSelf(%q) missing destination = %v, want nil", missing, err)
+	}
+}
+
+// TestRejectLiveSelfNameRules pins the Rust Destination::bind error
+// order: a reserved main name is name_invalid before any parent
+// access, an overlong main name is name_invalid after the parent
+// open and before the main-name open (so the kernel error of that
+// open never escapes), and a missing parent still wins over the
+// length rule exactly like Rust Directory::open before
+// require_name_lengths.
+func TestRejectLiveSelfNameRules(t *testing.T) {
+	dir := t.TempDir()
+	identity := probeSource{device: 1, inode: 2}
+	overlong := filepath.Join(dir, strings.Repeat("n", 300)+".iprange")
+	if err := rejectLiveSelf(identity, SourceLive, overlong, publication.PolicyReplaceExisting); err == nil {
+		t.Fatal("overlong destination accepted")
+	} else if fe, ok := err.(*format.Error); !ok || fe.Code != format.CodeNameInvalid {
+		t.Fatalf("overlong destination under an existing parent = %v, want CodeNameInvalid", err)
+	}
+	reserved := filepath.Join(dir, format.ReservedBasenamePrefix+"x.iprange")
+	if err := rejectLiveSelf(identity, SourceLive, reserved, publication.PolicyReplaceExisting); err == nil {
+		t.Fatal("reserved destination accepted")
+	} else if fe, ok := err.(*format.Error); !ok || fe.Code != format.CodeNameInvalid {
+		t.Fatalf("reserved destination = %v, want CodeNameInvalid", err)
+	}
+	// A missing parent answers before the length rule (Rust
+	// Directory::open precedes require_name_lengths in bind).
+	missingParent := filepath.Join(dir, "no-such-dir", strings.Repeat("n", 300)+".iprange")
+	if err := rejectLiveSelf(identity, SourceLive, missingParent, publication.PolicyReplaceExisting); err == nil {
+		t.Fatal("missing-parent destination accepted")
+	} else if fe, ok := err.(*format.Error); ok && fe.Code == format.CodeNameInvalid {
+		t.Fatalf("missing parent with overlong name = %v, want the parent error first (Rust order)", err)
 	}
 }
 

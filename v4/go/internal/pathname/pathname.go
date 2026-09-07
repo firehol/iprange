@@ -670,25 +670,56 @@ func WithFileName(path, name string) string {
 // them. The prefix raw bytes are preserved exactly as parsed (they may
 // contain "/"), a physical root byte is re-emitted as the main
 // separator, and the appended name follows directly after a RootDir.
-func verbatimPushRebuild(path, name string) string {
+func verbatimPushRebuild(base, name string) string {
 	type part struct {
 		kind compKind
 		raw  string
 	}
-	c := NewComponents(path)
-	var parts []part
-	for {
-		kind, raw := c.nextFront()
-		if kind == compNone {
-			break
+	collect := func(path string) []part {
+		c := NewComponents(path)
+		var parts []part
+		for {
+			kind, raw := c.nextFront()
+			if kind == compNone {
+				break
+			}
+			parts = append(parts, part{kind, raw})
 		}
-		parts = append(parts, part{kind, raw})
+		return parts
 	}
-	parts = append(parts, part{compNormal, name})
-
+	// std PathBuf::_push verbatim branch: the buffer starts as the
+	// base components and the pushed path's components fold in —
+	// CurDir vanishes, ParentDir pops the last Normal component,
+	// RootDir truncates the buffer to its prefix, and Prefix/Normal
+	// components append — then the whole buffer is re-emitted with
+	// the main separator.
+	buf := collect(base)
+	for _, p := range collect(name) {
+		switch p.kind {
+		case compCurDir:
+			// std Component::CurDir => (): no-op.
+		case compParentDir:
+			// std pops only when the last component is Normal.
+			for i := len(buf) - 1; i >= 0; i-- {
+				if buf[i].kind == compNormal {
+					buf = buf[:i]
+					break
+				}
+			}
+		case compRootDir:
+			// std truncate(1): a pushed root keeps only the
+			// verbatim prefix, then appends the root.
+			if len(buf) > 1 {
+				buf = buf[:1]
+			}
+			buf = append(buf, p)
+		default:
+			buf = append(buf, p)
+		}
+	}
 	var sb strings.Builder
 	needSep := false
-	for _, p := range parts {
+	for _, p := range buf {
 		if needSep && p.kind != compRootDir {
 			sb.WriteByte('\\')
 		}
@@ -699,9 +730,14 @@ func verbatimPushRebuild(path, name string) string {
 		case compPrefix:
 			sb.WriteString(p.raw)
 			// std sets need_sep = !prefix.is_drive() && prefix.len() > 0;
-			// Prefix::is_drive is Disk(_) only, so a verbatim prefix
-			// always needs the following separator.
-			needSep = len(p.raw) > 0
+			// is_drive is Disk(_) only: a verbatim prefix always
+			// needs the following separator, a pushed disk prefix
+			// ("C:name") never does.
+			drive := false
+			if hasPrefixes {
+				drive = parsePrefix(p.raw).isDrive()
+			}
+			needSep = !drive && len(p.raw) > 0
 		default:
 			sb.WriteString(p.raw)
 			needSep = true

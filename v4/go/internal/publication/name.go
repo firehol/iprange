@@ -28,10 +28,23 @@ func ValidDestinationName(destination string) bool {
 	if !ok {
 		return false
 	}
-	if invalidMainName(name) {
-		return false
-	}
-	return len(name) <= destinationNameMax && len(name)+len(format.CoordinationSuffix) <= destinationNameMax
+	return ValidMainName(name) && ValidMainNameLength(name)
+}
+
+// ValidMainName mirrors one main name against Rust
+// path::validate_main_name (the component rule plus the reserved
+// prefix and suffix; reserved matches are byte-wise
+// ASCII-case-insensitive).
+func ValidMainName(name string) bool {
+	return !invalidMainName(name)
+}
+
+// ValidMainNameLength mirrors Rust Directory::require_name_lengths
+// for the main name and its coordination suffix: each must fit the
+// destination component bound.
+func ValidMainNameLength(name string) bool {
+	return len(name) <= destinationNameMax &&
+		len(name)+len(format.CoordinationSuffix) <= destinationNameMax
 }
 
 // invalidMainName mirrors Rust path::validate_main_name through the

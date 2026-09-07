@@ -447,11 +447,18 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 		return nil
 	}
 	// Rust Destination::bind validates the destination main name before
-	// any filesystem access (path::validate_main_name plus
-	// require_name_lengths); the writer's CreateAttempt applies the
-	// same rules at the attempt creation.
+	// any filesystem access (path::validate_main_name), then opens the
+	// parent directory, then applies require_name_lengths, and only
+	// then opens the bound main name.  The writer's CreateAttempt
+	// applies the same rules again at the attempt creation; this
+	// preflight must mirror the Rust order so an overlong or reserved
+	// name answers name_invalid instead of surfacing the kernel error
+	// of the main-name open.
 	main, ok := live.FileName(destinationPath)
 	if !ok {
+		return &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
+	}
+	if !publication.ValidMainName(main) {
 		return &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
 	}
 	dir := live.FileParent(destinationPath)
@@ -474,6 +481,12 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 	parentDevice, _, err := directoryIdentityOf(dir)
 	if err != nil {
 		return err
+	}
+	// Rust Directory::require_name_lengths runs after the parent open
+	// and before open_regular: an overlong main name is name_invalid,
+	// and a missing parent still wins the class when both fail.
+	if !publication.ValidMainNameLength(main) {
+		return &format.Error{Code: format.CodeNameInvalid, Detail: "invalid destination name"}
 	}
 	// The destination main name is opened without following symlinks
 	// (Rust Directory::open_regular, read-only). An absent name is not
