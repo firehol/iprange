@@ -576,11 +576,14 @@ The `main_basename` members of `CreateResult`,
 destination basename text: a store that records UTF-16LE path units
 renders them as decoded Unicode text (lossy invalid-unit
 replacement), and a store that records single-byte path bytes
-renders them as text with the maximal-subpart rule — every maximal
-run of bytes that is not valid UTF-8 renders as exactly one U+FFFD
-(Rust `String::from_utf8_lossy` semantics).  The resolve methods
-compare against the same rendered text, so a result always
-round-trips through its destination path.
+renders them as text with the maximal-subpart rule — every
+ill-formed subsequence is replaced by one U+FFFD covering its
+maximal subpart (the longest prefix of the remaining bytes that
+could begin a well-formed UTF-8 sequence), and the bytes after that
+subpart re-scan from the next byte; this is exactly Rust
+`String::from_utf8_lossy` semantics.  The resolve methods compare
+against the same rendered text, so a result always round-trips
+through its destination path.
 
 ### `iprange.v1.database.initialize_live`
 
