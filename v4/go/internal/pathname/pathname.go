@@ -629,39 +629,11 @@ func WithFileName(path, name string) string {
 			path = parent
 		}
 	}
-	if path == "" {
-		return name
-	}
-	if hasPrefixes && name != "" {
-		if parsePrefix(path).verbatim() {
-			// Rust PathBuf::_push rebuilds verbatim-prefixed paths
-			// component by component with the main separator (RootDir
-			// is re-emitted as "\", the prefix raw bytes keep their
-			// parsed spelling, and a drive-only fast path never
-			// applies), so a "/" physical root or a share-less
-			// "\\?\\UNC\\" spelling is canonicalized exactly like
-			// native std::path (probe-verified).
-			return verbatimPushRebuild(path, name)
-		}
-	}
-	// push: a separator is needed unless the path already ends with a
-	// separator or is a bare drive prefix (Rust PathBuf::push; the
-	// separator check uses the ordinary separator set, not the
-	// verbatim one).
-	if isSepByte(path[len(path)-1]) {
-		return path + name
-	}
-	if hasPrefixes {
-		p := parsePrefix(path)
-		if p.isDrive() && p.length == len(path) {
-			return path + name
-		}
-	}
-	mainSep := "/"
-	if runtime.GOOS == "windows" {
-		mainSep = `\`
-	}
-	return path + mainSep + name
+	// Rust PathBuf::set_file_name replaces the final component via
+	// _push(parent, name); Push implements the full _push contract
+	// (need_clear replacement, the verbatim component fold, the
+	// rooted-name truncate, and the separator rules).
+	return Push(path, name)
 }
 
 // verbatimPushRebuild mirrors Rust PathBuf::_push's verbatim branch
@@ -699,12 +671,11 @@ func verbatimPushRebuild(base, name string) string {
 		case compCurDir:
 			// std Component::CurDir => (): no-op.
 		case compParentDir:
-			// std pops only when the last component is Normal.
-			for i := len(buf) - 1; i >= 0; i-- {
-				if buf[i].kind == compNormal {
-					buf = buf[:i]
-					break
-				}
+			// std pops only when the last buffer component is a
+			// Normal (if let Some(Normal) = buf.last()): a trailing
+			// CurDir or ParentDir component of the base stays.
+			if len(buf) > 0 && buf[len(buf)-1].kind == compNormal {
+				buf = buf[:len(buf)-1]
 			}
 		case compRootDir:
 			// std truncate(1): a pushed root keeps only the
@@ -746,19 +717,37 @@ func verbatimPushRebuild(base, name string) string {
 	return sb.String()
 }
 
-// Push mirrors Rust PathBuf::push for the shape used by temporary
-// file and @-expansion entry placement: the base path plus one plain
-// name.  A separator is inserted unless the base is empty, already
-// ends with a path separator, or is a bare drive prefix (std
-// PathBuf::_push: need_sep is dropped for a drive-only base), and a
-// verbatim-prefixed base is rebuilt component by component with the
-// main separator exactly like _push's verbatim branch.  A pushed name
-// that is absolute or carries its own prefix would replace the base in
-// Rust; callers here always pass a plain name, and such a name is
-// appended verbatim.
+// Push mirrors the full Rust PathBuf::_push contract: an absolute or
+// prefix-carrying pushed name replaces the base (std need_clear), a
+// verbatim-prefixed base folds the pushed components with the main
+// separator (verbatim branch), a rooted pushed name without a prefix
+// truncates the base to its prefix, and a relative name appends after
+// a main separator unless the base is empty, already ends with a
+// separator, or is a bare drive prefix.  The four SDK join sites
+// (temporary placement and "@"-expansion) always pass a plain
+// separator-free name, which reaches the final appending arm.
 func Push(base, name string) string {
-	if hasPrefixes && name != "" && parsePrefix(base).verbatim() {
-		return verbatimPushRebuild(base, name)
+	if name != "" {
+		nc := NewComponents(name)
+		nameHasPrefix := hasPrefixes && nc.prefix.kind != prefixNone
+		nameAbs := nc.hasRoot && (!hasPrefixes || nameHasPrefix)
+		if nameAbs || nameHasPrefix {
+			// std need_clear: inner.clear() then push the raw
+			// pushed bytes (no separator is ever needed).
+			return name
+		}
+		if hasPrefixes && parsePrefix(base).verbatim() {
+			return verbatimPushRebuild(base, name)
+		}
+		if nc.hasRoot {
+			// std: a rooted name without a prefix truncates the
+			// base to its prefix ("C:\\x" + "\\n" -> "C:\\n").
+			prefix := 0
+			if hasPrefixes {
+				prefix = parsePrefix(base).length
+			}
+			return base[:prefix] + name
+		}
 	}
 	needSep := len(base) > 0 && !isSepByte(base[len(base)-1])
 	if needSep && hasPrefixes {
