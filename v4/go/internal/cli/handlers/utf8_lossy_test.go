@@ -27,6 +27,8 @@ func TestUtf8LossyMatchesRustFromUtf8Lossy(t *testing.T) {
 		{"overlong 3-byte", []byte{0xe0, 0x80, 0x80}, "\ufffd\ufffd\ufffd"},
 		{"overlong 4-byte", []byte{0xf0, 0x80, 0x80, 0x80}, "\ufffd\ufffd\ufffd\ufffd"},
 		{"surrogate lead", []byte{0xed, 0xa0, 0x80}, "\ufffd\ufffd\ufffd"},
+		{"overlong 3-byte second byte 9f", []byte{0xe0, 0x9f, 0x80}, "\ufffd\ufffd\ufffd"},
+		{"out-of-range first continuation f4 bd", []byte{0xf4, 0xbd, 0xc5}, "\ufffd\ufffd\ufffd"},
 		{"low surrogate lead", []byte{0xed, 0xb0, 0x80}, "\ufffd\ufffd\ufffd"},
 		{"out of range", []byte{0xf4, 0x90, 0x80, 0x80}, "\ufffd\ufffd\ufffd\ufffd"},
 		{"lone continuation then overlong", []byte{0x80, 0xc0, 0xaf}, "\ufffd\ufffd\ufffd"},

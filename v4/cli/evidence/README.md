@@ -1,12 +1,16 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
 The fifteenth-wave evidence is regenerated at the final wave-15
-revision `e21784ce` after the external whole-milestone control
-review of the wave-14 revision (turn 2 review of the wave-15 fixes:
-lifecycle identity platform kind, artifact-basename wire mapping,
-drain-EOF, matrix fixture binding, conflict-order control, and
-strict response-id correlation — all recorded in SOW-0028's
-wave-15 section) plus the native Windows verification wave:
+revision `c6145590` (product source of the round-4 delta; HEAD
+`4cf0ff52`) after the external whole-milestone control turn-2
+review of the wave-14 revision (lifecycle identity platform kind,
+artifact-basename wire mapping, drain-EOF, matrix fixture binding,
+conflict-order control, and strict response-id correlation), the
+native Windows verification wave, and the wave-15 role-round
+deltas 2-4 (encoding-aware artifact-basename rendering, the
+maximal-subpart encoding-1 decode, and the Go `main_basename`
+invalid-UTF-8 round-trip repair) — all recorded in SOW-0028's
+wave-15 section:
 
 - the Rust CLI test suite now runs fully green natively on the
   authorized Windows validation host (711 tests across
@@ -25,9 +29,9 @@ wave-15 section) plus the native Windows verification wave:
   beside the running binary, requests now report the worker as
   unavailable instead of a raw file-not-found I/O error (matches
   the SDK `worker_availability` probe semantics);
-- Windows housekeeping re-qualified at `e21784ce` on the
-  authorized Windows validation host: 2/2 PASS with the native
-  Windows Python 3.14.6.
+- Windows housekeeping re-qualified at the final wave-15
+  revision `c6145590` on the authorized Windows validation host:
+  2/2 PASS with the native Windows Python 3.14.6.
 
 Linux reports record the product identities `40816ee2…` (rust) and
 `90cadcf3…` (go), workers `9fd36146…` / `8ae5e0ba…`, fixture

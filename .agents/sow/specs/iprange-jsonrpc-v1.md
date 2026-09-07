@@ -574,9 +574,13 @@ Result is the complete `CreateResult` plus `method`.
 The `main_basename` members of `CreateResult`,
 `LiveTransitionResult`, and commit cleanup results are decoded
 destination basename text: a store that records UTF-16LE path units
-renders them as decoded Unicode text, and a store that records
-single-byte path bytes renders that byte text unchanged; the
-resolve methods round-trip the same text.
+renders them as decoded Unicode text (lossy invalid-unit
+replacement), and a store that records single-byte path bytes
+renders them as text with the maximal-subpart rule — every maximal
+run of bytes that is not valid UTF-8 renders as exactly one U+FFFD
+(Rust `String::from_utf8_lossy` semantics).  The resolve methods
+compare against the same rendered text, so a result always
+round-trips through its destination path.
 
 ### `iprange.v1.database.initialize_live`
 
