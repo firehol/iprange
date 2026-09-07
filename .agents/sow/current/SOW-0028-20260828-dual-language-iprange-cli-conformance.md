@@ -313,6 +313,28 @@ Windows identities Go `3ec21b97…` (worker `71229191…`) and Rust
 milestone-4 closure record stands as qualified at this revision;
 milestone 5 remains unstarted per user decision 1A, and the round-4
 P3 commit-subject history rewrite remains pending user approval.
+
+Wave-16 follow-up round-8 state (2026-09-07, final): the full
+seven-role review round re-anchored at the records revision
+`d6b88c6a` (product source `e54015d1`) and every role PASSED at that
+exact revision: tester, operations, parity, portability, security,
+performance, and the glm whole-milestone validator (verdicts
+appended to the role reports under `.local/<role>/report.md`).
+Independent this round: the round-6 parity P2 (trailing-separator
+`@`-expansion doubling) and the round-6 tester P2 (drive-relative
+temporary placement) were both re-verified closed at the final
+staged binaries; parity additionally ran a wine-executed
+windows/amd64 `pathname` differential (296/296 cases) against a
+Python oracle translated from the pinned Rust 1.97.1 `std::path`
+source and a POSIX differential vs the real rustc (417 cases, zero
+mismatches); the golden corpus stands at 196 Windows rows and 162
+unix rows; SHASUMS lockstep verified (`sha256sum -c` 8/8 OK).  The
+milestone-4 closure record stands as qualified at this final
+revision; milestone 5 remains unstarted per user decision 1A; the
+round-4 P3 commit-subject history rewrite remains pending user
+approval.  After this round, the closure proceeds to the external
+whole-milestone control review at exactly this revision, with no
+further commits expected after its verdict.
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
