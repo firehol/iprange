@@ -229,6 +229,24 @@ milestone 5 remains unstarted per user decision 1A, and the
 round-4 P3 commit-subject history rewrite remains pending user
 approval.
 
+Wave-16 follow-up round-4 state (2026-09-07): the re-anchored
+whole-milestone review found the last remaining lexical
+normalization of a caller path: the `@`-directory expansion built
+entry paths with `filepath.Join`, refusing symlinked-`..`
+referenced directories that Rust serves; the repair at `2c5d668b`
+builds them by raw concatenation and pins the class with a
+POSIX-gated regression test and a dual-product live probe (both
+products publish through the raw referenced spelling).  Go suite
+23/23 on go1.26.4, host go1.27.0, and native Windows (go1.26.5);
+Linux identities at `2c5d668b` are Go `78cbd4c3…` / worker
+`114a7018…` and Rust `07c4e314…` / worker `77b6d086…` / fixture
+`df3623a6…`, Windows identities Go `3b967437…` (worker
+`8338b58d…`) and Rust `c960a64f…`; every battery gate is green at
+the revision.  The milestone-4 closure record stands as qualified
+at this revision; milestone 5 remains unstarted per user decision
+1A, and the round-4 P3 commit-subject history rewrite remains
+pending user approval.
+
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -7963,7 +7981,7 @@ non-empty, clamped to the path), and `WithFileName`'s push
 reproduces the verbatim rebuild corner where the share-less
 `\\?\\UNC\\` prefix spelling ends with a separator and Rust
 writes prefix + separator + name (the separator doubles).  The
-Windows golden corpus gained 13 shapes with the native-probe
+Windows golden corpus gained 12 shapes with the native-probe
 answers (share-terminal verbatim-UNC with and without trailing
 separators, empty server/share, verbatim-UNC trailing-`..`,
 verbatim-disk prefix corners, plain-UNC share-terminal with and
