@@ -4,9 +4,11 @@
 // dropped-IPv6 runtime diagnostic must never block the input worker,
 // even when stderr is a full, never-drained pipe.  The helper
 // process drains an IPv4-mode source made of IPv6-only files with
-// its stderr wired to a full pipe; a regression to synchronous (or
-// per-message) stderr writes makes the helper hang and this test
-// fail.  Mirrors the session-path full-stderr tests in
+// its stderr wired to a full pipe; a synchronous-write (or blocking
+// queue-send) regression makes the helper hang and this test fail.
+// Per-message detached writes are prevented structurally: stderrDiag
+// is the only write site and the bounded queue is the only delivery
+// path.  Mirrors the session-path full-stderr tests in
 // v4/go/internal/cli/rpc/session_signal_unix_test.go.
 
 package fileio

@@ -525,9 +525,12 @@ fn input_worker_full_stderr_publish_completes_and_eof_exits() {
     // never block the input worker or wedge EOF shutdown.  With
     // stderr a full, never-drained pipe, a publish of IPv6-only
     // files in IPv4 mode must still answer and the process must exit
-    // 0 at EOF.  A synchronous (or per-message) stderr write
-    // regression blocks the worker on the first diagnostic, the
-    // response never arrives, and this test fails.
+    // 0 at EOF.  A synchronous stderr-write regression blocks the
+    // worker on the first diagnostic, the response never arrives,
+    // and this test fails; a per-message detached-write regression
+    // keeps the worker running but leaves one blocked thread per
+    // diagnostic, which the Linux thread-count assertion below
+    // catches.
     let dir = std::env::temp_dir().join(format!(
         "w15-stderr-diag-{}-{}",
         std::process::id(),
@@ -586,6 +589,25 @@ fn input_worker_full_stderr_publish_completes_and_eof_exits() {
             let _ = std::fs::remove_dir_all(&dir);
             panic!("no publish response within 20s: input worker blocked on the full stderr pipe");
         }
+    }
+    // A per-message detached-write regression leaves one blocked
+    // thread per diagnostic behind (the fixed design keeps exactly
+    // the single drainer plus the session threads; the full stderr
+    // pipe keeps them all alive).  The e3d7bf61-shape hazard was
+    // unbounded thread growth, so pin the live thread count on
+    // Linux, where /proc exposes it.
+    if cfg!(target_os = "linux") {
+        let status = std::fs::read_to_string(format!("/proc/{}/status", child.id()))
+            .expect("read child /proc status");
+        let threads = status
+            .lines()
+            .find_map(|line| line.strip_prefix("Threads:"))
+            .and_then(|value| value.trim().parse::<usize>().ok())
+            .expect("child Threads field");
+        assert!(
+            threads <= 12,
+            "child thread count {threads} exceeds the single-drainer bound: per-message diagnostic spawns returned"
+        );
     }
     drop(child.stdin.take()); // EOF
     let deadline = Instant::now() + Duration::from_secs(10);
