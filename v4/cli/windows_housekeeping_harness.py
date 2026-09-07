@@ -194,7 +194,7 @@ def _sanitize_path_value(value, checkout, checkout_norm):
     return value
 
 
-def sanitized_command():
+def sanitized_command(argv=None):
     """Return argv with every path-valued element rewritten to a
     checkout-relative spelling when it lives under the checkout, so
     the committed evidence never records the operator's home
@@ -202,12 +202,15 @@ def sanitized_command():
     verbatim; ``--option=PATH`` and label-prefixed values (``rust=``,
     ``go=``) sanitize only the embedded path value.  Paths outside
     the checkout (binary and work-dir paths under the authorized
-    validation host's scratch area) are kept as recorded."""
+    validation host's scratch area) are kept as recorded.  ``argv``
+    defaults to ``sys.argv`` and may be injected by the self-test."""
+    if argv is None:
+        argv = sys.argv
     checkout = os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__))))
     checkout_norm = os.path.normcase(os.path.normpath(checkout))
     out = []
-    for arg in sys.argv:
+    for arg in argv:
         if not arg:
             out.append(arg)
         elif arg.startswith("--") and "=" in arg:
@@ -229,6 +232,53 @@ def sanitized_command():
         else:
             out.append(_sanitize_path_value(arg, checkout, checkout_norm))
     return out
+
+
+def _profile_path():
+    """Normcased operator profile root, or an empty string when the
+    platform cannot determine it (never match in that case)."""
+    home = os.path.expanduser("~")
+    if not home:
+        return ""
+    norm = os.path.normcase(os.path.normpath(home))
+    return norm if len(norm) >= 3 else ""
+
+
+def _under_profile(path):
+    """True when an absolute path lives at or under the operator's
+    profile (normcase prefix match, both separator spellings)."""
+    profile = _profile_path()
+    if not profile:
+        return False
+    norm = os.path.normcase(os.path.normpath(os.path.abspath(path)))
+    return norm == profile or norm.startswith(profile + os.sep)
+
+
+def _personal_path_in_report(report):
+    """Return one string field that is or starts with the operator's
+    profile path, or None.  Structural scan over every string value so
+    a future report field cannot silently re-introduce a personal
+    path."""
+    profile = _profile_path()
+    if not profile:
+        return None
+    hit = []
+
+    def visit(value):
+        if isinstance(value, str):
+            norm = os.path.normcase(
+                value.replace("/", os.sep).replace("\\", os.sep))
+            if norm == profile or norm.startswith(profile + os.sep):
+                hit.append(value)
+        elif isinstance(value, dict):
+            for item in value.values():
+                visit(item)
+        elif isinstance(value, list):
+            for item in value:
+                visit(item)
+
+    visit(report)
+    return hit[0] if hit else None
 
 
 WRITER_BUDGET = {"max_heap_bytes": "16777216", "max_private_pages": "20000",
@@ -1775,12 +1825,71 @@ def _self_test():
     except AssertionError:
         pass
 
+    # P2-7 command sanitization and report-privacy self-tests: pin
+    # the token-aware sanitizer, the normcase containment, the
+    # cross-drive guard, and the structural profile-path scan so a
+    # regression cannot silently re-introduce personal paths into
+    # committed evidence.
+    script = os.path.abspath(__file__)
+    checkout = os.path.dirname(os.path.dirname(os.path.dirname(script)))
+    probe = {"under": os.path.normpath(os.path.expanduser("~")), "ok": []}
+    if not _under_profile(probe["under"]):
+        problems.append("P2-7 _under_profile failed on the real profile")
+    else:
+        print("[P2-7] _under_profile(real profile) passed")
+    outside = os.path.dirname(os.path.dirname(script)) if os.sep == "/" \
+        else os.path.join(os.path.dirname(os.path.dirname(script)), "..")
+    # The checkout may itself live under the operator's profile (a
+    # home-directory clone); the negative probe must be a path that
+    # is neither the checkout nor under the profile.
+    outside = tempfile.gettempdir()
+    if _under_profile(outside):
+        problems.append(f"P2-7 _under_profile false-positive on {outside}")
+    else:
+        print("[P2-7] _under_profile(outside) passed")
+
+    cases = [
+        # (argv, expected) evaluated against the platform path rules.
+        (["--self-test"], ["--self-test"]),
+        ([script], [os.path.relpath(script, checkout)]),
+        (["8"], ["8"]),
+        ([f"--json-report={os.path.join(checkout, 'ev', 'out.json')}"],
+         [f"--json-report={os.path.relpath(os.path.join(checkout, 'ev', 'out.json'), checkout)}"]),
+        ([f"rust={os.path.join(outside, 'scratch', 'x.exe')}"],
+         [f"rust={os.path.join(outside, 'scratch', 'x.exe')}"]),
+    ]
+    for argv, want in cases:
+        got = sanitized_command(argv)
+        if got != want:
+            problems.append(f"P2-7 sanitized_command({argv}) = {got}, want {want}")
+        else:
+            print(f"[P2-7] sanitized_command({argv}) passed")
+    try:
+        sanitized_command(["--work-dir", "Z:\\scratch"])             if os.sep == "\\" else None
+    except ValueError:
+        problems.append("P2-7 cross-drive guard raised ValueError")
+    else:
+        print("[P2-7] cross-drive guard passed")
+
+    clean_report = {"command": ["--self-test"], "work_dir": "/tmp",
+                    "binaries": {}, "outcomes": []}
+    if _personal_path_in_report(clean_report) is not None:
+        problems.append("P2-7 clean report flagged as personal")
+    else:
+        print("[P2-7] clean report passed")
+    leaky_report = dict(clean_report, work_dir=os.path.expanduser("~"))
+    if _personal_path_in_report(leaky_report) is None:
+        problems.append("P2-7 leaky report not detected")
+    else:
+        print("[P2-7] leaky report detected")
+
     for problem in problems:
         print(f"FAIL: {problem}")
     if problems:
         print(f"{len(problems)} self-test failure(s)")
         return 1
-    print("PASS: P2-5 pair-row and P2-6 removal-log self-tests")
+    print("PASS: P2-5 pair-row, P2-6 removal-log, and P2-7 "
+          "sanitizer/privacy self-tests")
     return 0
 
 
@@ -1828,6 +1937,22 @@ def main():
         parser.error("--binaries is required (unless --self-test)")
     if not args.work_dir:
         parser.error("--work-dir is required (unless --self-test)")
+    # Durable-artifact policy: committed evidence must never carry the
+    # operator's home directory.  Every path-valued input must live
+    # outside the profile (the documented authorized scratch area),
+    # so the whole serialized report is inherently personal-path-free.
+    for label, path in parse_binaries(args.binaries).items():
+        if _under_profile(path):
+            parser.error(
+                f"{label} binary {path} lives under the operator's "
+                "profile; stage binaries under the authorized scratch "
+                "area so committed evidence cannot carry personal paths")
+    for path in (args.work_dir, args.json_report, args.provenance):
+        if path and _under_profile(path):
+            parser.error(
+                f"path {path} lives under the operator's profile; use "
+                "the authorized scratch area so committed evidence "
+                "cannot carry personal paths")
     if not os.path.isdir(args.work_dir) or not os.path.isabs(args.work_dir):
         parser.error("--work-dir must be an absolute existing directory")
     binaries = {}
@@ -2233,6 +2358,16 @@ def main():
     report["failed"] = failed
 
     _check_report_schema(report)
+
+    # Durable-artifact policy net: after every field (including the
+    # outcomes) is filled, refuse to serialize a report that still
+    # carries the operator's profile path in any string value.
+    personal = _personal_path_in_report(report)
+    if personal is not None:
+        raise SystemExit(
+            f"refusing to write evidence containing the operator's "
+            f"profile path: {personal!r}; stage all inputs outside "
+            "the profile")
 
     if args.json_report:
         # newline="" keeps the committed report LF-only on every

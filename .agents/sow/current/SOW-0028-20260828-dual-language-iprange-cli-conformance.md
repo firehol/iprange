@@ -8945,9 +8945,9 @@ re-listed out of scope).  The lead verified each before repair:
    comparison was case-sensitive (a case-varied checkout spelling
    could escape rewriting on Windows), running from a checkout
    subdirectory rewrote plain option tokens such as `--binaries`
-   into directory-prefixed strings, and a different-drive element
-   was mis-handled.  The sanitizer now: keeps option tokens
-   verbatim; for `--option=PATH` sanitizes only the embedded path
+   into directory-prefixed strings (the cross-drive ValueError guard
+   already existed at the reviewed revision).  The sanitizer now:
+   keeps option tokens verbatim; for `--option=PATH` sanitizes only the embedded path
    value; for label-prefixed values (`rust=PATH`, `go=PATH`)
    sanitizes only the value; compares containment with normcase so
    case-varied checkout spellings cannot escape; rewrites using the
@@ -8989,9 +8989,11 @@ grep found one residual Linux-scoped comment in crash_harness.py
 fixed here, and the wording now appears only in Windows-kind
 contexts where the products truthfully report it (the Windows
 housekeeping proofs, the schema enum) and in dated historical
-records; the sanitizer scenarios are covered
-by the committed simulation checks recorded above.  Sensitive-data
-gate: clean.  Artifact gate: AGENTS.md unchanged; runtime project
+records; the sanitizer and report-privacy scenarios are covered
+by the committed P2-7 harness self-tests added in the round-15
+follow-up (token-aware sanitization, normcase containment,
+cross-drive guard, profile-path staging refusal, and the
+structural report scan).  Sensitive-data gate: clean.  Artifact gate: AGENTS.md unchanged; runtime project
 skills unchanged; specs unchanged (the repairs restore spec'd
 behavior); end-user docs updated (removal wording scoped); the
 commit-subject history rewrite item remains open pending user
