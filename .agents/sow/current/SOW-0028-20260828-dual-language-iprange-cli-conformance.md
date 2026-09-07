@@ -175,6 +175,21 @@ stands as qualified at this revision; milestone 5 remains unstarted
 per user decision 1A, and the round-4 P3 commit-subject history
 rewrite remains pending user approval.
 
+Wave-16 follow-up state (2026-09-07): the re-anchored round-6
+portability review measured the Go 1.27 compress/flate deflate
+workspace above the declared 840 KiB charge; the repair at
+`06495eeb` raises deflateHeapOverhead to 1150 KiB and keeps the
+deflate path exercised under a budget that admits it.  Go suite
+23/23 on go1.26.4, host go1.27.0, and native Windows (go1.26.5);
+Linux identities at `06495eeb` are Go `7544ffc2…` / worker
+`4c8f50fa…` and Rust `07c4e314…` / worker `77b6d086…` / fixture
+`df3623a6…`, Windows identities Go `a20bcb2d…` (worker
+`d1273d04…`) and Rust `c960a64f…`; every battery gate is green at
+the revision.  The milestone-4 closure record stands as qualified
+at this revision; milestone 5 remains unstarted per user decision
+1A, and the round-4 P3 commit-subject history rewrite remains
+pending user approval.
+
 Sub-state: activated 2026-09-01 as the sole current SOW after SOW-0027
 closed. Design is complete and approved; no product-design round is
 needed. Performance scope: this SOW measures and reports Go/Rust
@@ -7757,5 +7772,60 @@ v4 JSON-RPC spec unchanged (no contract change, the repair restores
 the already-specified Rust reference behavior); end-user docs
 unchanged (no CLI surface change).  The round-4 P3 item (commit
 subjects `9374917e`/`e3d7bf61` naming the external review model)
-remains open pending user approval for the history rewrite; no
-repository commit is planned after this record.
+remains open pending user approval for the history rewrite.
+The closing statement that no repository commit was planned after
+the wave-16 record is superseded by the follow-up below.
+
+#### Wave 16 follow-up (2026-09-07) — cross-toolchain deflate workspace charge at `06495eeb`
+
+The re-anchored round-6 portability review at the wave-16 records
+commit `5a008411` measured one P2 finding: the writer's
+`deflateHeapOverhead` (840 KiB) under-charges the Go
+`compress/flate` DefaultCompression workspace on go1.27.0, whose
+measured peak is ~1.06 MiB (reproduced: the pinned
+`TestMetadataDeflateHeapOverheadCoversWorkspace` fails with
+"deflate workspace 1083989 bytes exceeds declared overhead 860160"
+on the host go1.27.0, passes on the qualified go1.26.4).  An
+under-charge would let the bounded deflate attempt exceed the
+caller's declared heap budget.
+
+Repair at `06495eeb` (`v4/go/internal/writer/metadata.go`): the
+charge is raised to 1150 KiB with headroom over the largest
+measured workspace, and `TestMetadataDeflatePathSmallPayload` now
+declares a budget of stored-bound + charge so the deflate branch
+remains exercised under the larger charge (the generic 1 MiB test
+budget can no longer admit it).  The pinned workspace test and the
+full writer suite pass on both the qualified go1.26.4 and the host
+go1.27.0.
+
+Re-qualification at the final revision (`06495eeb`, product
+source; records committed together with this evidence): Go suite
+23/23 packages PASS on Linux with the qualified go1.26.4 and with
+the host go1.27.0, and natively on the Windows host (go1.26.5,
+23/23 packages); Rust workspace suites PASS on Linux (rustc
+1.97.1, no Rust source change) and natively on Windows.  Full
+battery PASS at the final staged identities (matrices 38/38
+single and 14 PASS + 24 legitimate skips per mixed direction;
+crash 16/16 both directions; the negative control 0/16 with 8
+consumer-stage and 8 setup failures; resource proofs 8/8;
+kind-coverage gate PASS with all 46 self-test controls; golden
+corpus 55; sensitivity gate 14).  Windows housekeeping 2/2 PASS at
+`06495eeb` on the authorized Windows validation host (native
+Python 3.14.6, Go `a20bcb2d…`, Rust `c960a64f…`, provenance
+recorded with tree_clean).  Final Linux identities at `06495eeb`
+(staged in `.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK):
+Go product `7544ffc2…`, Go worker `4c8f50fa…` (rebuilt with
+`-buildvcs=false`), Rust product `07c4e314…`, Rust worker
+`77b6d086…`, fixture `df3623a6…` (Rust binaries carry from the
+round-4 qualified build at `ed29e437`).  `v4/cli/evidence/*`,
+`evidence/README.md`, and `resource-record.md` are regenerated at
+these identities in the records commit so the record and the
+identities cannot drift.  Sensitive-data gate: no secrets,
+credentials, community/customer names, personal data, or private
+endpoints in this wave.  Artifact gate: AGENTS.md unchanged (no
+workflow change); runtime project skills unchanged (no new how-to
+knowledge); the v4 JSON-RPC spec unchanged (no contract change —
+the charge is an internal heap-accounting constant); end-user
+docs unchanged (no CLI surface change).  The round-4 P3 item
+(commit subjects `9374917e`/`e3d7bf61` naming the external review
+model) remains open pending user approval for the history rewrite.

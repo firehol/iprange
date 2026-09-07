@@ -1,5 +1,41 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
+The current evidence is regenerated at product revision `06495eeb`
+(the round-6 follow-up that charges the cross-toolchain deflate
+workspace honestly).  The round-6 re-anchored portability review at
+`5a008411` measured the Go `compress/flate` DefaultCompression
+workspace at ~1.06 MiB on go1.27.0, above the declared 840 KiB
+`deflateHeapOverhead` charged to metadata callers
+(`v4/go/internal/writer/metadata.go`); the follow-up raises the
+charge to 1150 KiB and pins the deflate branch of the small-payload
+test with a budget that admits it under the larger charge.  The Go
+suite is green on the qualified go1.26.4 and on the host go1.27.0
+(23/23 packages on each), and natively on the Windows host
+(go1.26.5, 23/23 packages); the Rust workspace suites are green on
+Linux (rustc 1.97.1) and natively on Windows (without source
+change).  The full battery PASSes at the final staged identities:
+matrices 38/38 single and 14 PASS + 24 legitimate skips per mixed
+direction; crash 16/16 both directions; the negative control 0/16
+(8 real-producer scenarios failing at the substituted-consumer
+stage and 8 substituted-producer scenarios failing during setup);
+resource proofs 8/8; kind-coverage gate PASS with all 46 self-test
+controls; golden corpus 55; sensitivity gate 14.  Windows
+housekeeping re-qualified at `06495eeb` on the authorized Windows
+validation host: 2/2 PASS with native Windows Python 3.14.6
+(provenance: clean tree, go1.26.5 windows/amd64, rustc 1.97.1).
+
+Linux reports at `06495eeb` record the product identities
+`07c4e314…` (rust, unchanged since the round-4 qualified build) and
+`7544ffc2…` (go, rebuilt with `-buildvcs=false`), workers
+`77b6d086…` (rust) / `4c8f50fa…` (go), fixture `df3623a6…` (all
+staged in `.local/shared/binaries/SHASUMS.txt` with sha256sum -c
+OK).  The Windows housekeeping report records the Windows-host
+products `c960a64f…` (rust) and `a20bcb2d…` (go); the Windows Go
+worker is `d1273d04…`.
+
+---
+
+
 The round-6 evidence is regenerated at the round-6 final product
 revision `ebbd0419`.  The external round-5 control review found the
 Go publish destination preflight (`requirePublicationParent`) still
