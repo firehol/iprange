@@ -751,11 +751,11 @@ def proof_b(binary, label, work_dir, outcome):
 def drain_stdout(proc, deadline_seconds):
     """Read every remaining stdout byte until EOF or deadline.
 
-    Returns ``(bytes_read, reached_eof)``: ``bytes_read`` is the
-    exact byte count observed after the caller's last
+    Returns ``(remaining, reached_eof)``: ``remaining`` is the
+    collected byte string observed after the caller's last
     ``read_responses`` -- including any bytes ``read_responses`` had
     already taken out of the pipe and retained in
-    ``_PENDING_STDOUT_BYTES``, so the accounting stays exact (zero
+    ``_PENDING_STDOUT_BYTES``, so the accounting stays exact (empty
     for a product that answered exactly once) -- and ``reached_eof``
     is True only when stdout reached EOF while the deadline was still
     open.  Used by proof b to prove the single -32001 response is the

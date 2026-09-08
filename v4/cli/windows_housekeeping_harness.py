@@ -141,6 +141,7 @@ from command_sanitize import (  # noqa: E402  (side-effect free)
     owned_temp_dir,
     personal_path_in_report,
     sanitized_command,
+    sanitized_path_value,
     under_profile,
 )
 
@@ -1887,6 +1888,22 @@ def _self_test():
                     f"root: {_privacy_spellings(verbatim_unc)!r}")
             else:
                 print("[P2-7] verbatim-UNC normalized root exact")
+            # Embedded verbatim-UNC root restoration pin (astra
+            # turn-12 finding): a provenance command carrying
+            # ``\\?\\UNC\\server\\share\\alice\\...`` must
+            # restore the ordinary ``\\\\server\\share`` root in
+            # the inline-stripped candidate too, so a UNC home profile
+            # spelling cannot escape the scan.
+            embedded_unc = (
+                'copy "' + "\\\\?\\UNC\\server\\share\\"
+                + 'alice\\scratch\\x" dest')
+            if "\\\\server\\share\\alice\\scratch\\x" \
+                    not in _privacy_spellings(embedded_unc):
+                problems.append(
+                    "P2-7 embedded verbatim-UNC spelling lost the "
+                    f"server root: {_privacy_spellings(embedded_unc)!r}")
+            else:
+                print("[P2-7] embedded verbatim-UNC root restored")
             # Embedded device-prefixed profile spelling inside
             # provenance free text: ``copy "\\?\\C:\\Users
             # \\alice\\x" dest`` carries the prefix mid-string,
@@ -2080,8 +2097,52 @@ def _self_test():
         else:
             print("[P2-7] darwin case fold detected the case-varied "
                   "spelling")
+        # Darwin case-varied checkout rendering pin (astra turn-12
+        # finding): realpath preserves the recorded spelling on the
+        # case-insensitive APFS volume, so a case-varied spelling of
+        # a checkout-contained value must render as the plain
+        # checkout-relative suffix -- never as a ``..``-walk that
+        # repeats the checkout's (account-named) prefix.
+        checkout = checkout_root()
+        varied_checkout = os.path.join(
+            os.path.dirname(checkout).upper(),
+            os.path.basename(checkout).upper(),
+            "v4", "cli", "cases")
+        rendered = sanitized_path_value(varied_checkout)
+        want = os.path.join("v4", "cli", "cases")
+        if rendered != want:
+            problems.append(
+                "P2-7 darwin case-varied checkout spelling rendered "
+                f"{rendered!r}, want {want!r}")
+        else:
+            print("[P2-7] darwin case-varied checkout spelling "
+                  "renders checkout-relative")
+        if personal_path_in_report(
+                {"command": ["--cases", rendered]}) is not None:
+            problems.append(
+                "P2-7 darwin checkout-relative rendering tripped the "
+                "privacy scan")
+        else:
+            print("[P2-7] darwin checkout-relative rendering is "
+                  "privacy-clean")
     finally:
         sys.platform = saved_platform
+    # The rendering pin must be non-vacuous: without the darwin flag
+    # the same spelling renders as a ``..``-walk on case-sensitive
+    # hosts.
+    checkout = checkout_root()
+    varied_checkout = os.path.join(
+        os.path.dirname(checkout).upper(),
+        os.path.basename(checkout).upper(),
+        "v4", "cli", "cases")
+    if sanitized_path_value(varied_checkout) == os.path.join(
+            "v4", "cli", "cases"):
+        problems.append(
+            "P2-7 non-darwin rendering unexpectedly canonicalized "
+            "the case-varied checkout spelling")
+    else:
+        print("[P2-7] non-darwin rendering keeps the raw spelling "
+              "(pin is darwin-specific)")
 
     if os.sep == "/":
         parent = os.path.dirname(profile_abs)

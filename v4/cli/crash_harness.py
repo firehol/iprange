@@ -2974,6 +2974,7 @@ def main():
     report = {
         "schema": "iprange-cli-crash-report-v1",
         "command": sanitized_command(),
+        "checkout_root": recorded_checkout_root(),
         "platform": {
             "system": platform.system(),
             "release": platform.release(),

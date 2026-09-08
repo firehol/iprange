@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from command_sanitize import (  # noqa: E402  (side-effect free)
     owned_temp_root,
     personal_path_in_report,
+    recorded_checkout_root,
     same_path,
     sanitized_command,
     under_profile,
@@ -2084,6 +2085,7 @@ def main():
     report = {
         "schema": "iprange-cli-report-v3",
         "command": sanitized_command(),
+        "checkout_root": recorded_checkout_root(),
         "platform": {
             "system": platform_module.system(),
             "release": platform_module.release(),

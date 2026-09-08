@@ -9754,3 +9754,78 @@ exact verbatim-UNC root asserted); the committed evidence structural
 scan stays clean; product binaries byte-identical (SHASUMS 8/8).
 Sensitive-data gate: clean.  Artifact gate: AGENTS.md, specs, and
 runtime project skills unchanged.
+
+#### Wave 18 (2026-09-08) — turn-12 external-review repairs: darwin suffix rendering, inline UNC root, recorded producer authority, JSON-safe rehome
+
+Astra turn 12 (same session `b5dd923d…`, exact HEAD `79d5403d`)
+returned NEEDS CHANGES with four in-scope P2s and two P3s; all are
+repaired in this wave:
+
+1. P2 — macOS case handling could still expose the account path.
+   POSIX `realpath` preserves the recorded spelling (it does not
+   canonicalize case on the case-insensitive APFS volume), so a
+   case-varied spelling of a checkout-contained value rendered as a
+   ``..``-walk that repeated the account-named checkout prefix in
+   the record.  `sanitized_path_value` now derives the
+   checkout-relative suffix from the raw components below the
+   checkout (`_checkout_suffix`: folded component-by-component
+   prefix match), so the record can never carry the checkout's own
+   spelling; the P2-7 self-test pins the darwin rendering and its
+   non-vacuous contrast on case-sensitive hosts.  The run.py
+   `--cases` guard (`same_path`) is unchanged and remains
+   darwin-folded.
+2. P2 — embedded verbatim-UNC paths lost their root during privacy
+   normalization.  The inline strip removed `\\?\` from
+   `\\?\UNC\server\share\alice\...` and left `UNC\...` without its
+   ordinary `\\server\share` root, so a UNC home profile spelling
+   escaped the scan.  `_privacy_spellings` now restores the root
+   for inline `\\?\UNC\` occurrences (`_DEVICE_INLINE_UNC_RE` with
+   a function replacement — `re.sub` would treat the separator
+   backslashes of a string replacement as escapes); the P2-7
+   self-test pins the embedded-UNC normalized root on the Windows
+   host.
+3. P2 — evidence binding depended on the reviewing checkout.  A
+   neutral (non-personal) checkout records checkout-relative
+   command arguments alongside absolute binary identities; assessed
+   from another clone the gate resolved those values against the
+   reviewing checkout and rejected unchanged evidence.  The matrix
+   and crash runners now record a non-personal producer
+   `checkout_root` in the report (omitted when the checkout lives
+   under the operator's profile, so no personal path can reach the
+   evidence), and the gate resolves every relative command value
+   against the report's recorded root (`_report_checkout_root`
+   fallback: the gate's own checkout, which keeps the committed
+   absolute-argument evidence stable).  Kind-gate self-test control
+   48 re-homes the genuine evidence under a synthetic producer root
+   and passes with the recorded field while failing without it
+   (negative control in-suite); control 47 keeps its scratch-cwd
+   coverage.
+4. P2 — self-test control 47 inserted unescaped paths into
+   serialized JSON via text replacement after `json.dumps` (a legal
+   POSIX checkout containing a quote or backslash could produce
+   invalid JSON and block every gate run).  The re-home now walks
+   the decoded report structure (`rehome_strings`, deep string
+   replacement) and is shared by controls 47 and 48.
+5. P3 — `resource_harness.py` `drain_stdout` docstring corrected:
+   the first return value is the collected byte string, not a byte
+   count.
+6. P3 — carried commit-subject hygiene item (`9374917e`,
+   `e3d7bf61`, `65ea9587`) remains recorded, approval-dependent,
+   non-blocking.
+
+Validation: kind-gate self-test 48/48 (positive) with the
+removed-field negative failing as required and the pre-fix
+resolution style failing control 47/48 (negative controls
+verified); Windows-housekeeping `--self-test` PASS on Linux with
+the four new pins (darwin fold, darwin checkout-relative rendering,
+privacy-clean rendering, non-darwin contrast) — the nt-gated rows
+(embedded UNC root, four embedded device forms, exact verbatim-UNC
+root) run natively on the Windows host; resource-harness
+`--self-test` PASS; the nt-path simulation confirms the embedded
+UNC root restoration and the drive-profile classes unchanged; the
+committed evidence structural scan stays clean and the committed
+reports carry no `checkout_root` field (fallback path exercised);
+product binaries byte-identical (SHASUMS 8/8; no product source
+changed).  Sensitive-data gate: clean.  Artifact gate: AGENTS.md,
+specs, and runtime project skills unchanged; the sanitizer, runners,
+and gate docstrings describe the new semantics.

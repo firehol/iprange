@@ -67,14 +67,18 @@ def sanitized_path_value(value):
     except ValueError:
         under_checkout = False
     if under_checkout:
-        base = abs_path
-        if sys.platform == "darwin" and os.path.exists(abs_path):
-            # APFS is case-insensitive: canonicalize a case-varied
-            # spelling through the real path so the recorded relative
-            # form is stable (the raw spelling would produce a
-            # ``..``-walk relative record).
-            base = os.path.realpath(abs_path)
-        return os.path.relpath(base, _CHECKOUT)
+        if sys.platform == "darwin":
+            # APFS (macOS default) is case-insensitive and realpath
+            # preserves the recorded spelling, so a case-varied
+            # checkout spelling would render as a ``..``-walk that
+            # repeats the account path in the record; the suffix is
+            # computed from the raw components below the checkout
+            # instead, so the record can never carry the checkout's
+            # own spelling.
+            suffix = _checkout_suffix(abs_path)
+            if suffix is not None:
+                return suffix
+        return os.path.relpath(abs_path, _CHECKOUT)
     return value
 
 
@@ -229,6 +233,14 @@ _DEVICE_INLINE_RE = re.compile(
     + "|" + re.escape(_BS + _BS + "." + _BS),
     re.IGNORECASE)
 
+# Inline verbatim-UNC form: ``\?\UNC\server\share`` anywhere in a
+# string must restore the ordinary ``\\server\share`` root, exactly
+# like the whole-string branch in ``_strip_device_prefix``; the generic
+# inline strip alone would leave ``UNC\server\share`` without its
+# root and a UNC home profile would escape the scan.
+_DEVICE_INLINE_UNC_RE = re.compile(
+    re.escape(_BS + _BS + "?" + _BS + "UNC" + _BS), re.IGNORECASE)
+
 
 def _strip_device_prefix(value):
     """Map Windows verbatim/device spellings back to ordinary path
@@ -289,7 +301,13 @@ def _privacy_spellings(value):
         if anchored not in out:
             out.append(anchored)
     if os.name == "nt":
-        inline = _normcase(_DEVICE_INLINE_RE.sub("", norm))
+        # re.sub interprets backslashes in a string replacement as
+        # escapes, so the two-separator root is supplied through a
+        # function replacement.
+        inline = _DEVICE_INLINE_UNC_RE.sub(
+            lambda _match: _BS + _BS, norm)
+        inline = _DEVICE_INLINE_RE.sub("", inline)
+        inline = _normcase(inline)
         if inline not in out:
             out.append(inline)
     return out
@@ -315,6 +333,44 @@ def _matches_profile(spelling, profile):
     profile's comparison forms."""
     return any(spelling == form or spelling.startswith(form + os.sep)
                for form in _profile_comparisons(profile))
+
+
+def _checkout_suffix(path):
+    """Checkout-relative spelling of one path without its checkout
+    prefix, or None when the folded components do not start with the
+    checkout's.
+
+    The checkout prefix is matched folder-by-folder on folded
+    spellings, so a case-varied checkout spelling (valid on a
+    case-insensitive volume) is consumed entirely and the suffix is
+    taken from the raw components below the checkout."""
+    raw = os.path.normpath(path).split(os.sep)
+    base = _CHECKOUT.split(os.sep)
+    index = 0
+    while (index < len(base) and index < len(raw)
+           and _normcase(raw[index]) == _normcase(base[index])):
+        index += 1
+    if index < len(base):
+        return None
+    suffix = raw[index:]
+    return os.path.join(*suffix) if suffix else "."
+
+
+def recorded_checkout_root():
+    """Producer checkout root to record in a report for evidence
+    binding, or None when the checkout lives under the operator's
+    profile.
+
+    The kind gate resolves checkout-relative command values against
+    the recorded root, so evidence produced from one checkout keeps
+    its binary-identity binding when assessed from another clone;
+    a personal checkout root must never reach the report, so the
+    field is omitted there and relative values fall back to the
+    gate's own checkout root."""
+    root = _CHECKOUT
+    if under_profile(root):
+        return None
+    return root
 
 
 def same_path(a, b):

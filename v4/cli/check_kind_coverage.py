@@ -432,20 +432,41 @@ def _crash_path_to_sha(report):
     return table
 
 
-def _resolve_report_path(value):
-    """One path a report command names, invariant to the gate's cwd.
+def _report_checkout_root(report):
+    """Checkout root a report's relative command values are relative
+    to (the producer's recorded root), or the reviewing gate's own
+    checkout root when the report does not record one.
+
+    The runner records a non-personal producer checkout root in the
+    report (``checkout_root``); resolving against it keeps the
+    binary-identity binding stable when the evidence is assessed from
+    another clone.  Personal producer roots are never recorded, so
+    the fallback is the gate's checkout — the same authority the
+    sanitizer uses when it rewrites those values."""
+    root = (report or {}).get("checkout_root")
+    if isinstance(root, str) and root and os.path.isabs(root):
+        return root
+    return checkout_root()
+
+
+def _resolve_report_path(value, report):
+    """One path a report command names, invariant to the gate's cwd
+    and checkout.
 
     The matrix runner records checkout-contained values as
     checkout-relative spellings (command_sanitize rewrites them so
     the evidence is invariant to the invocation directory); resolving
     them against the gate's process cwd would reject the same
-    evidence when the gate runs from a scratch directory.  Relative
-    values therefore resolve against the checkout root that owns the
-    gate, matching the sanitizer's invariant.  Absolute values pass
-    through unchanged."""
+    evidence when the gate runs from a scratch directory, and
+    resolving against the reviewing checkout would change the
+    verdict when the evidence moves between clones.  Relative values
+    therefore resolve against the report's recorded producer
+    checkout root (or the gate's own checkout root as fallback).
+    Absolute values pass through unchanged."""
     if os.path.isabs(value):
         return os.path.realpath(value)
-    return os.path.realpath(os.path.join(checkout_root(), value))
+    return os.path.realpath(os.path.join(_report_checkout_root(report),
+                                         value))
 
 
 def _matrix_path_to_sha(report):
@@ -774,7 +795,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                         f"matrix {path}: report command records no {flag} "
                         f"argument")
                     continue
-                bound_path = _resolve_report_path(named)
+                bound_path = _resolve_report_path(named, report)
                 command_selected[language] = bound_path
                 bound_sha = report_shas.get(bound_path)
                 if bound_sha is None:
@@ -799,7 +820,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                 problems.append(
                     f"matrix {path}: report command records no "
                     f"--fixture-tool argument")
-            elif _resolve_report_path(fixture) not in fixture_paths:
+            elif _resolve_report_path(fixture, report) not in fixture_paths:
                 problems.append(
                     f"matrix {path}: report command --fixture-tool "
                     f"{fixture!r} does not name the fixture binary the "
@@ -809,7 +830,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
     if namespace is not None:
         named = namespace.fixture_tool
         if named is not None:
-            command_fixture = _resolve_report_path(named)
+            command_fixture = _resolve_report_path(named, report)
     cases = report.get("cases", [])
     # Counter cross-validation: the per-case status list is the truth;
     # a doctored aggregate can claim any number.  Cases that are not
@@ -1278,7 +1299,7 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                         f"crash {path}: report root binaries table records "
                         f"no {role} path")
                 elif (not isinstance(named, str)
-                      or _resolve_report_path(named)
+                      or _resolve_report_path(named, report)
                       != os.path.realpath(table_path)):
                     problems.append(
                         f"crash {path}: report command {flag} {named!r} does "
@@ -3408,8 +3429,31 @@ def _self_test():
         #     from a scratch cwd, the pre-fix ``os.path.realpath``
         #     resolution resolved those spellings against the gate's
         #     cwd and rejected the evidence.
-        def cwd_invariant_case():
-            matrices, crash = load_genuine()
+
+        def rehome_strings(node, old_root, new_root):
+            """Deep string replacement over a report structure.
+
+            Text replacement after ``json.dumps`` would insert
+            unescaped characters (a checkout path containing a quote
+            or backslash is legal on POSIX); the rewrite walks the
+            decoded structure instead and replaces binary path
+            spellings wherever they appear."""
+            if isinstance(node, str):
+                return node.replace(old_root, new_root)
+            if isinstance(node, list):
+                return [rehome_strings(item, old_root, new_root)
+                        for item in node]
+            if isinstance(node, dict):
+                return {key: rehome_strings(value, old_root, new_root)
+                        for key, value in node.items()}
+            return node
+
+        def rehome_evidence(matrices, crash, new_root):
+            """Move every binary path of the genuine evidence under
+            new_root and rewrite the command arrays the way the
+            sanitizer records checkout-contained values (relative
+            spellings); returns (matrices, crash) with the recorded
+            producer checkout root set on the reports."""
             first_bin = None
             for report in matrices:
                 for record in (report.get("binaries") or {}).values():
@@ -3421,21 +3465,24 @@ def _self_test():
                     break
             assert first_bin, "genuine evidence records no binary path"
             old_root = os.path.dirname(os.path.dirname(first_bin))
-            new_root = os.path.join(checkout_root(), ".local", "qual")
+            out_matrices = [rehome_strings(report, old_root, new_root)
+                            for report in matrices]
+            out_crash = rehome_strings(crash, old_root, new_root)
+            return out_matrices, out_crash, old_root
+
+        def cwd_invariant_case():
+            matrices, crash, _old = rehome_evidence(
+                *load_genuine(), os.path.join(
+                    checkout_root(), ".local", "qual"))
             for report in matrices + [crash]:
-                text = _json.dumps(report).replace(old_root, new_root)
-                rehomed = _json.loads(text)
-                command = rehomed.get("command") or []
+                report["checkout_root"] = checkout_root()
+                command = report.get("command") or []
                 for option in ("--rust", "--go", "--fixture-tool"):
                     if option not in command:
                         continue
                     index = command.index(option)
                     command[index + 1] = os.path.relpath(
                         command[index + 1], checkout_root())
-                if report is crash:
-                    crash = rehomed
-                else:
-                    matrices[matrices.index(report)] = rehomed
             paths = []
             for index, report in enumerate(matrices):
                 path = os.path.join(work, f"cwd-invariant-{index}.json")
@@ -3454,6 +3501,62 @@ def _self_test():
                 f"checkout-relative command paths failed from a "
                 f"different cwd: {problems}")
         cwd_invariant_case()
+
+        # 48. Evidence binding follows the producer's recorded
+        #     checkout root, not the reviewing checkout (external
+        #     review finding): a neutral checkout can legitimately
+        #     record checkout-relative command arguments alongside
+        #     absolute binary identities; copying those reports to
+        #     another clone must not change the verdict.  The
+        #     re-homed evidence records a synthetic producer root
+        #     (``checkout_root``) that differs from the gate's own
+        #     checkout, and the gate assesses it from its own
+        #     checkout: with the field the bindings resolve against
+        #     the producer root and pass; without the field the
+        #     same evidence must fail (the reviewing checkout cannot
+        #     name the binaries).
+        def cross_checkout_case():
+            producer_root = os.path.join(
+                owned_temp_root(), "qual-producer")
+            matrices, crash, _old = rehome_evidence(
+                *load_genuine(),
+                os.path.join(producer_root, ".local", "qual"))
+            for report in matrices + [crash]:
+                report["checkout_root"] = producer_root
+                command = report.get("command") or []
+                for option in ("--rust", "--go", "--fixture-tool"):
+                    if option not in command:
+                        continue
+                    index = command.index(option)
+                    command[index + 1] = os.path.relpath(
+                        command[index + 1], producer_root)
+            paths = []
+            for index, report in enumerate(matrices):
+                path = os.path.join(work, f"cross-checkout-{index}.json")
+                assign(path, report)
+                paths.append(path)
+            crash_cross = os.path.join(work, "cross-checkout-crash.json")
+            assign(crash_cross, crash)
+            problems, _c, _s = assess(paths, [crash_cross])
+            assert not problems, (
+                f"evidence bound to its recorded producer root failed "
+                f"from the reviewing checkout: {problems}")
+            # Negative control: without the recorded producer root the
+            # relative spellings resolve against the reviewing checkout
+            # and the identity binding must fail.
+            unrecorded = _copy.deepcopy(crash)
+            unrecorded["checkout_root"] = None
+            crash_unrecorded = os.path.join(
+                work, "cross-checkout-unrecorded.json")
+            assign(crash_unrecorded, unrecorded)
+            problems, _c, _s = assess(paths, [crash_unrecorded])
+            assert any(
+                "does not name the report root binaries table path"
+                in problem for problem in problems), (
+                f"evidence without a recorded producer root did not "
+                f"fail the binding from the reviewing checkout: "
+                f"{problems}")
+        cross_checkout_case()
 
 
 if __name__ == "__main__":
