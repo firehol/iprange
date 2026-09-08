@@ -1891,19 +1891,28 @@ def _self_test():
             # provenance free text: ``copy "\\?\\C:\\Users
             # \\alice\\x" dest`` carries the prefix mid-string,
             # so the start-only prefix strip cannot hide it from the
-            # scan; the inline-stripped candidate must trip (external
-            # review finding).
-            embedded_verbatim = (
+            # scan; the inline-stripped candidate must trip for every
+            # prefix form the regex removes (external review
+            # finding; round-17.1 pin-coverage repair).
+            embedded_device_forms = [
                 'copy "' + "\\\\?\\" + profile_abs
-                + '\\scratch\\x" dest')
-            if personal_path_in_report(
-                    {"build": embedded_verbatim}) is None:
-                problems.append(
-                    "P2-7 embedded verbatim profile spelling not "
-                    "detected")
-            else:
-                print("[P2-7] embedded verbatim profile spelling "
-                      "detected")
+                + '\\scratch\\x" dest',
+                'copy "' + "\\.\\" + profile_abs
+                + '\\scratch\\x" dest',
+                'copy "' + chr(92) + chr(92) + "??" + chr(92)
+                + profile_abs + '\\scratch\\x" dest',
+                'copy "' + chr(92) + "??" + chr(92)
+                + profile_abs + '\\scratch\\x" dest',
+            ]
+            for embedded_form in embedded_device_forms:
+                if personal_path_in_report(
+                        {"build": embedded_form}) is None:
+                    problems.append(
+                        "P2-7 embedded device profile spelling not "
+                        f"detected: {embedded_form!r}")
+                else:
+                    print("[P2-7] embedded device profile spelling "
+                          "detected")
             # The native NT prefix with one leading backslash.
             ntns_report = dict(clean_report,
                                work_dir=os.path.join(

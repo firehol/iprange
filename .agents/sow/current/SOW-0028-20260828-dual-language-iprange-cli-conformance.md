@@ -9698,3 +9698,24 @@ source changed — the Go edit touches a `_test.go` file only).
 Sensitive-data gate: clean.  Artifact gate: AGENTS.md, specs, and
 runtime project skills unchanged; sanitizer and gate docstrings
 describe the new semantics.
+
+#### Wave 17 follow-up round 17.1 (2026-09-08) — committed pins for all four embedded device forms
+
+The wave-17 role round PASSed at `c33fd825` for six roles, but the
+parity role returned one P2: the wave-17 record claimed the P2-7
+self-test pins "the four embedded device forms", while only the
+`\\?\` form had a committed pin; the `\\.\`, `\\??\`, and `\??\`
+forms were exercised only by the lead's uncommitted nt-shim probes,
+so a regression dropping those alternatives from
+`_DEVICE_INLINE_RE` would pass every committed gate.  Repair, in
+`v4/cli/windows_housekeeping_harness.py`: the embedded pin is now a
+four-form loop (verbatim, device, W32-namespace, and native-NT
+prefix spellings of the profile inside a quoted provenance command),
+with the prefix literals built from `chr(92)` so the source cannot
+mis-render an escape sequence.  Validation: all four forms trip and
+the neutral verbatim-UNC path stays clean under the nt-path
+simulation; the Windows-housekeeping `--self-test` executes the
+nt-gated loop natively on the Windows host; the committed evidence
+structural scan stays clean; product binaries byte-identical
+(SHASUMS 8/8).  Sensitive-data gate: clean.  Artifact gate:
+AGENTS.md, specs, and runtime project skills unchanged.
