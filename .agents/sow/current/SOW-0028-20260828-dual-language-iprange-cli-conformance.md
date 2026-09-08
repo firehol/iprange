@@ -10502,8 +10502,11 @@ review session) remains the milestone-4 closure gate.
 
 #### Wave 19 round 19.7 (2026-09-08) — tester-role P2: sidecar-guard test determinism (inode reuse) repaired
 
-The wave-19.6 role round at `1b30628f` returned two PASSes, six
-PASSes, and one tester FAIL:
+The wave-19.6 role round at `1b30628f` returned four PASSes
+(operations, portability, performance, glm) and three FAILs
+(tester P1+P2, parity P2, security P2); this round repairs the
+tester-role determinism finding after the other two FAILs were
+closed in round 19.6:
 
 - Tester P2 — the positive "distinct file stays accepted" assertion
   in the sidecar-guard unit tests ran AFTER the sidecar was renamed
