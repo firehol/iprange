@@ -2187,9 +2187,12 @@ def _self_test():
         # live on macOS (APFS folds case), so only other POSIX hosts
         # exercise the raw ``..``-walk spelling.  An all-uppercase
         # checkout (``/BUILD/IPRANGE``) uppercases to itself, which
-        # would make the contrast vacuous; the first alphabetic
-        # character is flipped instead, guaranteeing a spelling that
-        # differs from the checkout (astra turn-13 finding).
+        # would make the contrast vacuous; the first character
+        # whose case conversion differs (``swapcase() != ch`` --
+        # uncased script letters such as Chinese characters satisfy
+        # ``isalpha`` but have no case) is flipped instead,
+        # guaranteeing a spelling that differs from the checkout
+        # (astra turn-13 and turn-14 findings).
         checkout = checkout_root()
         varied_checkout = os.path.join(
             os.path.dirname(checkout).upper(),

@@ -9912,8 +9912,9 @@ commits normalization assertions for all four whole-string neutral
 forms (root exact, no trip) and all four embedded profile forms
 (root restored).  The end-to-end trip under a UNC-home profile is
 exercised by the separate nt-sim probe matrix and the native
-Windows runs (a CI Windows host profile is drive-letter, so the
-operator-profile trip cannot be a committed pin); the SOW
+Windows runs; that end-to-end control is not committed yet (a CI
+Windows host profile is drive-letter, so the operator-profile trip
+needs a controlled-profile or committed simulation).  The SOW
 validation text distinguishes the committed normalization
 assertions from those probe runs.
 
@@ -9982,12 +9983,11 @@ repaired and verified in this wave:
    controlled-profile or committed simulation can cover it later.
    The record now distinguishes the committed normalization
    assertions from those probe runs.
-6. P3 — carried commit-subject hygiene now names five revisions
-   (`9374917e`, `e3d7bf61`, `65ea9587`, `cf5c6782`, `aca58716`;
-   later waves that mention the reviewer-model name in commit
-   subjects extend the same approval-dependent item).  The
-   history-rewrite remains recorded, approval-dependent,
-   non-blocking.
+6. P3 — carried commit-subject hygiene now names four revisions
+   (`9374917e`, `e3d7bf61`, `65ea9587`, `aca58716`; later waves
+   that mention the reviewer-model name in commit subjects extend
+   the same approval-dependent item).  The history-rewrite remains
+   recorded, approval-dependent, non-blocking.
 
 Validation: harness `--self-test` PASS on Linux (incl. the
 doubled-separator darwin pins) and natively on the Windows host
@@ -10047,9 +10047,9 @@ in this wave:
    simply not committed yet (a controlled profile or committed
    nt-path simulation can cover it), and the record now describes
    the coverage as uncommitted rather than impossible.
-5. P3 — the commit-subject hygiene item now names five revisions
-   (`9374917e`, `e3d7bf61`, `65ea9587`, `cf5c6782`, `aca58716`);
-   later waves mentioning the reviewer-model name extend the same
+5. P3 — the commit-subject hygiene item now names four revisions
+   (`9374917e`, `e3d7bf61`, `65ea9587`, `aca58716`); later waves
+   mentioning the reviewer-model name extend the same
    approval-dependent, non-blocking item.
 
 Validation: harness `--self-test` PASS on Linux (two-separator
@@ -10063,3 +10063,30 @@ records only).  Sensitive-data gate: clean.  Artifact gate:
 AGENTS.md, specs, and runtime project skills unchanged; sanitizer
 and harness comments describe the checkout-root collapse, the
 exactly-two-separator control, and the cased-flip requirement.
+
+#### Wave 18 follow-up round 18.6 (2026-09-08) — astra turn-15 P3 corrections
+
+Astra turn 15 (same session `b5dd923d…`) returned PRODUCTION GRADE
+with three non-blocking P3s; all are corrected in this final wave:
+
+1. P3 — the round-18.3 record still said a UNC-profile rejection
+   "cannot be a committed pin"; the paragraph now says the
+   end-to-end control is not committed yet and can be covered by a
+   controlled-profile or committed simulation, consistent with the
+   round-18.5 correction.
+2. P3 — the hygiene list wrongly named `cf5c6782` (its subject and
+   body contain no reviewer-model name); the list now names the
+   four real revisions (`9374917e`, `e3d7bf61`, `65ea9587`,
+   `aca58716`).
+3. P3 — the contrast-pin comment still said "the first alphabetic
+   character is flipped"; it now states the first character whose
+   case conversion differs (`swapcase() != ch`), matching the
+   turn-14 repair.
+
+Validation: harness `--self-test` PASS on Linux and natively on
+the Windows host (checkout CWD and fresh scratch CWD); kind-gate
+self-test 48 positive controls PASS; resource-harness `--self-test`
+PASS; committed evidence structural scan clean; SHASUMS 8/8 (no
+product source changed).  Sensitive-data gate: clean.  Artifact
+gate: AGENTS.md, specs, and runtime project skills unchanged;
+comment/record corrections only.
