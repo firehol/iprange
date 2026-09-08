@@ -713,6 +713,26 @@ worker `9fd36146…` (unchanged), Windows Go `436691f5…` / Rust
 `d7deb242…`, every battery gate green and Windows housekeeping 2/2
 at the same revision `2e4f184d`.
 
+Wave-19 state (2026-09-08): the external whole-milestone control
+review at `11bd84e5` (same session `b5dd923d…`) FAILed milestone-4
+closure with nine in-scope findings — the P0 output-over-source
+overwrite, two Go P1s (EOF line completion, frame decode parity), the
+unbounded early-error responses, four qualification-gate defects, and
+the Windows row-validation gap.  All nine are repaired and verified
+in the "Wave 19" section below (product wave committed at `3c424ac2`
+plus the wave-19 Rust commit `081bf3c4`; the regenerating battery
+also found and closed the round-19.2 sensitivity-gate interaction at
+`e1350adb`).  Final wave-19 Linux identities: Go `be7ab14b…` /
+worker `4f2eb063…`, Rust `c63928dd…` / worker `9fd36146…`, fixture
+`947b94e9…` (go1.27.0, rustc 1.91.1 stable; Rust hashes verified
+identical to a fresh stable-toolchain rebuild); Windows Go
+`0d4dfa20…` / worker `1d99e72d…`, Rust `b2f8e9fd…` (go1.26.5, rustc
+1.97.1, native Python 3.14.6), every battery gate green (matrices
+38/38 single and 14+24 mixed, crash 16/16, resource 8/8, golden 55,
+sensitivity 14, kind gate PASS with fresh evidence, Windows
+housekeeping 2/2).  Evidence regenerated and committed at
+`e1350adb`; roles re-anchored and astra re-run at that revision.
+
 
 ## Requirements
 
