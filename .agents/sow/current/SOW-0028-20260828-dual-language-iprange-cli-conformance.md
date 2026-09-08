@@ -10336,6 +10336,12 @@ Repaired in both languages (this round):
    `TestCanonicalAbsoluteDecorations`, `TestExportRefusesDecoratedSourceSpelling`;
    Rust `canonical_absolute_normalizes_decorated_spellings`.
 
+The identity capture itself is hosted in the SDK for both
+languages (Go `os.SameFile`; Rust `iprange-livedb::identity`, which
+uses `GetFileInformationByHandle` on Windows with the same
+windows-sys surface as the namespace code), so the CLI guard needs no
+platform-specific unsafe of its own.
+
 Verification: Go suite 23/23 packages PASS; Rust workspace PASS
 (421 + support crates, including the three new regression tests);
 harness self-tests PASS (kind, resource, windows-housekeeping,

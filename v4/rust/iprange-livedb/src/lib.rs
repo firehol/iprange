@@ -27,6 +27,8 @@ mod database_file;
 mod draft_store;
 #[path = "sdk_error.rs"]
 pub mod error;
+pub mod file_identity;
+pub use file_identity::identity;
 mod fault;
 mod feed;
 mod feed_catalog;

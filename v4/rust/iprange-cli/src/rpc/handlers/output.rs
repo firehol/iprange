@@ -47,27 +47,16 @@ pub(crate) struct FileIdentity {
     pub ino: u64,
 }
 
-/// Capture the current file identity of `path`, if it exists.
+/// Capture the current file identity of `path`, if it exists.  The
+/// device/inode pair comes from the SDK's platform identity helper
+/// (windows-sys on Windows, std metadata on POSIX), which also owns
+/// the platform cfg split.
 pub(crate) fn file_identity(path: &Path) -> Option<FileIdentity> {
-    let meta = fs::metadata(path).ok()?;
-    #[cfg(unix)]
-    use std::os::unix::fs::MetadataExt;
-    #[cfg(windows)]
-    use std::os::windows::fs::MetadataExt;
-    #[cfg(unix)]
-    return Some(FileIdentity {
+    iprange_livedb::identity(path).map(|(dev, ino)| FileIdentity {
         path: path.to_path_buf(),
-        dev: meta.dev(),
-        ino: meta.ino(),
-    });
-    #[cfg(windows)]
-    return Some(FileIdentity {
-        path: path.to_path_buf(),
-        dev: meta.volume_serial_number(),
-        ino: meta.file_index(),
-    });
-    #[allow(unreachable_code)]
-    None
+        dev,
+        ino,
+    })
 }
 
 /// Lexical normalization of a canonicalized prefix plus a re-appended
