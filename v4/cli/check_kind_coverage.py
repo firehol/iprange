@@ -179,7 +179,10 @@ import tempfile
 # for their exact globals; they live next to this gate.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from command_sanitize import owned_temp_root  # noqa: E402  (side-effect free)
+from command_sanitize import (  # noqa: E402  (side-effect free)
+    checkout_root,
+    owned_temp_root,
+)
 
 
 REQUIRED_KINDS = [
@@ -427,6 +430,22 @@ def _crash_path_to_sha(report):
         if isinstance(path, str):
             table[path] = value
     return table
+
+
+def _resolve_report_path(value):
+    """One path a report command names, invariant to the gate's cwd.
+
+    The matrix runner records checkout-contained values as
+    checkout-relative spellings (command_sanitize rewrites them so
+    the evidence is invariant to the invocation directory); resolving
+    them against the gate's process cwd would reject the same
+    evidence when the gate runs from a scratch directory.  Relative
+    values therefore resolve against the checkout root that owns the
+    gate, matching the sanitizer's invariant.  Absolute values pass
+    through unchanged."""
+    if os.path.isabs(value):
+        return os.path.realpath(value)
+    return os.path.realpath(os.path.join(checkout_root(), value))
 
 
 def _matrix_path_to_sha(report):
@@ -755,7 +774,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                         f"matrix {path}: report command records no {flag} "
                         f"argument")
                     continue
-                bound_path = os.path.realpath(named)
+                bound_path = _resolve_report_path(named)
                 command_selected[language] = bound_path
                 bound_sha = report_shas.get(bound_path)
                 if bound_sha is None:
@@ -780,7 +799,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                 problems.append(
                     f"matrix {path}: report command records no "
                     f"--fixture-tool argument")
-            elif os.path.realpath(fixture) not in fixture_paths:
+            elif _resolve_report_path(fixture) not in fixture_paths:
                 problems.append(
                     f"matrix {path}: report command --fixture-tool "
                     f"{fixture!r} does not name the fixture binary the "
@@ -790,7 +809,7 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
     if namespace is not None:
         named = namespace.fixture_tool
         if named is not None:
-            command_fixture = os.path.realpath(named)
+            command_fixture = _resolve_report_path(named)
     cases = report.get("cases", [])
     # Counter cross-validation: the per-case status list is the truth;
     # a doctored aggregate can claim any number.  Cases that are not
@@ -1259,7 +1278,7 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                         f"crash {path}: report root binaries table records "
                         f"no {role} path")
                 elif (not isinstance(named, str)
-                      or os.path.realpath(named)
+                      or _resolve_report_path(named)
                       != os.path.realpath(table_path)):
                     problems.append(
                         f"crash {path}: report command {flag} {named!r} does "
@@ -3372,6 +3391,69 @@ def _self_test():
                        for problem in problems), (
                 f"matrix report without command did not record the argv "
                 f"problem: {problems}")
+
+        # 47. Command-path resolution is cwd-invariant (external
+        #     review finding): the matrix runner records
+        #     checkout-contained binary values as checkout-relative
+        #     spellings (``.local/qual/...``) while the binary
+        #     identity records stay absolute, so the gate must
+        #     resolve those values against the checkout root, never
+        #     the gate's process cwd.  The committed battery stages
+        #     binaries outside the checkout (absolute values are
+        #     cwd-invariant by themselves), so the genuine evidence
+        #     is re-homed under the checkout first: every binary
+        #     path is moved to ``<checkout>/.local/qual/...`` and the
+        #     command arrays are rewritten the way the sanitizer
+        #     records them (checkout-relative spellings).  Assessed
+        #     from a scratch cwd, the pre-fix ``os.path.realpath``
+        #     resolution resolved those spellings against the gate's
+        #     cwd and rejected the evidence.
+        def cwd_invariant_case():
+            matrices, crash = load_genuine()
+            first_bin = None
+            for report in matrices:
+                for record in (report.get("binaries") or {}).values():
+                    candidate = (record or {}).get("path")
+                    if candidate:
+                        first_bin = candidate
+                        break
+                if first_bin:
+                    break
+            assert first_bin, "genuine evidence records no binary path"
+            old_root = os.path.dirname(os.path.dirname(first_bin))
+            new_root = os.path.join(checkout_root(), ".local", "qual")
+            for report in matrices + [crash]:
+                text = _json.dumps(report).replace(old_root, new_root)
+                rehomed = _json.loads(text)
+                command = rehomed.get("command") or []
+                for option in ("--rust", "--go", "--fixture-tool"):
+                    if option not in command:
+                        continue
+                    index = command.index(option)
+                    command[index + 1] = os.path.relpath(
+                        command[index + 1], checkout_root())
+                if report is crash:
+                    crash = rehomed
+                else:
+                    matrices[matrices.index(report)] = rehomed
+            paths = []
+            for index, report in enumerate(matrices):
+                path = os.path.join(work, f"cwd-invariant-{index}.json")
+                assign(path, report)
+                paths.append(path)
+            crash_invariant = os.path.join(
+                work, "cwd-invariant-crash.json")
+            assign(crash_invariant, crash)
+            saved_cwd = os.getcwd()
+            try:
+                os.chdir(work)
+                problems, _c, _s = assess(paths, [crash_invariant])
+            finally:
+                os.chdir(saved_cwd)
+            assert not problems, (
+                f"checkout-relative command paths failed from a "
+                f"different cwd: {problems}")
+        cwd_invariant_case()
 
 
 if __name__ == "__main__":

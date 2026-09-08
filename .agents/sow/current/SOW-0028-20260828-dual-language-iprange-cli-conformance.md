@@ -9629,3 +9629,72 @@ the Windows-housekeeping `--self-test` result and the sensitive-data
 gate carry from round 16.10 (this wave touches only the SOW record).
 Artifact gate: AGENTS.md, specs, end-user docs, and runtime project
 skills unchanged.
+
+#### Wave 17 (2026-09-08) — turn-11 external-review repairs: inline device paths, gate cwd resolution, darwin guards, UNC pin
+
+Astra turn 11 (same session `b5dd923d…`, exact HEAD `254fb0e4`)
+returned NEEDS CHANGES with four in-scope P2s and three P3s; all four
+P2 classes and both actionable P3s are repaired in this wave:
+
+1. P2 — embedded Windows device paths escaped the report scan.
+   `_strip_device_prefix` only handles a device prefix at the start
+   of the whole value, so a provenance build command embedding a
+   quoted verbatim path under the profile (`copy "\\?\C:\Users\
+   alice\scratch\x" dest`) kept the prefix mid-string and the
+   occurrence walk rejected the match because the preceding
+   character was a path separator.  `_privacy_spellings` now also
+   emits an inline-stripped candidate on Windows (a regex built
+   from the same prefix constants removes `\\?\`, `\\.\`, `\\??\`,
+   and `\??\` anywhere inside the string), and the P2-7 self-test
+   pins the four embedded device forms as detected.
+2. P2 — the kind gate resolved recorded command paths against the
+   gate's process cwd.  The matrix runner records checkout-contained
+   binary values as checkout-relative spellings while binary
+   identity records stay absolute, so running the gate from a
+   scratch directory rejected valid evidence.  A new
+   `_resolve_report_path` helper in `check_kind_coverage.py`
+   resolves relative values against the checkout root (the
+   sanitizer's own invariant) and is used at all four binding sites
+   (matrix `--rust`/`--go`, matrix fixture, crash-side
+   producer/consumer/fixture, command-fixture); kind-gate self-test
+   control 47 re-homes the genuine evidence under the checkout,
+   records commands the way the sanitizer does, assesses from a
+   scratch cwd, and fails with the pre-fix resolution style.
+3. P2 — the default-corpus exception rejected valid macOS
+   spellings.  On case-insensitive APFS a case-varied `--cases`
+   spelling names the same corpus while the raw realpath strings
+   differ, so the guard refused it.  A new public `same_path`
+   helper compares normcased realpaths (darwin-folded) and the
+   run.py `--cases` guard uses it; `sanitized_path_value` also
+   canonicalizes a case-varied existing spelling through
+   `os.path.realpath` on darwin before computing the relative
+   record, reconciling the rendering with the folded containment.
+4. P2 — the verbatim-UNC regression control never exercised the
+   branch (the literal carried only one leading separator) and a
+   neutral server/share could not distinguish a broken
+   single-separator restoration from the correct
+   double-separator one.  The literal now carries two leading
+   separators and the pin additionally asserts the exact normalized
+   root (`\\server\share`) through `_privacy_spellings`.
+5. P3 — `lifecycle_live_test.go` comment corrected: the lossy
+   UTF-8 renderer emits one U+FFFD per maximal subpart of invalid
+   bytes, and a contiguous invalid run can yield several subparts.
+6. P3 — the kind-gate control count in an earlier record is
+   corrected: the gate carries 47 committed self-test controls
+   (the earlier "1–45" undercounted the then-existing control 46;
+   control 47 is added by this wave).
+
+Validation: nt-shim probes (embedded verbatim/device/native-NT/W32
+forms trip; verbatim-UNC neutral clean with the exact normalized
+root; all prior drive/absolute/sibling/delimiter classes unchanged)
+pass; kind-gate self-test (47 controls) passes, and control 47 fails
+with the pre-fix resolution style (negative control verified);
+Windows-housekeeping `--self-test` passes on Linux; resource-harness
+`--self-test` passes; the `same_path` matrix (POSIX, darwin-sim
+case-varied) passes; the committed evidence structural scan stays
+clean; the artifact-basename Go test passes after the comment-only
+change.  Product binaries byte-identical (SHASUMS 8/8; no product
+source changed — the Go edit touches a `_test.go` file only).
+Sensitive-data gate: clean.  Artifact gate: AGENTS.md, specs, and
+runtime project skills unchanged; sanitizer and gate docstrings
+describe the new semantics.

@@ -43,6 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from command_sanitize import (  # noqa: E402  (side-effect free)
     owned_temp_root,
     personal_path_in_report,
+    same_path,
     sanitized_command,
     under_profile,
 )
@@ -2040,7 +2041,7 @@ def main():
     # (``--cases=PATH``); any spelling that resolves to the in-tree
     # default corpus stays usable (the relative ``v4/cli/cases``
     # invocation included).
-    if (os.path.realpath(args.cases) != os.path.realpath(DEFAULT_CASE_DIR)
+    if (not same_path(args.cases, DEFAULT_CASE_DIR)
             and under_profile(args.cases)):
         parser.error(
             f"cases path {args.cases} lives under the operator's "

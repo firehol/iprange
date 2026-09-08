@@ -147,10 +147,12 @@ func TestHousekeepingRowBasenamesRoundTripJSON(t *testing.T) {
 }
 
 // artifactBasename must render encoding-1 bytes with the same lossy
-// UTF-8 decode as the Rust renderer (one U+FFFD per maximal invalid
-// run, from_utf8_lossy semantics): before the wave-15 round-3 repair
-// Go's json marshal replaced each invalid byte separately and the
-// products' wire text diverged for incomplete multibyte sequences.
+// UTF-8 decode as the Rust renderer (one U+FFFD per maximal subpart
+// of invalid bytes, from_utf8_lossy semantics; a contiguous invalid
+// run can yield several subparts, for example two rejected lead
+// bytes side by side): before the wave-15 round-3 repair Go's json
+// marshal replaced each invalid byte separately and the products'
+// wire text diverged for incomplete multibyte sequences.
 func TestArtifactBasenameEncodingOneInvalidUtf8MatchesRust(t *testing.T) {
 	// One incomplete two-byte run decodes to exactly one replacement
 	// character on the Rust side; a per-byte replacement would emit

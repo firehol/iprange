@@ -135,6 +135,7 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from command_sanitize import (  # noqa: E402  (side-effect free)
+    _privacy_spellings,
     checkout_root,
     neutral_temp_root,
     owned_temp_dir,
@@ -1866,14 +1867,43 @@ def _self_test():
             # Verbatim-UNC normalization: ``\\?\\UNC\\server
             # \\share`` must normalize to the ordinary
             # ``\\server\\share`` root, which is outside the
-            # profile and must not trip the scan.
-            raw_unc = "\\?\\UNC\\server\\share"
-            if personal_path_in_report({"work_dir": raw_unc}) is not None:
+            # profile and must not trip the scan.  The neutral
+            # control alone cannot distinguish a broken
+            # single-separator restoration from the correct
+            # double-separator one, so the exact normalized root is
+            # asserted too (external review finding).
+            verbatim_unc = "\\\\?\\UNC\\server\\share"
+            if personal_path_in_report(
+                    {"work_dir": verbatim_unc}) is not None:
                 problems.append(
                     "P2-7 verbatim-UNC prefix normalization tripped "
                     "on a neutral UNC path")
             else:
                 print("[P2-7] verbatim-UNC neutral path passed")
+            if "\\\\server\\share" not in _privacy_spellings(
+                    verbatim_unc):
+                problems.append(
+                    "P2-7 verbatim-UNC normalization lost the server "
+                    f"root: {_privacy_spellings(verbatim_unc)!r}")
+            else:
+                print("[P2-7] verbatim-UNC normalized root exact")
+            # Embedded device-prefixed profile spelling inside
+            # provenance free text: ``copy "\\?\\C:\\Users
+            # \\alice\\x" dest`` carries the prefix mid-string,
+            # so the start-only prefix strip cannot hide it from the
+            # scan; the inline-stripped candidate must trip (external
+            # review finding).
+            embedded_verbatim = (
+                'copy "' + "\\\\?\\" + profile_abs
+                + '\\scratch\\x" dest')
+            if personal_path_in_report(
+                    {"build": embedded_verbatim}) is None:
+                problems.append(
+                    "P2-7 embedded verbatim profile spelling not "
+                    "detected")
+            else:
+                print("[P2-7] embedded verbatim profile spelling "
+                      "detected")
             # The native NT prefix with one leading backslash.
             ntns_report = dict(clean_report,
                                work_dir=os.path.join(

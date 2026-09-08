@@ -67,7 +67,14 @@ def sanitized_path_value(value):
     except ValueError:
         under_checkout = False
     if under_checkout:
-        return os.path.relpath(abs_path, _CHECKOUT)
+        base = abs_path
+        if sys.platform == "darwin" and os.path.exists(abs_path):
+            # APFS is case-insensitive: canonicalize a case-varied
+            # spelling through the real path so the recorded relative
+            # form is stable (the raw spelling would produce a
+            # ``..``-walk relative record).
+            base = os.path.realpath(abs_path)
+        return os.path.relpath(base, _CHECKOUT)
     return value
 
 
@@ -209,6 +216,19 @@ _DEVICE_PREFIXES = (_BS + _BS + "?" + _BS,
                     _BS + _BS + "?" + "?" + _BS,
                     _BS + "?" + "?" + _BS)
 
+# Device/verbatim prefixes anywhere inside a string (built with chr(92)
+# for the same reason as the prefix constants; IGNORECASE mirrors the
+# prefix stripping).  ``_strip_device_prefix`` only handles a prefix at
+# the start of the whole value; a provenance build command embeds
+# quoted device paths mid-string, so the privacy scan also compares a
+# variant with every inline occurrence removed.
+_DEVICE_INLINE_RE = re.compile(
+    re.escape(_BS + _BS + "?" + _BS)
+    + "|" + re.escape(_BS + _BS + "?" + "?" + _BS)
+    + "|" + re.escape(_BS + "?" + "?" + _BS)
+    + "|" + re.escape(_BS + _BS + "." + _BS),
+    re.IGNORECASE)
+
 
 def _strip_device_prefix(value):
     """Map Windows verbatim/device spellings back to ordinary path
@@ -268,6 +288,10 @@ def _privacy_spellings(value):
         anchored = _normcase(os.path.normpath(os.path.abspath(norm)))
         if anchored not in out:
             out.append(anchored)
+    if os.name == "nt":
+        inline = _normcase(_DEVICE_INLINE_RE.sub("", norm))
+        if inline not in out:
+            out.append(inline)
     return out
 
 
@@ -291,6 +315,21 @@ def _matches_profile(spelling, profile):
     profile's comparison forms."""
     return any(spelling == form or spelling.startswith(form + os.sep)
                for form in _profile_comparisons(profile))
+
+
+def same_path(a, b):
+    """True when two spellings name the same existing path.
+
+    The normcased realpath of each side is compared, so a
+    case-varied spelling of the same path matches on
+    case-insensitive volumes (macOS APFS default), where the raw
+    realpath strings differ even though the kernel resolves both to
+    the same object."""
+    try:
+        return _normcase(os.path.realpath(a)) == _normcase(
+            os.path.realpath(b))
+    except OSError:
+        return False
 
 
 def under_profile(path):
