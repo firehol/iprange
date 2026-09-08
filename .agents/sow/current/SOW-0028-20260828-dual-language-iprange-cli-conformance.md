@@ -10202,11 +10202,15 @@ lead with reproduction scripts before and after repair (repos:
    semantics match Rust, including the absence of replacement
    bytes (`efbfbd`) in created databases.
 4. P2 — early error responses bypassed the output bounds.  Both
-   languages now emit bounded schema errors: a 70,000-byte unknown
-   member yields a 99-byte error object in Go and Rust (was
-   70,091 bytes); a near-limit integral ID refusal is 125 bytes in
-   both (was Go 1,048,587 bytes).  Go `rpc/session.go`,
-   Rust `rpc/session.rs`.
+   languages now emit bounded schema errors: measured at the
+   wave-19 binaries, a 70,000-byte unknown member yields a
+   4,201-byte error object in Go and a 10,904-byte object in Rust
+   (was 70,091 bytes in both), and a near-limit integral ID
+   refusal is 124 bytes in both (was Go 1,048,587 bytes); the
+   short-member baseline is 92 bytes in both.  The bounded
+   guarantee (never above the 65,000-byte object / 1,048,576-byte
+   frame ceilings) is pinned by committed tests in both
+   languages.  Go `rpc/session.go`, Rust `rpc/session.rs`.
 5. P2 — kind-gate identity/work contradictions accepted.  The gate
    now rejects duplicate-path different-SHA entries, duplicate `c`
    records with different SHAs, missing fixture identity, and
