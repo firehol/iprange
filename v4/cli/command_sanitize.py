@@ -207,10 +207,16 @@ def _expand_env_vars(value):
 # ``\\?\\UNC\`` rewrites a verbatim UNC path back to the ordinary
 # ``\\server\share`` form; the other prefixes are stripped away.
 _BS = chr(92)
-# ``\\?\\UNC\\`` (with its trailing separator): the verbatim form
-# of a UNC path; stripping it and re-adding the double-separator
-# prefix restores the ordinary ``\\server\\share`` root.
-_DEVICE_UNC = _BS + _BS + "?" + _BS + "UNC" + _BS
+# Every device/verbatim prefix spelling may precede ``UNC\\`` (the
+# W32 verbatim, W32 namespace, native-NT, and device namespace
+# forms); stripping any of them and re-adding the double-separator
+# root restores the ordinary ``\\server\\share`` UNC root.
+_DEVICE_UNC_FORMS = (
+    _BS + _BS + "?" + _BS + "UNC" + _BS,       # \\?\\UNC\\
+    _BS + _BS + "?" + "?" + _BS + "UNC" + _BS, # \\??\\UNC\\
+    _BS + "?" + "?" + _BS + "UNC" + _BS,       # \\??\\UNC\\ (native-NT)
+    _BS + _BS + "." + _BS + "UNC" + _BS,       # \\\\.\\UNC\\
+)
 # Device/verbatim prefixes stripped before comparison: ``\\?\\``,
 # ``\\.\\``, the W32 namespace ``\\??\\`` (two and one leading
 # backslash spellings), and the native NT prefix ``\??\\``.
@@ -239,22 +245,25 @@ _DEVICE_INLINE_RE = re.compile(
 # inline strip alone would leave ``UNC\server\share`` without its
 # root and a UNC home profile would escape the scan.
 _DEVICE_INLINE_UNC_RE = re.compile(
-    re.escape(_BS + _BS + "?" + _BS + "UNC" + _BS), re.IGNORECASE)
+    "|".join(re.escape(form) for form in _DEVICE_UNC_FORMS),
+    re.IGNORECASE)
 
 
 def _strip_device_prefix(value):
     """Map Windows verbatim/device spellings back to ordinary path
-    spellings before comparison.  ``\\?\\UNC\\server\\share``
-    (any case) becomes ``\\server\\share``; the ``\\?\\``,
-    ``\\.\\`` and ``\\??\\`` prefixes are stripped.  Applied
-    only on Windows; other platforms keep the value unchanged."""
+    spellings before comparison.  ``UNC\\server\\share`` preceded by
+    any device/verbatim prefix spelling (``\\?\\``, ``\\??\\``,
+    ``\\??\\``, ``\\.\\`` — any case) becomes ``\\server\\share``;
+    the device/verbatim prefixes are stripped.  Applied only on
+    Windows; other platforms keep the value unchanged."""
     lowered = value.lower()
-    if lowered.startswith(_DEVICE_UNC.lower()):
-        # ``\\?\\UNC\\server\\share`` -> ``\\\\server\\share``:
-        # the second leading separator is spelled by the ``UNC``
-        # component, so re-add the double-separator prefix after
-        # stripping the verbatim marker.
-        return _BS + _BS + value[len(_DEVICE_UNC):].lstrip(_BS)
+    for unc in _DEVICE_UNC_FORMS:
+        if lowered.startswith(unc.lower()):
+            # ``\\?\\UNC\\server\\share`` -> ``\\\\server\\share``:
+            # the second leading separator is spelled by the ``UNC``
+            # component, so re-add the double-separator prefix after
+            # stripping the prefix marker.
+            return _BS + _BS + value[len(unc):].lstrip(_BS)
     for prefix in _DEVICE_PREFIXES:
         if lowered.startswith(prefix.lower()):
             return value[len(prefix):]

@@ -1873,38 +1873,58 @@ def _self_test():
             # single-separator restoration from the correct
             # double-separator one, so the exact normalized root is
             # asserted too (external review finding).
-            verbatim_unc = "\\\\?\\UNC\\server\\share"
-            if personal_path_in_report(
-                    {"work_dir": verbatim_unc}) is not None:
-                problems.append(
-                    "P2-7 verbatim-UNC prefix normalization tripped "
-                    "on a neutral UNC path")
-            else:
-                print("[P2-7] verbatim-UNC neutral path passed")
-            if "\\\\server\\share" not in _privacy_spellings(
-                    verbatim_unc):
-                problems.append(
-                    "P2-7 verbatim-UNC normalization lost the server "
-                    f"root: {_privacy_spellings(verbatim_unc)!r}")
-            else:
-                print("[P2-7] verbatim-UNC normalized root exact")
-            # Embedded verbatim-UNC root restoration pin (astra
-            # turn-12 finding): a provenance command carrying
-            # ``\\?\\UNC\\server\\share\\alice\\...`` must
-            # restore the ordinary ``\\\\server\\share`` root in
-            # the inline-stripped candidate too, so a UNC home profile
-            # spelling cannot escape the scan.
-            embedded_unc = (
-                'copy "' + "\\\\?\\UNC\\server\\share\\"
-                + 'alice\\scratch\\x" dest')
-            if not any(
-                    "\\\\server\\share\\alice\\scratch\\x" in spelling
-                    for spelling in _privacy_spellings(embedded_unc)):
-                problems.append(
-                    "P2-7 embedded verbatim-UNC spelling lost the "
-                    f"server root: {_privacy_spellings(embedded_unc)!r}")
-            else:
-                print("[P2-7] embedded verbatim-UNC root restored")
+            verbatim_unc_forms = [
+                "\\\\?\\UNC\\server\\share",
+                "\\\\??\\UNC\\server\\share",
+                "\\??\\UNC\\server\\share",
+                "\\\\.\\UNC\\server\\share",
+            ]
+            for verbatim_unc in verbatim_unc_forms:
+                if personal_path_in_report(
+                        {"work_dir": verbatim_unc}) is not None:
+                    problems.append(
+                        "P2-7 verbatim-UNC prefix normalization "
+                        "tripped on a neutral UNC path: "
+                        f"{verbatim_unc!r}")
+                else:
+                    print("[P2-7] verbatim-UNC neutral path passed")
+                if "\\\\server\\share" not in _privacy_spellings(
+                        verbatim_unc):
+                    problems.append(
+                        "P2-7 verbatim-UNC normalization lost the "
+                        "server root: "
+                        f"{_privacy_spellings(verbatim_unc)!r}")
+                else:
+                    print("[P2-7] verbatim-UNC normalized root exact")
+            # Embedded UNC-root restoration pin (astra turn-12
+            # finding; round-18.3 parity-coverage repair): a
+            # provenance command carrying ``\\?\\UNC\\server
+            # \\share\\alice\\...`` must restore the ordinary
+            # ``\\\\server\\share`` root in the inline-stripped
+            # candidate too, so a UNC home profile spelling cannot
+            # escape the scan.  Every device/verbatim prefix spelling
+            # the strip recognizes must restore the root, not only
+            # the ``\\\\?\\\\UNC\\\\`` form (the generic inline strip
+            # alone would leave a rootless ``UNC\\server\\share``).
+            embedded_unc_forms = [
+                'copy "' + chr(92) + chr(92) + "?" + chr(92)
+                + "UNC\\server\\share\\alice\\scratch\\x\" dest",
+                'copy "' + chr(92) + chr(92) + "?" + "?" + chr(92)
+                + "UNC\\server\\share\\alice\\scratch\\x\" dest",
+                'copy "' + chr(92) + "?" + "?" + chr(92)
+                + "UNC\\server\\share\\alice\\scratch\\x\" dest",
+                'copy "' + chr(92) + chr(92) + "." + chr(92)
+                + "UNC\\server\\share\\alice\\scratch\\x\" dest",
+            ]
+            for embedded_unc in embedded_unc_forms:
+                if not any(
+                        "\\\\server\\share\\alice\\scratch\\x" in spelling
+                        for spelling in _privacy_spellings(embedded_unc)):
+                    problems.append(
+                        "P2-7 embedded UNC spelling lost the "
+                        f"server root: {_privacy_spellings(embedded_unc)!r}")
+                else:
+                    print("[P2-7] embedded UNC root restored")
             # Embedded device-prefixed profile spelling inside
             # provenance free text: ``copy "\\?\\C:\\Users
             # \\alice\\x" dest`` carries the prefix mid-string,

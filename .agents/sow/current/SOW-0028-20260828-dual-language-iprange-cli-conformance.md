@@ -9894,3 +9894,31 @@ scan clean; SHASUMS 8/8 (no product source changed).  Sensitive-data
 gate: clean.  Artifact gate: AGENTS.md, specs, and runtime project
 skills unchanged; the harness and sanitizer comments describe the
 platform split and the None/absent equivalence.
+
+#### Wave 18 follow-up round 18.3 (2026-09-08) — UNC root restoration for all four device-prefix spellings
+
+The round-18.2 parity role review found one P2 in the UNC-root
+restoration: `_strip_device_prefix` and `_DEVICE_INLINE_UNC_RE`
+restored the ordinary `\\server\share` root only for the
+`\\?\UNC\` spelling; the sibling spellings `\\??\UNC\`,
+`\??\UNC\`, and `\\.\UNC\` fell into the generic device-prefix
+strip, which left a rootless `UNC\server\share\...` and let a UNC
+home profile spelling escape the scan.  The restoration now covers
+all four device/verbatim prefix spellings the strip recognizes:
+`_DEVICE_UNC_FORMS` drives both the whole-string branch of
+`_strip_device_prefix` and the inline `_DEVICE_INLINE_UNC_RE`
+(alternation built from the four forms), and the P2-7 self-test
+pins all four whole-string neutral forms (root exact, no trip) and
+all four embedded profile forms (root restored, trips).
+
+Validation: harness `--self-test` PASS on Linux and natively on
+the Windows host (checkout CWD and fresh scratch CWD) with the
+four whole-string verbatim-UNC pairs and four embedded UNC
+restorations printing; nt-sim probe verifies neutral no-trip +
+root-exact and embedded trips for all four forms; kind-gate
+self-test 48 positive controls PASS; resource-harness `--self-test`
+PASS; committed evidence structural scan clean; SHASUMS 8/8 (no
+product source changed — qualification tooling only).  Sensitive-data
+gate: clean.  Artifact gate: AGENTS.md, specs, and runtime project
+skills unchanged; the sanitizer docstrings and harness comments
+describe the four-form UNC restoration.
