@@ -10146,3 +10146,84 @@ committed binaries before repair:
 
 Repaired in wave 19 (see round records below); binaries rebuilt,
 evidence regenerated, roles re-anchored, astra re-run.
+
+#### Wave 19 round 19.1 (2026-09-08) — the nine turn-17 findings repaired and verified
+
+All nine turn-17 findings are fixed in this wave and verified by the
+lead with reproduction scripts before and after repair (repos:
+`/tmp/iprange-review-11bd84e5.jQ3OF7/`, `/tmp/iprange-review-client-s1M34LOs/`,
+`/tmp/iprange-gate-11bd-review.LQcA1k/`, plus per-finding probes):
+
+1. P0 — output-over-source overwrite (Go + Rust).  Both languages
+   now canonicalize the destination and refuse it with
+   `invalid_argument/not_started` ("destination must differ from the
+   source database") whenever it names the source database, for
+   export, `database.metadata.get`, and `reader.metadata` file
+   delivery.  Handle-backed readers are tracked by their mapped
+   path (`ReaderValue.Path`, `reader_paths`) so an alias of the
+   source is refused too.  Verified: all four delivery forms refused
+   in both languages, source database intact and reopenable,
+   verification content preserved.  Go
+   `cli/handlers/export.go`, `cli/handlers/reader.go`,
+   `cli/fileio/input.go`; Rust `handlers/export.rs`,
+   `handlers/reader.rs`, `handlers/output.rs` (committed at
+   `081bf3c4`).
+2. P1 — Go dropped an unterminated final text line of exactly
+   65,536 or 131,072 bytes.  `fileio/input.go` now completes a
+   pending line at EOF when the accumulated buffer is non-empty.
+   Verified: Go publishes the address at 65,535 / 65,536 / 65,537 /
+   131,072 bytes with and without the trailing LF; Rust matches.
+3. P1 — Go frame decoding diverged from Rust on numbers and
+   strings.  `rpc/schema.go` now decodes numbers losslessly
+   (`json.Number`) so a 400-digit integral request ID is accepted
+   and echoed like Rust; unpaired `\ud800`/`\udfff` escapes are
+   refused (-32700) like Rust; valid surrogate pairs are accepted;
+   a refused `database.create` writes no file.  Verified 4/4
+   semantics match Rust, including the absence of replacement
+   bytes (`efbfbd`) in created databases.
+4. P2 — early error responses bypassed the output bounds.  Both
+   languages now emit bounded schema errors: a 70,000-byte unknown
+   member yields a 99-byte error object in Go and Rust (was
+   70,091 bytes); a near-limit integral ID refusal is 125 bytes in
+   both (was Go 1,048,587 bytes).  Go `rpc/session.go`,
+   Rust `rpc/session.rs`.
+5. P2 — kind-gate identity/work contradictions accepted.  The gate
+   now rejects duplicate-path different-SHA entries, duplicate `c`
+   records with different SHAs, missing fixture identity, and
+   step-count/method contradictions (verified 4/4 REJECT).
+   `check_kind_coverage.py`.
+6. P2 — command-path normalization recorded a different
+   executable than the one run.  Symlink-plus-`..` arguments now
+   record the effective executable (kernel target), matching
+   `run.py` realpath semantics.  Verified: the sanitized command
+   names the resolved binary.
+   `command_sanitize.py`.
+7. P1 — the shared client accepted an extra final non-JSON line and
+   exit status 7 on success.  Both POSIX and threaded branches now
+   reject unexpected trailing output and any non-zero exit.
+   Verified: extra line rejected, exit 7 rejected.  `run.py`.
+8. P1 — the cancellation proof accepted an unrelated `io` domain
+   error as cancellation.  Proofs A and D now require both
+   `cancelled` and `not_started` domain facts; an unrelated `io`
+   error is rejected (verified).  `resource_harness.py`.
+9. P2 — Windows cross-listing validation missed removal-field and
+   type changes.  Top-level `attempt_id`, `directory`, and boolean
+   `ordinal` mutations are now rejected in both directions
+   (verified 6/6 REJECT, previously 6/6 accepted).
+   `windows_housekeeping_harness.py`.
+
+Validation: Go `nice go -C v4/go test -count=1 ./...` PASS
+(22 s, including the four new tests: `fileio/input_eof_test.go`,
+`handlers/samefile_test.go`, `rpc/schema_unicode_test.go`,
+`rpc/session_bounds_test.go`); Rust workspace test PASS (421 +
+others); `check_kind_coverage --self-test`, `resource_harness
+--self-test`, and `windows_housekeeping_harness --self-test` PASS;
+all nine reproduction scripts re-run against the fixed binaries
+PASS.  The wave's closing evidence commit carries the regenerated reports
+at the wave-19 binary identities, with SHASUMS.txt and the evidence
+README identity block updated to the same identities.
+Sensitive-data gate: clean.
+Artifact gate: AGENTS.md, specs, and runtime project skills
+unchanged; harness comments and docstrings updated where the
+behavior description changed; evidence README identity block
+updated with the wave-19 hashes.

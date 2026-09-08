@@ -448,6 +448,15 @@ func deliverMetadata(method string, reader *rpc.ReaderValue, delivery rawObject)
 		if err != nil {
 			return nil, rpc.InvalidParamsError("delivery.path must be a string")
 		}
+		// The source path recorded at reader open: publishing over the
+		// input pathname would replace the database with the metadata
+		// text, which the v1 contract forbids (Rust reader.rs
+		// metadata_result refuse_output_over_source parity).
+		if reader.Path != "" {
+			if herr := refuseOutputOverSource(path, reader.Path); herr != nil {
+				return nil, herr
+			}
+		}
 		policyName, err := asString(delivery, "publication_policy")
 		if err != nil {
 			return nil, rpc.InvalidParamsError("delivery.publication_policy is invalid")
@@ -841,13 +850,13 @@ func openReader(path, mode, label string, cancellation *iprangedb.CancellationTo
 		if err != nil {
 			return nil, readError(err)
 		}
-		return &rpc.ReaderValue{Immutable: reader}, nil
+		return &rpc.ReaderValue{Immutable: reader, Path: path}, nil
 	}
 	reader, err := iprangedb.OpenLiveReader(path, cancellation)
 	if err != nil {
 		return nil, readError(err)
 	}
-	return &rpc.ReaderValue{Live: reader}, nil
+	return &rpc.ReaderValue{Live: reader, Path: path}, nil
 }
 
 // sourceFromParams decodes the validated single-source params of the

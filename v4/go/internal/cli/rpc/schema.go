@@ -14,7 +14,9 @@ package rpc
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"unicode/utf8"
 )
 
@@ -30,6 +32,22 @@ const (
 	MethodPrefix = "iprange.v1."
 	CancelMethod = "iprange.v1.cancel"
 )
+
+// maxRequestDiagnosticBytes caps request-derived text echoed in an
+// error message: the transport never echoes unbounded request bytes
+// into a response (an error object must stay inside the response
+// object ceiling).
+const maxRequestDiagnosticBytes = 4096
+
+// boundedDiagnosticText truncates request-derived diagnostic text with
+// an explicit marker so an error object can never reach the response
+// ceiling by echoing request bytes.
+func boundedDiagnosticText(text string) string {
+	if len(text) <= maxRequestDiagnosticBytes {
+		return text
+	}
+	return text[:maxRequestDiagnosticBytes] + "...(truncated)"
+}
 
 // RequestId is an exact JSON string or an integral JSON number. The
 // raw text is preserved so every integral literal the client sends is
@@ -230,7 +248,7 @@ func decodeEnvelope(item json.RawMessage, batchIndex *int) (*Request, *SchemaErr
 		switch key {
 		case "jsonrpc", "id", "method", "params":
 		default:
-			return nil, InvalidRequest(fmt.Sprintf("unknown request member %q", key))
+			return nil, InvalidRequest(fmt.Sprintf("unknown request member %q", boundedDiagnosticText(key)))
 		}
 	}
 	vr, ok := obj["jsonrpc"]
@@ -291,9 +309,26 @@ func DecodeFrame(line []byte) ([]*Request, *SchemaError) {
 		return nil, ParseError("parse error: empty frame")
 	}
 	value := json.RawMessage(t)
+	// Escaped Unicode is validated before any decode or execution:
+	// serde_json refuses unpaired surrogate escapes (-32700) while Go's
+	// encoding/json silently substitutes U+FFFD, which would let a
+	// refused frame execute with replacement bytes (schema.rs
+	// decode_frame parity).
+	if herr := validateSurrogates(t); herr != nil {
+		return nil, ParseError("parse error: " + herr.Error())
+	}
+	// The preliminary parse is a lossless syntax probe (json.Decoder
+	// with UseNumber): integral numbers surface as their exact lexical
+	// token, so an arbitrary-precision request id decodes without
+	// float64 range loss, exactly like serde_json arbitrary_precision.
+	decoder := json.NewDecoder(bytes.NewReader(t))
+	decoder.UseNumber()
 	var probe any
-	if err := json.Unmarshal(value, &probe); err != nil {
+	if err := decoder.Decode(&probe); err != nil {
 		return nil, ParseError("parse error: " + err.Error())
+	}
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, ParseError("parse error: multiple JSON values")
 	}
 	if t[0] == '[' {
 		var arr []json.RawMessage
@@ -348,6 +383,107 @@ func encodeResponseFrame(payload any) (string, *SchemaError) {
 		return "", &SchemaError{Code: TransportFrameTooLarge, Message: "response frame over 1,048,576-byte limit"}
 	}
 	return string(text), nil
+}
+
+// parseHex4 decodes one JSON \uXXXX escape body; ok=false on a
+// non-hex digit.
+func parseHex4(body []byte) (uint16, bool) {
+	var value uint16
+	for _, c := range body {
+		value <<= 4
+		switch {
+		case c >= '0' && c <= '9':
+			value |= uint16(c - '0')
+		case c >= 'a' && c <= 'f':
+			value |= uint16(c-'a') + 10
+		case c >= 'A' && c <= 'F':
+			value |= uint16(c-'A') + 10
+		default:
+			return 0, false
+		}
+	}
+	return value, true
+}
+
+// validateSurrogates refuses unpaired surrogate code points encoded as
+// \uXXXX escapes anywhere in a JSON text, matching serde_json: a high
+// surrogate (D800-DBFF) must be immediately followed by a low-surrogate
+// escape (DC00-DFFF), and a lone low surrogate is refused.  Only the
+// exact serde_json message families are produced ("unexpected end of
+// hex escape", "lone leading surrogate in hex escape"); malformed or
+// truncated escapes are left to the JSON decoder, which also refuses
+// them with a parse error.
+func validateSurrogates(text []byte) error {
+	for i := 0; i < len(text); {
+		if text[i] != '"' {
+			i++
+			continue
+		}
+		i++
+		for i < len(text) {
+			c := text[i]
+			if c == '\\' {
+				if i+1 >= len(text) {
+					return nil // truncated escape: the JSON decoder refuses it
+				}
+				if text[i+1] != 'u' {
+					i += 2
+					continue
+				}
+				if i+6 > len(text) {
+					return nil // truncated \u escape: the JSON decoder refuses it
+				}
+				code, ok := parseHex4(text[i+2 : i+6])
+				if !ok {
+					return nil // malformed escape: the JSON decoder refuses it
+				}
+				switch {
+				case code >= 0xD800 && code <= 0xDBFF:
+					rest := text[i+6:]
+					if len(rest) < 6 || rest[0] != '\\' || rest[1] != 'u' {
+						return errors.New("unexpected end of hex escape")
+					}
+					low, ok := parseHex4(rest[2:6])
+					if !ok || low < 0xDC00 || low > 0xDFFF {
+						return errors.New("lone leading surrogate in hex escape")
+					}
+					i += 12
+				case code >= 0xDC00 && code <= 0xDFFF:
+					return errors.New("lone leading surrogate in hex escape")
+				default:
+					i += 6
+				}
+				continue
+			}
+			if c == '"' {
+				i++
+				break
+			}
+			i++
+		}
+	}
+	return nil
+}
+
+// boundedErrorResponse serializes one early schema error under both
+// response bounds: the 65,000-byte object bound and, since the object
+// is the whole frame, the 1,048,576-byte frame bound. A payload whose
+// request-derived diagnostic cannot fit is replaced by a fixed bounded
+// error: the transport never emits an unbounded request echo (Rust
+// session.rs bounded schema-error path).
+func boundedErrorResponse(serr *SchemaError) string {
+	payload := serr.Response(nil)
+	if text, err := encodeResponseObject(payload); err == nil {
+		if _, ferr := encodeResponseFrame(json.RawMessage(text)); ferr == nil {
+			return text
+		}
+	}
+	fallback := (&SchemaError{
+		Code:    TransportFrameTooLarge,
+		Message: "error response exceeds the 65,000-byte response object limit",
+	}).Response(nil)
+	text, _ := encodeResponseObject(fallback)
+	return text
 }
 
 // SuccessResponse builds the standard success envelope.

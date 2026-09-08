@@ -1613,6 +1613,18 @@ class JsonRpcService:
         already terminated by the caller (crash scenarios' process
         groups) are reaped silently.
 
+        An ordinary successful session ends with a bounded final drain
+        of stdout and a clean exit: after the response set is
+        satisfied, every remaining stdout byte is validated (any
+        non-whitespace residue is a stray trailing frame) and the
+        process exit status must be 0.  Both checks apply only to a
+        session this call shuts down (the peer was still alive at
+        entry) and only when ``allow_forced`` is not set, so the
+        deliberate-stall controls and the harness's intentional crash
+        sessions (peers already terminated by the caller) keep their
+        documented behavior; a poisoned threaded peer's failure was
+        already reported by ``call()``.
+
         In threaded mode (Windows deadlines), a peer poisoned by a
         bounded-I/O timeout is reaped before touching buffered
         wrappers whose locks a blocked worker may still hold; the
@@ -1620,6 +1632,12 @@ class JsonRpcService:
         finding).
         """
 
+        # Whether the peer was already gone before this call acted on
+        # it.  Peers pre-terminated by the harness (crash scenarios'
+        # process groups) are a separate, intentional class: their
+        # exit status and any residue are the crash evidence, not a
+        # clean-session violation.
+        already_dead = self.proc.poll() is not None
         forced = False
         if self._use_threads and self._poisoned:
             # A timed-out writer may still hold the buffered stdin
@@ -1664,6 +1682,30 @@ class JsonRpcService:
         # before closing its stream so a closed-file race cannot appear.
         if getattr(self, "drainer", None) is not None:
             self.drainer.join(timeout=3)
+        # Ordinary-session final validation: the response set is
+        # complete, so any remaining stdout bytes are a stray trailing
+        # frame and a nonzero exit is an unclean end to a session this
+        # call shut down.  A peer that was already gone at entry (an
+        # intentional crash session) and deliberate-stall controls are
+        # exempt; a forced teardown reports itself instead.
+        if forced and not allow_forced:
+            raise AssertionError(
+                "service did not terminate cleanly at stdin EOF and had "
+                f"to be force-terminated (returncode "
+                f"{self.proc.returncode})")
+        if not already_dead and not allow_forced and \
+                not (self._use_threads and self._poisoned):
+            trailing = self._drain_trailing_stdout()
+            if trailing.strip():
+                raise AssertionError(
+                    f"service wrote {len(trailing)} unexpected "
+                    f"trailing byte(s) on stdout after the response "
+                    f"set (expected zero): {trailing[:120]!r}")
+            status = self.proc.returncode
+            if status != 0:
+                raise AssertionError(
+                    f"service exited with status {status} after a "
+                    f"successful session (expected 0)")
         # Close the buffered wrappers only after the peer is gone: a
         # still-blocked writer's write fails once the peer's pipe end
         # closes, releasing the lock.
@@ -1673,11 +1715,70 @@ class JsonRpcService:
                     stream.close()
             except Exception:
                 pass
-        if forced and not allow_forced:
-            raise AssertionError(
-                "service did not terminate cleanly at stdin EOF and had "
-                f"to be force-terminated (returncode "
-                f"{self.proc.returncode})")
+
+    def _drain_trailing_stdout(self):
+        """Every stdout byte remaining after the response set.
+
+        Collects bytes the bounded reader already pulled into
+        ``_read_buf`` (never yet validated), bytes sitting in the
+        buffered wrapper, and bytes still in the pipe.  Callers run
+        this only after the child has exited (or been killed), so the
+        pipe delivers EOF and the drain cannot block; the buffered
+        reads are additionally bounded by a byte ceiling so a
+        descendant still holding the pipe open cannot accumulate
+        unbounded memory.
+        """
+
+        parts = []
+        if self._read_buf:
+            parts.append(self._read_buf)
+            self._read_buf = b""
+        if self._raw_stdout is not None:
+            # Deadline-bounded POSIX branch: the buffered wrapper was
+            # detached, so the pipe is read directly.  The peer is
+            # already gone, so the pipe delivers the remaining bytes
+            # and then EOF; the deadline still bounds a descendant
+            # that keeps a write end open.
+            import selectors
+            fd = self._raw_stdout.fileno()
+            os.set_blocking(fd, False)
+            sel = selectors.DefaultSelector()
+            sel.register(fd, selectors.EVENT_READ)
+            deadline = time.monotonic() + (self.read_deadline or 1.0)
+            try:
+                while time.monotonic() < deadline:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        break
+                    if not sel.select(min(remaining, 0.5)):
+                        continue
+                    try:
+                        chunk = os.read(fd, 65536)
+                    except (BlockingIOError, InterruptedError):
+                        continue
+                    if not chunk:
+                        break
+                    parts.append(chunk)
+            finally:
+                sel.close()
+            return b"".join(parts)
+        stream = self.proc.stdout
+        if stream is not None and not stream.closed:
+            try:
+                buffered = stream.peek()
+            except (ValueError, OSError):
+                buffered = b""
+            if buffered:
+                parts.append(stream.read(len(buffered)))
+            total = len(buffered)
+            ceiling = frame.OUTPUT_FRAME_LIMIT * 2
+            while total <= ceiling:
+                chunk = stream.read1(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                parts.append(chunk)
+        return b"".join(parts)
 
 
 def parse_interval_text(text):
@@ -1791,7 +1892,15 @@ def generate_fixture(path, source, fixture_tool):
 
 
 def _self_test():
-    """Exercise runner-side protocol helpers without spawning a service."""
+    """Exercise runner-side protocol helpers and the final-output
+    contract of the shared JSON-RPC service.
+
+    Runs on every runner invocation (main() calls it before loading
+    cases): helper pins stay subprocess-free; the final-output
+    controls spawn four stub services (a few tens of milliseconds
+    each) to pin the clean-session end contract in both client I/O
+    branches.
+    """
 
     import tempfile
 
@@ -1871,6 +1980,82 @@ def _self_test():
             },
         })
         assert runner.oracle_checks == 2
+
+    # Final-output negative controls (kind-gate finding 7): an
+    # ordinary successful session must end with a clean stdout (no
+    # unexpected non-whitespace bytes after the response set) and
+    # exit status 0.  A controlled service that answers the request
+    # correctly and then writes an extra non-JSON line, or exits with
+    # status 7 after stdin EOF, must fail close() while call()
+    # still returns the response; both client I/O branches (POSIX and
+    # the forced threaded branch) are covered, and a clean session
+    # keeps passing.  The stubs stay alive until close() closes
+    # stdin, so the peer is still alive when close() shuts it down.
+    read_resp = ("import sys,json;"
+                 "r=json.loads(sys.stdin.buffer.readline());"
+                 "print(json.dumps({'jsonrpc':'2.0','id':r['id'],"
+                 "'result':{}}),flush=True);")
+    for threaded in (False, True):
+        for label, tail in (
+                ("trailing-output", "print('not-json',flush=True);"
+                                    "sys.stdin.buffer.read()"),
+                ("nonzero-exit", "sys.stdin.buffer.read();sys.exit(7)")):
+            # Deadline-bounded branch selection mirrors the harness:
+            # the POSIX branch detaches the raw pipes at construction
+            # (deadlines given up front), while the forced threaded
+            # branch keeps the buffered wrappers and applies the
+            # deadlines with worker threads (deadlines set after
+            # construction, exactly like the reviewer control).
+            service = JsonRpcService(
+                [sys.executable, "-c", read_resp + tail], "stub",
+                read_deadline=0.2 if not threaded else None,
+                write_deadline=0.2 if not threaded else None)
+            if threaded:
+                service.read_deadline = 0.2
+                service.write_deadline = 0.2
+                service._use_threads = True
+            try:
+                response = service.call(
+                    "1", "iprange.v1.system.describe", {})
+                assert "result" in response, response
+                try:
+                    service.close()
+                except AssertionError as exc:
+                    close_failure = str(exc)
+                else:
+                    close_failure = None
+                if close_failure is None:
+                    raise AssertionError(
+                        f"final-output control {label} "
+                        f"(threaded={threaded}): close() accepted an "
+                        f"unclean session end")
+                if "trailing" not in close_failure and \
+                        "exited with status" not in close_failure:
+                    raise AssertionError(
+                        f"final-output control {label} "
+                        f"(threaded={threaded}) failed for an "
+                        f"unrelated reason: {close_failure}")
+            finally:
+                if service.proc.poll() is None:
+                    service.proc.kill()
+                    service.proc.wait(timeout=2)
+        clean = JsonRpcService(
+            [sys.executable, "-c", read_resp + "sys.stdin.buffer.read()"],
+            "stub",
+            read_deadline=0.2 if not threaded else None,
+            write_deadline=0.2 if not threaded else None)
+        if threaded:
+            clean.read_deadline = 0.2
+            clean.write_deadline = 0.2
+            clean._use_threads = True
+        try:
+            response = clean.call("1", "iprange.v1.system.describe", {})
+            assert "result" in response, response
+            clean.close()  # must not raise for a clean session
+        finally:
+            if clean.proc.poll() is None:
+                clean.proc.kill()
+                clean.proc.wait(timeout=2)
 
 
 CAPABILITIES_CACHE = {}

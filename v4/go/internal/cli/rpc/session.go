@@ -641,9 +641,14 @@ func workerLoop(s *Session, fw *FrameWriter, writerMu *sync.Mutex, events chan<-
 func (s *Session) handleFrame(line []byte, fw *FrameWriter, writerMu *sync.Mutex) error {
 	requests, serr := DecodeFrame(line)
 	if serr != nil {
-		payload := serr.Response(nil)
+		// Early schema errors run through the same bounded error
+		// serialization as handler errors: a request-derived
+		// diagnostic (e.g. an unknown member name) must never exceed
+		// the 65,000-byte response-object bound or the 1,048,576-byte
+		// frame bound.
+		text := boundedErrorResponse(serr)
 		writerMu.Lock()
-		werr := fw.WriteLine(string(payload))
+		werr := fw.WriteLine(text)
 		writerMu.Unlock()
 		return werr
 	}

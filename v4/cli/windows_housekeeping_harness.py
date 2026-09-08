@@ -1185,42 +1185,87 @@ def check_synthesized_pair_rows(rows, directory, synth):
                 f"{row_kind} row identity {row.get('identity')!r} does "
                 f"not equal the synthesized identity "
                 f"{want_identity!r}")
-        # The top-level row ordinal is the removal identifier the
+        # The top-level removal fields are the identifiers the
         # maintenance row carries unchanged (maintenance.go parses and
-        # passes it to removal); it must equal the synthesized ordinal
-        # and the nested artifact ordinal.  Comparing only the nested
+        # passes them to removal): the row attempt_id, the scanned
+        # directory, and the ordinal.  Every removal field must bind
+        # to the synthesis facts and to the nested artifact facts, and
+        # the ordinal must be an integer, never a boolean (Python
+        # equality treats True == 1, so a strict type check is
+        # required; kind-gate finding 9).  Comparing only the nested
         # artifact fields would let a contradictory top-level removal
-        # ordinal pass (external review finding).
+        # record pass (external review finding).
+        row_attempt = row.get("attempt_id")
+        want_attempt = str((synth or {}).get("attempt")) \
+            if (synth or {}).get("attempt") is not None else None
+        if want_attempt is not None:
+            if not isinstance(row_attempt, str):
+                failures.append(
+                    f"{row_kind} row attempt_id {row_attempt!r} is not "
+                    f"a string; expected the synthesized attempt "
+                    f"{want_attempt!r}")
+            elif row_attempt != want_attempt:
+                failures.append(
+                    f"{row_kind} row attempt_id {row_attempt!r} does "
+                    f"not equal the synthesized attempt "
+                    f"{want_attempt!r}")
+        if not isinstance(row.get("directory"), str) or \
+                row.get("directory") != directory:
+            failures.append(
+                f"{row_kind} row directory {row.get('directory')!r} "
+                f"does not equal the pair directory {directory!r}")
         row_ordinal = row.get("ordinal")
         want_ordinal = (synth or {}).get("ordinal")
-        if isinstance(want_ordinal, int) and not isinstance(want_ordinal, bool):
-            if row_ordinal != want_ordinal:
+        if isinstance(want_ordinal, int) and \
+                not isinstance(want_ordinal, bool):
+            if not isinstance(row_ordinal, int) or \
+                    isinstance(row_ordinal, bool) or \
+                    row_ordinal != want_ordinal:
                 failures.append(
                     f"{row_kind} row ordinal {row_ordinal!r} does not "
-                    f"equal the synthesized ordinal {want_ordinal!r}")
+                    f"equal the synthesized ordinal {want_ordinal!r} "
+                    f"(ordinal must be an integer)")
         artifact = row.get("artifact")
         if not isinstance(artifact, dict):
             failures.append(
                 f"{row_kind} row carries no artifact object")
             continue
-        if isinstance(artifact.get("ordinal"), int) and \
-                not isinstance(artifact.get("ordinal"), bool) and \
-                row_ordinal != artifact.get("ordinal"):
+        artifact_ordinal = artifact.get("ordinal")
+        if isinstance(want_ordinal, int) and \
+                not isinstance(want_ordinal, bool):
+            if not isinstance(artifact_ordinal, int) or \
+                    isinstance(artifact_ordinal, bool) or \
+                    artifact_ordinal != want_ordinal:
+                failures.append(
+                    f"{row_kind} artifact ordinal "
+                    f"{artifact_ordinal!r} does not equal the "
+                    f"synthesized ordinal {want_ordinal!r} "
+                    f"(ordinal must be an integer)")
+        if (isinstance(row_ordinal, int)
+                and not isinstance(row_ordinal, bool)
+                and isinstance(artifact_ordinal, int)
+                and not isinstance(artifact_ordinal, bool)
+                and row_ordinal != artifact_ordinal):
             failures.append(
                 f"{row_kind} top-level row ordinal {row_ordinal!r} does "
                 f"not equal the nested artifact ordinal "
-                f"{artifact.get('ordinal')!r}")
+                f"{artifact_ordinal!r}")
+        if want_attempt is not None and \
+                artifact.get("attempt_id") != want_attempt:
+            failures.append(
+                f"{row_kind} artifact attempt_id "
+                f"{artifact.get('attempt_id')!r} does not equal the "
+                f"synthesized attempt {want_attempt!r}")
         artifact_checks = (
             # (label, expected, got) or (label, expected, got, custom
             # failure text); every required HOUSEKEEPING_ARTIFACT
             # schema member is compared against the synthesis facts.
             # Facts the synth record does not carry are skipped, so
             # evidence recorded before the facts existed still
-            # validates.
-            ("attempt_id", str((synth or {}).get("attempt")),
-             str(artifact.get("attempt_id"))),
-            ("ordinal", (synth or {}).get("ordinal"),
-             artifact.get("ordinal")),
+            # validates.  attempt_id and ordinal are owned by the
+            # explicit top-level removal-field checks above (single
+            # authority; a plain != comparison would let a boolean
+            # ordinal satisfy an integer one).
             ("basename_encoding", 2, artifact.get("basename_encoding")),
             ("state", "inert", artifact.get("state")),
             ("envelope_identity",
@@ -1318,12 +1363,29 @@ def check_cross_rows_match(local_rows, cross_rows):
             failures.append(
                 f"cross {kind!r} basename {cross_basename!r} does not "
                 f"equal the local {local_basename!r}")
-        for member in ("identity", "directory_identity", "ordinal"):
+        # The complete usable top-level row must match: the removal
+        # fields (attempt_id, directory, ordinal) are compared
+        # alongside the identities, and the ordinal must be an
+        # integer, never a boolean (Python equality treats True == 1;
+        # kind-gate finding 9).
+        for member in ("identity", "directory_identity",
+                       "attempt_id", "directory"):
             if local.get(member) != cross.get(member):
                 failures.append(
                     f"cross {kind!r} row {member} "
                     f"{cross.get(member)!r} does not equal the local "
                     f"{local.get(member)!r}")
+        for owner, row in (("local", local), ("cross", cross)):
+            ordinal = row.get("ordinal")
+            if isinstance(ordinal, bool) or \
+                    (ordinal is not None and not isinstance(ordinal, int)):
+                failures.append(
+                    f"{owner} {kind!r} row ordinal {ordinal!r} is not "
+                    f"an integer")
+        if local.get("ordinal") != cross.get("ordinal"):
+            failures.append(
+                f"cross {kind!r} row ordinal {cross.get('ordinal')!r} "
+                f"does not equal the local {local.get('ordinal')!r}")
         local_artifact = local.get("artifact")
         cross_artifact = cross.get("artifact")
         if (not isinstance(local_artifact, dict) or
@@ -1479,12 +1541,14 @@ def _self_test():
     """Doctored-record regression tests for the strict validation.
 
     Runs the two check families on this platform (no Windows host and
-    no product binaries needed): the six P2-5 pair-row mutations
-    (M1-M6, the last doctoring the required artifact
-    source_basename) and the P2-6 removal-log mutations must fail,
-    and the synthetic
-    complete record sets must pass.  Returns 0 on success, 1 on any
-    failure; the lead runs ``--self-test`` at integration.
+    no product binaries needed): the ten P2-5 pair-row mutations
+    (M1-M10: candidate-kind/basename/identity/ordinal doctoring,
+    artifacts, and the removal-field bindings -- attempt_id,
+    directory, and boolean ordinal -- from kind-gate finding 9) and
+    the P2-6 removal-log mutations must fail, and the synthetic
+    complete record sets (including an unchanged cross-listed
+    removal row) must pass.  Returns 0 on success, 1 on any failure;
+    the lead runs ``--self-test`` at integration.
     """
 
     problems = []
@@ -1625,6 +1689,57 @@ def _self_test():
         expect_fail(
             "P2-5 M7 top-level ordinal changed (cross equality)",
             check_cross_rows_match(rows, m7))
+
+        # M8: the top-level envelope-row attempt_id changed while the
+        # nested artifact attempt_id and the synthesis facts stay the
+        # fixture attempt (kind-gate finding 9: the removal attempt
+        # must bind to the fixture and to the nested artifact facts).
+        m8 = [dict(row) for row in rows]
+        m8[env_idx]["attempt_id"] = "1" * 32
+        expect_fail(
+            "P2-5 M8 top-level attempt_id changed (pair rows)",
+            check_synthesized_pair_rows(m8, scratch, synth))
+        expect_fail(
+            "P2-5 M8 top-level attempt_id changed (cross equality)",
+            check_cross_rows_match(rows, m8))
+
+        # M9: the top-level envelope-row directory changed to another
+        # directory; the row must name the scanned pair directory.
+        m9 = [dict(row) for row in rows]
+        m9[env_idx]["directory"] = os.path.join(scratch, "wrong-gc-dir")
+        expect_fail(
+            "P2-5 M9 top-level directory changed (pair rows)",
+            check_synthesized_pair_rows(m9, scratch, synth))
+        expect_fail(
+            "P2-5 M9 top-level directory changed (cross equality)",
+            check_cross_rows_match(rows, m9))
+
+        # M10: the top-level envelope-row ordinal replaced by the
+        # boolean True.  Python equality treats True == 1, so the
+        # comparator must reject the wrong type explicitly; the pair
+        # validator and the cross comparator both do (kind-gate
+        # finding 9).
+        m10 = [dict(row) for row in rows]
+        m10[env_idx]["ordinal"] = True
+        expect_fail(
+            "P2-5 M10 top-level ordinal boolean (pair rows)",
+            check_synthesized_pair_rows(m10, scratch, synth))
+        expect_fail(
+            "P2-5 M10 top-level ordinal boolean (cross equality)",
+            check_cross_rows_match(rows, m10))
+
+        # Unchanged cross-listed removal round trip: the envelope row
+        # (with every removal field intact) must pass the pair
+        # validator and the cross comparator against the local
+        # listing, so the removal entry passes unchanged.
+        round_trip = [dict(row) for row in rows]
+        expect_pass(
+            "P2-5 unchanged cross-listed removal round trip",
+            check_synthesized_pair_rows(round_trip, scratch, synth))
+        expect_pass(
+            "P2-5 unchanged cross-listed removal round trip "
+            "(cross equality)",
+            check_cross_rows_match(rows, round_trip))
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 

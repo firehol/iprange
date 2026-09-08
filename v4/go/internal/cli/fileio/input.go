@@ -945,6 +945,14 @@ func readLimitedLine(reader *bufio.Reader, maxLineBytes int, output *[]byte) (ha
 			return terminated, true, nil
 		}
 		if readErr == io.EOF {
+			// EOF with an empty chunk: the accumulated buffer-full
+			// chunks are the final unterminated line (Rust
+			// read_limited_line emits the accumulator at EOF). A truly
+			// empty input or a line that ended exactly at a terminator
+			// adds nothing.
+			if len(*output) > 0 {
+				return false, true, nil
+			}
 			return false, false, nil
 		}
 		// A bare LF at EOF produced an empty terminated line.

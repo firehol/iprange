@@ -261,6 +261,34 @@ def exact_id_response(responses, request_id):
     return None
 
 
+def check_cancelled_answer(response, proof):
+    """The cancellation answer of one cancelled active request.
+
+    Shared by proofs a and d: an active request cancelled at
+    shutdown answers -32010 and must carry the cancellation domain
+    facts -- ``data.code == "cancelled"`` and the factual outcome
+    of a cancellation before any durable attempt, ``outcome ==
+    "not_started"`` (spec ``iprange-jsonrpc-v1.md`` Error envelope) --
+    not merely the outer JSON-RPC error number.  A response that
+    answers -32010 with an unrelated domain code (``io``) or a
+    different factual outcome is a different failure dressed up as a
+    cancellation and fails the proof.  Returns the error data.
+    """
+
+    error = response.get("error") or {}
+    if error.get("code") != -32010:
+        raise ResourceFailure(
+            f"proof {proof}: the cancelled request answered with error "
+            f"code {error.get('code')}, expected -32010 cancelled")
+    data = error.get("data") or {}
+    if data.get("code") != "cancelled" or \
+            data.get("outcome") != "not_started":
+        raise ResourceFailure(
+            f"proof {proof}: the -32010 answer must carry the "
+            f"cancelled/not_started domain facts, got {data!r}")
+    return data
+
+
 def read_responses(proc, expect, deadline_seconds,
                    max_line_bytes=frame.OUTPUT_FRAME_LIMIT, raw_lines=None):
     """Read up to ``expect`` complete LF-terminated response lines.
@@ -482,8 +510,10 @@ def proof_a(binary, label, work_dir, outcome):
       deterministic; the harness asserts the count and the id
       coverage, never an exact id set);
     - the other 16 describes answer with results;
-    - the in-flight export answers -32010 ``cancelled`` (EOF
-      cancels the active unit); exit code 0.
+    - the in-flight export answers -32010 ``cancelled`` with the
+      domain facts ``data.code == "cancelled"`` and ``outcome ==
+      "not_started"`` (EOF cancels the active unit before any
+      durable attempt); exit code 0.
     """
 
     work = os.path.join(work_dir, f"a-{label}")
@@ -583,6 +613,7 @@ def proof_a(binary, label, work_dir, outcome):
                 "expected the in-flight export to answer -32010 "
                 "cancelled at EOF shutdown, got "
                 f"{outcome['export_code']}")
+        check_cancelled_answer(export, "a")
         # Any stdout byte after the expected responses is a stray
         # trailing frame (duplicate or malformed): drain to EOF and
         # require zero residue (external review finding).  The normal
@@ -928,7 +959,10 @@ def proof_d(binary, label, work_dir, outcome):
     cancelled export must never answer with a result, the describe
     must still answer with a result (the dispatcher stays responsive
     after the cancellation), and the process exits 0 after EOF
-    shutdown.  Both product binaries.
+    shutdown.  When the session does deliver the cancelled answer,
+    it must carry the cancellation domain facts (``data.code``
+    ``"cancelled"``, ``outcome`` ``"not_started"``), not merely the
+    outer -32010 number.  Both product binaries.
 
     The session contract for an explicit cancellation (spec
     ``iprange-jsonrpc-v1.md`` "Shutdown"; Rust
@@ -936,7 +970,8 @@ def proof_d(binary, label, work_dir, outcome):
     cancelled unit's response is suppressed: an id cancelled by the
     ``iprange.v1.cancel`` notification -- queued or active -- is
     omitted, while the EOF-cancelled active unit answers -32010
-    ``cancelled`` at shutdown (proof a).  The harness therefore pins
+    ``cancelled`` with the domain facts at shutdown (proof a).  The
+    harness therefore pins
     the invariant both paths share -- the cancelled export is never a
     result -- and records the exact export terminal: ``export_code``
     is -32010 when the session delivers the cancelled answer, and
@@ -1006,11 +1041,7 @@ def proof_d(binary, label, work_dir, outcome):
                 raise ResourceFailure(
                     "the cancelled export must never answer with a "
                     "result, got a result")
-            if export["error"].get("code") != -32010:
-                raise ResourceFailure(
-                    "the cancelled export answered with error code "
-                    f"{export['error'].get('code')}, expected -32010 "
-                    "cancelled")
+            check_cancelled_answer(export, "d")
         # The describe must still be served: the dispatcher stays
         # responsive after the cancellation.
         if describe is None:
@@ -1099,7 +1130,12 @@ def self_test():
 
     import selectors
 
-    global spawn_jsonrpc  # proof_b resolves this module global
+    # proof_b resolves spawn_jsonrpc; the cancellation-domain proofs
+    # below additionally patch the publish service, the export-start
+    # marker wait, and the feed-line count, all module globals the
+    # proofs read at call time.
+    global spawn_jsonrpc, PROOF_A_FEED_LINES, HarnessJsonRpcService  # noqa: PLW0603
+    global _wait_for_export_temp  # noqa: PLW0603
 
     root = tempfile.mkdtemp(prefix="iprange-self-test-proofb-",
                              dir=owned_temp_root())
@@ -1448,6 +1484,186 @@ def self_test():
             failures.append(f"proof-b {label}: took {elapsed:.2f} s "
                             "(bounded window 15 s)")
     spawn_jsonrpc = original_spawn
+
+    # Cancellation-domain controls (kind-gate finding 8): a cancelled
+    # active request that answers -32010 must carry the cancellation
+    # domain facts (data.code "cancelled" and outcome "not_started"),
+    # not merely the outer JSON-RPC error number.  Four controls pin
+    # the shared check, and both proofs that share it (a and d) are
+    # driven end-to-end with stub children: a valid cancellation
+    # answer passes, while a wrong-domain answer (data.code "io") and
+    # a wrong-outcome answer (outcome "read_only_failure") fail each
+    # proof.
+    cancel_valid = {"jsonrpc": "2.0", "id": "1", "error": {
+        "code": -32010, "message": "export was cancelled",
+        "data": {"code": "cancelled", "outcome": "not_started",
+                 "details": {}}}}
+    cancel_wrong_domain = {"jsonrpc": "2.0", "id": "1", "error": {
+        "code": -32010, "message": "unrelated disk failure",
+        "data": {"code": "io", "outcome": "not_started",
+                 "details": {}}}}
+    cancel_wrong_outcome = {"jsonrpc": "2.0", "id": "1", "error": {
+        "code": -32010, "message": "export was cancelled",
+        "data": {"code": "cancelled", "outcome": "read_only_failure",
+                 "details": {}}}}
+    cancel_wrong_number = {"jsonrpc": "2.0", "id": "1", "error": {
+        "code": -32002, "message": "server_busy",
+        "data": {"code": "cancelled", "outcome": "not_started",
+                 "details": {}}}}
+    for label, response, should_pass in (
+            ("valid", cancel_valid, True),
+            ("wrong-domain", cancel_wrong_domain, False),
+            ("wrong-outcome", cancel_wrong_outcome, False),
+            ("wrong-number", cancel_wrong_number, False)):
+        try:
+            check_cancelled_answer(response, "control")
+            now = None
+        except ResourceFailure as exc:
+            now = str(exc)
+        print(f"self-test cancelled-answer {label}: "
+              f"{now or 'accepted'}")
+        if should_pass and now is not None:
+            failures.append(
+                f"cancelled-answer {label}: valid cancellation answer "
+                f"rejected: {now}")
+        if not should_pass and now is None:
+            failures.append(
+                f"cancelled-answer {label}: answer without the "
+                f"cancellation domain facts accepted")
+
+    cancel_root = tempfile.mkdtemp(prefix="iprange-self-test-cancel-",
+                                   dir=owned_temp_root())
+    original_harness_service = HarnessJsonRpcService
+    original_wait_export_temp = _wait_for_export_temp
+    saved_feed_lines = PROOF_A_FEED_LINES
+
+    class _StubPublishService:
+        """HarnessJsonRpcService stand-in: any call answers a result."""
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def call(self, request_id, method, params):
+            return {"jsonrpc": "2.0", "id": request_id, "result": {}}
+
+        def close(self):
+            pass
+
+    def _cancel_stub_body(lines):
+        # Every line is emitted as a JSON text literal, so the stub
+        # prints exactly the wire form of each response object.
+        body = "import sys,json\n"
+        body += "sys.stdin.buffer.read()\n"
+        body += "".join(
+            f"print({json.dumps(json.dumps(line))},flush=True)\n"
+            for line in lines)
+        body += "sys.exit(0)\n"
+        return body
+
+    def cancel_spawn(export_response):
+        lines = [export_response,
+                 {"jsonrpc": "2.0", "id": "2", "result": {}}]
+        body = _cancel_stub_body(lines)
+
+        def spawn(binary, cwd, stderr_log):
+            child = subprocess.Popen(
+                [sys.executable, "-c", body],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, cwd=cwd,
+                start_new_session=True)
+            record_spawn(child)
+            return child
+        return spawn
+
+    def proof_a_cancel_spawn(export_response):
+        lines = [export_response]
+        for index in range(2, 2 + PROOF_A_DESCRIBES):
+            if index <= 4:
+                lines.append({"jsonrpc": "2.0", "id": str(index),
+                              "error": {"code": -32002,
+                                        "message": "server_busy"}})
+            else:
+                lines.append({"jsonrpc": "2.0", "id": str(index),
+                              "result": {}})
+        body = _cancel_stub_body(lines)
+
+        def spawn(binary, cwd, stderr_log):
+            child = subprocess.Popen(
+                [sys.executable, "-c", body],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, cwd=cwd,
+                start_new_session=True)
+            record_spawn(child)
+            return child
+        return spawn
+
+    def run_cancel_proof(proof, export_response, label, spawn_func):
+        # The publish service is stubbed and the source file is
+        # pre-created, so the proof runs fully on stub children
+        # (no product binary required); proof a additionally skips
+        # the export-start marker wait.
+        global spawn_jsonrpc, _wait_for_export_temp  # noqa: PLW0603
+        # proof_a/proof_d name their per-proof subdirectories
+        # ``a-<label>`` / ``d-<label>`` under the work root.
+        work = os.path.join(cancel_root, f"{proof}-{label}")
+        os.makedirs(work, exist_ok=True)
+        with open(os.path.join(work, "big.iprange"), "wb") as stream:
+            stream.write(b"stub source\n")
+        if proof == "a":
+            _wait_for_export_temp = lambda *args, **kwargs: 0.0
+        spawn_jsonrpc = spawn_func
+        outcome = {}
+        started = time.monotonic()
+        try:
+            if proof == "a":
+                proof_a("/unused", label, cancel_root, outcome)
+            else:
+                proof_d("/unused", label, cancel_root, outcome)
+            failed_now = None
+        except ResourceFailure as exc:
+            failed_now = str(exc)
+        elapsed = time.monotonic() - started
+        _wait_for_export_temp = original_wait_export_temp
+        print(f"self-test proof-{proof} {label}: "
+              f"{failed_now or 'accepted'} in {elapsed:.2f} s")
+        if failed_now is not None:
+            if "domain facts" not in failed_now and \
+                    "expected -32010" not in failed_now:
+                failures.append(
+                    f"proof-{proof} {label}: rejected for an unrelated "
+                    f"reason: {failed_now}")
+        if label == "valid" and failed_now is not None:
+            failures.append(
+                f"proof-{proof} {label}: valid cancellation answer "
+                f"rejected: {failed_now}")
+        if label != "valid" and failed_now is None:
+            failures.append(
+                f"proof-{proof} {label}: answer without the "
+                f"cancellation domain facts accepted")
+        if elapsed >= 5:
+            failures.append(
+                f"proof-{proof} {label}: took {elapsed:.2f} s "
+                "(bounded window 5 s)")
+
+    PROOF_A_FEED_LINES = 1
+    HarnessJsonRpcService = _StubPublishService
+    try:
+        for proof in ("a", "d"):
+            for label, response in (
+                    ("valid", cancel_valid),
+                    ("wrong-domain", cancel_wrong_domain),
+                    ("wrong-outcome", cancel_wrong_outcome)):
+                if proof == "d":
+                    spawn_func = cancel_spawn(response)
+                else:
+                    spawn_func = proof_a_cancel_spawn(response)
+                run_cancel_proof(proof, response, label, spawn_func)
+    finally:
+        PROOF_A_FEED_LINES = saved_feed_lines
+        HarnessJsonRpcService = original_harness_service
+        _wait_for_export_temp = original_wait_export_temp
+        spawn_jsonrpc = original_spawn
+        shutil.rmtree(cancel_root, ignore_errors=True)
 
     # Shared-path read-deadline control: JsonRpcService with a bounded
     # read deadline must fail a service that answers a partial line

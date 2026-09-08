@@ -21,6 +21,10 @@ import (
 type ReaderValue struct {
 	Immutable *iprangedb.ImmutableReader
 	Live      *iprangedb.LiveReader
+	// Path is the source path recorded when the handle was opened.
+	// The metadata file-delivery guard uses it to refuse a destination
+	// that resolves to the source database (Rust reader_paths parity).
+	Path string
 }
 
 // CloseLive closes only a registered live reader. Immutable readers

@@ -64,7 +64,17 @@ Evidence integrity rules:
   is a fabricated lineage, not merely an in-range ordinal.  Unknown
   actors, unknown operations,
   out-of-range ordinals, fabricated opens, and empty operation lists
-  on actors that recorded executed work fail the gate.
+  on actors that recorded executed work fail the gate.  The executed
+  step count of a PASS case actor must be at least the number of
+  distinct executed methods it records (the runner increments the
+  step counter once per executed step), so a doctored step count
+  that contradicts the executed-operation record fails the gate.
+- One executable has one identity: two binary records of a matrix
+  report that name the same resolved path must agree on the sha256
+  (a duplicate-path twin with a different hash is a forged
+  identity), and a matrix report whose command exercises the
+  fixture must record a ``fixture_tool`` identity (path plus
+  sha256) that agrees with the battery's crash identity.
 - Mixed matrices (``rust_to_go``, ``go_to_rust``) execute both
   binaries in every PASS case: producer and consumer must each
   record at least one executed step independently.  Single-language
@@ -470,26 +480,44 @@ def _resolve_report_path(value, report):
 
 
 def _matrix_path_to_sha(report):
-    """Matrix-report binaries block: binary path -> sha256.
+    """Matrix-report binaries block: resolved binary path -> sha256,
+    plus per-report identity conflicts.
 
     Matrix reports record each product binary as a capability record
     with a ``path`` and ``sha256``; the command binding resolves the
     recorded ``--rust``/``--go`` path through this table and then
-    through the global sha256 -> implementation map.
+    through the global sha256 -> implementation map.  Paths are
+    resolved the same way the command binding resolves them, so a
+    spelling variant cannot bypass the table.  One executable may be
+    named by several records only when every record agrees on its
+    sha256: two records naming the same resolved path with different
+    hashes are a contradictory identity (a forged twin record) and
+    each conflict is returned for the gate to reject.
     """
 
     table = {}
+    conflicts = []
     binaries = report.get("binaries")
     if not isinstance(binaries, dict):
-        return table
+        return table, conflicts
     for record in binaries.values():
         if not isinstance(record, dict):
             continue
-        path = record.get("path")
+        raw_path = record.get("path")
         sha = record.get("sha256")
-        if isinstance(path, str) and isinstance(sha, str):
-            table[path] = sha
-    return table
+        if not (isinstance(raw_path, str) and isinstance(sha, str)):
+            continue
+        path = _resolve_report_path(raw_path, report)
+        previous = table.get(path)
+        if previous is not None and previous != sha:
+            conflicts.append(
+                f"matrix binary records name the same executable "
+                f"{raw_path!r} (resolved {path!r}) with different "
+                f"sha256 values {previous!r} and {sha!r}; an "
+                f"executable has one identity")
+            continue
+        table[path] = sha
+    return table, conflicts
 
 
 def _load_report(path, problems):
@@ -785,7 +813,8 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                     f"matrix {path}: report command --matrix "
                     f"{command_matrix!r} does not match report matrix "
                     f"{matrix!r}")
-            report_shas = _matrix_path_to_sha(report)
+            report_shas, path_sha_conflicts = _matrix_path_to_sha(report)
+            problems.extend(path_sha_conflicts)
             for flag, language, attr in (
                     ("--rust", "rust", "rust_binary"),
                     ("--go", "go", "go_binary")):
@@ -1045,6 +1074,26 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                         f"matrix {path}: PASS case {case_name!r} actor "
                         f"{actor!r} records an empty executed-operation "
                         f"list despite {executed} executed step(s)")
+                # Step-count truthfulness: the runner increments the
+                # actor's executed-step counter once per executed step
+                # and records each distinct executed method once, so a
+                # genuine record always satisfies
+                # steps >= distinct executed methods.  A PASS case
+                # actor that records fewer steps than its distinct
+                # executed methods contradicts the executed-work
+                # evidence (doctored step count) and is a report
+                # defect.
+                distinct_methods = len(set(operations))
+                if (isinstance(executed, int)
+                        and not isinstance(executed, bool)
+                        and distinct_methods > 0
+                        and executed < distinct_methods):
+                    problems.append(
+                        f"matrix {path}: PASS case {case_name!r} actor "
+                        f"{actor!r} records {executed} executed "
+                        f"step(s) but {distinct_methods} distinct "
+                        f"executed method(s); run.py increments once "
+                        f"per executed step")
         if steps_complete and steps_sum < 1:
             problems.append(
                 f"matrix {path}: PASS case {case_name!r} records zero "
@@ -1773,15 +1822,29 @@ def assess(matrix_paths, crash_paths):
         sources.append(
             f"matrix {path} ({stats['cases']} cases, "
             f"{stats['pass_cases']} PASS)")
-        # Cross-report fixture identity (external review finding): the
-        # matrix report records the v4-fixture tool it used; the path
-        # must be the battery's fixture and its sha256 must equal the
-        # crash report root identity for the same path.
+        # Cross-report fixture identity (external and kind-gate
+        # review findings): the matrix report records the v4-fixture
+        # tool it used; the identity is mandatory whenever the
+        # recorded command selects a fixture (the matrix runner
+        # records the fixture_tool record for every run that carried
+        # --fixture-tool), the path must be the battery's fixture,
+        # and its sha256 must equal the crash report root identity
+        # for the same path.
         fixture = report.get("fixture_tool")
-        if isinstance(fixture, dict):
+        if command_fixture is not None and not isinstance(fixture, dict):
+            problems.append(
+                f"matrix {path}: report records no fixture_tool "
+                f"identity although the recorded command exercises "
+                f"the fixture ({command_fixture!r})")
+        elif isinstance(fixture, dict):
             fixture_path = fixture.get("path")
             fixture_sha = fixture.get("sha256")
-            if isinstance(fixture_path, str) and isinstance(
+            if not (isinstance(fixture_path, str)
+                    and isinstance(fixture_sha, str)):
+                problems.append(
+                    f"matrix {path}: fixture_tool record carries no "
+                    f"path/sha256 identity")
+            elif isinstance(fixture_path, str) and isinstance(
                     fixture_sha, str):
                 real = os.path.realpath(fixture_path)
                 if command_fixture is not None and real != command_fixture:
@@ -1942,6 +2005,9 @@ def _self_test():
 
     import json as _json
 
+    import command_sanitize
+    command_sanitize._self_test()
+
     def matrix_report(matrix, cases, failed, root_kinds=None):
         return {
             "schema": "iprange-cli-report-v3",
@@ -1954,6 +2020,14 @@ def _self_test():
                 "--matrix", matrix,
                 "--work-dir", "/tmp/kind-matrix-work",
                 "--json-report", "/tmp/kind-matrix-report.json"],
+            # The matrix runner records the fixture identity for every
+            # run whose command carries --fixture-tool; the doctored
+            # reports mirror that record and agree with the crash
+            # battery identity.
+            "fixture_tool": {
+                "path": CRASH_BINARIES["fixture_tool"],
+                "sha256": CRASH_BINARIES["fixture_tool_sha256"],
+            },
             "cases": cases,
             "file_kinds": root_kinds or {},
             "failed": failed,
@@ -2184,7 +2258,7 @@ def _self_test():
                     "sha256": actor_sha[expected["producer"]],
                     "implementation": expected["producer"],
                     "argv": BINARY_PATHS[expected["producer"]],
-                    "steps": 1,
+                    "steps": 2,
                     "operations": ["iprange.v1.database.create",
                                    "iprange.v1.export"],
                 },
@@ -2192,7 +2266,7 @@ def _self_test():
                     "sha256": actor_sha[expected["consumer"]],
                     "implementation": expected["consumer"],
                     "argv": BINARY_PATHS[expected["consumer"]],
-                    "steps": 1,
+                    "steps": 2,
                     "operations": ["iprange.v1.reader.open",
                                    "iprange.v1.database.metadata.get"],
                 },
@@ -3015,6 +3089,55 @@ def _self_test():
                         "consumer.1"]
         genuine_mutation_fails("false-main-open-operation",
                                false_main_open)
+
+        # Duplicate-path-different-sha (kind-gate finding): a second
+        # binary record that names the same executable path with a
+        # different sha256 is a contradictory identity; the pre-fix
+        # gate let the later record overwrite the earlier one and
+        # accepted the report.
+        def duplicate_path_different_sha(matrices, crash):
+            report = matrices[2]
+            twin = _copy.deepcopy(report["binaries"]["go"])
+            twin["sha256"] = "f" * 64
+            report["binaries"]["stale_go"] = twin
+        genuine_mutation_fails("duplicate-path-different-sha",
+                               duplicate_path_different_sha)
+
+        # Duplicate-c-path-different-sha (kind-gate finding): the same
+        # contradictory identity inserted through the optional ``c``
+        # record and a ``--c`` command argument must fail the gate too.
+        def duplicate_c_path_different_sha(matrices, crash):
+            report = matrices[2]
+            twin = _copy.deepcopy(report["binaries"]["go"])
+            twin["sha256"] = "f" * 64
+            report["binaries"]["c"] = twin
+            report["command"].extend(["--c", twin["path"]])
+        genuine_mutation_fails("duplicate-c-path-different-sha",
+                               duplicate_c_path_different_sha)
+
+        # Missing-fixture identity (kind-gate finding): a matrix report
+        # whose recorded command exercises the fixture must carry the
+        # ``fixture_tool`` identity record; popping it must fail the
+        # gate instead of being silently accepted.
+        def missing_fixture_identity(matrices, crash):
+            matrices[2].pop("fixture_tool", None)
+        genuine_mutation_fails("missing-fixture-identity",
+                               missing_fixture_identity)
+
+        # Step-count contradiction (kind-gate finding): a PASS case
+        # actor that records fewer executed steps than its distinct
+        # executed methods contradicts the executed-work record
+        # (run.py increments the step counter once per executed step).
+        def step_count_contradiction(matrices, crash):
+            for report in matrices:
+                for case in report["cases"]:
+                    if case.get("status") != "PASS":
+                        continue
+                    for actor in case["actors"].values():
+                        if actor.get("operations"):
+                            actor["steps"] = 1
+        genuine_mutation_fails("step-count-contradiction",
+                               step_count_contradiction)
 
         # 35. Matrix argv anchor (wave-10, unconditional since the
         #     second role round): every PASS case must carry

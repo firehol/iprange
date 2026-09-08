@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -368,6 +369,15 @@ func Export(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerErro
 	}
 	budget, herr := decodeExportBudget(object["result_budget"])
 	if herr != nil {
+		return nil, herr
+	}
+	// The v1 contract never modifies its input files: publishing the
+	// export over the source pathname would atomically replace the
+	// database with the output text and report success. Refuse it
+	// before the source opens or any output temporary exists, with
+	// the canonical invalid_argument/not_started shape (Rust
+	// export.rs refuse_output_over_source parity).
+	if herr := refuseOutputOverSource(destination, sourcePath); herr != nil {
 		return nil, herr
 	}
 	// The complete inline result carries the destination string and the
@@ -1961,4 +1971,49 @@ func writeJSONValue(buffer []byte, value map[string]any) ([]byte, *rpc.HandlerEr
 			fmt.Sprintf("export row JSON encoding failed: %v", err))
 	}
 	return append(buffer, encoded...), nil
+}
+
+// refuseOutputOverSource refuses a file destination that resolves to
+// the source database path (Rust output.rs refuse_output_over_source
+// parity): the v1 contract never modifies its input files, so the
+// destination must differ from the source under canonical same-file
+// resolution.
+func refuseOutputOverSource(destination, source string) *rpc.HandlerError {
+	if canonicalAbsolute(destination) == canonicalAbsolute(source) {
+		return rpc.NewHandlerError("invalid_argument", "not_started",
+			"destination must differ from the source database")
+	}
+	return nil
+}
+
+// canonicalAbsolute resolves path to a stable identity for same-file
+// comparison: the deepest existing ancestor is symlink-resolved and
+// the remaining components are appended (Rust output.rs
+// canonical_absolute parity), so a not-yet-existing destination still
+// resolves through symlinked parents.
+func canonicalAbsolute(path string) string {
+	absolute := path
+	if !filepath.IsAbs(path) {
+		if cwd, err := os.Getwd(); err == nil {
+			absolute = filepath.Join(cwd, path)
+		}
+	}
+	var missing []string
+	probe := absolute
+	for {
+		resolved, err := filepath.EvalSymlinks(probe)
+		if err == nil {
+			for i := len(missing) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, missing[i])
+			}
+			return resolved
+		}
+		name := filepath.Base(probe)
+		parent := filepath.Dir(probe)
+		if name == "" || parent == probe {
+			return absolute
+		}
+		missing = append(missing, name)
+		probe = parent
+	}
 }

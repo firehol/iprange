@@ -65,10 +65,22 @@ def sanitized_path_value(value):
     a case-varied checkout spelling cannot escape rewriting; a
     different-drive value (commonpath ValueError) is never treated as
     under the checkout.
+
+    Path-shaped values that exist on the filesystem are first resolved
+    with kernel semantics (``os.path.realpath`` on the un-collapsed
+    spelling): the runner records the effective executable (run.py
+    ``executable()`` realpaths every binary argument), and a lexical
+    ``normpath`` collapses ``link/..`` before the symlink is followed,
+    so the recorded command would name a different file than the
+    kernel executes.  The effective spelling then feeds the same
+    containment rendering, and when it differs from the lexical
+    spelling the rendered record is the effective spelling (the
+    identity the kernel would execute).  Nonexistent values keep the
+    lexical spelling verbatim: nothing was executed through them.
     """
     if not value:
         return value
-    abs_path = _resolve(value)
+    abs_path = _effective_absolute(value)
     norm = _normcase(abs_path)
     checkout_norm = _normcase(_CHECKOUT)
     try:
@@ -89,7 +101,38 @@ def sanitized_path_value(value):
             if suffix is not None:
                 return suffix
         return os.path.relpath(abs_path, _CHECKOUT)
-    return value
+    if abs_path == _resolve(value):
+        # The lexical spelling is already the effective file; keep
+        # the recorded spelling so outside-checkout values pass
+        # through verbatim.
+        return value
+    return abs_path
+
+
+def _effective_absolute(value):
+    """One value as the absolute spelling the kernel resolves.
+
+    For path-shaped values that exist on the filesystem the raw
+    spelling (symlinks intact, ``..`` un-collapsed) is resolved with
+    ``os.path.realpath``, which follows every component in kernel
+    order (symlinks before ``..``) -- the same resolution the runner's
+    ``executable()`` applies to the binaries it executes.  Values that
+    do not exist keep the lexical ``_resolve`` spelling: no file was
+    executed through them, and resolving a phantom path could change
+    its meaning.  Relative spellings are probed against the checkout
+    root (never the process working directory), keeping the record
+    invariant to the invocation directory.
+    """
+    if os.path.isabs(value):
+        probe = value
+    else:
+        probe = os.path.join(_CHECKOUT, value)
+    if os.sep == "/" and probe.startswith("//") \
+            and not probe.startswith("///"):
+        probe = probe[1:]
+    if os.path.exists(probe):
+        return os.path.realpath(probe)
+    return _resolve(value)
 
 
 def _resolve(value):
@@ -616,3 +659,109 @@ def neutral_temp_root():
         return os.path.join(os.environ.get("SystemRoot", r"C:\Windows"),
                             "Temp")
     return "/tmp"
+
+
+def _self_test():
+    """Kernel-resolution pins for the command-path sanitizer.
+
+    The runner executes a binary path through the kernel (symlinks
+    resolved before ``..``) and records the effective executable;
+    the sanitizer must render the recorded command so it names the
+    same file.  Two controls:
+
+    1. symlink-plus-parent traversal: an existing absolute value
+       ``<checkout>/link/../go/iprange`` where ``link`` is a symlink
+       to a directory OUTSIDE the checkout must render as the
+       kernel-resolved outside-checkout executable (the effective
+       identity), never as the lexical ``go/iprange`` checkout
+       spelling; resolving the rendered value must select the same
+       file the kernel would execute.
+    2. direct-path control: the same file named directly must keep
+       its recorded spelling (outside-checkout values pass through
+       verbatim), and the two rendered commands must resolve to the
+       same executed file.
+
+    Also pins the checkout-relative rendering invariant for an
+    existing value genuinely inside the checkout: it still renders
+    checkout-relative.
+    """
+
+    import tempfile
+
+    global _CHECKOUT
+    root = tempfile.mkdtemp(prefix="qual-selftest-checkout-",
+                            dir=neutral_temp_root())
+    saved_checkout = _CHECKOUT
+    try:
+        # A scratch checkout rooted OUTSIDE the operator's profile, so
+        # the containment and privacy invariants are exercised without
+        # depending on the real checkout's location.
+        _CHECKOUT = root
+        outside = os.path.join(neutral_temp_root(),
+                               "qual-selftest-bin")
+        os.makedirs(os.path.join(outside, "rust"), exist_ok=True)
+        os.makedirs(os.path.join(outside, "go"), exist_ok=True)
+        binary = os.path.join(outside, "go", "iprange")
+        with open(binary, "w", encoding="ascii") as stream:
+            stream.write("selftest binary\n")
+        os.symlink(os.path.join(outside, "rust"),
+                   os.path.join(root, "link"))
+        traversal = os.path.join(root, "link", "..", "go", "iprange")
+
+        rendered_traversal = sanitized_path_value(traversal)
+        rendered_direct = sanitized_path_value(binary)
+        # The traversal value lives lexically under the checkout, so
+        # the pre-fix sanitizer recorded ``go/iprange`` and the record
+        # resolved to a different (nonexistent) file; the rendered
+        # command must name the effective executable instead.
+        if rendered_traversal == "go/iprange":
+            raise AssertionError(
+                "symlink-plus-parent traversal rendered the lexical "
+                "checkout spelling; the recorded command would name a "
+                "different file than the kernel executes")
+        if not os.path.isabs(rendered_traversal):
+            raise AssertionError(
+                f"symlink-plus-parent traversal rendered a relative "
+                f"spelling {rendered_traversal!r} for an "
+                "outside-checkout effective executable")
+        if os.path.realpath(rendered_traversal) != \
+                os.path.realpath(binary):
+            raise AssertionError(
+                f"rendered traversal {rendered_traversal!r} does not "
+                f"resolve to the executed binary {binary!r}")
+        if rendered_direct != binary:
+            raise AssertionError(
+                f"direct outside-checkout value {binary!r} was rewritten "
+                f"to {rendered_direct!r}; it must pass through verbatim")
+        # The recorded-command resolution (checkout-relative values
+        # resolve against the checkout root) must agree with the
+        # kernel resolution for both spellings.
+        if os.path.realpath(
+                os.path.join(_CHECKOUT, rendered_traversal
+                             if not os.path.isabs(rendered_traversal)
+                             else rendered_traversal)) != \
+                os.path.realpath(binary):
+            raise AssertionError(
+                "recorded-command resolution of the traversal spelling "
+                "does not select the executed file")
+        # Existing value inside the checkout keeps the invariant
+        # checkout-relative rendering.
+        inside = os.path.join(root, "sub", "file.txt")
+        os.makedirs(os.path.dirname(inside), exist_ok=True)
+        with open(inside, "w", encoding="ascii") as stream:
+            stream.write("inside\n")
+        rendered_inside = sanitized_path_value(inside)
+        if rendered_inside != os.path.join("sub", "file.txt"):
+            raise AssertionError(
+                f"existing in-checkout value rendered "
+                f"{rendered_inside!r}, expected "
+                f"{os.path.join('sub', 'file.txt')!r}")
+    finally:
+        _CHECKOUT = saved_checkout
+        import shutil
+        shutil.rmtree(root, ignore_errors=True)
+
+
+if __name__ == "__main__":
+    _self_test()
+    print("PASS command_sanitize self-test: kernel-resolution pins")
