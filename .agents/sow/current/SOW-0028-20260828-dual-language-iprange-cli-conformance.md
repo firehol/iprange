@@ -10490,6 +10490,12 @@ Verification: Go suite 23/23 packages PASS; Rust workspace PASS;
 battery green at the rebuilt final identities (matrices 38/38 +
 14/24 mixed, crash 16/16, resource 8/8, golden 55, sensitivity 14,
 kind gate PASS); operations probe 34/34; Windows housekeeping 2/2
-natively at the final product revision.  The seven role reviews are
-re-anchored at the final HEAD; astra turn 18 (the same review
-session) remains the milestone-4 closure gate.
+natively at the final product revision.  The final committed
+identities of this round are Go product `a6e134fa…` / worker
+`4f2eb063…`, Rust product `892247dd…` / worker `4c17669d…` /
+fixture `9b40420e…` (Linux) and Windows-host products `13ac9a73…`
+(go) / `3bef2fc9…` (rust) / go worker `51e643f8…` built at
+`5724664e` tree_clean; SHASUMS.txt (8/8) and the evidence README
+identity block match the closing evidence commit.  The seven role
+reviews are re-anchored at the final HEAD; astra turn 18 (the same
+review session) remains the milestone-4 closure gate.
