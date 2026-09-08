@@ -35,6 +35,69 @@ pub fn base64_padded(input: &[u8]) -> String {
     output
 }
 
+/// Absolute form of `path` with symlinks and `.`/`..` resolved as far
+/// as the filesystem allows, without requiring the final component to
+/// exist (`fs::canonicalize` fails on a not-yet-created destination,
+/// which is the normal state of a `fail_if_exists` output).
+///
+/// The deepest existing ancestor is canonicalized and the missing
+/// suffix is re-appended lexically, so two spellings of the same
+/// eventual file (absolute vs relative, `./`/`..` decorations, a
+/// symlinked directory) compare equal.
+pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        match std::env::current_dir() {
+            Ok(cwd) => cwd.join(path),
+            Err(_) => path.to_path_buf(),
+        }
+    };
+    let mut missing: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut probe = absolute.as_path();
+    loop {
+        match fs::canonicalize(probe) {
+            Ok(resolved) => {
+                let mut result = resolved;
+                for component in missing.iter().rev() {
+                    result.push(component);
+                }
+                return result;
+            }
+            Err(_) => match (probe.file_name(), probe.parent()) {
+                (Some(name), Some(parent)) => {
+                    missing.push(name);
+                    probe = parent;
+                }
+                _ => return absolute,
+            },
+        }
+    }
+}
+
+/// Refuse an output destination that resolves to the same file as the
+/// source database.
+///
+/// The v1 contract never modifies its input files: publishing output
+/// over the source pathname would atomically replace the database
+/// with output text and report success. This is a caller error,
+/// refused before any output temporary or destination exists, with
+/// `invalid_argument`/`not_started` as the canonical Rust semantics
+/// (the Go engine mirrors this exact code/outcome/message).
+pub(crate) fn refuse_output_over_source(
+    destination: &Path,
+    source: &Path,
+) -> Result<(), HandlerError> {
+    if canonical_absolute(destination) == canonical_absolute(source) {
+        return Err(HandlerError::new(
+            "invalid_argument",
+            "not_started",
+            "destination must differ from the source database",
+        ));
+    }
+    Ok(())
+}
+
 pub fn metadata_output(
     path: &Path,
     bytes: &[u8],

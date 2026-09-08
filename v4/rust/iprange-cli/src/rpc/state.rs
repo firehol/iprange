@@ -213,6 +213,14 @@ const CLOSED_TOMBSTONE_CAP: usize = 8;
 #[derive(Default)]
 pub struct ConnectionState {
     pub readers: HashMap<String, ReaderValue>,
+    /// The `reader.open` source pathname of every live reader handle.
+    ///
+    /// Kept so a file-delivery output (metadata, exports over a handle)
+    /// can refuse a destination that resolves to the file backing an
+    /// open reader: the v1 contract never modifies input files. The map
+    /// is bounded by `reader.open`'s `READER_LIMIT` and every close
+    /// removes its entry.
+    pub reader_paths: HashMap<String, std::path::PathBuf>,
     pub closed_readers: HashMap<String, ()>,
     pub cursors: HashMap<String, CursorValue>,
     pub closed_cursors: HashMap<String, ()>,
@@ -244,6 +252,7 @@ impl ConnectionState {
         self.cursors.clear();
         self.closed_cursors.clear();
         self.closed_cursor_order.clear();
+        self.reader_paths.clear();
         let mut readers: Vec<(String, ReaderValue)> = self.readers.drain().collect();
         // HashMap iteration order is not deterministic; close in
         // sorted handle order so shutdown never depends on hashing.

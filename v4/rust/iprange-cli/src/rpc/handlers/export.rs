@@ -168,6 +168,13 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
     let policy = publication_policy(object["publication_policy"].as_str())
         .map_err(|_| HandlerError::invalid_params("publication_policy is invalid"))?;
     let budget = decode_budget(&object["result_budget"])?;
+    // The v1 contract never modifies its input files: publishing the
+    // export over the source pathname would atomically replace the
+    // database with the output text and report success. Refuse it
+    // before the source opens or any output temporary exists, with
+    // the canonical `invalid_argument`/`not_started` shape (the Go
+    // engine mirrors this code/outcome/message).
+    super::output::refuse_output_over_source(destination, Path::new(&source_path))?;
     // The complete inline result carries the destination string and
     // the source identity; refuse an unrepresentable request before
     // the source reader is opened or any output file is created, so a
@@ -1993,6 +2000,118 @@ mod live_source_tests {
         assert!(
             !destination.exists(),
             "preflight refusal must not create the destination"
+        );
+        fs::remove_file(&main).unwrap();
+        fs::remove_file(sidecar(&main)).unwrap();
+    }
+
+    #[test]
+    fn export_to_the_source_path_is_refused_and_preserves_the_database() {
+        // Publishing the export over the source pathname would
+        // atomically replace the input database with the output text
+        // and report success (P0 finding). The handler must refuse
+        // before any output exists, with the canonical
+        // invalid_argument/not_started shape, and the source must
+        // stay byte-identical and openable; a distinct destination
+        // must keep working.
+        let main = live_membership("same-file");
+        let before = fs::read(&main).unwrap();
+        let mut state = SessionState::default();
+        let error = export(
+            &mut state,
+            json!({
+                "source": {"path": main.display().to_string(), "mode": "live"},
+                "view": {"kind": "feed", "feed": "feed-a"},
+                "format": "csv",
+                "destination": main.display().to_string(),
+                "publication_policy": "replace_existing",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "1000",
+                    "max_open_files": 2
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (
+                error.code,
+                error.outcome,
+                error.message.as_str(),
+            ),
+            (
+                "invalid_argument",
+                "not_started",
+                "destination must differ from the source database",
+            )
+        );
+        assert_eq!(
+            fs::read(&main).unwrap(),
+            before,
+            "the source database must keep its exact bytes"
+        );
+        // The database still opens after the refusal and an ordinary
+        // distinct-destination export still succeeds.
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let destination =
+            std::env::temp_dir().join(format!("iprange-export-same-file-out-{unique}.csv"));
+        let result = export(
+            &mut state,
+            json!({
+                "source": {"path": main.display().to_string(), "mode": "live"},
+                "view": {"kind": "feed", "feed": "feed-a"},
+                "format": "csv",
+                "destination": destination.display().to_string(),
+                "publication_policy": "fail_if_exists",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "1000",
+                    "max_open_files": 2
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["rows"], "1");
+        assert_eq!(result["source_close"]["outcome"], "closed");
+        fs::remove_file(&destination).unwrap();
+        fs::remove_file(&main).unwrap();
+        fs::remove_file(sidecar(&main)).unwrap();
+    }
+
+    #[test]
+    fn export_refuses_a_canonically_equivalent_source_destination() {
+        // The same-file comparison runs on canonicalized absolute
+        // paths: a `./`-decorated spelling of the source pathname is
+        // the same file and must be refused too.
+        let main = live_membership("same-file-dotted");
+        let dotted = main
+            .parent()
+            .unwrap()
+            .join(".")
+            .join(main.file_name().unwrap());
+        let mut state = SessionState::default();
+        let error = export(
+            &mut state,
+            json!({
+                "source": {"path": main.display().to_string(), "mode": "live"},
+                "view": {"kind": "feed", "feed": "feed-a"},
+                "format": "csv",
+                "destination": dotted.display().to_string(),
+                "publication_policy": "replace_existing",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "1000",
+                    "max_open_files": 2
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome),
+            ("invalid_argument", "not_started")
         );
         fs::remove_file(&main).unwrap();
         fs::remove_file(sidecar(&main)).unwrap();

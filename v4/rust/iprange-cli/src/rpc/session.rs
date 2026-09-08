@@ -689,9 +689,17 @@ fn handle_frame<W: Write>(
     let requests = match schema::decode_frame(&line) {
         Ok(requests) => requests,
         Err(err) => {
-            let payload = SchemaError::response(None, err);
+            // The same bounded serialization as handler responses:
+            // the complete object must fit the 65,000-byte ceiling
+            // before the frame encoder runs, and request-derived
+            // diagnostic text (member names, parse spans) is
+            // truncated with an explicit marker instead of being
+            // echoed at full size (milestone finding: a 70,000-byte
+            // unknown member name used to produce a 70,091-byte
+            // error object).
+            let payload = bounded_schema_response(None, err);
             let text = schema::encode_response_frame(&payload)
-                .expect("constant schema error within limits");
+                .expect("bounded schema error within frame limit");
             let mut w = writer.lock().unwrap();
             w.write_line(&text)?;
             return Ok(());
@@ -843,7 +851,7 @@ fn busy_response(request: &Request) -> Value {
 /// payload shared by the immediate single-request path and in-position
 /// batch elements.
 fn unanswerable_response() -> Value {
-    SchemaError::response(
+    bounded_schema_response(
         None,
         SchemaError {
             code: schema::TRANSPORT_FRAME_TOO_LARGE,
@@ -906,6 +914,89 @@ fn preflight_unanswerable_id(request: &Request) -> bool {
         })),
     );
     schema::encode_response_object(&probe).is_err()
+}
+
+/// Enforce the 65,000-byte object ceiling on parse/schema/admission
+/// error responses, with the same guarantee `bounded_response` gives
+/// handler responses, before the frame encoder runs.
+///
+/// A faithful response is kept when it fits. An oversized response is
+/// shrunk by capping request-derived diagnostic text (the message)
+/// with an explicit marker, so the transport error keeps its identity
+/// (-32600/-32700/...) instead of being dropped or masked as a
+/// product error. Only when the id alone cannot be echoed does the
+/// response fall back to the constant -32001 id:null shape, the only
+/// response that always satisfies the ceiling (giant-id preflight
+/// contract, iprange-jsonrpc-v1.md).
+fn bounded_schema_response(id: Option<RequestId>, err: SchemaError) -> Value {
+    let faithful = SchemaError::response(
+        id.clone(),
+        SchemaError {
+            code: err.code,
+            message: err.message.clone(),
+        },
+    );
+    if schema::encode_response_object(&faithful).is_ok() {
+        return faithful;
+    }
+    // The message embeds request-derived text. Cap it so the
+    // serialized object provably fits: worst-case JSON escaping
+    // inflates a raw byte 6x (a control character serializes as
+    // `\u001f`) and the explicit marker is ASCII, so it serializes
+    // 1:1. The envelope overhead is measured on the empty message,
+    // which always fits when the id itself fits.
+    const MARKER: &str = " [message truncated]";
+    let envelope = SchemaError::response(
+        id.clone(),
+        SchemaError {
+            code: err.code,
+            message: String::new(),
+        },
+    );
+    if let Ok(envelope_text) = schema::encode_response_object(&envelope) {
+        let raw_budget = (super::framing::RESPONSE_OBJECT_LIMIT
+            .saturating_sub(envelope_text.len())
+            .saturating_sub(MARKER.len()))
+            / 6;
+        if raw_budget > 0 {
+            // Largest char-boundary prefix within the raw budget.
+            let mut cut = 0usize;
+            let mut used = 0usize;
+            for (index, character) in err.message.char_indices() {
+                let char_bytes = character.len_utf8();
+                if used + char_bytes > raw_budget {
+                    break;
+                }
+                used += char_bytes;
+                cut = index + char_bytes;
+            }
+            let mut message = String::with_capacity(cut + MARKER.len());
+            message.push_str(&err.message[..cut]);
+            message.push_str(MARKER);
+            let trimmed = SchemaError::response(
+                id,
+                SchemaError {
+                    code: err.code,
+                    message,
+                },
+            );
+            debug_assert!(
+                schema::encode_response_object(&trimmed).is_ok(),
+                "truncated message must fit the object ceiling"
+            );
+            return trimmed;
+        }
+    }
+    // The id alone cannot be echoed: the only response that always
+    // satisfies the ceiling.
+    SchemaError::response(
+        None,
+        SchemaError {
+            code: schema::TRANSPORT_FRAME_TOO_LARGE,
+            message: "response object exceeds the 65000-byte limit; request id cannot be echoed"
+                .into(),
+        },
+    )
 }
 
 fn bounded_response(response: Value, request: &Request) -> Value {
@@ -1520,6 +1611,113 @@ mod tests {
         assert_eq!(bounded["id"], Value::Null);
         assert_eq!(
             bounded["error"]["code"],
+            json!(schema::TRANSPORT_FRAME_TOO_LARGE)
+        );
+    }
+
+    #[test]
+    fn schema_error_with_giant_request_text_is_truncated_to_the_object_bound() {
+        // A request-derived diagnostic (the unknown top-level member
+        // name, up to the 1,048,576-byte input frame) must never
+        // escape the 65,000-byte object ceiling (P2 finding: the
+        // pre-fix frame was 70,091 bytes). The shared bounded schema
+        // path caps the message with an explicit marker while keeping
+        // the standard -32600 identity and id null.
+        let member = "x".repeat(70_000);
+        let mut frame = json!({
+            "jsonrpc": "2.0",
+            "id": "1",
+            "method": "iprange.v1.system.describe",
+            "params": {},
+        });
+        frame
+            .as_object_mut()
+            .unwrap()
+            .insert(member.clone(), json!(1));
+        let mut session = Session::new();
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
+        handle_frame(&mut session, serde_json::to_vec(&frame).unwrap(), &writer).unwrap();
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let line = text.lines().next().expect("one response line");
+        assert!(
+            line.len() <= super::super::framing::RESPONSE_OBJECT_LIMIT,
+            "schema error object must fit the 65000-byte ceiling: {} bytes",
+            line.len()
+        );
+        let payload: Value = serde_json::from_str(line).unwrap();
+        assert_eq!(payload["id"], Value::Null);
+        assert_eq!(
+            payload["error"]["code"],
+            json!(schema::STD_INVALID_REQUEST)
+        );
+        let message = payload["error"]["message"].as_str().unwrap();
+        assert!(message.contains("unknown request member"));
+        assert!(
+            message.contains(" [message truncated]"),
+            "explicit truncation marker missing: {message}"
+        );
+        assert!(message.len() < member.len(), "request text must be capped");
+    }
+
+    #[test]
+    fn bounded_schema_response_keeps_small_errors_and_caps_giant_messages() {
+        // Faithful small errors pass through unchanged; only oversized
+        // request-derived diagnostics are capped with the marker.
+        let small = bounded_schema_response(None, SchemaError::invalid("boom"));
+        assert_eq!(small["error"]["message"], json!("boom"));
+        assert!(schema::encode_response_object(&small).is_ok());
+
+        let giant = bounded_schema_response(
+            None,
+            SchemaError::invalid(format!("unknown request member {:?}", "y".repeat(200_000))),
+        );
+        let text = schema::encode_response_object(&giant).unwrap();
+        assert!(
+            text.len() <= super::super::framing::RESPONSE_OBJECT_LIMIT,
+            "truncated message must fit the object ceiling: {} bytes",
+            text.len()
+        );
+        assert_eq!(giant["error"]["code"], json!(schema::STD_INVALID_REQUEST));
+        assert!(giant["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(" [message truncated]"));
+    }
+
+    #[test]
+    fn unanswerable_giant_id_refusal_stays_within_object_and_frame_bounds() {
+        // A giant id that cannot be echoed answers the constant -32001
+        // id:null refusal; verification that the refusal fits both the
+        // 65,000-byte object bound and the 1,048,576-byte frame bound
+        // over the real transport path (P2 finding).
+        let id = "I".repeat(200_000);
+        let frame = json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": "iprange.v1.system.describe",
+            "params": {},
+        });
+        let mut session = Session::new();
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
+        handle_frame(&mut session, serde_json::to_vec(&frame).unwrap(), &writer).unwrap();
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        let line = text.lines().next().expect("one response line");
+        assert!(
+            line.len() <= super::super::framing::RESPONSE_OBJECT_LIMIT,
+            "object bound: {} bytes",
+            line.len()
+        );
+        assert!(
+            line.len() <= super::super::framing::OUTPUT_FRAME_LIMIT,
+            "frame bound: {} bytes",
+            line.len()
+        );
+        let payload: Value = serde_json::from_str(line).unwrap();
+        assert_eq!(payload["id"], Value::Null);
+        assert_eq!(
+            payload["error"]["code"],
             json!(schema::TRANSPORT_FRAME_TOO_LARGE)
         );
     }

@@ -112,6 +112,10 @@ pub fn open(state: &mut SessionState, params: Value) -> Result<Value, HandlerErr
         }
     };
     state.resources.readers.insert(handle.clone(), reader);
+    state
+        .resources
+        .reader_paths
+        .insert(handle.clone(), std::path::PathBuf::from(&path));
     bounded_result(json!({
         "method": "iprange.v1.reader.open",
         "reader": handle,
@@ -176,6 +180,7 @@ pub fn close(state: &mut SessionState, params: Value) -> Result<Value, HandlerEr
         }
         None => None,
     };
+    state.resources.reader_paths.remove(&handle);
     state.resources.record_closed_reader(handle.clone());
     let mut result = json!({
         "method": "iprange.v1.reader.close",
@@ -208,6 +213,12 @@ pub fn metadata(state: &mut SessionState, params: Value) -> Result<Value, Handle
         .ok_or_else(|| invalid("reader must be a string"))?;
     let delivery = object["delivery"].clone();
     let method = "iprange.v1.reader.metadata";
+    // The source path that backs this reader handle, recorded at
+    // `reader.open`: a file delivery whose destination resolves to it
+    // would replace the input database with the metadata text, which
+    // the v1 contract forbids. Cloned before the reader borrow so the
+    // refusal can be checked inside `metadata_result`.
+    let source_path = state.resources.reader_paths.get(handle).cloned();
     // Refuse an inline result that cannot fit the response-object
     // ceiling BEFORE the metadata blob is materialized. The reader
     // borrow is scoped to the mmap-only length lookup so the preflight
@@ -220,7 +231,7 @@ pub fn metadata(state: &mut SessionState, params: Value) -> Result<Value, Handle
         preflight_metadata_inline(state, method, length)?;
     }
     let reader = reader(state, handle)?;
-    let result = metadata_result(method, reader, &delivery)?;
+    let result = metadata_result(method, reader, &delivery, source_path.as_deref())?;
     bounded_result(result)
 }
 
@@ -425,7 +436,12 @@ pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Valu
         if let Some(length) = inline_metadata_length(&reader, delivery)? {
             preflight_metadata_inline(state, "iprange.v1.database.metadata.get", length)?;
         }
-        metadata_result("iprange.v1.database.metadata.get", &reader, delivery)
+        metadata_result(
+            "iprange.v1.database.metadata.get",
+            &reader,
+            delivery,
+            Some(Path::new(&path)),
+        )
     })();
     match result {
         Ok(report) => finish_ephemeral_reader(&mut reader, report),
@@ -717,6 +733,7 @@ fn metadata_result(
     method: &str,
     reader: &ReaderValue,
     delivery: &Value,
+    source_path: Option<&Path>,
 ) -> Result<Value, HandlerError> {
     // Callers must run the inline preflight
     // (`inline_metadata_length` + `preflight_metadata_inline`) before
@@ -740,6 +757,13 @@ fn metadata_result(
             let path = delivery["path"]
                 .as_str()
                 .ok_or_else(|| invalid("delivery.path must be a string"))?;
+            // Refuse a file delivery whose destination resolves to
+            // the source database: publishing over the input pathname
+            // would replace the database with the metadata text
+            // (product finding, same guarantee as export).
+            if let Some(source) = source_path {
+                output::refuse_output_over_source(Path::new(path), source)?;
+            }
             let policy = publication_policy(delivery["publication_policy"].as_str())
                 .map_err(|_| invalid("delivery.publication_policy is invalid"))?;
             let max_output_bytes = u64_string(delivery["max_output_bytes"].as_str())
@@ -1465,6 +1489,106 @@ mod tests {
             output::base64_padded(b"hello metadata")
         );
         small.remove();
+    }
+
+    #[test]
+    fn metadata_file_delivery_refuses_the_reader_source_path() {
+        // A handle-backed reader remembers its `reader.open` source
+        // path: a file delivery whose destination resolves to that
+        // path would replace the database with the metadata text (P0
+        // finding), so it is refused with the canonical
+        // invalid_argument/not_started shape and the database stays
+        // readable; a distinct destination still delivers.
+        let fixture = live_with_metadata("metadata-same-file", b"meta");
+        let mut state = SessionState::default();
+        let opened = open(&mut state, test_support::live_source(&fixture.path)).unwrap();
+        let handle = opened["reader"].as_str().unwrap().to_owned();
+        let error = metadata(
+            &mut state,
+            serde_json::json!({
+                "reader": handle,
+                "delivery": {
+                    "mode": "file",
+                    "path": fixture.path.display().to_string(),
+                    "publication_policy": "replace_existing",
+                    "max_output_bytes": "1048576",
+                    "max_open_files": 1,
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (
+                error.code,
+                error.outcome,
+                error.message.as_str(),
+            ),
+            (
+                "invalid_argument",
+                "not_started",
+                "destination must differ from the source database",
+            )
+        );
+        // The source still opens and still carries its metadata; a
+        // distinct destination is delivered normally.
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let destination = std::env::temp_dir().join(format!(
+            "iprange-metadata-same-file-out-{}-{unique}.json",
+            std::process::id()
+        ));
+        let delivered = metadata(
+            &mut state,
+            serde_json::json!({
+                "reader": handle,
+                "delivery": {
+                    "mode": "file",
+                    "path": destination.display().to_string(),
+                    "publication_policy": "fail_if_exists",
+                    "max_output_bytes": "1048576",
+                    "max_open_files": 1,
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(delivered["present"], true);
+        assert_eq!(std::fs::read(&destination).unwrap(), b"meta");
+        std::fs::remove_file(&destination).unwrap();
+        fixture.remove();
+    }
+
+    #[test]
+    fn database_metadata_file_delivery_refuses_the_source_path() {
+        // The ephemeral-source variant of the same P0 finding: the
+        // delivery destination is the source pathname itself, so the
+        // publication is refused before any output exists and the
+        // database stays openable.
+        let fixture = live_with_metadata("db-metadata-same-file", b"db-meta");
+        let mut state = SessionState::default();
+        let error = database_metadata(
+            &mut state,
+            serde_json::json!({
+                "source": {"path": fixture.path.display().to_string(), "mode": "live"},
+                "delivery": {
+                    "mode": "file",
+                    "path": fixture.path.display().to_string(),
+                    "publication_policy": "replace_existing",
+                    "max_output_bytes": "1048576",
+                    "max_open_files": 1,
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome),
+            ("invalid_argument", "not_started")
+        );
+        // The source still opens after the refusal.
+        let info = database_info(&mut state, test_support::live_source(&fixture.path)).unwrap();
+        assert_eq!(info["info"]["address_family"], "ipv6");
+        fixture.remove();
     }
 
     #[test]
