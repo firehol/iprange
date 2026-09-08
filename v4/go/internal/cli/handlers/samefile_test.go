@@ -171,7 +171,7 @@ func TestRefuseOutputOverSourceErrorShape(t *testing.T) {
 	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	herr := refuseOutputOverSource(source, source, nil)
+	herr := refuseOutputOverSource(source, source, nil, nil)
 	if herr == nil {
 		t.Fatal("same path accepted")
 	}
@@ -181,7 +181,7 @@ func TestRefuseOutputOverSourceErrorShape(t *testing.T) {
 			herr.Code, herr.Outcome, herr.Message)
 	}
 	other := filepath.Join(dir, "other.bin")
-	if herr := refuseOutputOverSource(other, source, nil); herr != nil {
+	if herr := refuseOutputOverSource(other, source, nil, nil); herr != nil {
 		t.Fatalf("distinct destination refused: %v", herr)
 	}
 }
@@ -565,7 +565,7 @@ func TestRefuseOutputOverSourceFileIdentity(t *testing.T) {
 	if err := os.Rename(source, renamed); err != nil {
 		t.Fatal(err)
 	}
-	if herr := refuseOutputOverSource(renamed, source, sourceInfo); herr == nil {
+	if herr := refuseOutputOverSource(renamed, source, sourceInfo, nil); herr == nil {
 		t.Fatal("renamed same-file destination accepted")
 	}
 	// Restore the source name and try a hard-link alias.
@@ -576,19 +576,19 @@ func TestRefuseOutputOverSourceFileIdentity(t *testing.T) {
 	if err := os.Link(source, link); err != nil {
 		t.Skipf("hard links unavailable: %v", err)
 	}
-	if herr := refuseOutputOverSource(link, source, sourceInfo); herr == nil {
+	if herr := refuseOutputOverSource(link, source, sourceInfo, nil); herr == nil {
 		t.Fatal("hard-link same-file destination accepted")
 	}
 	other := filepath.Join(dir, "other.bin")
 	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if herr := refuseOutputOverSource(other, source, sourceInfo); herr != nil {
+	if herr := refuseOutputOverSource(other, source, sourceInfo, nil); herr != nil {
 		t.Fatalf("distinct destination refused: %v", herr)
 	}
 	// A nil source identity still refuses the same pathname (the
 	// pathname arm is independent of the stat result).
-	if herr := refuseOutputOverSource(source, source, nil); herr == nil {
+	if herr := refuseOutputOverSource(source, source, nil, nil); herr == nil {
 		t.Fatal("same pathname with nil identity accepted")
 	}
 }
@@ -613,11 +613,15 @@ func TestRefuseOutputOverSourceSidecar(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	sidecarInfo, err := os.Stat(sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, destination := range []string{
 		sidecar,
 		filepath.Join(dir, "sub", "..", "db.bin.readers"),
 	} {
-		herr := refuseOutputOverSource(destination, source, sourceInfo)
+		herr := refuseOutputOverSource(destination, source, sourceInfo, sidecarInfo)
 		if herr == nil {
 			t.Fatalf("sidecar destination %q accepted", destination)
 		}
@@ -633,8 +637,30 @@ func TestRefuseOutputOverSourceSidecar(t *testing.T) {
 	if err := os.Link(sidecar, alias); err != nil {
 		t.Skipf("hard links unavailable: %v", err)
 	}
-	if herr := refuseOutputOverSource(alias, source, sourceInfo); herr == nil {
+	if herr := refuseOutputOverSource(alias, source, sourceInfo, sidecarInfo); herr == nil {
 		t.Fatal("hard-link sidecar destination accepted")
+	}
+	// A RENAMED sidecar keeps its captured identity (tester role
+	// wave-19.6): a destination at the renamed path is refused through
+	// the same-file arm even though its pathname no longer matches.
+	renamed := filepath.Join(dir, "db.bin.readers.old")
+	if err := os.Rename(sidecar, renamed); err != nil {
+		t.Fatal(err)
+	}
+	herr := refuseOutputOverSource(renamed, source, sourceInfo, sidecarInfo)
+	if herr == nil {
+		t.Fatal("renamed sidecar destination accepted")
+	}
+	if herr.Code != "invalid_argument" || herr.Outcome != "not_started" ||
+		herr.Message != "destination must differ from the source database" {
+		t.Fatalf("renamed sidecar: code=%q outcome=%q message=%q",
+			herr.Code, herr.Outcome, herr.Message)
+	}
+	// An ephemeral guard without the captured identity accepts the
+	// renamed pathname (a fresh stat no longer matches it); the
+	// wave-19.6 record documents this handle-vs-preflight distinction.
+	if herr := refuseOutputOverSource(renamed, source, sourceInfo, nil); herr != nil {
+		t.Fatalf("ephemeral guard refused the renamed pathname: %v", herr)
 	}
 	// A distinct file and a plain leftover "<main>.readers" of an
 	// unrelated main name stay accepted.
@@ -642,8 +668,36 @@ func TestRefuseOutputOverSourceSidecar(t *testing.T) {
 	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if herr := refuseOutputOverSource(other, source, sourceInfo); herr != nil {
+	if herr := refuseOutputOverSource(other, source, sourceInfo, sidecarInfo); herr != nil {
 		t.Fatalf("distinct destination refused: %v", herr)
+	}
+}
+
+// TestRefuseOutputOverSourceSidecarReservedName pins the wave-19.6
+// parity repair: the sidecar derivation is purely lexical (no
+// main-name grammar), so a reserved-name source such as "x.readers"
+// derives "x.readers.readers" and the guard refuses that destination
+// preflight with the canonical shape instead of unarming the sidecar
+// arm and failing later at the SDK open with a different outcome
+// (Rust sidecar_path parity).
+func TestRefuseOutputOverSourceSidecarReservedName(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "x.readers")
+	if err := os.WriteFile(source, []byte("coordination"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecar := filepath.Join(dir, "x.readers.readers")
+	herr := refuseOutputOverSource(sidecar, source, sourceInfo, nil)
+	if herr == nil {
+		t.Fatal("reserved-name sidecar destination accepted")
+	}
+	if herr.Code != "invalid_argument" || herr.Outcome != "not_started" ||
+		herr.Message != "destination must differ from the source database" {
+		t.Fatalf("code=%q outcome=%q message=%q", herr.Code, herr.Outcome, herr.Message)
 	}
 }
 
@@ -746,6 +800,77 @@ func TestSessionReaderMetadataRefusesLiveSidecar(t *testing.T) {
 	}
 	if len(bytes) == 0 || bytes[0] == '{' {
 		t.Fatalf("sidecar was modified: head %q", bytes[:min(len(bytes), 20)])
+	}
+}
+
+// TestSessionReaderMetadataRefusesRenamedLiveSidecar pins the
+// wave-19.6 P1 repair at the session level: a live reader captures
+// the sidecar identity at open, so a file delivery whose destination
+// is the sidecar RENAMED while the reader is open is refused through
+// the same-file arm (mirroring the renamed-main case) instead of
+// publishing metadata text over the displaced coordination file.
+func TestSessionReaderMetadataRefusesRenamedLiveSidecar(t *testing.T) {
+	dir := t.TempDir()
+	source := newLiveFeed(t, dir, "live2.db")
+	sidecar := source + ".readers"
+	renamed := sidecar + ".old"
+	registerHandlers()
+	openFrame := `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.reader.open","params":{"source":{"path":` +
+		mustJSONString(source) + `,"mode":"live"}}}`
+	metaFrame := `{"jsonrpc":"2.0","id":"2","method":"iprange.v1.reader.metadata","params":{"reader":` +
+		mustJSONString("@HANDLE@") + `,"delivery":{"mode":"file","path":` +
+		mustJSONString(renamed) + `,"publication_policy":"replace_existing","max_output_bytes":"1048576","max_open_files":8}}}`
+
+	session := rpc.NewSession()
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	outR, outW := io.Pipe()
+	defer outR.Close()
+	done := make(chan error, 1)
+	go func() { done <- session.Run(pr, outW) }()
+	if _, err := fmt.Fprintf(pw, "%s\n", openFrame); err != nil {
+		t.Fatalf("write open frame: %v", err)
+	}
+	first, err := bufio.NewReader(outR).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read open response: %v", err)
+	}
+	var openResponse struct {
+		Result map[string]json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(first)), &openResponse); err != nil {
+		t.Fatalf("open response %q: %v", first, err)
+	}
+	var handle string
+	if err := json.Unmarshal(openResponse.Result["reader"], &handle); err != nil || handle == "" {
+		t.Fatalf("reader handle %s: %v", openResponse.Result["reader"], err)
+	}
+	// The reader is open: rename the sidecar now, then deliver to the
+	// renamed path (the captured sidecar identity must refuse it).
+	if err := os.Rename(sidecar, renamed); err != nil {
+		t.Fatal(err)
+	}
+	metaFrame = strings.Replace(metaFrame, mustJSONString("@HANDLE@"), mustJSONString(handle), 1)
+	if _, err := fmt.Fprintf(pw, "%s\n", metaFrame); err != nil {
+		t.Fatalf("write metadata frame: %v", err)
+	}
+	second, err := bufio.NewReader(outR).ReadString('\n')
+	if err != nil && second == "" {
+		t.Fatalf("read metadata response: %v", err)
+	}
+	_ = pw.Close()
+	<-done
+	if !strings.Contains(second, `"code":"invalid_argument"`) ||
+		!strings.Contains(second, "destination must differ from the source database") {
+		t.Fatalf("metadata response %q, want the source-refusal error", second)
+	}
+	// The displaced sidecar file is untouched, not metadata text.
+	bytes, err := os.ReadFile(renamed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bytes) == 0 || bytes[0] == '{' {
+		t.Fatalf("renamed sidecar was modified: head %q", bytes[:min(len(bytes), 20)])
 	}
 }
 

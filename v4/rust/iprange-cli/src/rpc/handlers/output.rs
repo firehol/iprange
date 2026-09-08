@@ -59,6 +59,28 @@ pub(crate) fn file_identity(path: &Path) -> Option<FileIdentity> {
     })
 }
 
+/// The two file identities a same-source guard needs: the main
+/// database and its reader-coordination sidecar (`<main>.readers`).
+/// Handle-backed readers capture both at open; ephemeral preflights
+/// stat them at request time.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SourceIdentities {
+    pub main: FileIdentity,
+    pub sidecar: Option<FileIdentity>,
+}
+
+/// Capture the current file identity of a source's sidecar twin, when
+/// it exists (the sidecar is derived lexically like Go; a reserved
+/// main name still derives a sidecar component).
+pub(crate) fn sidecar_identity(main: &Path) -> Option<FileIdentity> {
+    iprange_livedb::sidecar_path(main)
+        .ok()
+        .and_then(|sidecar| {
+            iprange_livedb::identity(&sidecar)
+                .map(|(dev, ino)| FileIdentity { path: sidecar, dev, ino })
+        })
+}
+
 /// Lexical normalization of a canonicalized prefix plus a re-appended
 /// missing suffix, mirroring Go `filepath.Clean` on the same
 /// components: `.` components drop, `..` pops the previous component
@@ -131,31 +153,40 @@ pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
 pub(crate) fn refuse_output_over_source(
     destination: &Path,
     source: &FileIdentity,
+    sidecar: Option<&FileIdentity>,
 ) -> Result<(), HandlerError> {
     // Pathname identity: two spellings of the same eventual file
     // (absolute vs relative, symlinked parents, `.`/`..` decorations).
     let same_pathname =
         canonical_absolute(destination) == canonical_absolute(&source.path);
+    let destination_identity = file_identity(destination);
     // File identity: the destination is the same FILE that backs the
     // source even after the source pathname was renamed or hard-linked
     // (a reader keeps the identity captured at open).
-    let same_file = file_identity(destination)
+    let same_file = destination_identity
+        .as_ref()
         .map(|dest| dest.dev == source.dev && dest.ino == source.ino)
         .unwrap_or(false);
     // Sidecar identity: the live database's reader-coordination
     // sidecar (<main>.readers) is a distinct file that records reader
     // state; publishing output over it destroys the source's
     // readability, so it is refused exactly like the main database
-    // (pathname and file-identity arms, operations-role wave-19.5).
-    // An opened source always has a valid main name, so deriving the
-    // sidecar is expected to succeed; a failed derivation simply
-    // leaves the sidecar arm unarmed.
+    // (pathname and file-identity arms).  The file-identity arm uses
+    // the sidecar identity captured at reader open when one exists (a
+    // renamed sidecar keeps its identity, mirroring the main-file arm;
+    // tester role wave-19.6) and falls back to a fresh stat for
+    // ephemeral preflights; the pathname arm derives the sidecar
+    // component lexically like the Go guard.
     let sidecar_same = iprange_livedb::sidecar_path(&source.path)
-        .map(|sidecar| {
+        .map(|sidecar_path| {
             let by_pathname =
-                canonical_absolute(destination) == canonical_absolute(&sidecar);
-            let by_file = file_identity(destination)
-                .zip(file_identity(&sidecar))
+                canonical_absolute(destination) == canonical_absolute(&sidecar_path);
+            let twin = sidecar
+                .cloned()
+                .or_else(|| sidecar_identity(&sidecar_path));
+            let by_file = destination_identity
+                .as_ref()
+                .zip(twin.as_ref())
                 .map_or(false, |(dest, twin)| {
                     dest.dev == twin.dev && dest.ino == twin.ino
                 });
@@ -388,7 +419,7 @@ mod tests {
         let identity = file_identity(&source).expect("identity");
         let renamed = dir.join("db.bak");
         fs::rename(&source, &renamed).unwrap();
-        let error = refuse_output_over_source(&renamed, &identity).unwrap_err();
+        let error = refuse_output_over_source(&renamed, &identity, None).unwrap_err();
         assert_eq!(error.code, "invalid_argument");
         assert_eq!(error.outcome, "not_started");
         assert_eq!(
@@ -399,12 +430,12 @@ mod tests {
         fs::rename(&renamed, &source).unwrap();
         let alias = dir.join("db-alias.iprange");
         if fs::hard_link(&source, &alias).is_ok() {
-            assert!(refuse_output_over_source(&alias, &identity).is_err());
+            assert!(refuse_output_over_source(&alias, &identity, None).is_err());
             let _ = fs::remove_file(&alias);
         }
         let other = dir.join("other.iprange");
         fs::write(&other, b"other").unwrap();
-        assert!(refuse_output_over_source(&other, &identity).is_ok());
+        assert!(refuse_output_over_source(&other, &identity, None).is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -428,11 +459,13 @@ mod tests {
         // Both files exist, exactly like an open live database.
         fs::write(&sidecar, b"readers").unwrap();
         let identity = file_identity(&source).expect("identity");
+        let sidecar_id = file_identity(&sidecar).expect("sidecar identity");
         for destination in [
             sidecar.clone(),
             dir.join("sub").join("..").join("db.iprange.readers"),
         ] {
-            let error = refuse_output_over_source(&destination, &identity).unwrap_err();
+            let error = refuse_output_over_source(&destination, &identity, Some(&sidecar_id))
+                .unwrap_err();
             assert_eq!(error.code, "invalid_argument");
             assert_eq!(error.outcome, "not_started");
             assert_eq!(
@@ -444,15 +477,64 @@ mod tests {
         // file-identity arm even though its pathname differs.
         let alias = dir.join("sidecar-alias.iprange");
         if fs::hard_link(&sidecar, &alias).is_ok() {
-            assert!(refuse_output_over_source(&alias, &identity).is_err());
+            assert!(refuse_output_over_source(&alias, &identity, Some(&sidecar_id)).is_err());
             let _ = fs::remove_file(&alias);
         }
+        // A RENAMED sidecar keeps its captured identity: a destination
+        // at the renamed path is refused through the file-identity arm
+        // (tester role wave-19.6, mirroring the renamed-main arm).  An
+        // ephemeral guard without the captured identity accepts the
+        // renamed pathname because a fresh stat no longer matches it;
+        // the wave-19.6 record documents this handle-vs-preflight
+        // distinction.
+        let renamed = dir.join("db.iprange.readers.old");
+        fs::rename(&sidecar, &renamed).unwrap();
+        let error = refuse_output_over_source(&renamed, &identity, Some(&sidecar_id)).unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome, error.message.as_str()),
+            (
+                "invalid_argument",
+                "not_started",
+                "destination must differ from the source database",
+            )
+        );
+        assert!(refuse_output_over_source(&renamed, &identity, None).is_ok());
+        fs::remove_file(&renamed).unwrap();
         // A plain leftover "<main>.readers" cannot be a delivery target
         // through the OTHER main file's identity: the sidecar arm is
         // derived from the source main name, and a distinct file stays
         // accepted.
         let other = dir.join("other.iprange");
         fs::write(&other, b"other").unwrap();
-        assert!(refuse_output_over_source(&other, &identity).is_ok());
+        assert!(refuse_output_over_source(&other, &identity, Some(&sidecar_id)).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refuse_output_over_source_derives_the_sidecar_lexically_for_reserved_names() {
+        // Parity finding wave-19.6: the sidecar derivation must be
+        // purely lexical (Go pathname.FileName/WithFileName parity), so
+        // a reserved-name source such as `x.readers` derives
+        // `x.readers.readers` and the guard refuses that destination
+        // preflight with the canonical shape instead of unarming the
+        // sidecar arm and failing later at the SDK open with a
+        // different machine-contract outcome.
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-refuse-reserved-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("x.readers");
+        fs::write(&source, b"coordination").unwrap();
+        let identity = file_identity(&source).expect("identity");
+        let sidecar = iprange_livedb::sidecar_path(&source).expect("sidecar path");
+        assert_eq!(sidecar.file_name().unwrap(), "x.readers.readers");
+        let error = refuse_output_over_source(&sidecar, &identity, None).unwrap_err();
+        assert_eq!(error.code, "invalid_argument");
+        assert_eq!(error.outcome, "not_started");
+        assert_eq!(
+            error.message,
+            "destination must differ from the source database"
+        );
         let _ = fs::remove_dir_all(&dir);
     }

@@ -219,12 +219,13 @@ pub struct ConnectionState {
     /// can refuse a destination that resolves to the file backing an
     /// open reader: the v1 contract never modifies input files. The map
     /// is bounded by `reader.open`'s `READER_LIMIT` and every close
-    /// removes its entry. Each entry carries the file identity
-    /// captured at open (path plus device/inode), so a reader whose
-    /// source pathname was renamed is still refused (same-file guard).
+    /// removes its entry. Each entry carries the main and sidecar file
+    /// identities captured at open (path plus device/inode), so a
+    /// reader whose source pathname or sidecar was renamed is still
+    /// refused (same-file guard).
     pub reader_paths: HashMap<
         String,
-        crate::rpc::handlers::output::FileIdentity,
+        crate::rpc::handlers::output::SourceIdentities,
     >,
     pub closed_readers: HashMap<String, ()>,
     pub cursors: HashMap<String, CursorValue>,

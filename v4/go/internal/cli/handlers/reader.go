@@ -453,7 +453,7 @@ func deliverMetadata(method string, reader *rpc.ReaderValue, delivery rawObject)
 		// text, which the v1 contract forbids (Rust reader.rs
 		// metadata_result refuse_output_over_source parity).
 		if reader.Path != "" {
-			if herr := refuseOutputOverSource(path, reader.Path, reader.SourceInfo); herr != nil {
+			if herr := refuseOutputOverSource(path, reader.Path, reader.SourceInfo, reader.SidecarInfo); herr != nil {
 				return nil, herr
 			}
 		}
@@ -845,23 +845,40 @@ func openReader(path, mode, label string, cancellation *iprangedb.CancellationTo
 		return nil, rpc.NewHandlerError("io", "not_started",
 			"cannot inspect "+label+" "+path+": "+err.Error())
 	}
-	// The file identity is captured right after the SDK open succeeds:
-	// a reader whose source pathname is later renamed still carries
-	// the original file identity, so the output-over-source guard can
-	// refuse a destination that is the same file (os.SameFile).
+	// The file identities are captured after the SDK open succeeds: a
+	// reader whose source pathname or reader-coordination sidecar is
+	// later renamed still carries the original identities, so the
+	// output-over-source guard can refuse a destination that is the
+	// same file as either (os.SameFile; Rust SourceIdentities parity).
 	sourceInfo, _ := os.Stat(path)
 	if mode == "immutable" {
 		reader, err := iprangedb.OpenImmutable(path)
 		if err != nil {
 			return nil, readError(err)
 		}
-		return &rpc.ReaderValue{Immutable: reader, Path: path, SourceInfo: sourceInfo}, nil
+		return &rpc.ReaderValue{Immutable: reader, Path: path,
+			SourceInfo: sourceInfo, SidecarInfo: sidecarInfo(path)}, nil
 	}
 	reader, err := iprangedb.OpenLiveReader(path, cancellation)
 	if err != nil {
 		return nil, readError(err)
 	}
-	return &rpc.ReaderValue{Live: reader, Path: path, SourceInfo: sourceInfo}, nil
+	return &rpc.ReaderValue{Live: reader, Path: path,
+		SourceInfo: sourceInfo, SidecarInfo: sidecarInfo(path)}, nil
+}
+
+// sidecarInfo captures the file identity of the reader-coordination
+// sidecar (<main>.readers) for the same-source guard, when it exists.
+func sidecarInfo(path string) os.FileInfo {
+	sidecar, ok := outputSidecarPath(path)
+	if !ok {
+		return nil
+	}
+	info, err := os.Stat(sidecar)
+	if err != nil {
+		return nil
+	}
+	return info
 }
 
 // sourceFromParams decodes the validated single-source params of the

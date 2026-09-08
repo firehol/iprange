@@ -23,11 +23,22 @@ pub(crate) fn canonical_sidecar(main: &Path) -> Result<PathBuf> {
 
 /// Public SDK accessor for the reader-coordination sidecar twin of a
 /// main database path: `<main>.readers` under the same parent, derived
-/// from the raw path components with no symlink resolution.  The CLI
-/// same-source guard uses it to refuse publishing output over the live
-/// database's sidecar, which would destroy the source's readability.
+/// lexically from the raw path components with no symlink resolution
+/// and no main-name grammar validation.  The CLI same-source guard
+/// uses it to refuse publishing output over the live database's
+/// sidecar, which would destroy the source's readability; the lexical
+/// derivation (no `validate_main_name`) mirrors the Go guard's
+/// `pathname.FileName`/`WithFileName` derivation exactly, so a
+/// reserved-name source such as `x.readers` derives `x.readers.readers`
+/// and is refused preflight by both engines instead of diverging at
+/// the guard (parity finding, wave-19.6).
 pub fn sidecar_path(main: &Path) -> Result<PathBuf> {
-    canonical_sidecar(main)
+    let name = main
+        .file_name()
+        .ok_or(Error::InvalidArgument("database path has no file name"))?;
+    let mut sidecar_name = name.to_os_string();
+    sidecar_name.push(".readers");
+    Ok(main.with_file_name(sidecar_name))
 }
 
 pub(crate) fn live_transition_temp(main: &Path) -> Result<PathBuf> {

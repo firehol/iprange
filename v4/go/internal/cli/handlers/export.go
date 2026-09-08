@@ -380,7 +380,11 @@ func Export(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerErro
 	// the canonical invalid_argument/not_started shape (Rust
 	// export.rs refuse_output_over_source parity).
 	sourceInfo, _ := os.Stat(sourcePath)
-	if herr := refuseOutputOverSource(destination, sourcePath, sourceInfo); herr != nil {
+	var sidecarInfo os.FileInfo
+	if sidecarPath, ok := outputSidecarPath(sourcePath); ok {
+		sidecarInfo, _ = os.Stat(sidecarPath)
+	}
+	if herr := refuseOutputOverSource(destination, sourcePath, sourceInfo, sidecarInfo); herr != nil {
 		return nil, herr
 	}
 	// The complete inline result carries the destination string and the
@@ -1985,7 +1989,8 @@ func writeJSONValue(buffer []byte, value map[string]any) ([]byte, *rpc.HandlerEr
 // filesystem allows) and, when both paths exist, the file identity
 // (os.SameFile), so a destination that names the same file through a
 // rename or a hard link is refused too.
-func refuseOutputOverSource(destination, source string, sourceInfo os.FileInfo) *rpc.HandlerError {
+func refuseOutputOverSource(destination, source string, sourceInfo, sidecarInfo os.FileInfo) *rpc.HandlerError {
+	destInfo, destErr := os.Stat(destination)
 	if canonicalAbsolute(destination) == canonicalAbsolute(source) {
 		return refusedSameSource()
 	}
@@ -1993,24 +1998,42 @@ func refuseOutputOverSource(destination, source string, sourceInfo os.FileInfo) 
 	// ".readers") is a distinct file that records reader state;
 	// publishing output over it destroys the source's readability, so
 	// it is refused exactly like the main database (pathname and
-	// same-file arms, Rust refuse_output_over_source parity).
-	if name, ok := pathname.FileName(source); ok {
-		sidecar := pathname.WithFileName(source, name+format.CoordinationSuffix)
+	// same-file arms, Rust refuse_output_over_source parity).  The
+	// sidecar component is derived lexically (no main-name grammar),
+	// so a reserved-name source still derives a sidecar component and
+	// is refused preflight (wave-19.6 parity finding).
+	if sidecar, ok := outputSidecarPath(source); ok {
 		if canonicalAbsolute(destination) == canonicalAbsolute(sidecar) {
 			return refusedSameSource()
 		}
-		if destInfo, err := os.Stat(destination); err == nil {
-			if sidecarInfo, err := os.Stat(sidecar); err == nil && os.SameFile(sidecarInfo, destInfo) {
+		if destErr == nil {
+			if sidecarInfo != nil && os.SameFile(sidecarInfo, destInfo) {
 				return refusedSameSource()
+			}
+			if sidecarInfo == nil {
+				if fresh, err := os.Stat(sidecar); err == nil && os.SameFile(fresh, destInfo) {
+					return refusedSameSource()
+				}
 			}
 		}
 	}
-	if sourceInfo != nil {
-		if destInfo, err := os.Stat(destination); err == nil && os.SameFile(sourceInfo, destInfo) {
-			return refusedSameSource()
-		}
+	if sourceInfo != nil && destErr == nil && os.SameFile(sourceInfo, destInfo) {
+		return refusedSameSource()
 	}
 	return nil
+}
+
+// outputSidecarPath derives the reader-coordination sidecar component
+// of a main database path lexically (pathname.FileName/WithFileName
+// parity with the reader, Rust sidecar_path parity): no main-name
+// grammar is applied, so a reserved-name source still derives a
+// sidecar component and the guard refuses it preflight.
+func outputSidecarPath(path string) (string, bool) {
+	name, ok := pathname.FileName(path)
+	if !ok {
+		return "", false
+	}
+	return pathname.WithFileName(path, name+format.CoordinationSuffix), true
 }
 
 func refusedSameSource() *rpc.HandlerError {

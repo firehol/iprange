@@ -31,6 +31,13 @@ type ReaderValue struct {
 	// same-file guard can still refuse a destination that is the file
 	// backing this reader (os.SameFile; Rust FileIdentity parity).
 	SourceInfo os.FileInfo
+	// SidecarInfo is the file identity of the reader-coordination
+	// sidecar (<main>.readers) captured right after the open.  A
+	// rename of the sidecar keeps the identity, so the same-file
+	// guard can refuse a destination that is the file recording this
+	// reader's coordination membership even after its pathname moved
+	// (Rust sidecar identity parity; tester role wave-19.6).
+	SidecarInfo os.FileInfo
 }
 
 // CloseLive closes only a registered live reader. Immutable readers

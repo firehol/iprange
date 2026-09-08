@@ -10402,9 +10402,12 @@ Records corrected in this round: the wave-19 admission-error record
 now states the shape-dependent measured codes (params-level unknown
 member `-32602` with the marker, Go 4,182 B / Rust 4,188 B objects;
 top-level unknown member `-32600` with the marker, the shape the
-committed Go session test asserts; short messages carry no marker),
-and the wave-19 identity sentence now names the final committed
-hashes (see above).
+committed Go session test asserts; short messages carry no marker).
+The identity sentence inside the wave-19 record names the
+wave-19.4-final set and is dated to that round; the wave-19.5-final
+set is recorded in the round-19.6 record (below) with the closing
+evidence commit, and SHASUMS.txt / the evidence README carry the
+authoritative current hashes.
 
 Verification at the wave-19.5 HEAD: Go suite 23/23 packages PASS
 (including the two new sidecar tests); Rust workspace PASS
@@ -10415,3 +10418,78 @@ were re-run at the rebuilt final identities; SHASUMS.txt (8/8) and
 the evidence README identity block match the final commit.  The
 seven role reviews were re-anchored at the final HEAD; astra turn 18
 (the same review session) is the milestone-4 closure gate.
+
+#### Wave 19 round 19.6 (2026-09-08) — role round at `42de5520`: renamed-sidecar identity capture, lexical sidecar parity, and identity-record correction
+
+The wave-19.5 role round at `42de5520` passed operations, portability,
+performance, and glm; tester and parity FAILed with one product P1 and
+one parity P2, and security FAILed with a records P2 (the same
+identity-sentence class operations and glm also noted as P3):
+
+- Tester P1 — the sidecar guard had no rename arm: the sidecar
+  identity was never captured at open, so with a live reader open,
+  renaming `<main>.readers` and then delivering `reader.metadata`
+  file output to the renamed path overwrote the displaced
+  coordination file with metadata text and left the source
+  unreadable, in both languages (the exact P0 signature through a
+  renamed sidecar; the wave-19.5 record's "rename/hard-link alias
+  arm ... exactly like the main-database arms" was not yet true for
+  the sidecar).
+- Parity P2 — the Rust sidecar derivation ran `validate_main_name`
+  (reserved-name grammar) while Go derived the sidecar component
+  lexically.  For an immutable source with a reserved basename such
+  as `x.readers`, Go refused `x.readers.readers` preflight with the
+  canonical guard shape while Rust unarmed the sidecar arm and failed
+  later at the SDK open with a different machine-contract `outcome`
+  — identical wire input, divergent `data.outcome`.
+- Security P2 — the wave-19 record's "final committed identities"
+  sentence still anchored the superseded wave-19.4 set
+  (`a320028a…`/`aff80842…`/`cd84271c…`, Windows `aec92202…`,
+  `b595b97e…`, `1ec4d089…`), and the wave-19.5 "Records corrected"
+  paragraph pointed at it with "see above", so a SOW-only reader
+  could not reproduce the wave-19.5 qualified set.
+
+Repaired in commit `462334f1`-follow (see the product commit of this
+round; rebuilt binaries and final identities in SHASUMS.txt and the
+evidence README at the closing evidence commit):
+
+1. Renamed-sidecar identity capture: handle-backed readers now
+   capture the sidecar file identity at open alongside the main
+   identity — Rust `output::SourceIdentities { main, sidecar }`
+   recorded in `reader_paths` (`state.rs`) and built in
+   `reader.open` / `database.metadata.get`; Go `ReaderValue`
+   gains `SidecarInfo` captured after the SDK open in `openReader`
+   (`handlers/reader.go`).  `refuse_output_over_source` /
+   `refuseOutputOverSource` take the sidecar identity and compare the
+   destination's identity against it, so a renamed sidecar is
+   refused through the file-identity arm for the lifetime of the
+   handle; ephemeral preflights (export, `database.metadata.get`)
+   stat the sidecar at preflight like the main-file arm.
+2. Lexical sidecar parity: `iprange-livedb::sidecar_path` no longer
+   runs `validate_main_name` — it derives `<main>.readers` from the
+   raw components exactly like Go's `pathname.FileName` +
+   `WithFileName` (the documented `canonical_sidecar` keeps its
+   grammar checks for live-lifecycle callers).  Reserved-name
+   sources now derive a sidecar component and both engines refuse
+   the preflight with the canonical shape.
+3. Identity record: this round's record (below) names the final
+   committed hashes inline; the superseded wave-19.4 sentence in the
+   wave-19 record is left dated as the round record it was.
+
+Committed detecting tests: Go `samefile_test.go`
+(`TestRefuseOutputOverSourceSidecar` gains the renamed-sidecar arm,
+`TestRefuseOutputOverSourceSidecarReservedName`,
+`TestSessionReaderMetadataRefusesRenamedLiveSidecar`); Rust
+`output.rs` (`refuse_output_over_source_refuses_the_source_sidecar`
+gains the renamed-sidecar arm,
+`refuse_output_over_source_derives_the_sidecar_lexically_for_reserved_names`),
+`reader.rs`
+(`metadata_file_delivery_refuses_the_reader_renamed_sidecar`).
+
+Verification: Go suite 23/23 packages PASS; Rust workspace PASS;
+battery green at the rebuilt final identities (matrices 38/38 +
+14/24 mixed, crash 16/16, resource 8/8, golden 55, sensitivity 14,
+kind gate PASS); operations probe 34/34; Windows housekeeping 2/2
+natively at the final product revision.  The seven role reviews are
+re-anchored at the final HEAD; astra turn 18 (the same review
+session) remains the milestone-4 closure gate.

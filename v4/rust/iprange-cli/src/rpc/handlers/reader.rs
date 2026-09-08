@@ -112,17 +112,26 @@ pub fn open(state: &mut SessionState, params: Value) -> Result<Value, HandlerErr
         }
     };
     state.resources.readers.insert(handle.clone(), reader);
-    let source_identity = output::file_identity(Path::new(&path)).unwrap_or_else(
+    // Main and sidecar identities captured at open: a destination that
+    // is the same file as either (through a rename or hard link) is
+    // refused by the output-over-source guard for the lifetime of the
+    // handle (tester role wave-19.6).
+    let main_identity = output::file_identity(Path::new(&path)).unwrap_or_else(
         || output::FileIdentity {
             path: std::path::PathBuf::from(&path),
             dev: 0,
             ino: 0,
         },
     );
+    let sidecar_identity = output::sidecar_identity(Path::new(&path));
+    let source_identities = output::SourceIdentities {
+        main: main_identity,
+        sidecar: sidecar_identity,
+    };
     state
         .resources
         .reader_paths
-        .insert(handle.clone(), source_identity);
+        .insert(handle.clone(), source_identities);
     bounded_result(json!({
         "method": "iprange.v1.reader.open",
         "reader": handle,
@@ -225,7 +234,7 @@ pub fn metadata(state: &mut SessionState, params: Value) -> Result<Value, Handle
     // would replace the input database with the metadata text, which
     // the v1 contract forbids. Cloned before the reader borrow so the
     // refusal can be checked inside `metadata_result`.
-    let source_identity = state.resources.reader_paths.get(handle).cloned();
+    let source_identities = state.resources.reader_paths.get(handle).cloned();
     // Refuse an inline result that cannot fit the response-object
     // ceiling BEFORE the metadata blob is materialized. The reader
     // borrow is scoped to the mmap-only length lookup so the preflight
@@ -238,7 +247,7 @@ pub fn metadata(state: &mut SessionState, params: Value) -> Result<Value, Handle
         preflight_metadata_inline(state, method, length)?;
     }
     let reader = reader(state, handle)?;
-    let result = metadata_result(method, reader, &delivery, source_identity.as_ref())?;
+    let result = metadata_result(method, reader, &delivery, source_identities.as_ref())?;
     bounded_result(result)
 }
 
@@ -436,13 +445,16 @@ pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Valu
         .ok_or_else(|| invalid("params must be an object"))?;
     let (path, mode) = source_value(&object["source"]).map_err(HandlerError::invalid_params)?;
     let mut reader = open_reader(&path, &mode, &state.token())?;
-    let source_identity = output::file_identity(Path::new(&path)).unwrap_or_else(
-        || output::FileIdentity {
-            path: std::path::PathBuf::from(&path),
-            dev: 0,
-            ino: 0,
-        },
-    );
+    let source_identities = output::SourceIdentities {
+        main: output::file_identity(Path::new(&path)).unwrap_or_else(|| {
+            output::FileIdentity {
+                path: std::path::PathBuf::from(&path),
+                dev: 0,
+                ino: 0,
+            }
+        }),
+        sidecar: output::sidecar_identity(Path::new(&path)),
+    };
     let result = (|| -> Result<Value, HandlerError> {
         let delivery = &object["delivery"];
         // Inline preflight before the blob is materialized; the reader
@@ -454,7 +466,7 @@ pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Valu
             "iprange.v1.database.metadata.get",
             &reader,
             delivery,
-            Some(&source_identity),
+            Some(&source_identities),
         )
     })();
     match result {
@@ -747,7 +759,7 @@ fn metadata_result(
     method: &str,
     reader: &ReaderValue,
     delivery: &Value,
-    source_identity: Option<&output::FileIdentity>,
+    source_identities: Option<&output::SourceIdentities>,
 ) -> Result<Value, HandlerError> {
     // Callers must run the inline preflight
     // (`inline_metadata_length` + `preflight_metadata_inline`) before
@@ -775,8 +787,12 @@ fn metadata_result(
             // the source database: publishing over the input pathname
             // would replace the database with the metadata text
             // (product finding, same guarantee as export).
-            if let Some(source) = source_identity {
-                output::refuse_output_over_source(Path::new(path), source)?;
+            if let Some(source) = source_identities {
+                output::refuse_output_over_source(
+                    Path::new(path),
+                    &source.main,
+                    source.sidecar.as_ref(),
+                )?;
             }
             let policy = publication_policy(delivery["publication_policy"].as_str())
                 .map_err(|_| invalid("delivery.publication_policy is invalid"))?;
@@ -1679,6 +1695,65 @@ mod tests {
         )
         .unwrap();
         assert_eq!(delivered["present"], true);
+        fixture.remove();
+    }
+
+    #[test]
+    fn metadata_file_delivery_refuses_the_reader_renamed_sidecar() {
+        // Tester role wave-19.6: the handle-backed reader captures the
+        // sidecar identity at open, so a file delivery whose
+        // destination is the sidecar RENAMED while the reader is open
+        // is refused through the file-identity arm (mirroring the
+        // renamed-main case) instead of publishing metadata text over
+        // the displaced coordination file and leaving the source
+        // unreadable.
+        let fixture = live_with_metadata("metadata-sidecar-renamed", b"meta");
+        let sidecar = fixture.sidecar();
+        assert!(sidecar.exists(), "live fixture must carry its sidecar");
+        let mut state = SessionState::default();
+        let opened = open(&mut state, test_support::live_source(&fixture.path)).unwrap();
+        let handle = opened["reader"].as_str().unwrap().to_owned();
+        let renamed = sidecar.with_extension("readers.old");
+        assert!(renamed != sidecar);
+        std::fs::rename(&sidecar, &renamed).unwrap();
+        let error = metadata(
+            &mut state,
+            serde_json::json!({
+                "reader": handle,
+                "delivery": {
+                    "mode": "file",
+                    "path": renamed.display().to_string(),
+                    "publication_policy": "replace_existing",
+                    "max_output_bytes": "1048576",
+                    "max_open_files": 1,
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome, error.message.as_str()),
+            (
+                "invalid_argument",
+                "not_started",
+                "destination must differ from the source database",
+            )
+        );
+        // The displaced sidecar file is untouched and the main database
+        // still opens with its metadata.
+        let head = std::fs::read(&renamed).unwrap();
+        assert!(!head.starts_with(b"{"), "renamed sidecar was modified");
+        let delivered = metadata(
+            &mut state,
+            serde_json::json!({
+                "reader": handle,
+                "delivery": {
+                    "mode": "inline"
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(delivered["present"], true);
+        let _ = std::fs::remove_file(&renamed);
         fixture.remove();
     }
 

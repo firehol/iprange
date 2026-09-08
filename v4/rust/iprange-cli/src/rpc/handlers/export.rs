@@ -181,7 +181,11 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
             ino: 0,
         },
     );
-    super::output::refuse_output_over_source(destination, &source_identity)?;
+    super::output::refuse_output_over_source(
+        destination,
+        &source_identity,
+        super::output::sidecar_identity(Path::new(&source_path)).as_ref(),
+    )?;
     // The complete inline result carries the destination string and
     // the source identity; refuse an unrepresentable request before
     // the source reader is opened or any output file is created, so a
