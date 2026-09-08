@@ -1621,6 +1621,68 @@ mod tests {
     }
 
     #[test]
+    fn metadata_file_delivery_refuses_the_reader_sidecar() {
+        // The wave-19.5 P1 repair: the live database's
+        // reader-coordination sidecar (<main>.readers) is a distinct
+        // file that records reader state; a file delivery whose
+        // destination is that sidecar would destroy the source's
+        // readability, so it is refused with the canonical shape and
+        // the sidecar and main file stay untouched.
+        let fixture = live_with_metadata("metadata-sidecar-same-file", b"meta");
+        let sidecar = fixture.sidecar();
+        assert!(sidecar.exists(), "live fixture must carry its sidecar");
+        let sidecar_identity =
+            super::output::file_identity(&sidecar).expect("sidecar identity");
+        let mut state = SessionState::default();
+        let opened = open(&mut state, test_support::live_source(&fixture.path)).unwrap();
+        let handle = opened["reader"].as_str().unwrap().to_owned();
+        let error = metadata(
+            &mut state,
+            serde_json::json!({
+                "reader": handle,
+                "delivery": {
+                    "mode": "file",
+                    "path": sidecar.display().to_string(),
+                    "publication_policy": "replace_existing",
+                    "max_output_bytes": "1048576",
+                    "max_open_files": 1,
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome, error.message.as_str()),
+            (
+                "invalid_argument",
+                "not_started",
+                "destination must differ from the source database",
+            )
+        );
+        // The sidecar is still the sidecar FILE, not metadata text,
+        // and the main database still opens with its metadata.
+        let head = std::fs::read(&sidecar).unwrap();
+        assert!(!head.starts_with(b"{"), "sidecar was modified");
+        let after = super::output::file_identity(&sidecar).expect("sidecar identity");
+        assert_eq!(
+            (after.dev, after.ino),
+            (sidecar_identity.dev, sidecar_identity.ino),
+            "sidecar identity changed after refusal"
+        );
+        let delivered = metadata(
+            &mut state,
+            serde_json::json!({
+                "reader": handle,
+                "delivery": {
+                    "mode": "inline"
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(delivered["present"], true);
+        fixture.remove();
+    }
+
+    #[test]
     fn database_metadata_file_delivery_refuses_the_source_path() {
         // The ephemeral-source variant of the same P0 finding: the
         // delivery destination is the source pathname itself, so the

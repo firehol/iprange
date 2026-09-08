@@ -593,6 +593,162 @@ func TestRefuseOutputOverSourceFileIdentity(t *testing.T) {
 	}
 }
 
+// TestRefuseOutputOverSourceSidecar pins the wave-19.5 P1 repair: the
+// live database's reader-coordination sidecar (main + ".readers") is a
+// distinct file that records reader state; publishing output over it
+// destroys the source's readability, so the guard refuses the sidecar
+// pathname, its decorated spellings, and a hard-link alias of the
+// sidecar FILE, while a genuinely distinct file is accepted.
+func TestRefuseOutputOverSourceSidecar(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sidecar := filepath.Join(dir, "db.bin.readers")
+	if err := os.WriteFile(sidecar, []byte("readers"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, destination := range []string{
+		sidecar,
+		filepath.Join(dir, "sub", "..", "db.bin.readers"),
+	} {
+		herr := refuseOutputOverSource(destination, source, sourceInfo)
+		if herr == nil {
+			t.Fatalf("sidecar destination %q accepted", destination)
+		}
+		if herr.Code != "invalid_argument" || herr.Outcome != "not_started" ||
+			herr.Message != "destination must differ from the source database" {
+			t.Fatalf("destination %q: code=%q outcome=%q message=%q",
+				destination, herr.Code, herr.Outcome, herr.Message)
+		}
+	}
+	// A hard-link alias of the sidecar FILE is refused through the
+	// same-file arm even though its pathname differs.
+	alias := filepath.Join(dir, "sidecar-alias.bin")
+	if err := os.Link(sidecar, alias); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	if herr := refuseOutputOverSource(alias, source, sourceInfo); herr == nil {
+		t.Fatal("hard-link sidecar destination accepted")
+	}
+	// A distinct file and a plain leftover "<main>.readers" of an
+	// unrelated main name stay accepted.
+	other := filepath.Join(dir, "other.bin")
+	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if herr := refuseOutputOverSource(other, source, sourceInfo); herr != nil {
+		t.Fatalf("distinct destination refused: %v", herr)
+	}
+}
+
+// newLiveFeed creates one live membership database with the single
+// address 1.1.1.1 through the public SDK; the fixture carries the
+// reader-coordination sidecar (main + ".readers") like a live product
+// database.
+func newLiveFeed(t *testing.T, dir, name string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	tag, err := iprangedb.NewValueTag([]byte("v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := iprangedb.CreateLive(path, iprangedb.AddressFamilyIPv4,
+		iprangedb.ValueKindDirect, iprangedb.StructureKindNone, tag, 4, nil); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := iprangedb.OpenLiveWriter(path, iprangedb.DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := writer.BeginDirect(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transaction.AssignV4(iprangedb.IPv4(0x01010101), iprangedb.IPv4(0x01010101), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transaction.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// TestSessionReaderMetadataRefusesLiveSidecar pins the wave-19.5 P1
+// repair at the session level: a live reader's sidecar (main +
+// ".readers") is a file-delivery destination that would destroy the
+// database's readability, so it is refused with the canonical error
+// shape and the sidecar file stays untouched.
+func TestSessionReaderMetadataRefusesLiveSidecar(t *testing.T) {
+	dir := t.TempDir()
+	source := newLiveFeed(t, dir, "live.db")
+	sidecar := source + ".readers"
+	if _, err := os.Stat(sidecar); err != nil {
+		t.Fatalf("live fixture is missing its sidecar: %v", err)
+	}
+	registerHandlers()
+	openFrame := `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.reader.open","params":{"source":{"path":` +
+		mustJSONString(source) + `,"mode":"live"}}}`
+	metaFrame := `{"jsonrpc":"2.0","id":"2","method":"iprange.v1.reader.metadata","params":{"reader":` +
+		mustJSONString("@HANDLE@") + `,"delivery":{"mode":"file","path":` +
+		mustJSONString(sidecar) + `,"publication_policy":"replace_existing","max_output_bytes":"1048576","max_open_files":8}}}`
+
+	session := rpc.NewSession()
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	outR, outW := io.Pipe()
+	defer outR.Close()
+	done := make(chan error, 1)
+	go func() { done <- session.Run(pr, outW) }()
+	if _, err := fmt.Fprintf(pw, "%s\n", openFrame); err != nil {
+		t.Fatalf("write open frame: %v", err)
+	}
+	first, err := bufio.NewReader(outR).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read open response: %v", err)
+	}
+	var openResponse struct {
+		Result map[string]json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(first)), &openResponse); err != nil {
+		t.Fatalf("open response %q: %v", first, err)
+	}
+	var handle string
+	if err := json.Unmarshal(openResponse.Result["reader"], &handle); err != nil || handle == "" {
+		t.Fatalf("reader handle %s: %v", openResponse.Result["reader"], err)
+	}
+	metaFrame = strings.Replace(metaFrame, mustJSONString("@HANDLE@"), mustJSONString(handle), 1)
+	if _, err := fmt.Fprintf(pw, "%s\n", metaFrame); err != nil {
+		t.Fatalf("write metadata frame: %v", err)
+	}
+	second, err := bufio.NewReader(outR).ReadString('\n')
+	if err != nil && second == "" {
+		t.Fatalf("read metadata response: %v", err)
+	}
+	_ = pw.Close()
+	<-done
+	if !strings.Contains(second, `"code":"invalid_argument"`) ||
+		!strings.Contains(second, "destination must differ from the source database") {
+		t.Fatalf("metadata response %q, want the source-refusal error", second)
+	}
+	// The sidecar is still the sidecar, not metadata text.
+	bytes, err := os.ReadFile(sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bytes) == 0 || bytes[0] == '{' {
+		t.Fatalf("sidecar was modified: head %q", bytes[:min(len(bytes), 20)])
+	}
+}
+
 // TestSessionReaderMetadataRenamedSourceRefused pins the wave-19.4 P1
 // repair at the session level: a reader whose source pathname was
 // renamed while the handle is open must still refuse a file delivery

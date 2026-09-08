@@ -29,6 +29,7 @@ mod draft_store;
 pub mod error;
 pub mod file_identity;
 pub use file_identity::identity;
+pub use path::sidecar_path;
 mod fault;
 mod feed;
 mod feed_catalog;

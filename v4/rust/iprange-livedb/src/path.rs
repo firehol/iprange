@@ -21,6 +21,15 @@ pub(crate) fn canonical_sidecar(main: &Path) -> Result<PathBuf> {
     Ok(main.with_file_name(sidecar_name))
 }
 
+/// Public SDK accessor for the reader-coordination sidecar twin of a
+/// main database path: `<main>.readers` under the same parent, derived
+/// from the raw path components with no symlink resolution.  The CLI
+/// same-source guard uses it to refuse publishing output over the live
+/// database's sidecar, which would destroy the source's readability.
+pub fn sidecar_path(main: &Path) -> Result<PathBuf> {
+    canonical_sidecar(main)
+}
+
 pub(crate) fn live_transition_temp(main: &Path) -> Result<PathBuf> {
     let main_name = main
         .file_name()

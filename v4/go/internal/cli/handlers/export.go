@@ -25,6 +25,8 @@ import (
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/fileio"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
+	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 )
 
 // RegisterExport installs the export handler family.
@@ -1986,6 +1988,22 @@ func writeJSONValue(buffer []byte, value map[string]any) ([]byte, *rpc.HandlerEr
 func refuseOutputOverSource(destination, source string, sourceInfo os.FileInfo) *rpc.HandlerError {
 	if canonicalAbsolute(destination) == canonicalAbsolute(source) {
 		return refusedSameSource()
+	}
+	// The live database's reader-coordination sidecar (main +
+	// ".readers") is a distinct file that records reader state;
+	// publishing output over it destroys the source's readability, so
+	// it is refused exactly like the main database (pathname and
+	// same-file arms, Rust refuse_output_over_source parity).
+	if name, ok := pathname.FileName(source); ok {
+		sidecar := pathname.WithFileName(source, name+format.CoordinationSuffix)
+		if canonicalAbsolute(destination) == canonicalAbsolute(sidecar) {
+			return refusedSameSource()
+		}
+		if destInfo, err := os.Stat(destination); err == nil {
+			if sidecarInfo, err := os.Stat(sidecar); err == nil && os.SameFile(sidecarInfo, destInfo) {
+				return refusedSameSource()
+			}
+		}
 	}
 	if sourceInfo != nil {
 		if destInfo, err := os.Stat(destination); err == nil && os.SameFile(sourceInfo, destInfo) {

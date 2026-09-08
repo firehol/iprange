@@ -10319,10 +10319,14 @@ Repaired in both languages (this round):
    `boundedDiagnosticText` `...(truncated)`, Rust
    `capped_product_message` ` [message truncated]`) while keeping
    the error code and `data.code`/`data.outcome`, or the standard
-   validation code when no data exists.  Measured: the 70,000-char
-   unknown-member case answers `-32602` with the marker in both
-   (Go 4,182 B / Rust 4,188 B objects); message text remains a
-   human diagnostic and per-language markers differ by design.
+   validation code when no data exists.  The code is shape-dependent:
+   an unknown member inside `params` answers `-32602` with the marker
+   (measured Go 4,182 B / Rust 4,188 B objects); an unknown
+   top-level member answers `-32600` with the marker in both (the
+   committed Go `TestSessionBoundedUnknownMemberError` asserts this
+   top-level shape); short messages carry no marker.  Message text
+   remains a human diagnostic and per-language markers differ by
+   design.
    Committed tests: Go `session_bounds_test.go`, Rust
    `session.rs` (`bounded_response_preserves_product_error_identity_for_giant_messages`).
 3. Canonicalization parity: Go `canonicalAbsolute` cleans the input
@@ -10348,9 +10352,66 @@ harness self-tests PASS (kind, resource, windows-housekeeping,
 sensitivity 14/14, golden); the operations wave-19 probe is now
 34/34 OK (rename refusal, 70k-member identity with both markers,
 spelling parity, oversized-frame close path `-32001` 87 B).  The
-binaries were rebuilt at the new identities (Go product
-`a320028a…`, Rust product `8a8c3e08…`; workers and fixture
-unchanged) and the full battery and Windows housekeeping are
-re-run at those identities; SHASUMS and the evidence README
-identity block are updated in the closing evidence commit of this
-wave.
+identity capture then moved into the SDK (commit `73b5fcdd`), which
+re-rolled the Rust binary hashes; the final committed identities of
+this wave are Go product `a320028a…` / worker `4f2eb063…`, Rust
+product `aff80842…` / worker `f80043e6…` / fixture `cd84271c…`
+(Linux) and Windows-host products `aec92202…` (go) / `b595b97e…`
+(rust) / go worker `1ec4d089…` built at `73b5fcdd` tree_clean.  The
+full battery and Windows housekeeping were re-run at those final
+identities (battery green end to end; housekeeping 2/2) and
+SHASUMS.txt and the evidence README identity block match them
+(sha256sum -c 8/8 at the closing evidence commit `e334de76`).
+
+#### Wave 19 round 19.5 (2026-09-08) — operations-role P1: the live reader-coordination sidecar joins the same-source guard
+
+The wave-19.4 role round at `e334de76` passed tester, parity,
+portability, performance, and glm, and returned one product P1
+(operations role) plus two record P2s (tester "admission-error
+wording", operations/security "stale identity sentence"):
+
+- Operations P1 — the same-source guard compared the destination
+  against the main database only.  A live database carries the
+  deterministic reader-coordination sidecar `<main>.readers`
+  (exposed through `sidecar_id` in the create response); exporting
+  or delivering `reader.metadata` / `database.metadata.get` file
+  output to that sidecar pathname published the output text over the
+  sidecar, reported success, and left the source database unreadable
+  afterwards — the exact P0 signature through the companion
+  pathname, in both languages.
+
+Repaired in both engines by extending the guard with sidecar
+identity: the destination is refused with the canonical
+`invalid_argument`/`not_started` "destination must differ from the
+source database" when its canonical pathname resolves to the
+source's sidecar component or its file identity matches the sidecar
+file (rename/hard-link alias arm), exactly like the main-database
+arms.  Rust exposes the derivation as a public SDK helper
+(`iprange-livedb::sidecar_path`, wrapping the existing
+`path::canonical_sidecar`) so the CLI guard has no platform-specific
+duplication; Go reuses `format.CoordinationSuffix` and the
+`pathname` component helpers in `handlers/export.go`.  Committed
+tests: Go `samefile_test.go` (`TestRefuseOutputOverSourceSidecar`,
+`TestSessionReaderMetadataRefusesLiveSidecar`), Rust `output.rs`
+(`refuse_output_over_source_refuses_the_source_sidecar`) and
+`reader.rs` (`metadata_file_delivery_refuses_the_reader_sidecar`),
+each also proving the sidecar file and the main database stay
+untouched after the refusal.
+
+Records corrected in this round: the wave-19 admission-error record
+now states the shape-dependent measured codes (params-level unknown
+member `-32602` with the marker, Go 4,182 B / Rust 4,188 B objects;
+top-level unknown member `-32600` with the marker, the shape the
+committed Go session test asserts; short messages carry no marker),
+and the wave-19 identity sentence now names the final committed
+hashes (see above).
+
+Verification at the wave-19.5 HEAD: Go suite 23/23 packages PASS
+(including the two new sidecar tests); Rust workspace PASS
+(including the two new sidecar tests); the full qualification
+battery (matrices, mixed directions, crash, resource, kind gate,
+golden, sensitivity, client checks) and native-Windows housekeeping
+were re-run at the rebuilt final identities; SHASUMS.txt (8/8) and
+the evidence README identity block match the final commit.  The
+seven role reviews were re-anchored at the final HEAD; astra turn 18
+(the same review session) is the milestone-4 closure gate.

@@ -142,7 +142,27 @@ pub(crate) fn refuse_output_over_source(
     let same_file = file_identity(destination)
         .map(|dest| dest.dev == source.dev && dest.ino == source.ino)
         .unwrap_or(false);
-    if same_pathname || same_file {
+    // Sidecar identity: the live database's reader-coordination
+    // sidecar (<main>.readers) is a distinct file that records reader
+    // state; publishing output over it destroys the source's
+    // readability, so it is refused exactly like the main database
+    // (pathname and file-identity arms, operations-role wave-19.5).
+    // An opened source always has a valid main name, so deriving the
+    // sidecar is expected to succeed; a failed derivation simply
+    // leaves the sidecar arm unarmed.
+    let sidecar_same = iprange_livedb::sidecar_path(&source.path)
+        .map(|sidecar| {
+            let by_pathname =
+                canonical_absolute(destination) == canonical_absolute(&sidecar);
+            let by_file = file_identity(destination)
+                .zip(file_identity(&sidecar))
+                .map_or(false, |(dest, twin)| {
+                    dest.dev == twin.dev && dest.ino == twin.ino
+                });
+            by_pathname || by_file
+        })
+        .unwrap_or(false);
+    if same_pathname || same_file || sidecar_same {
         return Err(HandlerError::new(
             "invalid_argument",
             "not_started",
@@ -382,6 +402,55 @@ mod tests {
             assert!(refuse_output_over_source(&alias, &identity).is_err());
             let _ = fs::remove_file(&alias);
         }
+        let other = dir.join("other.iprange");
+        fs::write(&other, b"other").unwrap();
+        assert!(refuse_output_over_source(&other, &identity).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refuse_output_over_source_refuses_the_source_sidecar() {
+        // The wave-19.5 P1 repair: a live database's reader-coordination
+        // sidecar (<main>.readers) is a distinct file that records
+        // reader state; publishing output over it destroys the source's
+        // readability, so the guard refuses the sidecar pathname, its
+        // decorated spellings, and a hard-link alias of the sidecar
+        // FILE, while a genuinely distinct file is accepted.
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-refuse-sidecar-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("db.iprange");
+        fs::write(&source, b"source").unwrap();
+        let sidecar = iprange_livedb::sidecar_path(&source).expect("sidecar path");
+        assert!(sidecar != source);
+        // Both files exist, exactly like an open live database.
+        fs::write(&sidecar, b"readers").unwrap();
+        let identity = file_identity(&source).expect("identity");
+        for destination in [
+            sidecar.clone(),
+            dir.join("sub").join("..").join("db.iprange.readers"),
+        ] {
+            let error = refuse_output_over_source(&destination, &identity).unwrap_err();
+            assert_eq!(error.code, "invalid_argument");
+            assert_eq!(error.outcome, "not_started");
+            assert_eq!(
+                error.message,
+                "destination must differ from the source database"
+            );
+        }
+        // A hard-link alias of the sidecar file is refused through the
+        // file-identity arm even though its pathname differs.
+        let alias = dir.join("sidecar-alias.iprange");
+        if fs::hard_link(&sidecar, &alias).is_ok() {
+            assert!(refuse_output_over_source(&alias, &identity).is_err());
+            let _ = fs::remove_file(&alias);
+        }
+        // A plain leftover "<main>.readers" cannot be a delivery target
+        // through the OTHER main file's identity: the sidecar arm is
+        // derived from the source main name, and a distinct file stays
+        // accepted.
         let other = dir.join("other.iprange");
         fs::write(&other, b"other").unwrap();
         assert!(refuse_output_over_source(&other, &identity).is_ok());

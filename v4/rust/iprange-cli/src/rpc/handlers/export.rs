@@ -2089,6 +2089,89 @@ mod live_source_tests {
     }
 
     #[test]
+    fn export_to_the_reader_sidecar_is_refused_and_preserves_both_files() {
+        // The wave-19.5 P1 repair: a live database's
+        // reader-coordination sidecar (<main>.readers) is a distinct
+        // file that records reader state; publishing the export over
+        // it destroys the source's readability, so it is refused with
+        // the canonical shape and both the sidecar and the main
+        // database stay byte-identical and openable.
+        let main = live_membership("sidecar-export");
+        let sidecar = sidecar(&main);
+        assert!(sidecar.exists(), "live fixture must carry its sidecar");
+        let main_before = fs::read(&main).unwrap();
+        let sidecar_before = fs::read(&sidecar).unwrap();
+        let mut state = SessionState::default();
+        let error = export(
+            &mut state,
+            json!({
+                "source": {"path": main.display().to_string(), "mode": "live"},
+                "view": {"kind": "feed", "feed": "feed-a"},
+                "format": "csv",
+                "destination": sidecar.display().to_string(),
+                "publication_policy": "replace_existing",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "1000",
+                    "max_open_files": 2
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (
+                error.code,
+                error.outcome,
+                error.message.as_str(),
+            ),
+            (
+                "invalid_argument",
+                "not_started",
+                "destination must differ from the source database",
+            )
+        );
+        assert_eq!(
+            fs::read(&main).unwrap(),
+            main_before,
+            "the source database must keep its exact bytes"
+        );
+        assert_eq!(
+            fs::read(&sidecar).unwrap(),
+            sidecar_before,
+            "the sidecar must keep its exact bytes"
+        );
+        // A distinct destination still exports normally.
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let destination = std::env::temp_dir().join(format!(
+            "iprange-export-sidecar-out-{unique}.csv"
+        ));
+        let result = export(
+            &mut state,
+            json!({
+                "source": {"path": main.display().to_string(), "mode": "live"},
+                "view": {"kind": "feed", "feed": "feed-a"},
+                "format": "csv",
+                "destination": destination.display().to_string(),
+                "publication_policy": "fail_if_exists",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "1000",
+                    "max_open_files": 2
+                }
+            }),
+        )
+        .unwrap();
+        assert_eq!(result["rows"], "1");
+        assert_eq!(result["source_close"]["outcome"], "closed");
+        fs::remove_file(&destination).unwrap();
+        fs::remove_file(&main).unwrap();
+        fs::remove_file(sidecar).unwrap();
+    }
+
+    #[test]
     fn export_refuses_a_canonically_equivalent_source_destination() {
         // The same-file comparison runs on canonicalized absolute
         // paths: a `./`-decorated spelling of the source pathname is
