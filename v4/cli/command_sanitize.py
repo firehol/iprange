@@ -365,8 +365,9 @@ def recorded_checkout_root():
     the recorded root, so evidence produced from one checkout keeps
     its binary-identity binding when assessed from another clone;
     a personal checkout root must never reach the report, so the
-    field is omitted there and relative values fall back to the
-    gate's own checkout root."""
+    field records None there and relative values fall back to the
+    gate's own checkout root (None, absent, and empty are
+    equivalent to the gate)."""
     root = _CHECKOUT
     if under_profile(root):
         return None

@@ -2128,10 +2128,12 @@ def _self_test():
                   "privacy-clean")
     finally:
         sys.platform = saved_platform
-    if os.sep == "/":  # ntpath folds case; pin is POSIX-only
+    if os.sep == "/" and sys.platform != "darwin":
         # The rendering pin must be non-vacuous: without the darwin flag
         # the same spelling renders as a ``..``-walk on case-sensitive
-        # hosts.
+        # hosts.  ntpath folds case on Windows and the darwin branch is
+        # live on macOS (APFS folds case), so only other POSIX hosts
+        # exercise the raw ``..``-walk spelling.
         checkout = checkout_root()
         varied_checkout = os.path.join(
             os.path.dirname(checkout).upper(),

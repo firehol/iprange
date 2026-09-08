@@ -9842,8 +9842,10 @@ follow-up and the P2-7 battery re-verified on both hosts:
    inline-stripped candidate, so the pin could not detect a lost
    root.  The pin now checks
    `not any("\\\\server\\share\\..." in spelling for spelling in
-   _privacy_spellings(...))`.  A duplicated success print left by
-   the earlier patch is removed.
+   _privacy_spellings(...))`.  A duplicated success print that
+   existed only in the uncommitted working tree (never in a commit,
+   so it never reached the committed trail) was removed before this
+   wave committed.
 2. The non-darwin contrast pin ran on Windows and false-FAILed:
    `ntpath.relpath` folds case on Windows, so the case-varied
    checkout spelling renders as the plain `v4/cli/cases` and the
@@ -9862,3 +9864,33 @@ the false-FAIL root cause and is not repeated); kind-gate self-test
 committed evidence structural scan stays clean.  Sensitive-data
 gate: clean.  Artifact gate: AGENTS.md, specs, and runtime project
 skills unchanged; the harness comments describe the platform split.
+
+#### Wave 18 follow-up round 18.2 (2026-09-08) — macOS exclusion for the non-darwin contrast pin
+
+The round-18.1 security role review found one P2 in the round-18.1
+fix: the non-darwin contrast pin guarded with `os.sep == "/"`
+still runs on macOS, where the darwin branch of
+`sanitized_path_value` is live natively (APFS folds case, so the
+case-varied checkout spelling renders as the plain
+`v4/cli/cases`).  The guard now also excludes darwin
+(`os.sep == "/" and sys.platform != "darwin"`), so the contrast
+pin runs only on case-sensitive POSIX hosts; the darwin pins keep
+running on all hosts by design.  Simulated darwin and native Linux
+runs confirm the split, and the pin comment documents the
+Windows/macOS exclusions.  The same review also corrected the
+round-18.1 wording: the duplicated success print existed only in
+the uncommitted working tree (never in a commit), and the
+`recorded_checkout_root` docstring now says the field records None
+under the profile (None, absent, and empty are equivalent to the
+kind gate); both wording items are fixed in this wave.
+
+Validation: Windows-housekeeping `--self-test` PASS on Linux
+(darwin pins, POSIX-only contrast) and natively on the Windows
+host from the checkout CWD and a fresh scratch CWD; simulated
+darwin rendering shows `v4/cli/cases` while Linux keeps the raw
+spelling; kind-gate self-test 48 positive controls PASS;
+resource-harness `--self-test` PASS; committed evidence structural
+scan clean; SHASUMS 8/8 (no product source changed).  Sensitive-data
+gate: clean.  Artifact gate: AGENTS.md, specs, and runtime project
+skills unchanged; the harness and sanitizer comments describe the
+platform split and the None/absent equivalence.
