@@ -1897,8 +1897,9 @@ def _self_test():
             embedded_unc = (
                 'copy "' + "\\\\?\\UNC\\server\\share\\"
                 + 'alice\\scratch\\x" dest')
-            if "\\\\server\\share\\alice\\scratch\\x" \
-                    not in _privacy_spellings(embedded_unc):
+            if not any(
+                    "\\\\server\\share\\alice\\scratch\\x" in spelling
+                    for spelling in _privacy_spellings(embedded_unc)):
                 problems.append(
                     "P2-7 embedded verbatim-UNC spelling lost the "
                     f"server root: {_privacy_spellings(embedded_unc)!r}")
@@ -2127,22 +2128,23 @@ def _self_test():
                   "privacy-clean")
     finally:
         sys.platform = saved_platform
-    # The rendering pin must be non-vacuous: without the darwin flag
-    # the same spelling renders as a ``..``-walk on case-sensitive
-    # hosts.
-    checkout = checkout_root()
-    varied_checkout = os.path.join(
-        os.path.dirname(checkout).upper(),
-        os.path.basename(checkout).upper(),
-        "v4", "cli", "cases")
-    if sanitized_path_value(varied_checkout) == os.path.join(
-            "v4", "cli", "cases"):
-        problems.append(
-            "P2-7 non-darwin rendering unexpectedly canonicalized "
-            "the case-varied checkout spelling")
-    else:
-        print("[P2-7] non-darwin rendering keeps the raw spelling "
-              "(pin is darwin-specific)")
+    if os.sep == "/":  # ntpath folds case; pin is POSIX-only
+        # The rendering pin must be non-vacuous: without the darwin flag
+        # the same spelling renders as a ``..``-walk on case-sensitive
+        # hosts.
+        checkout = checkout_root()
+        varied_checkout = os.path.join(
+            os.path.dirname(checkout).upper(),
+            os.path.basename(checkout).upper(),
+            "v4", "cli", "cases")
+        if sanitized_path_value(varied_checkout) == os.path.join(
+                "v4", "cli", "cases"):
+            problems.append(
+                "P2-7 non-darwin rendering unexpectedly canonicalized "
+                "the case-varied checkout spelling")
+        else:
+            print("[P2-7] non-darwin rendering keeps the raw spelling "
+                  "(pin is darwin-specific)")
 
     if os.sep == "/":
         parent = os.path.dirname(profile_abs)

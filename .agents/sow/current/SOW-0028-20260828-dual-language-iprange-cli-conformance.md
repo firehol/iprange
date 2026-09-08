@@ -9829,3 +9829,36 @@ product binaries byte-identical (SHASUMS 8/8; no product source
 changed).  Sensitive-data gate: clean.  Artifact gate: AGENTS.md,
 specs, and runtime project skills unchanged; the sanitizer, runners,
 and gate docstrings describe the new semantics.
+
+#### Wave 18 follow-up round 18.1 (2026-09-08) — native-Windows re-verification and POSIX-only contrast pin
+
+Post-wave native qualification found two pin defects in
+`windows_housekeeping_harness.py`; both are repaired in this
+follow-up and the P2-7 battery re-verified on both hosts:
+
+1. The embedded verbatim-UNC pin used list membership
+   (`"..." not in _privacy_spellings(...)`), which compares whole
+   spellings; the restored-root spelling is a substring of the
+   inline-stripped candidate, so the pin could not detect a lost
+   root.  The pin now checks
+   `not any("\\\\server\\share\\..." in spelling for spelling in
+   _privacy_spellings(...))`.  A duplicated success print left by
+   the earlier patch is removed.
+2. The non-darwin contrast pin ran on Windows and false-FAILed:
+   `ntpath.relpath` folds case on Windows, so the case-varied
+   checkout spelling renders as the plain `v4/cli/cases` and the
+   pin reported "unexpectedly canonicalized".  The contrast pin is
+   now POSIX-only (`if os.sep == "/":`), matching its intent
+   (case-sensitive hosts); the darwin pins run on all hosts by
+   design and the nt-gated rows run natively on Windows.
+
+Validation: harness `--self-test` PASS with embedded-UNC root
+restored, four embedded device forms detected, verbatim-UNC exact
+root, darwin pins, and POSIX-only contrast on Linux; PASS natively
+on the Windows host from both the checkout CWD and a fresh scratch
+CWD (one-file-per-copy transfer; the earlier concatenated copy was
+the false-FAIL root cause and is not repeated); kind-gate self-test
+48 positive controls PASS; resource-harness `--self-test` PASS; the
+committed evidence structural scan stays clean.  Sensitive-data
+gate: clean.  Artifact gate: AGENTS.md, specs, and runtime project
+skills unchanged; the harness comments describe the platform split.
