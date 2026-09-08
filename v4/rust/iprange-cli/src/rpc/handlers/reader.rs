@@ -112,10 +112,17 @@ pub fn open(state: &mut SessionState, params: Value) -> Result<Value, HandlerErr
         }
     };
     state.resources.readers.insert(handle.clone(), reader);
+    let source_identity = output::file_identity(Path::new(&path)).unwrap_or_else(
+        || output::FileIdentity {
+            path: std::path::PathBuf::from(&path),
+            dev: 0,
+            ino: 0,
+        },
+    );
     state
         .resources
         .reader_paths
-        .insert(handle.clone(), std::path::PathBuf::from(&path));
+        .insert(handle.clone(), source_identity);
     bounded_result(json!({
         "method": "iprange.v1.reader.open",
         "reader": handle,
@@ -218,7 +225,7 @@ pub fn metadata(state: &mut SessionState, params: Value) -> Result<Value, Handle
     // would replace the input database with the metadata text, which
     // the v1 contract forbids. Cloned before the reader borrow so the
     // refusal can be checked inside `metadata_result`.
-    let source_path = state.resources.reader_paths.get(handle).cloned();
+    let source_identity = state.resources.reader_paths.get(handle).cloned();
     // Refuse an inline result that cannot fit the response-object
     // ceiling BEFORE the metadata blob is materialized. The reader
     // borrow is scoped to the mmap-only length lookup so the preflight
@@ -231,7 +238,7 @@ pub fn metadata(state: &mut SessionState, params: Value) -> Result<Value, Handle
         preflight_metadata_inline(state, method, length)?;
     }
     let reader = reader(state, handle)?;
-    let result = metadata_result(method, reader, &delivery, source_path.as_deref())?;
+    let result = metadata_result(method, reader, &delivery, source_identity.as_ref())?;
     bounded_result(result)
 }
 
@@ -429,6 +436,13 @@ pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Valu
         .ok_or_else(|| invalid("params must be an object"))?;
     let (path, mode) = source_value(&object["source"]).map_err(HandlerError::invalid_params)?;
     let mut reader = open_reader(&path, &mode, &state.token())?;
+    let source_identity = output::file_identity(Path::new(&path)).unwrap_or_else(
+        || output::FileIdentity {
+            path: std::path::PathBuf::from(&path),
+            dev: 0,
+            ino: 0,
+        },
+    );
     let result = (|| -> Result<Value, HandlerError> {
         let delivery = &object["delivery"];
         // Inline preflight before the blob is materialized; the reader
@@ -440,7 +454,7 @@ pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Valu
             "iprange.v1.database.metadata.get",
             &reader,
             delivery,
-            Some(Path::new(&path)),
+            Some(&source_identity),
         )
     })();
     match result {
@@ -733,7 +747,7 @@ fn metadata_result(
     method: &str,
     reader: &ReaderValue,
     delivery: &Value,
-    source_path: Option<&Path>,
+    source_identity: Option<&output::FileIdentity>,
 ) -> Result<Value, HandlerError> {
     // Callers must run the inline preflight
     // (`inline_metadata_length` + `preflight_metadata_inline`) before
@@ -761,7 +775,7 @@ fn metadata_result(
             // the source database: publishing over the input pathname
             // would replace the database with the metadata text
             // (product finding, same guarantee as export).
-            if let Some(source) = source_path {
+            if let Some(source) = source_identity {
                 output::refuse_output_over_source(Path::new(path), source)?;
             }
             let policy = publication_policy(delivery["publication_policy"].as_str())
@@ -1556,6 +1570,53 @@ mod tests {
         assert_eq!(delivered["present"], true);
         assert_eq!(std::fs::read(&destination).unwrap(), b"meta");
         std::fs::remove_file(&destination).unwrap();
+        fixture.remove();
+    }
+
+    #[test]
+    fn metadata_file_delivery_refuses_the_renamed_reader_source() {
+        // Wave-19.4 P1 repair: a reader whose source pathname was
+        // renamed while the handle is open still carries the original
+        // file identity, so a file delivery to the renamed path (the
+        // same file) is refused with the canonical shape and the file
+        // stays untouched.
+        let fixture = live_with_metadata("metadata-renamed-same-file", b"meta");
+        let mut state = SessionState::default();
+        let opened = open(&mut state, test_support::live_source(&fixture.path)).unwrap();
+        let handle = opened["reader"].as_str().unwrap().to_owned();
+        let renamed = fixture.path.with_extension("bak");
+        assert!(renamed != fixture.path);
+        std::fs::rename(&fixture.path, &renamed).unwrap();
+        let error = metadata(
+            &mut state,
+            serde_json::json!({
+                "reader": handle,
+                "delivery": {
+                    "mode": "file",
+                    "path": renamed.display().to_string(),
+                    "publication_policy": "replace_existing",
+                    "max_output_bytes": "1048576",
+                    "max_open_files": 1,
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (
+                error.code,
+                error.outcome,
+                error.message.as_str(),
+            ),
+            (
+                "invalid_argument",
+                "not_started",
+                "destination must differ from the source database",
+            )
+        );
+        // The renamed file is still the database, not metadata text.
+        let head = std::fs::read(&renamed).unwrap();
+        assert!(!head.starts_with(b"{"), "renamed source was modified");
+        let _ = std::fs::remove_file(&renamed);
         fixture.remove();
     }
 

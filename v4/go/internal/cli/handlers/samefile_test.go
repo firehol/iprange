@@ -171,7 +171,7 @@ func TestRefuseOutputOverSourceErrorShape(t *testing.T) {
 	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	herr := refuseOutputOverSource(source, source)
+	herr := refuseOutputOverSource(source, source, nil)
 	if herr == nil {
 		t.Fatal("same path accepted")
 	}
@@ -181,7 +181,7 @@ func TestRefuseOutputOverSourceErrorShape(t *testing.T) {
 			herr.Code, herr.Outcome, herr.Message)
 	}
 	other := filepath.Join(dir, "other.bin")
-	if herr := refuseOutputOverSource(other, source); herr != nil {
+	if herr := refuseOutputOverSource(other, source, nil); herr != nil {
 		t.Fatalf("distinct destination refused: %v", herr)
 	}
 }
@@ -514,6 +514,181 @@ func TestSessionDatabaseCreateSurrogateRefusedLeavesNoFiles(t *testing.T) {
 	for _, entry := range entries {
 		if strings.HasPrefix(entry.Name(), ".") {
 			t.Fatalf("leftover artifact %s after refused create", entry.Name())
+		}
+	}
+}
+
+// TestCanonicalAbsoluteDecorations pins the wave-19.4 canonicalization
+// parity: a trailing separator and a non-existent-ancestor ".."
+// spelling must resolve to the same canonical identity as the plain
+// source path (Go Clean at entry; Rust lexical_clean_path parity), so
+// both engines refuse those destinations before any output temporary
+// exists instead of failing late at the rename.
+func TestCanonicalAbsoluteDecorations(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, spelling := range []string{
+		source + string(os.PathSeparator),
+		filepath.Join(dir, "nosuch", "..", "db.bin"),
+	} {
+		if canonicalAbsolute(spelling) != canonicalAbsolute(source) {
+			t.Errorf("canonicalAbsolute(%q) = %q, want %q",
+				spelling, canonicalAbsolute(spelling), canonicalAbsolute(source))
+		}
+	}
+	// Distinct target under the same decorations stays distinct.
+	other := filepath.Join(dir, "other.bin")
+	if canonicalAbsolute(filepath.Join(dir, "nosuch", "..", "other.bin")) !=
+		canonicalAbsolute(other) {
+		t.Fatal("distinct decorated target does not resolve to itself")
+	}
+}
+
+// TestRefuseOutputOverSourceFileIdentity pins the wave-19.4 file
+// identity arm of the guard: a destination that is the same FILE as
+// the source (through a rename or a hard link) is refused even though
+// its pathname differs, and a genuinely distinct file is accepted.
+func TestRefuseOutputOverSourceFileIdentity(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed := filepath.Join(dir, "db.bak")
+	if err := os.Rename(source, renamed); err != nil {
+		t.Fatal(err)
+	}
+	if herr := refuseOutputOverSource(renamed, source, sourceInfo); herr == nil {
+		t.Fatal("renamed same-file destination accepted")
+	}
+	// Restore the source name and try a hard-link alias.
+	if err := os.Rename(renamed, source); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "db-alias.bin")
+	if err := os.Link(source, link); err != nil {
+		t.Skipf("hard links unavailable: %v", err)
+	}
+	if herr := refuseOutputOverSource(link, source, sourceInfo); herr == nil {
+		t.Fatal("hard-link same-file destination accepted")
+	}
+	other := filepath.Join(dir, "other.bin")
+	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if herr := refuseOutputOverSource(other, source, sourceInfo); herr != nil {
+		t.Fatalf("distinct destination refused: %v", herr)
+	}
+	// A nil source identity still refuses the same pathname (the
+	// pathname arm is independent of the stat result).
+	if herr := refuseOutputOverSource(source, source, nil); herr == nil {
+		t.Fatal("same pathname with nil identity accepted")
+	}
+}
+
+// TestSessionReaderMetadataRenamedSourceRefused pins the wave-19.4 P1
+// repair at the session level: a reader whose source pathname was
+// renamed while the handle is open must still refuse a file delivery
+// to the renamed path (the destination is the same file), and the
+// file itself must stay unmodified.
+func TestSessionReaderMetadataRenamedSourceRefused(t *testing.T) {
+	dir := t.TempDir()
+	source := newImmutableFeed(t, dir, "src.db", []byte("mymetadata"))
+	renamed := filepath.Join(dir, "src.bak")
+	if err := os.Rename(source, renamed); err != nil {
+		t.Fatal(err)
+	}
+	registerHandlers()
+	openFrame := `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.reader.open","params":{"source":{"path":` +
+		mustJSONString(renamed) + `,"mode":"immutable"}}}`
+	metaFrame := `{"jsonrpc":"2.0","id":"2","method":"iprange.v1.reader.metadata","params":{"reader":` +
+		mustJSONString("@HANDLE@") + `,"delivery":{"mode":"file","path":` +
+		mustJSONString(renamed) + `,"publication_policy":"replace_existing","max_output_bytes":"1048576","max_open_files":8}}}`
+
+	session := rpc.NewSession()
+	pr, pw := io.Pipe()
+	defer pr.Close()
+	outR, outW := io.Pipe()
+	defer outR.Close()
+	done := make(chan error, 1)
+	go func() { done <- session.Run(pr, outW) }()
+	if _, err := fmt.Fprintf(pw, "%s\n", openFrame); err != nil {
+		t.Fatalf("write open frame: %v", err)
+	}
+	first, err := bufio.NewReader(outR).ReadString('\n')
+	if err != nil {
+		t.Fatalf("read open response: %v", err)
+	}
+	var openResponse struct {
+		Result map[string]json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(first)), &openResponse); err != nil {
+		t.Fatalf("open response %q: %v", first, err)
+	}
+	var handle string
+	if err := json.Unmarshal(openResponse.Result["reader"], &handle); err != nil || handle == "" {
+		t.Fatalf("reader handle %s: %v", openResponse.Result["reader"], err)
+	}
+	metaFrame = strings.Replace(metaFrame, mustJSONString("@HANDLE@"), mustJSONString(handle), 1)
+	if _, err := fmt.Fprintf(pw, "%s\n", metaFrame); err != nil {
+		t.Fatalf("write metadata frame: %v", err)
+	}
+	second, err := bufio.NewReader(outR).ReadString('\n')
+	if err != nil && second == "" {
+		t.Fatalf("read metadata response: %v", err)
+	}
+	_ = pw.Close()
+	<-done
+	if !strings.Contains(second, `"code":"invalid_argument"`) ||
+		!strings.Contains(second, "destination must differ from the source database") {
+		t.Fatalf("metadata response %q, want the source-refusal error", second)
+	}
+	// The renamed file is still the database, not metadata text.
+	bytes, err := os.ReadFile(renamed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bytes) == 0 || bytes[0] == '{' {
+		t.Fatalf("renamed source was modified: head %q", bytes[:min(len(bytes), 20)])
+	}
+}
+
+// TestExportRefusesDecoratedSourceSpelling pins the wave-19.4
+// preflight claim for decorated spellings: exporting over
+// "source.db/" or "nosuch/../source.db" is refused before any output
+// temporary exists, in the same call as the plain-path refusal.
+func TestExportRefusesDecoratedSourceSpelling(t *testing.T) {
+	dir := t.TempDir()
+	source := newImmutableFeed(t, dir, "src.db", []byte("mymetadata"))
+	for _, spelling := range []string{
+		source + string(os.PathSeparator),
+		filepath.Join(dir, "nosuch", "..", "src.db"),
+	} {
+		st := rpc.NewSessionState()
+		result, herr := Export(st, exportRequest(t, source, spelling, "replace_existing"))
+		if herr == nil {
+			t.Fatalf("export to %q succeeded (%v), want refusal", spelling, result)
+		}
+		if herr.Code != "invalid_argument" || herr.Message != "destination must differ from the source database" {
+			t.Fatalf("export to %q: code=%q message=%q", spelling, herr.Code, herr.Message)
+		}
+	}
+	// No output residue anywhere: the refusal fired before the
+	// destination namespace was touched.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Name() != "src.db" && entry.Name() != "src.db.txt" {
+			t.Fatalf("unexpected residue after refusal: %s", entry.Name())
 		}
 	}
 }

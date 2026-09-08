@@ -809,7 +809,12 @@ func boundedResponse(response json.RawMessage, request *Request) json.RawMessage
 	if _, serr := encodeResponseObject(payload); serr == nil {
 		return response
 	}
-	// Try the reduced product-error form.
+	// Try the reduced product-error form: drop free-form details,
+	// cap a request-derived diagnostic message, and keep the stable
+	// data.code/data.outcome (or the absent data and the standard
+	// code, as validation errors carry) so the error keeps its
+	// identity instead of being masked as an output_limit product
+	// error (Rust capped_product_message parity).
 	if obj, ok := payload.(map[string]any); ok {
 		if errObj, ok := obj["error"].(map[string]any); ok {
 			if data, ok := errObj["data"].(map[string]any); ok {
@@ -821,9 +826,13 @@ func boundedResponse(response json.RawMessage, request *Request) json.RawMessage
 					reduced["outcome"] = outcome
 				}
 				errObj["data"] = reduced
-				if _, serr := encodeResponseObject(obj); serr == nil {
-					return mustMarshal(obj)
-				}
+			}
+			if message, ok := errObj["message"].(string); ok &&
+				len(message) > maxRequestDiagnosticBytes {
+				errObj["message"] = boundedDiagnosticText(message)
+			}
+			if _, serr := encodeResponseObject(obj); serr == nil {
+				return mustMarshal(obj)
 			}
 		}
 	}

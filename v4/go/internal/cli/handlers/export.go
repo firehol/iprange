@@ -377,7 +377,8 @@ func Export(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerErro
 	// before the source opens or any output temporary exists, with
 	// the canonical invalid_argument/not_started shape (Rust
 	// export.rs refuse_output_over_source parity).
-	if herr := refuseOutputOverSource(destination, sourcePath); herr != nil {
+	sourceInfo, _ := os.Stat(sourcePath)
+	if herr := refuseOutputOverSource(destination, sourcePath, sourceInfo); herr != nil {
 		return nil, herr
 	}
 	// The complete inline result carries the destination string and the
@@ -1974,16 +1975,29 @@ func writeJSONValue(buffer []byte, value map[string]any) ([]byte, *rpc.HandlerEr
 }
 
 // refuseOutputOverSource refuses a file destination that resolves to
-// the source database path (Rust output.rs refuse_output_over_source
+// the source database file (Rust output.rs refuse_output_over_source
 // parity): the v1 contract never modifies its input files, so the
 // destination must differ from the source under canonical same-file
-// resolution.
-func refuseOutputOverSource(destination, source string) *rpc.HandlerError {
+// resolution. Two identities are compared: the canonical pathname
+// spelling (symlinks and ./.. decorations resolved as far as the
+// filesystem allows) and, when both paths exist, the file identity
+// (os.SameFile), so a destination that names the same file through a
+// rename or a hard link is refused too.
+func refuseOutputOverSource(destination, source string, sourceInfo os.FileInfo) *rpc.HandlerError {
 	if canonicalAbsolute(destination) == canonicalAbsolute(source) {
-		return rpc.NewHandlerError("invalid_argument", "not_started",
-			"destination must differ from the source database")
+		return refusedSameSource()
+	}
+	if sourceInfo != nil {
+		if destInfo, err := os.Stat(destination); err == nil && os.SameFile(sourceInfo, destInfo) {
+			return refusedSameSource()
+		}
 	}
 	return nil
+}
+
+func refusedSameSource() *rpc.HandlerError {
+	return rpc.NewHandlerError("invalid_argument", "not_started",
+		"destination must differ from the source database")
 }
 
 // canonicalAbsolute resolves path to a stable identity for same-file
@@ -1998,6 +2012,12 @@ func canonicalAbsolute(path string) string {
 			absolute = filepath.Join(cwd, path)
 		}
 	}
+	// Normalize decorations up front: with a trailing separator the
+	// EvalSymlinks failure walk would re-append the file name onto
+	// itself ("db.iprange/" -> "db.iprange/db.iprange"). Clean makes
+	// both engines agree on the spelling before the walk (Rust
+	// canonical_absolute lexical_clean_path parity).
+	absolute = filepath.Clean(absolute)
 	var missing []string
 	probe := absolute
 	for {

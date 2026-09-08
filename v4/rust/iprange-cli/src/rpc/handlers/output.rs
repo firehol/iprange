@@ -35,6 +35,61 @@ pub fn base64_padded(input: &[u8]) -> String {
     output
 }
 
+/// Stable file identity of a path at a point in time: device and
+/// inode on POSIX, volume serial and file index on Windows.  A reader
+/// records this once at open; a later rename keeps the identity, so
+/// the output-over-source guard can still recognize the file that
+/// backs an open handle even when its pathname moved.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct FileIdentity {
+    pub path: PathBuf,
+    pub dev: u64,
+    pub ino: u64,
+}
+
+/// Capture the current file identity of `path`, if it exists.
+pub(crate) fn file_identity(path: &Path) -> Option<FileIdentity> {
+    let meta = fs::metadata(path).ok()?;
+    #[cfg(unix)]
+    use std::os::unix::fs::MetadataExt;
+    #[cfg(windows)]
+    use std::os::windows::fs::MetadataExt;
+    #[cfg(unix)]
+    return Some(FileIdentity {
+        path: path.to_path_buf(),
+        dev: meta.dev(),
+        ino: meta.ino(),
+    });
+    #[cfg(windows)]
+    return Some(FileIdentity {
+        path: path.to_path_buf(),
+        dev: meta.volume_serial_number(),
+        ino: meta.file_index(),
+    });
+    #[allow(unreachable_code)]
+    None
+}
+
+/// Lexical normalization of a canonicalized prefix plus a re-appended
+/// missing suffix, mirroring Go `filepath.Clean` on the same
+/// components: `.` components drop, `..` pops the previous component
+/// (a `..` at the root/prefix is dropped too, like Go), and repeated
+/// separators collapse.  The two engines' guards then agree on
+/// decorated spellings such as `dest/` and `nosuch/../dest`.
+fn lexical_clean_path(path: &Path) -> PathBuf {
+    let mut result = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                result.pop();
+            }
+            other => result.push(other.as_os_str()),
+        }
+    }
+    result
+}
+
 /// Absolute form of `path` with symlinks and `.`/`..` resolved as far
 /// as the filesystem allows, without requiring the final component to
 /// exist (`fs::canonicalize` fails on a not-yet-created destination,
@@ -62,14 +117,14 @@ pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
                 for component in missing.iter().rev() {
                     result.push(component);
                 }
-                return result;
+                return lexical_clean_path(&result);
             }
             Err(_) => match (probe.file_name(), probe.parent()) {
                 (Some(name), Some(parent)) => {
                     missing.push(name);
                     probe = parent;
                 }
-                _ => return absolute,
+                _ => return lexical_clean_path(&absolute),
             },
         }
     }
@@ -86,9 +141,19 @@ pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
 /// (the Go engine mirrors this exact code/outcome/message).
 pub(crate) fn refuse_output_over_source(
     destination: &Path,
-    source: &Path,
+    source: &FileIdentity,
 ) -> Result<(), HandlerError> {
-    if canonical_absolute(destination) == canonical_absolute(source) {
+    // Pathname identity: two spellings of the same eventual file
+    // (absolute vs relative, symlinked parents, `.`/`..` decorations).
+    let same_pathname =
+        canonical_absolute(destination) == canonical_absolute(&source.path);
+    // File identity: the destination is the same FILE that backs the
+    // source even after the source pathname was renamed or hard-linked
+    // (a reader keeps the identity captured at open).
+    let same_file = file_identity(destination)
+        .map(|dest| dest.dev == source.dev && dest.ino == source.ino)
+        .unwrap_or(false);
+    if same_pathname || same_file {
         return Err(HandlerError::new(
             "invalid_argument",
             "not_started",
@@ -260,3 +325,76 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
 }
+
+    #[test]
+    fn canonical_absolute_normalizes_decorated_spellings() {
+        // Wave 19.4 parity with the Go engine: a trailing separator
+        // and a non-existent-ancestor ".." spelling resolve to the
+        // same canonical identity as the plain path, so both engines
+        // refuse those destinations preflight instead of failing late
+        // at the output rename.
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-canon-w19-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("db.iprange");
+        fs::write(&source, b"source").unwrap();
+        for spelling in [
+            source.to_string_lossy().to_string() + "/",
+            dir.join("nosuch").join("..").join("db.iprange")
+                .to_string_lossy()
+                .to_string(),
+        ] {
+            assert_eq!(
+                canonical_absolute(Path::new(&spelling)),
+                canonical_absolute(&source),
+                "spelling {spelling}"
+            );
+        }
+        let other = dir.join("other.iprange");
+        assert_ne!(
+            canonical_absolute(&dir.join("nosuch").join("..").join("other.iprange")),
+            canonical_absolute(&source)
+        );
+        assert_eq!(
+            canonical_absolute(&dir.join("nosuch").join("..").join("other.iprange")),
+            canonical_absolute(&other)
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn refuse_output_over_source_uses_file_identity_after_rename() {
+        // The wave-19.4 P1 repair: the guard must recognize the same
+        // FILE through a rename (the identity captured at open), not
+        // only the same pathname.
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-refuse-w19-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("db.iprange");
+        fs::write(&source, b"source").unwrap();
+        let identity = file_identity(&source).expect("identity");
+        let renamed = dir.join("db.bak");
+        fs::rename(&source, &renamed).unwrap();
+        let error = refuse_output_over_source(&renamed, &identity).unwrap_err();
+        assert_eq!(error.code, "invalid_argument");
+        assert_eq!(error.outcome, "not_started");
+        assert_eq!(
+            error.message,
+            "destination must differ from the source database"
+        );
+        // A hard-link alias of the same file is refused too.
+        fs::rename(&renamed, &source).unwrap();
+        let alias = dir.join("db-alias.iprange");
+        if fs::hard_link(&source, &alias).is_ok() {
+            assert!(refuse_output_over_source(&alias, &identity).is_err());
+            let _ = fs::remove_file(&alias);
+        }
+        let other = dir.join("other.iprange");
+        fs::write(&other, b"other").unwrap();
+        assert!(refuse_output_over_source(&other, &identity).is_ok());
+        let _ = fs::remove_dir_all(&dir);
+    }

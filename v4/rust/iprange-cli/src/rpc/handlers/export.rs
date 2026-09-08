@@ -174,7 +174,14 @@ pub fn export(state: &mut SessionState, params: Value) -> Result<Value, HandlerE
     // before the source opens or any output temporary exists, with
     // the canonical `invalid_argument`/`not_started` shape (the Go
     // engine mirrors this code/outcome/message).
-    super::output::refuse_output_over_source(destination, Path::new(&source_path))?;
+    let source_identity = super::output::file_identity(Path::new(&source_path)).unwrap_or_else(
+        || super::output::FileIdentity {
+            path: Path::new(&source_path).to_path_buf(),
+            dev: 0,
+            ino: 0,
+        },
+    );
+    super::output::refuse_output_over_source(destination, &source_identity)?;
     // The complete inline result carries the destination string and
     // the source identity; refuse an unrepresentable request before
     // the source reader is opened or any output file is created, so a

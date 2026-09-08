@@ -999,11 +999,42 @@ fn bounded_schema_response(id: Option<RequestId>, err: SchemaError) -> Value {
     )
 }
 
+/// Cap a request-embedded diagnostic message so a product error
+/// keeps its code/outcome identity even when the text is huge: the
+/// decode-level bound (``bounded_schema_response``) uses its own
+/// budget-capped marker, and the admission-level bound here shares
+/// the same 4 KiB diagnostic cap the Go engine uses, so an oversized
+/// "unknown member" text answers -32602 with the marker instead of
+/// being masked as an output_limit product error.
+const MAX_PRODUCT_DIAGNOSTIC_BYTES: usize = 4096;
+
+fn capped_product_message(message: &str) -> String {
+    const MARKER: &str = " [message truncated]";
+    if message.len() <= MAX_PRODUCT_DIAGNOSTIC_BYTES {
+        return message.to_owned();
+    }
+    let mut cut = 0usize;
+    let mut used = 0usize;
+    for (index, character) in message.char_indices() {
+        let char_bytes = character.len_utf8();
+        if used + char_bytes > MAX_PRODUCT_DIAGNOSTIC_BYTES {
+            break;
+        }
+        used += char_bytes;
+        cut = index + char_bytes;
+    }
+    let mut bounded = String::with_capacity(cut + MARKER.len());
+    bounded.push_str(&message[..cut]);
+    bounded.push_str(MARKER);
+    bounded
+}
+
 fn bounded_response(response: Value, request: &Request) -> Value {
     if schema::encode_response_object(&response).is_ok() {
         return response;
     }
     if response.get("error").is_some() {
+        let mut trimmed = response.clone();
         if let Some(data) = response["error"].get("data").cloned() {
             let mut reduced = serde_json::Map::new();
             if let Some(code) = data.get("code") {
@@ -1012,11 +1043,19 @@ fn bounded_response(response: Value, request: &Request) -> Value {
             if let Some(outcome) = data.get("outcome") {
                 reduced.insert("outcome".into(), outcome.clone());
             }
-            let mut trimmed = response.clone();
             trimmed["error"]["data"] = Value::Object(reduced);
-            if schema::encode_response_object(&trimmed).is_ok() {
-                return trimmed;
+        }
+        // Cap a request-derived diagnostic message so the error keeps
+        // its identity (data.code/data.outcome when present, or the
+        // standard validation code with no data) instead of being
+        // masked as an output_limit replacement.
+        if let Some(message) = trimmed["error"].get_mut("message") {
+            if let Some(text) = message.as_str() {
+                *message = Value::String(capped_product_message(text));
             }
+        }
+        if schema::encode_response_object(&trimmed).is_ok() {
+            return trimmed;
         }
     }
     let replacement = schema::error_response(
@@ -1658,6 +1697,41 @@ mod tests {
             "explicit truncation marker missing: {message}"
         );
         assert!(message.len() < member.len(), "request text must be capped");
+    }
+
+    #[test]
+    fn bounded_response_preserves_product_error_identity_for_giant_messages() {
+        // Wave-19.4 P2 repair: an admission-level product error whose
+        // message embeds huge request text must keep its data.code /
+        // data.outcome identity with the truncation marker instead of
+        // being masked as an output_limit replacement.
+        let giant_message = format!("unknown member \"{}\"", "x".repeat(70_000));
+        let request = Request {
+            id: Some(RequestId::String("1".into())),
+            method: "iprange.v1.system.describe".into(),
+            params: serde_json::json!({}),
+            batch_index: None,
+        };
+        let response = json!({
+            "error": {
+                "code": schema::PRODUCT_ERROR,
+                "message": giant_message,
+                "data": {
+                    "code": "invalid_argument",
+                    "outcome": "not_started",
+                    "details": {"member": "x".repeat(70_000)},
+                }
+            }
+        });
+        let bounded = bounded_response(response, &request);
+        assert_eq!(bounded["error"]["data"]["code"], "invalid_argument");
+        assert_eq!(bounded["error"]["data"]["outcome"], "not_started");
+        let message = bounded["error"]["message"].as_str().unwrap();
+        assert!(
+            message.contains(" [message truncated]"),
+            "marker missing: {message}"
+        );
+        assert!(schema::encode_response_object(&bounded).is_ok());
     }
 
     #[test]

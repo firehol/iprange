@@ -10206,11 +10206,16 @@ lead with reproduction scripts before and after repair (repos:
    wave-19 binaries, a 70,000-byte unknown member yields a
    4,201-byte error object in Go and a 10,904-byte object in Rust
    (was 70,091 bytes in both), and a near-limit integral ID
-   refusal is 124 bytes in both (was Go 1,048,587 bytes); the
-   short-member baseline is 92 bytes in both.  The bounded
-   guarantee (never above the 65,000-byte object / 1,048,576-byte
-   frame ceilings) is pinned by committed tests in both
-   languages.  Go `rpc/session.go`, Rust `rpc/session.rs`.
+   refusal is a bounded `-32001` `id:null` object in both (86-124
+   bytes depending on the diagnostic wording; was Go 1,048,587
+   bytes).  Error message text is a human diagnostic by contract
+   (the machine contract is the error `code` and `outcome`
+   members, per the CLI README known-limitations note), so the
+   per-language sizes legitimately differ; byte-level error-text
+   parity is not a contract.  The bounded guarantee (never above
+   the 65,000-byte object / 1,048,576-byte frame ceilings) is
+   pinned by committed tests in both languages.  Go
+   `rpc/session.go`, Rust `rpc/session.rs`.
 5. P2 — kind-gate identity/work contradictions accepted.  The gate
    now rejects duplicate-path different-SHA entries, duplicate `c`
    records with different SHAs, missing fixture identity, and
@@ -10270,3 +10275,76 @@ close contract.  Verified: `sensitivity_gate.py` PASSes 14/14 with
 `cancel_replies` FAILing on the exact ``response id 'cancel-reply' !=
 request id`` marker; the battery re-run passes end to end at the
 wave-19 identities.
+
+#### Wave 19 round 19.4 (2026-09-08) — role round findings: file-identity guard, admission-error identity, canonicalization parity
+
+The wave-19 role round at `53d007ae` passed five roles (tester,
+portability, security, performance with one records P2 disposed in
+`994a2c13`, glm) and returned two role findings that required product
+repair (parity role at `53d007ae`, operations role):
+
+- Operations P1 — the same-file guard was bypassed by a rename while
+  a reader is open: `reader.open` recorded only the source pathname,
+  so after `rename(P, P.bak)` a metadata file delivery to `P.bak`
+  replaced the file that backs the open reader with metadata text
+  (the exact P0 class via rename rotation), in both languages.
+- Operations P2 — an admission-level error whose message embeds a
+  70,000-character request member was bounded by substituting a
+  `-32010` `output_limit` error, masking the real `-32602`/domain
+  code; the decode-level path already preserved the identity.
+- Parity P2 — canonicalization diverged for decorated destinations:
+  Go double-appended the file name for a trailing-slash destination
+  (`db.iprange/` -> `db.iprange/db.iprange`) and failed late at the
+  rename, while Rust refused preflight; Rust kept the `..` in a
+  non-existent-ancestor spelling (`nosuch/../db.iprange`) and failed
+  late with ENOENT, while Go refused preflight.
+
+Repaired in both languages (this round):
+
+1. File-identity guard: readers now capture the source file identity
+   at open (device+inode on POSIX, volume serial+file index on
+   Windows) and the guard also refuses a destination that is the same
+   FILE (Go `os.SameFile`, Rust `FileIdentity`), so renamed and
+   hard-linked aliases of an open reader's source are refused with
+   the canonical `invalid_argument`/`not_started` shape.  Export and
+   `database.metadata.get` compare the destination against the
+   source's stat identity when both exist.  Committed tests: Go
+   `samefile_test.go` (`TestRefuseOutputOverSourceFileIdentity`,
+   `TestSessionReaderMetadataRenamedSourceRefused`), Rust
+   `reader.rs` (`metadata_file_delivery_refuses_the_renamed_reader_source`)
+   and `output.rs`
+   (`refuse_output_over_source_uses_file_identity_after_rename`).
+2. Admission-error identity: the bounded response path now caps the
+   request-derived message with the explicit truncation marker (Go
+   `boundedDiagnosticText` `...(truncated)`, Rust
+   `capped_product_message` ` [message truncated]`) while keeping
+   the error code and `data.code`/`data.outcome`, or the standard
+   validation code when no data exists.  Measured: the 70,000-char
+   unknown-member case answers `-32602` with the marker in both
+   (Go 4,182 B / Rust 4,188 B objects); message text remains a
+   human diagnostic and per-language markers differ by design.
+   Committed tests: Go `session_bounds_test.go`, Rust
+   `session.rs` (`bounded_response_preserves_product_error_identity_for_giant_messages`).
+3. Canonicalization parity: Go `canonicalAbsolute` cleans the input
+   before the symlink walk (a trailing separator no longer
+   double-appends); Rust `canonical_absolute` lexically cleans the
+   re-appended suffix (`..`/`.` resolution like Go `Clean`).  Both
+   languages now refuse `source.db/` and `nosuch/../source.db`
+   preflight with no output residue; the parent-directory spelling
+   (`source.db/..`) stays allowed and fails late in both, as
+   before.  Committed tests: Go
+   `TestCanonicalAbsoluteDecorations`, `TestExportRefusesDecoratedSourceSpelling`;
+   Rust `canonical_absolute_normalizes_decorated_spellings`.
+
+Verification: Go suite 23/23 packages PASS; Rust workspace PASS
+(421 + support crates, including the three new regression tests);
+harness self-tests PASS (kind, resource, windows-housekeeping,
+sensitivity 14/14, golden); the operations wave-19 probe is now
+34/34 OK (rename refusal, 70k-member identity with both markers,
+spelling parity, oversized-frame close path `-32001` 87 B).  The
+binaries were rebuilt at the new identities (Go product
+`a320028a…`, Rust product `8a8c3e08…`; workers and fixture
+unchanged) and the full battery and Windows housekeeping are
+re-run at those identities; SHASUMS and the evidence README
+identity block are updated in the closing evidence commit of this
+wave.

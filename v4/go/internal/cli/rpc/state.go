@@ -11,6 +11,7 @@
 package rpc
 
 import (
+	"os"
 	"sort"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
@@ -25,6 +26,11 @@ type ReaderValue struct {
 	// The metadata file-delivery guard uses it to refuse a destination
 	// that resolves to the source database (Rust reader_paths parity).
 	Path string
+	// SourceInfo is the file identity captured right after the open.
+	// A rename of the source pathname keeps the identity, so the
+	// same-file guard can still refuse a destination that is the file
+	// backing this reader (os.SameFile; Rust FileIdentity parity).
+	SourceInfo os.FileInfo
 }
 
 // CloseLive closes only a registered live reader. Immutable readers
