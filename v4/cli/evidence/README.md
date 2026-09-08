@@ -1,35 +1,34 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The current evidence is regenerated at the wave-19 product revision
-`3c424ac2` (the astra turn-17 repair wave: same-file output refusal,
-Go EOF-line completion, lossless frame decode, bounded schema errors,
-and the five qualification-gate repairs), with the wave's closing
-evidence commit as the record HEAD.  The nine turn-17 findings are
-repaired and verified in SOW-0028 "Wave 19 round 19.1"; the battery
-also found and closed one wave-19 regression in the shared client's
-clean-session check (round 19.2, sensitivity-gate interaction).
+The current evidence is regenerated after the wave-19.4 role-round
+repairs (the file-identity guard, admission-error identity, and
+canonicalization parity, SOW-0028 "Wave 19 round 19.4"): the record
+HEAD is the wave's closing evidence commit after `73b5fcdd`; the
+product revision is `8c0b3983` for Go (rebuilt with
+`-buildvcs=false`) and `73b5fcdd` for Rust (the SDK-hosted identity
+helper), with the Linux toolchain go1.27.0 / rustc 1.91.1 stable.
 
-Re-qualification at the wave-19 Linux identities (go1.27.0, rustc
-1.91.1 stable; Go product and worker rebuilt with `-buildvcs=false`
-at `3c424ac2`, Rust binaries verified identical to a fresh stable
-toolchain rebuild of the committed `081bf3c4` Rust source): matrices
-rust 38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate skips,
+Re-qualification at the wave-19.4 Linux identities: matrices rust
+38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate skips,
 go_to_rust 14 PASS + 24 skips; crash positive 16/16 both directions
 and the /bin/false negative control fails as designed (rc 1);
 resource proofs 8/8; kind-coverage gate PASS with fresh evidence and
 all self-test controls; golden exchanges 55 / 38 case files;
-sensitivity gate 14/14.  Windows housekeeping re-qualified natively
-on the authorized Windows validation host at `3c424ac2`
+sensitivity gate 14/14.  The operations wave-19 probe is 34/34 OK
+against these binaries (renamed-source refusal, 70k-member error
+identity with truncation marker, decorated-spelling parity,
+oversized-frame close path).  Windows housekeeping re-qualified
+natively on the authorized Windows validation host at `73b5fcdd`
 (go1.26.5 windows/amd64, rustc 1.97.1, native Windows Python 3.14.6,
 clean tree): 2/2 PASS (`windows-housekeeping.json`, schema v3).
 
-Linux reports record the product identities `be7ab14b...`
-(go) and `c63928dd...` (rust), workers `4f2eb063...` (go) /
-`9fd36146...` (rust), fixture `947b94e9...` (all staged in
+Linux reports record the product identities `a320028a...` (go) and
+`aff80842...` (rust), workers `4f2eb063...` (go) / `f80043e6...`
+(rust), fixture `cd84271c...` (all staged in
 `.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK).  The Windows
-housekeeping report records the Windows-host products `0d4dfa20...`
-(go) and `b2f8e9fd...` (rust); the Windows Go worker is
-`1d99e72d...` (build provenance `3c424ac2`, tree_clean).
+housekeeping report records the Windows-host products `aec92202...`
+(go) and `b595b97e...` (rust); the Windows Go worker is
+`1ec4d089...` (build provenance `73b5fcdd`, tree_clean).
 
 ---
 
