@@ -2,11 +2,11 @@
   "binaries": {
     "go": {
       "path": "/tmp/qualsvc/ev26/bin/go/iprange",
-      "sha256": "5095c208741e1bb479ce8de058c33e0f6d99bbea1a6093a6a18fcc0cb5b73aa5"
+      "sha256": "be7ab14b597587feeafe11a4def6dad105cf75687175a6a983ce7d7ba1781c42"
     },
     "rust": {
       "path": "/tmp/qualsvc/ev26/bin/rust/iprange",
-      "sha256": "07c4e3145f37827aa4acd7e4bc6c23caec27f99ac5d293e0751dc7496865d1c7"
+      "sha256": "c63928dd9fe285aa7f4ad040e6f85d229e0a51e7933177b9132a0059a1dbcd30"
     }
   },
   "command": [
@@ -36,7 +36,7 @@
         "19",
         "20"
       ],
-      "elapsed_ms": 1062.8,
+      "elapsed_ms": 1081.4,
       "exit_code": 0,
       "export_code": -32010,
       "export_ids": [
@@ -53,7 +53,7 @@
           "jsonrpc": "2.0"
         }
       ],
-      "export_start_marker_ms": 20.2,
+      "export_start_marker_ms": 20.1,
       "failures": [],
       "feed_lines": 500000,
       "killed": false,
@@ -76,20 +76,20 @@
         "17"
       ],
       "pass": true,
-      "pid": 3536467,
+      "pid": 2609431,
       "proof": "a",
       "responses": 20,
-      "source_sha256": "3511a5196c636e5d44c4ee8dae16cb77561979b939d224bd1ff6926ca5eeb9d2"
+      "source_sha256": "31e2ae3f3c726316656a77f3bf358fd30857251aebbc788c6f6ae48e1ad5c75f"
     },
     {
       "binary": "go",
       "binary_path": "/tmp/qualsvc/ev26/bin/go/iprange",
       "drained_bytes": 0,
-      "elapsed_ms": 57.6,
+      "elapsed_ms": 56.6,
       "exit_code": 1,
       "failures": [],
       "pass": true,
-      "pid": 3536488,
+      "pid": 2609452,
       "proof": "b",
       "response": {
         "error": {
@@ -107,35 +107,35 @@
       "binary": "go",
       "binary_path": "/tmp/qualsvc/ev26/bin/go/iprange",
       "directory_identity": {
-        "file": "236979410",
+        "file": "237419041",
         "volume": "66307"
       },
-      "elapsed_ms": 61.5,
+      "elapsed_ms": 58.2,
       "evidence_phase": "prepared",
       "failures": [],
       "listed_row": {
         "artifact_identity": {
-          "file": "236979413",
+          "file": "237419044",
           "volume": "66307"
         },
-        "directory": "/tmp/qualsvc/ev26/w-res/resource-ba835b36/c-go",
+        "directory": "/tmp/qualsvc/ev26/w-res/resource-efacc194/c-go",
         "directory_identity": {
-          "file": "236979410",
+          "file": "237419041",
           "volume": "66307"
         },
         "evidence": {
           "output": {
             "digest": {
               "byte_length": "114688",
-              "sha512": "2602442bc7217b6a7270466899cf77d74188e5fb398b5879160dcf36fe3753bf77f9921a3712751641e688ebe80e02387e6d2f0727fd0d4632fbb986caaccd53"
+              "sha512": "8bde168470bb4f9a93334311087dc64f229cee98f42ca76943885597d9f648bf0d61b2056e4b2790ce874c6ee03c5e8ffb98566a016e8907438b09c936d11bd7"
             },
             "identity": {
-              "file": "236979412",
+              "file": "237419043",
               "volume": "66307"
             },
             "tuple": {
-              "commit_nonce": "bc844bd1c4a4924c9feacb6638c77da3",
-              "database_id": "f9284c1231b7b13cdb5accba63926f16",
+              "commit_nonce": "c1abce876e5993d5bab52f37756d9016",
+              "database_id": "7effe7fcc7d8d0fdc3bdbc0a0c2cf65d",
               "transaction_id": "1"
             }
           },
@@ -143,15 +143,15 @@
           "policy": "fail_if_exists"
         },
         "kind": "reservation",
-        "publication_attempt_id": "0e887512ff0f10e9a8cbe8c377a89e63"
+        "publication_attempt_id": "5ab850b88bc8605a7be4576bbac9857d"
       },
       "listed_rows": 1,
-      "marker_seen_ms": 8.616778999567032,
+      "marker_seen_ms": 8.690206101164222,
       "pass": true,
       "policy": "fail_if_exists",
       "proof": "c",
       "publish_temp_after": [
-        ".iprange-publish-0e887512ff0f10e9a8cbe8c377a89e63.tmp"
+        ".iprange-publish-5ab850b88bc8605a7be4576bbac9857d.tmp"
       ],
       "remove": "ok",
       "reports": [
@@ -164,27 +164,27 @@
       "row_passed_unchanged": true,
       "row_used": {
         "artifact_identity": {
-          "file": "236979413",
+          "file": "237419044",
           "volume": "66307"
         },
-        "directory": "/tmp/qualsvc/ev26/w-res/resource-ba835b36/c-go",
+        "directory": "/tmp/qualsvc/ev26/w-res/resource-efacc194/c-go",
         "directory_identity": {
-          "file": "236979410",
+          "file": "237419041",
           "volume": "66307"
         },
         "evidence": {
           "output": {
             "digest": {
               "byte_length": "114688",
-              "sha512": "2602442bc7217b6a7270466899cf77d74188e5fb398b5879160dcf36fe3753bf77f9921a3712751641e688ebe80e02387e6d2f0727fd0d4632fbb986caaccd53"
+              "sha512": "8bde168470bb4f9a93334311087dc64f229cee98f42ca76943885597d9f648bf0d61b2056e4b2790ce874c6ee03c5e8ffb98566a016e8907438b09c936d11bd7"
             },
             "identity": {
-              "file": "236979412",
+              "file": "237419043",
               "volume": "66307"
             },
             "tuple": {
-              "commit_nonce": "bc844bd1c4a4924c9feacb6638c77da3",
-              "database_id": "f9284c1231b7b13cdb5accba63926f16",
+              "commit_nonce": "c1abce876e5993d5bab52f37756d9016",
+              "database_id": "7effe7fcc7d8d0fdc3bdbc0a0c2cf65d",
               "transaction_id": "1"
             }
           },
@@ -192,14 +192,14 @@
           "policy": "fail_if_exists"
         },
         "kind": "reservation",
-        "publication_attempt_id": "0e887512ff0f10e9a8cbe8c377a89e63"
+        "publication_attempt_id": "5ab850b88bc8605a7be4576bbac9857d"
       }
     },
     {
       "binary": "go",
       "binary_path": "/tmp/qualsvc/ev26/bin/go/iprange",
       "describe_answered": true,
-      "elapsed_ms": 1025.1,
+      "elapsed_ms": 1024.2,
       "exit_code": 0,
       "export_answered": false,
       "export_code": null,
@@ -207,10 +207,10 @@
       "feed_lines": 500000,
       "killed": false,
       "pass": true,
-      "pid": 3536559,
+      "pid": 2609536,
       "proof": "d",
       "responses": 1,
-      "source_sha256": "b2f2c946ebeb12e136374ff17206aeeac77aa85e3f32980ab0e537ceb5b950ca"
+      "source_sha256": "ae2b1d0593c09e32048db94b64f4d76aa8e0a23351f63f644431c96edbab5ce1"
     },
     {
       "binary": "rust",
@@ -220,7 +220,7 @@
         "19",
         "20"
       ],
-      "elapsed_ms": 861.2,
+      "elapsed_ms": 911.4,
       "exit_code": 0,
       "export_code": -32010,
       "export_ids": [
@@ -237,7 +237,7 @@
           "jsonrpc": "2.0"
         }
       ],
-      "export_start_marker_ms": 20.2,
+      "export_start_marker_ms": 20.1,
       "failures": [],
       "feed_lines": 500000,
       "killed": false,
@@ -260,10 +260,10 @@
         "17"
       ],
       "pass": true,
-      "pid": 3536573,
+      "pid": 2609592,
       "proof": "a",
       "responses": 20,
-      "source_sha256": "5f8a4921150a5baed50fbbbeaa8fccde3a32c5729868c9a234d689cd6fed39ac"
+      "source_sha256": "9d7558a2bcaf0091ad4c66afab7a2120e807cc5da7943a92f5eac1007d49edcf"
     },
     {
       "binary": "rust",
@@ -273,7 +273,7 @@
       "exit_code": 1,
       "failures": [],
       "pass": true,
-      "pid": 3536578,
+      "pid": 2609597,
       "proof": "b",
       "response": {
         "error": {
@@ -291,35 +291,35 @@
       "binary": "rust",
       "binary_path": "/tmp/qualsvc/ev26/bin/rust/iprange",
       "directory_identity": {
-        "file": "236979424",
+        "file": "237677185",
         "volume": "66307"
       },
-      "elapsed_ms": 48.5,
+      "elapsed_ms": 47.3,
       "evidence_phase": "prepared",
       "failures": [],
       "listed_row": {
         "artifact_identity": {
-          "file": "236979427",
+          "file": "237677188",
           "volume": "66307"
         },
-        "directory": "/tmp/qualsvc/ev26/w-res/resource-ba835b36/c-rust",
+        "directory": "/tmp/qualsvc/ev26/w-res/resource-efacc194/c-rust",
         "directory_identity": {
-          "file": "236979424",
+          "file": "237677185",
           "volume": "66307"
         },
         "evidence": {
           "output": {
             "digest": {
               "byte_length": "114688",
-              "sha512": "edaad1d4c4c24d4fda597acfee1f1d2adb6ad40914b98149e43dedd4f80cd76bed42221488792df967ff4ee539dc5c12d92ca73aae9ba26ce3f7d264caec8a3a"
+              "sha512": "21efd20364e3cfd88262026ddcb0440d85800eb7f59d9434d08e406300d4f472b61bd37ceb8e7ad7c68a78a05409d987b5ebbb557fdd6c067994c185b0b8a06b"
             },
             "identity": {
-              "file": "236979426",
+              "file": "237677187",
               "volume": "66307"
             },
             "tuple": {
-              "commit_nonce": "7602bac0de16d550972bfc083b2c3149",
-              "database_id": "8ba3d8e10d2d3ae6cba3dfcb41388d4d",
+              "commit_nonce": "8fb394dc47ece461af33a43ec0c46e96",
+              "database_id": "bf69d326b1ec7f4be073816cc5f56cf0",
               "transaction_id": "1"
             }
           },
@@ -327,15 +327,15 @@
           "policy": "fail_if_exists"
         },
         "kind": "reservation",
-        "publication_attempt_id": "55be674460f912b711cbdb62dec883e2"
+        "publication_attempt_id": "2852127ae2133036897864e6cdb6880e"
       },
       "listed_rows": 1,
-      "marker_seen_ms": 5.137520143762231,
+      "marker_seen_ms": 4.002803936600685,
       "pass": true,
       "policy": "fail_if_exists",
       "proof": "c",
       "publish_temp_after": [
-        ".iprange-publish-55be674460f912b711cbdb62dec883e2.tmp"
+        ".iprange-publish-2852127ae2133036897864e6cdb6880e.tmp"
       ],
       "remove": "ok",
       "reports": [
@@ -348,27 +348,27 @@
       "row_passed_unchanged": true,
       "row_used": {
         "artifact_identity": {
-          "file": "236979427",
+          "file": "237677188",
           "volume": "66307"
         },
-        "directory": "/tmp/qualsvc/ev26/w-res/resource-ba835b36/c-rust",
+        "directory": "/tmp/qualsvc/ev26/w-res/resource-efacc194/c-rust",
         "directory_identity": {
-          "file": "236979424",
+          "file": "237677185",
           "volume": "66307"
         },
         "evidence": {
           "output": {
             "digest": {
               "byte_length": "114688",
-              "sha512": "edaad1d4c4c24d4fda597acfee1f1d2adb6ad40914b98149e43dedd4f80cd76bed42221488792df967ff4ee539dc5c12d92ca73aae9ba26ce3f7d264caec8a3a"
+              "sha512": "21efd20364e3cfd88262026ddcb0440d85800eb7f59d9434d08e406300d4f472b61bd37ceb8e7ad7c68a78a05409d987b5ebbb557fdd6c067994c185b0b8a06b"
             },
             "identity": {
-              "file": "236979426",
+              "file": "237677187",
               "volume": "66307"
             },
             "tuple": {
-              "commit_nonce": "7602bac0de16d550972bfc083b2c3149",
-              "database_id": "8ba3d8e10d2d3ae6cba3dfcb41388d4d",
+              "commit_nonce": "8fb394dc47ece461af33a43ec0c46e96",
+              "database_id": "bf69d326b1ec7f4be073816cc5f56cf0",
               "transaction_id": "1"
             }
           },
@@ -376,14 +376,14 @@
           "policy": "fail_if_exists"
         },
         "kind": "reservation",
-        "publication_attempt_id": "55be674460f912b711cbdb62dec883e2"
+        "publication_attempt_id": "2852127ae2133036897864e6cdb6880e"
       }
     },
     {
       "binary": "rust",
       "binary_path": "/tmp/qualsvc/ev26/bin/rust/iprange",
       "describe_answered": true,
-      "elapsed_ms": 845.4,
+      "elapsed_ms": 851.1,
       "exit_code": 0,
       "export_answered": false,
       "export_code": null,
@@ -391,10 +391,10 @@
       "feed_lines": 500000,
       "killed": false,
       "pass": true,
-      "pid": 3536623,
+      "pid": 2609629,
       "proof": "d",
       "responses": 1,
-      "source_sha256": "e2e1989484368b16cb689a2e04c07a386ed8ab414968fb69b6c21f53db12af7f"
+      "source_sha256": "86b1efcdd0e22d5ac347d0c9614d2da28bf829a50d45f80da662b4538be2e51b"
     }
   ],
   "schema": "iprange-cli-resource-report-v1"

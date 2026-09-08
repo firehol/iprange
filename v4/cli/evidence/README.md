@@ -1,57 +1,35 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The current evidence is regenerated at product revision `5dd8e010`
-(the round-11 repair wave: the completed `PathBuf::_push` mirror).
-The round-10 revision passed six of seven roles; the portability
-role FAILed again on the verbatim fold's ParentDir rule, and glm
-confirmed the same cell as a latent P3.  Repairs, all verified
-against real windows-host rustc 1.97.1 and the wine oracle
-differential (now WINDOWS 591/591 and POSIX 437/437, zero
-mismatches):
+The current evidence is regenerated at the wave-19 product revision
+`3c424ac2` (the astra turn-17 repair wave: same-file output refusal,
+Go EOF-line completion, lossless frame decode, bounded schema errors,
+and the five qualification-gate repairs), with the wave's closing
+evidence commit as the record HEAD.  The nine turn-17 findings are
+repaired and verified in SOW-0028 "Wave 19 round 19.1"; the battery
+also found and closed one wave-19 regression in the shared client's
+clean-session check (round 19.2, sensitivity-gate interaction).
 
-- P2 — the fold popped the last Normal component anywhere in the
-  buffer, while Rust pops only when the *last* element is Normal
-  (`if let Some(Normal) = buf.last()`): a trailing `..` or `.`
-  component of the base stayed in Rust (`Push("\\?\\C:\\x\\..",
-  "..")` = `\\?\\C:\\x\\..`) and was deleted in Go.  One-line
-  pop rule fix; 21 new pinned Push rows plus 4 `with_file_name`
-  rows cover the trailing-CurDir/ParentDir cells.
-- P2 — `Push` still documented (and implemented) a deviation for
-  absolute or prefix-carrying pushed names, and missed the
-  rooted-name-truncates-to-prefix arm (`push("C:\\x", "\\n")` =
-  `C:\\n`).  `Push` now implements the complete std `_push`
-  contract: `need_clear` replacement, the verbatim component fold,
-  the rooted truncate, and the separator rules; `WithFileName`
-  routes through `Push` exactly like `set_file_name`.  Seven new
-  pinned rows (native answers) cover the new arms.
+Re-qualification at the wave-19 Linux identities (go1.27.0, rustc
+1.91.1 stable; Go product and worker rebuilt with `-buildvcs=false`
+at `3c424ac2`, Rust binaries verified identical to a fresh stable
+toolchain rebuild of the committed `081bf3c4` Rust source): matrices
+rust 38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate skips,
+go_to_rust 14 PASS + 24 skips; crash positive 16/16 both directions
+and the /bin/false negative control fails as designed (rc 1);
+resource proofs 8/8; kind-coverage gate PASS with fresh evidence and
+all self-test controls; golden exchanges 55 / 38 case files;
+sensitivity gate 14/14.  Windows housekeeping re-qualified natively
+on the authorized Windows validation host at `3c424ac2`
+(go1.26.5 windows/amd64, rustc 1.97.1, native Windows Python 3.14.6,
+clean tree): 2/2 PASS (`windows-housekeeping.json`, schema v3).
 
-No current product call site passes names that reach the new arms
-(the four join sites pass plain separator-free entry names), so the
-round-11 delta is parity-completeness, not a behavior change on any
-reachable input.
-
-Re-qualification at the new identities: Go suite 23/23 packages
-PASS on Linux (go1.26.4 and host go1.27.0) and natively on the
-Windows host (go1.26.5, 23/23 including the 201-row golden, the
-push tests, and the 69-row verbatim fold test); Rust
-workspace PASS on Linux (rustc 1.97.1, no Rust product source
-change).  The full battery PASSes at the final staged identities:
-matrices 38/38 single and 14 PASS + 24 legitimate skips per mixed
-direction; crash 16/16 both directions; the negative control 0/16;
-resource proofs 8/8; kind-coverage gate PASS with all 46
-self-test controls; golden exchanges 55; sensitivity gate 14.
-Windows housekeeping re-qualified at `5dd8e010`: 2/2 PASS with
-native Windows Python 3.14.6 (provenance: clean tree, go1.26.5
-windows/amd64, rustc 1.97.1).
-
-Linux reports record the product identities `07c4e314...` (rust,
-unchanged since the round-4 qualified build) and `5095c208...`
-(go, rebuilt with `-buildvcs=false`), workers `77b6d086...`
-(rust) / `795362f2...` (go), fixture `df3623a6...` (all staged in
-`.local/shared/binaries/SHASUMS.txt` with sha256sum -c OK).  The
-Windows housekeeping report records the Windows-host products
-`c960a64f...` (rust) and `02e7daa7...` (go); the Windows Go worker
-is `1dac468e...`.
+Linux reports record the product identities `be7ab14b...`
+(go) and `c63928dd...` (rust), workers `4f2eb063...` (go) /
+`9fd36146...` (rust), fixture `947b94e9...` (all staged in
+`.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK).  The Windows
+housekeeping report records the Windows-host products `0d4dfa20...`
+(go) and `b2f8e9fd...` (rust); the Windows Go worker is
+`1d99e72d...` (build provenance `3c424ac2`, tree_clean).
 
 ---
 

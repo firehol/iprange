@@ -122,7 +122,7 @@ MODES = [
 ]
 
 
-def run_mode(mode, steps):
+def run_mode(mode, steps, want):
     case = {
         "schema": "iprange-cli-case-v1",
         "name": f"sensitivity:{mode}",
@@ -140,14 +140,17 @@ def run_mode(mode, steps):
     except (AssertionError, ValueError, ValidationError) as exc:
         return False, f"FAIL {exc}"
     finally:
-        runner.service.close()
+        # Deliberate-brokenness controls leave surplus frames in the
+        # stream (the desync evidence); the ordinary-session final
+        # validation must not mask the exchange-level failure reason.
+        runner.service.close(broken_exchange=(want != "PASS"))
         shutil.rmtree(work, ignore_errors=True)
 
 
 def main():
     failures = []
     for mode, steps, want, marker in MODES:
-        passed, detail = run_mode(mode, steps)
+        passed, detail = run_mode(mode, steps, want)
         ok = (passed and want == "PASS") or (not passed and want == "FAIL"
                                              and marker in detail)
         status = "OK " if ok else "BAD"

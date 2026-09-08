@@ -10227,3 +10227,22 @@ Artifact gate: AGENTS.md, specs, and runtime project skills
 unchanged; harness comments and docstrings updated where the
 behavior description changed; evidence README identity block
 updated with the wave-19 hashes.
+
+#### Wave 19 round 19.2 (2026-09-08) — sensitivity-gate interaction found by the regenerating battery
+
+The first wave-19 battery run FAILed at the sensitivity gate: the
+turn-17 finding-7 repair made the shared client's `close()` reject
+any trailing stdout bytes, but the sensitivity gate's
+deliberate-brokenness modes rely on leftover frames as the desync
+evidence, and the new close check masked the intended exchange-level
+FAIL reason ("response id") with a trailing-bytes error.  Repaired:
+`JsonRpcService.close()` gains `broken_exchange=False`; the
+ordinary-session final-outcome checks (trailing bytes and exit
+status) are skipped when it is set; `sensitivity_gate.run_mode`
+passes `broken_exchange=(want != "PASS")` so the deliberate-broken
+modes keep their documented failure reasons.  All other callers
+(matrix, crash, resource harnesses) are unchanged and keep the strict
+close contract.  Verified: `sensitivity_gate.py` PASSes 14/14 with
+`cancel_replies` FAILing on the exact ``response id 'cancel-reply' !=
+request id`` marker; the battery re-run passes end to end at the
+wave-19 identities.

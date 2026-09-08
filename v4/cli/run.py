@@ -1602,7 +1602,7 @@ class JsonRpcService:
         finally:
             sel.close()
 
-    def close(self, allow_forced=False):
+    def close(self, allow_forced=False, broken_exchange=False):
         """Close stdin and wait for this owned subprocess to terminate.
 
         Bounded teardown: a peer that does not exit after stdin EOF is
@@ -1619,11 +1619,13 @@ class JsonRpcService:
         non-whitespace residue is a stray trailing frame) and the
         process exit status must be 0.  Both checks apply only to a
         session this call shuts down (the peer was still alive at
-        entry) and only when ``allow_forced`` is not set, so the
-        deliberate-stall controls and the harness's intentional crash
-        sessions (peers already terminated by the caller) keep their
-        documented behavior; a poisoned threaded peer's failure was
-        already reported by ``call()``.
+        entry) and only when ``allow_forced`` and ``broken_exchange``
+        are not set, so the deliberate-stall controls, the
+        deliberate-brokenness sensitivity controls (whose leftover
+        frames are the evidence of the desync), and the harness's
+        intentional crash sessions (peers already terminated by the
+        caller) keep their documented behavior; a poisoned threaded
+        peer's failure was already reported by ``call()``.
 
         In threaded mode (Windows deadlines), a peer poisoned by a
         bounded-I/O timeout is reaped before touching buffered
@@ -1694,6 +1696,7 @@ class JsonRpcService:
                 f"to be force-terminated (returncode "
                 f"{self.proc.returncode})")
         if not already_dead and not allow_forced and \
+                not broken_exchange and \
                 not (self._use_threads and self._poisoned):
             trailing = self._drain_trailing_stdout()
             if trailing.strip():
