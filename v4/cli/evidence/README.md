@@ -1,14 +1,15 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The current evidence is regenerated after the wave-19.4 role-round
-repairs (the file-identity guard, admission-error identity, and
-canonicalization parity, SOW-0028 "Wave 19 round 19.4"): the record
-HEAD is the wave's closing evidence commit after `73b5fcdd`; the
-product revision is `8c0b3983` for Go (rebuilt with
-`-buildvcs=false`) and `73b5fcdd` for Rust (the SDK-hosted identity
-helper), with the Linux toolchain go1.27.0 / rustc 1.91.1 stable.
+The current evidence is regenerated after the wave-19.5 role-round
+repair (the live reader-coordination sidecar joins the same-source
+guard, SOW-0028 "Wave 19 round 19.5"): the record HEAD is the wave's
+closing evidence commit after `462334f1`; both products were rebuilt
+at `462334f1`, with the Linux toolchain go1.27.0 / rustc 1.91.1
+stable (Go product and worker rebuilt with `-buildvcs=false`; Rust
+product, worker, and fixture rebuilt with `cargo build --release
+--all-features`).
 
-Re-qualification at the wave-19.4 Linux identities: matrices rust
+Re-qualification at the wave-19.5 Linux identities: matrices rust
 38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate skips,
 go_to_rust 14 PASS + 24 skips; crash positive 16/16 both directions
 and the /bin/false negative control fails as designed (rc 1);
@@ -16,19 +17,23 @@ resource proofs 8/8; kind-coverage gate PASS with fresh evidence and
 all self-test controls; golden exchanges 55 / 38 case files;
 sensitivity gate 14/14.  The operations wave-19 probe is 34/34 OK
 against these binaries (renamed-source refusal, 70k-member error
-identity with truncation marker, decorated-spelling parity,
-oversized-frame close path).  Windows housekeeping re-qualified
-natively on the authorized Windows validation host at `73b5fcdd`
-(go1.26.5 windows/amd64, rustc 1.97.1, native Windows Python 3.14.6,
-clean tree): 2/2 PASS (`windows-housekeeping.json`, schema v3).
+identity: params-level unknown member -32602 with the truncation
+marker at 4,182 B / 4,188 B objects, decorated-spelling parity,
+oversized-frame close path).  The sidecar-guard regression tests
+(session and export level, both languages) PASS in the Go suite
+(23/23 packages) and the Rust workspace.  Windows housekeeping
+re-qualified natively on the authorized Windows validation host at
+`462334f1` (go1.26.5 windows/amd64, rustc 1.97.1, native Windows
+Python 3.14.6, clean tree): 2/2 PASS
+(`windows-housekeeping.json`, schema v3).
 
-Linux reports record the product identities `a320028a...` (go) and
-`aff80842...` (rust), workers `4f2eb063...` (go) / `f80043e6...`
-(rust), fixture `cd84271c...` (all staged in
+Linux reports record the product identities `6b383a25...` (go) and
+`1357a16b...` (rust), workers `4f2eb063...` (go) / `28ce3983...`
+(rust), fixture `9c346d70...` (all staged in
 `.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK).  The Windows
-housekeeping report records the Windows-host products `aec92202...`
-(go) and `b595b97e...` (rust); the Windows Go worker is
-`1ec4d089...` (build provenance `73b5fcdd`, tree_clean).
+housekeeping report records the Windows-host products `dc224127...`
+(go) and `c8e30c55...` (rust); the Windows Go worker is
+`9c710fba...` (build provenance `462334f1`, tree_clean).
 
 ---
 
