@@ -10090,3 +10090,59 @@ PASS; committed evidence structural scan clean; SHASUMS 8/8 (no
 product source changed).  Sensitive-data gate: clean.  Artifact
 gate: AGENTS.md, specs, and runtime project skills unchanged;
 comment/record corrections only.
+
+#### Wave 19 (2026-09-08) — astra turn-17 FAIL: milestone-4 closure reopened over nine product and qualification findings
+
+Astra (same session `b5dd923d…`, worker-ready review
+`/tmp/iprange-review-11bd84e5.jQ3OF7/review.md`) returned FAIL at
+`11bd84e5`: the prior PRODUCTION GRADE covered the record/closure
+surface, but this review exercised product interfaces not covered
+by the committed qualification and found nine in-scope findings.
+All nine were independently reproduced by the lead at the
+committed binaries before repair:
+
+1. P0 — file output can replace its source database: export and
+   both metadata-output methods (database.metadata.get and
+   reader.metadata with file delivery) publish text over the input
+   database pathname and report success in both languages; a
+   subsequent reader open returns format_invalid.  Go
+   `handlers/export.go:749`, `fileio/export_writer.go:231`,
+   `handlers/reader.go:478`; Rust `handlers/export.rs:176`,
+   `io/export_writer.rs:230`, `handlers/reader.rs:753`,
+   `handlers/output.rs:122`.
+2. P1 — Go drops a valid unterminated final text line of exactly
+   65,536 or 131,072 bytes (buffer multiples): publication succeeds
+   but the address is absent; Rust publishes it.  Go
+   `fileio/input.go:947` treats the final empty ReadSlice at EOF as
+   no-line although accumulated buffer-full chunks remain.
+3. P1 — Go frame decoding diverges from Rust on numbers and
+   strings: a 400-digit integral request ID is refused (-32700) by
+   Go and accepted by Rust; unpaired Unicode escapes execute with a
+   replacement character in Go and are refused by Rust, and Go
+   stores the replacement bytes (`efbfbd`) in a created database.
+   Go `cli/rpc/schema.go:286-296`.
+4. P2 — early error responses bypass the output bounds: a 70,000-byte
+   unknown member name yields a 70,091-byte error object in both
+   languages; Go also emits a 1,048,587-byte frame for a
+   near-limit ID (Rust emits a bounded 124-byte refusal).  Go
+   `cli/rpc/session.go:642`; Rust `rpc/session.rs:689`.
+5. P2 — the kind gate accepts contradictory identity and work
+   records: duplicate-path different-SHA entries, missing fixture
+   identity, step-count/method contradictions, and duplicate `c`
+   records all pass.  `check_kind_coverage.py:491,799,997,1037`.
+6. P2 — command-path normalization can record a different
+   executable than the one actually run for a symlink-plus-`..`
+   argument.  `command_sanitize.py:110` normpath vs `run.py:2057`
+   realpath.
+7. P1 — the shared client accepts an extra final non-JSON line and
+   exit status 7 on ordinary successful sessions (both I/O
+   branches).  `run.py:1605,1676-1680`.
+8. P1 — the cancellation proof accepts an unrelated `io` domain
+   error as cancellation because it checks only the shared outer
+   code.  `resource_harness.py:1009` and proof A at line 581.
+9. P2 — Windows cross-listing validation accepts changed top-level
+   removal fields (attempt_id, directory) and a boolean ordinal.
+   `windows_housekeeping_harness.py:1321,1197,1334`.
+
+Repaired in wave 19 (see round records below); binaries rebuilt,
+evidence regenerated, roles re-anchored, astra re-run.
