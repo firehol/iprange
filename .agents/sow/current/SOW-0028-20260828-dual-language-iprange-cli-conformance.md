@@ -9953,12 +9953,12 @@ repaired and verified in this wave:
    a ``..``-walk repeating the account-context prefix (which the
    scan missed because the profile occurrence followed `..`).
    `_resolve` and `_checkout_suffix` now collapse the doubled
-   leading separator on POSIX (the kernel, APFS, and ntpath all
-   resolve it as one root), so the spelling renders
-   checkout-relative and privacy-clean; the P2-7 darwin block pins
-   the doubled-separator rendering on POSIX hosts (skipped on
-   Windows, where `//C:` is a UNC server spelling, not the same
-   path).
+   leading separator on POSIX (the kernel and APFS resolve it as
+   one root; Windows ``//`` starts a UNC server name and is
+   excluded), so the spelling renders checkout-relative and
+   privacy-clean; the P2-7 darwin block pins the doubled-separator
+   rendering on POSIX hosts (skipped on Windows, where ``//C:`` is a
+   UNC server spelling, not the same path).
 3. P2 — kind-gate control 48 fixed the synthetic producer root to
    `owned_temp_root()/qual-producer`, which can equal the reviewing
    checkout when the clone is staged at that exact path, making the
@@ -9975,14 +9975,19 @@ repaired and verified in this wave:
    no-op, guaranteeing a spelling that differs from the checkout.
 5. P3 — the round-18.3 record wording "all four embedded profile
    forms (root restored, trips)" overstates committed coverage: the
-   committed pins assert root restoration only; the end-to-end trip
+   committed pins assert root restoration only.  The end-to-end trip
    under a UNC-home profile is exercised by the separate nt-sim
-   probe matrix and native Windows runs (a CI Windows host uses a
-   drive-letter profile, so the operator-profile trip cannot be a
-   committed pin).  The record now distinguishes the committed
-   normalization assertions from those probe runs.
-6. P3 — carried commit-subject hygiene (`9374917e`, `e3d7bf61`,
-   `65ea9587`) remains recorded, approval-dependent, non-blocking.
+   probe matrix and native Windows runs; it is not yet a committed
+   control (a CI Windows host uses a drive-letter profile), and a
+   controlled-profile or committed simulation can cover it later.
+   The record now distinguishes the committed normalization
+   assertions from those probe runs.
+6. P3 — carried commit-subject hygiene now names five revisions
+   (`9374917e`, `e3d7bf61`, `65ea9587`, `cf5c6782`, `aca58716`;
+   later waves that mention the reviewer-model name in commit
+   subjects extend the same approval-dependent item).  The
+   history-rewrite remains recorded, approval-dependent,
+   non-blocking.
 
 Validation: harness `--self-test` PASS on Linux (incl. the
 doubled-separator darwin pins) and natively on the Windows host
@@ -9999,3 +10004,62 @@ AGENTS.md, specs, and runtime project skills unchanged; the
 sanitizer docstrings and harness comments describe the doubled-root
 collapse, the scratch-unique control-48 root, and the
 all-uppercase contrast spelling.
+
+#### Wave 18 follow-up round 18.5 (2026-09-08) — astra turn-14 repairs: checkout-root spelling, two-separator control, Unicode contrast, wording
+
+Astra turn 14 (same session `b5dd923d…`) returned NEEDS CHANGES
+with three in-scope P2s and two P3s; all are repaired and verified
+in this wave:
+
+1. P2 — checkout-root normalization remained inconsistent:
+   `_CHECKOUT` derives from `os.path.abspath(__file__)`, and
+   CPython preserves an already-absolute doubled-leading-separator
+   script spelling, so launching through
+   `//home/alice/src/iprange/.../run.py` left `_CHECKOUT` with a
+   doubled root while `_resolve` collapsed every candidate path.
+   `commonpath` then returned a single-root path that can never
+   equal the doubled-root checkout, containment failed, and
+   personal script paths survived sanitization.  `_CHECKOUT` now
+   applies the same POSIX collapse at module load (kernel and APFS
+   resolve the doubled root as one separator).
+2. P2 — the doubled-separator control exercised three separators:
+   `"//" + varied_checkout` where `varied_checkout` already starts
+   with `/` produced `///...`, which POSIX `normpath` collapses on
+   its own — the control stayed green even with both repair parts
+   removed.  The control now strips the leading separator first
+   (`"//" + varied_checkout.lstrip(os.sep)`) so the committed
+   spelling carries exactly two leading separators; with both
+   repairs removed the exactly-two spelling renders the
+   account-repeating ``..``-walk and the control fails (negative
+   verified by simulation).
+3. P2 — the contrast control's first-`isalpha()` flip assumed
+   `swapcase()` changes the character; uncased script letters
+   (e.g. Chinese `数`) satisfy `isalpha` but have no case, so at a
+   checkout such as `/数据/IPRANGE` the flip was a no-op and the
+   sanitizer's correct `v4/cli/cases` rendering was rejected.  The
+   flip now requires `swapcase() != ch`, with the corpus suffix's
+   cased ASCII letters as a guaranteed fallback.
+4. P3 — two wording inaccuracies corrected: (a) the sanitizer and
+   SOW claimed ntpath collapses a doubled root, but Windows
+   preserves `//` as a UNC server prefix; the collapse is POSIX-only
+   and the comments now say so; (b) the round-18.3/18.4 record
+   said a UNC-profile rejection "cannot be a committed pin" — it is
+   simply not committed yet (a controlled profile or committed
+   nt-path simulation can cover it), and the record now describes
+   the coverage as uncommitted rather than impossible.
+5. P3 — the commit-subject hygiene item now names five revisions
+   (`9374917e`, `e3d7bf61`, `65ea9587`, `cf5c6782`, `aca58716`);
+   later waves mentioning the reviewer-model name extend the same
+   approval-dependent, non-blocking item.
+
+Validation: harness `--self-test` PASS on Linux (two-separator
+darwin pin green; Unicode-checkout simulation keeps the contrast
+pin PASSing); kind-gate self-test 48 positive controls PASS;
+resource-harness `--self-test` PASS; native Windows self-test PASS
+from the checkout CWD and a fresh scratch CWD; nt-sim probe matrix
+unchanged (26/26); committed evidence structural scan clean;
+SHASUMS 8/8 (no product source changed — qualification tooling and
+records only).  Sensitive-data gate: clean.  Artifact gate:
+AGENTS.md, specs, and runtime project skills unchanged; sanitizer
+and harness comments describe the checkout-root collapse, the
+exactly-two-separator control, and the cased-flip requirement.

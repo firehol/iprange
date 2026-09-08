@@ -2155,7 +2155,12 @@ def _self_test():
         # turn-13 finding).  POSIX-only: on Windows ``//C:`` is a
         # UNC server spelling, not the same path.
         if os.sep == "/":
-            slashed = "//" + varied_checkout
+            # Exactly two leading separators: ``varied_checkout``
+            # already starts with one, so prefixing another keeps the
+            # ``//``-root spelling that POSIX normpath preserves
+            # (three or more collapse on their own, which would make
+            # the control vacuous).
+            slashed = "//" + varied_checkout.lstrip(os.sep)
             rendered2 = sanitized_path_value(slashed)
             if rendered2 != want:
                 problems.append(
@@ -2192,10 +2197,17 @@ def _self_test():
             "v4", "cli", "cases")
         if varied_checkout == os.path.join(
                 checkout, "v4", "cli", "cases"):
+            # Flip a character whose case conversion actually
+            # differs: ``isalpha`` includes uncased script letters
+            # (Chinese ``数`` has no case), so ``swapcase`` alone can
+            # be a no-op and leave the spelling identical; the corpus
+            # suffix always carries cased ASCII letters as the final
+            # fallback (astra turn-14 finding).
             for index, ch in enumerate(varied_checkout):
-                if ch.isalpha():
+                flipped = ch.swapcase()
+                if flipped != ch:
                     varied_checkout = (varied_checkout[:index]
-                                       + ch.swapcase()
+                                       + flipped
                                        + varied_checkout[index + 1:])
                     break
         if sanitized_path_value(varied_checkout) == os.path.join(

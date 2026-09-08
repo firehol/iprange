@@ -36,6 +36,16 @@ import unicodedata
 _CHECKOUT = os.path.normpath(
     os.path.dirname(os.path.dirname(os.path.dirname(
         os.path.abspath(__file__)))))
+# The module can be launched through a doubled-leading-separator
+# script spelling (``//home/alice/src/iprange/.../run.py``), which
+# CPython preserves; the kernel and APFS (macOS repeated-separator
+# handling) resolve that root as one separator on POSIX, so the
+# checkout root must use the same
+# single-root spelling as every candidate path or containment
+# fails and personal paths survive sanitization.
+if os.sep == "/" and _CHECKOUT.startswith("//") \
+        and not _CHECKOUT.startswith("///"):
+    _CHECKOUT = _CHECKOUT[1:]
 
 
 def checkout_root():
@@ -88,12 +98,13 @@ def _resolve(value):
     Relative spellings resolve against the checkout root so the
     sanitized record is invariant to the invocation directory.
     A doubled leading separator (``//home/...``) is collapsed to one
-    on POSIX: ``ntpath`` folds it, the kernel resolves it as the
-    root, and APFS does too (macOS repeated-separator handling), so
-    every comparison path must see the same single-root spelling or
-    a case-varied, ``//``-prefixed checkout spelling falls out of
-    containment and renders as a ``..``-walk repeating the account
-    path.
+    on POSIX: the kernel and APFS (macOS repeated-separator
+    handling) resolve it as the root, so every comparison path must
+    see the same single-root spelling or a case-varied,
+    ``//``-prefixed checkout spelling falls out of containment and
+    renders as a ``..``-walk repeating the account path.  Windows is
+    intentionally excluded: there ``//`` starts a UNC server name,
+    not the same path.
     """
     if os.path.isabs(value):
         norm = os.path.normpath(value)
