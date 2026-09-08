@@ -640,6 +640,19 @@ func TestRefuseOutputOverSourceSidecar(t *testing.T) {
 	if herr := refuseOutputOverSource(alias, source, sourceInfo, sidecarInfo); herr == nil {
 		t.Fatal("hard-link sidecar destination accepted")
 	}
+	// A distinct file stays accepted.  This assertion runs BEFORE the
+	// sidecar is renamed and removed: a fresh file created after the
+	// sidecar inode was freed can reuse that exact inode on common
+	// filesystems, which would make the captured-identity comparison
+	// refuse it and the test nondeterministic (tester role wave-19.6
+	// determinism finding).
+	other := filepath.Join(dir, "other.bin")
+	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if herr := refuseOutputOverSource(other, source, sourceInfo, sidecarInfo); herr != nil {
+		t.Fatalf("distinct destination refused: %v", herr)
+	}
 	// A RENAMED sidecar keeps its captured identity (tester role
 	// wave-19.6): a destination at the renamed path is refused through
 	// the same-file arm even though its pathname no longer matches.
@@ -661,15 +674,6 @@ func TestRefuseOutputOverSourceSidecar(t *testing.T) {
 	// wave-19.6 record documents this handle-vs-preflight distinction.
 	if herr := refuseOutputOverSource(renamed, source, sourceInfo, nil); herr != nil {
 		t.Fatalf("ephemeral guard refused the renamed pathname: %v", herr)
-	}
-	// A distinct file and a plain leftover "<main>.readers" of an
-	// unrelated main name stay accepted.
-	other := filepath.Join(dir, "other.bin")
-	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if herr := refuseOutputOverSource(other, source, sourceInfo, sidecarInfo); herr != nil {
-		t.Fatalf("distinct destination refused: %v", herr)
 	}
 }
 

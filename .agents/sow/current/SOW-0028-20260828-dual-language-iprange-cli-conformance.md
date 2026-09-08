@@ -10499,3 +10499,32 @@ fixture `9b40420e…` (Linux) and Windows-host products `13ac9a73…`
 identity block match the closing evidence commit.  The seven role
 reviews are re-anchored at the final HEAD; astra turn 18 (the same
 review session) remains the milestone-4 closure gate.
+
+#### Wave 19 round 19.7 (2026-09-08) — tester-role P2: sidecar-guard test determinism (inode reuse) repaired
+
+The wave-19.6 role round at `1b30628f` returned two PASSes, six
+PASSes, and one tester FAIL:
+
+- Tester P2 — the positive "distinct file stays accepted" assertion
+  in the sidecar-guard unit tests ran AFTER the sidecar was renamed
+  and unlinked: a freshly created file can reuse the just-freed
+  sidecar inode on common filesystems, so the captured-identity
+  comparison legitimately refused it and the test failed
+  nondeterministically (isolated 8/8 fails, full-suite 1/2 fails at
+  the identical HEAD; product behavior correct).  Same hazard in
+  both languages' unit tests.
+
+Repaired: both unit tests now assert the positive distinct-file
+acceptance BEFORE the sidecar is renamed/unlinked (Go
+`TestRefuseOutputOverSourceSidecar`, Rust
+`refuse_output_over_source_refuses_the_source_sidecar`), with a
+comment explaining the inode-reuse constraint; 10/10 repeat runs
+pass per language.  No product code changed in this round.
+
+Identity note (recorded for future qualification builds): the Rust
+release product binary is layout-sensitive to ANY change in the
+`iprange-cli` crate sources, including `#[cfg(test)]`-only edits
+(the default codegen-unit partitioning reorders object layout), so
+the product hash re-rolls even for test-only commits while the
+worker and fixture stay byte-identical.  The wave-19.7 final
+identities are recorded at the closing evidence commit.

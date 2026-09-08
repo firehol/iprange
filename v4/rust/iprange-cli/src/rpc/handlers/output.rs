@@ -480,6 +480,16 @@ mod tests {
             assert!(refuse_output_over_source(&alias, &identity, Some(&sidecar_id)).is_err());
             let _ = fs::remove_file(&alias);
         }
+        // A distinct file stays accepted.  This assertion runs BEFORE
+        // the sidecar is renamed and unlinked: a fresh file created
+        // after the sidecar inode was freed can reuse that exact inode
+        // on common filesystems, which would make the captured-identity
+        // comparison refuse it and the test nondeterministic (tester
+        // role wave-19.6 determinism finding).
+        let other = dir.join("other.iprange");
+        fs::write(&other, b"other").unwrap();
+        assert!(refuse_output_over_source(&other, &identity, Some(&sidecar_id)).is_ok());
+
         // A RENAMED sidecar keeps its captured identity: a destination
         // at the renamed path is refused through the file-identity arm
         // (tester role wave-19.6, mirroring the renamed-main arm).  An
@@ -499,14 +509,6 @@ mod tests {
             )
         );
         assert!(refuse_output_over_source(&renamed, &identity, None).is_ok());
-        fs::remove_file(&renamed).unwrap();
-        // A plain leftover "<main>.readers" cannot be a delivery target
-        // through the OTHER main file's identity: the sidecar arm is
-        // derived from the source main name, and a distinct file stays
-        // accepted.
-        let other = dir.join("other.iprange");
-        fs::write(&other, b"other").unwrap();
-        assert!(refuse_output_over_source(&other, &identity, Some(&sidecar_id)).is_ok());
         let _ = fs::remove_dir_all(&dir);
     }
 
