@@ -1897,8 +1897,8 @@ def _self_test():
             embedded_device_forms = [
                 'copy "' + "\\\\?\\" + profile_abs
                 + '\\scratch\\x" dest',
-                'copy "' + "\\.\\" + profile_abs
-                + '\\scratch\\x" dest',
+                'copy "' + chr(92) + chr(92) + "." + chr(92)
+                + profile_abs + '\\scratch\\x" dest',
                 'copy "' + chr(92) + chr(92) + "??" + chr(92)
                 + profile_abs + '\\scratch\\x" dest',
                 'copy "' + chr(92) + "??" + chr(92)
