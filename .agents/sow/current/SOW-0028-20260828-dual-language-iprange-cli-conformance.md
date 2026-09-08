@@ -10526,5 +10526,12 @@ release product binary is layout-sensitive to ANY change in the
 `iprange-cli` crate sources, including `#[cfg(test)]`-only edits
 (the default codegen-unit partitioning reorders object layout), so
 the product hash re-rolls even for test-only commits while the
-worker and fixture stay byte-identical.  The wave-19.7 final
-identities are recorded at the closing evidence commit.
+worker and fixture stay byte-identical; the Windows Go product also
+embeds its checkout directory, so per-wave Windows identities are
+recorded from the exact qualification checkout.  The final committed
+identities of this round are Go product `a6e134fa…` / worker
+`4f2eb063…`, Rust product `28217469…` / worker `4c17669d…` /
+fixture `9b40420e…` (Linux) and Windows-host products `2fcec018…`
+(go) / `8bdf71db…` (rust) / go worker `33088124…` built at
+`587d579b` tree_clean; SHASUMS.txt (8/8) and the evidence README
+identity block match the closing evidence commit.
