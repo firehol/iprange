@@ -105,7 +105,9 @@ import uuid
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from command_sanitize import (  # noqa: E402  (side-effect free)
+    checkout_root,
     personal_path_in_report,
+    recorded_checkout_root,
     sanitized_command,
     under_profile,
 )
@@ -595,6 +597,35 @@ def _orphan_contract_self_test():
         raise AssertionError(
             f"negative control: residue {injected} must fail the "
             "exactly-one private export-temp assertion")
+
+
+def _report_construction_self_test():
+    """In-memory control for the report-dict construction path.
+
+    The crash report records the producer ``checkout_root`` through
+    ``recorded_checkout_root``; a missing import or a personal root
+    would surface only when a real battery runs.  This control builds
+    the exact report field at harness startup (no processes, no
+    files): the recorded root must be None under a profile checkout,
+    or an absolute non-personal path otherwise, and the checkout the
+    harness would record must itself be non-personal.
+    """
+
+    root = recorded_checkout_root()
+    if root is not None:
+        assert os.path.isabs(root), (
+            f"recorded checkout root is not absolute: {root!r}")
+        assert not under_profile(root), (
+            f"recorded checkout root is personal: {root!r}")
+    else:
+        assert under_profile(checkout_root()), (
+            "recorded checkout root is None outside a profile "
+            "checkout; expected a personal checkout")
+    # The recorded field must serialize as a plain scalar so the
+    # report stays JSON-safe.
+    import json as _json
+    encoded = _json.dumps({"checkout_root": root})
+    _json.loads(encoded)
 
 
 def decimal_u64(value):
@@ -2967,6 +2998,7 @@ def main():
         _orphan_contract_self_test()
     except AssertionError as exc:
         parser.error(f"export-orphan negative control failed: {exc}")
+    _report_construction_self_test()
     producer = executable(args.producer, "producer binary")
     consumer = executable(args.consumer, "consumer binary")
     fixture_tool = executable(args.fixture_tool, "fixture tool")

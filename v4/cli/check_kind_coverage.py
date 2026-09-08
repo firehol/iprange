@@ -3516,8 +3516,12 @@ def _self_test():
         #     same evidence must fail (the reviewing checkout cannot
         #     name the binaries).
         def cross_checkout_case():
-            producer_root = os.path.join(
-                owned_temp_root(), "qual-producer")
+            # A fixed ``owned_temp_root()/qual-producer`` spelling can
+            # equal the reviewing checkout (a clone staged at
+            # ``/tmp/qual-producer``), which would make the negative
+            # control vacuous and block every gate run; the unique
+            # per-run scratch directory guarantees a distinct root.
+            producer_root = os.path.join(work, "qual-producer")
             matrices, crash, _old = rehome_evidence(
                 *load_genuine(),
                 os.path.join(producer_root, ".local", "qual"))

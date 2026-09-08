@@ -9908,17 +9908,94 @@ all four device/verbatim prefix spellings the strip recognizes:
 `_DEVICE_UNC_FORMS` drives both the whole-string branch of
 `_strip_device_prefix` and the inline `_DEVICE_INLINE_UNC_RE`
 (alternation built from the four forms), and the P2-7 self-test
-pins all four whole-string neutral forms (root exact, no trip) and
-all four embedded profile forms (root restored, trips).
+commits normalization assertions for all four whole-string neutral
+forms (root exact, no trip) and all four embedded profile forms
+(root restored).  The end-to-end trip under a UNC-home profile is
+exercised by the separate nt-sim probe matrix and the native
+Windows runs (a CI Windows host profile is drive-letter, so the
+operator-profile trip cannot be a committed pin); the SOW
+validation text distinguishes the committed normalization
+assertions from those probe runs.
 
 Validation: harness `--self-test` PASS on Linux and natively on
 the Windows host (checkout CWD and fresh scratch CWD) with the
 four whole-string verbatim-UNC pairs and four embedded UNC
-restorations printing; nt-sim probe verifies neutral no-trip +
-root-exact and embedded trips for all four forms; kind-gate
+restorations printing; nt-sim probe matrix verifies neutral
+no-trip + root-exact for all four forms and the end-to-end
+UNC-home-profile trip for all four embedded and whole-string
+forms; kind-gate
 self-test 48 positive controls PASS; resource-harness `--self-test`
 PASS; committed evidence structural scan clean; SHASUMS 8/8 (no
 product source changed — qualification tooling only).  Sensitive-data
 gate: clean.  Artifact gate: AGENTS.md, specs, and runtime project
 skills unchanged; the sanitizer docstrings and harness comments
 describe the four-form UNC restoration.
+
+#### Wave 18 follow-up round 18.4 (2026-09-08) — astra turn-13 repairs: crash report construction, doubled-root spelling, control-48 root, all-uppercase contrast
+
+Astra turn 13 (same session `b5dd923d…`) returned NEEDS CHANGES
+with one P1, three in-scope P2s, and two non-blocking P3s; all are
+repaired and verified in this wave:
+
+1. P1 — `crash_harness.py` called `recorded_checkout_root()` when
+   building the crash report but never imported it, so every normal
+   crash harness invocation raised `NameError` before any scenario
+   ran.  The import is added and a startup control
+   (`_report_construction_self_test`) builds the exact recorded
+   field at harness startup (no processes, no files): the root must
+   be None under a profile checkout or an absolute non-personal
+   path otherwise, and the field must serialize as a JSON scalar.
+2. P2 — the macOS account-path disclosure stayed reachable through
+   a doubled-leading-separator spelling
+   (`//USERS/ALICE/src/iprange/v4/cli/cases`): POSIX `normpath`
+   preserves the doubled root, `_checkout_suffix` saw an extra
+   empty component, containment failed, and the record rendered as
+   a ``..``-walk repeating the account-context prefix (which the
+   scan missed because the profile occurrence followed `..`).
+   `_resolve` and `_checkout_suffix` now collapse the doubled
+   leading separator on POSIX (the kernel, APFS, and ntpath all
+   resolve it as one root), so the spelling renders
+   checkout-relative and privacy-clean; the P2-7 darwin block pins
+   the doubled-separator rendering on POSIX hosts (skipped on
+   Windows, where `//C:` is a UNC server spelling, not the same
+   path).
+3. P2 — kind-gate control 48 fixed the synthetic producer root to
+   `owned_temp_root()/qual-producer`, which can equal the reviewing
+   checkout when the clone is staged at that exact path, making the
+   negative control vacuous and blocking every gate run (the
+   self-test executes before each normal invocation).  The producer
+   root now derives from the per-run unique scratch directory
+   (`work/qual-producer`), guaranteed distinct from any checkout.
+4. P2 — the non-darwin contrast pin assumed uppercasing changes the
+   checkout spelling; at an all-uppercase checkout
+   (`/BUILD/IPRANGE`) the uppercased spelling equals the checkout
+   and the sanitizer correctly renders `v4/cli/cases`, false-FAILing
+   the self-test on a valid Linux/FreeBSD checkout.  The pin now
+   flips the first alphabetic character when uppercasing is a
+   no-op, guaranteeing a spelling that differs from the checkout.
+5. P3 — the round-18.3 record wording "all four embedded profile
+   forms (root restored, trips)" overstates committed coverage: the
+   committed pins assert root restoration only; the end-to-end trip
+   under a UNC-home profile is exercised by the separate nt-sim
+   probe matrix and native Windows runs (a CI Windows host uses a
+   drive-letter profile, so the operator-profile trip cannot be a
+   committed pin).  The record now distinguishes the committed
+   normalization assertions from those probe runs.
+6. P3 — carried commit-subject hygiene (`9374917e`, `e3d7bf61`,
+   `65ea9587`) remains recorded, approval-dependent, non-blocking.
+
+Validation: harness `--self-test` PASS on Linux (incl. the
+doubled-separator darwin pins) and natively on the Windows host
+from the checkout CWD and a fresh scratch CWD; kind-gate self-test
+48 positive controls PASS (control-48 root now scratch-unique);
+resource-harness `--self-test` PASS; the crash harness
+`_report_construction_self_test` PASSes on Linux and natively on
+Windows; all-uppercase-checkout simulation keeps the contrast pin
+PASSing; `//`-prefixed `--cases` argv renders `v4/cli/cases` and
+stays privacy-clean; committed evidence structural scan clean;
+SHASUMS 8/8 (no product source changed — qualification tooling and
+records only).  Sensitive-data gate: clean.  Artifact gate:
+AGENTS.md, specs, and runtime project skills unchanged; the
+sanitizer docstrings and harness comments describe the doubled-root
+collapse, the scratch-unique control-48 root, and the
+all-uppercase contrast spelling.

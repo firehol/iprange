@@ -87,10 +87,21 @@ def _resolve(value):
 
     Relative spellings resolve against the checkout root so the
     sanitized record is invariant to the invocation directory.
+    A doubled leading separator (``//home/...``) is collapsed to one
+    on POSIX: ``ntpath`` folds it, the kernel resolves it as the
+    root, and APFS does too (macOS repeated-separator handling), so
+    every comparison path must see the same single-root spelling or
+    a case-varied, ``//``-prefixed checkout spelling falls out of
+    containment and renders as a ``..``-walk repeating the account
+    path.
     """
     if os.path.isabs(value):
-        return os.path.normpath(value)
-    return os.path.normpath(os.path.join(_CHECKOUT, value))
+        norm = os.path.normpath(value)
+    else:
+        norm = os.path.normpath(os.path.join(_CHECKOUT, value))
+    if os.sep == "/" and norm.startswith("//") and not norm.startswith("///"):
+        return norm[1:]
+    return norm
 
 
 def _looks_like_path(value):
@@ -353,7 +364,10 @@ def _checkout_suffix(path):
     spellings, so a case-varied checkout spelling (valid on a
     case-insensitive volume) is consumed entirely and the suffix is
     taken from the raw components below the checkout."""
-    raw = os.path.normpath(path).split(os.sep)
+    norm = os.path.normpath(path)
+    if os.sep == "/" and norm.startswith("//") and not norm.startswith("///"):
+        norm = norm[1:]
+    raw = norm.split(os.sep)
     base = _CHECKOUT.split(os.sep)
     index = 0
     while (index < len(base) and index < len(raw)

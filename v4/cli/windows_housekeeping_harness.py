@@ -2146,6 +2146,33 @@ def _self_test():
         else:
             print("[P2-7] darwin checkout-relative rendering is "
                   "privacy-clean")
+        # Doubled-leading-separator spelling (``//USERS/...``): the
+        # kernel and APFS resolve the doubled root as one separator
+        # on POSIX, so a ``//``-prefixed case-varied checkout
+        # spelling must render checkout-relative under darwin too --
+        # a single-root mismatch would fall out of containment and
+        # emit a ``..``-walk repeating the account path (astra
+        # turn-13 finding).  POSIX-only: on Windows ``//C:`` is a
+        # UNC server spelling, not the same path.
+        if os.sep == "/":
+            slashed = "//" + varied_checkout
+            rendered2 = sanitized_path_value(slashed)
+            if rendered2 != want:
+                problems.append(
+                    "P2-7 darwin doubled-separator case-varied "
+                    f"checkout spelling rendered {rendered2!r}, "
+                    f"want {want!r}")
+            else:
+                print("[P2-7] darwin doubled-separator spelling "
+                      "renders checkout-relative")
+            if personal_path_in_report(
+                    {"command": ["--cases", rendered2]}) is not None:
+                problems.append(
+                    "P2-7 darwin doubled-separator rendering tripped "
+                    "the privacy scan")
+            else:
+                print("[P2-7] darwin doubled-separator rendering is "
+                      "privacy-clean")
     finally:
         sys.platform = saved_platform
     if os.sep == "/" and sys.platform != "darwin":
@@ -2153,12 +2180,24 @@ def _self_test():
         # the same spelling renders as a ``..``-walk on case-sensitive
         # hosts.  ntpath folds case on Windows and the darwin branch is
         # live on macOS (APFS folds case), so only other POSIX hosts
-        # exercise the raw ``..``-walk spelling.
+        # exercise the raw ``..``-walk spelling.  An all-uppercase
+        # checkout (``/BUILD/IPRANGE``) uppercases to itself, which
+        # would make the contrast vacuous; the first alphabetic
+        # character is flipped instead, guaranteeing a spelling that
+        # differs from the checkout (astra turn-13 finding).
         checkout = checkout_root()
         varied_checkout = os.path.join(
             os.path.dirname(checkout).upper(),
             os.path.basename(checkout).upper(),
             "v4", "cli", "cases")
+        if varied_checkout == os.path.join(
+                checkout, "v4", "cli", "cases"):
+            for index, ch in enumerate(varied_checkout):
+                if ch.isalpha():
+                    varied_checkout = (varied_checkout[:index]
+                                       + ch.swapcase()
+                                       + varied_checkout[index + 1:])
+                    break
         if sanitized_path_value(varied_checkout) == os.path.join(
                 "v4", "cli", "cases"):
             problems.append(
