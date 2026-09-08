@@ -9719,3 +9719,38 @@ nt-gated loop natively on the Windows host; the committed evidence
 structural scan stays clean; product binaries byte-identical
 (SHASUMS 8/8).  Sensitive-data gate: clean.  Artifact gate:
 AGENTS.md, specs, and runtime project skills unchanged.
+
+#### Wave 17 follow-up round 17.2 (2026-09-08) — c33fd825 verdict-tally correction and uniform chr(92) pin literals
+
+The round-17.1 record's opening tally mis-stated the `c33fd825`
+role round: it said "PASSed ... for six roles" while only five roles
+passed (tester, operations, portability, performance, glm).  The
+parity role FAILed with the pin-coverage P2, and the security role
+independently FAILed with two P2s whose reply delivery was
+interrupted; its durable report (`.local/security/report.md`,
+round 42) records: (a) the same pin-coverage gap — the wave-17
+record claimed four committed embedded device pins while only the
+`\\?\` form was committed — and (b) review-time tree hygiene — an
+interim uncommitted four-form pin edit landed in the worktree while
+the review was in flight, and that interim edit carried the
+mis-rendered `\\.\` prefix (one leading backslash) that the native
+Windows self-test later caught.  Neither finding remains open:
+
+- the four-form pin loop is committed (round 17.1) and natively
+  verified on the Windows host (round 17.1/17.2);
+- the interim-edit hazard is closed by the review discipline
+  recorded here: role rounds re-anchor only at a committed HEAD and
+  every role verdict is read from its durable report file, not from
+  reply delivery order;
+- the round-17.1 "all four ... built from `chr(92)`" wording was
+  also imprecise for the `\\?\` form, which was still a
+  double-escaped source literal; the verbatim form is now built
+  from `chr(92)` too, so all four embedded-prefix pin literals use
+  the same unambiguous construction.
+
+Validation: Windows-housekeeping `--self-test` PASSes on Linux and
+natively on the Windows host (all four embedded forms detected,
+exact verbatim-UNC root asserted); the committed evidence structural
+scan stays clean; product binaries byte-identical (SHASUMS 8/8).
+Sensitive-data gate: clean.  Artifact gate: AGENTS.md, specs, and
+runtime project skills unchanged.

@@ -1895,8 +1895,8 @@ def _self_test():
             # prefix form the regex removes (external review
             # finding; round-17.1 pin-coverage repair).
             embedded_device_forms = [
-                'copy "' + "\\\\?\\" + profile_abs
-                + '\\scratch\\x" dest',
+                'copy "' + chr(92) + chr(92) + "?" + chr(92)
+                + profile_abs + '\\scratch\\x" dest',
                 'copy "' + chr(92) + chr(92) + "." + chr(92)
                 + profile_abs + '\\scratch\\x" dest',
                 'copy "' + chr(92) + chr(92) + "??" + chr(92)
