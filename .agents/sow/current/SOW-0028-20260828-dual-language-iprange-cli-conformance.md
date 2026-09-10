@@ -734,6 +734,20 @@ housekeeping 2/2).  Evidence regenerated and committed at
 `e1350adb`; roles re-anchored and astra re-run at that revision.
 
 
+Wave-19.8 state (2026-09-11): the fresh astra control session
+(turn 18) FAILed with five P2 findings (symlink-.. canonicalization,
+Rust sidecar fallback double suffix, metadata.get guard order,
+loose probe error shapes, round tally mislabel), all repaired and
+re-qualified at `94e2c778` plus the closing evidence commit: full
+battery green (matrices 38/38 + 14/24 mixed, crash 16/16, resource
+8/8, golden 55, sensitivity 14, kind gate PASS, probe 39/39,
+Windows housekeeping 2/2 natively); Linux identities Go
+`ef4a8575…`/worker `4f2eb063…`, Rust `8f0a7610…`/worker
+`4c17669d…`/fixture `9b40420e…`, Windows products
+`d3c6e574…`/`56cd7f60…`/go worker `945cc091…`; the seven role
+reviews are re-anchored at the final HEAD; astra turn 18 remains
+the milestone-4 closure gate (no commit after its PASS).
+
 ## Requirements
 
 ### Purpose
@@ -10502,11 +10516,13 @@ review session) remains the milestone-4 closure gate.
 
 #### Wave 19 round 19.7 (2026-09-08) — tester-role P2: sidecar-guard test determinism (inode reuse) repaired
 
-The wave-19.6 role round at `1b30628f` returned four PASSes
+The wave-19.5 role round at `42de5520` returned four PASSes
 (operations, portability, performance, glm) and three FAILs
-(tester P1+P2, parity P2, security P2); this round repairs the
-tester-role determinism finding after the other two FAILs were
-closed in round 19.6:
+(tester P1, parity P2, security P2); round 19.6 closed those
+FAILs, and the wave-19.6 role round at `1b30628f` then returned
+six PASSes (operations, portability, parity, security,
+performance, glm) with one tester P2 FAIL (sidecar-guard test
+determinism), which this round repairs:
 
 - Tester P2 — the positive "distinct file stays accepted" assertion
   in the sidecar-guard unit tests ran AFTER the sidecar was renamed
@@ -10538,3 +10554,92 @@ fixture `9b40420e…` (Linux) and Windows-host products `2fcec018…`
 (go) / `8bdf71db…` (rust) / go worker `33088124…` built at
 `587d579b` tree_clean; SHASUMS.txt (8/8) and the evidence README
 identity block match the closing evidence commit.
+
+#### Wave 19 round 19.8 (2026-09-11) — symlink-aware canonicalization, metadata preflight, sidecar fallback, strict probe shapes, round tally correction (astra turn-18 fresh session, five P2 findings)
+
+A fresh astra control review (the turn-17 session was killed by the
+hosting moderation filter; the user chose a fresh session) FAILed at
+`0d099589` with five P2 findings, all repaired in this round at
+product commit `94e2c778`:
+
+- F1 (product P2, live) — Go `canonicalAbsolute` cleaned the
+  destination path BEFORE resolving symlinks: `filepath.Clean` folded
+  a `..` component lexically, so `/var/run/../<source>` became
+  `/var/<source>` (non-existent) instead of resolving `/var/run`
+  (`/run`) and then `/`, and the same-source guard missed a
+  destination that IS the source (metadata.get accepted it and
+  reported `present:false`; Rust refused it).  Repaired: the walk
+  now resolves the RAW path with `EvalSymlinks` and pops components
+  with Rust `Path` semantics — a raw parent (Go `filepath.Dir`
+  cleans and was folded too) and a trailing separator that is not a
+  component (`/a/b/` yields `("b", "/a")`).  Parity test:
+  `TestCanonicalAbsoluteSymlinkedParentDotDot` (Go) and
+  `canonical_absolute_resolves_parent_dotdot_through_symlinked_ancestors`
+  (Rust) construct a symlink whose target is nested one level below
+  its parent, where lexical folding and symlink resolution diverge;
+  the wave-19 probe gained the same spelling as an export e2e case.
+- F2 (product P2, Rust only) — the ephemeral sidecar fallback in
+  `refuse_output_over_source` passed the already-derived
+  `<main>.readers` path into `sidecar_identity`, which appended a
+  second `.readers` suffix: a distinct destination named
+  `<main>.readers.readers` was refused when it existed.  Repaired:
+  the fallback stats the derived sidecar path directly
+  (`file_identity`); the Go engine never had the double suffix.
+  Tests: `refuse_output_over_source_sidecar_fallback_stats_the_derived_path`
+  (Rust) and the Go parity pin
+  `TestRefuseOutputOverSourceDoubleSuffixedSidecarDistinct` plus an
+  e2e acceptance case in the wave-19 probe.
+- F3 (product P2, both engines, live) — `database.metadata.get` ran
+  its file-delivery same-source refusal AFTER the SDK open, so a
+  reserved-name source (`x.readers`) failed at the open with
+  `io/read_only_failure` instead of the canonical
+  `invalid_argument/not_started` preflight (export refuses before
+  open).  Repaired: both handlers run the refusal before the source
+  opens when the delivery mode is `file`; the post-open guard stays
+  for handle identities.  Tests:
+  `TestSessionDatabaseMetadataGetReservedNamePreflight` (Go session
+  level) and
+  `database_metadata_file_delivery_refuses_reserved_name_source_preflight`
+  (Rust).
+- F4 (records/gate P2) — the operations wave-19 probe accepted any
+  error whose message contained "destination must differ" (a wrong
+  `data.outcome` such as `read_only_failure` passed) and had no
+  sidecar case; the evidence README claimed renamed-sidecar probe
+  coverage the probe did not have.  Repaired: the probe now checks
+  `data.code`/`data.outcome`/message separately from source
+  integrity and re-openability, adds sidecar-pathname refusal cases
+  (metadata.get and export) and the distinct double-suffix
+  acceptance case, adds a self-test proving relabeled/missing/wrong
+  shapes fail the gate, and the README describes the actual
+  coverage (renamed-sidecar identity arms live in the session/unit
+  battery).  Probe result at the wave-19.8 binaries: 39/39 OK.
+- F5 (records P2) — the round-19.7 opening mislabeled the
+  wave-19.6 role-round tally: at `1b30628f` the round returned SIX
+  PASSes (operations, portability, parity, security, performance,
+  glm) and ONE tester P2 (sidecar-guard test determinism); the three
+  FAILs (tester P1, parity P2, security P2) belong to the wave-19.5
+  round at `42de5520` (already recorded correctly in the round-19.6
+  opening).  Repaired in the round-19.7 opening paragraph above.
+
+Battery at the wave-19.8 final identities: Go suite 24 packages
+PASS; Rust workspace PASS; matrices rust 38/38, go 38/38,
+rust_to_go 14 PASS + 24 legitimate skips, go_to_rust 14 PASS + 24
+skips; crash positive 16/16 both directions and the /bin/false
+negative control fails as designed (rc 1); resource proofs 8/8 and
+self-test PASS; golden exchanges 55 / 38 case files; sensitivity
+gate 14/14; kind-coverage gate PASS with all self-test controls;
+operations probe 39/39.  Windows housekeeping re-qualified natively
+on the authorized Windows validation host at `94e2c778` (go1.26.5
+windows/amd64, rustc 1.97.1, native Windows Python 3.14.0
+embeddable, clean tree): 2/2 PASS (`windows-housekeeping.json`,
+schema v3).
+
+The final committed identities of this round are Go product
+`ef4a8575…` / worker `4f2eb063…`, Rust product `8f0a7610…` /
+worker `4c17669d…` / fixture `9b40420e…` (Linux) and Windows-host
+products `d3c6e574…` (go) / `56cd7f60…` (rust) / go worker
+`945cc091…` built at `94e2c778` tree_clean; SHASUMS.txt (8/8) and
+the evidence README identity block match the closing evidence
+commit.  The seven role reviews are re-anchored at the final HEAD;
+astra turn 18 (the same review session) remains the milestone-4
+closure gate.
