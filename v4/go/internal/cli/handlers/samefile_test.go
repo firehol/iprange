@@ -977,3 +977,132 @@ func TestExportRefusesDecoratedSourceSpelling(t *testing.T) {
 		}
 	}
 }
+
+// TestCanonicalAbsoluteSymlinkedParentDotDot pins the wave-19.8
+// parity repair: ".." must be resolved with symlink semantics against
+// the deepest existing ancestor (Rust canonical_absolute parity), not
+// folded lexically before symlinks are followed.  Cleaning up front
+// turns "<link>/../<other-name>/<file>" into a non-existent path and
+// the same-source guard misses a destination that IS the source.
+func TestCanonicalAbsoluteSymlinkedParentDotDot(t *testing.T) {
+	outer := t.TempDir()
+	deeper := t.TempDir()
+	source := filepath.Join(deeper, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(outer, "link")
+	if err := os.Symlink(deeper, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	// <link>/.. resolves through the symlink target: deeper/.. is the
+	// parent of deeper, then <basename(deeper)> re-enters deeper.
+	// The spelling is built WITHOUT filepath.Join: Join cleans ".."
+	// lexically before the symlink walk, which is exactly the removal
+	// this test must prove is wrong inside canonicalAbsolute.
+	spelling := rawJoin(outer, "link", "..", filepath.Base(deeper), "db.bin")
+	if got, want := canonicalAbsolute(spelling), canonicalAbsolute(source); got != want {
+		t.Fatalf("canonicalAbsolute(%q) = %q, want %q", spelling, got, want)
+	}
+	// The guard therefore refuses the decorated spelling as the source.
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	herr := refuseOutputOverSource(spelling, source, sourceInfo, nil)
+	if herr == nil {
+		t.Fatal("symlink-.. spelling of the source accepted")
+	}
+	if herr.Code != "invalid_argument" || herr.Outcome != "not_started" {
+		t.Fatalf("code=%q outcome=%q", herr.Code, herr.Outcome)
+	}
+	// A distinct file under the same decoration stays distinct.
+	other := filepath.Join(deeper, "other.bin")
+	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := canonicalAbsolute(spellingOther(link, deeper, "other.bin")),
+		canonicalAbsolute(other); got != want {
+		t.Fatalf("decorated distinct target: %q != %q", got, want)
+	}
+}
+
+func spellingOther(link, deeper, name string) string {
+	return rawJoin(link, "..", filepath.Base(deeper), name)
+}
+
+// rawJoin concatenates path components without cleaning, so ".."
+// components survive for the canonicalAbsolute symlink walk.
+func rawJoin(parts ...string) string {
+	return strings.Join(parts, string(os.PathSeparator))
+}
+
+// TestRefuseOutputOverSourceDoubleSuffixedSidecarDistinct pins the
+// wave-19.8 Rust fallback repair parity: an ephemeral guard whose
+// sidecar (<main>.readers) does not exist must NOT derive
+// <main>.readers.readers and refuse a distinct destination that
+// happens to carry that double-suffixed name.  The guard refuses only
+// the real sidecar pathname (and a real sidecar file identity).
+func TestRefuseOutputOverSourceDoubleSuffixedSidecarDistinct(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The real sidecar does not exist; a distinct file carries the
+	// double-suffixed name.
+	double := filepath.Join(dir, "db.bin.readers.readers")
+	if err := os.WriteFile(double, []byte("distinct"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if herr := refuseOutputOverSource(double, source, sourceInfo, nil); herr != nil {
+		t.Fatalf("distinct double-suffixed destination refused: %v", herr)
+	}
+	// The real sidecar pathname is still refused lexically.
+	sidecar := filepath.Join(dir, "db.bin.readers")
+	if err := os.WriteFile(sidecar, []byte("readers"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sidecarInfo, err := os.Stat(sidecar)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if herr := refuseOutputOverSource(sidecar, source, sourceInfo, sidecarInfo); herr == nil {
+		t.Fatal("real sidecar destination accepted")
+	}
+}
+
+// TestSessionDatabaseMetadataGetReservedNamePreflight pins the
+// wave-19.8 preflight repair: database.metadata.get with a file
+// delivery refuses a reserved-name source (x.readers) BEFORE the
+// source opens, with the canonical invalid_argument/not_started shape;
+// opening it first would relabel the request as io/read_only_failure
+// (export-before-open parity, Rust database_metadata parity).
+func TestSessionDatabaseMetadataGetReservedNamePreflight(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "x.readers")
+	if err := os.WriteFile(source, []byte("coordination"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	frame := `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.database.metadata.get","params":{"source":{"path":` +
+		mustJSONString(source) + `,"mode":"immutable"},"delivery":{"mode":"file","path":` +
+		mustJSONString(filepath.Join(dir, "x.readers.readers")) + `,"publication_policy":"replace_existing","max_output_bytes":"1048576","max_open_files":8}}}`
+	out := runSession(t, frame)
+	if !strings.Contains(out, `"code":"invalid_argument"`) ||
+		!strings.Contains(out, `"outcome":"not_started"`) ||
+		!strings.Contains(out, "destination must differ from the source database") {
+		t.Fatalf("output = %q, want the canonical source-refusal shape", out)
+	}
+	// The reserved source file is untouched.
+	got, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "coordination" {
+		t.Fatalf("source modified: %q", got)
+	}
+}

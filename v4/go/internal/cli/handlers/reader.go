@@ -816,6 +816,27 @@ func DatabaseMetadataGet(st *rpc.SessionState, params json.RawMessage) (any, *rp
 	if err != nil {
 		return nil, rpc.InvalidParamsError(err.Error())
 	}
+	// File-delivery preflight before the source opens: the v1 contract
+	// never modifies its input files, and a reserved-name source
+	// (which derives a sidecar component lexically) must be refused
+	// with the canonical invalid_argument/not_started shape; opening
+	// it first would relabel the same request as io/read_only_failure
+	// at the SDK open (export.go refuse-before-open parity; Rust
+	// reader.rs database_metadata parity, wave 19 round 19.8).
+	if mode, err := asString(delivery, "mode"); err == nil && mode == "file" {
+		destPath, err := asString(delivery, "path")
+		if err != nil {
+			return nil, rpc.InvalidParamsError(err.Error())
+		}
+		sourceInfo, _ := os.Stat(path)
+		var sidecarInfo os.FileInfo
+		if sidecarPath, ok := outputSidecarPath(path); ok {
+			sidecarInfo, _ = os.Stat(sidecarPath)
+		}
+		if herr := refuseOutputOverSource(destPath, path, sourceInfo, sidecarInfo); herr != nil {
+			return nil, herr
+		}
+	}
 	reader, herr := openReader(path, mode, "database source", st.Token())
 	if herr != nil {
 		return nil, herr

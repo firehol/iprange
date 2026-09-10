@@ -444,6 +444,30 @@ pub fn database_metadata(state: &mut SessionState, params: Value) -> Result<Valu
         .as_object()
         .ok_or_else(|| invalid("params must be an object"))?;
     let (path, mode) = source_value(&object["source"]).map_err(HandlerError::invalid_params)?;
+    // File-delivery preflight before the source opens: the v1 contract
+    // never modifies its input files, and a reserved-name source
+    // (which derives a sidecar component lexically) must be refused
+    // with the canonical invalid_argument/not_started shape; opening
+    // it first would relabel the same request as read_only_failure at
+    // the SDK open (export.rs refuse-before-open parity; Go
+    // DatabaseMetadataGet parity, wave 19 round 19.8).
+    if object["delivery"]["mode"].as_str() == Some("file") {
+        if let Some(destination) = object["delivery"]["path"].as_str() {
+            let main = output::file_identity(Path::new(&path)).unwrap_or_else(|| {
+                output::FileIdentity {
+                    path: std::path::PathBuf::from(&path),
+                    dev: 0,
+                    ino: 0,
+                }
+            });
+            let sidecar = output::sidecar_identity(Path::new(&path));
+            output::refuse_output_over_source(
+                Path::new(destination),
+                &main,
+                sidecar.as_ref(),
+            )?;
+        }
+    }
     let mut reader = open_reader(&path, &mode, &state.token())?;
     let source_identities = output::SourceIdentities {
         main: output::file_identity(Path::new(&path)).unwrap_or_else(|| {
@@ -1931,5 +1955,48 @@ mod open_failure_tests {
         assert_eq!(error.outcome, "read_only_failure");
         assert_ne!(error.code, "io");
         fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn database_metadata_file_delivery_refuses_reserved_name_source_preflight() {
+        // Wave 19 round 19.8 repair: database.metadata.get with a
+        // file delivery refuses a reserved-name source (x.readers)
+        // BEFORE the source opens, with the canonical
+        // invalid_argument/not_started source-refusal shape.  Opening
+        // first would relabel the same request as read_only_failure at
+        // the SDK open (export.rs refuse-before-open parity; Go
+        // DatabaseMetadataGet parity).
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-meta-reserved-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("x.readers");
+        fs::write(&source, b"coordination").unwrap();
+        let mut state = SessionState::default();
+        let error = database_metadata(
+            &mut state,
+            serde_json::json!({
+                "source": {"path": source.display().to_string(), "mode": "immutable"},
+                "delivery": {
+                    "mode": "file",
+                    "path": dir.join("x.readers.readers").display().to_string(),
+                    "publication_policy": "replace_existing",
+                    "max_output_bytes": "1048576",
+                    "max_open_files": 1,
+                }
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome),
+            ("invalid_argument", "not_started")
+        );
+        assert_eq!(
+            error.message,
+            "destination must differ from the source database"
+        );
+        // The reserved source file is untouched and no reader leaked.
+        assert_eq!(fs::read(&source).unwrap(), b"coordination");
+        let _ = fs::remove_dir_all(&dir);
     }
 }

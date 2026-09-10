@@ -2046,6 +2046,14 @@ func refusedSameSource() *rpc.HandlerError {
 // the remaining components are appended (Rust output.rs
 // canonical_absolute parity), so a not-yet-existing destination still
 // resolves through symlinked parents.
+//
+// The raw path is walked without up-front Clean: a ".." component is
+// resolved with symlink semantics by EvalSymlinks (POSIX: ".." pops
+// the symlink TARGET's parent, e.g. "/var/run/.." is "/" when
+// /var/run is a symlink to /run). Cleaning up front would fold ".."
+// against the symlink component lexically ("/var/run/.." -> "/var")
+// and the guard would miss a destination that IS the source (wave 19
+// round 19.8 parity finding).
 func canonicalAbsolute(path string) string {
 	absolute := path
 	if !filepath.IsAbs(path) {
@@ -2053,12 +2061,6 @@ func canonicalAbsolute(path string) string {
 			absolute = filepath.Join(cwd, path)
 		}
 	}
-	// Normalize decorations up front: with a trailing separator the
-	// EvalSymlinks failure walk would re-append the file name onto
-	// itself ("db.iprange/" -> "db.iprange/db.iprange"). Clean makes
-	// both engines agree on the spelling before the walk (Rust
-	// canonical_absolute lexical_clean_path parity).
-	absolute = filepath.Clean(absolute)
 	var missing []string
 	probe := absolute
 	for {
@@ -2069,12 +2071,36 @@ func canonicalAbsolute(path string) string {
 			}
 			return resolved
 		}
-		name := filepath.Base(probe)
-		parent := filepath.Dir(probe)
+		name, parent := pathLeaf(probe)
 		if name == "" || parent == probe {
-			return absolute
+			return filepath.Clean(absolute)
 		}
 		missing = append(missing, name)
 		probe = parent
 	}
+}
+
+// pathLeaf returns (last component, parent directory) with Rust Path
+// component semantics.  A trailing separator is not a component, so
+// "/a/b/" yields ("b", "/a").  The parent is computed RAW: Go's
+// filepath.Dir cleans its result, which would fold a ".." component
+// lexically ("/var/run/../x" -> "/var") and defeat the symlink-aware
+// walk of canonicalAbsolute.
+func pathLeaf(path string) (string, string) {
+	trimmed := path
+	for len(trimmed) > 1 && os.IsPathSeparator(trimmed[len(trimmed)-1]) {
+		trimmed = trimmed[:len(trimmed)-1]
+	}
+	if len(trimmed) <= 1 {
+		return "", path
+	}
+	name := filepath.Base(trimmed)
+	separator := len(trimmed) - 1
+	for separator > 0 && !os.IsPathSeparator(trimmed[separator]) {
+		separator--
+	}
+	if separator == 0 {
+		return name, string(os.PathSeparator)
+	}
+	return name, trimmed[:separator]
 }

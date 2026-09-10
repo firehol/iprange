@@ -181,9 +181,15 @@ pub(crate) fn refuse_output_over_source(
         .map(|sidecar_path| {
             let by_pathname =
                 canonical_absolute(destination) == canonical_absolute(&sidecar_path);
-            let twin = sidecar
-                .cloned()
-                .or_else(|| sidecar_identity(&sidecar_path));
+            // The file-identity arm uses the sidecar identity captured
+            // at reader open when one exists (a renamed sidecar keeps
+            // its identity) and falls back to a fresh stat at the
+            // sidecar PATH for ephemeral preflights: `sidecar_path` is
+            // already the derived `<main>.readers` component, so the
+            // fallback stats that exact path (a second `.readers`
+            // suffix would derive `<main>.readers.readers` and wrongly
+            // refuse a distinct destination; wave 19 round 19.8).
+            let twin = sidecar.cloned().or_else(|| file_identity(&sidecar_path));
             let by_file = destination_identity
                 .as_ref()
                 .zip(twin.as_ref())
@@ -315,6 +321,26 @@ fn file_error(error: std::io::Error, operation: &str) -> HandlerError {
         HandlerError::new("name_exists", "read_only_failure", message)
     } else {
         HandlerError::new("io", "read_only_failure", message)
+    }
+}
+
+#[cfg(test)]
+// Symlink creation is platform-specific; tests that need it skip on
+// hosts without symlink permission.  Defined at file scope because
+// the same-file guard tests live at top level (the pre-existing
+// organization of this test module).
+fn make_symlink(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(target, link)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (target, link);
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "symlinks unsupported on this platform",
+        ))
     }
 }
 
@@ -538,5 +564,95 @@ mod tests {
             error.message,
             "destination must differ from the source database"
         );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn canonical_absolute_resolves_parent_dotdot_through_symlinked_ancestors() {
+        // Wave 19 round 19.8 parity with the Go engine: ".." must be
+        // resolved with symlink semantics against the deepest existing
+        // ancestor ("<link>/.." pops the link TARGET's parent), not
+        // folded lexically before symlinks are followed, so a
+        // decorated spelling of the source still compares equal and
+        // the same-source guard refuses it.
+        let outer = std::env::temp_dir().join(format!(
+            "iprange-canon-dotdot-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let deeper = std::env::temp_dir().join(format!(
+            "iprange-canon-dotdot-target-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&outer).unwrap();
+        fs::create_dir_all(&deeper).unwrap();
+        if make_symlink(&deeper, &outer.join("link")).is_err() {
+            let _ = fs::remove_dir_all(&outer);
+            let _ = fs::remove_dir_all(&deeper);
+            return; // platforms without symlink permission cannot test
+        }
+        let source = deeper.join("db.iprange");
+        fs::write(&source, b"source").unwrap();
+        let spelling = outer
+            .join("link")
+            .join("..")
+            .join(deeper.file_name().unwrap())
+            .join("db.iprange");
+        assert_eq!(
+            canonical_absolute(&spelling),
+            canonical_absolute(&source),
+            "spelling {}",
+            spelling.display()
+        );
+        let identity = file_identity(&source).expect("identity");
+        let error = refuse_output_over_source(&spelling, &identity, None).unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome, error.message.as_str()),
+            (
+                "invalid_argument",
+                "not_started",
+                "destination must differ from the source database",
+            )
+        );
+        let _ = fs::remove_dir_all(&outer);
+        let _ = fs::remove_dir_all(&deeper);
+    }
+
+    #[test]
+    fn refuse_output_over_source_sidecar_fallback_stats_the_derived_path() {
+        // Wave 19 round 19.8 repair: the ephemeral sidecar fallback
+        // stats the already-derived <main>.readers path directly.  A
+        // second ".readers" suffix would derive <main>.readers.readers
+        // and wrongly refuse a distinct destination that carries that
+        // double-suffixed name.
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-refuse-doublesuffix-{}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("db.iprange");
+        fs::write(&source, b"source").unwrap();
+        let identity = file_identity(&source).expect("identity");
+        // The real sidecar (<main>.readers) does not exist; a distinct
+        // file carries the double-suffixed name.
+        let double = dir.join("db.iprange.readers.readers");
+        fs::write(&double, b"distinct").unwrap();
+        assert!(
+            refuse_output_over_source(&double, &identity, None).is_ok(),
+            "distinct double-suffixed destination must be accepted"
+        );
+        // The real sidecar pathname is still refused lexically.
+        let sidecar = dir.join("db.iprange.readers");
+        fs::write(&sidecar, b"readers").unwrap();
+        let sidecar_id = file_identity(&sidecar).expect("sidecar identity");
+        let error = refuse_output_over_source(&sidecar, &identity, Some(&sidecar_id)).unwrap_err();
+        assert_eq!((error.code, error.outcome), ("invalid_argument", "not_started"));
         let _ = fs::remove_dir_all(&dir);
     }
