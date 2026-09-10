@@ -1106,3 +1106,133 @@ func TestSessionDatabaseMetadataGetReservedNamePreflight(t *testing.T) {
 		t.Fatalf("source modified: %q", got)
 	}
 }
+
+// TestCanonicalAbsoluteRelativeSymlinkDotDot pins the wave-19.9
+// security repair: RELATIVE spellings are cwd-anchored with a raw join
+// (Rust cwd.join parity), so a ".." component is still resolved with
+// symlink semantics.  filepath.Join(cwd, path) used to clean ".."
+// before the walk, folding relative symlink-".." destinations the same
+// way the absolute class was folded in wave 19.8 (a live destructive
+// follow-on wrote metadata text over the source's coordination-sidecar
+// pathname).
+func TestCanonicalAbsoluteRelativeSymlinkDotDot(t *testing.T) {
+	dir := t.TempDir()
+	holder := filepath.Join(dir, "holder")
+	deeper := filepath.Join(dir, "deeper")
+	if err := os.MkdirAll(holder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(deeper, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(deeper, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(deeper, filepath.Join(holder, "link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	chdirTest(t, dir)
+	// holder/link -> dir/deeper; ".." pops the TARGET's parent, so
+	// "holder/link/../deeper/db.bin" IS the source.  A lexical fold
+	// yields dir/holder/deeper/db.bin (non-existent).
+	spelling := filepath.FromSlash("holder/link/../deeper/db.bin")
+	if got, want := canonicalAbsolute(spelling), canonicalAbsolute(source); got != want {
+		t.Fatalf("canonicalAbsolute(%q) = %q, want %q", spelling, got, want)
+	}
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	herr := refuseOutputOverSource(spelling, source, sourceInfo, nil)
+	if herr == nil {
+		t.Fatal("relative symlink-.. spelling of the source accepted")
+	}
+	if herr.Code != "invalid_argument" || herr.Outcome != "not_started" {
+		t.Fatalf("code=%q outcome=%q", herr.Code, herr.Outcome)
+	}
+	// Mirror class: a relative ".." that pops the TARGET out of the
+	// source directory must NOT be refused (Go used to false-refuse
+	// it when the cleaned form coincided with the source).
+	outer := filepath.Join(dir, "outer")
+	if err := os.MkdirAll(outer, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(outer, "a", "b")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(dir, "alias")
+	if err := os.Symlink(target, alias); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(dir, "other.bin")
+	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// alias/.. resolves to outer/a, so "alias/../other.bin" is
+	// outer/a/other.bin, NOT the file in dir; the cleaned spelling
+	// (dir/other.bin) would false-match the source directory.
+	accepted := filepath.FromSlash("alias/../other.bin")
+	if got, want := canonicalAbsolute(accepted), filepath.Join(outer, "a", "other.bin"); got != want {
+		t.Fatalf("mirror canonicalAbsolute(%q) = %q, want %q", accepted, got, want)
+	}
+	if herr := refuseOutputOverSource(accepted, other, nil, nil); herr != nil {
+		t.Fatalf("mirror-class distinct destination refused: %v", herr)
+	}
+}
+
+// TestSessionMetadataGetRelativeSymlinkDotDotRefusesSidecar pins the
+// wave-19.9 security repair at the session level with the exact live
+// trigger: an immutable source and a RELATIVE symlink-".." spelling of
+// its derived coordination-sidecar pathname.  Pre-fix Go accepted the
+// delivery and wrote the metadata text AT the sidecar pathname
+// (destroying the database's readability); Rust refused it.
+func TestSessionMetadataGetRelativeSymlinkDotDotRefusesSidecar(t *testing.T) {
+	dir := t.TempDir()
+	source := newImmutableFeed(t, dir, "db.iprange", []byte("mymetadata"))
+	holder := filepath.Join(dir, "outer")
+	if err := os.MkdirAll(holder, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(dir, filepath.Join(holder, "link")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	sidecar := source + ".readers"
+	if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+		t.Fatalf("sidecar must not exist before the request: %v", err)
+	}
+	chdirTest(t, dir)
+	dest := filepath.FromSlash("outer/link/../" + filepath.Base(dir) + "/db.iprange.readers")
+	frame := `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.database.metadata.get","params":{"source":{"path":` +
+		mustJSONString(source) + `,"mode":"immutable"},"delivery":{"mode":"file","path":` +
+		mustJSONString(dest) + `,"publication_policy":"replace_existing","max_output_bytes":"1048576","max_open_files":8}}}`
+	out := runSession(t, frame)
+	if !strings.Contains(out, `"code":"invalid_argument"`) ||
+		!strings.Contains(out, `"outcome":"not_started"`) ||
+		!strings.Contains(out, "destination must differ from the source database") {
+		t.Fatalf("output = %q, want the canonical source-refusal shape", out)
+	}
+	if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+		t.Fatalf("sidecar was created by the refused request: %v", err)
+	}
+}
+
+// chdirTest changes the process working directory for the test and
+// restores it on cleanup; relative-spelling tests cannot use
+// t.Chdir in this module (go.mod targets go1.23).
+func chdirTest(t *testing.T, dir string) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Errorf("restore cwd: %v", err)
+		}
+	})
+}
