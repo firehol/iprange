@@ -1,16 +1,16 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The current evidence is regenerated after the wave-19.8 repair
-(symlink-aware same-source canonicalization, metadata.get preflight
-before open, single-suffix sidecar fallback, strict probe error
-shapes, round tally correction; SOW-0028 "Wave 19 round 19.8"): the
-record HEAD is the wave's closing evidence commit after `94e2c778`;
-both products were rebuilt at `94e2c778`, with the Linux toolchain
-go1.27.0 / rustc 1.91.1 stable (Go product and worker rebuilt with
-`-buildvcs=false`; Rust product, worker, and fixture rebuilt with
-`cargo build --release --all-features`).
+The current evidence is regenerated after the wave-19.9 repair
+(relative cwd-anchored spellings join raw in the same-source guard,
+closing the relative symlink-".." class the wave-19.8 absolute-path
+repair left open; security role wave-19.9 P1; SOW-0028 "Wave 19 round
+19.9"): the record HEAD is the wave's closing evidence commit after
+`9f9318f6`; both products were rebuilt at `9f9318f6`, with the Linux
+toolchain go1.27.0 / rustc 1.91.1 stable (Go product and worker
+rebuilt with `-buildvcs=false`; Rust product, worker, and fixture
+rebuilt with `cargo build --release --all-features`).
 
-Re-qualification at the wave-19.8 Linux identities: matrices rust
+Re-qualification at the wave-19.9 Linux identities: matrices rust
 38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate skips,
 go_to_rust 14 PASS + 24 skips; crash positive 16/16 both directions
 and the /bin/false negative control fails as designed (rc 1);
@@ -22,7 +22,9 @@ per case — invalid_argument/not_started with the exact message,
 checked separately from source integrity and re-openability —
 renamed-source handle refusals, sidecar-pathname refusals for
 metadata.get and export, distinct double-suffixed sidecar-name
-acceptance, symlinked-parent ".." spelling, 70k-member error
+acceptance, symlinked-parent ".." spellings in absolute AND relative
+form (the relative case targets the source's non-existent sidecar
+pathname, where only the pathname arm can refuse), 70k-member error
 identity: params-level unknown member -32602 with the truncation
 marker at 4,182 B / 4,188 B objects, decorated-spelling parity,
 oversized-frame close path, and a probe self-test that rejects
@@ -32,18 +34,18 @@ probe).  The sidecar-guard regression
 tests (session and export level, including the renamed-sidecar arm,
 both languages; 10/10 repeat runs) PASS in the Go suite (24 packages)
 and the Rust workspace.  Windows housekeeping re-qualified natively
-on the authorized Windows validation host at `94e2c778` (go1.26.5
+on the authorized Windows validation host at `9f9318f6` (go1.26.5
 windows/amd64, rustc 1.97.1, native Windows Python 3.14.0
 embeddable, clean tree): 2/2 PASS (`windows-housekeeping.json`,
 schema v3).
 
-Linux reports record the product identities `ef4a8575...` (go) and
+Linux reports record the product identities `3497e807...` (go) and
 `8f0a7610...` (rust), workers `4f2eb063...` (go) / `4c17669d...`
 (rust), fixture `9b40420e...` (all staged in
 `.local/shared/binaries/SHASUMS.txt`, sha256sum -c OK).  The Windows
-housekeeping report records the Windows-host products `d3c6e574...`
-(go) and `56cd7f60...` (rust); the Windows Go worker is
-`945cc091...` (build provenance `94e2c778`, tree_clean).
+housekeeping report records the Windows-host products `c64e57c9...`
+(go) and `55d60504...` (rust); the Windows Go worker is
+`d4bf3783...` (build provenance `9f9318f6`, tree_clean).
 
 ---
 

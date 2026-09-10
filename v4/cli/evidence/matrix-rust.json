@@ -149,7 +149,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "ef4a8575b8631061d5592aafd834e13ae5cbddfe5da8d788e7f6fc6857256f96"
+      "sha256": "3497e80753fd1337de0dd8d97239f48f2e1bd7cd3987d89212abd94624f909d9"
     },
     "rust": {
       "available": true,
@@ -2016,7 +2016,7 @@
     "--fixture-tool",
     "/tmp/qualsvc/ev27/bin/rust/v4-fixture",
     "--work-dir",
-    "/tmp/qualsvc/ev27/w/rust2",
+    "/tmp/qualsvc/ev27/w/r9-rust",
     "--allow-skips",
     "--json-report",
     "/tmp/qualsvc/ev27/reports/matrix-rust.json"
@@ -2123,118 +2123,118 @@
   },
   "frame_sizes": {
     "iprange.v1.algebra.compare": {
-      "max_request_bytes": 427,
+      "max_request_bytes": 429,
       "max_response_bytes": 338
     },
     "iprange.v1.algebra.count": {
-      "max_request_bytes": 577,
+      "max_request_bytes": 581,
       "max_response_bytes": 210
     },
     "iprange.v1.algebra.publish": {
-      "max_request_bytes": 758,
+      "max_request_bytes": 762,
       "max_response_bytes": 1428
     },
     "iprange.v1.cancel": {
       "max_request_bytes": 101
     },
     "iprange.v1.commit.resolve": {
-      "max_request_bytes": 530,
+      "max_request_bytes": 532,
       "max_response_bytes": 474
     },
     "iprange.v1.current.publish": {
-      "max_request_bytes": 708,
+      "max_request_bytes": 712,
       "max_response_bytes": 1276
     },
     "iprange.v1.database.create": {
-      "max_request_bytes": 325,
+      "max_request_bytes": 327,
       "max_response_bytes": 704
     },
     "iprange.v1.database.create.resolve": {
-      "max_request_bytes": 814,
+      "max_request_bytes": 816,
       "max_response_bytes": 192
     },
     "iprange.v1.database.info": {
-      "max_request_bytes": 223,
+      "max_request_bytes": 225,
       "max_response_bytes": 514
     },
     "iprange.v1.database.initialize_live": {
-      "max_request_bytes": 206,
+      "max_request_bytes": 208,
       "max_response_bytes": 668
     },
     "iprange.v1.database.live_residue.resolve": {
-      "max_request_bytes": 218,
+      "max_request_bytes": 220,
       "max_response_bytes": 456
     },
     "iprange.v1.database.live_transition.resolve": {
-      "max_request_bytes": 748,
+      "max_request_bytes": 750,
       "max_response_bytes": 673
     },
     "iprange.v1.database.metadata.get": {
-      "max_request_bytes": 430,
-      "max_response_bytes": 326
+      "max_request_bytes": 434,
+      "max_response_bytes": 328
     },
     "iprange.v1.database.metadata.replace": {
-      "max_request_bytes": 395,
+      "max_request_bytes": 397,
       "max_response_bytes": 547
     },
     "iprange.v1.database.reclaim": {
-      "max_request_bytes": 351,
+      "max_request_bytes": 353,
       "max_response_bytes": 590
     },
     "iprange.v1.database.reset_live": {
-      "max_request_bytes": 224,
+      "max_request_bytes": 226,
       "max_response_bytes": 752
     },
     "iprange.v1.direct.replace": {
-      "max_request_bytes": 473,
+      "max_request_bytes": 477,
       "max_response_bytes": 1071
     },
     "iprange.v1.export": {
-      "max_request_bytes": 458,
-      "max_response_bytes": 344
+      "max_request_bytes": 462,
+      "max_response_bytes": 346
     },
     "iprange.v1.feeds.create": {
-      "max_request_bytes": 514,
+      "max_request_bytes": 518,
       "max_response_bytes": 1131
     },
     "iprange.v1.feeds.delete": {
-      "max_request_bytes": 334,
+      "max_request_bytes": 336,
       "max_response_bytes": 543
     },
     "iprange.v1.feeds.import": {
-      "max_request_bytes": 433,
+      "max_request_bytes": 437,
       "max_response_bytes": 1063
     },
     "iprange.v1.feeds.rename": {
-      "max_request_bytes": 382,
+      "max_request_bytes": 384,
       "max_response_bytes": 541
     },
     "iprange.v1.feeds.replace": {
-      "max_request_bytes": 507,
+      "max_request_bytes": 511,
       "max_response_bytes": 1065
     },
     "iprange.v1.history.project": {
-      "max_request_bytes": 11645,
+      "max_request_bytes": 11649,
       "max_response_bytes": 1383
     },
     "iprange.v1.join.direct": {
-      "max_request_bytes": 659,
-      "max_response_bytes": 617
+      "max_request_bytes": 665,
+      "max_response_bytes": 619
     },
     "iprange.v1.join.membership": {
-      "max_request_bytes": 752,
-      "max_response_bytes": 642
+      "max_request_bytes": 758,
+      "max_response_bytes": 644
     },
     "iprange.v1.maintenance.list": {
-      "max_request_bytes": 476,
-      "max_response_bytes": 415
+      "max_request_bytes": 480,
+      "max_response_bytes": 417
     },
     "iprange.v1.maintenance.remove": {
       "max_request_bytes": 199,
       "max_response_bytes": 165
     },
     "iprange.v1.publication.inspect": {
-      "max_request_bytes": 174,
+      "max_request_bytes": 176,
       "max_response_bytes": 193
     },
     "iprange.v1.publication.residue.remove": {
@@ -2242,20 +2242,20 @@
       "max_response_bytes": 202
     },
     "iprange.v1.publication.resolve": {
-      "max_request_bytes": 1304,
+      "max_request_bytes": 1306,
       "max_response_bytes": 1187
     },
     "iprange.v1.query.cardinalities": {
-      "max_request_bytes": 534,
-      "max_response_bytes": 411
+      "max_request_bytes": 538,
+      "max_response_bytes": 413
     },
     "iprange.v1.query.matching_feeds": {
-      "max_request_bytes": 524,
-      "max_response_bytes": 325
+      "max_request_bytes": 528,
+      "max_response_bytes": 327
     },
     "iprange.v1.query.overlaps": {
-      "max_request_bytes": 540,
-      "max_response_bytes": 474
+      "max_request_bytes": 544,
+      "max_response_bytes": 476
     },
     "iprange.v1.reader.close": {
       "max_request_bytes": 145,
@@ -2290,7 +2290,7 @@
       "max_response_bytes": 155
     },
     "iprange.v1.reader.open": {
-      "max_request_bytes": 226,
+      "max_request_bytes": 228,
       "max_response_bytes": 504
     },
     "iprange.v1.reader.ranges.close": {
@@ -2306,23 +2306,23 @@
       "max_response_bytes": 193
     },
     "iprange.v1.recover": {
-      "max_request_bytes": 897,
+      "max_request_bytes": 903,
       "max_response_bytes": 1801
     },
     "iprange.v1.recovery.inspect": {
-      "max_request_bytes": 317,
+      "max_request_bytes": 319,
       "max_response_bytes": 537
     },
     "iprange.v1.retention.first_seen.refresh": {
-      "max_request_bytes": 734,
-      "max_response_bytes": 1367
+      "max_request_bytes": 740,
+      "max_response_bytes": 1369
     },
     "iprange.v1.retention.last_seen.refresh": {
-      "max_request_bytes": 520,
+      "max_request_bytes": 524,
       "max_response_bytes": 1084
     },
     "iprange.v1.snapshot": {
-      "max_request_bytes": 429,
+      "max_request_bytes": 433,
       "max_response_bytes": 1181
     },
     "iprange.v1.system.describe": {
@@ -2330,8 +2330,8 @@
       "max_response_bytes": 2277
     },
     "iprange.v1.validate": {
-      "max_request_bytes": 576,
-      "max_response_bytes": 801
+      "max_request_bytes": 580,
+      "max_response_bytes": 803
     }
   },
   "matrix": "rust",

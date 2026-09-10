@@ -734,19 +734,22 @@ housekeeping 2/2).  Evidence regenerated and committed at
 `e1350adb`; roles re-anchored and astra re-run at that revision.
 
 
-Wave-19.8 state (2026-09-11): the fresh astra control session
-(turn 18) FAILed with five P2 findings (symlink-.. canonicalization,
-Rust sidecar fallback double suffix, metadata.get guard order,
-loose probe error shapes, round tally mislabel), all repaired and
-re-qualified at `94e2c778` plus the closing evidence commit: full
-battery green (matrices 38/38 + 14/24 mixed, crash 16/16, resource
-8/8, golden 55, sensitivity 14, kind gate PASS, probe 39/39,
-Windows housekeeping 2/2 natively); Linux identities Go
-`ef4a8575…`/worker `4f2eb063…`, Rust `8f0a7610…`/worker
-`4c17669d…`/fixture `9b40420e…`, Windows products
-`d3c6e574…`/`56cd7f60…`/go worker `945cc091…`; the seven role
-reviews are re-anchored at the final HEAD; astra turn 18 remains
-the milestone-4 closure gate (no commit after its PASS).
+Wave-19.9 state (2026-09-11): the wave-19.8 role round passed six
+roles and the security role FAILed with one P1 — Go joined relative
+spellings with filepath.Join, which folded a ".." BEFORE the symlink
+walk and re-opened the wave-19.8 F1 class for relative destinations
+(a live probe wrote metadata text over the source's coordination
+sidecar, destroying its readability; Rust refused).  Repaired at
+`9f9318f6` (raw cwd join) with committing detecting tests (unit +
+session + probe e2e) and re-qualified: full battery green (matrices
+38/38 + 14/24 mixed, crash 16/16, resource 8/8, golden 55,
+sensitivity 14, kind gate PASS, probe 39/39, Windows housekeeping
+2/2 natively); Linux identities Go `3497e807…`/worker
+`4f2eb063…`, Rust `8f0a7610…`/worker `4c17669d…`/fixture
+`9b40420e…`, Windows products `c64e57c9…`/`55d60504…`/go worker
+`d4bf3783…`; the seven role reviews are re-anchored at the final
+HEAD; astra turn 18 remains the milestone-4 closure gate (no commit
+after its PASS).
 
 ## Requirements
 
@@ -10639,6 +10642,79 @@ The final committed identities of this round are Go product
 worker `4c17669d…` / fixture `9b40420e…` (Linux) and Windows-host
 products `d3c6e574…` (go) / `56cd7f60…` (rust) / go worker
 `945cc091…` built at `94e2c778` tree_clean; SHASUMS.txt (8/8) and
+the evidence README identity block match the closing evidence
+commit.  The seven role reviews are re-anchored at the final HEAD;
+astra turn 18 (the same review session) remains the milestone-4
+closure gate.
+
+#### Wave 19 round 19.9 (2026-09-11) — security-role P1: relative cwd-anchored spellings folded before the symlink walk (re-opened the wave-19.8 F1 class), repaired and re-qualified
+
+The wave-19.8 role round at `54016b1e` returned six PASSes
+(operations, parity, portability, performance, tester, glm) and one
+security FAIL (P1):
+
+- Security P1 — Go `canonicalAbsolute` absolutized relative
+  destinations with `filepath.Join(cwd, path)`, which CLEANS `..`
+  before the symlink walk; for a RELATIVE symlink-parent spelling
+  this re-opened the wave-19.8 F1 class exactly: with an immutable
+  source `<work>/db.iprange`, cwd `<work>`, and `outer/link` a
+  symlink to `<work>`, the metadata.get file delivery to the
+  relative destination `outer/link/../<base>/db.iprange.readers`
+  folded to `<work>/outer/<base>/db.iprange.readers` (non-existent),
+  the guard missed it, and the delivery wrote the 23-byte metadata
+  text AT the kernel-resolved sidecar pathname `<work>/db.iprange.readers`
+  — every later open of the database then failed in both engines
+  ("external sidecar present; immutable open of a live database is
+  refused").  Rust (`cwd.join(path)`, no cleaning) refused the same
+  frame with the canonical `invalid_argument/not_started`, so the
+  wire semantics diverged and Go destroyed the source's readability,
+  the exact outcome the guard exists to prevent.  The committed
+  wave-19.8 parity tests used only absolute spellings, so the
+  relative class passed every committed gate.  The mirror class also
+  existed: a relative ".." popping the symlink TARGET out of the
+  source directory was false-refused in Go while Rust accepted.
+
+Repaired in product commit `9f9318f6`:
+
+1. Go `canonicalAbsolute` now joins the working directory RAW
+   (`rawAbsoluteJoin`: base + separator + path, no cleaning),
+   matching Rust `cwd.join(path)`; the existing raw-path
+   EvalSymlinks walk then resolves ".." with symlink semantics for
+   relative spellings exactly as for absolute ones.
+2. Detecting tests: Go
+   `TestCanonicalAbsoluteRelativeSymlinkDotDot` (unit: relative
+   symlink-".." spelling equals the source and is refused, plus the
+   mirror-class acceptance) and
+   `TestSessionMetadataGetRelativeSymlinkDotDotRefusesSidecar`
+   (session level: the exact destructive trigger is refused with the
+   canonical shape and no sidecar file appears); Rust behavior was
+   already correct and is pinned by the live byte-identical probes.
+3. The operations wave-19 probe gained the relative sidecar-spelling
+   e2e case (metadata.get file delivery to the relative
+   symlink-".." spelling of the source's NON-EXISTENT sidecar
+   pathname; only the pathname arm can refuse it, so a fold is
+   observed as a created sidecar and a failed reopen).  The probe
+   fails on the pre-fix Go binary (delivery accepted, sidecar
+   created) and is 39/39 OK at the repaired binaries.
+
+Battery at the wave-19.9 final identities: Go suite 24 packages PASS
+(including the new relative-spelling tests); Rust workspace PASS;
+matrices rust 38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate
+skips, go_to_rust 14 PASS + 24 skips; crash positive 16/16 both
+directions and the /bin/false negative control fails as designed
+(rc 1); resource proofs 8/8 and self-test PASS; golden exchanges
+55 / 38 case files; sensitivity gate 14/14; kind-coverage gate PASS
+with all self-test controls; operations probe 39/39.  Windows
+housekeeping re-qualified natively on the authorized Windows
+validation host at `9f9318f6` (go1.26.5 windows/amd64, rustc 1.97.1,
+native Windows Python 3.14.0 embeddable, clean tree): 2/2 PASS
+(`windows-housekeeping.json`, schema v3).
+
+The final committed identities of this round are Go product
+`3497e807…` / worker `4f2eb063…`, Rust product `8f0a7610…` /
+worker `4c17669d…` / fixture `9b40420e…` (Linux) and Windows-host
+products `c64e57c9…` (go) / `55d60504…` (rust) / go worker
+`d4bf3783…` built at `9f9318f6` tree_clean; SHASUMS.txt (8/8) and
 the evidence README identity block match the closing evidence
 commit.  The seven role reviews are re-anchored at the final HEAD;
 astra turn 18 (the same review session) remains the milestone-4
