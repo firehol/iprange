@@ -11847,7 +11847,9 @@ worker `ee213ca1eb...`, rust worker `d7a599886e...`, rust fixture
 `24401226...` unchanged in both platforms.
 
 The milestone stays gated on the re-anchor PASS of every available
-role at `8a386af4` and the astra same-session review at that revision.
+role at the wave-19.17 final revision and the astra same-session
+review at that revision (final revision: `6d917bf6`, see the
+security follow-up below).
 #### Wave 19 round 19.17 security follow-up (2026-09-11) — GLOBALROOT device-namespace P1
 
 The security role's re-anchor review at `8a386af4` found a fourth
@@ -11915,5 +11917,5 @@ reproduction from the identical source path, toolchain, and
 environment.
 
 The milestone stays gated on the re-anchor PASS of every available
-role at `e3362716` and the astra same-session review at that
-revision.
+role at the final wave-19.17 revision `6d917bf6` (pushed,
+origin/master) and the astra same-session review at that revision.
