@@ -133,9 +133,12 @@ def validate_success_response(response, method, destination):
         for key in OUTPUT_FACTS:
             if key not in output:
                 return False, "output lacks %r" % key
-        if output.get("path") != os.path.abspath(destination):
-            return False, "output.path %r != %r" % (
-                output.get("path"), os.path.abspath(destination))
+        # The products publish the path fact as either the caller
+        # spelling or its absolute form; both identify the delivered
+        # file.
+        if output.get("path") not in (destination, os.path.abspath(destination)):
+            return False, "output.path %r not %r nor %r" % (
+                output.get("path"), destination, os.path.abspath(destination))
         if not os.path.exists(destination):
             return False, "output file %r missing" % destination
         actual = hashlib.sha256(open(destination, "rb").read()).hexdigest()
@@ -153,13 +156,14 @@ def validate_success_response(response, method, destination):
 
 def product_all_ok(product):
     """Aggregate verdict of one product record: every case ok plus
-    the source-integrity, sidecar-absence, and reopening facts."""
+    the source-integrity, sidecar-absence, and reopening facts (all
+    stored inside the product cases record)."""
     cases = product.get("cases", {})
     return (
         all(v.get("ok", True) for k, v in cases.items() if isinstance(v, dict))
-        and product.get("source_unchanged", False)
-        and product.get("sidecar_absent_after", False)
-        and product.get("reopen_allowed", False)
+        and cases.get("source_unchanged", False)
+        and cases.get("sidecar_absent_after", False)
+        and cases.get("reopen_allowed", False)
     )
 
 
@@ -218,6 +222,30 @@ def selftest():
                not validate_success_response(
                    {"result": {"method": METHOD, "present": False}},
                    METHOD, dest)[0])
+
+    # guard_cases must build on both platform shapes without
+    # crashing and with the platform-appropriate case mix (wave 19
+    # round 19.14 regression: conditional None entries once made the
+    # POSIX negative control crash with an unpacking TypeError).
+    posix_cases = guard_cases("/tmp/guard-work")
+    win_cases = guard_cases("C:\\guard-work")
+    expect("posix cases non-empty", len(posix_cases) > 0)
+    expect("win cases non-empty", len(win_cases) > 0)
+    expect("every case is a triple",
+           all(len(c) == 3 for c in posix_cases + win_cases))
+    names_posix = {c[0] for c in posix_cases}
+    names_win = {c[0] for c in win_cases}
+    expect("posix has no drive-root case", "drive_root_allowed" not in names_posix)
+    expect("win has drive-root case", "drive_root_allowed" in names_win)
+    expect("posix has no drive-relative case", "drive_relative" not in names_posix)
+    expect("win has drive-relative case", "drive_relative" in names_win)
+    # The verbatim (extended-length) spelling is a Windows name family:
+    # on POSIX it is a relative path whose parents never exist, so the
+    # delivery cannot be exercised (wave 19 round 19.14).
+    expect("win covers the verbatim sidecar",
+           "verbatim_sidecar" in names_win)
+    expect("posix skips the verbatim sidecar",
+           "verbatim_sidecar" not in names_posix)
     return ok
 
 
@@ -248,14 +276,15 @@ def guard_cases(work):
     )
     candidates += [
         ("absolute_upper", os.path.join(work, "DB.IPRANGE.READERS")),
-        (
-            "rooted_sidecar",
-            os.path.sep + work[len(drive):].lstrip("\\/")
-            + os.path.sep + "db.iprange.readers"
-            if drive
-            else None,  # no rooted-without-volume spelling on POSIX
-        ),
-    ] + dot_space + [
+    ]
+    if drive:
+        # rooted-without-volume spelling exists only on Windows; on
+        # POSIX the same string is a plain relative file name.
+        candidates.append(
+            ("rooted_sidecar",
+             os.path.sep + work[len(drive):].lstrip("\\/")
+             + os.path.sep + "db.iprange.readers"))
+    candidates += dot_space + [
         ("non_ascii", os.path.join(work, "DB_\u00c4.IPRANGE.READERS")),
         # NTFS upcase-name equivalence of the Greek sigma class (wave
         # 19 round 19.14 astra P1): "\u03c3" spells the absent sidecar
@@ -266,17 +295,23 @@ def guard_cases(work):
         # fold.
         ("ntfs_sigma", os.path.join(work, "A\u03c31.iprange.readers")),
         ("ntfs_final_sigma", os.path.join(work, "A\u03c21.iprange.readers")),
+    ]
+    if drive:
         # Extended-length spelling (wave 19 round 19.14 astra P1): the
         # verbatim name of the absent sidecar, refused canonically.
-        ("verbatim_sidecar", "\\\\?\\" + work + "\\db.iprange.readers"),
+        # Windows-only: on POSIX the spelling is a relative path whose
+        # parents never exist, so the delivery cannot be exercised;
+        # the GOOS-gated no-strip behavior is pinned by both engines'
+        # unit tables.
+        candidates.append(
+            ("verbatim_sidecar", "\\\\?\\" + work + "\\db.iprange.readers"))
         # Distinct drive-root control with the SAME basename as the
         # absent sidecar (wave 19 round 19.14 astra P1): with the
         # source in the per-drive working directory,
         # "\db.iprange.readers" names the distinct C:\db.iprange.readers
         # and must be published, not refused as the source's sidecar.
-        ("drive_root_allowed", "\\db.iprange.readers") if drive else None,
-        ("control_allowed", os.path.join(work, "meta.txt")),
-    ]
+        candidates.append(("drive_root_allowed", "\\db.iprange.readers"))
+    candidates.append(("control_allowed", os.path.join(work, "meta.txt")))
     source_base = {
         "non_ascii": "db_\u00e4.iprange",
         "ntfs_sigma": "A\u03a31.iprange",
@@ -285,7 +320,6 @@ def guard_cases(work):
     return [
         (name, source_base.get(name, "db.iprange"), path)
         for name, path in candidates
-        if path is not None
     ]
 
 
@@ -464,7 +498,12 @@ def main():
         (args.rust, "rust"),
         (args.go, "go"),
     ):
-        work = os.path.join(args.work, label)
+        # Normalize the working directory to the native separator
+        # spelling: the extended-length cases build "\\?\<work>\..."
+        # destinations and the Win32 verbatim prefix requires
+        # backslashes throughout (forward slashes fail the create
+        # with error 123).
+        work = os.path.normpath(os.path.join(args.work, label))
         os.makedirs(work, exist_ok=True)
         product = run_product(binary, label, work, args.fixture, provenance)
         product["all_ok"] = product_all_ok(product)
