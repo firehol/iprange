@@ -418,6 +418,7 @@ def run_product(binary, label, work, fixture, provenance):
                 "destination": destination,
                 "refused": refused,
                 "error_code": error_code,
+                "error_outcome": error_outcome,
                 "error_message": error_message,
                 "expected_refused": expected,
                 "ok": refused == expected and (
