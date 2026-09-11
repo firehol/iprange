@@ -2386,22 +2386,32 @@ func canonicalSplitPath(path string) (ancestor string, suffix []string, ok bool)
 		// Namespace families that Go's EvalSymlinks cannot walk but
 		// the kernel resolves through ordinary file APIs (the NT
 		// device-root namespace \\?\\GLOBALROOT\\Device\\
-		// HarddiskVolumeN\\... and its \\.\\ twin): the symlink
-		// walk fails at the intermediate \\Device component while
-		// the publication path opens the same real file through the
-		// caller spelling.  os.Stat proves the probe is the deepest
-		// existing ancestor and gives the kernel identity the
-		// same-ancestor arm compares, so the raw existing ancestor
-		// is authoritative (wave-19.17 security P1: Go delivered
-		// metadata over the live sidecar through the GLOBALROOT
-		// spelling while Rust refused it).
+		// HarddiskVolumeN\\... and its \\.\\ and \\??\\ twins):
+		// the symlink walk fails at the intermediate \\Device
+		// component while the publication path opens the same real
+		// file through the caller spelling.  os.Stat proves the
+		// probe is the deepest existing ancestor and gives the
+		// kernel identity the same-ancestor arm compares, so the raw
+		// existing ancestor is authoritative (wave-19.17 security P1:
+		// Go delivered metadata over the live sidecar through the
+		// GLOBALROOT spelling while Rust refused it).  The fallback
+		// is gated to the GLOBALROOT family because a raw-ancestor
+		// shortcut in any other class would skip the symlink-aware
+		// ".." resolution the walk performs (the wave-19.17
+		// portability P1: the relative symlink-plus-".." class
+		// regressed TestCanonicalAbsoluteRelativeSymlinkDotDot).
 		if runtime.GOOS == "windows" {
-			if _, statErr := os.Stat(probe); statErr == nil {
-				suffix = make([]string, len(missing))
-				for i, name := range missing {
-					suffix[len(missing)-1-i] = name
+			globalroot := strings.HasPrefix(probe, `\\?\GLOBALROOT`) ||
+				strings.HasPrefix(probe, `\\.\GLOBALROOT`) ||
+				strings.HasPrefix(probe, `\??\GLOBALROOT`)
+			if globalroot {
+				if _, statErr := os.Stat(probe); statErr == nil {
+					suffix = make([]string, len(missing))
+					for i, name := range missing {
+						suffix[len(missing)-1-i] = name
+					}
+					return windowsAbsolutize(probe), suffix, true
 				}
-				return windowsAbsolutize(probe), suffix, true
 			}
 		}
 		name, parent := pathLeaf(probe)

@@ -2,7 +2,8 @@
 
 Current evidence regenerated after the wave-19.17 follow-up
 (SOW-0028 "Wave 19 round 19.17", 2026-09-11).  Product and harness
-revision `a8fcadaa` (pushed, origin/master); the two 19.17 repairs
+revision (pushed, origin/master; product source `a8fcadaa` plus the
+gated-fallback repair); the two 19.17 repairs
 below were first qualified at `8a386af4`, then the security role's
 GLOBALROOT finding added the third:
 
@@ -19,21 +20,25 @@ GLOBALROOT finding added the third:
   four-source-backslash spelling as the other loopback-UNC cases.
 - The NT device-root namespace
   (`\\?\\GLOBALROOT\\Device\\HarddiskVolumeN\\...` and its
-  `\\.\\GLOBALROOT` twin) names the same real files as the
-  drive-letter spelling, but Go's `EvalSymlinks` cannot walk the
-  intermediate `\\Device` component, so the split walk reported
-  `ok=false` and publication delivered metadata over the live
-  sidecar while Rust refused canonically (wave-19.17 security P1,
-  fourth recurrence of the over-the-sidecar destructive class).
-  `canonicalSplitPath` now falls back to an `os.Stat` existence
-  proof on the probe when `EvalSymlinks` fails: `os.Stat` opens the
-  same spelling the publication path opens, and the ancestor arm
+  `\\.\\GLOBALROOT` and `\\??\\GLOBALROOT` twins) names the same
+  real files as the drive-letter spelling, but Go's `EvalSymlinks`
+  cannot walk the intermediate `\\Device` component, so the split
+  walk reported `ok=false` and publication delivered metadata over
+  the live sidecar while Rust refused canonically (wave-19.17
+  security P1, fourth recurrence of the over-the-sidecar
+  destructive class).  `canonicalSplitPath` now falls back to an
+  `os.Stat` existence proof on the probe when `EvalSymlinks` fails
+  and the probe is GLOBALROOT-family: `os.Stat` opens the same
+  spelling the publication path opens, and the ancestor arm
   compares the kernel identity of the existing ancestor, so the
-  guard refuses both spellings in Go exactly like Rust.  Pinned
-  natively by `TestRefuseOutputOverSourceWindowsGlobalrootSidecar`
-  (guard + session call site, three prefix spellings) and by the
-  harness cases `globalroot_sidecar` and
-  `globalroot_device_sidecar`.
+  guard refuses the spellings in Go exactly like Rust.  The
+  fallback is gated to the GLOBALROOT family — an ungated form
+  regressed the relative symlink-plus-".." canonicalAbsolute pin
+  (wave-19.17 portability P1), which is restored and pinned by the
+  same committed corpus.  Pinned natively by
+  `TestRefuseOutputOverSourceWindowsGlobalrootSidecar` (guard +
+  session call site, three prefix spellings) and by the harness
+  cases `globalroot_sidecar` and `globalroot_device_sidecar`.
 - The `6de5b630` Go same-ancestor anchor fed both spellings through
   `canonicalAbsolute`, whose extended-length prefix strip turns a
   verbatim or volume-GUID absolute destination into a bare relative
@@ -63,16 +68,16 @@ Re-qualification at `8a386af4` and re-verified at `a8fcadaa`:
   3 success-fact rows per product), housekeeping PASS
   (`windows_qualified=true`, `skipped=false`, `failed=0`).
 
-Linux identities at `a8fcadaa`: go product
-`a470f068de1249adb54b4751c2efda2cc41107cf5a57e507f953eabf77153f76`,
+Linux identities at the wave-19.17 final revision: go product
+`91b8f7a1273f222a14a4114d6ed7c5215e070cf07f8d4cdf7045632401b678ae`,
 go worker `ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`,
 rust product `e59c0f08bc58bf9a95d841e0acb5d29d6d873a984c219bb8d2dce7f18f855a77`,
 rust worker `d7a599886eaecccbef00f0a683e2c481d52c2a24352c533b3f7ad5c2d257775e`,
 rust fixture `24401226902e2050d9377322649758c86826ab9290298185c3c4abba3b5e0637`.
 
-Windows identities at `a8fcadaa` (measured, prose-recorded per user
-decision 2 of 2026-09-11): go product
-`a0d2f8704c590be417719cf4b891bd43680f1891d3217c67b772329536fd91f4`,
+Windows identities at the wave-19.17 final revision (measured,
+prose-recorded per user decision 2 of 2026-09-11): go product
+`f5b9d48feb673761cbb37f8be79ab37a4a32c8298b9af6899ec68341034aeb92`,
 go worker `cf3b4d2c7b10caca80600a3f3e95f3a5efea76208018f91b763b919a3683a240`,
 rust product `2d5ea513bd0f15fc6eebe86da904496f1e128267c7ec604663fd1ea966d01c87`,
 rust worker `1cf2f694e91bbbd3196fab4810d33e9e6e7c9e31091b8cda5989c20d6d695318`,

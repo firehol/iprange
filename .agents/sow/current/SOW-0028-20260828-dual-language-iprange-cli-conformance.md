@@ -11886,13 +11886,32 @@ device, loopback-UNC, volume-GUID, GLOBALROOT, relative-source
 families) plus the 3 distinct-destination controls allowed (23
 case checks, 26 report keys with the 3 success-fact rows);
 housekeeping PASS.  The pre-fix `8a386af4` Go binary delivered over
-the sidecar in the lead's reproduction probe; the `a8fcadaa` Go
-binary (and Rust, unchanged) refuse with
+the sidecar in the lead's reproduction probe; the fixed Go binary
+(and Rust, unchanged) refuse with
 `invalid_argument`/`not_started` and never create the sidecar.
 
-Final wave-19.17 identities: Linux go product `a470f068de...`
+Portability-role re-check at `a8fcadaa` found the fallback was not
+gated: it fired for ANY probe where EvalSymlinks fails but
+os.Stat succeeds, and the relative symlink-plus-".." class took the
+raw spelling as the ancestor, regressing the committed
+`TestCanonicalAbsoluteRelativeSymlinkDotDot` pin (deterministic
+native FAIL at `6d917bf6`; reproduced by the lead).  Repaired in
+the final wave-19.17 revision: the os.Stat fallback now fires only
+for the GLOBALROOT device-namespace family (`\\?\\GLOBALROOT`,
+`\\.\\GLOBALROOT`, `\\??\\GLOBALROOT`), so the symlink-aware
+".." walk and the pinned canonicalAbsolute behavior are untouched
+for every other class while the GLOBALROOT sidecar spellings stay
+refused.  Native re-verification at the final revision: the dotdot
+pin and the GLOBALROOT pin both PASS, the Windows-gated suite is
+16/16, the full native handlers package is 68 PASS with exactly the
+three documented pre-existing host-environment classes failing
+(worker-spawn %PATH%; two immutable file-lock cleanup), guard
+harness PASS both products, housekeeping PASS, and the lead's
+GLOBALROOT reproduction probe refuses in both engines.
+
+Final wave-19.17 identities: Linux go product `91b8f7a127...`
 (go1.27.0, CGO_ENABLED=0, -buildvcs=false), Windows go product
-`a0d2f8704c...` (go1.26.5); Rust product/worker/fixture and the Go
+`f5b9d48feb...` (go1.26.5); Rust product/worker/fixture and the Go
 worker unchanged on both platforms.  Linux battery at the final
 binary: go tests green, Rust workspace 918/0, matrices 38/38 both
 single languages + 14/24 both mixed directions, crash 16/16,
