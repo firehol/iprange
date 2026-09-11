@@ -35,8 +35,9 @@ import shutil
 import sys
 
 sys.dont_write_bytecode = True
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # repo root
-sys.path.insert(0, os.path.join(ROOT, "v4/cli"))
+_HERE = os.path.dirname(os.path.abspath(__file__))  # the v4/cli harness directory
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
 
 from crash_harness import HarnessJsonRpcService  # noqa: E402
 
