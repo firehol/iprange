@@ -286,6 +286,36 @@ fn windows_strip_extended(path: PathBuf) -> PathBuf {
     path
 }
 
+#[cfg(all(test, windows))]
+mod windows_strip_extended_tests {
+    use super::*;
+
+    // The strip consumes exactly the four-character extended-length
+    // ("\\?\") or device ("\\.\") prefix; the UTF-16 units and
+    // the resolved identity comparison stay verbatim (wave 19 round
+    // 19.14 astra parity finding, mirror of the Go pin).
+    #[test]
+    fn strip_extended_literals() {
+        for (input, want) in [
+            ("\\\\?\\C:\\review\\db.iprange.readers",
+             "C:\\review\\db.iprange.readers"),
+            ("\\\\\\.\\C:\\review\\db.iprange.readers",
+             "C:\\review\\db.iprange.readers"),
+            ("\\\\?\\UNC\\server\\share\\db.iprange.readers",
+             "\\\\server\\share\\db.iprange.readers"),
+            ("C:\\review\\db.iprange.readers",
+             "C:\\review\\db.iprange.readers"),
+            ("\\\\server\\share\\db.iprange.readers",
+             "\\\\server\\share\\db.iprange.readers"),
+        ] {
+            let got = windows_strip_extended(PathBuf::from(input.as_str()))
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(got, want, "strip {input:?}");
+        }
+    }
+}
+
 pub(crate) fn refuse_output_over_source(
     destination: &Path,
     source: &FileIdentity,
@@ -657,7 +687,7 @@ mod tests {
             // round 19.14 astra parity finding): "\\?\C:\...\db.bin.readers"
             // names the same file as the ordinary sidecar path and
             // must be refused.
-            let verbatim = PathBuf::from(format!("\\\\?\\\\{}", dir.display()))
+            let verbatim = PathBuf::from(format!("\\\\?\\{}", dir.display()))
                 .join("db.bin.readers");
             if refuse_output_over_source(&verbatim, &identity, None).is_ok() {
                 return Err(format!(
