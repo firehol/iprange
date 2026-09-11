@@ -11250,3 +11250,88 @@ classes) are unchanged and documented.
 The seven role reviews are re-anchored at the completed HEAD; astra
 turn 4 (the same review session) remains the milestone-4 closure
 gate.
+
+#### Wave 19 round 19.13 Final_Sigma completion (2026-09-11) — contextual fold parity closed, final evidence regenerated
+
+The fold-parity completion at `9ea6becb`/`233653fc` was NOT
+accepted: parity FAILed again on one final P1 — Rust
+`str::to_lowercase` applies the contextual Final_Sigma rule (`Σ` ->
+`ς` only word-finally when the previous non-Case_Ignorable character
+is Cased and the next non-Case_Ignorable is not Cased or absent,
+else `σ`), which a per-rune lowercase table cannot express.  The
+per-rune map would choose a single form for U+03A3, so any
+word-final `Σ` in a same-source-guard pathname (or any other
+lowercased string) still diverged between the products.
+
+Repaired in `e3fd8aa2` (product): `windowsFoldPath`
+(`v4/go/internal/cli/handlers/export.go`) now implements Final_Sigma
+with the Cased and Case_Ignorable property tables generated from
+DerivedCoreProperties.txt Unicode 17.0.0
+(`v4/go/internal/cli/handlers/unicode_fold_tables.go`).  rustc
+1.97.1's property tables match Unicode 17 (U+0295 lost Cased when
+the pharyngeal fricative letters moved to U+A7CE/U+A7CF) while its
+lowercase tables match Unicode 16, so the generated property tables
+are required in addition to the explicit 55-rune Unicode-16
+lowercase map from `9ea6becb`.  The Go fold applies the simple
+per-rune map first and then, for each `Σ` in the folded output,
+applies the sigma-neighbor rule over Case_Ignorable-skipping
+neighbors.
+
+Verification: a 7,784,473-character sigma-context string
+differential on the authorized Windows validation host (go1.26.5 x
+rustc 1.97.1) reports **byte-identical output**, sha256
+`3cdf661f6772e0ec6875a315d1662232cc1f80f11ab44edc65435f3b9992e4d4`;
+the 1,112,064-scalar differential remains 0 mismatches with the
+55-rune map (the Rust per-rune path also folds in the context phase
+in the probe, so both engines are compared on the full production
+fold).  Pins: `TestWindowsFoldCorpusPin` (every platform), Go
+`TestWindowsFoldStringContextDifferential` (Windows session test),
+and Rust `windows_fold_string_context_differential` (Windows).
+
+Test-only follow-up `5e40f6ae`: the workspace test-binary sha2
+0.10.9 digest intermittently mis-hashed the 16.5 MB Vec input on the
+Windows validation host on 2026-09-11 (rustc 1.97.1 windows/msvc
+codegen observation; Python/OpenSSL and standalone release binaries
+always hashed correctly; not reproducible deterministically across
+full rebuilds), so the Rust pin now uses an inline FNV-1a 64
+(`0x732bbe7ae850adfc`) and sha2 is removed from the test.  Production
+sha2 usage (release builds) is unaffected; the anomaly is recorded
+in the fold-enum README so a future failing hash pin is not mistaken
+for a fold regression.
+
+Final qualified identities (product source `e3fd8aa2`, pushed,
+origin/master; `5e40f6ae` test-only follow-up): Linux go product
+`ee582554389897024bf8f69ee59d175b1d122d6013a9799a5943031c1c5ac83e` /
+worker
+`4f2eb0638f0cc9fac942f885aed4b20b3a23f388d1a1b1d0e0757594866399a7`;
+rust product `453b0ab9…` / worker `4c17669d…` / fixture
+`9b40420e…` (unchanged); Windows go product
+`efb109e782a63327f5aaa77ff3b793ce43de276461d06a5c68456409d0d763e6` /
+worker `65e75d99…`; rust product `68ca5446…` / worker `48d840ec…` /
+fixture `f222a430…` (unchanged).  SHASUMS.txt (10/10, verified with
+sha256sum -c) and the evidence README identity block match the
+closing evidence commit.
+
+Battery at the Final_Sigma identities (fresh run, every evidence
+JSON regenerated): matrices rust 38/38, go 38/38, mixed 14 PASS + 24
+legitimate skips per direction; crash positive 16/16 both directions
++ /bin/false negative rc 1; resource 8/8 + all self-test controls;
+golden 55/38; sensitivity 14/14; kind gate PASS + self-test;
+operations probe 39/39; Go suite 24 packages PASS; Rust workspace
+918 passed / 0 failed.  Windows native re-qualified at `e3fd8aa2`
+(go1.26.5 windows/amd64, rustc 1.97.1, clean tree): guard session
+harness PASS (all seven spellings refused, `windows-guard.json`);
+housekeeping 2/2 PASS (`windows-housekeeping.json`); all four Go
+fold/identity tests PASS natively (`TestSameCanonicalWindowsFold`,
+`TestSameCanonicalWindowsFoldUnicode16`,
+`TestWindowsFoldCorpusPin`,
+`TestWindowsFoldStringContextDifferential`) and all three Rust fold
+tests pass natively (`same_canonical_folds_windows_case`,
+`same_canonical_folds_windows_unicode16`,
+`windows_fold_string_context_differential`); the three pre-existing
+Go Windows failures (worker-spawn PATH and immutable file-lock
+cleanup classes) are unchanged and documented.
+
+The seven role reviews are re-anchored at the Final_Sigma HEAD;
+astra turn 5 (the same review session) remains the milestone-4
+closure gate.
