@@ -2077,21 +2077,50 @@ func windowsFoldPath(path string) string {
 	}
 	var b strings.Builder
 	b.Grow(len(path) + 2)
-	for _, r := range path {
+	runes := []rune(path)
+	for i, r := range runes {
 		// rustc 1.97.1 (the Windows Rust product toolchain) applies
 		// the Unicode-16 lowercase mappings for U+1C89, U+A7CB,
 		// U+A7CC, U+A7CE, U+A7D2, U+A7D4, U+A7DA, U+A7DC, Garay
 		// U+10D50..U+10D65, and Kirat Rai U+16EA0..U+16EB8, while
 		// the go1.26.5 (Windows Go product toolchain) tables predate
-		// them (added in go1.27).  The fold maps them explicitly so
-		// the two Windows products fold byte-identically; the
-		// differential enumeration is in v4/cli/evidence/fold-enum/
-		// (wave 19 round 19.13 fold-parity finding).
+		// them (added in go1.27), and applies the contextual
+		// Final_Sigma rule for U+03A3 (word-final sigma) that a
+		// per-rune simple mapping cannot express.  The fold maps
+		// them explicitly so the two Windows products fold
+		// byte-identically; the differential enumerations are in
+		// v4/cli/evidence/fold-enum/ (wave 19 round 19.13
+		// fold-parity findings).
 		switch r {
 		case 0x0130:
 			// Rust char::to_lowercase expansion parity (the only
 			// BMP character whose full lowercase has two runes).
 			b.WriteString("i\u0307")
+			continue
+		case 0x03A3:
+			// Final_Sigma (Unicode 3.13): capital sigma folds to
+			// final sigma U+03C2 when it is preceded by a cased
+			// character and not followed by a cased character
+			// (case-ignorable characters are skipped on both
+			// sides), exactly like Rust str::to_lowercase.
+			prev, next := -1, len(runes)
+			for j := i - 1; j >= 0; j-- {
+				if !isCaseIgnorable(runes[j]) {
+					prev = j
+					break
+				}
+			}
+			for j := i + 1; j < len(runes); j++ {
+				if !isCaseIgnorable(runes[j]) {
+					next = j
+					break
+				}
+			}
+			if prev >= 0 && isCased(runes[prev]) && (next >= len(runes) || !isCased(runes[next])) {
+				b.WriteRune(0x03C2)
+			} else {
+				b.WriteRune(0x03C3)
+			}
 			continue
 		case 0x1C89:
 			b.WriteRune(0x1C8A)

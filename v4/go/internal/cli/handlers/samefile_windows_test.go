@@ -11,6 +11,7 @@
 package handlers
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -262,5 +263,42 @@ func TestSameCanonicalWindowsFoldUnicode16(t *testing.T) {
 			fmt.Sprintf(`C:\review\DB_%c.READERS`, lo)) {
 			t.Errorf("fold mismatch: U+%04X vs U+%04X", up, lo)
 		}
+	}
+}
+
+func TestWindowsFoldStringContextDifferential(t *testing.T) {
+	// Full-string differential corpus: every scalar in both
+	// sigma-neighbor contexts (before and after U+03A3) plus fixed
+	// boundary spellings, folded by the real production
+	// windowsFoldPath.  The sha256 pins the Go fold to the
+	// rustc 1.97.1 str::to_lowercase output over the identical
+	// corpus, covering the contextual Final_Sigma rule that a
+	// per-rune differential cannot see; the Rust product test pins
+	// the same hash (wave 19 round 19.13 fold-parity findings;
+	// corpus generator in v4/cli/evidence/fold-enum/).
+	wantSHA := "3cdf661f6772e0ec6875a315d1662232cc1f80f11ab44edc65435f3b9992e4d4"
+	var corpus strings.Builder
+	corpus.Grow(14000000)
+	for r := rune(0); r <= 0x10FFFF; r++ {
+		if 0xD800 <= r && r <= 0xDFFF {
+			continue
+		}
+		corpus.WriteRune(r) // sigma preceded by r, followed by '1'
+		corpus.WriteRune(0x03A3)
+		corpus.WriteRune('1')
+	}
+	for r := rune(0); r <= 0x10FFFF; r++ {
+		if 0xD800 <= r && r <= 0xDFFF {
+			continue
+		}
+		corpus.WriteRune('a') // sigma preceded by 'a', followed by r
+		corpus.WriteRune(0x03A3)
+		corpus.WriteRune(r)
+		corpus.WriteRune('1')
+	}
+	corpus.WriteString("a\u03A3a\u03A3a\u03A3\u0308a\u0308\u03A3\u03A31\u03A3\u2160\u03A3a\u03A3\u0345a\u0345\u03A3a\u03A3\u1C89\u03A3")
+	got := sha256.Sum256([]byte(windowsFoldPath(corpus.String())))
+	if gotSHA := fmt.Sprintf("%x", got); gotSHA != wantSHA {
+		t.Fatalf("fold string corpus sha256 %s, want %s", gotSHA, wantSHA)
 	}
 }

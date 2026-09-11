@@ -662,6 +662,52 @@ mod tests {
             );
         }
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_fold_string_context_differential() {
+        // Identical corpus and sha256 pin as the Go test
+        // TestWindowsFoldStringContextDifferential: every scalar in
+        // both sigma-neighbor contexts plus fixed boundary
+        // spellings, folded by the real production
+        // windows_fold_path.  The hash also pins the Rust side:
+        // if a future Rust toolchain's case tables change, this
+        // test fails (wave 19 round 19.13 fold-parity findings).
+        use sha2::{Digest, Sha256};
+        let mut corpus = String::with_capacity(14_000_000);
+        for cp in 0u32..=0x10FFFF {
+            if (0xD800..=0xDFFF).contains(&cp) {
+                continue;
+            }
+            let c = char::from_u32(cp).unwrap();
+            corpus.push(c); // sigma preceded by c, followed by '1'
+            corpus.push('\u{3A3}');
+            corpus.push('1');
+        }
+        for cp in 0u32..=0x10FFFF {
+            if (0xD800..=0xDFFF).contains(&cp) {
+                continue;
+            }
+            let c = char::from_u32(cp).unwrap();
+            corpus.push('a'); // sigma preceded by 'a', followed by c
+            corpus.push('\u{3A3}');
+            corpus.push(c);
+            corpus.push('1');
+        }
+        corpus.push_str(
+            "a\u{3A3}a\u{3A3}a\u{3A3}\u{308}a\u{308}\u{3A3}\u{3A3}1\u{3A3}\u{2160}\u{3A3}a\u{3A3}\u{345}a\u{345}\u{3A3}a\u{3A3}\u{1C89}\u{3A3}",
+        );
+        let out = windows_fold_path(&corpus);
+        let mut hasher = Sha256::new();
+        hasher.update(out.as_bytes());
+        let got = hasher.finalize();
+        let want: [u8; 32] = [
+            0x3c, 0xdf, 0x66, 0x1f, 0x67, 0x72, 0xe0, 0xec, 0x68, 0x75, 0xa3, 0x15, 0xd1, 0x66,
+            0x22, 0x32, 0xcc, 0x1f, 0x80, 0xf1, 0x1a, 0xb4, 0x4e, 0xd6, 0x54, 0x35, 0xf3, 0xb9,
+            0x99, 0x2e, 0x4d, 0x04,
+        ];
+        assert_eq!(got.as_slice(), &want);
+    }
 }
 
     #[test]
