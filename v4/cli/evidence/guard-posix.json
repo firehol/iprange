@@ -1,0 +1,184 @@
+{
+  "all_ok": true,
+  "build_provenance": null,
+  "fixture": {
+    "mtime": 1789117509.085769,
+    "path": "/tmp/qualsvc/w1914-final3/w/fixture-2929619.iprange",
+    "sha256": "2606d2a53a41f310666e1d464a7bdc713a2fbf223607818e0d60c7eea31ad92f",
+    "size": 16384
+  },
+  "platform": "posix",
+  "products": {
+    "go": {
+      "all_ok": true,
+      "binary": {
+        "mtime": 1789115249.3925405,
+        "path": "/tmp/qualsvc/w1914b/bin/go/iprange",
+        "sha256": "23bbd84706528c8d7c417a0290a9a106795d25ec15a0e4f2ee2f1d3b995e27ba",
+        "size": 14399127
+      },
+      "cases": {
+        "absolute_trailing_dot": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/go/db.iprange.readers.",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "absolute_trailing_space": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/go/db.iprange.readers ",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "absolute_upper": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/go/DB.IPRANGE.READERS",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "control_allowed": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/go/meta.txt",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "non_ascii": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/go/DB_\u00c4.IPRANGE.READERS",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "ntfs_final_sigma": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/go/A\u03c21.iprange.readers",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "ntfs_sigma": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/go/A\u03c31.iprange.readers",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "reopen_allowed": true,
+        "sidecar_absent_after": true,
+        "source_unchanged": true
+      },
+      "implementation": "go",
+      "sources_before": {
+        "/tmp/qualsvc/w1914-final3/w/guard/go/A\u03a31.iprange": {
+          "sha256_before": "2606d2a53a41f310666e1d464a7bdc713a2fbf223607818e0d60c7eea31ad92f",
+          "sidecar_absent_before": true
+        },
+        "/tmp/qualsvc/w1914-final3/w/guard/go/db.iprange": {
+          "sha256_before": "2606d2a53a41f310666e1d464a7bdc713a2fbf223607818e0d60c7eea31ad92f",
+          "sidecar_absent_before": true
+        },
+        "/tmp/qualsvc/w1914-final3/w/guard/go/db_\u00e4.iprange": {
+          "sha256_before": "2606d2a53a41f310666e1d464a7bdc713a2fbf223607818e0d60c7eea31ad92f",
+          "sidecar_absent_before": true
+        }
+      }
+    },
+    "rust": {
+      "all_ok": true,
+      "binary": {
+        "mtime": 1789117247.3698328,
+        "path": "/tmp/qualsvc/w1914b/bin/rust/iprange",
+        "sha256": "38f513fd0d16b7aa59689288e4b450c1d7120c28ab73d89cdd834f07c2f60720",
+        "size": 6889880
+      },
+      "cases": {
+        "absolute_trailing_dot": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/rust/db.iprange.readers.",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "absolute_trailing_space": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/rust/db.iprange.readers ",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "absolute_upper": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/rust/DB.IPRANGE.READERS",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "control_allowed": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/rust/meta.txt",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "non_ascii": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/rust/DB_\u00c4.IPRANGE.READERS",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "ntfs_final_sigma": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/rust/A\u03c21.iprange.readers",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "ntfs_sigma": {
+          "destination": "/tmp/qualsvc/w1914-final3/w/guard/rust/A\u03c31.iprange.readers",
+          "error_code": null,
+          "error_message": "",
+          "expected_refused": false,
+          "ok": true,
+          "refused": false
+        },
+        "reopen_allowed": true,
+        "sidecar_absent_after": true,
+        "source_unchanged": true
+      },
+      "implementation": "rust",
+      "sources_before": {
+        "/tmp/qualsvc/w1914-final3/w/guard/rust/A\u03a31.iprange": {
+          "sha256_before": "2606d2a53a41f310666e1d464a7bdc713a2fbf223607818e0d60c7eea31ad92f",
+          "sidecar_absent_before": true
+        },
+        "/tmp/qualsvc/w1914-final3/w/guard/rust/db.iprange": {
+          "sha256_before": "2606d2a53a41f310666e1d464a7bdc713a2fbf223607818e0d60c7eea31ad92f",
+          "sidecar_absent_before": true
+        },
+        "/tmp/qualsvc/w1914-final3/w/guard/rust/db_\u00e4.iprange": {
+          "sha256_before": "2606d2a53a41f310666e1d464a7bdc713a2fbf223607818e0d60c7eea31ad92f",
+          "sidecar_absent_before": true
+        }
+      }
+    }
+  },
+  "schema": "iprange-cli-windows-guard-report-v1"
+}

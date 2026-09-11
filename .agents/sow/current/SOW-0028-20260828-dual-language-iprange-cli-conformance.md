@@ -11335,3 +11335,170 @@ cleanup classes) are unchanged and documented.
 The seven role reviews are re-anchored at the Final_Sigma HEAD;
 astra turn 5 (the same review session) remains the milestone-4
 closure gate.
+
+#### Wave 19 round 19.14 (2026-09-11) — astra FAIL at the Final_Sigma HEAD: NTFS sigma family, drive-volume parent, extended-length prefix, weak-success harness, and the fixture device-name parity defect — repaired and re-qualified
+
+The wave-19.13 role round PASSed at `c53b9e40`; the astra same-session
+review at that HEAD returned FAIL with four Windows same-source-guard
+findings.  All four were reproduced by the lead before repair (the
+schema was already hardened by the round-19.13 harness work; the
+driver findings, in order):
+
+1. P1 — NTFS sigma name family: the contextual Final_Sigma lowercase
+   splits U+03A3 into U+03C2/U+03C3, so a sigma-spelled absent sidecar
+   escaped the guard and could be published over the source's reader
+   coordination file.  Repaired in `cdf0ee28`: `sameCanonical` now
+   compares `windowsNameIdentity` (Go `v4/go/internal/cli/handlers/
+   export.go`) / `windows_name_identity` (Rust `v4/rust/iprange-cli/src/
+   rpc/handlers/output.rs`), which folds and then collapses the sigma
+   class (U+03A3/U+03C2/U+03C3 -> U+03A3) on Windows only; the fold
+   itself and its corpus pins are unchanged.  Pin: harness
+   `ntfs_sigma`/`ntfs_final_sigma` cases plus Go
+   `TestSameCanonicalWindowsFold`-style assertions and Rust
+   `same_canonical_folds_windows_case` (sigma class assertions added).
+2. P1 — drive-volume parent: Go `pathLeaf` returned the bare volume
+   ("C:") as the parent of "C:\\name", so `canonicalAbsolute`
+   re-anchored the destination on the per-drive working directory and
+   falsely refused the distinct `C:\\name` file (Rust `Path::parent`
+   returns the drive root).  Repaired in `cdf0ee28`: the volume parent
+   is now the drive root ("C:\\").  Pin: the harness `drive_root_allowed`
+   control (same basename as the absent sidecar, distinct file at the
+   drive root, must be published) and the Go
+   `TestSessionMetadataGetWindowsDriveRootDistinct` session test.
+3. P1 — extended-length spelling: "\\\\?\\C:\\...\\db.iprange.readers"
+   was not reconciled with the ordinary spelling, so `metadata.get`
+   published into the sidecar namespace (or reported `present:false`)
+   instead of refusing like the ordinary spelling.  Repaired in
+   `cdf0ee28` (prefix strip in both engines) with two literal-correction
+   waves, `19052867` and `dc97fd83`, because the raw prefix literals in
+   both engines had the exact escape-class defect the review was
+   hunting (Go `\\?\\` with an extra trailing backslash, Rust `\\?\\`
+   one backslash short); the strip is now pinned by a unit table in
+   both engines (Go `TestWindowsStripExtendedWindows`; Rust
+   `strip_extended_literals` — the Rust test literal itself was
+   corrected twice, `4ef1d7c9` and `2bf79d54`).  Pin: harness
+   `verbatim_sidecar` case and the Rust unit test.
+4. P2 — weak-success harness evidence: `windows_guard_harness.py`
+   accepted any non-error response plus a mere file-existence reopen
+   check.  Repaired in `cdf0ee28` and `3b2be617` (harness-only):
+   `validate_success_response` requires the exact result schema
+   (method, boolean present, output bytes/rows/path/sha256) and the
+   delivered file digest/size on disk; reopening must be fresh and
+   match the claimed digest; the `--selftest` battery pins astra's
+   executed counterexamples (bare `result:{}`, missing output file,
+   empty pre-existing file, wrong digest).  The round-closing harness
+   repair (`3b2be617`) also fixed the POSIX negative control, which
+   crashed on conditional `None` case entries, and restricted the
+   verbatim spelling to Windows (on POSIX it is a relative path whose
+   parents never exist, so the delivery cannot be exercised; the
+   GOOS-gated no-strip behavior is pinned by the unit tables).
+   The POSIX negative control runs in the battery and its evidence is
+   committed as `v4/cli/evidence/guard-posix.json`.
+
+Self-found product defect while re-qualifying (P1, both-engine parity):
+
+5. Rust `is_windows_device_name` compared the pre-dot stem with the
+   reserved device table through `wide_ascii_eq`, whose `all()` is
+   vacuously true over an empty stem: every dot-leading name (for
+   example the fixture tool's own ".<name>.live" live-pair temporary)
+   matched a device spelling and was rejected as "reserved" on
+   Windows, while the Go engine's `windowsDeviceName` switches on the
+   stem length and accepts them.  The consequence surfaced in the
+   round-19.14 re-qualification: the fixture tool could not create a
+   database natively on the Windows host, and a dot-leading database
+   name was unreadable/uncreatable in Rust.  Repaired in `68a53a84`:
+   `wide_ascii_eq` requires equal lengths first; pinned by Rust
+   `device_name_requires_equal_length` and the native probe (plain vs
+   `.dot.live`/`.x.live` create).  This is the same predicate class
+   astra turn 16 had forwarded as an out-of-scope engine note
+   ("Rust is_windows_device_name lacks length equality"); it is now
+   in scope because the qualification fixture and dot-leading live
+   names depend on it.
+
+Additional experiment recorded: `b6225ad6` encoded Windows directory
+entry names as UTF-16 units to close the Go create-path non-Latin-1
+gap, then was reverted (`420b94b2`) because the change's blast radius
+was not contained; the sigma session regression instead builds the
+fixture under an ASCII name and renames it (`c47fc071`), mirroring
+the fixture-copy deployment the harness qualifies.  The pre-existing
+Go create-path restriction (non-Latin-1 main names rejected with
+`name_invalid` before any file exists) remains a separate parity gap,
+tracked in the follow-up map below.
+
+Final qualified identities (product source `2bf79d54`, pushed,
+origin/master): Linux go product
+`23bbd84706528c8d7c417a0290a9a106795d25ec15a0e4f2ee2f1d3b995e27ba` /
+worker
+`4f2eb0638f0cc9fac942f885aed4b20b3a23f388d1a1b1d0e0757594866399a7`;
+rust product
+`38f513fd0d16b7aa59689288e4b450c1d7120c28ab73d89cdd834f07c2f60720` /
+worker
+`d7a599886eaecccbef00f0a683e2c481d52c2a24352c533b3f7ad5c2d257775e` /
+fixture
+`24401226902e2050d9377322649758c86826ab9290298185c3c4abba3b5e0637`;
+Windows go product
+`0ec2a0215230fff5f67e8a339b0d1883277fd4475578013a4bab461549add4f6` /
+worker
+`cf3b4d2c7b10caca80600a3f3e95f3a5efea76208018f91b763b919a3683a240`;
+rust product
+`40a5b6c0173c12a096b88c863aa04c4350cad9c2f69a9a22c269aa2945bb1e2b` /
+worker
+`1cf2f694e91bbbd3196fab4810d33e9e6e7c9e31091b8cda5989c20d6d695318` /
+fixture
+`da46eb8dfa0162fcdabf6e932f2411efad37488fbb592c77fa33b0941430d4d7`.
+SHASUMS.txt (10/10, verified with sha256sum -c from
+`.local/shared/binaries/`) and the evidence README identity block
+match the closing evidence commit.
+
+Battery at the final identities (fresh run at `2bf79d54`, every
+evidence JSON regenerated into `v4/cli/evidence/`): matrices rust
+38/38, go 38/38, mixed 14 PASS + 24 legitimate skips per direction;
+crash positive 16/16 both directions + /bin/false negative rc 1;
+resource 8/8 + all self-test controls; golden 55/38; sensitivity
+14/14; kind gate PASS + self-test; operations probe 39/39; guard
+harness `--selftest` PASS and the POSIX negative control
+(`guard-posix.json`) PASS for both products; Go suite 24 packages
+PASS; Rust workspace 918 passed / 0 failed.
+
+Windows native re-qualified at `2bf79d54` (go1.26.5 windows/amd64,
+rustc 1.97.1, clean tree, embeddable Python 3.14.0): the guard
+session harness PASS (`windows-guard.json`) with the fixture
+database created natively by the fixed fixture tool — every
+absent-sidecar spelling refused with data.code=invalid_argument +
+outcome=not_started + the exact message (drive_relative,
+drive_relative_upper, absolute_upper, rooted_sidecar,
+absolute_trailing_dot, absolute_trailing_space, non_ascii,
+ntfs_sigma, ntfs_final_sigma, verbatim_sidecar), distinct
+destinations (meta.txt, drive-root same-basename file) allowed and
+validated strictly, sources byte-identical, sidecars absent, fresh
+reopen matching the claimed digest; housekeeping 2/2 PASS
+(`windows-housekeeping.json`, skipped=False); the Go fold/identity/
+strip/guard-session tests PASS natively; the Rust guard, fold,
+strip, and path tests PASS natively; the Go Windows suite fails
+exactly the three documented pre-existing host-environment classes
+(worker-spawn %PATH% and the two immutable file-lock cleanup
+cases); the Rust iprange-cli suite natively reports 302 passed / 8
+failed and the eight failures are the same two documented
+host-environment classes (six worker-spawn %PATH%, two immutable
+file-lock cleanup) — the full Rust CLI suite had not been run
+natively before this wave, so the count is newly recorded, not a
+regression.
+
+Follow-up map for this wave:
+
+- Go create-path non-Latin-1 Windows name rejection (create path
+  admits only Latin-1 main names while Rust binds UTF-16 units):
+  pre-existing parity gap, tracked for the parity/portability roles'
+  next engine round; the qualification works around it via
+  ASCII-name-then-rename (SOW-0030 remains the engine-residual
+  tracker; this item joins it).
+- The escaped-literal class (extra/missing backslash in raw prefix
+  literals) is now pinned by unit tables in both engines and by the
+  harness's strict verbatim case; no further tracking item.
+- Windows dev/CI host classes (worker-spawn %PATH% under the msys
+  test environment, immutable file-lock cleanup) remain documented
+  environment limitations, re-measured each native round.
+
+The seven role reviews are re-anchored at the wave-19.14 HEAD;
+astra (the same review session) remains the milestone-4 closure
+gate.
