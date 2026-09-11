@@ -9,13 +9,14 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 )
 
 // Exact copy of the wave-19.6 session test plus cleanup diagnostics
 // (wave-19.13 Windows qualification).
-func TestTmpProbeGCOnly(t *testing.T) {
+func TestTmpProbeBlocked(t *testing.T) {
 
 	dir := t.TempDir()
 	source := newLiveFeed(t, dir, "live2.db")
@@ -83,4 +84,10 @@ func TestTmpProbeGCOnly(t *testing.T) {
 		t.Fatalf("renamed sidecar was modified: head %q", bytes[:min(len(bytes), 20)])
 	}
 	runtime.GC()
+	t.Cleanup(func() {
+		// Pause so the outer host can query Restart Manager and name
+		// the process that still holds the directory open.
+		fmt.Println("cleanup-paused")
+		time.Sleep(20 * time.Second)
+	})
 }
