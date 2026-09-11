@@ -82,7 +82,7 @@ names plus 3 success-fact controls; the wave-19.15 evidence held
 (`windows-housekeeping.json`, refresh flow 150 rows / 123456 /
 200 rows); the Rust cross-family guard test now PASSES natively
 (corrected single-backslash spelling); the Go native handler suite
-(Windows / SameCanonical / Strip tables) PASSes (12 tests,
+(Windows / SameCanonical / Strip tables) PASSes (13 tests,
 including `TestSessionMetadataGetWindowsSidecarSpellings`,
 `TestRefuseOutputOverSourceWindowsSidecarSpellings`, and
 `TestWindowsStripExtendedWindows`).
