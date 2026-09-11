@@ -1,5 +1,69 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
+Current evidence regenerated after the wave-19.17 follow-up
+(SOW-0028 "Wave 19 round 19.17", 2026-09-11).  Product and harness
+revision `8a386af4` (pushed, origin/master):
+
+- The wave-19.17 harness case
+  `relative_source_unc_loopback_sidecar` spelled its destination
+  with a single leading backslash (`\localhost\C$...`), a rooted
+  relative path under `C:\localhost\...` that is a genuinely
+  distinct destination; the published `io`/`read_only_failure`
+  observation was the OS "path not found" error on that distinct
+  path, not a guard miss.  Fresh-process probes and in-session
+  sequences with the real UNC spelling
+  (`\localhost\C$...`) refuse `invalid_argument`/`not_started`
+  10/10 in both engines.  The harness literal now carries the same
+  four-source-backslash spelling as the other loopback-UNC cases.
+- The `6de5b630` Go same-ancestor anchor fed both spellings through
+  `canonicalAbsolute`, whose extended-length prefix strip turns a
+  verbatim or volume-GUID absolute destination into a bare relative
+  path re-anchored at the drive root; the volume-GUID sidecar
+  spelling regressed (allowed).  The anchor is narrowed to raw
+  spellings only (Rust `canonical_split` parity:
+  `filepath.IsAbs` + `pathname.Push`, no strip), restoring the
+  volume-GUID arm; pinned natively by
+  `TestRefuseOutputOverSourceWindowsVolumeGuidSidecar` and by the
+  harness `volume_guid_sidecar` case.
+
+Re-qualification at `8a386af4`:
+
+- Linux battery (go1.27.0 / rustc 1.91.1, clean staging): go tests
+  green (24 packages), Rust workspace 918 passed 0 failed, guard
+  selftest + POSIX negative control PASS, matrices rust 38/38 /
+  go 38/38 / rust_to_go 14 PASS + 24 legitimate skips /
+  go_to_rust 14 + 24, crash positive 16/16 both directions and the
+  /bin/false negative control fails as designed (rc 1), resource
+  proofs 8/8 with self-test controls PASS, golden exchanges 55 /
+  38 case files, sensitivity gate 14/14, kind-coverage gate PASS.
+- Windows native (win11 validation host, go1.26.5 / rustc 1.97.1):
+  Go Windows handler suite 13/13 PASS including the new volume-GUID
+  pin, guard harness PASS for both products (all 19 sidecar
+  spellings refused canonically, the three distinct-destination
+  controls allowed), housekeeping PASS (`windows_qualified=true`,
+  `skipped=false`, `failed=0`).
+
+Linux identities at `8a386af4`: go product
+`36d2be74857d0c105bed2835c02334c45e2666ad0757f35688dcc9c3c0e8f586`,
+go worker `ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`,
+rust product `e59c0f08bc58bf9a95d841e0acb5d29d6d873a984c219bb8d2dce7f18f855a77`,
+rust worker `d7a599886eaecccbef00f0a683e2c481d52c2a24352c533b3f7ad5c2d257775e`,
+rust fixture `24401226902e2050d9377322649758c86826ab9290298185c3c4abba3b5e0637`.
+
+Windows identities at `8a386af4` (measured, prose-recorded per user
+decision 2 of 2026-09-11): go product
+`981b103bb33ab7b397160c20130939270e4999a56ef6ab82cf72c8e27ff6468a`,
+go worker `cf3b4d2c7b10caca80600a3f3e95f3a5efea76208018f91b763b919a3683a240`,
+rust product `2d5ea513bd0f15fc6eebe86da904496f1e128267c7ec604663fd1ea966d01c87`,
+rust worker `1cf2f694e91bbbd3196fab4810d33e9e6e7c9e31091b8cda5989c20d6d695318`,
+fixture `570e81cdabd38fe132a84b8d07f2a7ea6256eef050d2d7765319677d074d5050`;
+fixture database created natively by the fixture tool sha256
+`d7126fc04b502f3aee316ef98d192514246ec39adecf68c747b35ce43e1eabd4`.
+
+Previous wave blocks below remain part of the historical record;
+the wave-19.16, wave-19.15, wave-19.14, and earlier blocks are not
+superseded, only superseded-in-position by this head.
+
 Current evidence regenerated after the wave-19.16 cross-family
 guard completion (SOW-0028 "Wave 19 round 19.16", 2026-09-11).  The
 guard round that followed the wave-19.15 record closed the remaining

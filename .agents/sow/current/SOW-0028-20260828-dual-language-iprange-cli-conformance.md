@@ -11778,3 +11778,70 @@ same-directory cases).  The worktree file is byte-identical to the
 committed blob after the proofs.  The milestone stays gated on the
 re-anchor PASS of every available role at the final revision and the
 astra same-session review.
+
+#### Wave 19 round 19.17 (2026-09-11) — astra turn-5 findings and the harness-spelling root cause
+
+The astra same-session review (turn 5) at `acccd0e9` returned five
+findings.  Four were repaired in the `6de5b630` follow-up commit
+(Go `sameAncestorPath` relative-spelling anchor, strict guard
+success facts, fixture restore, SOW-0030 accepted-exception
+tracker); the portability and security report anchors were appended
+afterwards.  Native re-verification of that commit exposed two
+additional wave-19.17 defects, both repaired and re-qualified in
+this round:
+
+1. P1 (harness, not product): the new harness case
+   `relative_source_unc_loopback_sidecar` spelled its destination
+   with a single leading backslash (`"\\localhost\\C$"`), which
+   Windows parses as a rooted-relative path under `C:\localhost\...`
+   — a genuinely distinct destination that the guard must allow.
+   Publish then fails with the OS `path not found` error and the
+   harness recorded `io`/`read_only_failure`, which looked like a
+   guard miss.  Fresh-process probes and in-session sequences with
+   the real UNC spelling (`\\localhost\C$...`) refused
+   `invalid_argument`/`not_started` 10/10 in both engines, proving
+   the guard was correct all along.  The harness destination is now
+   spelled with the same four-source-backslash literal as the other
+   loopback-UNC cases.
+2. P1 (Go product regression): the `6de5b630` same-ancestor change
+   fed both spellings through `canonicalAbsolute` before the split
+   walk.  `canonicalAbsolute` strips the extended-length prefix
+   (`\\?\...`), turning a verbatim or volume-GUID absolute
+   destination into a bare relative path that re-anchors at the
+   drive root; the volume-GUID sidecar spelling was therefore
+   allowed again (the wave-19.16 evidence had refused it).  The
+   anchor is now narrowed to raw spellings only (Rust
+   `canonical_split` parity: `filepath.IsAbs` + `pathname.Push` for
+   relative inputs, no prefix stripping), which both fixes the
+   astra P1 and restores the volume-GUID arm.  New pin:
+   `TestRefuseOutputOverSourceWindowsVolumeGuidSidecar` (guard and
+   session call site) plus the tightened harness case; scratch-proof
+   checked on win11 — the 6de5b630 shape FAILs the new pin and the
+   narrowed anchor PASSes it.
+
+Re-qualification at the wave-19.17 final revision (`8a386af4`, pushed origin/master):
+
+- Linux battery (go1.27.0 / rustc 1.91.1, fresh staging): go tests
+  green (24 packages), Rust workspace 918 passed 0 failed, guard
+  selftest + POSIX negative control PASS, matrices rust 38/38 /
+  go 38/38 / rust_to_go 14 PASS + 24 skips / go_to_rust 14 + 24,
+  crash positive 16/16 both directions, /bin/false negative rc=1 as
+  designed, resource 8/8 + selftest, golden 55 exchanges, sensitivity
+  14/14, kind coverage PASS.
+- Windows native (win11 validation host, go1.26.5 / rustc 1.97.1):
+  Go Windows handler suite 13/13 PASS including the new
+  volume-GUID pin; guard harness PASS for both products with the
+  corrected UNC spelling (all 19 sidecar spellings refused
+  canonically, 3 distinct-destination controls allowed);
+  housekeeping PASS (`windows_qualified`, refresh + abort/failure
+  cleanup proofs).
+
+Windows identities at the wave-19.17 final revision (`8a386af4`): go product
+`981b103bb3...` (guard-anchor repair), rust product
+`2d5ea513bd...` (unchanged).  Linux identities at `8a386af4`: go product
+`36d2be7485...`, rust product `e59c0f08bc...` (unchanged); go
+worker `ee213ca1eb...`, rust worker `d7a599886e...`, rust fixture
+`24401226...` unchanged in both platforms.
+
+The milestone stays gated on the re-anchor PASS of every available
+role at `8a386af4` and the astra same-session review at that revision.
