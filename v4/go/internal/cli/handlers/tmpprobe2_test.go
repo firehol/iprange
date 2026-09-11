@@ -3,9 +3,7 @@ package handlers
 import (
 	"bufio"
 	"encoding/json"
-	"fmt"
 	"io"
-	"os"
 	"runtime"
 	"strings"
 	"testing"
@@ -15,7 +13,7 @@ import (
 
 // Exact copy of the wave-19.6 session test plus cleanup diagnostics
 // (wave-19.13 Windows qualification).
-func TestTmpProbeExact(t *testing.T) {
+func TestTmpProbeGCOnly(t *testing.T) {
 
 	dir := t.TempDir()
 	source := newLiveFeed(t, dir, "live2.db")
@@ -83,12 +81,4 @@ func TestTmpProbeExact(t *testing.T) {
 		t.Fatalf("renamed sidecar was modified: head %q", bytes[:min(len(bytes), 20)])
 	}
 	runtime.GC()
-	fmt.Println("post-body: remove main:", os.Remove(source))
-	fmt.Println("post-body: remove renamed:", os.Remove(renamed))
-	var entries []string
-	if d, err := os.Open(dir); err == nil {
-		entries, _ = d.Readdirnames(-1)
-		d.Close()
-	}
-	fmt.Println("post-body dir entries:", entries)
 }
