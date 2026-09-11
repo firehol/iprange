@@ -266,7 +266,7 @@ fn windows_name_identity(path: &str) -> String {
 #[cfg(windows)]
 fn windows_strip_extended(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
-    for prefix in ["\\\\?\\\\", "\\\\.\\\\"] {
+    for prefix in ["\\\\?\\", "\\\\.\\"] {
         if let Some(rest) = text.strip_prefix(prefix) {
             if rest.len() >= 4 && rest[..4].eq_ignore_ascii_case("unc\\") {
                 let mut out = String::with_capacity(rest.len() + 2);
