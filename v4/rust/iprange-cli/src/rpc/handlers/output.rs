@@ -202,32 +202,28 @@ fn same_canonical(a: &Path, b: &Path) -> bool {
 /// fold's explicit mapping).
 #[cfg(windows)]
 fn windows_fold_path(path: &str) -> String {
-    let mut s = path.to_owned();
-    let trim_component = |comp: &str| -> Option<&str> {
-        if comp == "." || comp == ".." {
-            return None;
-        }
-        let trimmed = comp.trim_end_matches(['.', ' ']);
-        if trimmed.is_empty() || trimmed.len() == comp.len() {
-            return None;
-        }
-        Some(trimmed)
+    // Trim the Win32 create-normalization characters (trailing dots
+    // and spaces) from the FINAL component only; the special "." and
+    // ".." components are never trimmed.
+    let (head, comp) = match path.rfind(|c| c == '\\' || c == '/') {
+        Some(i) => (&path[..i + 1], &path[i + 1..]),
+        None => ("", path),
     };
-    match s.rfind(|c| c == '\\' || c == '/') {
-        Some(i) => {
-            let start = i + 1;
-            if let Some(trimmed) = trim_component(&s[start..]) {
-                s.truncate(start);
-                s.push_str(trimmed);
-            }
+    let trimmed_comp;
+    let trimmed: &str = if comp == "." || comp == ".." {
+        comp
+    } else {
+        trimmed_comp = comp.trim_end_matches(['.', ' ']);
+        if trimmed_comp.is_empty() || trimmed_comp.len() == comp.len() {
+            comp
+        } else {
+            trimmed_comp
         }
-        None => {
-            if let Some(trimmed) = trim_component(&s) {
-                s = trimmed.to_owned();
-            }
-        }
-    }
-    s.to_lowercase()
+    };
+    let mut out = String::with_capacity(head.len() + trimmed.len());
+    out.push_str(head);
+    out.push_str(trimmed);
+    out.to_lowercase()
 }
 
 pub(crate) fn refuse_output_over_source(

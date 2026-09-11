@@ -95,9 +95,13 @@ def guard_cases(work):
     source database basename it targets ("db.iprange" for the primary
     source, "db_\u00e4.iprange" for the non-ASCII fold pair)."""
     drive = work[:2] if len(work) >= 2 and work[1] == ":" else None
+    # Win32 strips trailing dots and spaces at create, so these
+    # spellings denote the absent sidecar db.iprange.readers.
     dot_space = [
-        ("absolute_trailing_dot", work + ".readers."),
-        ("absolute_trailing_space", work + ".readers "),
+        ("absolute_trailing_dot",
+         os.path.join(work, "db.iprange") + ".readers."),
+        ("absolute_trailing_space",
+         os.path.join(work, "db.iprange") + ".readers "),
     ]
     candidates = (
         [
@@ -117,7 +121,7 @@ def guard_cases(work):
             else None,  # no rooted-without-volume spelling on POSIX
         ),
     ] + dot_space + [
-        ("non_ascii", os.path.join(work, "DB_\u00e4.IPRANGE.READERS")),
+        ("non_ascii", os.path.join(work, "DB_\u00c4.IPRANGE.READERS")),
         ("control_allowed", os.path.join(work, "meta.txt")),
     ]
     return [
