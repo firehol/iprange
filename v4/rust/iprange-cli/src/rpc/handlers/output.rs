@@ -106,13 +106,48 @@ fn lexical_clean_path(path: &Path) -> PathBuf {
 /// exist (`fs::canonicalize` fails on a not-yet-created destination,
 /// which is the normal state of a `fail_if_exists` output).
 ///
+/// Rewrites a leading NT object-manager spelling ("\\??\\") to its
+/// Win32 verbatim presentation ("\\\\?\\") before path parsing.
+/// Non-Windows identities pass through unchanged (there "\\??\\" is
+/// an ordinary relative spelling).
+#[cfg(windows)]
+fn normalize_nt_namespace(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    match text.strip_prefix("\\??\\") {
+        Some(rest) => {
+            let mut out = String::with_capacity(text.len());
+            out.push('\\');
+            out.push('\\');
+            out.push('?');
+            out.push('\\');
+            out.push_str(rest);
+            PathBuf::from(out)
+        }
+        None => path.to_path_buf(),
+    }
+}
+
+#[cfg(not(windows))]
+fn normalize_nt_namespace(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
 /// The deepest existing ancestor is canonicalized and the missing
 /// suffix is re-appended lexically, so two spellings of the same
 /// eventual file (absolute vs relative, `./`/`..` decorations, a
 /// symlinked directory) compare equal.
 pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
+    // The NT object-manager spelling ("\\??\\C:\\...") names the same
+    // file as the verbatim family, but Rust's Path parser does not
+    // recognize it as a root prefix: is_absolute() is false and
+    // cwd.join() would anchor it on the working directory, producing
+    // a "C:\\??\\C:\\..." identity the strip can never reconcile
+    // (wave-19.15 security P1).  Presenting it as "\\\\?\\" first lets
+    // the existing verbatim machinery canonicalize and refuse it like
+    // any other family member.
+    let path = normalize_nt_namespace(path);
     let absolute = if path.is_absolute() {
-        path.to_path_buf()
+        path
     } else {
         match std::env::current_dir() {
             Ok(cwd) => cwd.join(path),
