@@ -8,14 +8,13 @@ import (
 	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 )
 
 // Exact copy of the wave-19.6 session test plus cleanup diagnostics
 // (wave-19.13 Windows qualification).
-func TestTmpProbeSleep3(t *testing.T) {
+func TestTmpProbeInBodyRemoveAll(t *testing.T) {
 
 	dir := t.TempDir()
 	source := newLiveFeed(t, dir, "live2.db")
@@ -82,5 +81,8 @@ func TestTmpProbeSleep3(t *testing.T) {
 	if len(bytes) == 0 || bytes[0] == '{' {
 		t.Fatalf("renamed sidecar was modified: head %q", bytes[:min(len(bytes), 20)])
 	}
-	time.Sleep(3 * time.Second)
+	fmt.Println("inbody remove main:", os.Remove(source))
+	fmt.Println("inbody remove renamed:", os.Remove(renamed))
+	fmt.Println("inbody remove dir:", os.RemoveAll(dir))
+	fmt.Println("inbody dir exists:", pathExists(dir))
 }
