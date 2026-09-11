@@ -734,6 +734,20 @@ housekeeping 2/2).  Evidence regenerated and committed at
 `e1350adb`; roles re-anchored and astra re-run at that revision.
 
 
+Wave-19.10 state (2026-09-11): astra turn 2 (the same review
+session) FAILed with one P1 + two P2 + one P3 (Windows drive-rooted
+push semantics in the Go cwd anchor, Rust missing-ancestor walk
+parity, probe per-case evaluator + exact message, round-11 identity
+record staleness), all repaired and re-qualified at `668468cc` plus
+the closing evidence commit: full battery green (matrices 38/38 +
+14/24 mixed, crash 16/16, resource 8/8, golden 55, sensitivity 14,
+kind gate PASS, probe 39/39, Windows housekeeping 2/2 natively);
+Linux identities Go `c4ecf30a…`/worker `4f2eb063…`, Rust
+`bc4fbd3e…`/worker `4c17669d…`/fixture `9b40420e…`, Windows
+products `b892a052…`/`cd4b2f15…`/go worker `30dd304f…`; the seven
+role reviews are re-anchored at the final HEAD; astra turn 2 remains
+the milestone-4 closure gate (no commit after its PASS).
+
 Wave-19.9 state (2026-09-11): the wave-19.8 role round passed six
 roles and the security role FAILed with one P1 — Go joined relative
 spellings with filepath.Join, which folded a ".." BEFORE the symlink
@@ -10718,4 +10732,84 @@ products `c64e57c9…` (go) / `55d60504…` (rust) / go worker
 the evidence README identity block match the closing evidence
 commit.  The seven role reviews are re-anchored at the final HEAD;
 astra turn 18 (the same review session) remains the milestone-4
+closure gate.
+
+#### Wave 19 round 19.10 (2026-09-11) — astra turn-2 (same session): Windows drive-rooted push semantics, Rust missing-ancestor walk parity, probe per-case evaluator, stale identity record — repaired and re-qualified
+
+The wave-19.9 role round at `381b9696` returned all seven PASSes;
+the resumed astra control session (turn 2) then FAILed with one P1,
+two P2 and one P3::
+
+- P1 (Go, Windows) — `canonicalAbsolute` anchored relative
+  destinations with a plain string concatenation after the wave-19.9
+  raw-join repair: on Windows, a drive-rooted spelling (`\x`, no
+  volume) is NOT absolute per `filepath.IsAbs`, but names a path from
+  the current drive's root; concatenating the working directory
+  produced `C:\cwd\x` instead of `C:\x`, so the guard missed the
+  derived sidecar pathname while the publication (which uses the raw
+  destination string, resolved by the OS with Windows semantics)
+  wrote over it — the same destructive class as wave 19.9, Windows
+  form.  Rust `PathBuf::push` keeps the base's volume and replaces
+  its directory, so it refused correctly.  Repaired: the cwd anchor
+  now reuses the platform-aware `pathname.Push` (the shared port of
+  Rust `PathBuf::_push`: rooted-without-prefix truncates the base to
+  its prefix, a prefix-carrying name replaces the base, a relative
+  name appends raw — clean-free in every arm); the native Windows
+  `push_windows_test.go` pin gained the drive-rooted and
+  prefix-carrying cases.
+- P2 (Rust) — `canonical_absolute` gave up when a not-yet-existing
+  ancestor terminated in `..` (`Path::file_name` returns None for a
+  terminating `..`) and lexically cleaned the WHOLE original path,
+  folding earlier `..` components against symlink names: the
+  combined spelling `/var/run/../<dir>/not-present-control/../<name>.readers`
+  passed the guard in Rust (delivery reported success) while Go
+  refused; executed against both final binaries.  Repaired: the walk
+  pops the terminating ParentDir component explicitly and keeps
+  walking, so `..` before the missing suffix keeps symlink
+  semantics; combined symlink-plus-missing-component detecting tests
+  added in both engines
+  (`canonical_absolute_resolves_parent_dotdot_before_missing_suffix`,
+  Go
+  `TestCanonicalAbsoluteMissingAncestorDotDotAfterSymlink`); a live
+  re-run of the exact turn-2 frame now refuses byte-identically in
+  both engines.
+- P2 (probe) — the wave-19 probe still accepted incorrect responses:
+  the generic "not refused + intact" fallback treated any non-refusal
+  (including `io/read_only_failure` whose reopen attempts failed) as
+  success, and the message check was a substring despite the README's
+  "exact message" claim; an executed negative control (eleven
+  relabeled export responses with failed reopens) reported 12/12 OK.
+  Repaired: the same-file matrix now declares the expected outcome
+  per case (every spelling must show the canonical refusal shape +
+  integrity + reopen; the single directory-collision control must
+  fail without a same-source refusal and leave the source intact),
+  the refusal message comparison is exact, and the self-test drives
+  the full case evaluator with the incorrect-response battery.
+- P3 (records) — `v4/cli/resource-record.md` still labeled the
+  round-11 identities as "current"; the sentence is now marked
+  historical with the evidence README as the authoritative source.
+
+Battery at the wave-19.10 final identities: Go suite 24 packages
+PASS (including the new relative/missing-ancestor tests and the
+extended Windows push pin); Rust workspace PASS; matrices rust
+38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate skips,
+go_to_rust 14 PASS + 24 skips; crash positive 16/16 both directions
+and the /bin/false negative control fails as designed (rc 1);
+resource proofs 8/8 and self-test PASS; golden exchanges 55 / 38
+case files; sensitivity gate 14/14; kind-coverage gate PASS with all
+self-test controls; operations probe 39/39 (with the per-case
+evaluator and the extended self-test).  Windows housekeeping
+re-qualified natively on the authorized Windows validation host at
+`668468cc` (go1.26.5 windows/amd64, rustc 1.97.1, native Windows
+Python 3.14.0 embeddable, clean tree): 2/2 PASS
+(`windows-housekeeping.json`, schema v3).
+
+The final committed identities of this round are Go product
+`c4ecf30a…` / worker `4f2eb063…`, Rust product `bc4fbd3e…` /
+worker `4c17669d…` / fixture `9b40420e…` (Linux) and Windows-host
+products `b892a052…` (go) / `cd4b2f15…` (rust) / go worker
+`30dd304f…` built at `668468cc` tree_clean; SHASUMS.txt (8/8) and
+the evidence README identity block match the closing evidence
+commit.  The seven role reviews are re-anchored at the final HEAD;
+astra turn 2 (the same review session) remains the milestone-4
 closure gate.
