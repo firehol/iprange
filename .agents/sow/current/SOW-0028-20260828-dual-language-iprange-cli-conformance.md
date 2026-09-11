@@ -11829,10 +11829,13 @@ Re-qualification at the wave-19.17 final revision (`8a386af4`, pushed origin/mas
   designed, resource 8/8 + selftest, golden 55 exchanges, sensitivity
   14/14, kind coverage PASS.
 - Windows native (win11 validation host, go1.26.5 / rustc 1.97.1):
-  Go Windows handler suite 13/13 PASS including the new
-  volume-GUID pin; guard harness PASS for both products with the
-  corrected UNC spelling (all 19 sidecar spellings refused
-  canonically, 3 distinct-destination controls allowed);
+  Go Windows handler suite 15/15 PASS at that revision (the 13
+  pre-wave tests plus the relative-source and volume-GUID pins;
+  the 16th, the GLOBALROOT pin, lands in the security follow-up
+  below); guard harness PASS for both products with the
+  corrected UNC spelling (all 18 sidecar spellings refused
+  canonically at that revision, 3 distinct-destination controls
+  allowed);
   housekeeping PASS (`windows_qualified`, refresh + abort/failure
   cleanup proofs).
 
@@ -11893,6 +11896,23 @@ single languages + 14/24 both mixed directions, crash 16/16,
 resource 8/8, golden 55, sensitivity 14/14, kind gate PASS, guard
 POSIX PASS.
 
+Identity-reproduction truth (portability-role verification and lead
+reproduction, recorded at `e3362716`): the Go product, the Go
+worker, the Rust worker, and the Rust fixture reproduce byte-exactly
+from any clean staging with the documented recipes; the Rust PRODUCT
+identity embeds absolute build inputs (standard cargo, no
+`--remap-path-prefix`).  The lead's fresh builds from the committed
+tree in three different target dirs give one stable hash
+(`7bbad485...`), a fourth build from a different source checkout
+path gives a different hash (`ead04bf4...`), and the earlier
+wave-19.16 "verified-reproduction" builds produced the recorded
+`e59c0f08...` — the identity is a function of the exact source-tree
+path and build environment of the recorded build.  Records therefore
+cite the measured hashes from the canonical staging (the documented
+practice since wave 19.15); byte-identity claims are limited to
+reproduction from the identical source path, toolchain, and
+environment.
+
 The milestone stays gated on the re-anchor PASS of every available
-role at `a8fcadaa` and the astra same-session review at that
+role at `e3362716` and the astra same-session review at that
 revision.

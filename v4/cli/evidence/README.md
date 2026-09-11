@@ -79,6 +79,17 @@ fixture `570e81cdabd38fe132a84b8d07f2a7ea6256eef050d2d7765319677d074d5050`;
 fixture database created natively by the fixture tool sha256
 `d7126fc04b502f3aee316ef98d192514246ec39adecf68c747b35ce43e1eabd4`.
 
+Identity note: the Linux Rust product identity embeds absolute
+build inputs (standard cargo release build, no
+`--remap-path-prefix`); fresh builds are deterministic for a given
+source-checkout path and toolchain, but a different checkout path
+or environment yields a different hash, so byte-identity claims are
+limited to the exact recorded build inputs.  The Go product/worker,
+the Rust worker, and the fixture reproduce from any clean staging.
+All recorded hashes are the measured values from the canonical
+staging (portability-role verification and lead reproduction,
+recorded with wave-19.17).
+
 Previous wave blocks below remain part of the historical record;
 the wave-19.16, wave-19.15, wave-19.14, and earlier blocks are not
 superseded, only superseded-in-position by this head.
