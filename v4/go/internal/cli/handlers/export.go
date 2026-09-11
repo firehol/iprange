@@ -2314,6 +2314,22 @@ func canonicalAbsolute(path string) string {
 	return windowsStripExtended(resolved)
 }
 
+// windowsUncProbe rewrites a leading verbatim-family UNC prefix
+// ("\\?\UNC\server\share" or the NT object-manager twin
+// "\\??\UNC\server\share") to the ordinary UNC spelling
+// ("\\server\share") for filesystem probes: the two spellings name
+// the same shares and the ordinary form is walkable by Go's
+// EvalSymlinks, which cannot open the verbatim "server" prefix
+// alone (wave-19.15 security P1).
+func windowsUncProbe(path string) string {
+	for _, prefix := range []string{`\\?\UNC\`, `\??\UNC\`} {
+		if rest, ok := strings.CutPrefix(path, prefix); ok {
+			return `\\` + rest
+		}
+	}
+	return path
+}
+
 // canonicalSplitPath walks an anchored, separator-normalized
 // spelling exactly like canonicalAbsolute but returns the deepest
 // EXISTING ancestor and the missing suffix separately: the ancestor
@@ -2326,6 +2342,15 @@ func canonicalSplitPath(path string) (ancestor string, suffix []string, ok bool)
 	var missing []string
 	probe := path
 	for {
+		// Go's EvalSymlinks probes path components one by one and
+		// cannot open the "\\?\UNC\server" prefix alone (CreateFile
+		// fails with ERROR_INVALID_NAME), while the ordinary UNC
+		// spelling "\\server\share" walks fine; the two spellings
+		// name the same shares, so the deepest-existing-ancestor
+		// walk probes through the ordinary spelling (wave-19.15
+		// security P1).  "\\??\UNC\" was already presented as its
+		// verbatim twin by normalize_nt_namespace.
+		probe = windowsUncProbe(probe)
 		resolved, err := filepath.EvalSymlinks(probe)
 		if err == nil {
 			// missing holds the walked components deepest-first;
