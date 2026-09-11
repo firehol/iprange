@@ -61,13 +61,6 @@ func TestTmpProbeErrPrint(t *testing.T) {
 	if err != nil && second == "" {
 		t.Fatalf("read metadata response: %v", err)
 	}
-	_ = pw.Close()
-	serr := <-done
-	fmt.Println("SESSION-ERR:", serr)
-	if !strings.Contains(second, `"code":"invalid_argument"`) ||
-		!strings.Contains(second, "destination must differ from the source database") {
-		t.Fatalf("metadata response %q, want the source-refusal error", second)
-	}
 	// The displaced sidecar file is untouched, not metadata text.
 	// The read re-opens with a share-delete handle on Windows (Go's
 	// os.ReadFile does not share delete, and the live reader's sidecar
@@ -79,6 +72,7 @@ func TestTmpProbeErrPrint(t *testing.T) {
 	if len(bytes) == 0 || bytes[0] == '{' {
 		t.Fatalf("renamed sidecar was modified: head %q", bytes[:min(len(bytes), 20)])
 	}
+
 	// Restore the sidecar before the transport EOF so the session can
 	// finish the reader close: with the table renamed away the close
 	// is deliberately retryable (close-incomplete, Rust
@@ -87,5 +81,12 @@ func TestTmpProbeErrPrint(t *testing.T) {
 	// which blocks temp-directory cleanup on Windows.
 	if err := os.Rename(renamed, sidecar); err != nil {
 		t.Fatal(err)
+	}
+	_ = pw.Close()
+	serr := <-done
+	fmt.Println("SESSION-ERR:", serr)
+	if !strings.Contains(second, `"code":"invalid_argument"`) ||
+		!strings.Contains(second, "destination must differ from the source database") {
+		t.Fatalf("metadata response %q, want the source-refusal error", second)
 	}
 }
