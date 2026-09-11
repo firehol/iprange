@@ -11175,3 +11175,78 @@ immutable file-lock cleanup classes) are unchanged and documented.
 The seven role reviews are re-anchored at the corrected final HEAD;
 astra turn 4 (the same review session) remains the milestone-4
 closure gate.
+
+#### Wave 19 round 19.13 fold-parity completion (2026-09-11) — the 52 residual runes mapped, full differential pinned
+
+The wave-19.13 role round at `8b293c3d` was NOT all-PASS: parity,
+portability, and the tester all FAILed with the same P1 class — the
+fold-parity repair covered only U+A7CE/U+A7D2/U+A7D4, and the
+go1.26.5 Windows Go product still diverged from the rustc 1.97.1
+Rust product on **52 more runes** whose Unicode-16 mappings the
+go1.26.5 tables predate (operations, performance, and glm PASSed).
+An independent full-rune differential on the authorized Windows
+validation host (1,112,064 valid scalars; Go fold replica run with
+go1.26.5 vs rustc 1.97.1 `char::to_lowercase`) confirmed the
+reviewers exactly: 52 mismatches, all "Go leaves unchanged / Rust
+maps":
+
+- U+1C89 -> U+1C8A;
+- U+A7CB -> U+0264, U+A7CC -> U+A7CD, U+A7DA -> U+A7DB,
+  U+A7DC -> U+019B;
+- Garay U+10D50..U+10D65 -> U+10D70..U+10D85 (22 runes);
+- Kirat Rai U+16EA0..U+16EB8 -> U+16EBB..U+16ED3 (25 runes).
+
+Repaired in `9ea6becb` (product): `windowsFoldPath`
+(`v4/go/internal/cli/handlers/export.go`) now maps all 55 divergent
+runes explicitly (the three earlier ones plus the 52 above; the
+Garay/Kirat Rai blocks are range-mapped `r+0x20` / `r+0x1B`).
+`TestSameCanonicalWindowsFoldUnicode16`
+(`samefile_windows_test.go`) pins all 55 pairs, and the Rust side
+pins the same pairs in
+`same_canonical_folds_windows_unicode16` (`output.rs`; char
+literals, so a future Rust toolchain table change cannot silently
+break the byte-identical claim).  The differential enumeration
+probes, this procedure, and the 0-mismatch result are committed
+under `v4/cli/evidence/fold-enum/`.  The follow-up commit
+`233653fc` fixes the Rust pin to char literals (test-only).
+
+The differential after the fix at go1.26.5 x rustc 1.97.1:
+**0 mismatches** across all 1,112,064 scalars.  go1.27-built Go
+also matches rustc 1.97.1 (0 mismatches at the previous round), so
+this residual class existed only at the Windows product pair; with
+the explicit map it is closed at every toolchain, and the earlier
+records' "1,112,064-rune zero-mismatch enumeration" claims are now
+accurate again (they were false for the go1.26.5 Windows product
+when the three-rune map was the only fix — the enumeration pair had
+been go1.27-on-Linux only).
+
+Final qualified identities (product source `9ea6becb`, pushed,
+origin/master; `233653fc` test-only follow-up): Linux go product
+`e5d26ad8e8f36f4cc10c9ee1890d27cd64639c910be5deb236ef80a30235ae2b` /
+worker
+`4f2eb0638f0cc9fac942f885aed4b20b3a23f388d1a1b1d0e0757594866399a7`;
+rust product `453b0ab9…` / worker `4c17669d…` / fixture
+`9b40420e…` (unchanged); Windows go product
+`78419e47559d6caf55c8f4d9ec0220097396d12dfa0a68c3074a32e536989d96` /
+worker `65e75d99…`; rust product `68ca5446…` / worker `48d840ec…` /
+fixture `f222a430…` (unchanged).  SHASUMS.txt (10/10) and the
+evidence README identity block match the closing evidence commit.
+
+Battery at the completed identities (fresh run, every evidence JSON
+regenerated): matrices rust 38/38, go 38/38, mixed 14 PASS + 24
+legitimate skips per direction; crash positive 16/16 both directions
++ /bin/false negative rc 1; resource 8/8 + all self-test controls;
+golden 55/38; sensitivity 14/14; kind gate PASS + self-test;
+operations probe 39/39; Go suite 24 packages PASS; Rust workspace
+918 passed / 0 failed.  Windows native re-qualified at `233653fc`:
+guard session harness PASS (all seven spellings refused,
+`windows-guard.json`); housekeeping 2/2 PASS
+(`windows-housekeeping.json`); the seven fold/identity Go tests PASS
+natively (including the full 55-pair Unicode-16 pin) and the Rust
+fold tests pass natively (rustc 1.97.1); the three pre-existing Go
+Windows failures (worker-spawn PATH and immutable file-lock cleanup
+classes) are unchanged and documented.
+
+The seven role reviews are re-anchored at the completed HEAD; astra
+turn 4 (the same review session) remains the milestone-4 closure
+gate.
