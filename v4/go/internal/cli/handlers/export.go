@@ -2383,6 +2383,27 @@ func canonicalSplitPath(path string) (ancestor string, suffix []string, ok bool)
 			}
 			return windowsAbsolutize(resolved), suffix, true
 		}
+		// Namespace families that Go's EvalSymlinks cannot walk but
+		// the kernel resolves through ordinary file APIs (the NT
+		// device-root namespace \\?\\GLOBALROOT\\Device\\
+		// HarddiskVolumeN\\... and its \\.\\ twin): the symlink
+		// walk fails at the intermediate \\Device component while
+		// the publication path opens the same real file through the
+		// caller spelling.  os.Stat proves the probe is the deepest
+		// existing ancestor and gives the kernel identity the
+		// same-ancestor arm compares, so the raw existing ancestor
+		// is authoritative (wave-19.17 security P1: Go delivered
+		// metadata over the live sidecar through the GLOBALROOT
+		// spelling while Rust refused it).
+		if runtime.GOOS == "windows" {
+			if _, statErr := os.Stat(probe); statErr == nil {
+				suffix = make([]string, len(missing))
+				for i, name := range missing {
+					suffix[len(missing)-1-i] = name
+				}
+				return windowsAbsolutize(probe), suffix, true
+			}
+		}
 		name, parent := pathLeaf(probe)
 		if name == "" || parent == probe {
 			return "", nil, false

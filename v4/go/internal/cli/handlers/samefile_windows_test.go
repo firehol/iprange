@@ -724,3 +724,76 @@ func TestRefuseOutputOverSourceWindowsVolumeGuidSidecar(t *testing.T) {
 		t.Fatalf("metadata.get to %q created the sidecar: %v", destination, err)
 	}
 }
+
+// cGlobalrootDevicePath resolves the NT device-root namespace prefix
+// that backs the current working directory's volume
+// ("\\?\GLOBALROOT\Device\HarddiskVolumeN"), mirroring how the
+// qualification harness enumerates the device family; skips when no
+// device matches.  The GLOBALROOT spelling names the same real files
+// as the drive-letter spelling, so the same-ancestor guard arm must
+// refuse a GLOBALROOT spelling of the absent sidecar exactly like the
+// volume-GUID spellings (wave-19.17 security P1: Go's EvalSymlinks
+// cannot walk the \Device component, so the walk fell back to
+// ok=false and publication delivered metadata over the live sidecar
+// while Rust refused it).
+func cGlobalrootDevicePath(t *testing.T, dir string) string {
+	t.Helper()
+	for n := 0; n < 16; n++ {
+		probe := fmt.Sprintf(`\\?\GLOBALROOT\Device\HarddiskVolume%d%s`, n, dir[2:])
+		if fi, err := os.Stat(probe); err == nil && fi.IsDir() {
+			return fmt.Sprintf(`\\?\GLOBALROOT\Device\HarddiskVolume%d`, n)
+		}
+	}
+	t.Skip("no GLOBALROOT device backs the temp dir")
+	return ""
+}
+
+// TestRefuseOutputOverSourceWindowsGlobalrootSidecar pins the NT
+// device-root namespace at the guard and at the production session
+// call site: every spelling of the device root names the same real
+// directory as the drive-letter spelling, so the absent sidecar must
+// be refused through the kernel-identity arm (wave-19.17 security
+// P1, fourth recurrence of the over-the-sidecar destructive class).
+func TestRefuseOutputOverSourceWindowsGlobalrootSidecar(t *testing.T) {
+	dir := t.TempDir()
+	drive := filepath.VolumeName(dir)
+	if len(drive) != 2 || drive[1] != ':' || !strings.EqualFold(drive, "C:") {
+		t.Skip("temp dir is not on the C: volume")
+	}
+	device := cGlobalrootDevicePath(t, dir)
+	source := filepath.Join(dir, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sidecar := source + format.CoordinationSuffix
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(wd) })
+
+	for _, prefix := range []string{device, strings.Replace(device, `\\?\GLOBALROOT`, `\\.\GLOBALROOT`, 1),
+		strings.Replace(device, `\\?\GLOBALROOT`, `\??\GLOBALROOT`, 1)} {
+		destination := prefix + dir[2:] + `\` + filepath.Base(source) + format.CoordinationSuffix
+		// Guard level: refused preflight before any SDK open.
+		if herr := refuseOutputOverSource(destination, source, nil, nil); herr == nil {
+			t.Fatalf("GLOBALROOT destination %q naming the absent sidecar accepted", destination)
+		}
+		// Production call site: refused canonically and the sidecar
+		// is never created.
+		frame := `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.database.metadata.get","params":{"source":{"path":` +
+			mustJSONString(source) + `,"mode":"immutable"},"delivery":{"mode":"file","path":` +
+			mustJSONString(destination) + `,"publication_policy":"replace_existing","max_output_bytes":"1048576","max_open_files":8}}}`
+		out := runSession(t, frame)
+		if !strings.Contains(out, `"code":"invalid_argument"`) ||
+			!strings.Contains(out, "destination must differ from the source database") {
+			t.Fatalf("metadata.get to %q: output = %q, want the source-refusal error", destination, out)
+		}
+	}
+	if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+		t.Fatalf("metadata.get created the sidecar: %v", err)
+	}
+}

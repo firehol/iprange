@@ -339,6 +339,27 @@ def windows_c_volume_guid():
         return None
 
 
+def windows_c_globalroot(work):
+    """NT device-root prefix backing the C: volume
+    ("\\?\\GLOBALROOT\\Device\\HarddiskVolumeN") on a native Windows
+    host, or None elsewhere: the GLOBALROOT spelling names the same
+    real files as the drive-letter spelling through the kernel, while
+    Go's EvalSymlinks cannot walk the intermediate \\Device component,
+    so the guard must refuse it through the kernel-identity arm like
+    the volume-GUID spelling (wave-19.17 security P1)."""
+    if os.name != "nt":
+        return None
+    for n in range(0, 16):
+        probe = r"\\?\GLOBALROOT\Device\HarddiskVolume%d%s" % (n, work[2:])
+        try:
+            if os.path.isdir(probe):
+                return r"\\?\GLOBALROOT\Device\HarddiskVolume%d" % n
+        except OSError:
+            return None
+    return None
+
+
+
 def guard_cases(work):
     """Windows-targeted spellings of the absent sidecar plus the
     distinct-destination controls.  Expectation depends on the host
@@ -444,6 +465,21 @@ def guard_cases(work):
             candidates.append(
                 ("volume_guid_sidecar",
                  volume_guid + work[2:] + "\\db.iprange.readers"))
+        # NT device-root spellings (wave-19.17 security P1): the
+        # GLOBALROOT device namespace names the same real files as the
+        # drive-letter spelling; the guard must refuse it through the
+        # kernel-identity arm exactly like the volume-GUID spelling.
+        # Windows-only, same skip rule as the other cross-family
+        # spellings.
+        globalroot = windows_c_globalroot(work)
+        if globalroot:
+            candidates.append(
+                ("globalroot_sidecar",
+                 globalroot + work[2:] + "\\db.iprange.readers"))
+            candidates.append(
+                ("globalroot_device_sidecar",
+                 globalroot.replace(r"\\?\GLOBALROOT", r"\\.\GLOBALROOT")
+                 + work[2:] + "\\db.iprange.readers"))
         # Distinct drive-root control with the SAME basename as the
         # absent sidecar (wave 19 round 19.14 astra P1): with the
         # source in the per-drive working directory,
