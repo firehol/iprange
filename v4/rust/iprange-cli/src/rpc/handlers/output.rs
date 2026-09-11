@@ -444,16 +444,32 @@ mod windows_strip_extended_tests {
     // verbatim; only an ASCII "UNC\\" head becomes a UNC root.
     #[test]
     fn strip_non_ascii_head_does_not_panic() {
+        // The escaped-literal rows pin the literal-escape class
+        // (wave-19.14); the real multibyte rows pin the byte-4 cut:
+        // a two-byte character starting at rest[3] (for example
+        // "é" after three ASCII letters) is the case that panicked
+        // the old rest[..4] byte-index check and crashed the worker
+        // mid-session (wave-19.15 operations P0).  The expected
+        // value is the verbatim after-prefix rest; deriving it with
+        // strip_prefix keeps the assertion boundary-safe.
         for input in [
             "\\\\?\\abc\\u{00e9}\\db.iprange.readers",
             "\\\\?\\\u{03a9}\\db.iprange.readers",
             "\\\\.\\abc\\u{00e9}\\db.iprange.readers",
             "\\??\\abc\\u{00e9}\\db.iprange.readers",
+            "\\\\?\\abc\u{00e9}\\db.iprange.readers",
+            "\\\\.\\abc\u{00e9}\\db.iprange.readers",
+            "\\??\\abc\u{00e9}\\db.iprange.readers",
         ] {
             let got = windows_strip_extended(PathBuf::from(input))
                 .to_string_lossy()
                 .into_owned();
-            assert_eq!(got, &input[4..], "strip {input:?}");
+            let want = input
+                .strip_prefix("\\\\?\\")
+                .or_else(|| input.strip_prefix("\\\\.\\"))
+                .or_else(|| input.strip_prefix("\\??\\"))
+                .unwrap();
+            assert_eq!(got, want, "strip {input:?}");
         }
     }
 }
@@ -928,7 +944,11 @@ mod tests {
         }
 
         // A distinct loopback-UNC destination in another directory
-        // names a different file and must stay allowed.
+        // names a different file and must stay allowed: the guard
+        // returns Ok (allowed) and the pin fails when a regression
+        // over-refuses the distinct spelling (the previous control
+        // asserted `is_err() || !other_unc.exists()`, which passed
+        // unconditionally because the guard never creates the file).
         let other = dir.join("other");
         fs::create_dir(&other).unwrap();
         let other_unc = PathBuf::from(format!(
@@ -937,8 +957,22 @@ mod tests {
         ))
         .join("db.bin.readers");
         assert!(
-            refuse_output_over_source(&other_unc, &identity, None).is_err()
-                || !other_unc.exists()
+            refuse_output_over_source(&other_unc, &identity, None).is_ok(),
+            "distinct loopback-UNC destination in another directory was refused: {other_unc:?}"
+        );
+
+        // A distinct name in the source directory stays allowed too:
+        // the same-ancestor arm's suffix comparison is the
+        // distinguishing guard when both spellings share the deepest
+        // existing ancestor directory.
+        let other_name = PathBuf::from(format!(
+            "\\\\localhost\\{drive}${}",
+            relative.display()
+        ))
+        .join("other.bin.readers");
+        assert!(
+            refuse_output_over_source(&other_name, &identity, None).is_ok(),
+            "distinct loopback-UNC destination in the source directory was refused: {other_name:?}"
         );
 
         let _ = fs::remove_dir_all(&dir);

@@ -11667,15 +11667,16 @@ origin/master) with all evidence regenerated:
   worker `d7a599886eaecccbef00f0a683e2c481d52c2a24352c533b3f7ad5c2d257775e` /
   fixture `24401226902e2050d9377322649758c86826ab9290298185c3c4abba3b5e0637`.
 - Windows native (go1.26.5 windows/amd64, rustc 1.97.1, clean tree
-  at `e576d4e8`): guard harness PASS for both products with 22 cases
-  including the five added cross-family names (`windows-guard.json`,
-  all_ok true, 22/22 each product; the wave-19.15 evidence held 17
-  cases); housekeeping PASS with skipped=false, failed=0,
+  at `e576d4e8`): guard harness PASS for both products with 22 report keys
+  per product (`windows-guard.json`, all_ok true) — 19 completed
+  case checks including the five added cross-family names plus 3
+  success-fact controls; the wave-19.15 evidence held 17 keys (14
+  cases + 3 facts); housekeeping PASS with skipped=false, failed=0,
   windows_qualified=true (`windows-housekeeping.json`, refresh flow
   150 rows / 123456 / 200 rows); the Rust cross-family guard test
   now PASSES natively (corrected single-backslash spelling); the Go
   native handler suite (Windows / SameCanonical / Strip tables)
-  PASSes (12 tests, including
+  PASSes (13 tests, including
   `TestSessionMetadataGetWindowsSidecarSpellings`,
   `TestRefuseOutputOverSourceWindowsSidecarSpellings`, and
   `TestWindowsStripExtendedWindows`).
@@ -11710,3 +11711,60 @@ The closure role round re-review over this records commit and the
 astra same-session review follow as the milestone-4 closure gate.
 No later repository commit is expected after the records commit
 before that gate reports.
+
+#### Wave 19 round 19.16 follow-up — closure role round and records commit (2026-09-11)
+
+The closure role round over the records commit returned three PASS
+(security, performance, and the glm role) and five FAIL reports
+(tester, operations, parity, portability, and the closure role)
+covering three verified finding classes, all closed in this
+follow-up commit, plus one falsified report:
+
+1. P2/P1 (tester, operations, parity, portability — vacuous
+   distinct-destination pin): the Rust cross-family guard test
+   asserted
+   `refuse_output_over_source(&other_unc, ...).is_err() || !other_unc.exists()`,
+   which passes unconditionally (the guard never creates the file,
+   and the `is_err()` disjunct passes exactly when the guard wrongly
+   refuses the distinct loopback-UNC destination).  Repaired in this
+   commit: the control now asserts `is_ok()` (allowed) and adds a
+   second allow case — a different name in the source directory with
+   a loopback-UNC spelling — which pins the same-ancestor arm's
+   suffix comparison.
+2. P2 (parity, portability — carried vacuous strip-head pin): the
+   `strip_non_ascii_head_does_not_panic` rows used the escaped
+   literal `\u{00e9}` (ASCII text) and a leading `Ω`, neither of
+   which ever lands a multibyte character across the byte-4 cut the
+   wave-19.15 fix removed.  Repaired in this commit: three rows now
+   place a real two-byte `é` at `rest[3]` (after three ASCII
+   letters) for the `\\?\`, `\\.\`, and `\??\` prefixes — the exact
+   case that panicked `rest[..4]` — with the expected value derived
+   via `strip_prefix` so the assertion stays boundary-safe.
+3. P2 (closure role — Linux identity reproducibility): the report
+   claimed fresh clean builds of the Rust product and fixture from
+   the committed tree do not reproduce the recorded identities.  The
+   claim was falsified by the lead with two independent fresh
+   `CARGO_TARGET_DIR` release builds at `da81a804` plus a clean Go
+   build: all five Linux identities reproduce byte-exactly
+   (go product `ad402735a5...`, go worker `ee213ca1...`, rust
+   product `e59c0f08...`, rust worker `d7a59988...`, rust fixture
+   `24401226...`).  The wave-19.15 non-reproducibility was a
+   contaminated-worktree artifact of that wave's build; the
+   staged-build recipe used since wave-19.16 (fresh staging
+   directories with the documented commands and pinned toolchain)
+   reproduces the recorded hashes.  The wave-19.16 records already
+   carried the honest measured-identity note; this follow-up adds
+   the verified-reproduction result.
+4. Hygiene (all roles, P3): the role-local scratch directory
+   `v4/go/.local/` is now covered by `.gitignore`, so the working
+   tree is clean except the two always-untracked Go build artifacts.
+   Records wording corrected: the Windows guard evidence is
+   described as 22 report keys per product (19 completed case checks
+   plus 3 success-fact controls), and the Go Windows handler suite
+   is 13 tests, not 12.
+
+Windows native re-verification of the corrected pins (both new tests
+plus the scratch-revert regression proof) is recorded in the
+follow-up commit before the re-anchor round; the milestone stays
+gated on the re-anchor PASS of every available role at the final
+revision and the astra same-session review.

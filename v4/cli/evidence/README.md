@@ -74,9 +74,10 @@ packages) and the Rust workspace (918 passed, 0 failed) are green on
 Linux.
 
 Windows native at `e576d4e8`: guard harness PASS for both products
-with 22 cases including the five added cross-family names
-(`windows-guard.json`, all_ok true, 22/22 each product — the
-wave-19.15 evidence held 17 cases); housekeeping PASS with
+with 22 report keys per product (`windows-guard.json`, all_ok true)
+— 19 completed case checks including the five added cross-family
+names plus 3 success-fact controls; the wave-19.15 evidence held
+17 keys (14 cases + 3 facts); housekeeping PASS with
 `skipped=false`, `failed=0`, `windows_qualified=true`
 (`windows-housekeeping.json`, refresh flow 150 rows / 123456 /
 200 rows); the Rust cross-family guard test now PASSES natively
