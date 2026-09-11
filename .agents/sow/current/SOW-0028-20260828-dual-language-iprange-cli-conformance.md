@@ -11110,3 +11110,68 @@ SHASUMS.txt (10/10) and the evidence README identity block match the
 closing evidence commit.  The seven role reviews are re-anchored at
 the final HEAD; astra turn 4 (the same review session) remains the
 milestone-4 closure gate.
+
+#### Wave 19 round 19.13 correction (2026-09-11) — fold-parity P1 repaired after the first 19.13 record
+
+The wave-19.13 role round at `86a41bfa` was NOT all-PASS: the tester
+role FAILed with a P1 fold-parity defect and a P2 record claim
+(glm, operations, and performance PASSed).  The fold-parity P1 was
+real and is repaired here.
+
+The first 19.13 record above stated the fold-parity direction
+wrongly: it claimed rustc 1.97 `char::to_lowercase` leaves
+U+A7CE/A7D2/A7D4 unchanged and that Go carved the three code points
+out.  Native verification on the authorized Windows validation host
+shows the opposite:
+
+- rustc 1.97.1 (the Windows Rust product toolchain) maps
+  U+A7CE → A7CF, U+A7D2 → A7D3, U+A7D4 → A7D5.
+- go1.26.5 (the Windows Go product toolchain) does NOT:
+  `unicode.ToLower(0xA7CE) == 0xA7CE`; the Go mappings were added in
+  go1.27.
+- go1.27 on Linux maps them, which is why a Linux-only comparison of
+  the two engines cannot detect the parity break.
+
+Repaired at `050b93d1` (product): `windowsFoldPath` in
+`v4/go/internal/cli/handlers/export.go` now maps the three code
+points explicitly (`WriteRune(r + 1)`), and `samefile_windows_test.go`
+pins the three pairs as equal inside `TestSameCanonicalWindowsFold`.
+The interim commit `c0eba523` (reverting the carve-out to plain
+`unicode.ToLower`) was the wrong fix and is superseded by
+`050b93d1`.  All six fold/identity Go tests PASS natively on Windows
+at `050b93d1`.
+
+The P2 record claim: the round-19.12/19.13 records claimed the Go
+Linux product was byte-identical to the wave-19.11 build.  That is
+false: the wave-19.12 fold is not compile-time-dead on POSIX, and the
+Linux Go product carries the fold code (+568 B versus the wave-19.11
+build).  This correction states the actual final identities instead.
+
+Final qualified identities (product source `050b93d1`, pushed,
+origin/master): Linux go product
+`4272e4b1f38e0836c6afb4a489eac7188ee1d318107d75a81de926c2ce14a388` /
+worker
+`ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`;
+rust product `453b0ab9…` / worker `4c17669d…` / fixture `9b40420e…`
+(unchanged from the first 19.13 record); Windows go product
+`53ceeb9c29ce75bc083e220775b5b35ac47e80f7811117ccc9007f17d32ca9e8` /
+worker `65e75d99…`; rust product `68ca5446…` / worker `48d840ec…` /
+fixture `f222a430…` (unchanged).  SHASUMS.txt (10/10) and the
+evidence README identity block match the closing evidence commit.
+
+Battery at the corrected identities (fresh run, every evidence JSON
+regenerated): matrices rust 38/38, go 38/38, mixed 14 PASS + 24
+legitimate skips per direction; crash positive 16/16 both directions
++ /bin/false negative rc 1; resource 8/8 + all self-test controls;
+golden 55/38; sensitivity 14/14; kind gate PASS + self-test;
+operations probe 39/39; Go suite 24 packages PASS; Rust workspace
+918 passed / 0 failed.  Windows native re-qualified at `050b93d1`:
+guard session harness PASS (all seven spellings refused,
+`windows-guard.json`); housekeeping 2/2 PASS
+(`windows-housekeeping.json`); the six fold/identity Go tests PASS;
+the three pre-existing Go Windows failures (worker-spawn PATH and
+immutable file-lock cleanup classes) are unchanged and documented.
+
+The seven role reviews are re-anchored at the corrected final HEAD;
+astra turn 4 (the same review session) remains the milestone-4
+closure gate.

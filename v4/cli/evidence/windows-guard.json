@@ -6,7 +6,7 @@
       "CGO_ENABLED=0 go -C v4/go build -buildvcs=false -o C:/Temp/iprange-w1913b/go-iprange-v4-worker.exe ./cmd/iprange-v4-worker",
       "cargo build --release --all-features --manifest-path v4/rust/Cargo.toml -p iprange-cli --bin iprange -p iprange-livedb --bin iprange-v4-worker --example v4-fixture"
     ],
-    "revision": "401f19d3",
+    "revision": "050b93d1",
     "toolchain": {
       "date": "2026-09-11",
       "go": "go1.26.5 windows/amd64",
@@ -25,9 +25,9 @@
     "go": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789099130.3426387,
+        "mtime": 1789100976.8032563,
         "path": "C:\\Temp\\iprange-w1913b\\bin\\go\\iprange.exe",
-        "sha256": "cdd8abf7556df4ffc42da6f2f0e6c9753038dc039099fffda745e625e130b1d6",
+        "sha256": "53ceeb9c29ce75bc083e220775b5b35ac47e80f7811117ccc9007f17d32ca9e8",
         "size": 14014464
       },
       "cases": {
@@ -207,7 +207,7 @@
       "CGO_ENABLED=0 go -C v4/go build -buildvcs=false -o C:/Temp/iprange-w1913b/go-iprange-v4-worker.exe ./cmd/iprange-v4-worker",
       "cargo build --release --all-features --manifest-path v4/rust/Cargo.toml -p iprange-cli --bin iprange -p iprange-livedb --bin iprange-v4-worker --example v4-fixture"
     ],
-    "revision": "401f19d3",
+    "revision": "050b93d1",
     "toolchain": {
       "date": "2026-09-11",
       "go": "go1.26.5 windows/amd64",

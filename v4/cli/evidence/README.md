@@ -1,45 +1,43 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The current evidence is regenerated after the wave-19.13 repair
-(portability-role P1/P2 findings, wave 19 round 19.13; SOW-0028 "Wave
-19 round 19.13": the Go same-source guard now stores numeric file
-identities — (device, inode) on POSIX and (volume serial, file index)
-through GetFileInformationByHandle on Windows — instead of
-`os.FileInfo`, which on Windows re-opens the recorded stat paths and
-cannot compare a renamed-away source or sidecar; the two
-renamed-identity regressions that earlier rounds recorded as
-pre-existing host-environment failures now PASS natively on Windows.
-The wave-19.13 record also pins the Go fold to Rust 1.97
-`char::to_lowercase` for U+A7CE/A7D2/A7D4 (Go 1.27 `unicode.ToLower`
-would map them to their uppercase partners), gives the
-windows-guard harness the same product-interface IO deadlines as the
-housekeeping harness, and completes the native Windows
-re-qualification (the wave-19.12 README head said it was still
-pending; it is not).
+The current evidence is regenerated after the wave-19.13 final
+correction (SOW-0028 "Wave 19 round 19.13 correction"): the Go
+Windows fold now maps U+A7CE→A7CF, U+A7D2→A7D3, U+A7D4→A7D5
+explicitly so both engines fold byte-identically.  rustc 1.97.1,
+the Windows product toolchain, applies those mappings; the go1.26.5
+Windows product toolchain does not (`unicode.ToLower` leaves the
+three code points unchanged — the mappings were added in go1.27),
+so parity required the explicit Go mapping.  The first wave-19.13
+record claimed the opposite (rustc leaving them unchanged and Go
+carving them out); that claim was wrong and this record supersedes
+it.  The rest of the wave-19.13 repairs stand: the Go same-source
+guard stores numeric file identities — (device, inode) on POSIX and
+(volume serial, file index) through GetFileInformationByHandle on
+Windows — instead of `os.FileInfo`, which on Windows re-opens the
+recorded stat paths and cannot compare a renamed-away source or
+sidecar; the two renamed-identity regressions that earlier rounds
+recorded as pre-existing host-environment failures now PASS
+natively on Windows; and the windows-guard harness has the same
+product-interface IO deadlines as the housekeeping harness.
 
-The product source revision of every staged binary is `401f19d3`
-(pushed, origin/master); the wave-19.13 test/harness repairs
-(`355967e5`, `bb4b6ab7`, `50b515df`, `abb4c3d4` and the probe
-cleanup at `9a6d24de`) change no product code, so the identities
-below are the final wave-19.13 identities.  Both products were
-rebuilt at `401f19d3`: Linux toolchain go1.27.0 / rustc 1.91.1
+The product source revision of every staged binary is `050b93d1`
+(pushed, origin/master).  Linux toolchain go1.27.0 / rustc 1.91.1
 stable (Go product and worker with `-buildvcs=false`; Rust product,
 worker, and fixture with `cargo build --release --all-features`);
 Windows toolchain go1.26.5 windows/amd64 / rustc 1.97.1 on the
 authorized validation host.
 
-Re-qualification at the wave-19.13 Linux identities: matrices rust
-38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate skips,
-go_to_rust 14 PASS + 24 skips; crash positive 16/16 both directions
-and the /bin/false negative control fails as designed (rc 1);
-resource proofs 8/8 with all self-test controls PASS;
-kind-coverage gate PASS with fresh evidence and all self-test
-controls; golden exchanges 55 / 38 case files; sensitivity gate
-14/14; operations wave-19 probe 39/39 OK.  The Go suite (24
-packages, fresh `-count=1`) and the Rust workspace (918 passed, 0
-failed) are green on Linux.
+Re-qualification at the final Linux identities: matrices rust 38/38,
+go 38/38, rust_to_go 14 PASS + 24 legitimate skips, go_to_rust
+14 PASS + 24 skips; crash positive 16/16 both directions and the
+/bin/false negative control fails as designed (rc 1); resource
+proofs 8/8 with all self-test controls PASS; kind-coverage gate PASS
+with fresh evidence and all self-test controls; golden exchanges
+55 / 38 case files; sensitivity gate 14/14; operations wave-19 probe
+39/39 OK.  The Go suite (24 packages, fresh `-count=1`) and the Rust
+workspace (918 passed, 0 failed) are green on Linux.
 
-Windows native at `401f19d3` (go1.26.5 windows/amd64, rustc 1.97.1,
+Windows native at `050b93d1` (go1.26.5 windows/amd64, rustc 1.97.1,
 clean tree): the guard session harness (`windows-guard.json`) PASS
 for both products — all seven spellings refused
 (drive_relative, drive_relative_upper, absolute_upper,
@@ -47,17 +45,21 @@ rooted_sidecar, absolute_trailing_dot, absolute_trailing_space,
 non_ascii) with data.code=invalid_argument + outcome=not_started +
 the exact message, control and reopen allowed, both sources
 byte-identical, sidecars absent; housekeeping 2/2 PASS
-(`windows-housekeeping.json`); the Go Windows suite is green except
-the three documented pre-existing host-environment failures
-(worker-spawn PATH and immutable file-lock cleanup classes — the two
-renamed-identity tests now PASS natively); the Rust Windows guard
-and identity tests PASS natively
-(`refuse_output_over_source_*` 5/5 including
-`refuse_output_over_source_windows_sidecar_spellings` and
+(`windows-housekeeping.json`); the six fold/identity Go tests PASS
+natively — `TestSameCanonicalWindowsFold` pins the three
+U+A7CE/A7D2/A7D4 pairs, and the two renamed-identity tests
+(`TestRefuseOutputOverSourceFileIdentity`,
+`TestSessionReaderMetadataRefusesRenamedLiveSidecar`) that earlier
+rounds recorded as pre-existing host-environment failures now PASS;
+the Go Windows suite is green except the three documented
+pre-existing host-environment failures (worker-spawn PATH and
+immutable file-lock cleanup classes); the Rust Windows guard and
+identity tests PASS natively (`refuse_output_over_source_*` 5/5
+including `refuse_output_over_source_windows_sidecar_spellings` and
 `same_canonical_folds_windows_case`).
 
-Linux identities at `401f19d3`: go product
-`de23d22b0aac97a55b14bcf71c756d221e27af2950bc81282e9c1fae65173c5b` /
+Linux identities at `050b93d1`: go product
+`4272e4b1f38e0836c6afb4a489eac7188ee1d318107d75a81de926c2ce14a388` /
 worker
 `ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`;
 rust product
@@ -67,8 +69,8 @@ worker
 fixture
 `9b40420e7a72d8d0248ac07dffb842ed30ef1766df1e922bd9084e2c9c86ae91`.
 
-Windows identities at `401f19d3`: go product
-`cdd8abf7556df4ffc42da6f2f0e6c9753038dc039099fffda745e625e130b1d6` /
+Windows identities at `050b93d1`: go product
+`53ceeb9c29ce75bc083e220775b5b35ac47e80f7811117ccc9007f17d32ca9e8` /
 worker
 `65e75d99b2fad0b12f3af01ca486296eac1d710476eb36bf79623cd8c2fea01f`;
 rust product
@@ -77,11 +79,6 @@ worker
 `48d840ecece8dec3ab55aae619fb74840839eb142fb584dcb001aa2b04ee9c55` /
 fixture
 `f222a4303ce786f53c44b623c703fec69529a62b21136139371fd7c96bc0b3c6`.
-
-All ten binaries are staged in `.local/shared/binaries/SHASUMS.txt`
-(sha256sum -c OK, 10/10) and every evidence JSON below embeds the
-identities of the executables that actually served it.
-
 ---
 Historical wave record (superseded by the head block): the current evidence is regenerated after the wave-19.12 repair
 (security-role P1/P2 findings, wave 19 round 19.12; SOW-0028 "Wave 19
