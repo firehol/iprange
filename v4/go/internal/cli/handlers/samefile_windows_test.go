@@ -29,10 +29,15 @@ import (
 //   - rooted:             "\dir\db.readers" (rooted-without-volume,
 //     F3: Push anchors it on the source drive; raw concatenation
 //     anchors it on the cwd and misses)
+//
+// dir[len(drive):] keeps the leading separator ("\Users\..."), so
+// exactly one separator is added before it; a second one would turn
+// the spelling into a UNC path that names a different share.
 func windowsSidecarSpellings(dir, source string) []string {
 	drive := filepath.VolumeName(dir) // "C:"
 	base := filepath.Base(source)     // "db"
-	rooted := string(os.PathSeparator) + dir[len(drive):] + format.CoordinationSuffix
+	rooted := string(os.PathSeparator) + strings.TrimLeft(dir[len(drive):], "\\/") +
+		string(os.PathSeparator) + base + format.CoordinationSuffix
 	return []string{
 		drive + base + format.CoordinationSuffix,
 		strings.ToUpper(drive + base + format.CoordinationSuffix),

@@ -486,15 +486,15 @@ mod tests {
             // Rooted-without-volume spelling of the sidecar: the
             // absolute sidecar path minus its "C:" volume prefix.
             let root_relative = sidecar
-                .strip_prefix(Path::new(&format!("{}:", drive as char)))
+                .strip_prefix(Path::new(&format!("{}:", char::from(drive))))
                 .unwrap();
 
             // Every spelling that names the absent sidecar must be
             // refused: drive-relative, drive-relative case variant,
             // absolute case variant, and rooted-without-volume.
             let refusals: Vec<PathBuf> = vec![
-                PathBuf::from(format!("{drive}:db.bin.readers")),
-                PathBuf::from(format!("{drive}:DB.BIN.READERS")),
+                PathBuf::from(format!("{}:db.bin.readers", char::from(drive))),
+                PathBuf::from(format!("{}:DB.BIN.READERS", char::from(drive))),
                 dir.join("DB.BIN.READERS"),
                 root_relative.to_path_buf(),
             ];
