@@ -11942,3 +11942,142 @@ origin/master) and the astra same-session review at that revision.
 This record (and the evidence README head) is the accompanying
 records commit; role verdicts anchor the product revision and the
 observed HEAD together.
+
+#### Wave 19 round 19.18 (2026-09-12) — GLOBALROOT/UNC case-insensitivity parity P1, the dead-literal regression class, CI-catchable namespace pins, and full re-qualification
+
+Parity P1 (native win11 reproduction against the wave-19.17 product
+`f5b9d48f…`): the NT device and UNC namespaces resolve path heads
+case-insensitively, but Go gated the two namespace rewrites on
+case-sensitive prefix comparisons — `strings.CutPrefix` for the
+verbatim/object-manager UNC heads in `windowsUncProbe` and
+`strings.HasPrefix` for the GLOBALROOT family in the
+`canonicalSplitPath` fallback.  Every all-lowercase spelling
+(`\\?\globalroot\…`, `\\.\globalroot\…`, `\??\globalroot\…`,
+`\\?\unc\localhost\…`, `\??\unc\localhost\…`) therefore bypassed
+the Go guard and delivered metadata over the live reader sidecar
+while Rust refused canonically — a fifth recurrence of the
+over-the-sidecar destructive class, reproduced on the native host
+through the production JSON-RPC surface.
+
+Repair 1 (`v4/go/internal/cli/handlers/export.go`): `windowsUncProbe`
+presents verbatim and object-manager UNC spellings to the walk in
+the ordinary form under `strings.EqualFold`.
+
+Repair 2 — regression class found and closed during this round's
+own qualification.  The first rewrite of the GLOBALROOT family gate
+expressed its literals as doubled-separator raw strings
+(`` `\\?\\GLOBALROOT\\` `` — seventeen literal characters that can
+never equal a fifteen-character real path).  The gate was dead code
+and the tree regressed against the committed HEAD: all six
+GLOBALROOT spellings, canonical and lowercase, delivered over the
+live sidecar on the defective win build `d1bdb8e6…`/`03faccf1…`
+(preserved for forensics on the win11 validation host at
+`C:/Temp/iprange-w1917c/defective-1918/`).  The native end-to-end
+pins caught it: the lowercase refusal matrix on the defective build
+returned delivered-allow for every GLOBALROOT row on Go while Rust
+refused all twelve rows.  Root cause is byte-level, not logical:
+inside backtick raw strings a doubled backslash is two literal
+backslashes, so the comparison operand could never match a real
+path.
+
+Final repair: the family gate is now the pure helper
+`globalrootFamilyProbe` (`export.go`, single call site in
+`canonicalSplitPath` behind `runtime.GOOS == "windows"`), comparing
+the three namespace heads with `strings.EqualFold` against
+single-separator raw literals, each verified byte-exact by hexdump
+(`5c5c3f5c47…5c`, `5c5c2e5c47…5c`, `5c3f3f5c47…5c`; fifteen bytes
+per head).  The trailing separator scopes the family to the
+namespace head itself, so the look-alike device component
+`\\?\GLOBALROOTX\` stays outside the gate — a tightening against
+the committed prefix gate, matching Rust, whose string identity
+handles such spellings without a stat arm.
+
+CI-catchability (the systemic lesson of this round): two new
+platform-independent table pins in
+`v4/go/internal/cli/handlers/samefile_test.go` make both failure
+classes fail Linux CI instead of surviving to a Windows host run:
+
+- `TestGlobalrootFamilyProbe` — true family (three heads in
+  canonical, all-lower, all-upper case, and the bare head with
+  trailing separator) and false set (head without trailing
+  separator, `GLOBALROOTX`, near miss, drive path, volume GUID,
+  both UNC families, non-prefix `GLOBALROOT` component, relative,
+  empty).  Negative control: mutating one literal back to the
+  doubled-separator form fails the test; restoring it passes.
+- `TestWindowsUncProbeCaseFold` — the walk rewrite runs on every
+  platform, so case-fold rewrites and look-alike non-rewrites are
+  pinned directly.  Negative control: reverting `EqualFold` to
+  case-sensitive `HasPrefix` fails the test; restoring passes.
+
+Native suite extension: `TestRefuseOutputOverSourceWindowsGlobalrootSidecar`
+now iterates six spellings (three heads × canonical and
+all-lowercase); `windowsSidecarSpellings` adds the two lowercase
+loopback-UNC rows; the native test file's `t.Chdir` uses became
+`os.Chdir` + `t.Cleanup` restore (`go.mod` floor is `go 1.23`;
+`t.Chdir` requires 1.24 and broke `GOOS=windows go vet`).
+
+Reviewed and recorded as NOT a defect: the case-sensitive
+`headerNorm == "UNC\"` comparison in
+`v4/go/internal/format/pathname.go` is the byte-faithful mirror of
+the standard-library verbatim-prefix strip it reproduces —
+rust-lang/rust @ `ed61e7d7e242494fb7057f2657300d9e77bb4fcb`
+library/std/src/sys/path/windows_prefix.rs:82 uses
+`strip_prefix(r"UNC\")` case-sensitively for the same
+`\\?\UNC\` head.  Rust and Go agree there by construction; only
+Go's own guard gates (the two above) carried the case asymmetry.
+
+Blast-radius scan: every namespace-head literal in `v4/go` non-test
+`internal/**` and `cmd/**` was reviewed; the only broken site was
+the GLOBALROOT family gate.  The symbol-only head check at
+`export.go` (verbatim-prefix strip preflight) already compares
+case-insensitively and needed no change.
+
+Final wave-19.18 identities (Linux go1.27.0 / rustc 1.91.1,
+CGO_ENABLED=0, `-buildvcs=false`, clean staging; win go1.26.5 on
+the win11 validation host, `-buildvcs=false`): Linux go product
+`e2377a2c5fea0961a4556a2364e85f3efdd67112470c574126352ea3a14a735a`
+(replaces the broken-gate build), Linux go worker
+`ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`
+unchanged (its dependency closure excludes `cli/handlers`);
+Windows go product `630bc0508a7c6b69473f0b88fc59c394f35d1ed4371bdc04775a5f0a2d4e2019`,
+Windows go worker `d5054a29848c568a28e4f1e97e3ce028dc318a0378c73ca9573476f01a884a1e`
+(hash shift from `cf3b4d2c…` is the embedded staging directory, not
+a code change: `go list -deps` links zero handler packages and the
+embedded staging path string was located in the binary).  Rust on
+both platforms unchanged and re-verified against the pins: Linux
+`e59c0f08…`/`d7a59988…`/`2440122…`, Windows
+`2d5ea513…`/`1cf2f694…`/`570e81cd…`, fixture database
+`d7126fc0…`.  The staging ledger `.local/shared/binaries/SHASUMS.txt`
+(gitignored) was rotated and `sha256sum -c` verifies 10/10.
+
+Battery at the final identity — Linux: go tests green (24 packages),
+Rust workspace 918/0, guard selftest + POSIX negative PASS,
+matrices rust 38/38, go 38/38, rust_to_go and go_to_rust each
+14 executed / 24 legitimate skips / 0 failures, crash 16/16 both
+directions with the `/usr/bin/false` negative control failing 0/16
+as designed (rc 1), resource 8/8 with self-test controls, golden
+exchanges 55 / 38 case files, sensitivity gate 14/14, kind-coverage
+gate PASS.  All eight Linux evidence files regenerated from the new
+identity; a tree-wide scan finds zero references to any superseded
+hash.
+
+Windows native at the final identity (win11 validation host):
+full Go handlers package 69 PASS / 0 SKIP with exactly the three
+documented host-environment failures (msys-`TMPDIR` worker-spawn
+`%PATH%`; two immutable-file-lock `TempDir` cleanups); all required
+pins PASS (`TestGlobalrootFamilyProbe`, GLOBALROOT six-spelling
+pin, sidecar-spellings pin, session sidecar-spellings pin,
+volume-GUID pin); the lowercase refusal matrix — six GLOBALROOT and
+six lowercase verbatim/object-manager UNC/volume-GUID spellings
+driven through the production JSON-RPC surface against the live
+sidecar — REFUSED `invalid_argument` on both engines 12/12; guard
+harness PASS both products (26 cases per product: 22 canonical
+refusals including the GLOBALROOT rows, four distinct-destination
+controls allowed); housekeeping PASS (`windows_qualified=true`,
+`failed=0`).  Windows evidence files `windows-guard.json` and
+`windows-housekeeping.json` regenerated from the new identity and
+byte-verified on both hosts.
+
+The milestone stays gated on the re-anchor PASS of every available
+role at the final wave-19.18 revision (this commit, pushed to
+origin/master) and the astra same-session review at that revision.

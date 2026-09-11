@@ -1269,3 +1269,79 @@ func TestCanonicalAbsoluteMissingAncestorDotDotAfterSymlink(t *testing.T) {
 		t.Fatalf("code=%q outcome=%q", herr.Code, herr.Outcome)
 	}
 }
+
+// TestGlobalrootFamilyProbe pins the GLOBALROOT-family gate of the
+// deepest-existing-ancestor fallback platform-independently.  The
+// fallback itself runs only under GOOS=windows, so without this
+// unit pin a broken literal in the family table (the wave-19.18
+// regression class: a doubled-separator raw-string literal can
+// never match a real path, silently reverting the gate to the
+// wave-19.17 defect where Go delivered metadata over the live
+// sidecar through every GLOBALROOT spelling while Rust refused it)
+// stays invisible to Linux CI.
+func TestGlobalrootFamilyProbe(t *testing.T) {
+	heads := []string{`\\?\GLOBALROOT\`, `\\.\GLOBALROOT\`, `\??\GLOBALROOT\`}
+	for _, head := range heads {
+		for _, spelling := range []string{
+			head + `Device\HarddiskVolume3\dir\db.bin.readers`,
+			strings.ToLower(head) + `Device\HarddiskVolume3\dir\db.bin.readers`,
+			strings.ToUpper(head) + `DEVICE\HARDDISKVOLUME3`,
+			head, // namespace head itself (with trailing separator)
+		} {
+			if !globalrootFamilyProbe(spelling) {
+				t.Errorf("globalrootFamilyProbe(%q) = false, want true", spelling)
+			}
+		}
+	}
+	for _, spelling := range []string{
+		`\\?\GLOBALROOT`,            // no trailing separator
+		`\\?\GLOBALROOTX\Device`,    // look-alike device component
+		`\\?\GLOBALROO\Device`,      // near miss
+		`C:\Temp\plain.bin.readers`, // ordinary drive path
+		`\\?\Volume{f6d5280e-1f28-11ef-8000-0a1a2b3c4d5e}\dir\db.bin`,
+		`\\?\UNC\localhost\C$\dir\db.bin`, // UNC family, not GLOBALROOT
+		`\??\UNC\localhost\C$\dir\db.bin`,
+		`\\server\share\GLOBALROOT\x`, // head not at the prefix
+		`relative\GLOBALROOT\x`,
+		``,
+	} {
+		if globalrootFamilyProbe(spelling) {
+			t.Errorf("globalrootFamilyProbe(%q) = true, want false", spelling)
+		}
+	}
+}
+
+// TestWindowsUncProbeCaseFold pins the case-insensitive verbatim/object-manager
+// UNC-head rewrite platform-independently: the walk rewrite itself runs on
+// every platform, so a case-sensitive prefix comparison (the wave-19.17
+// parity P1: lowercase `\\?\\unc\\localhost\\...` bypassed the rewrite and
+// delivered metadata over the live sidecar while Rust refused it) fails Linux
+// CI instead of surviving until a Windows host run.
+func TestWindowsUncProbeCaseFold(t *testing.T) {
+	rest := `localhost\C$\dir\db.bin.readers`
+	for _, head := range []string{`\\?\UNC\`, `\??\UNC\`} {
+		for _, spelling := range []string{
+			head + rest,
+			strings.ToLower(head) + rest,
+			strings.ToUpper(head) + strings.ToUpper(rest),
+		} {
+			want := `\\` + spelling[len(head):]
+			if got := windowsUncProbe(spelling); got != want {
+				t.Errorf("windowsUncProbe(%q) = %q, want %q", spelling, got, want)
+			}
+		}
+	}
+	for _, spelling := range []string{
+		`\\?\UNCX\localhost\share`, // look-alike head
+		`\\?\UNC`,                  // head without trailing separator
+		`\??\UNC`,
+		`C:\Temp\plain.bin.readers`,
+		`\\server\share\dir`, // ordinary UNC is never rewritten
+		`relative\path`,
+		``,
+	} {
+		if got := windowsUncProbe(spelling); got != spelling {
+			t.Errorf("windowsUncProbe(%q) = %q, want unchanged", spelling, got)
+		}
+	}
+}

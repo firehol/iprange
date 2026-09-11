@@ -60,6 +60,11 @@ func windowsSidecarSpellings(dir, source string) []string {
 	loopbackUNCIP := `\\127.0.0.1\C$` + dir[len(drive):] + `\` + base + format.CoordinationSuffix
 	verbatimLoopbackUNC := `\\?\UNC\localhost\C$` + dir[len(drive):] + `\` + base + format.CoordinationSuffix
 	ntLoopbackUNC := `\??\UNC\localhost\C$` + dir[len(drive):] + `\` + base + format.CoordinationSuffix
+	// Lowercase UNC heads: the kernel resolves them like the
+	// canonical spelling, so the walk rewrite must match any case
+	// (wave-19.17 parity P1).
+	verbatimLoopbackUNCLower := `\\?\unc\localhost\C$` + dir[len(drive):] + `\` + base + format.CoordinationSuffix
+	ntLoopbackUNCLower := `\??\unc\localhost\C$` + dir[len(drive):] + `\` + base + format.CoordinationSuffix
 	return []string{
 		drive + base + format.CoordinationSuffix,
 		strings.ToUpper(drive + base + format.CoordinationSuffix),
@@ -72,7 +77,9 @@ func windowsSidecarSpellings(dir, source string) []string {
 		loopbackUNC,
 		loopbackUNCIP,
 		verbatimLoopbackUNC,
-		ntLoopbackUNC}
+		ntLoopbackUNC,
+		verbatimLoopbackUNCLower,
+		ntLoopbackUNCLower}
 }
 
 // TestRefuseOutputOverSourceWindowsSidecarSpellings pins the guard
@@ -632,7 +639,14 @@ func TestRefuseOutputOverSourceWindowsRelativeSourceCrossFamily(t *testing.T) {
 	if err := os.WriteFile(source, []byte("source"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Chdir(dir)
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(wd) })
 	sourceID := captureFileIdentity("db.bin")
 	if sourceID == nil {
 		t.Fatal("source identity not captured")
@@ -776,7 +790,13 @@ func TestRefuseOutputOverSourceWindowsGlobalrootSidecar(t *testing.T) {
 	t.Cleanup(func() { os.Chdir(wd) })
 
 	for _, prefix := range []string{device, strings.Replace(device, `\\?\GLOBALROOT`, `\\.\GLOBALROOT`, 1),
-		strings.Replace(device, `\\?\GLOBALROOT`, `\??\GLOBALROOT`, 1)} {
+		strings.Replace(device, `\\?\GLOBALROOT`, `\??\GLOBALROOT`, 1),
+		// The NT namespace resolves the whole spelling
+		// case-insensitively; the all-lowercase forms must be refused
+		// exactly like the canonical ones (wave-19.17 parity P1).
+		strings.ToLower(device),
+		strings.ToLower(strings.Replace(device, `\\?\GLOBALROOT`, `\\.\GLOBALROOT`, 1)),
+		strings.ToLower(strings.Replace(device, `\\?\GLOBALROOT`, `\??\GLOBALROOT`, 1))} {
 		destination := prefix + dir[2:] + `\` + filepath.Base(source) + format.CoordinationSuffix
 		// Guard level: refused preflight before any SDK open.
 		if herr := refuseOutputOverSource(destination, source, nil, nil); herr == nil {

@@ -2,9 +2,9 @@
   "all_ok": true,
   "build_provenance": null,
   "fixture": {
-    "mtime": 1789138299.5661473,
-    "path": "/tmp/qualsvc/w1917r/w/fixture-3734351.iprange",
-    "sha256": "f8fa7d993aff3f9f8e4acdd3bef2bc5525e249c0a6b8c2a5034183b32b89491f",
+    "mtime": 1789167317.9565322,
+    "path": "/tmp/qualsvc/w1917r/w/fixture-522986.iprange",
+    "sha256": "6eb60d0f225195586400a9698b8136d9315cd9f5de3ef393c543a892a01fbc56",
     "size": 16384
   },
   "platform": "posix",
@@ -12,10 +12,10 @@
     "go": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789138294.127235,
+        "mtime": 1789167290.4423811,
         "path": "/tmp/qualsvc/w1916/bin/go/iprange",
-        "sha256": "91b8f7a1273f222a14a4114d6ed7c5215e070cf07f8d4cdf7045632401b678ae",
-        "size": 14325519
+        "sha256": "e2377a2c5fea0961a4556a2364e85f3efdd67112470c574126352ea3a14a735a",
+        "size": 14326198
       },
       "cases": {
         "absolute_trailing_dot": {
@@ -97,15 +97,15 @@
       "implementation": "go",
       "sources_before": {
         "/tmp/qualsvc/w1917r/w/guard/go/A\u03a31.iprange": {
-          "sha256_before": "f8fa7d993aff3f9f8e4acdd3bef2bc5525e249c0a6b8c2a5034183b32b89491f",
+          "sha256_before": "6eb60d0f225195586400a9698b8136d9315cd9f5de3ef393c543a892a01fbc56",
           "sidecar_absent_before": true
         },
         "/tmp/qualsvc/w1917r/w/guard/go/db.iprange": {
-          "sha256_before": "f8fa7d993aff3f9f8e4acdd3bef2bc5525e249c0a6b8c2a5034183b32b89491f",
+          "sha256_before": "6eb60d0f225195586400a9698b8136d9315cd9f5de3ef393c543a892a01fbc56",
           "sidecar_absent_before": true
         },
         "/tmp/qualsvc/w1917r/w/guard/go/db_\u00e4.iprange": {
-          "sha256_before": "f8fa7d993aff3f9f8e4acdd3bef2bc5525e249c0a6b8c2a5034183b32b89491f",
+          "sha256_before": "6eb60d0f225195586400a9698b8136d9315cd9f5de3ef393c543a892a01fbc56",
           "sidecar_absent_before": true
         }
       }
@@ -198,15 +198,15 @@
       "implementation": "rust",
       "sources_before": {
         "/tmp/qualsvc/w1917r/w/guard/rust/A\u03a31.iprange": {
-          "sha256_before": "f8fa7d993aff3f9f8e4acdd3bef2bc5525e249c0a6b8c2a5034183b32b89491f",
+          "sha256_before": "6eb60d0f225195586400a9698b8136d9315cd9f5de3ef393c543a892a01fbc56",
           "sidecar_absent_before": true
         },
         "/tmp/qualsvc/w1917r/w/guard/rust/db.iprange": {
-          "sha256_before": "f8fa7d993aff3f9f8e4acdd3bef2bc5525e249c0a6b8c2a5034183b32b89491f",
+          "sha256_before": "6eb60d0f225195586400a9698b8136d9315cd9f5de3ef393c543a892a01fbc56",
           "sidecar_absent_before": true
         },
         "/tmp/qualsvc/w1917r/w/guard/rust/db_\u00e4.iprange": {
-          "sha256_before": "f8fa7d993aff3f9f8e4acdd3bef2bc5525e249c0a6b8c2a5034183b32b89491f",
+          "sha256_before": "6eb60d0f225195586400a9698b8136d9315cd9f5de3ef393c543a892a01fbc56",
           "sidecar_absent_before": true
         }
       }

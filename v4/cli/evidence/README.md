@@ -1,11 +1,16 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-Current evidence regenerated after the wave-19.17 follow-up
-(SOW-0028 "Wave 19 round 19.17", 2026-09-11).  Product and harness
-revision (pushed, origin/master; product source `a8fcadaa` plus the
-gated-fallback repair); the two 19.17 repairs
-below were first qualified at `8a386af4`, then the security role's
-GLOBALROOT finding added the third:
+Current evidence regenerated after the wave-19.18 repairs
+(SOW-0028 "Wave 19 round 19.18", 2026-09-12).  The product and
+harness revision is the final wave-19.18 tree (pushed to
+origin/master; product identities in the identity block below).  The
+wave-19.18 repairs complete the wave-19.17 GLOBALROOT fallback gate:
+the gate now covers the whole device-namespace family
+case-insensitively, its literals are byte-verified single-separator
+raw strings, and the family/probe tables are pinned by
+platform-independent unit tests so a broken literal or a
+case-sensitive comparison fails Linux CI instead of surviving to a
+Windows host run:
 
 - The wave-19.17 harness case
   `relative_source_unc_loopback_sidecar` spelled its destination
@@ -32,13 +37,34 @@ GLOBALROOT finding added the third:
   spelling the publication path opens, and the ancestor arm
   compares the kernel identity of the existing ancestor, so the
   guard refuses the spellings in Go exactly like Rust.  The
-  fallback is gated to the GLOBALROOT family — an ungated form
-  regressed the relative symlink-plus-".." canonicalAbsolute pin
-  (wave-19.17 portability P1), which is restored and pinned by the
-  same committed corpus.  Pinned natively by
+  fallback is gated by `globalrootFamilyProbe`, which compares the
+  three namespace heads (`\\?\\GLOBALROOT\\`,
+  `\\.\\GLOBALROOT\\`, `\\??\\GLOBALROOT\\`) with
+  `strings.EqualFold` and requires the trailing separator, so the
+  NT namespace's case-insensitive resolution is matched and the
+  look-alike device component `\\?\\GLOBALROOTX\\` stays
+  outside the gate (wave-19.18 parity P1: the case-sensitive gate
+  let all-lowercase `globalroot` spellings deliver metadata over
+  the live sidecar while Rust refused; win11 native probes refuse
+  all six spellings on both engines).  An ungated form regressed
+  the relative symlink-plus-".." canonicalAbsolute pin (wave-19.17
+  portability P1), which is restored and pinned by the same
+  committed corpus.  Pinned natively by
   `TestRefuseOutputOverSourceWindowsGlobalrootSidecar` (guard +
-  session call site, three prefix spellings) and by the harness
-  cases `globalroot_sidecar` and `globalroot_device_sidecar`.
+  session call site, six prefix spellings: three heads in
+  canonical and all-lowercase form), platform-independently by
+  `TestGlobalrootFamilyProbe`, and by the harness cases
+  `globalroot_sidecar` and `globalroot_device_sidecar`.
+- The NT namespace resolves the verbatim and object-manager UNC
+  heads (`\\?\\UNC\\`, `\\??\\UNC\\`) case-insensitively,
+  so `windowsUncProbe` presents those spellings to the walk in the
+  ordinary form under `strings.EqualFold` (wave-19.18 parity P1:
+  the case-sensitive `CutPrefix` gate let lowercase
+  `\\?\\unc\\localhost\\...` bypass the rewrite and deliver
+  metadata over the live sidecar while Rust refused).  Pinned by
+  `TestWindowsUncProbeCaseFold` (platform-independent; the rewrite
+  runs on every platform) and by the lowercase loopback-UNC rows of
+  the native sidecar-spelling suite.
 - The `6de5b630` Go same-ancestor anchor fed both spellings through
   `canonicalAbsolute`, whose extended-length prefix strip turns a
   verbatim or volume-GUID absolute destination into a bare relative
@@ -50,7 +76,9 @@ GLOBALROOT finding added the third:
   `TestRefuseOutputOverSourceWindowsVolumeGuidSidecar` and by the
   harness `volume_guid_sidecar` case.
 
-Re-qualification at `8a386af4` and re-verified at `a8fcadaa`:
+Re-qualification at the final wave-19.18 tree (fresh Linux battery
+on the rebuilt Go product; win11 native runs on the rebuilt Go
+executables; Rust binaries unchanged on both platforms):
 
 - Linux battery (go1.27.0 / rustc 1.91.1, clean staging): go tests
   green (24 packages), Rust workspace 918 passed 0 failed, guard
@@ -61,24 +89,29 @@ Re-qualification at `8a386af4` and re-verified at `a8fcadaa`:
   proofs 8/8 with self-test controls PASS, golden exchanges 55 /
   38 case files, sensitivity gate 14/14, kind-coverage gate PASS.
 - Windows native (win11 validation host, go1.26.5 / rustc 1.97.1):
-  Go Windows handler suite 16/16 PASS including the new GLOBALROOT
-  pin, guard harness PASS for both products (20 sidecar spellings
-  refused canonically including the two GLOBALROOT rows, plus the
-  three distinct-destination controls allowed; 23 case checks and
-  3 success-fact rows per product), housekeeping PASS
+  full native Go handlers package 69 PASS / 0 SKIP with exactly the
+  three documented host-environment failures (msys-`TMPDIR`
+  worker-spawn `%PATH%`; two immutable-file-lock `TempDir`
+  cleanups), the Windows-gated GLOBALROOT pin PASS for all six
+  spellings, the lowercase refusal matrix (six GLOBALROOT plus six
+  lowercase UNC/volume-GUID spellings) REFUSED on both engines
+  through the production JSON-RPC surface, guard harness PASS for
+  both products (26 cases per product: 22 sidecar spellings
+  refused canonically including the GLOBALROOT rows, four
+  distinct-destination controls allowed), housekeeping PASS
   (`windows_qualified=true`, `skipped=false`, `failed=0`).
 
-Linux identities at the wave-19.17 final revision: go product
-`91b8f7a1273f222a14a4114d6ed7c5215e070cf07f8d4cdf7045632401b678ae`,
+Linux identities at the final wave-19.18 revision: go product
+`e2377a2c5fea0961a4556a2364e85f3efdd67112470c574126352ea3a14a735a`,
 go worker `ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`,
 rust product `e59c0f08bc58bf9a95d841e0acb5d29d6d873a984c219bb8d2dce7f18f855a77`,
 rust worker `d7a599886eaecccbef00f0a683e2c481d52c2a24352c533b3f7ad5c2d257775e`,
 rust fixture `24401226902e2050d9377322649758c86826ab9290298185c3c4abba3b5e0637`.
 
-Windows identities at the wave-19.17 final revision (measured,
+Windows identities at the final wave-19.18 revision (measured,
 prose-recorded per user decision 2 of 2026-09-11): go product
-`f5b9d48feb673761cbb37f8be79ab37a4a32c8298b9af6899ec68341034aeb92`,
-go worker `cf3b4d2c7b10caca80600a3f3e95f3a5efea76208018f91b763b919a3683a240`,
+`630bc0508a7c6b69473f0b88fc59c394f35d1ed4371bdc04775a5f0a2d4e2019`,
+go worker `d5054a29848c568a28e4f1e97e3ce028dc318a0378c73ca9573476f01a884a1e`,
 rust product `2d5ea513bd0f15fc6eebe86da904496f1e128267c7ec604663fd1ea966d01c87`,
 rust worker `1cf2f694e91bbbd3196fab4810d33e9e6e7c9e31091b8cda5989c20d6d695318`,
 fixture `570e81cdabd38fe132a84b8d07f2a7ea6256eef050d2d7765319677d074d5050`;
@@ -90,8 +123,14 @@ build inputs (standard cargo release build, no
 `--remap-path-prefix`); fresh builds are deterministic for a given
 source-checkout path and toolchain, but a different checkout path
 or environment yields a different hash, so byte-identity claims are
-limited to the exact recorded build inputs.  The Go product/worker,
-the Rust worker, and the fixture reproduce from any clean staging.
+limited to the exact recorded build inputs.  The Linux Go
+product/worker, the Rust worker, and the fixture reproduce from any
+clean staging; the Windows Go executables embed their build
+directory (no `-trimpath`), so their identity is tied to the exact
+staging directory of the recorded build (verified by dependency
+closure: the Windows worker links zero `cli/handlers` packages, so
+its hash shift between rounds is the staging-path artifact, not a
+code change).
 All recorded hashes are the measured values from the canonical
 staging (portability-role verification and lead reproduction,
 recorded with wave-19.17).

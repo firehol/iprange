@@ -2345,11 +2345,39 @@ func canonicalAbsolute(path string) string {
 // alone (wave-19.15 security P1).
 func windowsUncProbe(path string) string {
 	for _, prefix := range []string{`\\?\UNC\`, `\??\UNC\`} {
-		if rest, ok := strings.CutPrefix(path, prefix); ok {
-			return `\\` + rest
+		// The kernel resolves the UNC head case-insensitively, so a
+		// lowercase spelling must be presented to the walk in the
+		// ordinary form exactly like the canonical one (wave-19.17
+		// parity P1: lowercase `\\?\\unc\\localhost\\...`
+		// bypassed the rewrites and delivered over the live sidecar
+		// while Rust refused it).
+		if len(path) >= len(prefix) && strings.EqualFold(path[:len(prefix)], prefix) {
+			return `\\` + path[len(prefix):]
 		}
 	}
 	return path
+}
+
+// globalrootFamilyProbe reports whether path lives under one of the
+// NT device-root namespace heads ("\\?\GLOBALROOT\", its "\\.\"
+// twin, and the object-manager "\??\" twin), compared
+// case-insensitively because the NT namespace resolves the head in
+// any spelling case (wave-19.17 parity P1: the case-sensitive gate
+// let lowercase `globalroot` deliver over the live sidecar while
+// Rust refused it).  The literals are single-separator raw strings:
+// a doubled-separator literal can never name a real path and
+// silently reverts the gate (wave-19.18 regression class, caught by
+// the native end-to-end pin and pinned platform-independently by
+// TestGlobalrootFamilyProbe).  The trailing separator scopes the
+// family to the namespace head itself, so a look-alike device
+// component ("\\?\GLOBALROOTX\") stays outside the gate.
+func globalrootFamilyProbe(path string) bool {
+	for _, prefix := range []string{`\\?\GLOBALROOT\`, `\\.\GLOBALROOT\`, `\??\GLOBALROOT\`} {
+		if len(path) >= len(prefix) && strings.EqualFold(path[:len(prefix)], prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // canonicalSplitPath walks an anchored, separator-normalized
@@ -2400,18 +2428,13 @@ func canonicalSplitPath(path string) (ancestor string, suffix []string, ok bool)
 		// ".." resolution the walk performs (the wave-19.17
 		// portability P1: the relative symlink-plus-".." class
 		// regressed TestCanonicalAbsoluteRelativeSymlinkDotDot).
-		if runtime.GOOS == "windows" {
-			globalroot := strings.HasPrefix(probe, `\\?\GLOBALROOT`) ||
-				strings.HasPrefix(probe, `\\.\GLOBALROOT`) ||
-				strings.HasPrefix(probe, `\??\GLOBALROOT`)
-			if globalroot {
-				if _, statErr := os.Stat(probe); statErr == nil {
-					suffix = make([]string, len(missing))
-					for i, name := range missing {
-						suffix[len(missing)-1-i] = name
-					}
-					return windowsAbsolutize(probe), suffix, true
+		if runtime.GOOS == "windows" && globalrootFamilyProbe(probe) {
+			if _, statErr := os.Stat(probe); statErr == nil {
+				suffix = make([]string, len(missing))
+				for i, name := range missing {
+					suffix[len(missing)-1-i] = name
 				}
+				return windowsAbsolutize(probe), suffix, true
 			}
 		}
 		name, parent := pathLeaf(probe)
