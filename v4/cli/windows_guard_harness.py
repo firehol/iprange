@@ -13,6 +13,11 @@ product interface, while still allowing distinct destinations:
   equivalence of U+03A3/U+03C3, wave 19 round 19.14)
 - extended-length       "\\\\?\\C:\\review\\db.iprange.readers"
   (wave 19 round 19.14)
+- NT object-manager     "\\\\??\\C:\\review\\db.iprange.readers"
+  (the "\\\\?\\" verbatim sibling, wave 19 round 19.15)
+- forward-slash verbatim "\\\\?\\C:/review/db.iprange.readers"
+  (same guarded identity; the kernel rejects the slash form for I/O,
+  both engines still refuse it canonically, wave 19 round 19.15)
 
 The distinct-destination controls publish real metadata bytes and the
 harness validates the exact success response schema plus the delivered
@@ -246,6 +251,14 @@ def selftest():
            "verbatim_sidecar" in names_win)
     expect("posix skips the verbatim sidecar",
            "verbatim_sidecar" not in names_posix)
+    expect("win covers the NT namespace sidecar",
+           "nt_namespace_sidecar" in names_win)
+    expect("posix skips the NT namespace sidecar",
+           "nt_namespace_sidecar" not in names_posix)
+    expect("win covers the forward-slash verbatim sidecar",
+           "verbatim_fwd_sidecar" in names_win)
+    expect("posix skips the forward-slash verbatim sidecar",
+           "verbatim_fwd_sidecar" not in names_posix)
     return ok
 
 
@@ -305,6 +318,22 @@ def guard_cases(work):
         # unit tables.
         candidates.append(
             ("verbatim_sidecar", "\\\\?\\" + work + "\\db.iprange.readers"))
+        # NT object-manager spelling of the verbatim family (wave 19
+        # round 19.15 security P1): "\\??\C:\...\db.iprange.readers"
+        # names the same absent sidecar and must be refused
+        # canonically like "\\?\".  Windows-only, same skip rule as
+        # verbatim_sidecar.
+        candidates.append(
+            ("nt_namespace_sidecar", "\\??\\" + work + "\\db.iprange.readers"))
+        # Forward-slash verbatim spelling (wave 19 round 19.15
+        # security P2): the kernel rejects slash I/O for the "\\?\"
+        # family, but the guarded identity is the same file, so both
+        # engines refuse it canonically (Go canonicalAbsolute now
+        # normalizes separators like Rust PathBuf).  Windows-only,
+        # same skip rule.
+        candidates.append(
+            ("verbatim_fwd_sidecar",
+             "\\\\?\\" + work.replace("\\", "/") + "/db.iprange.readers"))
         # Distinct drive-root control with the SAME basename as the
         # absent sidecar (wave 19 round 19.14 astra P1): with the
         # source in the per-drive working directory,

@@ -255,20 +255,26 @@ fn windows_name_identity(path: &str) -> String {
     out
 }
 
-/// Removes a leading Win32 extended-length ("\\?\") or device
-/// ("\\.\") prefix from a canonical identity: the prefixed spelling
-/// names the same file as the ordinary one, and fs::canonicalize
-/// re-emits every resolved identity in the "\\?\" form, so the
-/// pathname comparison must reconcile both spellings (wave 19 round
-/// 19.14 astra parity finding).  A "\\?\UNC\" or "\\.\UNC\"
-/// device prefix becomes the ordinary "\\server\share" form.
+/// Removes a leading Win32 device-family prefix from a canonical
+/// identity: extended-length ("\\?\"), device ("\\.\"), and the NT
+/// object-manager spelling of the verbatim family ("\??\").
+/// The prefixed spelling names the same file as the ordinary one, and
+/// fs::canonicalize re-emits every resolved identity in the "\\?\"
+/// form, so the pathname comparison must reconcile all three spellings
+/// (wave 19 round 19.14 astra parity finding; the "\??\" sibling is
+/// the wave-19.15 security finding).  A "UNC\" head after any prefix
+/// becomes the ordinary "\\server\share" form.
 /// Non-Windows identities pass through unchanged.
 #[cfg(windows)]
 fn windows_strip_extended(path: PathBuf) -> PathBuf {
     let text = path.to_string_lossy();
-    for prefix in ["\\\\?\\", "\\\\.\\"] {
+    for prefix in ["\\\\?\\", "\\\\.\\", "\\??\\"] {
         if let Some(rest) = text.strip_prefix(prefix) {
-            if rest.len() >= 4 && rest[..4].eq_ignore_ascii_case("unc\\") {
+            // rest.get(..4) is char-boundary safe: a multi-byte head
+            // after the prefix must never panic the worker with a
+            // byte-index fault (wave-19.15 operations P0); a non-ASCII
+            // head is not a UNC spelling.
+            if rest.get(..4).is_some_and(|head| head.eq_ignore_ascii_case("unc\\")) {
                 let mut out = String::with_capacity(rest.len() + 2);
                 out.push('\\');
                 out.push('\\');
@@ -291,9 +297,11 @@ mod windows_strip_extended_tests {
     use super::*;
 
     // The strip consumes exactly the four-character extended-length
-    // ("\\?\") or device ("\\.\") prefix; the UTF-16 units and
-    // the resolved identity comparison stay verbatim (wave 19 round
-    // 19.14 astra parity finding, mirror of the Go pin).
+    // ("\\?\"), device ("\\.\"), or NT object-manager ("\??\")
+    // prefix; the UTF-16 units and the resolved identity comparison
+    // stay verbatim (wave 19 round 19.14 astra parity finding,
+    // mirror of the Go pin; the "\??\" rows are the wave-19.15
+    // security finding).
     #[test]
     fn strip_extended_literals() {
         for (input, want) in [
@@ -301,7 +309,13 @@ mod windows_strip_extended_tests {
              "C:\\review\\db.iprange.readers"),
             ("\\\\.\\C:\\review\\db.iprange.readers",
              "C:\\review\\db.iprange.readers"),
+            ("\\??\\C:\\review\\db.iprange.readers",
+             "C:\\review\\db.iprange.readers"),
             ("\\\\?\\UNC\\server\\share\\db.iprange.readers",
+             "\\\\server\\share\\db.iprange.readers"),
+            ("\\\\.\\UNC\\server\\share\\db.iprange.readers",
+             "\\\\server\\share\\db.iprange.readers"),
+            ("\\??\\UNC\\server\\share\\db.iprange.readers",
              "\\\\server\\share\\db.iprange.readers"),
             ("C:\\review\\db.iprange.readers",
              "C:\\review\\db.iprange.readers"),
@@ -312,6 +326,26 @@ mod windows_strip_extended_tests {
                 .to_string_lossy()
                 .into_owned();
             assert_eq!(got, want, "strip {input:?}");
+        }
+    }
+
+    // A multi-byte head directly after the prefix must not panic:
+    // the old byte-slice check read rest[..4] on a char-boundary
+    // assumption and crashed the worker mid-session (wave-19.15
+    // operations P0).  The strip returns the escaped spelling
+    // verbatim; only an ASCII "UNC\\" head becomes a UNC root.
+    #[test]
+    fn strip_non_ascii_head_does_not_panic() {
+        for input in [
+            "\\\\?\\abc\\u{00e9}\\db.iprange.readers",
+            "\\\\?\\\u{03a9}\\db.iprange.readers",
+            "\\\\.\\abc\\u{00e9}\\db.iprange.readers",
+            "\\??\\abc\\u{00e9}\\db.iprange.readers",
+        ] {
+            let got = windows_strip_extended(PathBuf::from(input))
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(got, &input[4..], "strip {input:?}");
         }
     }
 }

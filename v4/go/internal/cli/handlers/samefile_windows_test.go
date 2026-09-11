@@ -40,13 +40,25 @@ func windowsSidecarSpellings(dir, source string) []string {
 	base := filepath.Base(source)     // "db"
 	rooted := string(os.PathSeparator) + strings.TrimLeft(dir[len(drive):], "\\/") +
 		string(os.PathSeparator) + base + format.CoordinationSuffix
+	// NT object-manager spelling of the verbatim family (wave-19.15
+	// security P1): "\\??\C:\dir\db.readers" names the same file as
+	// the ordinary sidecar; the guard must refuse it like "\\?\".
+	ntNamespace := `\??\` + dir + `\` + base + format.CoordinationSuffix
+	// Forward-slash verbatim spelling (wave-19.15 security P2): the
+	// kernel rejects the slash form for I/O but the identity is the
+	// same file; the guard must refuse it canonically like Rust
+	// (PathBuf normalizes separators eagerly; Go now mirrors that at
+	// canonicalAbsolute entry).
+	verbatimForward := `\\?\` + strings.ReplaceAll(dir, `\`, `/`) + "/" + base + format.CoordinationSuffix
 	return []string{
 		drive + base + format.CoordinationSuffix,
 		strings.ToUpper(drive + base + format.CoordinationSuffix),
 		filepath.Join(dir, strings.ToUpper(base+format.CoordinationSuffix)),
 		rooted,
 		filepath.Join(dir, base+format.CoordinationSuffix+"."),
-		filepath.Join(dir, base+format.CoordinationSuffix+" ")}
+		filepath.Join(dir, base+format.CoordinationSuffix+" "),
+		ntNamespace,
+		verbatimForward}
 }
 
 // TestRefuseOutputOverSourceWindowsSidecarSpellings pins the guard

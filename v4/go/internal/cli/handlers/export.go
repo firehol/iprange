@@ -2182,19 +2182,22 @@ func windowsNameIdentity(path string) string {
 	}, folded)
 }
 
-// windowsStripExtended removes a leading Win32 extended-length
-// ("\\?\") or device ("\\.\") prefix from a canonical identity:
-// the prefixed spelling names the same file as the ordinary one, and
-// Rust's canonicalize re-emits every resolved identity in the "\\?\"
-// form, so the pathname comparison must reconcile both spellings
-// (wave 19 round 19.14 astra parity finding).  A "\\?\UNC\" or
-// "\\.\UNC\" device prefix becomes the ordinary "\\server\share"
-// form.  Non-Windows identities pass through unchanged.
+// windowsStripExtended removes a leading Win32 device-family prefix
+// from a canonical identity: extended-length ("\\?\"), device
+// ("\\.\"), and the NT object-manager spelling of the verbatim
+// family ("\??\").  The prefixed spelling names the same file as the
+// ordinary one, and Rust's canonicalize re-emits every resolved
+// identity in the "\\?\" form, so the pathname comparison must
+// reconcile all three spellings (wave 19 round 19.14 astra parity
+// finding; the "\??\" sibling is the wave-19.15 security finding).
+// A "UNC\" head after any prefix becomes the ordinary
+// "\\server\share" form.  Non-Windows identities pass through
+// unchanged.
 func windowsStripExtended(path string) string {
 	if runtime.GOOS != "windows" {
 		return path
 	}
-	for _, prefix := range []string{`\\?\`, `\\.\`} {
+	for _, prefix := range []string{`\\?\`, `\\.\`, `\??\`} {
 		if !strings.HasPrefix(path, prefix) {
 			continue
 		}
@@ -2226,6 +2229,18 @@ func refusedSameSource() *rpc.HandlerError {
 // and the guard would miss a destination that IS the source (wave 19
 // round 19.8 parity finding).
 func canonicalAbsolute(path string) string {
+	if runtime.GOOS == "windows" {
+		// Rust's PathBuf normalizes every separator to '\' eagerly
+		// at parse; Go's filepath keeps the caller spelling, and
+		// EvalSymlinks preserves it too, so a forward-slash
+		// verbatim spelling ("\\?\C:/dir/...") produced a
+		// mixed-separator identity that escaped the same-source
+		// guard and failed later at the kernel rename with
+		// io/read_only_failure instead of the canonical guard error
+		// (wave-19.15 security P2).  Normalizing here restores the
+		// Rust behavior for every identity the guard compares.
+		path = strings.ReplaceAll(path, "/", `\`)
+	}
 	absolute := path
 	if !filepath.IsAbs(path) {
 		if cwd, err := os.Getwd(); err == nil {
