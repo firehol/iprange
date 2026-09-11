@@ -57,9 +57,10 @@ Re-qualification at `8a386af4` and re-verified at `a8fcadaa`:
   38 case files, sensitivity gate 14/14, kind-coverage gate PASS.
 - Windows native (win11 validation host, go1.26.5 / rustc 1.97.1):
   Go Windows handler suite 16/16 PASS including the new GLOBALROOT
-  pin, guard harness PASS for both products (23 sidecar spellings
-  refused canonically including the two GLOBALROOT rows, the three
-  distinct-destination controls allowed), housekeeping PASS
+  pin, guard harness PASS for both products (20 sidecar spellings
+  refused canonically including the two GLOBALROOT rows, plus the
+  three distinct-destination controls allowed; 23 case checks and
+  3 success-fact rows per product), housekeeping PASS
   (`windows_qualified=true`, `skipped=false`, `failed=0`).
 
 Linux identities at `a8fcadaa`: go product

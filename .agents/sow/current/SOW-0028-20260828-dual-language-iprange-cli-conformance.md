@@ -11878,10 +11878,11 @@ wave-19.17 binaries before any fix, repaired in `a8fcadaa`
 
 Native verification at `a8fcadaa` (win11 validation host): Go
 Windows suite 16/16 PASS (Windows-gated handler tests including the
-new GLOBALROOT pin); guard harness PASS for both products with 23
+new GLOBALROOT pin); guard harness PASS for both products with 20
 sidecar spellings refused canonically per product (verbatim, NT,
 device, loopback-UNC, volume-GUID, GLOBALROOT, relative-source
-families) plus the 3 distinct-destination controls allowed;
+families) plus the 3 distinct-destination controls allowed (23
+case checks, 26 report keys with the 3 success-fact rows);
 housekeeping PASS.  The pre-fix `8a386af4` Go binary delivered over
 the sidecar in the lead's reproduction probe; the `a8fcadaa` Go
 binary (and Rust, unchanged) refuse with
