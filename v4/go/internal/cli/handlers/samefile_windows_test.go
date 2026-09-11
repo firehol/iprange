@@ -555,3 +555,22 @@ func TestSessionMetadataGetWindowsDriveRootDistinct(t *testing.T) {
 		t.Fatalf("drive-root delivery created the sidecar: %v", err)
 	}
 }
+
+// TestWindowsStripExtendedWindows pins the extended-length/device
+// prefix normalization used by canonicalAbsolute identities (wave 19
+// round 19.14 astra parity finding): "\\?\C:\..." and "\\.\C:\..."
+// strip to the ordinary spelling, "\\?\UNC\..." becomes the ordinary
+// UNC form, and ordinary/UNC paths pass through unchanged.
+func TestWindowsStripExtendedWindows(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{`\\?\C:\review\db.iprange.readers`, `C:\review\db.iprange.readers`},
+		{`\\.\C:\review\db.iprange.readers`, `C:\review\db.iprange.readers`},
+		{`\\?\UNC\server\share\db.iprange.readers`, `\\server\share\db.iprange.readers`},
+		{`C:\review\db.iprange.readers`, `C:\review\db.iprange.readers`},
+		{`\\server\share\db.iprange.readers`, `\\server\share\db.iprange.readers`},
+	} {
+		if got := windowsStripExtended(tc.in); got != tc.want {
+			t.Errorf("windowsStripExtended(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

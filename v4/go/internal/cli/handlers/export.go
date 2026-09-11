@@ -2194,7 +2194,7 @@ func windowsStripExtended(path string) string {
 	if runtime.GOOS != "windows" {
 		return path
 	}
-	for _, prefix := range []string{`\\?\\`, `\\.\\`} {
+	for _, prefix := range []string{`\\?\`, `\\.\`} {
 		if !strings.HasPrefix(path, prefix) {
 			continue
 		}
