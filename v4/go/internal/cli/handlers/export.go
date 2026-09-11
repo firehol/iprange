@@ -2238,6 +2238,17 @@ func sameAncestorPath(a, b string) bool {
 		a = strings.ReplaceAll(a, "/", `\`)
 		b = strings.ReplaceAll(b, "/", `\`)
 	}
+	// Anchor relative spellings at the process working directory
+	// before the split walk: a bare relative name has no parent
+	// below the drive root (pathLeaf returns "\"), which would
+	// compare the drive root against the destination's real ancestor
+	// and let a relative source or destination spelling escape the
+	// namespace arm while Rust's canonicalize anchors the same input
+	// (astra turn-5 parity finding).  canonicalAbsolute performs the
+	// identical cwd push used by the pathname arm, so both arms see
+	// the same identity.
+	a = canonicalAbsolute(a)
+	b = canonicalAbsolute(b)
 	aAnc, aSuf, aOK := canonicalSplitPath(a)
 	bAnc, bSuf, bOK := canonicalSplitPath(b)
 	if !aOK || !bOK || len(aSuf) != len(bSuf) {

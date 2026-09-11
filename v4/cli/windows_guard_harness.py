@@ -57,6 +57,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from crash_harness import HarnessJsonRpcService  # noqa: E402
+from schema.results import validate_result  # noqa: E402
 
 REPORT_SCHEMA = "iprange-cli-windows-guard-report-v1"
 RPC_READ_DEADLINE_SECONDS = 300.0
@@ -66,6 +67,11 @@ ACCEPTED_MESSAGE = "destination must differ from the source database"
 IS_WINDOWS = os.name == "nt"
 METHOD = "iprange.v1.database.metadata.get"
 OUTPUT_FACTS = ("bytes", "path", "rows", "sha256")
+
+# The guard fixture carries the direct-v4 metadata record written by
+# the fixture tool; every allowed delivery must publish exactly these
+# bytes, independent of the product's own claims (astra turn-5 P2).
+FIXTURE_METADATA = b'{"fixture":"direct-v4"}'
 
 
 def file_evidence(path):
@@ -110,13 +116,16 @@ def metadata_get_frame(source, destination):
     }
 
 
-def validate_success_response(response, method, destination):
+def validate_success_response(response, method, destination,
+                              expected_bytes=FIXTURE_METADATA):
     """Strict success-facts validation for one metadata.get file
-    delivery (wave 19 round 19.14 astra P2).  A successful response
-    must carry the exact result schema and the delivered file must
-    match the claimed digest/bytes on disk; a bare ``result:{}``, an
-    omitted output file, or a ``present:false`` response that leaves
-    the destination existing is a harness failure, never a PASS.
+    delivery (wave 19 round 19.14 astra P2, hardened astra turn-5).
+    A successful response must carry the exact result schema, must
+    report present=true (the guard fixture carries metadata), and the
+    delivered file must equal the fixture's known metadata bytes; a
+    bare ``result:{}``, a ``present:false`` answer, a schema
+    violation, or a delivered file that merely matches the product's
+    own claims is a harness failure, never a PASS.
 
     Returns (ok, reason).  Error responses are rejected here; refusal
     cases are validated separately with the exact canonical shape.
@@ -126,36 +135,37 @@ def validate_success_response(response, method, destination):
     result = response.get("result")
     if not isinstance(result, dict):
         return False, "result is not an object"
-    if result.get("method") != method:
-        return False, "result.method = %r, want %r" % (result.get("method"), method)
-    present = result.get("present")
-    if not isinstance(present, bool):
-        return False, "result.present is not a boolean"
-    if present:
-        output = result.get("output")
-        if not isinstance(output, dict):
-            return False, "present delivery without output facts"
-        for key in OUTPUT_FACTS:
-            if key not in output:
-                return False, "output lacks %r" % key
-        # The products publish the path fact as either the caller
-        # spelling or its absolute form; both identify the delivered
-        # file.
-        if output.get("path") not in (destination, os.path.abspath(destination)):
-            return False, "output.path %r not %r nor %r" % (
-                output.get("path"), destination, os.path.abspath(destination))
-        if not os.path.exists(destination):
-            return False, "output file %r missing" % destination
-        actual = hashlib.sha256(open(destination, "rb").read()).hexdigest()
-        if actual != output.get("sha256"):
-            return False, "output file digest %s != claimed %s" % (
-                actual, output.get("sha256"))
-        if str(os.path.getsize(destination)) != str(output.get("bytes")):
-            return False, "output file size %d != claimed %r" % (
-                os.path.getsize(destination), output.get("bytes"))
-        return True, ""
-    if os.path.exists(destination):
-        return False, "present:false but destination %r exists" % destination
+    try:
+        validate_result(method, result)
+    except Exception as exc:  # schema.engine.ValidationError
+        return False, "result schema violation: %s" % exc
+    if result.get("present") is not True:
+        return False, "present is not true (the fixture carries metadata)"
+    output = result.get("output")
+    if not isinstance(output, dict):
+        return False, "present delivery without output facts"
+    for key in OUTPUT_FACTS:
+        if key not in output:
+            return False, "output lacks %r" % key
+    # The products publish the path fact as either the caller
+    # spelling or its absolute form; both identify the delivered
+    # file.
+    if output.get("path") not in (destination, os.path.abspath(destination)):
+        return False, "output.path %r not %r nor %r" % (
+            output.get("path"), destination, os.path.abspath(destination))
+    if not os.path.exists(destination):
+        return False, "output file %r missing" % destination
+    expected_digest = hashlib.sha256(expected_bytes).hexdigest()
+    actual = hashlib.sha256(open(destination, "rb").read()).hexdigest()
+    if output.get("sha256") != expected_digest:
+        return False, "claimed digest %s != fixture metadata digest %s" % (
+            output.get("sha256"), expected_digest)
+    if actual != expected_digest:
+        return False, "output file digest %s != fixture metadata digest %s" % (
+            actual, expected_digest)
+    if os.path.getsize(destination) != len(expected_bytes):
+        return False, "output file size %d != expected %d" % (
+            os.path.getsize(destination), len(expected_bytes))
     return True, ""
 
 
@@ -205,9 +215,9 @@ def selftest():
 
     with tempfile.TemporaryDirectory(prefix="iprange-guard-selftest-") as td:
         dest = os.path.join(td, "meta.txt")
-        claimed = hashlib.sha256(b"mymetadata").hexdigest()
+        claimed = hashlib.sha256(FIXTURE_METADATA).hexdigest()
         response = {"result": {"method": METHOD, "present": True, "output": {
-            "bytes": str(len(b"mymetadata")), "rows": "1", "sha256": claimed,
+            "bytes": str(len(FIXTURE_METADATA)), "rows": "1", "sha256": claimed,
             "path": dest}}}
         # astra's counterexample: omit meta.txt entirely.
         expect("omitted file rejected",
@@ -217,9 +227,9 @@ def selftest():
             fh.write(b"")
         expect("empty file rejected",
                not validate_success_response(response, METHOD, dest)[0])
-        # The genuine bytes pass.
+        # The genuine fixture metadata bytes pass.
         with open(dest, "wb") as fh:
-            fh.write(b"mymetadata")
+            fh.write(FIXTURE_METADATA)
         expect("genuine delivery accepted",
                validate_success_response(response, METHOD, dest)[0])
         # present:false with a leftover destination (a missed guard).
@@ -227,6 +237,43 @@ def selftest():
                not validate_success_response(
                    {"result": {"method": METHOD, "present": False}},
                    METHOD, dest)[0])
+        # astra turn-5 counterexample: present:false with the
+        # destination absent (a legal answer for a metadata-less
+        # database, but the guard fixture carries metadata, so the
+        # allowed controls must deliver real bytes).
+        missing = os.path.join(td, "missing.txt")
+        expect("present:false with absent dest rejected",
+               not validate_success_response(
+                   {"result": {"method": METHOD, "present": False}},
+                   METHOD, missing)[0])
+        # astra turn-5 counterexample: an empty delivered file that
+        # matches its own claimed empty digest must not pass.
+        empty_dest = os.path.join(td, "empty.txt")
+        with open(empty_dest, "wb") as fh:
+            fh.write(b"")
+        empty_claim = {"result": {"method": METHOD, "present": True, "output": {
+            "bytes": "0", "rows": "1",
+            "sha256": hashlib.sha256(b"").hexdigest(),
+            "path": empty_dest}}}
+        expect("self-consistent empty digest rejected",
+               not validate_success_response(empty_claim, METHOD, empty_dest)[0])
+        # astra turn-5 counterexample: strict schema violations are
+        # rejected through validate_result (numeric bytes, null rows,
+        # unknown result member).
+        with open(dest, "wb") as fh:
+            fh.write(FIXTURE_METADATA)
+        bad_types = {"result": {"method": METHOD, "present": True, "output": {
+            "bytes": len(FIXTURE_METADATA), "rows": None, "sha256": claimed,
+            "path": dest, "extra": 1}}}
+        expect("schema violations rejected",
+               not validate_success_response(bad_types, METHOD, dest)[0])
+        wrong_method = {"result": {"method": "iprange.v1.reader.lookup",
+                                   "present": True, "output": {
+                                       "bytes": str(len(FIXTURE_METADATA)),
+                                       "rows": "1", "sha256": claimed,
+                                       "path": dest}}}
+        expect("wrong method echo rejected",
+               not validate_success_response(wrong_method, METHOD, dest)[0])
 
     # guard_cases must build on both platform shapes without
     # crashing and with the platform-appropriate case mix (wave 19
@@ -320,6 +367,14 @@ def guard_cases(work):
     candidates += [
         ("absolute_upper", os.path.join(work, "DB.IPRANGE.READERS")),
     ]
+    # Relative-source spellings (astra turn-5 P1): the service runs
+    # with cwd=work, so a "$rel:" source names the same fixture the
+    # absolute spellings address; the relative sidecar derivation must
+    # still be refused through the cross-family namespace arm (Go used
+    # to collapse the relative spelling's ancestor to the drive root).
+    candidates.append(
+        ("relative_source_control_allowed", "$rel:./db.iprange",
+         os.path.join(work, "meta-rel.txt")))
     if drive:
         # rooted-without-volume spelling exists only on Windows; on
         # POSIX the same string is a plain relative file name.
@@ -395,16 +450,31 @@ def guard_cases(work):
         # "\db.iprange.readers" names the distinct C:\db.iprange.readers
         # and must be published, not refused as the source's sidecar.
         candidates.append(("drive_root_allowed", "\\db.iprange.readers"))
+        # Relative source + loopback-UNC sidecar destination: the
+        # relative sidecar derivation must be refused through the
+        # namespace arm exactly like the absolute spellings
+        # (Windows-only: on POSIX the UNC spelling is a plain
+        # unresolvable relative name and the delivery cannot be
+        # exercised).
+        candidates.append(
+            ("relative_source_unc_loopback_sidecar", "$rel:./db.iprange",
+             "\\localhost\\C$" + work[2:] + "\\db.iprange.readers"))
     candidates.append(("control_allowed", os.path.join(work, "meta.txt")))
     source_base = {
         "non_ascii": "db_\u00e4.iprange",
         "ntfs_sigma": "A\u03a31.iprange",
         "ntfs_final_sigma": "A\u03a31.iprange",
     }
-    return [
-        (name, source_base.get(name, "db.iprange"), path)
-        for name, path in candidates
-    ]
+    result = []
+    for entry in candidates:
+        if len(entry) == 3:
+            # A case tuple may carry its own explicit source spelling
+            # (the "$rel:" relative-source cases, astra turn-5 P1).
+            result.append((entry[0], entry[1], entry[2]))
+        else:
+            name, path = entry
+            result.append((name, source_base.get(name, "db.iprange"), path))
+    return result
 
 
 def run_product(binary, label, work, fixture, provenance):
@@ -438,7 +508,10 @@ def run_product(binary, label, work, fixture, provenance):
 
         cases = {}
         for name, source_base, destination in guard_cases(work):
-            source = os.path.join(work, source_base)
+            if source_base.startswith("$rel:"):
+                source = source_base[len("$rel:"):]
+            else:
+                source = os.path.join(work, source_base)
             response = service.call(
                 "g1", METHOD,
                 metadata_get_frame(source, destination),
@@ -452,7 +525,10 @@ def run_product(binary, label, work, fixture, provenance):
                 # Every spelling of the absent sidecar is refused; the
                 # distinct-destination controls (meta.txt, the drive
                 # root) stay allowed (wave 19 round 19.14).
-                expected = name not in ("control_allowed", "drive_root_allowed")
+                expected = name not in (
+                    "control_allowed", "drive_root_allowed",
+                    "relative_source_control_allowed",
+                )
             else:
                 # POSIX negative control: every spelling denotes a
                 # distinct path and must stay allowed.

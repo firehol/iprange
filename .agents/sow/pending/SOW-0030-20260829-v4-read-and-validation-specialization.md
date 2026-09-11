@@ -284,6 +284,32 @@ Pending.
 
 - This SOW's own residuals are recorded here at its close.
 
+## Accepted Exceptions Tracked Here (2026-09-11)
+
+The milestone-4 closure recorded one agreed carve-out whose follow-up
+lives in this tracker (SOW-0028 wave-19.14/19.16 records, user
+decision 2, 2026-09-11).
+
+### Go Windows create-path non-Latin-1 name rejection (parity carve-out)
+
+- Contract: identical-wire parity on the Windows live create surface
+  (`iprange.v1.database.create` / initialize live paths).
+- Current behavior: the Go create path accepts only Latin-1 main
+  names and rejects non-Latin-1 names with `name_invalid` before any
+  file exists; the Rust engine binds UTF-16 units and accepts them.
+  The qualification works around the gap with ASCII-name-then-rename
+  (`c47fc071`), and milestone records do not claim create-name
+  parity.
+- Acceptance/completion criteria for closing this exception: the Go
+  create path accepts and round-trips the same non-Latin-1 main-name
+  set as Rust on the Windows validation host (native session test on
+  `costa-win11`), with identical wire errors for the rejected
+  remainder, OR the user explicitly accepts the restriction as a
+  documented limitation at a decision point, closing this entry as
+  accepted.
+- Owner: this SOW (engine residual), alongside the measured
+  performance residuals above.
+
 ## Regression Log
 
 None.

@@ -608,3 +608,43 @@ func TestWindowsStripExtendedWindows(t *testing.T) {
 		}
 	}
 }
+
+// TestRefuseOutputOverSourceWindowsRelativeSourceCrossFamily pins the
+// anchor behavior of the same-ancestor namespace arm: a RELATIVE
+// source spelling (for example "db.bin" resolved against the service
+// working directory) derives a relative sidecar spelling, and a
+// cross-family destination naming that sidecar must still be refused.
+// Without the cwd anchor the relative sidecar's deepest existing
+// ancestor collapses to the drive root, the ancestor identities
+// diverge, and the guard lets publication reach the reader
+// coordination file (astra turn-5 parity finding; Rust canonicalize
+// anchors the same input).
+func TestRefuseOutputOverSourceWindowsRelativeSourceCrossFamily(t *testing.T) {
+	dir := t.TempDir()
+	drive := ""
+	if len(dir) >= 2 && dir[1] == ':' {
+		drive = dir[:2]
+	} else {
+		t.Skip("temp dir is not on a drive-letter volume")
+	}
+	source := filepath.Join(dir, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	sourceID := captureFileIdentity("db.bin")
+	if sourceID == nil {
+		t.Fatal("source identity not captured")
+	}
+	relative := strings.TrimPrefix(dir, drive)
+	destination := `\\localhost\C$` + relative + `\db.bin.readers`
+	if herr := refuseOutputOverSource(destination, "db.bin", sourceID, nil); herr == nil {
+		t.Fatalf("relative source + cross-family sidecar destination %q not refused", destination)
+	}
+	// The reverse spelling direction stays refused too: a relative
+	// destination naming the sidecar of the absolute source.
+	destRelative := "db.bin.readers"
+	if herr := refuseOutputOverSource(destRelative, source, sourceID, nil); herr == nil {
+		t.Fatalf("relative destination %q naming the sidecar not refused", destRelative)
+	}
+}
