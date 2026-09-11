@@ -131,9 +131,15 @@ fn ends_with_ascii_case_wide(value: &[u16], suffix: &[u8]) -> bool {
 
 #[cfg(windows)]
 fn wide_ascii_eq(wide: &[u16], ascii: &[u8]) -> bool {
-    wide.iter().zip(ascii).all(|(&left, &right)| {
-        left <= u16::from(u8::MAX) && (left as u8).eq_ignore_ascii_case(&right)
-    })
+    // Length equality first: a vacuous .all() over an empty stem made
+    // every dot-leading name ("..", or a leading-dot name such as the
+    // live-pair ".x.live") match the device-name table, while the Go
+    // engine's windowsDeviceName switches on the stem length and
+    // accepts them (wave 19 round 19.14 parity defect).
+    wide.len() == ascii.len()
+        && wide.iter().zip(ascii).all(|(&left, &right)| {
+            left <= u16::from(u8::MAX) && (left as u8).eq_ignore_ascii_case(&right)
+        })
 }
 
 #[cfg(windows)]
@@ -196,5 +202,31 @@ mod tests {
             live_transition_temp(Path::new("/tmp/feed.v4")).unwrap(),
             Path::new("/tmp/feed.v4.readers.reset")
         );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn device_name_requires_equal_length() {
+        // The device stem before the first dot must compare at equal
+        // length: a dot-leading name has an empty stem and is not a
+        // device (wave 19 round 19.14 parity defect; the Go engine's
+        // windowsDeviceName switches on the stem length the same
+        // way).
+        assert!(!is_windows_device_name(&wide(".x.live")), "dot-leading live name");
+        assert!(!is_windows_device_name(&wide(".dot.live")), "dot-leading name");
+        assert!(!is_windows_device_name(&wide("plain.live")), "ordinary name");
+        for name in ["CON", "con", "com1", "LPT9", "aux.txt", "PRN.x"] {
+            assert!(is_windows_device_name(&wide(name)), "{name}");
+        }
+        assert_eq!(
+            validate_main_name(std::ffi::OsStr::new(".x.live")).is_ok(),
+            true,
+            "dot-leading main name must be creatable"
+        );
+    }
+
+    #[cfg(windows)]
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().collect()
     }
 }
