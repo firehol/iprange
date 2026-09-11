@@ -410,7 +410,16 @@ func TestSessionMetadataGetWindowsSigmaSidecar(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.Chdir(wd) })
-	source := newImmutableFeed(t, dir, "A\u03a31.iprange", []byte("mymetadata"))
+	// The database is built under an ASCII name and renamed to the
+	// sigma spelling: the v4 bytes are name-agnostic and the guard
+	// derivation is lexical, so the session exercises the protected
+	// sidecar exactly like a fixture-copied deployment (the Go SDK
+	// create path on Windows rejects non-Latin-1 main names with
+	// name_invalid before any file exists; tracked separately).
+	source := filepath.Join(dir, "A\u03a31.iprange")
+	if err := os.Rename(newImmutableFeed(t, dir, "db-ascii.iprange", []byte("mymetadata")), source); err != nil {
+		t.Fatal(err)
+	}
 	before, err := os.ReadFile(source)
 	if err != nil {
 		t.Fatal(err)
