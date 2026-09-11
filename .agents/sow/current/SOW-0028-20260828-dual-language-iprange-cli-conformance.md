@@ -10813,3 +10813,103 @@ the evidence README identity block match the closing evidence
 commit.  The seven role reviews are re-anchored at the final HEAD;
 astra turn 2 (the same review session) remains the milestone-4
 closure gate.
+
+#### Wave 19 round 19.11 (2026-09-11) — astra turn-3 (same session): Windows drive-relative and case-equivalent sidecar spellings — repaired and re-qualified
+
+The wave-19.10 role round at `bfda5782` returned all seven PASSes;
+the resumed astra control session (turn 3) then FAILed with three P1
+findings, all in the Windows pathname class of the same-source guard:
+
+- P1 (Go, Windows) — drive-relative destinations (`C:db.iprange.readers`)
+  missed the guard.  Native host probes confirmed the mechanics:
+  `filepath.EvalSymlinks("C:")` returns the drive-relative `C:.`,
+  `filepath.Join("C:.", name)` cleans to the drive ROOT (`C:\name`)
+  instead of the per-drive working directory, and the old `pathLeaf`
+  returned the drive root as the parent of a drive-relative name;
+  Rust `Path::parent("C:name") = Some("C:")` and
+  `fs::canonicalize("C:")` resolve the drive cwd, so Rust already
+  refused.  Repaired in Go: `pathLeaf` returns the bare volume prefix
+  as parent for drive-relative names (Rust Path::parent parity), and
+  `canonicalAbsolute` absolutizes any drive-relative EvalSymlinks
+  result through `filepath.Abs` — which on Windows resolves via
+  `GetFullPathName` with per-drive cwd semantics — before re-appending
+  the missing components; the fallback arm absolutizes too.  A scratch
+  revert of the cwd anchor to the wave-19.9 raw join reproduces the
+  destructive behavior again (metadata.get writes the 10-byte metadata
+  text at the drive-relative sidecar pathname), and the new native
+  regressions fail it, proving the pin detects the revert.
+- P1 (both engines) — case variants of an ABSENT Windows sidecar
+  passed: both canonicalizers appended the missing basename unchanged
+  and compared case-sensitively, and an absent sidecar has no file
+  identity for the device/inode arm.  Repaired: the pathname arms now
+  fold ASCII case on Windows only (`sameCanonical` /
+  `same_canonical`, `eq_ignore_ascii_case` parity); POSIX stays
+  strict.  The fold is a documented ASCII approximation for absent
+  names, identical in both engines; existing files stay protected by
+  the OS-handle file-identity arm.
+- P1 (test coverage) — the wave-19.10 Windows pin rows called
+  `pathname.Push` directly, so a revert of the `canonicalAbsolute`
+  call site restored the bypass without failing them.  Repaired with
+  Windows-native regressions that exercise the guard and the real
+  `iprange.v1.database.metadata.get` session call:
+  drive-relative, drive-relative case variant, absolute case variant,
+  and rooted-without-volume sidecar spellings must all refuse with the
+  canonical shape; distinct destinations (including rooted
+  non-sidecar names and case variants on POSIX) stay allowed.  The
+  call-site revert experiment (wave-19.9 shape, scratch checkout on
+  the Windows host) FAILs both new Go tests natively, reproducing the
+  original destructive write; the tests pass again after restoring
+  the repair.
+
+The wave-19.11 product commit is `7a193500` (Go canonicalAbsolute/
+pathLeaf + sameCanonical, Rust same_canonical, Go Windows regressions
+`samefile_windows_test.go`, Rust cfg(windows) guard tests); the
+initial test spellings and the new harness
+(`v4/cli/windows_guard_harness.py`) were corrected in `b1bfd32d`
+(the rooted spelling had a double leading separator, turning into a
+UNC path, and the harness asserted a top-level error code the
+products never emit) and the harness import path fixed in `9b3fd2b3`
+(the isolated embeddable Windows Python never adds the script
+directory; the harness now inserts its own directory like the
+housekeeping harness) — no product change after `7a193500`.
+
+Battery at the wave-19.11 final identities (Linux at `7a193500`:
+go `949fa62c…` / worker `4f2eb063…`, rust `02f2dc6a…` / worker
+`4c17669d…` / fixture `9b40420e…`): Go suite 24 packages PASS;
+Rust workspace 918 passed / 0 failed; matrices rust 38/38, go
+38/38, rust_to_go 14 PASS + 24 legitimate skips, go_to_rust
+14 PASS + 24 skips; crash positive 16/16 both directions and the
+/bin/false negative control fails as designed (rc 1); resource
+proofs 8/8 and self-test PASS (one run-1 flake of proof d.go
+observed during regeneration: the pipelined cancel landed after the
+destination open, so the factual abort outcome was
+`cancelled/read_only_failure` instead of `cancelled/not_started` —
+the wave-19.11 refusals run before the destination open and only
+widen the `not_started` window; runs 2-5 were clean 8/8 and the
+committed evidence is a clean run); golden exchanges 55 / 38 case
+files; sensitivity gate 14/14; kind-coverage gate PASS with all
+self-test controls; operations probe 39/39.
+
+Windows native qualification at `7a193500` (go1.26.5 windows/amd64,
+rustc 1.97.1, embeddable Python 3.14.0, clean tree; products go
+`0fd9be82…` / rust `3a3735ae…`, workers `0f4bd8c1…` /
+`7513ac4d…`, fixture `f6badab6…`):
+`TestRefuseOutputOverSourceWindowsSidecarSpellings`,
+`TestSessionMetadataGetWindowsSidecarSpellings`,
+`refuse_output_over_source_windows_sidecar_spellings`, and
+`same_canonical_folds_windows_case` PASS natively; the new guard
+session harness (`windows-guard.json`, both products) refuses all
+four sidecar spellings with the canonical shape and exact message,
+proves the source byte-identical and the sidecar absent, publishes
+to a distinct destination, and reopens; housekeeping 2/2 PASS
+(`windows-housekeeping.json`, schema v3).  The full Windows Go suite
+shows only five pre-existing host-environment failures (worker-spawn
+PATH and file-lock cleanup classes, byte-identical to the
+`668468cc` baseline) and the Rust workspace only the pre-existing
+C-ABI `libiprange_v4.dll.a` link-surface gap of the debug tree.
+
+The final committed identities of this round are the Linux products
+above and the Windows products above; SHASUMS.txt (5/5) and the
+evidence README identity block match the closing evidence commit.
+The seven role reviews are re-anchored at the final HEAD; astra turn
+3 (the same review session) remains the milestone-4 closure gate.
