@@ -1,5 +1,106 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
+Current evidence regenerated after the wave-19.16 cross-family
+guard completion (SOW-0028 "Wave 19 round 19.16", 2026-09-11).  The
+guard round that followed the wave-19.15 record closed the remaining
+namespace-spelling arm of the destructive same-source class and
+corrected the Rust cross-family pin to the real NT object-manager
+spelling.  Product source revision `e576d4e8` (pushed, origin/master):
+
+- Loopback-UNC and volume-GUID namespace spellings
+  (`\\localhost\C$\...`, `\\127.0.0.1\C$\...`,
+  `\\?\UNC\localhost\C$\...`, `\\?\Volume{...}`) name the
+  same real file as the drive-letter spelling, resolved by the
+  kernel, while the canonical identities stayed in the caller's
+  namespace and never matched: `metadata.get` published over the
+  absent live sidecar and made the source unreadable (third
+  recurrence of the wave-19.9/19.14 destructive class).  Both
+  engines now add the same-ancestor arm: the deepest EXISTING
+  ancestor of both spellings is the same real directory with one
+  kernel file identity (volume serial + file index), which no
+  lexical mapping can forge; refuse when the ancestor identities
+  match (`530b7548`).  The Go probe re-spells the verbatim-family
+  UNC prefixes (`\\?\UNC\...` and its NT object-manager twin
+  `\??\UNC\...`) as `\\server\share` because EvalSymlinks
+  cannot open the verbatim "server" prefix alone (`3540edc9`).
+  Pins: five native harness cases (`unc_loopback_sidecar`,
+  `unc_loopback_ip_sidecar`, `verbatim_unc_loopback_sidecar`,
+  `nt_unc_loopback_sidecar`, `volume_guid_sidecar`) plus Go/Rust
+  unit tables.
+- The Rust cross-family pin built its native path with two leading
+  backslashes (`\\??\UNC\...`), which Windows parses as a UNC
+  server named `??` that resolves to nothing; the real NT
+  object-manager spelling has ONE leading backslash
+  (`\??\UNC\...`).  The native Windows run proved both release
+  products refuse the real spelling; the pin row now builds the
+  same spelling as the harness, the Go pin, and the product probe
+  (`e576d4e8`).  Product code was not changed by this fix.
+
+User decision 2026-09-11 (decision 2): the Windows native evidence is
+recorded with the actual measured binary identities in prose (the
+harness JSONs carry the per-product sha256 inline while
+`build_provenance` stays null) without a `--provenance` re-run,
+matching the wave-19.15 recording practice.
+
+Product source revision `e576d4e8` (pushed, origin/master).  Linux
+toolchain go1.27.0 / rustc 1.91.1 stable (Go product and worker with
+`CGO_ENABLED=0 go -C v4/go build -buildvcs=false`; Rust product,
+worker, and fixture with `cargo build --release --all-features` on
+`iprange-cli`, `iprange-livedb`, and the `v4-fixture` example);
+Windows toolchain go1.26.5 windows/amd64 / rustc 1.97.1 on the
+authorized validation host, built from a clean tree at `e576d4e8`.
+
+Linux identities at `e576d4e8`:
+
+- go product `ad402735a5009eb255a3e2385138e3d2c3fdbc948170399cd3338d6a29b6b241`, worker `ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`
+- rust product `e59c0f08bc58bf9a95d841e0acb5d29d6d873a984c219bb8d2dce7f18f855a77`, worker `d7a599886eaecccbef00f0a683e2c481d52c2a24352c533b3f7ad5c2d257775e`, fixture `24401226902e2050d9377322649758c86826ab9290298185c3c4abba3b5e0637`
+
+Windows identities at `e576d4e8`:
+
+- go product `850e70ec61d2ef306f55cf6e26ce8600067bde417b0d8fa878a30f1c36e80de0`, worker `cf3b4d2c7b10caca80600a3f3e95f3a5efea76208018f91b763b919a3683a240`
+- rust product `2d5ea513bd0f15fc6eebe86da904496f1e128267c7ec604663fd1ea966d01c87`, worker `1cf2f694e91bbbd3196fab4810d33e9e6e7c9e31091b8cda5989c20d6d695318`, fixture `570e81cdabd38fe132a84b8d07f2a7ea6256eef050d2d7765319677d074d5050`
+- fixture database created natively by the fixture tool: sha256 `d7126fc04b502f3aee316ef98d192514246ec39adecf68c747b35ce43e1eabd4`
+
+Re-qualification at the final Linux identities (fresh battery):
+matrices rust 38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate
+skips, go_to_rust 14 PASS + 24 skips; crash positive 16/16 both
+directions and the /bin/false negative control fails as designed
+(rc 1); resource proofs 8/8 with all self-test controls PASS;
+golden exchanges 55 / 38 case files; sensitivity gate 14/14;
+kind-coverage gate PASS; operations wave-19 probe 39/39 OK; the
+guard harness selftest PASS and the POSIX negative control
+(`guard-posix.json`) PASS for both products.  The Go suite (24
+packages) and the Rust workspace (918 passed, 0 failed) are green on
+Linux.
+
+Windows native at `e576d4e8`: guard harness PASS for both products
+with 22 cases including the five added cross-family names
+(`windows-guard.json`, all_ok true, 22/22 each product — the
+wave-19.15 evidence held 17 cases); housekeeping PASS with
+`skipped=false`, `failed=0`, `windows_qualified=true`
+(`windows-housekeeping.json`, refresh flow 150 rows / 123456 /
+200 rows); the Rust cross-family guard test now PASSES natively
+(corrected single-backslash spelling); the Go native handler suite
+(Windows / SameCanonical / Strip tables) PASSes (12 tests,
+including `TestSessionMetadataGetWindowsSidecarSpellings`,
+`TestRefuseOutputOverSourceWindowsSidecarSpellings`, and
+`TestWindowsStripExtendedWindows`).
+
+Measured-identity note: the wave-19.15 Linux Rust product/fixture
+did not reproduce byte-exactly from the clean recipe in that wave
+(document `.local/operations/report.md`); the hashes above are the
+actual measured values at `e576d4e8` from the documented recipe.
+The Windows go worker hash also differs from the wave-19.15 record
+(the earlier Windows record predates the guard changes and was
+built without the fully clean recipe; the recipe now pins a clean
+tree and `-buildvcs=false`).  Records cite the measured hashes;
+byte-exact reproducibility is re-verified by the closure role round
+against this revision.
+
+Previous wave blocks below remain part of the historical record;
+the wave-19.15, wave-19.14, and earlier blocks are not superseded,
+only superseded-in-position by this head.
+
 Current evidence regenerated after the wave-19.15 same-source guard
 completion (SOW-0028 "Wave 19 round 19.15", 2026-09-11): the
 closure-role round at the wave-19.14 HEAD returned three blockers,

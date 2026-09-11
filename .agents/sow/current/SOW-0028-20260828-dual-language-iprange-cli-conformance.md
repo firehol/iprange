@@ -11604,3 +11604,109 @@ source; origin/master) with all evidence regenerated:
 
 A fresh role round over the final evidence commit and the astra
 same-session review follow as the milestone-4 closure gate.
+
+#### Wave 19 round 19.16 (2026-09-11) — cross-family guard completion and records commit
+
+The guard round that followed the wave-19.15 record closed the
+remaining namespace-spelling arm of the destructive same-source
+class and corrected the Rust cross-family pin.  Product and test
+commits at `530b7548`, `3540edc9`, `e576d4e8` (pushed,
+origin/master):
+
+1. P1 (guard recurrence) — loopback-UNC and volume-GUID namespace
+   spellings (`\\localhost\C$\...`, `\\127.0.0.1\C$\...`,
+   `\\?\UNC\localhost\C$\...`, `\\?\Volume{...}`) name the same
+   real file as the drive-letter spelling, resolved by the kernel,
+   while the canonical identities stayed in the caller's namespace
+   and never matched: `metadata.get` published over the absent live
+   sidecar and made the source unreadable (third recurrence of the
+   wave-19.9/19.14 destructive class).  Repair (`530b7548`): both
+   engines add the same-ancestor arm — the deepest EXISTING ancestor
+   of both spellings is the same real directory with one kernel file
+   identity (volume serial + file index), which no lexical mapping
+   can forge; refuse when the ancestor identities match.  The Go
+   probe additionally re-spells the verbatim-family UNC prefixes
+   (`\\?\UNC\...` and the NT object-manager twin `\??\UNC\...`) as
+   `\\server\share` because EvalSymlinks cannot open the verbatim
+   "server" prefix alone (`3540edc9`).  Pins: five native harness
+   cases (`unc_loopback_sidecar`, `unc_loopback_ip_sidecar`,
+   `verbatim_unc_loopback_sidecar`, `nt_unc_loopback_sidecar`,
+   `volume_guid_sidecar`) plus Go/Rust unit tables.
+2. P3 (test construction, found natively) — the Rust cross-family
+   pin built its native path with two leading backslashes
+   (`\\??\UNC\...`), which Windows parses as a UNC server named `??`
+   that resolves to nothing; the real NT object-manager spelling has
+   ONE leading backslash (`\??\UNC\...`).  The native Windows run
+   proved both release products refuse the real spelling; the pin
+   row now builds the same spelling as the harness, the Go pin, and
+   the product probe (`e576d4e8`).  Product code was not changed by
+   this fix.
+
+User decision 2026-09-11 (decision 2): the Windows native evidence
+is recorded with actual measured binary identities in prose (the
+harness JSONs carry per-product sha256 inline while
+`build_provenance` stays null) without a `--provenance` re-run,
+matching the wave-19.15 recording practice.
+
+Re-qualified at the fixed HEAD `e576d4e8` (product source, pushed,
+origin/master) with all evidence regenerated:
+
+- Linux battery (go1.27.0, rustc 1.91.1, fresh workdir): go suite
+  24 packages PASS (incl. the handlers package), Rust workspace 918
+  passed / 0 failed; matrices rust 38/38, go 38/38, rust_to_go 14
+  PASS + 24 legitimate skips, go_to_rust 14 PASS + 24 skips; crash
+  positive 16/16 both directions + /bin/false negative control rc 1
+  as designed; resource 8/8 + selftest; golden 55/38; sensitivity
+  14/14; kind gate PASS; operations probe 39/39; guard selftest PASS
+  and POSIX negative control (`guard-posix.json`) PASS.
+- Linux identities: go product
+  `ad402735a5009eb255a3e2385138e3d2c3fdbc948170399cd3338d6a29b6b241` /
+  worker `ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`;
+  rust product
+  `e59c0f08bc58bf9a95d841e0acb5d29d6d873a984c219bb8d2dce7f18f855a77` /
+  worker `d7a599886eaecccbef00f0a683e2c481d52c2a24352c533b3f7ad5c2d257775e` /
+  fixture `24401226902e2050d9377322649758c86826ab9290298185c3c4abba3b5e0637`.
+- Windows native (go1.26.5 windows/amd64, rustc 1.97.1, clean tree
+  at `e576d4e8`): guard harness PASS for both products with 22 cases
+  including the five added cross-family names (`windows-guard.json`,
+  all_ok true, 22/22 each product; the wave-19.15 evidence held 17
+  cases); housekeeping PASS with skipped=false, failed=0,
+  windows_qualified=true (`windows-housekeeping.json`, refresh flow
+  150 rows / 123456 / 200 rows); the Rust cross-family guard test
+  now PASSES natively (corrected single-backslash spelling); the Go
+  native handler suite (Windows / SameCanonical / Strip tables)
+  PASSes (12 tests, including
+  `TestSessionMetadataGetWindowsSidecarSpellings`,
+  `TestRefuseOutputOverSourceWindowsSidecarSpellings`, and
+  `TestWindowsStripExtendedWindows`).
+- Windows identities: go product
+  `850e70ec61d2ef306f55cf6e26ce8600067bde417b0d8fa878a30f1c36e80de0` /
+  worker `cf3b4d2c7b10caca80600a3f3e95f3a5efea76208018f91b763b919a3683a240`;
+  rust product
+  `2d5ea513bd0f15fc6eebe86da904496f1e128267c7ec604663fd1ea966d01c87` /
+  worker `1cf2f694e91bbbd3196fab4810d33e9e6e7c9e31091b8cda5989c20d6d695318` /
+  fixture `570e81cdabd38fe132a84b8d07f2a7ea6256eef050d2d7765319677d074d5050`.
+- Measured-identity note: the wave-19.15 Linux Rust product/fixture
+  did not reproduce byte-exactly from the clean recipe in that wave
+  (document `.local/operations/report.md`); the hashes above are the
+  actual measured values at `e576d4e8` from the documented recipe.
+  The Windows go worker hash also differs from the wave-19.15 record
+  (the earlier Windows record predates the guard changes and was
+  built before the recipe pinned a clean tree and `-buildvcs=false`).
+  Records cite the measured hashes; byte-exact reproducibility is
+  re-verified by the closure role round against this revision.
+- Native suite deltas vs the wave-19.15 record: Go Windows suite
+  fails the same three documented host-environment classes; the Rust
+  iprange-cli suite's cross-family test now passes, with the same
+  two immutable file-lock cleanup host-environment classes remaining
+  (worker-spawn %PATH% cases pass in this environment).
+
+Evidence regenerated into `v4/cli/evidence/` at `e576d4e8` (matrices,
+crash, resource, guard-posix, windows-guard, windows-housekeeping,
+README head); the private `.local/shared/binaries/` staging and
+`SHASUMS.txt` are refreshed with the identities above.
+
+The closure role round re-review over this records commit and the
+astra same-session review follow as the milestone-4 closure gate.
+No later repository commit is expected after the records commit
+before that gate reports.
