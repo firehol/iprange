@@ -27,6 +27,7 @@ import (
 	"errors"
 	"os"
 	"syscall"
+	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -499,7 +500,13 @@ func (d *Directory) openEntry(name string, access uint32, writeThrough bool) (*o
 }
 
 // entryPath is the retained final path plus one name component (Rust
-// Directory::entry_path: final_path + backslash + name units).
+// Directory::entry_path: final_path + backslash + name units).  The
+// name is encoded as UTF-16 code units exactly like the Rust OsStr
+// units, so every name the main-name rule admits binds the same file
+// (wave 19 round 19.14 parity finding: the prior Latin-1-only loop
+// rejected every rune above U+00FF with name_invalid while the Rust
+// engine accepted it, blocking non-Latin-1 database names such as the
+// Greek sigma spellings on Windows).
 func (d *Directory) entryPath(name string) (string, error) {
 	units, err := finalPath(d.file)
 	if err != nil {
@@ -508,12 +515,7 @@ func (d *Directory) entryPath(name string) (string, error) {
 	if len(units) == 0 || units[len(units)-1] != '\\' {
 		units = append(units, '\\')
 	}
-	for _, r := range name {
-		if r > 0xFF {
-			return "", nsInvalidNameError()
-		}
-		units = append(units, uint16(r))
-	}
+	units = append(units, utf16.Encode([]rune(name))...)
 	return windows.UTF16ToString(units), nil
 }
 
