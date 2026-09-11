@@ -16,7 +16,7 @@ import (
 
 // Exact copy of the wave-19.6 session test plus cleanup diagnostics
 // (wave-19.13 Windows qualification).
-func TestTmpProbeBlocked(t *testing.T) {
+func TestTmpProbeSleep3(t *testing.T) {
 
 	dir := t.TempDir()
 	source := newLiveFeed(t, dir, "live2.db")
@@ -83,11 +83,5 @@ func TestTmpProbeBlocked(t *testing.T) {
 	if len(bytes) == 0 || bytes[0] == '{' {
 		t.Fatalf("renamed sidecar was modified: head %q", bytes[:min(len(bytes), 20)])
 	}
-	runtime.GC()
-	t.Cleanup(func() {
-		// Pause so the outer host can query Restart Manager and name
-		// the process that still holds the directory open.
-		fmt.Println("cleanup-paused")
-		time.Sleep(20 * time.Second)
-	})
+	time.Sleep(3 * time.Second)
 }
