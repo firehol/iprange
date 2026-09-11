@@ -876,6 +876,15 @@ func TestSessionReaderMetadataRefusesRenamedLiveSidecar(t *testing.T) {
 	if len(bytes) == 0 || bytes[0] == '{' {
 		t.Fatalf("renamed sidecar was modified: head %q", bytes[:min(len(bytes), 20)])
 	}
+	// Restore the sidecar before the transport EOF so the session can
+	// finish the reader close: with the table renamed away the close
+	// is deliberately retryable (close-incomplete, Rust
+	// failed_close_keeps_exact_retry_authority parity) and the
+	// retained handles would stay open through the process teardown,
+	// which blocks temp-directory cleanup on Windows.
+	if err := os.Rename(renamed, sidecar); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // TestSessionReaderMetadataRenamedSourceRefused pins the wave-19.4 P1
