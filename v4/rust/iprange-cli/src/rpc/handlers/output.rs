@@ -614,14 +614,14 @@ mod tests {
         // on the Rust side means a future Rust toolchain table
         // change cannot silently break the byte-identical fold.
         let single: &[(char, char)] = &[
-            (0x1C89 as char, 0x1C8A as char),
-            (0xA7CB as char, 0x0264 as char),
-            (0xA7CC as char, 0xA7CD as char),
-            (0xA7CE as char, 0xA7CF as char),
-            (0xA7D2 as char, 0xA7D3 as char),
-            (0xA7D4 as char, 0xA7D5 as char),
-            (0xA7DA as char, 0xA7DB as char),
-            (0xA7DC as char, 0x019B as char),
+            ('\u{1C89}', '\u{1C8A}'),
+            ('\u{A7CB}', '\u{0264}'),
+            ('\u{A7CC}', '\u{A7CD}'),
+            ('\u{A7CE}', '\u{A7CF}'),
+            ('\u{A7D2}', '\u{A7D3}'),
+            ('\u{A7D4}', '\u{A7D5}'),
+            ('\u{A7DA}', '\u{A7DB}'),
+            ('\u{A7DC}', '\u{019B}'),
         ];
         for (up, lo) in single {
             let a = format!("C:\\review\\db_{up}.readers");
