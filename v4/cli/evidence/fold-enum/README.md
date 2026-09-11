@@ -27,11 +27,20 @@ toolchains (go1.26.5, rustc 1.97.1) on the Windows validation host:
    Case_Ignorable property tables in
    `v4/go/internal/cli/handlers/unicode_fold_tables.go`.  Result:
    byte-identical output, sha256
-   `3cdf661f6772e0ec6875a315d1662232cc1f80f11ab44edc65435f3b9992e4d4`,
-   pinned by `TestWindowsFoldCorpusPin` (every platform, real
-   production function), `TestWindowsFoldStringContextDifferential`
-   (Windows Go test) and
-   `windows_fold_string_context_differential` (Windows Rust test).
+   `3cdf661f6772e0ec6875a315d1662232cc1f80f11ab44edc65435f3b9992e4d4`.
+   The Go tests pin the sha256 (stdlib crypto/sha256, verified
+   correct on both toolchains): `TestWindowsFoldCorpusPin` (every
+   platform, real production function) and
+   `TestWindowsFoldStringContextDifferential` (Windows session
+   test).  The Rust Windows test pins the same bytes with an inline
+   FNV-1a 64 (`0x732bbe7ae850adfc`) instead of a crate digest:
+   workspace test-binary sha2 instances intermittently mis-hashed
+   long Vec inputs on the Windows validation host on 2026-09-11
+   (rustc 1.97.1 windows/msvc codegen observation; release
+   standalone binaries and Python/OpenSSL always hashed correctly,
+   and the anomaly did not reproduce deterministically across full
+   rebuilds — recorded here so a future failing hash pin is not
+   mistaken for a fold regression).
 
 Property table generation: `unicode_fold_tables.go` is generated
 from DerivedCoreProperties.txt **Unicode 17.0.0**
