@@ -2007,6 +2007,19 @@ func refuseOutputOverSource(destination, source string, sourceID, sidecarID *rpc
 		if sameCanonical(canonicalAbsolute(destination), canonicalAbsolute(sidecar)) {
 			return refusedSameSource()
 		}
+		// Same-ancestor arm (Windows only): two spellings of the same
+		// eventual file can live in different namespace families
+		// (drive letter, loopback UNC like \\localhost\C$\\... or
+		// \\127.0.0.1\\C$\\..., volume GUID like \\\\?\\Volume{...})
+		// that no lexical strip can reconcile, while the deepest
+		// EXISTING ancestor of both spellings is the same real
+		// directory with one kernel file identity.  Refuse when the
+		// ancestor identities match AND the folded missing suffix
+		// matches; distinct directories or distinct names stay
+		// allowed (wave-19.15 security P1).
+		if runtime.GOOS == "windows" && sameAncestorPath(destination, sidecar) {
+			return refusedSameSource()
+		}
 		// The file-identity arm prefers the sidecar identity captured
 		// at reader open (a renamed sidecar keeps its identity) and
 		// falls back to a fresh capture at the derived path for
@@ -2215,6 +2228,41 @@ func refusedSameSource() *rpc.HandlerError {
 		"destination must differ from the source database")
 }
 
+// sameAncestorPath reports whether two path spellings denote the
+// same eventual file by comparing the kernel file identity of their
+// deepest existing ancestors plus the folded relative suffix: the
+// namespace-independent part of canonicalSplitPath (wave-19.15 security
+// P1, UNC-loopback and volume-GUID sidecar spellings).
+func sameAncestorPath(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		a = strings.ReplaceAll(a, "/", `\`)
+		b = strings.ReplaceAll(b, "/", `\`)
+	}
+	aAnc, aSuf, aOK := canonicalSplitPath(a)
+	bAnc, bSuf, bOK := canonicalSplitPath(b)
+	if !aOK || !bOK || len(aSuf) != len(bSuf) {
+		return false
+	}
+	for i := range aSuf {
+		if !sameSuffixComponent(aSuf[i], bSuf[i]) {
+			return false
+		}
+	}
+	aID := captureFileIdentity(aAnc)
+	bID := captureFileIdentity(bAnc)
+	return aID != nil && bID != nil && aID.Dev == bID.Dev && aID.Ino == bID.Ino
+}
+
+// sameSuffixComponent compares one missing-suffix component under
+// the destination filesystem's name-equivalence rules: the Windows
+// fold (case, trailing dots/spaces, sigma class) or exact bytes.
+func sameSuffixComponent(a, b string) bool {
+	if runtime.GOOS == "windows" {
+		return windowsNameIdentity(a) == windowsNameIdentity(b)
+	}
+	return a == b
+}
+
 // canonicalAbsolute resolves path to a stable identity for same-file
 // comparison: the deepest existing ancestor is symlink-resolved and
 // the remaining components are appended (Rust output.rs
@@ -2254,20 +2302,43 @@ func canonicalAbsolute(path string) string {
 			absolute = pathname.Push(cwd, path)
 		}
 	}
+	ancestor, suffix, ok := canonicalSplitPath(absolute)
+	if !ok {
+		return windowsStripExtended(windowsAbsolutize(filepath.Clean(absolute)))
+	}
+	// suffix is already in path order (deepest-collected reversed).
+	resolved := ancestor
+	for _, name := range suffix {
+		resolved = filepath.Join(resolved, name)
+	}
+	return windowsStripExtended(resolved)
+}
+
+// canonicalSplitPath walks an anchored, separator-normalized
+// spelling exactly like canonicalAbsolute but returns the deepest
+// EXISTING ancestor and the missing suffix separately: the ancestor
+// keeps a kernel file identity that is namespace-independent (drive
+// letter, loopback UNC, volume GUID all name the same real
+// directory), which the same-ancestor guard arm compares; ok=false
+// means no ancestor exists (the whole spelling is not-yet-existing),
+// so the string identity fallback applies (wave-19.15 security P1).
+func canonicalSplitPath(path string) (ancestor string, suffix []string, ok bool) {
 	var missing []string
-	probe := absolute
+	probe := path
 	for {
 		resolved, err := filepath.EvalSymlinks(probe)
 		if err == nil {
-			resolved = windowsAbsolutize(resolved)
-			for i := len(missing) - 1; i >= 0; i-- {
-				resolved = filepath.Join(resolved, missing[i])
+			// missing holds the walked components deepest-first;
+			// reverse it so the suffix reads in path order.
+			suffix = make([]string, len(missing))
+			for i, name := range missing {
+				suffix[len(missing)-1-i] = name
 			}
-			return windowsStripExtended(resolved)
+			return windowsAbsolutize(resolved), suffix, true
 		}
 		name, parent := pathLeaf(probe)
 		if name == "" || parent == probe {
-			return windowsStripExtended(windowsAbsolutize(filepath.Clean(absolute)))
+			return "", nil, false
 		}
 		missing = append(missing, name)
 		probe = parent

@@ -137,6 +137,35 @@ fn normalize_nt_namespace(path: &Path) -> PathBuf {
 /// eventual file (absolute vs relative, `./`/`..` decorations, a
 /// symlinked directory) compare equal.
 pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
+    let split = canonical_split(path);
+    let mut result = match split.ancestor {
+        Some(ancestor) => ancestor,
+        None => return windows_strip_extended(lexical_clean_path(&split.absolute)),
+    };
+    // suffix is already in path order (deepest-collected reversed).
+    for component in split.suffix.iter() {
+        result.push(component);
+    }
+    windows_strip_extended(lexical_clean_path(&result))
+}
+
+/// The deepest existing ancestor and the missing suffix of a
+/// spelling, separated so the same-source guard can also compare
+/// kernel file identities that are namespace-independent (drive
+/// letter, loopback UNC, volume GUID all name the same real
+/// directory; wave-19.15 security P1).
+struct CanonicalSplit {
+    /// Deepest existing ancestor, when any component exists
+    /// (None means the whole spelling is not-yet-existing and only
+    /// the string identity fallback applies).
+    ancestor: Option<PathBuf>,
+    /// Missing suffix components in path order.
+    suffix: Vec<std::ffi::OsString>,
+    /// The anchored absolute spelling (normalized) for fallbacks.
+    absolute: PathBuf,
+}
+
+fn canonical_split(path: &Path) -> CanonicalSplit {
     // The NT object-manager spelling ("\\??\\C:\\...") names the same
     // file as the verbatim family, but Rust's Path parser does not
     // recognize it as a root prefix: is_absolute() is false and
@@ -154,23 +183,24 @@ pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
             Err(_) => path.to_path_buf(),
         }
     };
-    let mut missing: Vec<&std::ffi::OsStr> = Vec::new();
+    let mut missing: Vec<std::ffi::OsString> = Vec::new();
     let mut probe = absolute.as_path();
     loop {
         match fs::canonicalize(probe) {
             Ok(resolved) => {
-                let mut result = resolved;
-                for component in missing.iter().rev() {
-                    result.push(component);
-                }
-                return windows_strip_extended(lexical_clean_path(&result));
+                missing.reverse();
+                return CanonicalSplit {
+                    ancestor: Some(resolved),
+                    suffix: missing,
+                    absolute,
+                };
             }
             Err(_) => {
                 let ends_in_parentdir =
                     probe.components().next_back() == Some(std::path::Component::ParentDir);
                 match (probe.file_name(), probe.parent()) {
                     (Some(name), Some(parent)) => {
-                        missing.push(name);
+                        missing.push(name.to_os_string());
                         probe = parent;
                     }
                     // A not-yet-existing ancestor that terminates in
@@ -182,14 +212,57 @@ pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
                     // lexical clean of the whole path would fold them
                     // against the symlink name).
                     (None, Some(parent)) if ends_in_parentdir => {
-                        missing.push(std::ffi::OsStr::new(".."));
+                        missing.push(std::ffi::OsStr::new("..").to_os_string());
                         probe = parent;
                     }
-                    _ => return windows_strip_extended(lexical_clean_path(&absolute)),
+                    _ => {
+                        return CanonicalSplit {
+                            ancestor: None,
+                            suffix: Vec::new(),
+                            absolute,
+                        };
+                    }
                 }
             }
         }
     }
+}
+
+/// Same-ancestor guard arm (Windows-only): two spellings of the same
+/// eventual file can live in different namespace families (drive
+/// letter, loopback UNC like \\localhost\\C$\\..., volume GUID like
+/// \\\\?\\Volume{...}) that no lexical strip can reconcile, while
+/// their deepest EXISTING ancestors are the same real directory with
+/// one kernel file identity.  Refuse when the ancestor identities
+/// match AND the folded missing suffix matches, so distinct
+/// directories or distinct names stay allowed (wave-19.15 security
+/// P1).  POSIX guard paths pass through with the pathname arm only.
+#[cfg(windows)]
+fn ancestor_same(a: &Path, b: &Path) -> bool {
+    let a_split = canonical_split(a);
+    let b_split = canonical_split(b);
+    let (Some(a_ancestor), Some(b_ancestor)) = (a_split.ancestor, b_split.ancestor) else {
+        return false;
+    };
+    if a_split.suffix.len() != b_split.suffix.len() {
+        return false;
+    }
+    for (x, y) in a_split.suffix.iter().zip(b_split.suffix.iter()) {
+        let xs = x.to_string_lossy();
+        let ys = y.to_string_lossy();
+        if windows_name_identity(&xs) != windows_name_identity(&ys) {
+            return false;
+        }
+    }
+    match (file_identity(&a_ancestor), file_identity(&b_ancestor)) {
+        (Some(x), Some(y)) => x.dev == y.dev && x.ino == y.ino,
+        _ => false,
+    }
+}
+
+#[cfg(not(windows))]
+fn ancestor_same(_a: &Path, _b: &Path) -> bool {
+    false
 }
 
 /// Refuse an output destination that resolves to the same file as the
@@ -418,6 +491,12 @@ pub(crate) fn refuse_output_over_source(
                 &canonical_absolute(destination),
                 &canonical_absolute(&sidecar_path),
             );
+            // The same-ancestor arm compares kernel file identities
+            // of the deepest existing ancestors plus the folded
+            // missing suffix: namespace families (drive letter,
+            // loopback UNC, volume GUID) that no lexical strip can
+            // reconcile (wave-19.15 security P1).
+            let by_ancestor = ancestor_same(destination, &sidecar_path);
             // The file-identity arm uses the sidecar identity captured
             // at reader open when one exists (a renamed sidecar keeps
             // its identity) and falls back to a fresh stat at the
@@ -433,7 +512,7 @@ pub(crate) fn refuse_output_over_source(
                 .map_or(false, |(dest, twin)| {
                     dest.dev == twin.dev && dest.ino == twin.ino
                 });
-            by_pathname || by_file
+            by_pathname || by_file || by_ancestor
         })
         .unwrap_or(false);
     if same_pathname || same_file || sidecar_same {
@@ -792,6 +871,77 @@ mod tests {
         std::env::set_current_dir(&previous).unwrap();
         let _ = fs::remove_dir_all(&dir);
         result.unwrap();
+    }
+
+    // Wave-19.15 security P1: the loopback UNC and NT/verbatim UNC
+    // spellings of the absent sidecar name the same real file as the
+    // drive-letter spelling through a namespace family no lexical
+    // strip can reconcile; the same-ancestor arm must refuse them
+    // using the kernel file identity of the deepest existing
+    // ancestor, while a distinct loopback-UNC destination (other
+    // directory) stays allowed.
+    #[cfg(windows)]
+    #[test]
+    fn refuse_output_over_source_windows_cross_family_spellings() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-guard-crosfam-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.join("db.bin");
+        fs::write(&source, b"source").unwrap();
+        let identity = FileIdentity {
+            path: source.clone(),
+            dev: 0,
+            ino: 0,
+        };
+
+        // dir must sit on a drive-letter volume for the C$ admin
+        // share spelling to reach it.
+        let drive = match dir.components().next() {
+            Some(std::path::Component::Prefix(prefix)) => match prefix.kind() {
+                std::path::Prefix::Disk(letter) => char::from(letter),
+                _ => return,
+            },
+            _ => return,
+        };
+        let relative = dir.strip_prefix(Path::new(&format!("{drive}:"))).unwrap();
+        let cross_family: Vec<PathBuf> = vec![
+            PathBuf::from(format!("\\\\localhost\\{drive}${}", relative.display()))
+                .join("db.bin.readers"),
+            PathBuf::from(format!("\\\\127.0.0.1\\{drive}${}", relative.display()))
+                .join("db.bin.readers"),
+            PathBuf::from(format!("\\\\?\\UNC\\localhost\\{drive}${}", relative.display()))
+                .join("db.bin.readers"),
+            PathBuf::from(format!("\\\\??\\UNC\\localhost\\{drive}${}", relative.display()))
+                .join("db.bin.readers"),
+        ];
+        for destination in cross_family {
+            if refuse_output_over_source(&destination, &identity, None).is_ok() {
+                panic!("cross-family destination {destination:?} naming the absent sidecar accepted");
+            }
+        }
+
+        // A distinct loopback-UNC destination in another directory
+        // names a different file and must stay allowed.
+        let other = dir.join("other");
+        fs::create_dir(&other).unwrap();
+        let other_unc = PathBuf::from(format!(
+            "\\\\localhost\\{drive}${}",
+            other.strip_prefix(Path::new(&format!("{drive}:"))).unwrap().display()
+        ))
+        .join("db.bin.readers");
+        assert!(
+            refuse_output_over_source(&other_unc, &identity, None).is_err()
+                || !other_unc.exists()
+        );
+
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[cfg(windows)]

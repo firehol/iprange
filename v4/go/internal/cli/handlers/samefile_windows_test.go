@@ -50,6 +50,15 @@ func windowsSidecarSpellings(dir, source string) []string {
 	// (PathBuf normalizes separators eagerly; Go now mirrors that at
 	// canonicalAbsolute entry).
 	verbatimForward := `\\?\` + strings.ReplaceAll(dir, `\`, `/`) + "/" + base + format.CoordinationSuffix
+	// Cross-family spellings (wave-19.15 security P1): the loopback
+	// UNC and volume-GUID namespaces name the same real files as the
+	// drive-letter spelling; no lexical strip can reconcile them, so
+	// the guard's same-ancestor arm compares the kernel file identity
+	// of the deepest existing ancestor plus the folded suffix.
+	loopbackUNC := `\\localhost\C$` + dir[len(drive):] + `\` + base + format.CoordinationSuffix
+	loopbackUNCIP := `\\127.0.0.1\C$` + dir[len(drive):] + `\` + base + format.CoordinationSuffix
+	verbatimLoopbackUNC := `\\?\UNC\localhost\C$` + dir[len(drive):] + `\` + base + format.CoordinationSuffix
+	ntLoopbackUNC := `\??\UNC\localhost\C$` + dir[len(drive):] + `\` + base + format.CoordinationSuffix
 	return []string{
 		drive + base + format.CoordinationSuffix,
 		strings.ToUpper(drive + base + format.CoordinationSuffix),
@@ -58,7 +67,11 @@ func windowsSidecarSpellings(dir, source string) []string {
 		filepath.Join(dir, base+format.CoordinationSuffix+"."),
 		filepath.Join(dir, base+format.CoordinationSuffix+" "),
 		ntNamespace,
-		verbatimForward}
+		verbatimForward,
+		loopbackUNC,
+		loopbackUNCIP,
+		verbatimLoopbackUNC,
+		ntLoopbackUNC}
 }
 
 // TestRefuseOutputOverSourceWindowsSidecarSpellings pins the guard

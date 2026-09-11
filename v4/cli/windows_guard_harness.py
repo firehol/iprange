@@ -259,7 +259,37 @@ def selftest():
            "verbatim_fwd_sidecar" in names_win)
     expect("posix skips the forward-slash verbatim sidecar",
            "verbatim_fwd_sidecar" not in names_posix)
+    expect("win covers the UNC loopback sidecar",
+           "unc_loopback_sidecar" in names_win)
+    expect("posix skips the UNC loopback sidecar",
+           "unc_loopback_sidecar" not in names_posix)
+    expect("win covers the volume-GUID sidecar only natively",
+           ("volume_guid_sidecar" in names_win) == IS_WINDOWS)
+    expect("posix skips the volume-GUID sidecar",
+           "volume_guid_sidecar" not in names_posix)
     return ok
+
+
+def windows_c_volume_guid():
+    """Device path of the C: volume ("\\\\?\\\\Volume{...}\\\\") on a native
+    Windows host, or None elsewhere: the volume-GUID spelling of a
+    path names the same file as the drive-letter spelling, so the
+    guard must refuse it like the other sidecar spellings (wave 19
+    round 19.15 security P1)."""
+    if os.name != "nt":
+        return None
+    import subprocess
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance Win32_Volume -Filter \"DriveLetter='C:'\").DeviceID"],
+            capture_output=True, text=True, timeout=30)
+        value = out.stdout.strip()
+        if value.endswith("\\"):
+            return value
+        return value + "\\" if value else None
+    except Exception:
+        return None
 
 
 def guard_cases(work):
@@ -334,6 +364,31 @@ def guard_cases(work):
         candidates.append(
             ("verbatim_fwd_sidecar",
              "\\\\?\\" + work.replace("\\", "/") + "/db.iprange.readers"))
+        # Cross-family spellings (wave 19 round 19.15 security P1):
+        # loopback UNC and volume-GUID namespaces name the same real
+        # files as the drive-letter spelling; no lexical strip can
+        # reconcile them, so the guard compares the kernel file
+        # identity of the deepest existing ancestor plus the folded
+        # suffix.  Windows-only, same skip rule: on POSIX these are
+        # relative or unresolvable spellings and the delivery cannot
+        # be exercised.
+        candidates.append(
+            ("unc_loopback_sidecar",
+             "\\\\localhost\\C$" + work[2:] + "\\db.iprange.readers"))
+        candidates.append(
+            ("unc_loopback_ip_sidecar",
+             "\\\\127.0.0.1\\C$" + work[2:] + "\\db.iprange.readers"))
+        candidates.append(
+            ("verbatim_unc_loopback_sidecar",
+             "\\\\?\\UNC\\localhost\\C$" + work[2:] + "\\db.iprange.readers"))
+        candidates.append(
+            ("nt_unc_loopback_sidecar",
+             "\\??\\UNC\\localhost\\C$" + work[2:] + "\\db.iprange.readers"))
+        volume_guid = windows_c_volume_guid()
+        if volume_guid:
+            candidates.append(
+                ("volume_guid_sidecar",
+                 volume_guid + work[2:] + "\\db.iprange.readers"))
         # Distinct drive-root control with the SAME basename as the
         # absent sidecar (wave 19 round 19.14 astra P1): with the
         # source in the per-drive working directory,
