@@ -2084,14 +2084,11 @@ func windowsFoldPath(path string) string {
 			b.WriteString("i\u0307")
 			continue
 		}
-		if r == 0xA7CE || r == 0xA7D2 || r == 0xA7D4 {
-			// rustc 1.97 char::to_lowercase leaves these three code
-			// points unchanged; Go 1.27 unicode.ToLower would map
-			// them to their uppercase partners, diverging the fold
-			// (wave 19 round 19.13 portability finding).
-			b.WriteRune(r)
-			continue
-		}
+		// Plain unicode.ToLower for every other rune: the product
+		// toolchains agree on all 1,112,064 valid runes (go1.26.5 /
+		// go1.27.0 vs rustc 1.97.1, wave-19.12 enumeration), including
+		// U+A7CE/A7D2/A7D4 whose mappings differ on the older Linux
+		// rustc 1.91 but the fold is cfg(windows) only.
 		b.WriteRune(unicode.ToLower(r))
 	}
 	return b.String()
