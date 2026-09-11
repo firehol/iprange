@@ -108,7 +108,9 @@ rust product
 worker
 `1cf2f694e91bbbd3196fab4810d33e9e6e7c9e31091b8cda5989c20d6d695318` /
 fixture tool
-`da46eb8dfa0162fcdabf6e932f2411efad37488fbb592c77fa33b0941430d4d7`;
+`fbaaa5f879787d8347fa499ab4ca11bd099e599f51db512808e6249e7ac6cc36`
+(rebuild from `c2b2b0cf`; the wave-19.14 record value was not
+reproducible from the recorded recipe);
 the native fixture database created for this wave hashes to
 `d7126fc04b502f3aee316ef98d192514246ec39adecf68c747b35ce43e1eabd4`.
 
