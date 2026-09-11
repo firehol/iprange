@@ -866,7 +866,10 @@ func TestSessionReaderMetadataRefusesRenamedLiveSidecar(t *testing.T) {
 		t.Fatalf("metadata response %q, want the source-refusal error", second)
 	}
 	// The displaced sidecar file is untouched, not metadata text.
-	bytes, err := os.ReadFile(renamed)
+	// The read re-opens with a share-delete handle on Windows (Go's
+	// os.ReadFile does not share delete, and the live reader's sidecar
+	// gate retains a DELETE-access handle; readSidecar_windows_test.go).
+	bytes, err := readFileShareDelete(renamed)
 	if err != nil {
 		t.Fatal(err)
 	}
