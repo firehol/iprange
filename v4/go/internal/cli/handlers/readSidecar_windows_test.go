@@ -50,7 +50,11 @@ func readFileShareDelete(path string) ([]byte, error) {
 	if n < 0 {
 		n = 0
 	}
-	return unsafe.Slice((*byte)(uintptrToPointer(view)), n), nil
+	// Copy before the deferred unmap: the returned slice must own its
+	// bytes once the view is released.
+	out := make([]byte, n)
+	copy(out, unsafe.Slice((*byte)(uintptrToPointer(view)), n))
+	return out, nil
 }
 
 // uintptrToPointer reinterprets one kernel-returned address as a
