@@ -14,6 +14,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -646,5 +647,80 @@ func TestRefuseOutputOverSourceWindowsRelativeSourceCrossFamily(t *testing.T) {
 	destRelative := "db.bin.readers"
 	if herr := refuseOutputOverSource(destRelative, source, sourceID, nil); herr == nil {
 		t.Fatalf("relative destination %q naming the sidecar not refused", destRelative)
+	}
+}
+
+// cVolumeDevicePath resolves the device path of the volume backing
+// the current working directory ("\\\\?\\Volume{guid}\\") through the
+// Win32_Volume class, mirroring the qualification harness
+// windows_c_volume_guid; skips when PowerShell or the volume query is
+// unavailable.  The volume-GUID namespace names the same real files
+// as the drive-letter spelling, so the same-ancestor guard arm must
+// refuse a volume-GUID spelling of the absent sidecar exactly like
+// the loopback-UNC spellings (wave-19.15 security P1).
+func cVolumeDevicePath(t *testing.T) string {
+	t.Helper()
+	out, err := exec.Command("powershell", "-NoProfile", "-Command",
+		"(Get-CimInstance Win32_Volume -Filter \"DriveLetter='C:'\").DeviceID").Output()
+	if err != nil {
+		t.Skipf("volume device path query failed: %v", err)
+	}
+	device := strings.TrimSpace(string(out))
+	if !strings.HasPrefix(device, `\\?\Volume{`) || !strings.HasSuffix(device, `\`) {
+		t.Skipf("unexpected device path %q", device)
+	}
+	return device
+}
+
+// TestRefuseOutputOverSourceWindowsVolumeGuidSidecar pins the
+// volume-GUID spelling at the guard and at the production session
+// call site: the deep-existing-ancestor identity of the volume-GUID
+// namespace equals the drive-letter identity, so the absent sidecar
+// must be refused even though no lexical strip can reconcile the two
+// spellings (wave-19.15 security P1; regression pin for the
+// wave-19.17 sameAncestorPath anchoring change, which regressed this
+// arm until the anchor was narrowed to relative spellings only).
+func TestRefuseOutputOverSourceWindowsVolumeGuidSidecar(t *testing.T) {
+	dir := t.TempDir()
+	drive := filepath.VolumeName(dir) // "C:"
+	if len(drive) != 2 || drive[1] != ':' || !strings.EqualFold(drive, "C:") {
+		t.Skip("temp dir is not on the C: volume")
+	}
+	device := cVolumeDevicePath(t)
+	source := filepath.Join(dir, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sidecar := source + format.CoordinationSuffix
+	destination := device + strings.TrimLeft(dir[len(drive):], `\/`) +
+		`\` + filepath.Base(source) + format.CoordinationSuffix
+
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(wd) })
+
+	// Guard level: the destination names the absent sidecar through
+	// the volume-GUID namespace and must be refused preflight.
+	if herr := refuseOutputOverSource(destination, source, nil, nil); herr == nil {
+		t.Fatalf("volume-GUID destination %q naming the absent sidecar accepted", destination)
+	}
+	// Production call site: the same request through
+	// iprange.v1.database.metadata.get is refused canonically and
+	// must not create the sidecar.
+	frame := `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.database.metadata.get","params":{"source":{"path":` +
+		mustJSONString(source) + `,"mode":"immutable"},"delivery":{"mode":"file","path":` +
+		mustJSONString(destination) + `,"publication_policy":"replace_existing","max_output_bytes":"1048576","max_open_files":8}}}`
+	out := runSession(t, frame)
+	if !strings.Contains(out, `"code":"invalid_argument"`) ||
+		!strings.Contains(out, "destination must differ from the source database") {
+		t.Fatalf("metadata.get to %q: output = %q, want the source-refusal error", destination, out)
+	}
+	if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+		t.Fatalf("metadata.get to %q created the sidecar: %v", destination, err)
 	}
 }

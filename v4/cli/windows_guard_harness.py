@@ -458,7 +458,7 @@ def guard_cases(work):
         # exercised).
         candidates.append(
             ("relative_source_unc_loopback_sidecar", "$rel:./db.iprange",
-             "\\localhost\\C$" + work[2:] + "\\db.iprange.readers"))
+             "\\\\localhost\\C$" + work[2:] + "\\db.iprange.readers"))
     candidates.append(("control_allowed", os.path.join(work, "meta.txt")))
     source_base = {
         "non_ascii": "db_\u00e4.iprange",
