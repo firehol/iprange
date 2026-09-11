@@ -170,24 +170,64 @@ pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
 /// filename-equivalence rules.  On Windows an absent sidecar (or any
 /// not-yet-existing destination) has no file identity for the device/
 /// inode arm, so the pathname arm must apply the platform's name
-/// equivalence; NTFS-style case folding is approximated with the
-/// ASCII fold shared with Go `sameCanonical` so both engines refuse
-/// exactly the same spellings (wave 19 round 19.11 astra finding).
-/// POSIX names are case-sensitive and compare exactly.
+/// equivalence: Win32 strips trailing dots and spaces from the final
+/// component at create, and the volume's case table equates name
+/// spellings.  The fold below is the Unicode full lowercase shared
+/// with Go `sameCanonical` (Go maps the one BMP character whose full
+/// lowercase expands, U+0130, to its two-rune form so both engines
+/// fold byte-identically); it is a practical approximation of the
+/// per-volume upcase table for ABSENT names — existing files stay
+/// protected by the OS file-identity arm (wave 19 round 19.12
+/// security finding).  POSIX names are case-sensitive and compare
+/// exactly.
 fn same_canonical(a: &Path, b: &Path) -> bool {
     if a == b {
         return true;
     }
     #[cfg(windows)]
     {
-        return a
-            .to_string_lossy()
-            .eq_ignore_ascii_case(b.to_string_lossy().as_ref());
+        return windows_fold_path(&a.to_string_lossy())
+            == windows_fold_path(&b.to_string_lossy());
     }
     #[cfg(not(windows))]
     {
         false
     }
+}
+
+/// Windows-equivalence fold of a canonical pathname: trailing
+/// dots/spaces of the final component trimmed (the Win32 create
+/// normalization), then Unicode lowercase per rune (Rust's full
+/// `char::to_lowercase`, which expands U+0130 exactly like the Go
+/// fold's explicit mapping).
+#[cfg(windows)]
+fn windows_fold_path(path: &str) -> String {
+    let mut s = path.to_owned();
+    let trim_component = |comp: &str| -> Option<&str> {
+        if comp == "." || comp == ".." {
+            return None;
+        }
+        let trimmed = comp.trim_end_matches(['.', ' ']);
+        if trimmed.is_empty() || trimmed.len() == comp.len() {
+            return None;
+        }
+        Some(trimmed)
+    };
+    match s.rfind(|c| c == '\\' || c == '/') {
+        Some(i) => {
+            let start = i + 1;
+            if let Some(trimmed) = trim_component(&s[start..]) {
+                s.truncate(start);
+                s.push_str(trimmed);
+            }
+        }
+        None => {
+            if let Some(trimmed) = trim_component(&s) {
+                s = trimmed.to_owned();
+            }
+        }
+    }
+    s.to_lowercase()
 }
 
 pub(crate) fn refuse_output_over_source(
@@ -497,6 +537,11 @@ mod tests {
                 PathBuf::from(format!("{}:DB.BIN.READERS", char::from(drive))),
                 dir.join("DB.BIN.READERS"),
                 root_relative.to_path_buf(),
+                // Win32 strips trailing dots and spaces at create, so
+                // these spellings denote the absent sidecar (wave 19
+                // round 19.12 security finding).
+                dir.join("db.bin.readers."),
+                dir.join("db.bin.readers "),
             ];
             for destination in refusals {
                 if refuse_output_over_source(&destination, &identity, None).is_ok() {
@@ -507,11 +552,33 @@ mod tests {
                 }
             }
 
+            // Non-ASCII case equivalence through the shared full
+            // lowercase fold (wave 19 round 19.12 security finding).
+            let non_ascii_source = dir.join("db_\u{00e4}.bin");
+            fs::write(&non_ascii_source, b"source").map_err(|e| e.to_string())?;
+            let non_ascii_identity = FileIdentity {
+                path: non_ascii_source.clone(),
+                dev: 0,
+                ino: 0,
+            };
+            for destination in [
+                dir.join("DB_\u{00c4}.BIN.READERS"),
+                dir.join("DB_\u{00c4}.BIN.READERS "),
+            ] {
+                if refuse_output_over_source(&destination, &non_ascii_identity, None).is_ok() {
+                    return Err(format!(
+                        "non-ASCII variant {:?} naming the absent sidecar accepted",
+                        destination
+                    ));
+                }
+            }
+
             // Distinct destinations stay allowed: an absolute file in
             // the directory and a rooted-without-volume name on the
             // drive root that is not the sidecar.
             for destination in [
                 dir.join("other.bin"),
+                dir.join("other.bin."),
                 PathBuf::from("\\unrelated.bin"),
             ] {
                 if refuse_output_over_source(&destination, &identity, None).is_err() {

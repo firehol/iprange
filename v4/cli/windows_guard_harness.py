@@ -91,29 +91,39 @@ def metadata_get_frame(source, destination):
 def guard_cases(work):
     """Windows-targeted spellings of the absent sidecar plus the
     distinct-destination control.  Expectation depends on the host
-    platform (Windows refuses, POSIX allows)."""
+    platform (Windows refuses, POSIX allows).  Each case names the
+    source database basename it targets ("db.iprange" for the primary
+    source, "db_\u00e4.iprange" for the non-ASCII fold pair)."""
     drive = work[:2] if len(work) >= 2 and work[1] == ":" else None
-    cases = [
-        (
-            "drive_relative",
-            "%sdb.iprange.readers" % drive if drive else None,
-        ),
-        (
-            "drive_relative_upper",
-            "%sDB.IPRANGE.READERS" % drive if drive else None,
-        ),
+    dot_space = [
+        ("absolute_trailing_dot", work + ".readers."),
+        ("absolute_trailing_space", work + ".readers "),
+    ]
+    candidates = (
+        [
+            ("drive_relative", "%sdb.iprange.readers" % drive),
+            ("drive_relative_upper", "%sDB.IPRANGE.READERS" % drive),
+        ]
+        if drive
+        else []
+    )
+    candidates += [
         ("absolute_upper", os.path.join(work, "DB.IPRANGE.READERS")),
         (
             "rooted_sidecar",
             os.path.sep + work[len(drive):].lstrip("\\/")
             + os.path.sep + "db.iprange.readers"
             if drive
-            else None,
+            else None,  # no rooted-without-volume spelling on POSIX
         ),
+    ] + dot_space + [
+        ("non_ascii", os.path.join(work, "DB_\u00e4.IPRANGE.READERS")),
         ("control_allowed", os.path.join(work, "meta.txt")),
     ]
     return [
-        (name, path) for name, path in cases if path is not None
+        (name, "db.iprange" if name != "non_ascii" else "db_\u00e4.iprange", path)
+        for name, path in candidates
+        if path is not None
     ]
 
 
@@ -127,16 +137,26 @@ def run_product(binary, label, work, fixture, provenance):
     try:
         product["binary"] = file_evidence(binary)
         product["implementation"] = describe_implementation(service, label)
-        source = os.path.join(work, "db.iprange")
-        shutil.copyfile(fixture, source)
-        before = hashlib.sha256(open(source, "rb").read()).hexdigest()
-        product["source_sha256_before"] = before
-        product["sidecar_absent_before"] = not os.path.exists(
-            source + ".readers"
-        )
+
+        sources = {}
+        for base in ("db.iprange", "db_\u00e4.iprange"):
+            path = os.path.join(work, base)
+            shutil.copyfile(fixture, path)
+            sources[path] = {
+                "sha256_before": hashlib.sha256(
+                    open(path, "rb").read()
+                ).hexdigest(),
+                "sidecar_absent_before": not os.path.exists(
+                    path + ".readers"
+                ),
+            }
+        product["sources_before"] = {
+            path: info for path, info in sources.items()
+        }
 
         cases = {}
-        for name, destination in guard_cases(work):
+        for name, source_base, destination in guard_cases(work):
+            source = os.path.join(work, source_base)
             response = service.call(
                 "g1", "iprange.v1.database.metadata.get",
                 metadata_get_frame(source, destination),
@@ -163,7 +183,7 @@ def run_product(binary, label, work, fixture, provenance):
                     or (
                         error_outcome == "not_started"
                         and error_code == "invalid_argument"
-                        and ACCEPTED_MESSAGE in error_message
+                        and error_message == ACCEPTED_MESSAGE
                     )
                 ),
             }
@@ -173,16 +193,25 @@ def run_product(binary, label, work, fixture, provenance):
                     % (label, destination, json.dumps(cases[name])[:400])
                 )
 
-        after = hashlib.sha256(open(source, "rb").read()).hexdigest()
-        sidecar = os.path.join(work, "db.iprange.readers")
-        cases["sidecar_absent_after"] = not os.path.exists(sidecar)
-        cases["source_unchanged"] = after == before
+        # Every source must stay byte-identical with its sidecar still
+        # absent after the refusal battery.
+        unchanged = True
+        sidecars_absent = True
+        for path, info in sources.items():
+            after = hashlib.sha256(open(path, "rb").read()).hexdigest()
+            unchanged = unchanged and after == info["sha256_before"]
+            sidecars_absent = sidecars_absent and not os.path.exists(
+                path + ".readers"
+            )
+        cases["source_unchanged"] = unchanged
+        cases["sidecar_absent_after"] = sidecars_absent
 
-        # Reopening: one more file delivery against the same source.
+        # Reopening: one more file delivery against the primary source.
         reopen = os.path.join(work, "meta-reopen.txt")
+        primary = os.path.join(work, "db.iprange")
         response = service.call(
             "g2", "iprange.v1.database.metadata.get",
-            metadata_get_frame(source, reopen),
+            metadata_get_frame(primary, reopen),
         )
         cases["reopen_allowed"] = "error" not in response and os.path.exists(
             reopen

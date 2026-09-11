@@ -43,13 +43,72 @@ func windowsSidecarSpellings(dir, source string) []string {
 		strings.ToUpper(drive + base + format.CoordinationSuffix),
 		filepath.Join(dir, strings.ToUpper(base+format.CoordinationSuffix)),
 		rooted,
-	}
+		filepath.Join(dir, base+format.CoordinationSuffix+"."),
+		filepath.Join(dir, base+format.CoordinationSuffix+" ")}
 }
 
 // TestRefuseOutputOverSourceWindowsSidecarSpellings pins the guard
 // itself: every spelling that names the absent sidecar is refused,
 // distinct destinations are accepted, and the per-drive working
 // directory is what resolves drive-relative spellings.
+// TestSameCanonicalWindowsFold pins the shared Windows fold: Unicode
+// lowercase equivalence (ASCII, Latin-1, and the U+0130 expansion
+// shared with Rust char::to_lowercase) and the Win32 trailing
+// dot/space create normalization of the final component.  Distinct
+// trailing-dot names (not the sidecar) stay unequal.
+func TestSameCanonicalWindowsFold(t *testing.T) {
+	equal := [][2]string{
+		{"C:\\review\\db.readers", "c:\\review\\DB.READERS"},
+		{"C:\\review\\db_ä.readers", "C:\\review\\DB_Ä.READERS"},
+		{"C:\\review\\db_İ.readers", "C:\\review\\db_i̇.readers"},
+		{"C:\\review\\db.readers.", "C:\\review\\db.readers"},
+		{"C:\\review\\db.readers ", "C:\\review\\db.readers"},
+		{"C:\\review\\..", "C:\\review\\.."},
+	}
+	for _, pair := range equal {
+		if !sameCanonical(pair[0], pair[1]) {
+			t.Errorf("sameCanonical(%q, %q) = false, want true", pair[0], pair[1])
+		}
+	}
+	distinct := [][2]string{
+		{"C:\\review\\other.readers.", "C:\\review\\db.readers"},
+		{"C:\\review\\other.readers ", "C:\\review\\db.readers"},
+		{"C:\\review\\db_ä.readers", "C:\\review\\db_ö.readers"},
+	}
+	for _, pair := range distinct {
+		if sameCanonical(pair[0], pair[1]) {
+			t.Errorf("sameCanonical(%q, %q) = true, want false", pair[0], pair[1])
+		}
+	}
+}
+
+// TestRefuseOutputOverSourceWindowsNonASCII pins the non-ASCII class
+// at the guard: a destination that differs from the absent sidecar
+// only by script case is refused.
+func TestRefuseOutputOverSourceWindowsNonASCII(t *testing.T) {
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(wd) })
+	source := filepath.Join(dir, "db_ä.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, destination := range []string{
+		filepath.Join(dir, "DB_Ä.BIN.READERS"),
+		filepath.Join(dir, "DB_Ä.BIN.READERS "),
+	} {
+		if herr := refuseOutputOverSource(destination, source, nil, nil); herr == nil {
+			t.Fatalf("destination %q naming the absent sidecar accepted", destination)
+		}
+	}
+}
+
 func TestRefuseOutputOverSourceWindowsSidecarSpellings(t *testing.T) {
 	dir := t.TempDir()
 	wd, err := os.Getwd()

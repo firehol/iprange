@@ -22,6 +22,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"unicode"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/fileio"
@@ -2041,10 +2042,15 @@ func outputSidecarPath(path string) (string, bool) {
 // destination filesystem's filename-equivalence rules.  On Windows an
 // absent sidecar (or any not-yet-existing destination) has no file
 // identity for the os.SameFile arms, so the pathname arm must apply
-// the platform's name equivalence; NTFS-style case folding is
-// approximated with the ASCII fold shared with Rust
-// eq_ignore_ascii_case so both engines refuse exactly the same
-// spellings (wave 19 round 19.11 astra finding).  POSIX names are
+// the platform's name equivalence: Win32 strips trailing dots and
+// spaces from the final component at create, and the volume's case
+// table equates name spellings.  The fold below is the Unicode full
+// lowercase shared with Rust (the only BMP character whose full
+// lowercase expands, U+0130 LATIN CAPITAL LETTER I WITH DOT ABOVE, is
+// mapped to its two-rune form so both engines fold byte-identically);
+// it is a practical approximation of the per-volume upcase table for
+// ABSENT names — existing files stay protected by the OS file-identity
+// arm (wave 19 round 19.12 security finding).  POSIX names are
 // case-sensitive and compare exactly.
 func sameCanonical(a, b string) bool {
 	if a == b {
@@ -2053,22 +2059,33 @@ func sameCanonical(a, b string) bool {
 	if runtime.GOOS != "windows" {
 		return false
 	}
-	if len(a) != len(b) {
-		return false
+	return windowsFoldPath(a) == windowsFoldPath(b)
+}
+
+// windowsFoldPath returns the Windows-equivalence fold of a canonical
+// pathname: trailing dots/spaces of the final component trimmed (the
+// Win32 create normalization), then Unicode lowercase per rune with
+// the Rust full-lowercase expansion for U+0130.
+func windowsFoldPath(path string) string {
+	i := strings.LastIndexAny(path, `\/`)
+	comp := path[i+1:]
+	if comp != "." && comp != ".." {
+		if trimmed := strings.TrimRight(comp, ". "); trimmed != "" && trimmed != comp {
+			path = path[:len(path)-len(comp)] + trimmed
+		}
 	}
-	for i := 0; i < len(a); i++ {
-		ca, cb := a[i], b[i]
-		if 'A' <= ca && ca <= 'Z' {
-			ca += 'a' - 'A'
+	var b strings.Builder
+	b.Grow(len(path) + 2)
+	for _, r := range path {
+		if r == 0x0130 {
+			// Rust char::to_lowercase expansion parity (the only
+			// BMP character whose full lowercase has two runes).
+			b.WriteString("i\u0307")
+			continue
 		}
-		if 'A' <= cb && cb <= 'Z' {
-			cb += 'a' - 'A'
-		}
-		if ca != cb {
-			return false
-		}
+		b.WriteRune(unicode.ToLower(r))
 	}
-	return true
+	return b.String()
 }
 
 func refusedSameSource() *rpc.HandlerError {
