@@ -2,11 +2,11 @@
   "all_ok": true,
   "build_provenance": {
     "build_commands": [
-      "go -C v4/go build -buildvcs=false -o C:/Temp/w1912b-bin/go-iprange.exe ./cmd/iprange",
-      "go -C v4/go build -buildvcs=false -o C:/Temp/w1912b-bin/go-worker.exe ./cmd/iprange-v4-worker",
+      "CGO_ENABLED=0 go -C v4/go build -buildvcs=false -o C:/Temp/iprange-w1913b/go-iprange.exe ./cmd/iprange",
+      "CGO_ENABLED=0 go -C v4/go build -buildvcs=false -o C:/Temp/iprange-w1913b/go-iprange-v4-worker.exe ./cmd/iprange-v4-worker",
       "cargo build --release --all-features --manifest-path v4/rust/Cargo.toml -p iprange-cli --bin iprange -p iprange-livedb --bin iprange-v4-worker --example v4-fixture"
     ],
-    "revision": "3d943d8e",
+    "revision": "401f19d3",
     "toolchain": {
       "date": "2026-09-11",
       "go": "go1.26.5 windows/amd64",
@@ -25,14 +25,14 @@
     "go": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789092216.294741,
-        "path": "C:\\Temp\\w1912b-bin\\go-iprange.exe",
-        "sha256": "27441898a8510983b3a3c60c818c79f99ec99b7607fe6000ad4c2e4c6c8500f2",
-        "size": 14012928
+        "mtime": 1789099130.3426387,
+        "path": "C:\\Temp\\iprange-w1913b\\bin\\go\\iprange.exe",
+        "sha256": "cdd8abf7556df4ffc42da6f2f0e6c9753038dc039099fffda745e625e130b1d6",
+        "size": 14014464
       },
       "cases": {
         "absolute_trailing_dot": {
-          "destination": "C:/Temp/w1912b-guard\\go\\db.iprange.readers.",
+          "destination": "C:/Temp/iprange-w1913b/guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "expected_refused": true,
@@ -40,7 +40,7 @@
           "refused": true
         },
         "absolute_trailing_space": {
-          "destination": "C:/Temp/w1912b-guard\\go\\db.iprange.readers ",
+          "destination": "C:/Temp/iprange-w1913b/guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "expected_refused": true,
@@ -48,7 +48,7 @@
           "refused": true
         },
         "absolute_upper": {
-          "destination": "C:/Temp/w1912b-guard\\go\\DB.IPRANGE.READERS",
+          "destination": "C:/Temp/iprange-w1913b/guardwork\\go\\DB.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "expected_refused": true,
@@ -56,7 +56,7 @@
           "refused": true
         },
         "control_allowed": {
-          "destination": "C:/Temp/w1912b-guard\\go\\meta.txt",
+          "destination": "C:/Temp/iprange-w1913b/guardwork\\go\\meta.txt",
           "error_code": null,
           "error_message": "",
           "expected_refused": false,
@@ -80,7 +80,7 @@
           "refused": true
         },
         "non_ascii": {
-          "destination": "C:/Temp/w1912b-guard\\go\\DB_\u00c4.IPRANGE.READERS",
+          "destination": "C:/Temp/iprange-w1913b/guardwork\\go\\DB_\u00c4.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "expected_refused": true,
@@ -89,7 +89,7 @@
         },
         "reopen_allowed": true,
         "rooted_sidecar": {
-          "destination": "\\Temp/w1912b-guard\\go\\db.iprange.readers",
+          "destination": "\\Temp/iprange-w1913b/guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "expected_refused": true,
@@ -101,11 +101,11 @@
       },
       "implementation": "go",
       "sources_before": {
-        "C:/Temp/w1912b-guard\\go\\db.iprange": {
+        "C:/Temp/iprange-w1913b/guardwork\\go\\db.iprange": {
           "sha256_before": "a3109a64546dfb05a0d986462f8834d74cdd4455e7716f5554a66ad85e27baea",
           "sidecar_absent_before": true
         },
-        "C:/Temp/w1912b-guard\\go\\db_\u00e4.iprange": {
+        "C:/Temp/iprange-w1913b/guardwork\\go\\db_\u00e4.iprange": {
           "sha256_before": "a3109a64546dfb05a0d986462f8834d74cdd4455e7716f5554a66ad85e27baea",
           "sidecar_absent_before": true
         }
@@ -114,14 +114,14 @@
     "rust": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789092394.1437654,
-        "path": "C:\\Temp\\w1912b-bin\\iprange.exe",
+        "mtime": 1789099127.286764,
+        "path": "C:\\Temp\\iprange-w1913b\\bin\\rust\\iprange.exe",
         "sha256": "68ca5446b1ae0ce22f416e0c3f549d9988069539d38fc5f4a34d603f4538c514",
         "size": 6149632
       },
       "cases": {
         "absolute_trailing_dot": {
-          "destination": "C:/Temp/w1912b-guard\\rust\\db.iprange.readers.",
+          "destination": "C:/Temp/iprange-w1913b/guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "expected_refused": true,
@@ -129,7 +129,7 @@
           "refused": true
         },
         "absolute_trailing_space": {
-          "destination": "C:/Temp/w1912b-guard\\rust\\db.iprange.readers ",
+          "destination": "C:/Temp/iprange-w1913b/guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "expected_refused": true,
@@ -137,7 +137,7 @@
           "refused": true
         },
         "absolute_upper": {
-          "destination": "C:/Temp/w1912b-guard\\rust\\DB.IPRANGE.READERS",
+          "destination": "C:/Temp/iprange-w1913b/guardwork\\rust\\DB.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "expected_refused": true,
@@ -145,7 +145,7 @@
           "refused": true
         },
         "control_allowed": {
-          "destination": "C:/Temp/w1912b-guard\\rust\\meta.txt",
+          "destination": "C:/Temp/iprange-w1913b/guardwork\\rust\\meta.txt",
           "error_code": null,
           "error_message": "",
           "expected_refused": false,
@@ -169,7 +169,7 @@
           "refused": true
         },
         "non_ascii": {
-          "destination": "C:/Temp/w1912b-guard\\rust\\DB_\u00c4.IPRANGE.READERS",
+          "destination": "C:/Temp/iprange-w1913b/guardwork\\rust\\DB_\u00c4.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "expected_refused": true,
@@ -178,7 +178,7 @@
         },
         "reopen_allowed": true,
         "rooted_sidecar": {
-          "destination": "\\Temp/w1912b-guard\\rust\\db.iprange.readers",
+          "destination": "\\Temp/iprange-w1913b/guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "expected_refused": true,
@@ -190,11 +190,11 @@
       },
       "implementation": "rust",
       "sources_before": {
-        "C:/Temp/w1912b-guard\\rust\\db.iprange": {
+        "C:/Temp/iprange-w1913b/guardwork\\rust\\db.iprange": {
           "sha256_before": "a3109a64546dfb05a0d986462f8834d74cdd4455e7716f5554a66ad85e27baea",
           "sidecar_absent_before": true
         },
-        "C:/Temp/w1912b-guard\\rust\\db_\u00e4.iprange": {
+        "C:/Temp/iprange-w1913b/guardwork\\rust\\db_\u00e4.iprange": {
           "sha256_before": "a3109a64546dfb05a0d986462f8834d74cdd4455e7716f5554a66ad85e27baea",
           "sidecar_absent_before": true
         }
@@ -203,11 +203,11 @@
   },
   "provenance": {
     "build_commands": [
-      "go -C v4/go build -buildvcs=false -o C:/Temp/w1912b-bin/go-iprange.exe ./cmd/iprange",
-      "go -C v4/go build -buildvcs=false -o C:/Temp/w1912b-bin/go-worker.exe ./cmd/iprange-v4-worker",
+      "CGO_ENABLED=0 go -C v4/go build -buildvcs=false -o C:/Temp/iprange-w1913b/go-iprange.exe ./cmd/iprange",
+      "CGO_ENABLED=0 go -C v4/go build -buildvcs=false -o C:/Temp/iprange-w1913b/go-iprange-v4-worker.exe ./cmd/iprange-v4-worker",
       "cargo build --release --all-features --manifest-path v4/rust/Cargo.toml -p iprange-cli --bin iprange -p iprange-livedb --bin iprange-v4-worker --example v4-fixture"
     ],
-    "revision": "3d943d8e",
+    "revision": "401f19d3",
     "toolchain": {
       "date": "2026-09-11",
       "go": "go1.26.5 windows/amd64",

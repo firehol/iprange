@@ -10994,3 +10994,119 @@ above and the Windows products above; SHASUMS.txt (10/10) and the
 evidence README identity block match the closing evidence commit.
 The seven role reviews are re-anchored at the final HEAD; astra turn
 3 (the same review session) remains the milestone-4 closure gate.
+
+#### Wave 19 round 19.13 (2026-09-11) — portability-role P1/P2: Go Windows rename-identity guard, fold parity, harness IO deadlines — repaired and natively re-qualified
+
+The wave-19.12 role round at `ec075c46` was NOT all-PASS: the
+portability role FAILed (one P1, two P2) and the operations role
+FAILed (two P2); the security, parity, performance, and glm roles
+PASSed with P3 notes.  The tester role verdict arrived late (after
+the wave-19.12 closing commit) and FAILed with two P2 provenance
+statements that are identical to two of the portability findings.
+This round repairs all of them.  The wave-19.12 round-19.12 record
+above says "the seven role reviews are re-anchored at the final HEAD"
+— that sentence is superseded by this round.
+
+The P1 (portability): Go's same-source guard recorded `os.FileInfo`
+for the source and its reader-coordination sidecar, and compared
+destinations with `os.SameFile`.  On Windows `os.SameFile` re-opens
+the recorded stat paths, and a renamed-away source or sidecar path
+cannot be re-opened, so a destination at the renamed source/sidecar
+path was ACCEPTED (the reader file lock only stopped writes for
+already-locked targets).  The two regressions
+(`TestRefuseOutputOverSourceFileIdentity`,
+`TestSessionReaderMetadataRefusesRenamedLiveSidecar`) had been
+recorded in the wave-19.11/19.12 rounds as pre-existing
+host-environment failures; they are that mislabeled class, and after
+this repair they PASS natively on Windows.  Repaired: Go now stores
+numeric file identities — (device, inode) on POSIX and (volume
+serial, file index) through `GetFileInformationByHandle` on Windows —
+mirroring Rust `iprange-livedb` file_identity
+(`v4/go/internal/cli/handlers/file_identity{,_unix,_windows}.go`,
+`rpc.FileIdentity` with a numeric `SameFile`, and the
+`refuseOutputOverSource`/reader call sites).  The identity capture
+opens with FILE_READ_ATTRIBUTES and shares delete, exactly like the
+Rust arms.
+
+The P2 (portability) — fold parity: Go `unicode.ToLower` maps
+U+A7CE/A7D2/A7D4 to their uppercase partners while rustc 1.97
+`char::to_lowercase` leaves them unchanged; `windowsFoldPath` now
+carves the three code points out so both engines fold byte-identically.
+The P2 (operations) — the windows-guard harness had no product-interface
+IO deadlines; it now takes the same `read_deadline`/`write_deadline`
+profile as the housekeeping harness (`v4/cli/windows_guard_harness.py`).
+The P2 (records) — the evidence README head claimed Windows
+re-qualification was still pending while the same closing commit
+shipped current Windows evidence; the README head is rewritten for
+this round (below).
+
+Native-Windows test repair (in this round): the renamed-sidecar
+session test read the displaced table bytes with `os.ReadFile`,
+which on Windows neither shares delete nor bypasses the live
+reader's exclusive per-slot byte-range lock; the assertion now reads
+through a share-delete mapping view (the product's own access path).
+And the test restored the sidecar before the transport EOF: with the
+table renamed away, reader close is deliberately retryable
+(close-incomplete, Rust
+`failed_close_keeps_exact_retry_authority` parity), and the retained
+handles would otherwise stay open through teardown, which blocks
+temp-directory cleanup on Windows.  The refusal assertions are
+unchanged.
+
+The wave-19.13 investigation committed diagnostic probes to master
+(labeled "tmp:"); they were removed before this evidence round, so
+the final tree contains no probe code.
+
+Battery at the wave-19.13 final identities (product source
+`401f19d3`; the follow-up commits change tests and harnesses only):
+Linux go product `de23d22b…` / worker `ee213ca1…`, rust product
+`453b0ab9…` / worker `4c17669d…` / fixture `9b40420e…`: Go suite 24
+packages PASS; Rust workspace 918 passed / 0 failed; matrices rust
+38/38, go 38/38, mixed 14 PASS + 24 skips per direction; crash
+16/16 and /bin/false negative fails as designed (rc 1); resource
+8/8 + self-test; golden 55 / 38; sensitivity 14/14; kind gate PASS +
+self-test; operations probe 39/39.
+
+Windows native at `401f19d3` (go1.26.5 windows/amd64, rustc 1.97.1,
+embeddable Python 3.14.0, clean tree; products go `cdd8abf7…` /
+rust `68ca5446…`, workers `65e75d99…` / `48d840ec…`, fixture
+`f222a430…`): the guard session harness (`windows-guard.json`) PASS
+for both products — all seven spellings refused with
+data.code=invalid_argument + outcome=not_started + the exact
+message, control and reopen allowed, both sources byte-identical,
+sidecars absent; housekeeping 2/2 PASS
+(`windows-housekeeping.json`); the two renamed-identity Go
+regressions PASS natively (the wave-19.12 record counted them among
+five pre-existing Go failures — the remaining pre-existing three are
+the worker-spawn PATH class (`TestExportDistinctDestinationStillWorks`)
+and the immutable file-lock cleanup class
+(`TestSessionReaderMetadataHandleRefusesSource`,
+`TestSessionReaderMetadataRenamedSourceRefused`), byte-identical to
+the `668468cc` baseline); the Rust Windows guard/identity tests PASS
+natively (`refuse_output_over_source_*` 5/5 including
+`refuse_output_over_source_windows_sidecar_spellings`, and
+`same_canonical_folds_windows_case`), with only the pre-existing
+C-ABI debug-tree gap outside.
+
+The final committed identities of this round are Linux go product
+`de23d22b0aac97a55b14bcf71c756d221e27af2950bc81282e9c1fae65173c5b` /
+worker
+`ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`,
+rust product
+`453b0ab91b9b8173bbe6d7612552fcb0569c8396d6cdbd42de0200e1fea92dba` /
+worker
+`4c17669de96631956d290a54a2553ddc8b9f7dcf517f81c538c844fa9dfe252e` /
+fixture `9b40420e7a72d8d0248ac07dffb842ed30ef1766df1e922bd9084e2c9c86ae91`;
+Windows go product
+`cdd8abf7556df4ffc42da6f2f0e6c9753038dc039099fffda745e625e130b1d6` /
+worker
+`65e75d99b2fad0b12f3af01ca486296eac1d710476eb36bf79623cd8c2fea01f`,
+rust product
+`68ca5446b1ae0ce22f416e0c3f549d9988069539d38fc5f4a34d603f4538c514` /
+worker
+`48d840ecece8dec3ab55aae619fb74840839eb142fb584dcb001aa2b04ee9c55` /
+fixture `f222a4303ce786f53c44b623c703fec69529a62b21136139371fd7c96bc0b3c6`.
+SHASUMS.txt (10/10) and the evidence README identity block match the
+closing evidence commit.  The seven role reviews are re-anchored at
+the final HEAD; astra turn 4 (the same review session) remains the
+milestone-4 closure gate.
