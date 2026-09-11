@@ -299,7 +299,7 @@ mod windows_strip_extended_tests {
         for (input, want) in [
             ("\\\\?\\C:\\review\\db.iprange.readers",
              "C:\\review\\db.iprange.readers"),
-            ("\\\\\\.\\C:\\review\\db.iprange.readers",
+            ("\\\\.\\C:\\review\\db.iprange.readers",
              "C:\\review\\db.iprange.readers"),
             ("\\\\?\\UNC\\server\\share\\db.iprange.readers",
              "\\\\server\\share\\db.iprange.readers"),
