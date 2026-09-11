@@ -11845,3 +11845,54 @@ worker `ee213ca1eb...`, rust worker `d7a599886e...`, rust fixture
 
 The milestone stays gated on the re-anchor PASS of every available
 role at `8a386af4` and the astra same-session review at that revision.
+#### Wave 19 round 19.17 security follow-up (2026-09-11) — GLOBALROOT device-namespace P1
+
+The security role's re-anchor review at `8a386af4` found a fourth
+recurrence of the over-the-sidecar destructive class, now in the Go
+engine only.  Reproduced independently by the lead at the exact
+wave-19.17 binaries before any fix, repaired in `a8fcadaa`
+(pushed, origin/master):
+
+- P1 (Go parity divergence): the NT device-root namespace
+  (`\\?\GLOBALROOT\Device\HarddiskVolumeN\...` and the `\\.\`
+  twin) names the same real files as the drive-letter spelling,
+  but Go's `EvalSymlinks` cannot walk the intermediate `\Device`
+  component (`CreateFile \\?\GLOBALROOT\Device: The handle is
+  invalid`), so `canonicalSplitPath` reported `ok=false`, the
+  same-ancestor arm declined, and `metadata.get` published the
+  metadata JSON over the live sidecar — the source became
+  unopenable afterwards.  Rust refused both spellings canonically
+  (its `fs::canonicalize` resolves the existing GLOBALROOT
+  ancestor).  Fix: when `EvalSymlinks` fails, `canonicalSplitPath`
+  proves the probe exists with `os.Stat` (the same CreateFile
+  machinery the publication path uses) and uses the raw existing
+  ancestor; the ancestor arm's kernel-identity comparison then
+  refuses the spelling exactly like Rust.  Pins:
+  `TestRefuseOutputOverSourceWindowsGlobalrootSidecar` (guard and
+  session call site, `\\?\GLOBALROOT`, `\\.\GLOBALROOT`, and
+  `\??\GLOBALROOT` prefixes) and the harness cases
+  `globalroot_sidecar` / `globalroot_device_sidecar`.
+
+Native verification at `a8fcadaa` (win11 validation host): Go
+Windows suite 16/16 PASS (Windows-gated handler tests including the
+new GLOBALROOT pin); guard harness PASS for both products with 23
+sidecar spellings refused canonically per product (verbatim, NT,
+device, loopback-UNC, volume-GUID, GLOBALROOT, relative-source
+families) plus the 3 distinct-destination controls allowed;
+housekeeping PASS.  The pre-fix `8a386af4` Go binary delivered over
+the sidecar in the lead's reproduction probe; the `a8fcadaa` Go
+binary (and Rust, unchanged) refuse with
+`invalid_argument`/`not_started` and never create the sidecar.
+
+Final wave-19.17 identities: Linux go product `a470f068de...`
+(go1.27.0, CGO_ENABLED=0, -buildvcs=false), Windows go product
+`a0d2f8704c...` (go1.26.5); Rust product/worker/fixture and the Go
+worker unchanged on both platforms.  Linux battery at the final
+binary: go tests green, Rust workspace 918/0, matrices 38/38 both
+single languages + 14/24 both mixed directions, crash 16/16,
+resource 8/8, golden 55, sensitivity 14/14, kind gate PASS, guard
+POSIX PASS.
+
+The milestone stays gated on the re-anchor PASS of every available
+role at `a8fcadaa` and the astra same-session review at that
+revision.
