@@ -11,6 +11,7 @@
 package handlers
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -219,5 +220,47 @@ func TestSessionMetadataGetWindowsSidecarSpellings(t *testing.T) {
 	}
 	if string(content) != "mymetadata" {
 		t.Fatalf("metadata output %q, want mymetadata", content)
+	}
+}
+
+func TestSameCanonicalWindowsFoldUnicode16(t *testing.T) {
+	// rustc 1.97.1 (the Windows Rust product toolchain) applies the
+	// Unicode-16 lowercase mappings below while the go1.26.5
+	// (Windows Go product toolchain) tables predate them (added in
+	// go1.27); windowsFoldPath maps them explicitly.  Pin every pair
+	// so a Go or Rust toolchain table change cannot silently break
+	// the byte-identical Windows fold (wave 19 round 19.13
+	// fold-parity finding; differential enumeration in
+	// v4/cli/evidence/fold-enum/).
+	single := []struct{ up, lo rune }{
+		{0x1C89, 0x1C8A},
+		{0xA7CB, 0x0264},
+		{0xA7CC, 0xA7CD},
+		{0xA7CE, 0xA7CF},
+		{0xA7D2, 0xA7D3},
+		{0xA7D4, 0xA7D5},
+		{0xA7DA, 0xA7DB},
+		{0xA7DC, 0x019B},
+	}
+	for _, p := range single {
+		up := fmt.Sprintf(`C:\review\db_%c.readers`, p.up)
+		lo := fmt.Sprintf(`C:\review\DB_%c.READERS`, p.lo)
+		if !sameCanonical(up, lo) {
+			t.Errorf("fold mismatch: U+%04X vs U+%04X", p.up, p.lo)
+		}
+	}
+	for up := 0x10D50; up <= 0x10D65; up++ { // Garay uppercase block
+		lo := up + 0x20
+		if !sameCanonical(fmt.Sprintf(`C:\review\db_%c.readers`, up),
+			fmt.Sprintf(`C:\review\DB_%c.READERS`, lo)) {
+			t.Errorf("fold mismatch: U+%04X vs U+%04X", up, lo)
+		}
+	}
+	for up := 0x16EA0; up <= 0x16EB8; up++ { // Kirat Rai uppercase block
+		lo := up + 0x1B
+		if !sameCanonical(fmt.Sprintf(`C:\review\db_%c.readers`, up),
+			fmt.Sprintf(`C:\review\DB_%c.READERS`, lo)) {
+			t.Errorf("fold mismatch: U+%04X vs U+%04X", up, lo)
+		}
 	}
 }

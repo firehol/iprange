@@ -603,6 +603,65 @@ mod tests {
             Path::new(r"C:\review\other.readers")
         ));
     }
+
+    #[cfg(windows)]
+    #[test]
+    fn same_canonical_folds_windows_unicode16() {
+        // Parity with the Go fold's explicit Unicode-16 mappings
+        // (wave 19 round 19.13 fold-parity finding): rustc 1.97.1
+        // applies these lowercase mappings while the go1.26.5
+        // Windows Go toolchain does not.  Pinning the same 55 pairs
+        // on the Rust side means a future Rust toolchain table
+        // change cannot silently break the byte-identical fold.
+        let single: &[(char, char)] = &[
+            (0x1C89 as char, 0x1C8A as char),
+            (0xA7CB as char, 0x0264 as char),
+            (0xA7CC as char, 0xA7CD as char),
+            (0xA7CE as char, 0xA7CF as char),
+            (0xA7D2 as char, 0xA7D3 as char),
+            (0xA7D4 as char, 0xA7D5 as char),
+            (0xA7DA as char, 0xA7DB as char),
+            (0xA7DC as char, 0x019B as char),
+        ];
+        for (up, lo) in single {
+            let a = format!("C:\\review\\db_{up}.readers");
+            let b = format!("C:\\review\\DB_{lo}.READERS");
+            assert!(
+                same_canonical(Path::new(&a), Path::new(&b)),
+                "fold mismatch: U+{:04X} vs U+{:04X}",
+                *up as u32,
+                *lo as u32
+            );
+        }
+        for up in 0x10D50..=0x10D65 {
+            let a = format!(
+                "C:\\review\\db_{}.readers",
+                char::from_u32(up).unwrap()
+            );
+            let b = format!(
+                "C:\\review\\DB_{}.READERS",
+                char::from_u32(up + 0x20).unwrap()
+            );
+            assert!(
+                same_canonical(Path::new(&a), Path::new(&b)),
+                "fold mismatch: U+{up:04X}"
+            );
+        }
+        for up in 0x16EA0..=0x16EB8 {
+            let a = format!(
+                "C:\\review\\db_{}.readers",
+                char::from_u32(up).unwrap()
+            );
+            let b = format!(
+                "C:\\review\\DB_{}.READERS",
+                char::from_u32(up + 0x1B).unwrap()
+            );
+            assert!(
+                same_canonical(Path::new(&a), Path::new(&b)),
+                "fold mismatch: U+{up:04X}"
+            );
+        }
+    }
 }
 
     #[test]

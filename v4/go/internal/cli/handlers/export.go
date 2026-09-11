@@ -2078,20 +2078,46 @@ func windowsFoldPath(path string) string {
 	var b strings.Builder
 	b.Grow(len(path) + 2)
 	for _, r := range path {
+		// rustc 1.97.1 (the Windows Rust product toolchain) applies
+		// the Unicode-16 lowercase mappings for U+1C89, U+A7CB,
+		// U+A7CC, U+A7CE, U+A7D2, U+A7D4, U+A7DA, U+A7DC, Garay
+		// U+10D50..U+10D65, and Kirat Rai U+16EA0..U+16EB8, while
+		// the go1.26.5 (Windows Go product toolchain) tables predate
+		// them (added in go1.27).  The fold maps them explicitly so
+		// the two Windows products fold byte-identically; the
+		// differential enumeration is in v4/cli/evidence/fold-enum/
+		// (wave 19 round 19.13 fold-parity finding).
 		switch r {
 		case 0x0130:
 			// Rust char::to_lowercase expansion parity (the only
 			// BMP character whose full lowercase has two runes).
 			b.WriteString("i\u0307")
 			continue
+		case 0x1C89:
+			b.WriteRune(0x1C8A)
+			continue
+		case 0xA7CB:
+			b.WriteRune(0x0264)
+			continue
+		case 0xA7CC:
+			b.WriteRune(0xA7CD)
+			continue
 		case 0xA7CE, 0xA7D2, 0xA7D4:
-			// rustc 1.97.1 (the Windows product toolchain) maps
-			// U+A7CE->A7CF, U+A7D2->A7D3, U+A7D4->A7D5 while the
-			// go1.26.5 unicode tables predate the mappings (added in
-			// go1.27); map them explicitly so the Windows fold is
-			// byte-identical to the Rust product (wave 19 round
-			// 19.13 fold-parity finding).
 			b.WriteRune(r + 1)
+			continue
+		case 0xA7DA:
+			b.WriteRune(0xA7DB)
+			continue
+		case 0xA7DC:
+			b.WriteRune(0x019B)
+			continue
+		}
+		if r >= 0x10D50 && r <= 0x10D65 { // Garay uppercase block
+			b.WriteRune(r + 0x20)
+			continue
+		}
+		if r >= 0x16EA0 && r <= 0x16EB8 { // Kirat Rai uppercase block
+			b.WriteRune(r + 0x1B)
 			continue
 		}
 		b.WriteRune(unicode.ToLower(r))
