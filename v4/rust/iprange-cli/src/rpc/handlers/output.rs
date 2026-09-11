@@ -918,7 +918,7 @@ mod tests {
                 .join("db.bin.readers"),
             PathBuf::from(format!("\\\\?\\UNC\\localhost\\{drive}${}", relative.display()))
                 .join("db.bin.readers"),
-            PathBuf::from(format!("\\\\??\\UNC\\localhost\\{drive}${}", relative.display()))
+            PathBuf::from(format!("\\??\\UNC\\localhost\\{drive}${}", relative.display()))
                 .join("db.bin.readers"),
         ];
         for destination in cross_family {
