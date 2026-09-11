@@ -11848,7 +11848,8 @@ worker `ee213ca1eb...`, rust worker `d7a599886e...`, rust fixture
 
 The milestone stays gated on the re-anchor PASS of every available
 role at the wave-19.17 final revision and the astra same-session
-review at that revision (final revision: `6d917bf6`, see the
+review at that revision (final product revision: `6ec96bfb`,
+see the
 security follow-up below).
 #### Wave 19 round 19.17 security follow-up (2026-09-11) — GLOBALROOT device-namespace P1
 
@@ -11936,5 +11937,8 @@ reproduction from the identical source path, toolchain, and
 environment.
 
 The milestone stays gated on the re-anchor PASS of every available
-role at the final wave-19.17 revision `6d917bf6` (pushed,
+role at the final wave-19.17 product revision `6ec96bfb` (pushed,
 origin/master) and the astra same-session review at that revision.
+This record (and the evidence README head) is the accompanying
+records commit; role verdicts anchor the product revision and the
+observed HEAD together.
