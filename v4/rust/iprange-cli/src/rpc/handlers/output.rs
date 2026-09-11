@@ -128,7 +128,7 @@ pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
                 for component in missing.iter().rev() {
                     result.push(component);
                 }
-                return lexical_clean_path(&result);
+                return windows_strip_extended(lexical_clean_path(&result));
             }
             Err(_) => {
                 let ends_in_parentdir =
@@ -150,7 +150,7 @@ pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
                         missing.push(std::ffi::OsStr::new(".."));
                         probe = parent;
                     }
-                    _ => return lexical_clean_path(&absolute),
+                    _ => return windows_strip_extended(lexical_clean_path(&absolute)),
                 }
             }
         }
@@ -186,8 +186,8 @@ fn same_canonical(a: &Path, b: &Path) -> bool {
     }
     #[cfg(windows)]
     {
-        return windows_fold_path(&a.to_string_lossy())
-            == windows_fold_path(&b.to_string_lossy());
+        return windows_name_identity(&a.to_string_lossy())
+            == windows_name_identity(&b.to_string_lossy());
     }
     #[cfg(not(windows))]
     {
@@ -224,6 +224,66 @@ fn windows_fold_path(path: &str) -> String {
     out.push_str(head);
     out.push_str(trimmed);
     out.to_lowercase()
+}
+
+/// Windows name-equivalence identity used by same_canonical: the
+/// windows_fold_path lowercasing plus the per-volume upcase-name
+/// equivalence of the Greek sigma class.  NTFS treats the sigma
+/// spellings as one name family (the classic default upcase table
+/// maps U+03A3/U+03C2/U+03C3 all to U+03A3; on the qualified Win11
+/// volume the measured classes are {U+03A3, U+03C3} equal with
+/// U+03C2 distinct); the contextual Final_Sigma lowercase would split
+/// the family into U+03C2 (word-final) and U+03C3, letting a
+/// sigma-spelled sidecar escape the guard, so the comparison
+/// collapses all three sigmas to one identity.  The collapse is
+/// conservative (refusal direction only): a genuinely distinct
+/// U+03C2 spelling on a volume that separates it is refused exactly
+/// like the fold already refuses it.  Keep the fold itself untouched
+/// so the committed byte-identical fold corpus pins stay valid (wave
+/// 19 round 19.14 astra findings).
+#[cfg(windows)]
+fn windows_name_identity(path: &str) -> String {
+    let folded = windows_fold_path(path);
+    let mut out = String::with_capacity(folded.len());
+    for c in folded.chars() {
+        if matches!(c, '\u{03A3}' | '\u{03C2}' | '\u{03C3}') {
+            out.push('\u{03A3}');
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Removes a leading Win32 extended-length ("\\?\") or device
+/// ("\\.\") prefix from a canonical identity: the prefixed spelling
+/// names the same file as the ordinary one, and fs::canonicalize
+/// re-emits every resolved identity in the "\\?\" form, so the
+/// pathname comparison must reconcile both spellings (wave 19 round
+/// 19.14 astra parity finding).  A "\\?\UNC\" or "\\.\UNC\"
+/// device prefix becomes the ordinary "\\server\share" form.
+/// Non-Windows identities pass through unchanged.
+#[cfg(windows)]
+fn windows_strip_extended(path: PathBuf) -> PathBuf {
+    let text = path.to_string_lossy();
+    for prefix in ["\\?\\", "\\.\\"] {
+        if let Some(rest) = text.strip_prefix(prefix) {
+            if rest.len() >= 4 && rest[..4].eq_ignore_ascii_case("unc\\") {
+                let mut out = String::with_capacity(rest.len() + 2);
+                out.push('\\');
+                out.push('\\');
+                out.push_str(&rest[4..]);
+                return PathBuf::from(out);
+            }
+            return PathBuf::from(rest);
+        }
+    }
+    path
+}
+
+#[cfg(not(windows))]
+fn windows_strip_extended(path: PathBuf) -> PathBuf {
+    path
 }
 
 pub(crate) fn refuse_output_over_source(
@@ -569,13 +629,57 @@ mod tests {
                 }
             }
 
+            // NTFS upcase-name equivalence of the Greek sigma class
+            // (wave 19 round 19.14 astra finding): a destination that
+            // spells the absent sidecar of source A\u{03a3}1.bin with
+            // U+03C3 or U+03C2 is refused exactly like the U+03A3
+            // spelling.
+            let sigma_source = dir.join("A\u{03a3}1.bin");
+            fs::write(&sigma_source, b"source").map_err(|e| e.to_string())?;
+            let sigma_identity = FileIdentity {
+                path: sigma_source.clone(),
+                dev: 0,
+                ino: 0,
+            };
+            for destination in [
+                dir.join("A\u{03c3}1.BIN.READERS"),
+                dir.join("A\u{03c2}1.BIN.READERS"),
+            ] {
+                if refuse_output_over_source(&destination, &sigma_identity, None).is_ok() {
+                    return Err(format!(
+                        "sigma destination {:?} naming the absent sidecar accepted",
+                        destination
+                    ));
+                }
+            }
+
+            // Extended-length spelling of the absent sidecar (wave 19
+            // round 19.14 astra parity finding): "\\?\C:\...\db.bin.readers"
+            // names the same file as the ordinary sidecar path and
+            // must be refused.
+            let verbatim = PathBuf::from(format!("\\?\\{}", dir.display()))
+                .join("db.bin.readers");
+            if refuse_output_over_source(&verbatim, &identity, None).is_ok() {
+                return Err(format!(
+                    "verbatim destination {:?} naming the absent sidecar accepted",
+                    verbatim
+                ));
+            }
+
             // Distinct destinations stay allowed: an absolute file in
             // the directory and a rooted-without-volume name on the
-            // drive root that is not the sidecar.
+            // drive root that is not the sidecar.  The drive-root
+            // control uses the SAME basename as the absent sidecar
+            // ("\\db.bin.readers" with the source in the per-drive
+            // working directory): it names the distinct drive-root
+            // file and must stay allowed (wave 19 round 19.14 astra
+            // finding; a bare-volume parent would re-anchor it onto
+            // the source directory and wrongly refuse).
             for destination in [
                 dir.join("other.bin"),
                 dir.join("other.bin."),
                 PathBuf::from("\\unrelated.bin"),
+                PathBuf::from("\\db.bin.readers"),
             ] {
                 if refuse_output_over_source(&destination, &identity, None).is_err() {
                     return Err(format!(
@@ -601,6 +705,19 @@ mod tests {
         assert!(!same_canonical(
             Path::new(r"C:\review\db.iprange.readers"),
             Path::new(r"C:\review\other.readers")
+        ));
+        // NTFS upcase-name equivalence of the Greek sigma class (wave
+        // 19 round 19.14 astra finding): the contextual Final_Sigma
+        // lowercase splits U+03A3 into U+03C2 (word-final) and
+        // U+03C3, so a sigma-spelled sidecar would escape the guard;
+        // the identity layer collapses the family into one form.
+        assert!(same_canonical(
+            Path::new("C:\\review\\A\u{03a3}1.iprange.readers"),
+            Path::new("C:\\review\\A\u{03c3}1.iprange.readers")
+        ));
+        assert!(same_canonical(
+            Path::new("C:\\review\\A\u{03a3}1.iprange.readers"),
+            Path::new("C:\\review\\A\u{03c2}1.iprange.readers")
         ));
     }
 

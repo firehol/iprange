@@ -63,6 +63,8 @@ func TestSameCanonicalWindowsFold(t *testing.T) {
 		{"C:\\review\\db.readers", "c:\\review\\DB.READERS"},
 		{"C:\\review\\db_ä.readers", "C:\\review\\DB_Ä.READERS"},
 		{"C:\\review\\db_İ.readers", "C:\\review\\db_i̇.readers"},
+		{"C:\\review\\AΣ1.readers", "C:\\review\\Aσ1.readers"},
+		{"C:\\review\\AΣ1.readers", "C:\\review\\Aς1.readers"},
 		{"C:\\review\\db_꟎.readers", "C:\\review\\DB_꟏.READERS"},
 		{"C:\\review\\db_꟒.readers", "C:\\review\\DB_ꟓ.READERS"},
 		{"C:\\review\\db_꟔.readers", "C:\\review\\DB_ꟕ.READERS"},
@@ -300,5 +302,256 @@ func TestWindowsFoldStringContextDifferential(t *testing.T) {
 	got := sha256.Sum256([]byte(windowsFoldPath(corpus.String())))
 	if gotSHA := fmt.Sprintf("%x", got); gotSHA != wantSHA {
 		t.Fatalf("fold string corpus sha256 %s, want %s", gotSHA, wantSHA)
+	}
+}
+
+// TestPathLeafWindowsDriveRoot pins the Rust Path::parent semantics
+// at the canonicalAbsolute walk: "C:\name" has the drive ROOT ("C:\")
+// as its parent (which exists and terminates the walk), never the
+// bare volume "C:" (a drive-relative prefix that EvalSymlinks would
+// re-anchor on the per-drive working directory and falsely join the
+// missing name onto the source's directory; wave 19 round 19.14
+// astra finding).
+func TestPathLeafWindowsDriveRoot(t *testing.T) {
+	for _, tc := range []struct{ path, wantName, wantParent string }{
+		{`C:\db.iprange.readers`, `db.iprange.readers`, `C:\`},
+		{`C:\dir\db.iprange.readers`, `db.iprange.readers`, `C:\dir`},
+		{`C:db.iprange.readers`, `db.iprange.readers`, `C:`},
+		{`C:`, ``, `C:`},
+		{`\\server\share\db.iprange.readers`, `db.iprange.readers`, `\\server\share`},
+		{`\\?\C:\db.iprange.readers`, `db.iprange.readers`, `\\?\C:`},
+	} {
+		name, parent := pathLeaf(tc.path)
+		if name != tc.wantName || parent != tc.wantParent {
+			t.Errorf("pathLeaf(%q) = (%q, %q), want (%q, %q)",
+				tc.path, name, parent, tc.wantName, tc.wantParent)
+		}
+	}
+	// The drive-root parent resolution must make the canonical
+	// identity of a rooted destination stay on the drive root, i.e.
+	// distinct from the cwd-anchored sidecar (the wave 19 round 19.14
+	// astra reproduction: cwd C:\review, source C:\review\db.iprange,
+	// destination \db.iprange.readers).
+	if _, parent := pathLeaf(`C:\db.iprange.readers`); parent != `C:\` {
+		t.Fatalf("drive-root parent = %q, want %q", parent, `C:\`)
+	}
+}
+
+// TestRefuseOutputOverSourceWindowsSigmaSidecar pins the NTFS
+// upcase-name equivalence of the Greek sigma class through the guard:
+// a destination spelling the absent sidecar of source "AΣ1.bin" with
+// U+03C3 (or U+03C2) is refused, exactly like the U+03A3 spelling
+// (wave 19 round 19.14 astra finding; the NTFS-equivalent sigma
+// family let the fold split spellings and miss the sidecar).
+func TestRefuseOutputOverSourceWindowsSigmaSidecar(t *testing.T) {
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(wd) })
+	source := filepath.Join(dir, "A\u03a31.bin") // "AΣ1.bin"
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, destination := range []string{
+		filepath.Join(dir, "A\u03c31.BIN.READERS"), // σ spelling
+		filepath.Join(dir, "A\u03c21.BIN.READERS"), // ς spelling
+	} {
+		if herr := refuseOutputOverSource(destination, source, nil, nil); herr == nil {
+			t.Fatalf("destination %q naming the absent sigma sidecar accepted", destination)
+		}
+	}
+}
+
+// TestRefuseOutputOverSourceWindowsDriveRootDistinct pins the
+// wave-19.14 drive-root distinction at the guard: with the source in
+// the per-drive working directory, the rooted-without-volume
+// destination "\db.bin.readers" names the DISTINCT file at the drive
+// root (not the source's sidecar) and must stay allowed.  Without the
+// pathLeaf root-parent fix this destination resolves to
+// "<cwd>\db.bin.readers" (the sidecar) and is wrongly refused.
+func TestRefuseOutputOverSourceWindowsDriveRootDistinct(t *testing.T) {
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(wd) })
+	source := filepath.Join(dir, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rootSidecar := string(os.PathSeparator) + "db.bin.readers" // C:\db.bin.readers
+	if herr := refuseOutputOverSource(rootSidecar, source, nil, nil); herr != nil {
+		t.Fatalf("distinct drive-root destination %q refussed: %v", rootSidecar, herr)
+	}
+}
+
+// TestSessionMetadataGetWindowsSigmaSidecar pins the sigma family at
+// the production call site: metadata.get refuses a destination that
+// spells the absent reader sidecar of source "AΣ1.iprange" with the
+// NTFS-equivalent U+03C3 or U+03C2, with the canonical refusal, an
+// unchanged source and no sidecar (wave 19 round 19.14 astra
+// finding).
+func TestSessionMetadataGetWindowsSigmaSidecar(t *testing.T) {
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(wd) })
+	source := newImmutableFeed(t, dir, "A\u03a31.iprange", []byte("mymetadata"))
+	before, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, spelling := range []string{"A\u03c31.iprange.readers", "A\u03c21.iprange.readers"} {
+		destination := filepath.Join(dir, spelling)
+		frame := `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.database.metadata.get","params":{"source":{"path":` +
+			mustJSONString(source) + `,"mode":"immutable"},"delivery":{"mode":"file","path":` +
+			mustJSONString(destination) + `,"publication_policy":"replace_existing","max_output_bytes":"1048576","max_open_files":8}}}`
+		out := runSession(t, frame)
+		if !strings.Contains(out, `"code":"invalid_argument"`) ||
+			!strings.Contains(out, "destination must differ from the source database") {
+			t.Fatalf("metadata.get to %q: output = %q, want the source-refusal error", destination, out)
+		}
+		if _, err := os.Stat(source + format.CoordinationSuffix); !os.IsNotExist(err) {
+			t.Fatalf("metadata.get to %q created the sidecar: %v", destination, err)
+		}
+	}
+	after, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("source bytes changed after refusals: %d -> %d bytes", len(before), len(after))
+	}
+	// The sigma source still reopens (distinct destination).
+	out := filepath.Join(dir, "meta.bin")
+	frame := `{"jsonrpc":"2.0","id":"2","method":"iprange.v1.database.metadata.get","params":{"source":{"path":` +
+		mustJSONString(source) + `,"mode":"immutable"},"delivery":{"mode":"file","path":` +
+		mustJSONString(out) + `,"publication_policy":"fail_if_exists","max_output_bytes":"1048576","max_open_files":8}}}`
+	res := runSession(t, frame)
+	if strings.Contains(res, `"code":"invalid_argument"`) || strings.Contains(res, "destination must differ") {
+		t.Fatalf("distinct metadata destination refused: %s", res)
+	}
+	content, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != "mymetadata" {
+		t.Fatalf("metadata output %q, want mymetadata", content)
+	}
+}
+
+// TestSessionMetadataGetWindowsVerbatimSidecar pins the
+// extended-length spelling at the production call site: a
+// "\\?\C:\...\db.iprange.readers" destination names the absent
+// sidecar and must be refused canonically like the ordinary spelling
+// (wave 19 round 19.14 astra parity finding; Go's resolver preserved
+// the verbatim prefix while the source-derived sidecar did not).
+func TestSessionMetadataGetWindowsVerbatimSidecar(t *testing.T) {
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(wd) })
+	source := newImmutableFeed(t, dir, "db.iprange", []byte("mymetadata"))
+	before, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := `\\?\` + source + format.CoordinationSuffix
+	frame := `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.database.metadata.get","params":{"source":{"path":` +
+		mustJSONString(source) + `,"mode":"immutable"},"delivery":{"mode":"file","path":` +
+		mustJSONString(destination) + `,"publication_policy":"replace_existing","max_output_bytes":"1048576","max_open_files":8}}}`
+	out := runSession(t, frame)
+	if !strings.Contains(out, `"code":"invalid_argument"`) ||
+		!strings.Contains(out, "destination must differ from the source database") {
+		t.Fatalf("metadata.get to %q: output = %q, want the source-refusal error", destination, out)
+	}
+	if _, err := os.Stat(source + format.CoordinationSuffix); !os.IsNotExist(err) {
+		t.Fatalf("metadata.get to %q created the sidecar: %v", destination, err)
+	}
+	after, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("source bytes changed after refusal: %d -> %d bytes", len(before), len(after))
+	}
+}
+
+// TestSessionMetadataGetWindowsDriveRootDistinct pins the
+// wave-19.14 drive-root distinction at the production call site: with
+// the source in the per-drive working directory, a rooted
+// destination "\db-<unique>.iprange.readers" names the distinct file
+// at the drive root and the metadata is published there (not refused
+// as the source's sidecar).  Skipped when the drive root is not
+// writable by the test user.
+func TestSessionMetadataGetWindowsDriveRootDistinct(t *testing.T) {
+	probe := `C:\__iprange-write-probe-` + fmt.Sprint(os.Getpid()) + `.tmp`
+	if err := os.WriteFile(probe, []byte("x"), 0o644); err != nil {
+		t.Skipf("drive root not writable, skipping: %v", err)
+	}
+	defer os.Remove(probe)
+
+	dir := t.TempDir()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chdir(wd) })
+	source := newImmutableFeed(t, dir, "db-"+fmt.Sprint(os.Getpid())+".iprange", []byte("mymetadata"))
+	before, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sidecar := source + format.CoordinationSuffix
+	destination := string(os.PathSeparator) + filepath.Base(sidecar) // C:\db-<pid>.iprange.readers
+	frame := `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.database.metadata.get","params":{"source":{"path":` +
+		mustJSONString(source) + `,"mode":"immutable"},"delivery":{"mode":"file","path":` +
+		mustJSONString(destination) + `,"publication_policy":"replace_existing","max_output_bytes":"1048576","max_open_files":8}}}`
+	defer os.Remove(destination)
+	res := runSession(t, frame)
+	if strings.Contains(res, `"code":"invalid_argument"`) || strings.Contains(res, "destination must differ") {
+		t.Fatalf("distinct drive-root destination refused: %s", res)
+	}
+	if !strings.Contains(res, `"present":true`) {
+		t.Fatalf("drive-root delivery did not publish: %s", res)
+	}
+	content, err := os.ReadFile(destination)
+	if err != nil {
+		t.Fatalf("drive-root output not written: %v", err)
+	}
+	if string(content) != "mymetadata" {
+		t.Fatalf("drive-root metadata output %q, want mymetadata", content)
+	}
+	after, err := os.ReadFile(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatalf("source bytes changed after drive-root delivery: %d -> %d bytes", len(before), len(after))
+	}
+	if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
+		t.Fatalf("drive-root delivery created the sidecar: %v", err)
 	}
 }

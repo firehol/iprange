@@ -2060,7 +2060,7 @@ func sameCanonical(a, b string) bool {
 	if runtime.GOOS != "windows" {
 		return false
 	}
-	return windowsFoldPath(a) == windowsFoldPath(b)
+	return windowsNameIdentity(a) == windowsNameIdentity(b)
 }
 
 // windowsFoldPath returns the Windows-equivalence fold of a canonical
@@ -2154,6 +2154,59 @@ func windowsFoldPath(path string) string {
 	return b.String()
 }
 
+// windowsNameIdentity returns the Windows-equivalence identity of a
+// canonical pathname used by sameCanonical: the windowsFoldPath
+// lowercasing plus the per-volume upcase-name equivalence of the
+// Greek sigma class.  NTFS treats the sigma spellings as one name
+// family (the classic default upcase table maps U+03A3/U+03C2/U+03C3
+// all to U+03A3; on the qualified Win11 volume the measured classes
+// are {U+03A3, U+03C3} equal with U+03C2 distinct); the contextual
+// Final_Sigma fold would split the family into U+03C2 (word-final)
+// and U+03C3, letting a sigma-spelled sidecar escape the guard, so
+// the comparison collapses all three sigmas to one identity.  The
+// collapse is conservative (refusal direction only): a genuinely
+// distinct U+03C2 spelling on a volume that separates it is refused
+// exactly like the fold already refuses it (wave 19 round 19.14
+// astra findings).
+func windowsNameIdentity(path string) string {
+	folded := windowsFoldPath(path)
+	if !strings.ContainsAny(folded, "\u03A3\u03C2\u03C3") {
+		return folded
+	}
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case 0x03A3, 0x03C2, 0x03C3:
+			return 0x03A3
+		}
+		return r
+	}, folded)
+}
+
+// windowsStripExtended removes a leading Win32 extended-length
+// ("\\?\") or device ("\\.\") prefix from a canonical identity:
+// the prefixed spelling names the same file as the ordinary one, and
+// Rust's canonicalize re-emits every resolved identity in the "\\?\"
+// form, so the pathname comparison must reconcile both spellings
+// (wave 19 round 19.14 astra parity finding).  A "\\?\UNC\" or
+// "\\.\UNC\" device prefix becomes the ordinary "\\server\share"
+// form.  Non-Windows identities pass through unchanged.
+func windowsStripExtended(path string) string {
+	if runtime.GOOS != "windows" {
+		return path
+	}
+	for _, prefix := range []string{`\\?\\`, `\\.\\`} {
+		if !strings.HasPrefix(path, prefix) {
+			continue
+		}
+		rest := path[len(prefix):]
+		if len(rest) >= 4 && strings.EqualFold(rest[:4], "unc\\") {
+			return `\\` + rest[4:]
+		}
+		return rest
+	}
+	return path
+}
+
 func refusedSameSource() *rpc.HandlerError {
 	return rpc.NewHandlerError("invalid_argument", "not_started",
 		"destination must differ from the source database")
@@ -2195,11 +2248,11 @@ func canonicalAbsolute(path string) string {
 			for i := len(missing) - 1; i >= 0; i-- {
 				resolved = filepath.Join(resolved, missing[i])
 			}
-			return resolved
+			return windowsStripExtended(resolved)
 		}
 		name, parent := pathLeaf(probe)
 		if name == "" || parent == probe {
-			return windowsAbsolutize(filepath.Clean(absolute))
+			return windowsStripExtended(windowsAbsolutize(filepath.Clean(absolute)))
 		}
 		missing = append(missing, name)
 		probe = parent
@@ -2261,6 +2314,22 @@ func pathLeaf(path string) (string, string) {
 			}
 		}
 		return name, string(os.PathSeparator)
+	}
+	if runtime.GOOS == "windows" {
+		// Rust Path::parent parity for "C:\\name": the parent is the
+		// drive ROOT ("C:\\"), which exists and terminates the
+		// canonicalAbsolute walk; the bare volume ("C:") is a
+		// drive-relative prefix that EvalSymlinks would re-anchor on
+		// the per-drive working directory, falsely joining the missing
+		// name onto the source's directory (wave 19 round 19.14 astra
+		// finding).  Windows-only: verbatim/device volumes
+		// ("\\\\?\\C:", "\\\\.\\C:") and UNC prefixes keep their
+		// bare-prefix parent, matching Rust Path::parent.
+		if vol := filepath.VolumeName(trimmed); separator == len(vol) &&
+			len(vol) == 2 && vol[1] == ':' &&
+			(vol[0] >= 'A' && vol[0] <= 'Z' || vol[0] >= 'a' && vol[0] <= 'z') {
+			return name, vol + string(os.PathSeparator)
+		}
 	}
 	return name, trimmed[:separator]
 }

@@ -1,17 +1,28 @@
 #!/usr/bin/env python3
 """Native same-source-guard session qualification for Windows spellings.
 
-Wave 19.11 (astra turn-3 P1s): the same-source guard must refuse
-every Windows spelling of the absent reader sidecar of a source
-database at the normal JSON-RPC product interface, while still
-allowing distinct destinations:
+The same-source guard must refuse every Windows spelling of the
+absent reader sidecar of a source database at the normal JSON-RPC
+product interface, while still allowing distinct destinations:
 
 - drive-relative        "C:db.iprange.readers"   (per-drive cwd)
 - drive-relative upper  "C:DB.IPRANGE.READERS"
 - absolute upper        "C:\\review\\DB.IPRANGE.READERS"
 - rooted-without-volume "\\review\\db.iprange.readers"
+- NTFS sigma family     "A\\u03c31.iprange.readers" (NTFS upcase-name
+  equivalence of U+03A3/U+03C3, wave 19 round 19.14)
+- extended-length       "\\\\?\\C:\\review\\db.iprange.readers"
+  (wave 19 round 19.14)
 
-On Windows every spelling above denotes the protected sidecar
+The distinct-destination controls publish real metadata bytes and the
+harness validates the exact success response schema plus the delivered
+file digest (wave 19 round 19.14 astra P2): a bare ``result:{}`` or an
+omitted/empty output file can never pass.  The drive-root control
+uses the SAME basename as the absent sidecar ("\\db.iprange.readers"
+while the source sits in the per-drive working directory): it names
+the distinct file at the drive root and must be published.
+
+On Windows every sidecar spelling above denotes the protected sidecar
 pathname; on POSIX (the negative control) all of them denote distinct
 paths and must be allowed, proving the guard does not over-refuse.
 
@@ -20,9 +31,10 @@ delivery over one persistent JSON-RPC service per product, against a
 real v4 database copied into the working directory, and after the
 refusal cases proves: the source bytes are unchanged, the sidecar is
 still absent, and a follow-up metadata request still succeeds
-(reopening).  Per-binary evidence records auditable identities: the
-binary absolute path, its SHA-256, and one ``system.describe`` call
-whose ``implementation`` member must claim the expected language.
+(reopening) with fresh output matching the claimed digest.
+Per-binary evidence records auditable identities: the binary
+absolute path, its SHA-256, and one ``system.describe`` call whose
+``implementation`` member must claim the expected language.
 
 Report schema: ``iprange-cli-windows-guard-report-v1``.
 """
@@ -47,6 +59,8 @@ RPC_WRITE_DEADLINE_SECONDS = 120.0
 
 ACCEPTED_MESSAGE = "destination must differ from the source database"
 IS_WINDOWS = os.name == "nt"
+METHOD = "iprange.v1.database.metadata.get"
+OUTPUT_FACTS = ("bytes", "path", "rows", "sha256")
 
 
 def file_evidence(path):
@@ -91,12 +105,130 @@ def metadata_get_frame(source, destination):
     }
 
 
+def validate_success_response(response, method, destination):
+    """Strict success-facts validation for one metadata.get file
+    delivery (wave 19 round 19.14 astra P2).  A successful response
+    must carry the exact result schema and the delivered file must
+    match the claimed digest/bytes on disk; a bare ``result:{}``, an
+    omitted output file, or a ``present:false`` response that leaves
+    the destination existing is a harness failure, never a PASS.
+
+    Returns (ok, reason).  Error responses are rejected here; refusal
+    cases are validated separately with the exact canonical shape.
+    """
+    if "error" in response:
+        return False, "unexpected error response"
+    result = response.get("result")
+    if not isinstance(result, dict):
+        return False, "result is not an object"
+    if result.get("method") != method:
+        return False, "result.method = %r, want %r" % (result.get("method"), method)
+    present = result.get("present")
+    if not isinstance(present, bool):
+        return False, "result.present is not a boolean"
+    if present:
+        output = result.get("output")
+        if not isinstance(output, dict):
+            return False, "present delivery without output facts"
+        for key in OUTPUT_FACTS:
+            if key not in output:
+                return False, "output lacks %r" % key
+        if output.get("path") != os.path.abspath(destination):
+            return False, "output.path %r != %r" % (
+                output.get("path"), os.path.abspath(destination))
+        if not os.path.exists(destination):
+            return False, "output file %r missing" % destination
+        actual = hashlib.sha256(open(destination, "rb").read()).hexdigest()
+        if actual != output.get("sha256"):
+            return False, "output file digest %s != claimed %s" % (
+                actual, output.get("sha256"))
+        if str(os.path.getsize(destination)) != str(output.get("bytes")):
+            return False, "output file size %d != claimed %r" % (
+                os.path.getsize(destination), output.get("bytes"))
+        return True, ""
+    if os.path.exists(destination):
+        return False, "present:false but destination %r exists" % destination
+    return True, ""
+
+
+def product_all_ok(product):
+    """Aggregate verdict of one product record: every case ok plus
+    the source-integrity, sidecar-absence, and reopening facts."""
+    cases = product.get("cases", {})
+    return (
+        all(v.get("ok", True) for k, v in cases.items() if isinstance(v, dict))
+        and product.get("source_unchanged", False)
+        and product.get("sidecar_absent_after", False)
+        and product.get("reopen_allowed", False)
+    )
+
+
+def selftest():
+    """Pure-function regression battery for the strict validators
+    (wave 19 round 19.14 astra P2): every counterexample that the old
+    weak evaluator accepted must now be rejected, and a genuine
+    successful delivery must still pass."""
+    import tempfile
+    ok = True
+
+    def expect(label, cond):
+        nonlocal ok
+        if not cond:
+            print("SELFTEST FAIL: %s" % label)
+            ok = False
+
+    # astra's executed counterexample: result:{} for successful calls.
+    expect("result {} rejected",
+           not validate_success_response({"result": {}}, METHOD, r"C:\x\meta.txt")[0])
+    expect("missing present rejected",
+           not validate_success_response(
+               {"result": {"method": METHOD}}, METHOD, r"C:\x\meta.txt")[0])
+    expect("present without output rejected",
+           not validate_success_response(
+               {"result": {"method": METHOD, "present": True}},
+               METHOD, r"C:\x\meta.txt")[0])
+    expect("impossible digest rejected",
+           not validate_success_response(
+               {"result": {"method": METHOD, "present": True, "output": {
+                   "bytes": "48", "rows": "1", "sha256": "0" * 64,
+                   "path": r"C:\x\meta.txt"}}},
+               METHOD, r"C:\x\meta.txt")[0])
+
+    with tempfile.TemporaryDirectory(prefix="iprange-guard-selftest-") as td:
+        dest = os.path.join(td, "meta.txt")
+        claimed = hashlib.sha256(b"mymetadata").hexdigest()
+        response = {"result": {"method": METHOD, "present": True, "output": {
+            "bytes": str(len(b"mymetadata")), "rows": "1", "sha256": claimed,
+            "path": dest}}}
+        # astra's counterexample: omit meta.txt entirely.
+        expect("omitted file rejected",
+               not validate_success_response(response, METHOD, dest)[0])
+        # astra's counterexample: empty pre-existing reopen file.
+        with open(dest, "wb") as fh:
+            fh.write(b"")
+        expect("empty file rejected",
+               not validate_success_response(response, METHOD, dest)[0])
+        # The genuine bytes pass.
+        with open(dest, "wb") as fh:
+            fh.write(b"mymetadata")
+        expect("genuine delivery accepted",
+               validate_success_response(response, METHOD, dest)[0])
+        # present:false with a leftover destination (a missed guard).
+        expect("present:false with existing dest rejected",
+               not validate_success_response(
+                   {"result": {"method": METHOD, "present": False}},
+                   METHOD, dest)[0])
+    return ok
+
+
 def guard_cases(work):
     """Windows-targeted spellings of the absent sidecar plus the
-    distinct-destination control.  Expectation depends on the host
-    platform (Windows refuses, POSIX allows).  Each case names the
-    source database basename it targets ("db.iprange" for the primary
-    source, "db_\u00e4.iprange" for the non-ASCII fold pair)."""
+    distinct-destination controls.  Expectation depends on the host
+    platform (Windows refuses sidecar spellings, both platforms allow
+    the controls).  Each case names the source database basename it
+    targets ("db.iprange" for the primary source, "db_\\u00e4.iprange"
+    for the non-ASCII fold pair, "A\\u03a31.iprange" for the NTFS
+    sigma family)."""
     drive = work[:2] if len(work) >= 2 and work[1] == ":" else None
     # Win32 strips trailing dots and spaces at create, so these
     # spellings denote the absent sidecar db.iprange.readers.
@@ -125,10 +257,33 @@ def guard_cases(work):
         ),
     ] + dot_space + [
         ("non_ascii", os.path.join(work, "DB_\u00c4.IPRANGE.READERS")),
+        # NTFS upcase-name equivalence of the Greek sigma class (wave
+        # 19 round 19.14 astra P1): "\u03c3" spells the absent sidecar
+        # of source "A\u03a31.iprange" (the contextual lowercase fold
+        # splits U+03A3 into U+03C2/U+03C3 and would let the spelling
+        # escape); the final-sigma U+03C2 spelling is refused
+        # conservatively on volumes that separate it, matching the
+        # fold.
+        ("ntfs_sigma", os.path.join(work, "A\u03c31.iprange.readers")),
+        ("ntfs_final_sigma", os.path.join(work, "A\u03c21.iprange.readers")),
+        # Extended-length spelling (wave 19 round 19.14 astra P1): the
+        # verbatim name of the absent sidecar, refused canonically.
+        ("verbatim_sidecar", "\\\\?\\" + work + "\\db.iprange.readers"),
+        # Distinct drive-root control with the SAME basename as the
+        # absent sidecar (wave 19 round 19.14 astra P1): with the
+        # source in the per-drive working directory,
+        # "\db.iprange.readers" names the distinct C:\db.iprange.readers
+        # and must be published, not refused as the source's sidecar.
+        ("drive_root_allowed", "\\db.iprange.readers") if drive else None,
         ("control_allowed", os.path.join(work, "meta.txt")),
     ]
+    source_base = {
+        "non_ascii": "db_\u00e4.iprange",
+        "ntfs_sigma": "A\u03a31.iprange",
+        "ntfs_final_sigma": "A\u03a31.iprange",
+    }
     return [
-        (name, "db.iprange" if name != "non_ascii" else "db_\u00e4.iprange", path)
+        (name, source_base.get(name, "db.iprange"), path)
         for name, path in candidates
         if path is not None
     ]
@@ -148,7 +303,7 @@ def run_product(binary, label, work, fixture, provenance):
         product["implementation"] = describe_implementation(service, label)
 
         sources = {}
-        for base in ("db.iprange", "db_\u00e4.iprange"):
+        for base in ("db.iprange", "db_\u00e4.iprange", "A\u03a31.iprange"):
             path = os.path.join(work, base)
             shutil.copyfile(fixture, path)
             sources[path] = {
@@ -167,7 +322,7 @@ def run_product(binary, label, work, fixture, provenance):
         for name, source_base, destination in guard_cases(work):
             source = os.path.join(work, source_base)
             response = service.call(
-                "g1", "iprange.v1.database.metadata.get",
+                "g1", METHOD,
                 metadata_get_frame(source, destination),
             )
             refused = "error" in response
@@ -176,11 +331,26 @@ def run_product(binary, label, work, fixture, provenance):
             error_outcome = error_data.get("outcome")
             error_message = response.get("error", {}).get("message", "")
             if IS_WINDOWS:
-                expected = name != "control_allowed"
+                # Every spelling of the absent sidecar is refused; the
+                # distinct-destination controls (meta.txt, the drive
+                # root) stay allowed (wave 19 round 19.14).
+                expected = name not in ("control_allowed", "drive_root_allowed")
             else:
                 # POSIX negative control: every spelling denotes a
                 # distinct path and must stay allowed.
                 expected = False
+            if not refused:
+                # Strict success-facts validation: the exact result
+                # schema plus the delivered file matching the claimed
+                # digest/bytes (wave 19 round 19.14 astra P2; a bare
+                # `result:{}` or an omitted output must never pass).
+                success_ok, reason = validate_success_response(
+                    response, METHOD, destination)
+                if not success_ok:
+                    raise AssertionError(
+                        "%s metadata.get to %r: invalid success: %s"
+                        % (label, destination, reason)
+                    )
             cases[name] = {
                 "destination": destination,
                 "refused": refused,
@@ -202,6 +372,16 @@ def run_product(binary, label, work, fixture, provenance):
                     % (label, destination, json.dumps(cases[name])[:400])
                 )
 
+        # The drive-root control publishes C:\db.iprange.readers; drop
+        # the scratch file so the next product and the reopen stay
+        # isolated from it (Windows-only: on POSIX the rooted control
+        # is skipped and the backslash spelling stays in the scratch
+        # working directory).
+        if IS_WINDOWS:
+            root_dest = os.path.abspath("\\db.iprange.readers")
+            if os.path.exists(root_dest):
+                os.remove(root_dest)
+
         # Every source must stay byte-identical with its sidecar still
         # absent after the refusal battery.
         unchanged = True
@@ -216,27 +396,33 @@ def run_product(binary, label, work, fixture, provenance):
         cases["sidecar_absent_after"] = sidecars_absent
 
         # Reopening: one more file delivery against the primary source.
+        # The output must be FRESH (a pre-existing file is removed
+        # before the call) and must match the claimed digest/bytes
+        # (wave 19 round 19.14 astra P2 counterexample: an empty
+        # pre-existing reopen file must never count as success).
         reopen = os.path.join(work, "meta-reopen.txt")
+        if os.path.exists(reopen):
+            os.remove(reopen)
         primary = os.path.join(work, "db.iprange")
         response = service.call(
-            "g2", "iprange.v1.database.metadata.get",
-            metadata_get_frame(primary, reopen),
+            "g2", METHOD, metadata_get_frame(primary, reopen),
         )
-        cases["reopen_allowed"] = "error" not in response and os.path.exists(
-            reopen
-        )
-        if not cases["reopen_allowed"]:
+        if "error" in response:
+            cases["reopen_allowed"] = False
             raise AssertionError(
                 "%s reopen delivery failed: %s"
                 % (label, json.dumps(response)[:300])
             )
+        reopen_ok, reopen_reason = validate_success_response(
+            response, METHOD, reopen)
+        cases["reopen_allowed"] = reopen_ok
+        if not reopen_ok:
+            raise AssertionError(
+                "%s reopen delivery invalid: %s" % (label, reopen_reason)
+            )
 
         product["cases"] = cases
-        product["all_ok"] = all(
-            v.get("ok", True) for k, v in cases.items()
-            if isinstance(v, dict)
-        ) and cases["source_unchanged"] and cases["sidecar_absent_after"] \
-            and cases["reopen_allowed"]
+        product["all_ok"] = product_all_ok(product)
     finally:
         service.close()
 
@@ -245,6 +431,8 @@ def run_product(binary, label, work, fixture, provenance):
 
 
 def main():
+    if "--selftest" in sys.argv:
+        return 0 if selftest() else 1
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust", required=True, help="Rust iprange binary")
     parser.add_argument("--go", required=True, help="Go iprange binary")
@@ -279,6 +467,7 @@ def main():
         work = os.path.join(args.work, label)
         os.makedirs(work, exist_ok=True)
         product = run_product(binary, label, work, args.fixture, provenance)
+        product["all_ok"] = product_all_ok(product)
         products[label] = product
         all_ok = all_ok and product["all_ok"]
 
