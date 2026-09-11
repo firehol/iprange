@@ -1,84 +1,128 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-The current evidence is regenerated after the wave-19.11 repair
-(astra turn-3 findings, same review session; SOW-0028 "Wave 19 round
-19.11"): the same-source guard now treats three Windows pathname
-classes of the absent reader sidecar exactly like the filesystem
-does — drive-relative destinations ("C:db.readers" resolve against
-the per-drive working directory; Go canonicalAbsolute now walks the
-bare volume prefix as parent and absolutizes drive-relative
-EvalSymlinks results through GetFullPathName, Rust already resolved
-them via its Path parent/canonicalize), case variants of the absent
-sidecar (both engines fold ASCII case for the pathname arms on
-Windows only; POSIX stays strict), and rooted-without-volume
-spellings that name the sidecar (pathname.Push keeps the base's
-volume; native regression tests now pin the production call site, so
-a revert of the cwd anchor fails them natively — demonstrated by a
-scratch revert that made the drive-relative delivery write metadata
-over the sidecar again).  The product revision is `7a193500` (test
-and harness corrections followed in `b1bfd32d` and the harness
-import fix in `9b3fd2b3`; no product change); the record HEAD is this
-round's closing evidence commit.
+The current evidence is regenerated after the wave-19.12 repair
+(security-role P1/P2 findings, wave 19 round 19.12; SOW-0028 "Wave 19
+round 19.12"): the same-source guard now refuses two more Windows
+equivalence classes of the absent reader sidecar exactly like the
+filesystem does — trailing dots and spaces in the final component,
+which Win32 strips at create time so the sidecar materializes and
+later opens fail, and non-ASCII case variants, which the wave-19.11
+ASCII fold missed while NTFS equates them.  Both engines fold the
+canonical pathname arms on Windows only: the final component's
+trailing dots/spaces are trimmed (the special "." and ".." components
+excluded), then both spellings are compared under Unicode full
+lowercase (Rust `char::to_lowercase`; Go maps the single expanding
+BMP character U+0130 to its two-rune form so both engines fold
+byte-identically).  POSIX keeps exact comparison; the fold is a
+documented practical approximation of the per-volume upcase table for
+absent names while existing files stay protected by the OS
+file-identity arm.  The product revision is `d10eb757` (pushed,
+origin/master); the record HEAD is `3d943d8e`, the follow-up
+fold-compiler lifetime fix and the harness sidecar-spelling
+corrections (Rust `cfg(windows)` refactor; Linux behavior
+identical).  This round's Linux evidence regeneration is staged at
+that HEAD (no product change follows in this round).
 
-Both products were rebuilt at `7a193500`: Linux toolchain go1.27.0 /
-rustc 1.91.1 stable (Go product and worker with `-buildvcs=false`;
-Rust product, worker, and fixture with `cargo build --release
---all-features`); Windows toolchain go1.26.5 windows/amd64 / rustc
-1.97.1 / embeddable Python 3.14.0, clean tree.
+Both products were rebuilt at the record HEAD `3d943d8e` (product
+source `d10eb757` with the fold-compiler fix): Linux toolchain
+go1.27.0 / rustc 1.91.1 stable (Go product and worker with
+`-buildvcs=false`; Rust product, worker, and fixture with `cargo
+build --release --all-features`).  The Go Linux product binary is
+byte-identical to the wave-19.11 build (sha256 `949fa62c...`): the
+wave-19.12 change is Windows-gated dead code on POSIX.
 
-Re-qualification at the wave-19.11 Linux identities: matrices rust
+Re-qualification at the wave-19.12 Linux identities: matrices rust
 38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate skips,
 go_to_rust 14 PASS + 24 skips; crash positive 16/16 both directions
 and the /bin/false negative control fails as designed (rc 1);
-resource proofs 8/8; kind-coverage gate PASS with fresh evidence and
-all self-test controls; golden exchanges 55 / 38 case files;
-sensitivity gate 14/14.  The operations wave-19 probe is 39/39 OK
-against these binaries (same per-case expected-outcome evaluator and
-full-evaluator self-test as wave 19.10).  The Go suite (24 packages)
-and the Rust workspace (918 passed) are green; the Windows-native
-unit/session regressions
-(`TestRefuseOutputOverSourceWindowsSidecarSpellings`,
-`TestSessionMetadataGetWindowsSidecarSpellings`,
-`refuse_output_over_source_windows_sidecar_spellings`,
-`same_canonical_folds_windows_case`) PASS on the authorized Windows
-host; the full Windows Go suite shows only five pre-existing
-host-environment failures (worker-spawn PATH and file-lock cleanup
-classes, byte-identical to the `668468cc` baseline) and the Rust
-workspace only the pre-existing C-ABI `libiprange_v4.dll.a`
-link-surface gap of the debug tree.
+resource proofs 8/8 — the evidence run and three consecutive
+flake-check runs are all 8/8, and the wave-19.11 intermittent
+proof-d.go timing race did not recur — with all self-test controls
+PASS; kind-coverage gate PASS with fresh evidence and all self-test
+controls; golden exchanges 55 / 38 case files; sensitivity gate
+14/14.  The operations wave-19 probe is 39/39 OK against these
+binaries (same per-case expected-outcome evaluator and
+full-evaluator self-test as wave 19.11).  The Go suite (24 packages,
+fresh `-count=1`) and the Rust workspace (918 passed, 0 failed) are
+green.
 
-Windows native qualification at `7a193500` (products go
-`0fd9be82a30f921f17579bfcdb71e6fad34fd1cdffdad12a9f93ac6a3990fdd4` /
-rust
-`3a3735aedfe4c84c346cf9989fc413432d451c68431038baab7c77460c989377`,
-workers
-`0f4bd8c1a6564ffe9b519a18fb5ecc30e526d1a433db721e999d7054db6d8b08` /
-`7513ac4dce83f614bfb702fcd0143bb7bc07e59660b1e1b57d509395d13cbaf7`,
-fixture
-`f6badab65912d6c73a04660a511a89ef157e1760d29e1131c9bb9bc75fc894c3`):
-the new `windows-guard.json` session harness (schema
-`iprange-cli-windows-guard-report-v1`) drives the real binaries and
-proves both products refuse the drive-relative, drive-relative-case,
-absolute-case, and rooted spellings of the absent sidecar with the
-canonical invalid_argument/not_started shape and exact message,
-leave the source byte-identical with the sidecar still absent, still
-publish to a distinct destination, and reopen; housekeeping
-re-qualified 2/2 PASS (`windows-housekeeping.json`, schema v3).
+The wave-19.12 change is Windows-gated; the Windows-native
+re-qualification at the wave-19.12 product revision is the follow-up
+evidence round being updated separately (the staged Windows binaries
+predate `d10eb757` and `3d943d8e`), so `windows-guard.json` and
+`windows-housekeeping.json` remain the wave-19.11 (`7a193500`)
+artifacts.
 
-Linux identities at `7a193500`: go product
+Linux identities at `3d943d8e` (product source `d10eb757` with the
+fold-compiler fix): go product
 `949fa62c114d79171260d98300f29ada005b224d549315d72fdde5f893333d2f` /
 worker
 `4f2eb0638f0cc9fac942f885aed4b20b3a23f388d1a1b1d0e0757594866399a7`;
 rust product
-`02f2dc6a1af670b53b775acf64f0d3b82a598ef87711d1bd80779dd192b69b27` /
+`453b0ab91b9b8173bbe6d7612552fcb0569c8396d6cdbd42de0200e1fea92dba` /
 worker
 `4c17669de96631956d290a54a2553ddc8b9f7dcf517f81c538c844fa9dfe252e` /
 fixture
 `9b40420e7a72d8d0248ac07dffb842ed30ef1766df1e922bd9084e2c9c86ae91`
 (all staged in `.local/shared/binaries/SHASUMS.txt`, sha256sum -c
-OK).  The wave's seven role reviews are re-anchored at the record
-HEAD.
-
+OK).
+---
+Historical wave record (superseded by the head block): the current evidence is regenerated after the wave-19.12 repair
+(security-role P1/P2 findings, wave 19 round 19.12; SOW-0028 "Wave 19
+round 19.12"): the same-source guard now refuses two more Windows
+equivalence classes of the absent reader sidecar exactly like the
+filesystem does — trailing dots and spaces in the final component,
+which Win32 strips at create time so the sidecar materializes and
+later opens fail, and non-ASCII case variants, which the wave-19.11
+ASCII fold missed while NTFS equates them.  Both engines fold the
+canonical pathname arms on Windows only: the final component's
+trailing dots/spaces are trimmed (the special "." and ".." components
+excluded), then both spellings are compared under Unicode full
+lowercase (Rust `char::to_lowercase`; Go maps the single expanding
+BMP character U+0130 to its two-rune form so both engines fold
+byte-identically).  POSIX keeps exact comparison; the fold is a
+documented practical approximation of the per-volume upcase table for
+absent names while existing files stay protected by the OS
+file-identity arm.  The product revision is `d10eb757` (pushed,
+origin/master); this round's Linux evidence regeneration is staged at
+that HEAD (no product change follows in this round).
+Both products were rebuilt at `d10eb757`: Linux toolchain go1.27.0 /
+rustc 1.91.1 stable (Go product and worker with `-buildvcs=false`;
+Rust product, worker, and fixture with `cargo build --release
+--all-features`).  The Go Linux product binary is byte-identical to
+the wave-19.11 build (sha256 `949fa62c...`): the wave-19.12 change is
+Windows-gated dead code on POSIX.
+Re-qualification at the wave-19.12 Linux identities: matrices rust
+38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate skips,
+go_to_rust 14 PASS + 24 skips; crash positive 16/16 both directions
+and the /bin/false negative control fails as designed (rc 1);
+resource proofs 8/8 — the evidence run and three consecutive
+flake-check runs are all 8/8, and the wave-19.11 intermittent
+proof-d.go timing race did not recur — with all self-test controls
+PASS; kind-coverage gate PASS with fresh evidence and all self-test
+controls; golden exchanges 55 / 38 case files; sensitivity gate
+14/14.  The operations wave-19 probe is 39/39 OK against these
+binaries (same per-case expected-outcome evaluator and
+full-evaluator self-test as wave 19.11).  The Go suite (24 packages,
+fresh `-count=1`) and the Rust workspace (918 passed, 0 failed) are
+green.
+The wave-19.12 change is Windows-gated; Windows-native
+re-qualification at `d10eb757` is a separate follow-up (the staged
+Windows binaries at the time of this round predate `d10eb757`), so
+`windows-guard.json` and `windows-housekeeping.json` remain the
+wave-19.11 (`7a193500`) artifacts.
+Linux identities at `d10eb757`: go product
+`949fa62c114d79171260d98300f29ada005b224d549315d72fdde5f893333d2f` /
+worker
+`4f2eb0638f0cc9fac942f885aed4b20b3a23f388d1a1b1d0e0757594866399a7`;
+rust product
+`45ba8b6fd5270a30d940464b15a2309541d1c0867c7c4895f4976d6e4f34ed3b` /
+worker
+`4c17669de96631956d290a54a2553ddc8b9f7dcf517f81c538c844fa9dfe252e` /
+fixture
+`9b40420e7a72d8d0248ac07dffb842ed30ef1766df1e922bd9084e2c9c86ae91`
+(all staged in `.local/shared/binaries/SHASUMS.txt`, sha256sum -c
+OK).
 ---
 
 Historical wave record (superseded by the head block): the current evidence is regenerated at product revision `016010fc`
@@ -138,7 +182,6 @@ unchanged since the round-4 qualified build) and `eab62a09...`
 Windows housekeeping report records the Windows-host products
 `c960a64f...` (rust) and `64854dfa...` (go); the Windows Go worker
 is `06128e96...`.
-
 ---
 
 Historical wave record (superseded by the head block): the current evidence is regenerated at product revision `01356600`

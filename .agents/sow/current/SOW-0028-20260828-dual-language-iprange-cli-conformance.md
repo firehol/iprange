@@ -10913,3 +10913,84 @@ above and the Windows products above; SHASUMS.txt (5/5) and the
 evidence README identity block match the closing evidence commit.
 The seven role reviews are re-anchored at the final HEAD; astra turn
 3 (the same review session) remains the milestone-4 closure gate.
+
+#### Wave 19 round 19.12 (2026-09-11) — security-role P1/P2: Win32-normalized sidecar spellings — repaired and re-qualified
+
+The wave-19.11 role round at `3736083f` returned all seven PASSes
+(parity and glm carrying only P3 notes); the security role then FAILed
+with one P1 and two P2s, all in the Windows equivalence classes of the
+same-source guard:
+
+- P1 (both engines) — trailing-dot and trailing-space spellings of an
+  ABSENT sidecar (`db.iprange.readers.`, `db.iprange.readers `) passed
+  the guard on the metadata-delivery surface; Win32 strips trailing
+  dots/spaces at create time, so the coordination sidecar materialized
+  and every later open of the source failed (export/snapshot had a
+  name-rule backstop; the file-delivery surface did not).  Verified
+  natively with a fresh wave-19.12 build before the repair.
+  Repaired at the guard for ALL surfaces: the Windows comparison now
+  trims the final component's trailing dots/spaces (the special "."
+  and ".." components are excluded), so the spellings refuse with the
+  canonical shape everywhere.
+- P2-1 (both engines) — non-ASCII case variants bypassed the
+  wave-19.11 ASCII fold (e.g. source `db_ä.iprange` with destination
+  `DB_Ä.IPRANGE.READERS`): NTFS equates them through the volume upcase
+  table.  Repaired: the fold is now Unicode full lowercase shared by
+  both engines (Rust `char::to_lowercase`; Go maps the single
+  expanding BMP character U+0130 to its two-rune form so both engines
+  fold byte-identically); the fold remains a documented practical
+  approximation of the per-volume upcase table for ABSENT names —
+  existing files stay protected by the OS file-identity arm.  POSIX
+  stays strict (the Go Linux binary is byte-identical to wave-19.11:
+  the fold is Windows-gated dead code).
+- P2-2 (staging/records) — the wave-19.11 Windows identities were not
+  verifiable from the repository staging (SHASUMS listed Linux rows
+  only, and `.local/shared/binaries/win/` held stale wave-19.10
+  binaries).  Repaired: all five wave-19.12 Windows binaries are
+  staged under `.local/shared/binaries/win/{go,rust}/` (the stale
+  product binary overwritten) and SHASUMS.txt now covers ten rows
+  (five Linux + five Windows), `sha256sum -c` 10/10 OK.
+
+Two implementation defects found and repaired within the round
+(`3d943d8e`): the Rust `cfg(windows)` fold closure borrowed the path
+string while the caller mutated it, which rustc rejects under the
+windows target (Linux builds never compile the arm; the error was
+reproduced natively and fixed with explicit borrow scopes, verified
+locally with `cargo check --target x86_64-pc-windows-gnu` and on the
+Windows host with a clean `cargo clean --release` rebuild), and the
+guard harness's trailing-dot/trailing-space cases initially spelled
+`<workdir>.readers.` instead of the sidecar pathname
+`<workdir>/db.iprange.readers.` (the same basename omission class as
+wave 19.11's test-spelling round); both are now correct and pinned.
+
+Qualification at the wave-19.12 final identities: Linux at
+`3d943d8e` (go `949fa62c…` / worker `4f2eb063…` — byte-identical to
+wave-19.11, rust `453b0ab9…` / worker `4c17669d…` / fixture
+`9b40420e…`): Go suite 24 packages PASS; Rust workspace 918 passed /
+0 failed; matrices rust 38/38, go 38/38, mixed 14 PASS + 24 skips per
+direction; crash 16/16 and /bin/false negative fails as designed (rc
+1); resource 8/8 + self-test (the wave-19.11 proof-d.go cancel race
+did not recur in four consecutive runs); golden 55 / 38; sensitivity
+14/14; kind gate PASS + self-test; operations probe 39/39.
+
+Windows native at `3d943d8e` (go1.26.5 windows/amd64, rustc 1.97.1,
+embeddable Python 3.14.0, clean tree; products go `27441898…` /
+rust `68ca5446…`, workers `0f4bd8c1…` / `48d840ec…`, fixture
+`f222a430…`): the guard session harness (`windows-guard.json`) PASS
+for both products — all seven spellings refused
+(drive_relative, drive_relative_upper, absolute_upper,
+rooted_sidecar, absolute_trailing_dot, absolute_trailing_space,
+non_ascii) with data.code=invalid_argument + outcome=not_started +
+the exact message, control and reopen allowed, both sources
+byte-identical, sidecars absent; the four Go Windows regressions and
+the two Rust Windows guard tests PASS natively; housekeeping 2/2
+PASS (`windows-housekeeping.json`, schema v3).  The Windows-host
+full-suite exceptions are only the pre-existing five Go failures and
+the pre-existing Rust C-ABI debug-tree gap, byte-identical to the
+`668468cc` baseline.
+
+The final committed identities of this round are the Linux products
+above and the Windows products above; SHASUMS.txt (10/10) and the
+evidence README identity block match the closing evidence commit.
+The seven role reviews are re-anchored at the final HEAD; astra turn
+3 (the same review session) remains the milestone-4 closure gate.
