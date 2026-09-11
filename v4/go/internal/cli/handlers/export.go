@@ -2058,13 +2058,14 @@ func canonicalAbsolute(path string) string {
 	absolute := path
 	if !filepath.IsAbs(path) {
 		if cwd, err := os.Getwd(); err == nil {
-			// Raw join, not filepath.Join: Join cleans ".." components
-			// before the symlink walk, which would fold a relative
-			// ".." against a symlinked component lexically and re-open
-			// the same-source guard for relative destinations (Rust
-			// cwd.join(path) parity; wave 19 round 19.9 security
+			// pathname.Push mirrors Rust PathBuf::push exactly and
+			// never cleans: filepath.Join would fold ".." components
+			// before the symlink walk (wave-19.9 security finding),
+			// while a plain string concatenation breaks Windows
+			// drive-rooted spellings ("\x" must keep the base's
+			// volume and replace its directory; wave-19.10 astra
 			// finding).
-			absolute = rawAbsoluteJoin(cwd, path)
+			absolute = pathname.Push(cwd, path)
 		}
 	}
 	var missing []string
@@ -2084,16 +2085,6 @@ func canonicalAbsolute(path string) string {
 		missing = append(missing, name)
 		probe = parent
 	}
-}
-
-// rawAbsoluteJoin joins an absolute base and a relative path without
-// cleaning "." / ".." components (Rust PathBuf::join parity) and
-// without doubling a trailing separator of the base.
-func rawAbsoluteJoin(base, path string) string {
-	if strings.HasSuffix(base, string(os.PathSeparator)) {
-		return base + path
-	}
-	return base + string(os.PathSeparator) + path
 }
 
 // pathLeaf returns (last component, parent directory) with Rust Path

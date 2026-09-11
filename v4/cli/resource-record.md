@@ -142,8 +142,9 @@ publication binding, live namespace, sidecar paths, reader,
 recovery, worker/system deps discovery); the native Windows suite
 then pinned and fixed the Windows prefix parser
 (`sys/path/windows_prefix.rs parse_prefix` port; `//a//b` is not a
-UNC prefix and `"C:."` has no file name or parent).  The current
-canonical Linux identities are recorded in `evidence/README.md`
+UNC prefix and `"C:."` has no file name or parent).  The round-11
+canonical Linux identities (historical) were recorded in
+`evidence/README.md`
 (Go product `5095c208…`, Go worker `795362f2…`, Rust product
 `07c4e314…`, Rust worker `77b6d086…`, fixture `df3623a6…` at the
 round-11 repair product revision `5dd8e010` — the Go

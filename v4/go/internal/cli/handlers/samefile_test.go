@@ -1236,3 +1236,41 @@ func chdirTest(t *testing.T, dir string) {
 		}
 	})
 }
+
+// TestCanonicalAbsoluteMissingAncestorDotDotAfterSymlink pins the
+// wave-19.10 parity class (astra turn-2 F2): a ".." component that
+// precedes a MISSING ancestor keeps symlink semantics (Rust pop-the-
+// ParentDir repair; Go's Base/Dir walk already handled it), so a
+// decorated spelling of the source's sidecar pathname is refused in
+// both engines.
+func TestCanonicalAbsoluteMissingAncestorDotDotAfterSymlink(t *testing.T) {
+	outer := t.TempDir()
+	deeper := t.TempDir()
+	source := filepath.Join(deeper, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(outer, "link")
+	if err := os.Symlink(deeper, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	// <link>/.. resolves through the target to the parent of deeper;
+	// the missing ancestor and its ".." then fold lexically onto the
+	// sidecar pathname of the source.
+	spelling := rawJoin(outer, "link", "..", filepath.Base(deeper), "not-present-control", "..", "db.bin.readers")
+	sidecar := filepath.Join(deeper, "db.bin.readers")
+	if got, want := canonicalAbsolute(spelling), canonicalAbsolute(sidecar); got != want {
+		t.Fatalf("canonicalAbsolute(%q) = %q, want %q", spelling, got, want)
+	}
+	sourceInfo, err := os.Stat(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	herr := refuseOutputOverSource(spelling, source, sourceInfo, nil)
+	if herr == nil {
+		t.Fatal("pre-missing-.. spelling of the sidecar accepted")
+	}
+	if herr.Code != "invalid_argument" || herr.Outcome != "not_started" {
+		t.Fatalf("code=%q outcome=%q", herr.Code, herr.Outcome)
+	}
+}

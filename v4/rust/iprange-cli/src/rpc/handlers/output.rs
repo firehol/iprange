@@ -130,13 +130,29 @@ pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
                 }
                 return lexical_clean_path(&result);
             }
-            Err(_) => match (probe.file_name(), probe.parent()) {
-                (Some(name), Some(parent)) => {
-                    missing.push(name);
-                    probe = parent;
+            Err(_) => {
+                let ends_in_parentdir =
+                    probe.components().next_back() == Some(std::path::Component::ParentDir);
+                match (probe.file_name(), probe.parent()) {
+                    (Some(name), Some(parent)) => {
+                        missing.push(name);
+                        probe = parent;
+                    }
+                    // A not-yet-existing ancestor that terminates in
+                    // `..` has no file name (Path::file_name returns
+                    // None): pop the ParentDir component explicitly
+                    // and keep walking, so `..` components that sit
+                    // BEFORE the missing suffix still resolve with
+                    // symlink semantics (wave 19 round 19.10; a
+                    // lexical clean of the whole path would fold them
+                    // against the symlink name).
+                    (None, Some(parent)) if ends_in_parentdir => {
+                        missing.push(std::ffi::OsStr::new(".."));
+                        probe = parent;
+                    }
+                    _ => return lexical_clean_path(&absolute),
                 }
-                _ => return lexical_clean_path(&absolute),
-            },
+            }
         }
     }
 }
@@ -608,6 +624,71 @@ mod tests {
         assert_eq!(
             canonical_absolute(&spelling),
             canonical_absolute(&source),
+            "spelling {}",
+            spelling.display()
+        );
+        let identity = file_identity(&source).expect("identity");
+        let error = refuse_output_over_source(&spelling, &identity, None).unwrap_err();
+        assert_eq!(
+            (error.code, error.outcome, error.message.as_str()),
+            (
+                "invalid_argument",
+                "not_started",
+                "destination must differ from the source database",
+            )
+        );
+        let _ = fs::remove_dir_all(&outer);
+        let _ = fs::remove_dir_all(&deeper);
+    }
+
+    #[test]
+    fn canonical_absolute_resolves_parent_dotdot_before_missing_suffix() {
+        // Wave 19 round 19.10 (astra turn-2 P2): a ".." component that
+        // precedes a MISSING ancestor must keep symlink semantics.
+        // Path::file_name returns None for a probe terminating in
+        // ".."; the walk must pop the ParentDir explicitly instead of
+        // lexically cleaning the whole original path (which would fold
+        // "<link>/.." against the symlink name and miss the sidecar
+        // pathname this spelling names).
+        let outer = std::env::temp_dir().join(format!(
+            "iprange-canon-premissing-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let deeper = std::env::temp_dir().join(format!(
+            "iprange-canon-premissing-target-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&outer).unwrap();
+        fs::create_dir_all(&deeper).unwrap();
+        if make_symlink(&deeper, &outer.join("link")).is_err() {
+            let _ = fs::remove_dir_all(&outer);
+            let _ = fs::remove_dir_all(&deeper);
+            return; // platforms without symlink permission cannot test
+        }
+        let source = deeper.join("db.iprange");
+        fs::write(&source, b"source").unwrap();
+        // <link>/.. resolves through the target to the parent of
+        // deeper; the missing ancestor and its ".." then fold
+        // lexically, landing on the sidecar pathname of the source.
+        let spelling = outer
+            .join("link")
+            .join("..")
+            .join(deeper.file_name().unwrap())
+            .join("not-present-control")
+            .join("..")
+            .join("db.iprange.readers");
+        let sidecar = deeper.join("db.iprange.readers");
+        assert_eq!(
+            canonical_absolute(&spelling),
+            canonical_absolute(&sidecar),
             "spelling {}",
             spelling.display()
         );

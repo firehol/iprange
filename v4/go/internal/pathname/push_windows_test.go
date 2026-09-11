@@ -22,6 +22,14 @@ func TestPushWindows(t *testing.T) {
 		{`\\?\C:/dir/`, "n", `\\?\C:\dir/\n`},
 		{`\\?\UNC\srv\sh`, "n", `\\?\UNC\srv\sh\n`},
 		{`\\?\foo`, "n", `\\?\foo\n`},
+		// Wave-19.10 astra P1: a rooted pushed name without a prefix
+		// truncates the base to its prefix ("C:\review" + "\x" ->
+		// "C:\x"); a prefix-carrying name replaces the base.
+		{"C:\\review", `\review\db`, `C:\review\db`},
+		{"C:\\review", `\db`, `C:\db`},
+		{"C:\review", "C:rel", "C:rel"},
+		{"", `\db`, `\db`},
+		{`\\srv\share\dir`, `\n`, `\\srv\share\n`},
 	}
 	for _, c := range cases {
 		if got := Push(c.base, c.name); got != c.want {
