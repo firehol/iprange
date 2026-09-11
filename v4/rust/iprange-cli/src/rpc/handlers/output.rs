@@ -308,7 +308,7 @@ mod windows_strip_extended_tests {
             ("\\\\server\\share\\db.iprange.readers",
              "\\\\server\\share\\db.iprange.readers"),
         ] {
-            let got = windows_strip_extended(PathBuf::from(input.as_str()))
+            let got = windows_strip_extended(PathBuf::from(input))
                 .to_string_lossy()
                 .into_owned();
             assert_eq!(got, want, "strip {input:?}");
