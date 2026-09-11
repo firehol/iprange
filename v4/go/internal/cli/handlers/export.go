@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 
@@ -1991,7 +1992,7 @@ func writeJSONValue(buffer []byte, value map[string]any) ([]byte, *rpc.HandlerEr
 // rename or a hard link is refused too.
 func refuseOutputOverSource(destination, source string, sourceInfo, sidecarInfo os.FileInfo) *rpc.HandlerError {
 	destInfo, destErr := os.Stat(destination)
-	if canonicalAbsolute(destination) == canonicalAbsolute(source) {
+	if sameCanonical(canonicalAbsolute(destination), canonicalAbsolute(source)) {
 		return refusedSameSource()
 	}
 	// The live database's reader-coordination sidecar (main +
@@ -2003,7 +2004,7 @@ func refuseOutputOverSource(destination, source string, sourceInfo, sidecarInfo 
 	// so a reserved-name source still derives a sidecar component and
 	// is refused preflight (wave-19.6 parity finding).
 	if sidecar, ok := outputSidecarPath(source); ok {
-		if canonicalAbsolute(destination) == canonicalAbsolute(sidecar) {
+		if sameCanonical(canonicalAbsolute(destination), canonicalAbsolute(sidecar)) {
 			return refusedSameSource()
 		}
 		if destErr == nil {
@@ -2034,6 +2035,40 @@ func outputSidecarPath(path string) (string, bool) {
 		return "", false
 	}
 	return pathname.WithFileName(path, name+format.CoordinationSuffix), true
+}
+
+// sameCanonical compares two canonical pathname identities under the
+// destination filesystem's filename-equivalence rules.  On Windows an
+// absent sidecar (or any not-yet-existing destination) has no file
+// identity for the os.SameFile arms, so the pathname arm must apply
+// the platform's name equivalence; NTFS-style case folding is
+// approximated with the ASCII fold shared with Rust
+// eq_ignore_ascii_case so both engines refuse exactly the same
+// spellings (wave 19 round 19.11 astra finding).  POSIX names are
+// case-sensitive and compare exactly.
+func sameCanonical(a, b string) bool {
+	if a == b {
+		return true
+	}
+	if runtime.GOOS != "windows" {
+		return false
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		ca, cb := a[i], b[i]
+		if 'A' <= ca && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if 'A' <= cb && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
 }
 
 func refusedSameSource() *rpc.HandlerError {
@@ -2073,6 +2108,7 @@ func canonicalAbsolute(path string) string {
 	for {
 		resolved, err := filepath.EvalSymlinks(probe)
 		if err == nil {
+			resolved = windowsAbsolutize(resolved)
 			for i := len(missing) - 1; i >= 0; i-- {
 				resolved = filepath.Join(resolved, missing[i])
 			}
@@ -2080,11 +2116,32 @@ func canonicalAbsolute(path string) string {
 		}
 		name, parent := pathLeaf(probe)
 		if name == "" || parent == probe {
-			return filepath.Clean(absolute)
+			return windowsAbsolutize(filepath.Clean(absolute))
 		}
 		missing = append(missing, name)
 		probe = parent
 	}
+}
+
+// windowsAbsolutize resolves a drive-relative or rooted-without-volume
+// identity against the OS per-drive/current-drive working directory,
+// exactly like the file APIs the publication path will use.  Go's
+// EvalSymlinks keeps drive-relative results relative ("C:" resolves
+// to "C:."), and filepath.Join on such a result would fold to the
+// drive root instead of the drive's working directory; filepath.Abs
+// on Windows resolves through GetFullPathName, matching how Rust
+// canonicalize re-resolves the drive-relative parent (wave 19 round
+// 19.11 astra finding).  POSIX paths are returned unchanged: on
+// POSIX canonicalAbsolute already anchors relative inputs to the
+// absolute process working directory.
+func windowsAbsolutize(path string) string {
+	if runtime.GOOS != "windows" || filepath.IsAbs(path) {
+		return path
+	}
+	if absolute, err := filepath.Abs(path); err == nil {
+		return absolute
+	}
+	return path
 }
 
 // pathLeaf returns (last component, parent directory) with Rust Path
@@ -2107,6 +2164,19 @@ func pathLeaf(path string) (string, string) {
 		separator--
 	}
 	if separator == 0 {
+		// Rust Path::parent parity: a drive-relative name
+		// ("C:db") has the bare volume prefix as its parent
+		// ("C:"), not the drive root; a bare volume is a prefix
+		// without a file name and terminates the walk like Rust
+		// (wave 19 round 19.11 astra finding).
+		if runtime.GOOS == "windows" {
+			if vol := filepath.VolumeName(trimmed); vol != "" {
+				if vol == trimmed {
+					return "", vol
+				}
+				return name, vol
+			}
+		}
 		return name, string(os.PathSeparator)
 	}
 	return name, trimmed[:separator]

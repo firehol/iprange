@@ -166,6 +166,30 @@ pub(crate) fn canonical_absolute(path: &Path) -> PathBuf {
 /// refused before any output temporary or destination exists, with
 /// `invalid_argument`/`not_started` as the canonical Rust semantics
 /// (the Go engine mirrors this exact code/outcome/message).
+/// Same-file pathname identity under the destination filesystem's
+/// filename-equivalence rules.  On Windows an absent sidecar (or any
+/// not-yet-existing destination) has no file identity for the device/
+/// inode arm, so the pathname arm must apply the platform's name
+/// equivalence; NTFS-style case folding is approximated with the
+/// ASCII fold shared with Go `sameCanonical` so both engines refuse
+/// exactly the same spellings (wave 19 round 19.11 astra finding).
+/// POSIX names are case-sensitive and compare exactly.
+fn same_canonical(a: &Path, b: &Path) -> bool {
+    if a == b {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        return a
+            .to_string_lossy()
+            .eq_ignore_ascii_case(b.to_string_lossy().as_ref());
+    }
+    #[cfg(not(windows))]
+    {
+        false
+    }
+}
+
 pub(crate) fn refuse_output_over_source(
     destination: &Path,
     source: &FileIdentity,
@@ -174,7 +198,7 @@ pub(crate) fn refuse_output_over_source(
     // Pathname identity: two spellings of the same eventual file
     // (absolute vs relative, symlinked parents, `.`/`..` decorations).
     let same_pathname =
-        canonical_absolute(destination) == canonical_absolute(&source.path);
+        same_canonical(&canonical_absolute(destination), &canonical_absolute(&source.path));
     let destination_identity = file_identity(destination);
     // File identity: the destination is the same FILE that backs the
     // source even after the source pathname was renamed or hard-linked
@@ -195,8 +219,10 @@ pub(crate) fn refuse_output_over_source(
     // component lexically like the Go guard.
     let sidecar_same = iprange_livedb::sidecar_path(&source.path)
         .map(|sidecar_path| {
-            let by_pathname =
-                canonical_absolute(destination) == canonical_absolute(&sidecar_path);
+            let by_pathname = same_canonical(
+                &canonical_absolute(destination),
+                &canonical_absolute(&sidecar_path),
+            );
             // The file-identity arm uses the sidecar identity captured
             // at reader open when one exists (a renamed sidecar keeps
             // its identity) and falls back to a fresh stat at the
@@ -405,6 +431,114 @@ mod tests {
         assert_eq!(fs::read(&path).unwrap(), b"second");
         assert!(metadata_output(&path, b"third", PublicationPolicy::FailIfExists, 100, 1).is_err());
         fs::remove_file(path).unwrap();
+    }
+
+    // Wave 19.11 astra P1 regressions.  On Windows the guard must
+    // refuse every spelling of the absent reader sidecar of the
+    // source database -- drive-relative ("C:db.readers", resolved by
+    // the OS against the per-drive working directory), its case
+    // variant, the absolute case variant, and the
+    // rooted-without-volume spelling ("\dir\db.readers") -- and
+    // keep accepting distinct destinations.  The serial mutex keeps
+    // the process cwd stable against the parallel test harness; every
+    // path used here is absolute except the deliberately
+    // drive-relative spellings under test.
+    #[cfg(windows)]
+    #[test]
+    fn refuse_output_over_source_windows_sidecar_spellings() {
+        static SERIAL: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = SERIAL.lock().unwrap();
+
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-guard-windows-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        let previous = std::env::current_dir().unwrap();
+
+        std::env::set_current_dir(&dir).unwrap();
+        let result = (|| -> Result<(), String> {
+            let source = dir.join("db.bin");
+            fs::write(&source, b"source").map_err(|e| e.to_string())?;
+
+            let drive = match std::env::current_dir()
+                .map_err(|e| e.to_string())?
+                .components()
+                .next()
+            {
+                Some(std::path::Component::Prefix(prefix)) => match prefix.kind() {
+                    std::path::Prefix::Disk(letter) => letter,
+                    _ => return Err("test requires a drive-letter prefix".into()),
+                },
+                _ => return Err("test requires a drive-letter prefix".into()),
+            };
+            let identity = FileIdentity {
+                path: source.clone(),
+                dev: 0,
+                ino: 0,
+            };
+            let sidecar = source.with_file_name("db.bin.readers");
+
+            // Rooted-without-volume spelling of the sidecar: the
+            // absolute sidecar path minus its "C:" volume prefix.
+            let root_relative = sidecar
+                .strip_prefix(Path::new(&format!("{}:", drive as char)))
+                .unwrap();
+
+            // Every spelling that names the absent sidecar must be
+            // refused: drive-relative, drive-relative case variant,
+            // absolute case variant, and rooted-without-volume.
+            let refusals: Vec<PathBuf> = vec![
+                PathBuf::from(format!("{drive}:db.bin.readers")),
+                PathBuf::from(format!("{drive}:DB.BIN.READERS")),
+                dir.join("DB.BIN.READERS"),
+                root_relative.to_path_buf(),
+            ];
+            for destination in refusals {
+                if refuse_output_over_source(&destination, &identity, None).is_ok() {
+                    return Err(format!(
+                        "destination {:?} naming the absent sidecar accepted",
+                        destination
+                    ));
+                }
+            }
+
+            // Distinct destinations stay allowed: an absolute file in
+            // the directory and a rooted-without-volume name on the
+            // drive root that is not the sidecar.
+            for destination in [
+                dir.join("other.bin"),
+                PathBuf::from("\\unrelated.bin"),
+            ] {
+                if refuse_output_over_source(&destination, &identity, None).is_err() {
+                    return Err(format!(
+                        "distinct destination {:?} refused",
+                        destination
+                    ));
+                }
+            }
+            Ok(())
+        })();
+        std::env::set_current_dir(&previous).unwrap();
+        let _ = fs::remove_dir_all(&dir);
+        result.unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn same_canonical_folds_windows_case() {
+        assert!(same_canonical(
+            Path::new(r"C:\review\db.iprange.readers"),
+            Path::new(r"c:\review\DB.IPRANGE.READERS")
+        ));
+        assert!(!same_canonical(
+            Path::new(r"C:\review\db.iprange.readers"),
+            Path::new(r"C:\review\other.readers")
+        ));
     }
 }
 
