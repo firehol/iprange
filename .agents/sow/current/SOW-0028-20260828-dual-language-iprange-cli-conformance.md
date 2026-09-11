@@ -11763,8 +11763,18 @@ follow-up commit, plus one falsified report:
    plus 3 success-fact controls), and the Go Windows handler suite
    is 13 tests, not 12.
 
-Windows native re-verification of the corrected pins (both new tests
-plus the scratch-revert regression proof) is recorded in the
-follow-up commit before the re-anchor round; the milestone stays
-gated on the re-anchor PASS of every available role at the final
-revision and the astra same-session review.
+Windows native re-verification at the follow-up HEAD (go1.26.5 /
+rustc 1.97.1, win11 validation host, clean worktree): both corrected
+pins PASS natively (`refuse_output_over_source_windows_cross_family_spellings`
+and `strip_non_ascii_head_does_not_panic`).  Scratch-revert proofs
+confirm both pins detect their defect classes: restoring the
+pre-fix `rest[..4]` byte-index shape FAILs the strip pin (the real
+multibyte `\u{00e9}` rows at `rest[3]` are live), and flipping the
+two distinct-destination allow assertions to `is_err()` FAILs the
+cross-family pin (the previous formulation passed unconditionally;
+the corrected formulation detects wrongful refusal of distinct
+loopback-UNC destinations in both the sibling-directory and
+same-directory cases).  The worktree file is byte-identical to the
+committed blob after the proofs.  The milestone stays gated on the
+re-anchor PASS of every available role at the final revision and the
+astra same-session review.
