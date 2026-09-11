@@ -557,15 +557,15 @@ func TestRefuseOutputOverSourceFileIdentity(t *testing.T) {
 	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sourceInfo, err := os.Stat(source)
-	if err != nil {
-		t.Fatal(err)
+	sourceID := captureFileIdentity(source)
+	if sourceID == nil {
+		t.Fatal("no identity captured")
 	}
 	renamed := filepath.Join(dir, "db.bak")
 	if err := os.Rename(source, renamed); err != nil {
 		t.Fatal(err)
 	}
-	if herr := refuseOutputOverSource(renamed, source, sourceInfo, nil); herr == nil {
+	if herr := refuseOutputOverSource(renamed, source, sourceID, nil); herr == nil {
 		t.Fatal("renamed same-file destination accepted")
 	}
 	// Restore the source name and try a hard-link alias.
@@ -576,14 +576,14 @@ func TestRefuseOutputOverSourceFileIdentity(t *testing.T) {
 	if err := os.Link(source, link); err != nil {
 		t.Skipf("hard links unavailable: %v", err)
 	}
-	if herr := refuseOutputOverSource(link, source, sourceInfo, nil); herr == nil {
+	if herr := refuseOutputOverSource(link, source, sourceID, nil); herr == nil {
 		t.Fatal("hard-link same-file destination accepted")
 	}
 	other := filepath.Join(dir, "other.bin")
 	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if herr := refuseOutputOverSource(other, source, sourceInfo, nil); herr != nil {
+	if herr := refuseOutputOverSource(other, source, sourceID, nil); herr != nil {
 		t.Fatalf("distinct destination refused: %v", herr)
 	}
 	// A nil source identity still refuses the same pathname (the
@@ -609,19 +609,16 @@ func TestRefuseOutputOverSourceSidecar(t *testing.T) {
 	if err := os.WriteFile(sidecar, []byte("readers"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sourceInfo, err := os.Stat(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sidecarInfo, err := os.Stat(sidecar)
-	if err != nil {
-		t.Fatal(err)
+	sourceID := captureFileIdentity(source)
+	sidecarID := captureFileIdentity(sidecar)
+	if sourceID == nil || sidecarID == nil {
+		t.Fatal("no identity captured")
 	}
 	for _, destination := range []string{
 		sidecar,
 		filepath.Join(dir, "sub", "..", "db.bin.readers"),
 	} {
-		herr := refuseOutputOverSource(destination, source, sourceInfo, sidecarInfo)
+		herr := refuseOutputOverSource(destination, source, sourceID, sidecarID)
 		if herr == nil {
 			t.Fatalf("sidecar destination %q accepted", destination)
 		}
@@ -637,7 +634,7 @@ func TestRefuseOutputOverSourceSidecar(t *testing.T) {
 	if err := os.Link(sidecar, alias); err != nil {
 		t.Skipf("hard links unavailable: %v", err)
 	}
-	if herr := refuseOutputOverSource(alias, source, sourceInfo, sidecarInfo); herr == nil {
+	if herr := refuseOutputOverSource(alias, source, sourceID, sidecarID); herr == nil {
 		t.Fatal("hard-link sidecar destination accepted")
 	}
 	// A distinct file stays accepted.  This assertion runs BEFORE the
@@ -650,7 +647,7 @@ func TestRefuseOutputOverSourceSidecar(t *testing.T) {
 	if err := os.WriteFile(other, []byte("other"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if herr := refuseOutputOverSource(other, source, sourceInfo, sidecarInfo); herr != nil {
+	if herr := refuseOutputOverSource(other, source, sourceID, sidecarID); herr != nil {
 		t.Fatalf("distinct destination refused: %v", herr)
 	}
 	// A RENAMED sidecar keeps its captured identity (tester role
@@ -660,7 +657,7 @@ func TestRefuseOutputOverSourceSidecar(t *testing.T) {
 	if err := os.Rename(sidecar, renamed); err != nil {
 		t.Fatal(err)
 	}
-	herr := refuseOutputOverSource(renamed, source, sourceInfo, sidecarInfo)
+	herr := refuseOutputOverSource(renamed, source, sourceID, sidecarID)
 	if herr == nil {
 		t.Fatal("renamed sidecar destination accepted")
 	}
@@ -672,7 +669,7 @@ func TestRefuseOutputOverSourceSidecar(t *testing.T) {
 	// An ephemeral guard without the captured identity accepts the
 	// renamed pathname (a fresh stat no longer matches it); the
 	// wave-19.6 record documents this handle-vs-preflight distinction.
-	if herr := refuseOutputOverSource(renamed, source, sourceInfo, nil); herr != nil {
+	if herr := refuseOutputOverSource(renamed, source, sourceID, nil); herr != nil {
 		t.Fatalf("ephemeral guard refused the renamed pathname: %v", herr)
 	}
 }
@@ -690,12 +687,12 @@ func TestRefuseOutputOverSourceSidecarReservedName(t *testing.T) {
 	if err := os.WriteFile(source, []byte("coordination"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sourceInfo, err := os.Stat(source)
-	if err != nil {
-		t.Fatal(err)
+	sourceID := captureFileIdentity(source)
+	if sourceID == nil {
+		t.Fatal("no identity captured")
 	}
 	sidecar := filepath.Join(dir, "x.readers.readers")
-	herr := refuseOutputOverSource(sidecar, source, sourceInfo, nil)
+	herr := refuseOutputOverSource(sidecar, source, sourceID, nil)
 	if herr == nil {
 		t.Fatal("reserved-name sidecar destination accepted")
 	}
@@ -1005,11 +1002,8 @@ func TestCanonicalAbsoluteSymlinkedParentDotDot(t *testing.T) {
 		t.Fatalf("canonicalAbsolute(%q) = %q, want %q", spelling, got, want)
 	}
 	// The guard therefore refuses the decorated spelling as the source.
-	sourceInfo, err := os.Stat(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	herr := refuseOutputOverSource(spelling, source, sourceInfo, nil)
+	sourceID := captureFileIdentity(source)
+	herr := refuseOutputOverSource(spelling, source, sourceID, nil)
 	if herr == nil {
 		t.Fatal("symlink-.. spelling of the source accepted")
 	}
@@ -1049,17 +1043,14 @@ func TestRefuseOutputOverSourceDoubleSuffixedSidecarDistinct(t *testing.T) {
 	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sourceInfo, err := os.Stat(source)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sourceID := captureFileIdentity(source)
 	// The real sidecar does not exist; a distinct file carries the
 	// double-suffixed name.
 	double := filepath.Join(dir, "db.bin.readers.readers")
 	if err := os.WriteFile(double, []byte("distinct"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if herr := refuseOutputOverSource(double, source, sourceInfo, nil); herr != nil {
+	if herr := refuseOutputOverSource(double, source, sourceID, nil); herr != nil {
 		t.Fatalf("distinct double-suffixed destination refused: %v", herr)
 	}
 	// The real sidecar pathname is still refused lexically.
@@ -1067,11 +1058,8 @@ func TestRefuseOutputOverSourceDoubleSuffixedSidecarDistinct(t *testing.T) {
 	if err := os.WriteFile(sidecar, []byte("readers"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	sidecarInfo, err := os.Stat(sidecar)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if herr := refuseOutputOverSource(sidecar, source, sourceInfo, sidecarInfo); herr == nil {
+	sidecarID := captureFileIdentity(sidecar)
+	if herr := refuseOutputOverSource(sidecar, source, sourceID, sidecarID); herr == nil {
 		t.Fatal("real sidecar destination accepted")
 	}
 }
@@ -1140,11 +1128,8 @@ func TestCanonicalAbsoluteRelativeSymlinkDotDot(t *testing.T) {
 	if got, want := canonicalAbsolute(spelling), canonicalAbsolute(source); got != want {
 		t.Fatalf("canonicalAbsolute(%q) = %q, want %q", spelling, got, want)
 	}
-	sourceInfo, err := os.Stat(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	herr := refuseOutputOverSource(spelling, source, sourceInfo, nil)
+	sourceID := captureFileIdentity(source)
+	herr := refuseOutputOverSource(spelling, source, sourceID, nil)
 	if herr == nil {
 		t.Fatal("relative symlink-.. spelling of the source accepted")
 	}
@@ -1262,11 +1247,8 @@ func TestCanonicalAbsoluteMissingAncestorDotDotAfterSymlink(t *testing.T) {
 	if got, want := canonicalAbsolute(spelling), canonicalAbsolute(sidecar); got != want {
 		t.Fatalf("canonicalAbsolute(%q) = %q, want %q", spelling, got, want)
 	}
-	sourceInfo, err := os.Stat(source)
-	if err != nil {
-		t.Fatal(err)
-	}
-	herr := refuseOutputOverSource(spelling, source, sourceInfo, nil)
+	sourceID := captureFileIdentity(source)
+	herr := refuseOutputOverSource(spelling, source, sourceID, nil)
 	if herr == nil {
 		t.Fatal("pre-missing-.. spelling of the sidecar accepted")
 	}

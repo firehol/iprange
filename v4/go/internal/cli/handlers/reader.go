@@ -453,7 +453,7 @@ func deliverMetadata(method string, reader *rpc.ReaderValue, delivery rawObject)
 		// text, which the v1 contract forbids (Rust reader.rs
 		// metadata_result refuse_output_over_source parity).
 		if reader.Path != "" {
-			if herr := refuseOutputOverSource(path, reader.Path, reader.SourceInfo, reader.SidecarInfo); herr != nil {
+			if herr := refuseOutputOverSource(path, reader.Path, reader.SourceID, reader.SidecarID); herr != nil {
 				return nil, herr
 			}
 		}
@@ -828,12 +828,9 @@ func DatabaseMetadataGet(st *rpc.SessionState, params json.RawMessage) (any, *rp
 		if err != nil {
 			return nil, rpc.InvalidParamsError(err.Error())
 		}
-		sourceInfo, _ := os.Stat(path)
-		var sidecarInfo os.FileInfo
-		if sidecarPath, ok := outputSidecarPath(path); ok {
-			sidecarInfo, _ = os.Stat(sidecarPath)
-		}
-		if herr := refuseOutputOverSource(destPath, path, sourceInfo, sidecarInfo); herr != nil {
+		sourceID := captureFileIdentity(path)
+		sidecarID := sidecarIdentity(path)
+		if herr := refuseOutputOverSource(destPath, path, sourceID, sidecarID); herr != nil {
 			return nil, herr
 		}
 	}
@@ -870,36 +867,25 @@ func openReader(path, mode, label string, cancellation *iprangedb.CancellationTo
 	// reader whose source pathname or reader-coordination sidecar is
 	// later renamed still carries the original identities, so the
 	// output-over-source guard can refuse a destination that is the
-	// same file as either (os.SameFile; Rust SourceIdentities parity).
-	sourceInfo, _ := os.Stat(path)
+	// same file as either (fileIdentity dev/ino comparison, rename-
+	// proof on Windows too; Rust SourceIdentities parity, wave 19
+	// round 19.13).
+	sourceID := captureFileIdentity(path)
+	sidecarID := sidecarIdentity(path)
 	if mode == "immutable" {
 		reader, err := iprangedb.OpenImmutable(path)
 		if err != nil {
 			return nil, readError(err)
 		}
 		return &rpc.ReaderValue{Immutable: reader, Path: path,
-			SourceInfo: sourceInfo, SidecarInfo: sidecarInfo(path)}, nil
+			SourceID: sourceID, SidecarID: sidecarID}, nil
 	}
 	reader, err := iprangedb.OpenLiveReader(path, cancellation)
 	if err != nil {
 		return nil, readError(err)
 	}
 	return &rpc.ReaderValue{Live: reader, Path: path,
-		SourceInfo: sourceInfo, SidecarInfo: sidecarInfo(path)}, nil
-}
-
-// sidecarInfo captures the file identity of the reader-coordination
-// sidecar (<main>.readers) for the same-source guard, when it exists.
-func sidecarInfo(path string) os.FileInfo {
-	sidecar, ok := outputSidecarPath(path)
-	if !ok {
-		return nil
-	}
-	info, err := os.Stat(sidecar)
-	if err != nil {
-		return nil
-	}
-	return info
+		SourceID: sourceID, SidecarID: sidecarID}, nil
 }
 
 // sourceFromParams decodes the validated single-source params of the

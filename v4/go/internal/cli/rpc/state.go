@@ -11,7 +11,6 @@
 package rpc
 
 import (
-	"os"
 	"sort"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
@@ -26,18 +25,38 @@ type ReaderValue struct {
 	// The metadata file-delivery guard uses it to refuse a destination
 	// that resolves to the source database (Rust reader_paths parity).
 	Path string
-	// SourceInfo is the file identity captured right after the open.
-	// A rename of the source pathname keeps the identity, so the
-	// same-file guard can still refuse a destination that is the file
-	// backing this reader (os.SameFile; Rust FileIdentity parity).
-	SourceInfo os.FileInfo
-	// SidecarInfo is the file identity of the reader-coordination
-	// sidecar (<main>.readers) captured right after the open.  A
-	// rename of the sidecar keeps the identity, so the same-file
-	// guard can refuse a destination that is the file recording this
-	// reader's coordination membership even after its pathname moved
-	// (Rust sidecar identity parity; tester role wave-19.6).
-	SidecarInfo os.FileInfo
+	// SourceID is the stable file identity captured right after the
+	// open: (device, inode) on POSIX and (volume serial, file index)
+	// on Windows through GetFileInformationByHandle.  A rename of the
+	// source pathname keeps the identity, so the same-file guard can
+	// still refuse a destination that is the file backing this reader;
+	// numeric comparison is rename-proof, where os.SameFile is not on
+	// Windows (Rust FileIdentity parity; wave 19 round 19.13).
+	SourceID *FileIdentity
+	// SidecarID is the stable file identity of the
+	// reader-coordination sidecar (<main>.readers) captured right
+	// after the open.  A rename of the sidecar keeps the identity, so
+	// the same-file guard can refuse a destination that is the file
+	// recording this reader's coordination membership even after its
+	// pathname moved (Rust sidecar identity parity; tester role
+	// wave-19.6).
+	SidecarID *FileIdentity
+}
+
+// FileIdentity is the stable identity of one file at a point in
+// time: (device, inode) on POSIX and (volume serial, file index) on
+// Windows — the Rust iprange-livedb file_identity tuple.  Two
+// identities compare equal only for the same file, and the numeric
+// comparison keeps working after a rename, which os.SameFile cannot
+// guarantee on Windows (it re-opens recorded paths).
+type FileIdentity struct {
+	Dev uint64
+	Ino uint64
+}
+
+// SameFile reports whether both identities are present and equal.
+func (a *FileIdentity) SameFile(b *FileIdentity) bool {
+	return a != nil && b != nil && *a == *b
 }
 
 // CloseLive closes only a registered live reader. Immutable readers

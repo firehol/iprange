@@ -381,12 +381,9 @@ func Export(st *rpc.SessionState, params json.RawMessage) (any, *rpc.HandlerErro
 	// before the source opens or any output temporary exists, with
 	// the canonical invalid_argument/not_started shape (Rust
 	// export.rs refuse_output_over_source parity).
-	sourceInfo, _ := os.Stat(sourcePath)
-	var sidecarInfo os.FileInfo
-	if sidecarPath, ok := outputSidecarPath(sourcePath); ok {
-		sidecarInfo, _ = os.Stat(sidecarPath)
-	}
-	if herr := refuseOutputOverSource(destination, sourcePath, sourceInfo, sidecarInfo); herr != nil {
+	sourceID := captureFileIdentity(sourcePath)
+	sidecarID := sidecarIdentity(sourcePath)
+	if herr := refuseOutputOverSource(destination, sourcePath, sourceID, sidecarID); herr != nil {
 		return nil, herr
 	}
 	// The complete inline result carries the destination string and the
@@ -1988,11 +1985,13 @@ func writeJSONValue(buffer []byte, value map[string]any) ([]byte, *rpc.HandlerEr
 // destination must differ from the source under canonical same-file
 // resolution. Two identities are compared: the canonical pathname
 // spelling (symlinks and ./.. decorations resolved as far as the
-// filesystem allows) and, when both paths exist, the file identity
-// (os.SameFile), so a destination that names the same file through a
+// filesystem allows) and, when the destination and the captured
+// source/sidecar identities exist, the numeric file identity
+// ((device, inode) / (volume serial, file index); Rust FileIdentity
+// parity), so a destination that names the same file through a
 // rename or a hard link is refused too.
-func refuseOutputOverSource(destination, source string, sourceInfo, sidecarInfo os.FileInfo) *rpc.HandlerError {
-	destInfo, destErr := os.Stat(destination)
+func refuseOutputOverSource(destination, source string, sourceID, sidecarID *rpc.FileIdentity) *rpc.HandlerError {
+	destID := captureFileIdentity(destination)
 	if sameCanonical(canonicalAbsolute(destination), canonicalAbsolute(source)) {
 		return refusedSameSource()
 	}
@@ -2008,18 +2007,20 @@ func refuseOutputOverSource(destination, source string, sourceInfo, sidecarInfo 
 		if sameCanonical(canonicalAbsolute(destination), canonicalAbsolute(sidecar)) {
 			return refusedSameSource()
 		}
-		if destErr == nil {
-			if sidecarInfo != nil && os.SameFile(sidecarInfo, destInfo) {
-				return refusedSameSource()
-			}
-			if sidecarInfo == nil {
-				if fresh, err := os.Stat(sidecar); err == nil && os.SameFile(fresh, destInfo) {
-					return refusedSameSource()
-				}
-			}
+		// The file-identity arm prefers the sidecar identity captured
+		// at reader open (a renamed sidecar keeps its identity) and
+		// falls back to a fresh capture at the derived path for
+		// ephemeral preflights (Rust sidecar twin parity; the derived
+		// path is the sidecar itself, never double-suffixed).
+		twin := sidecarID
+		if twin == nil {
+			twin = captureFileIdentity(sidecar)
+		}
+		if destID.SameFile(twin) {
+			return refusedSameSource()
 		}
 	}
-	if sourceInfo != nil && destErr == nil && os.SameFile(sourceInfo, destInfo) {
+	if destID.SameFile(sourceID) {
 		return refusedSameSource()
 	}
 	return nil
@@ -2081,6 +2082,14 @@ func windowsFoldPath(path string) string {
 			// Rust char::to_lowercase expansion parity (the only
 			// BMP character whose full lowercase has two runes).
 			b.WriteString("i\u0307")
+			continue
+		}
+		if r == 0xA7CE || r == 0xA7D2 || r == 0xA7D4 {
+			// rustc 1.97 char::to_lowercase leaves these three code
+			// points unchanged; Go 1.27 unicode.ToLower would map
+			// them to their uppercase partners, diverging the fold
+			// (wave 19 round 19.13 portability finding).
+			b.WriteRune(r)
 			continue
 		}
 		b.WriteRune(unicode.ToLower(r))

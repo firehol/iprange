@@ -42,6 +42,9 @@ if _HERE not in sys.path:
 from crash_harness import HarnessJsonRpcService  # noqa: E402
 
 REPORT_SCHEMA = "iprange-cli-windows-guard-report-v1"
+RPC_READ_DEADLINE_SECONDS = 300.0
+RPC_WRITE_DEADLINE_SECONDS = 120.0
+
 ACCEPTED_MESSAGE = "destination must differ from the source database"
 IS_WINDOWS = os.name == "nt"
 
@@ -136,7 +139,9 @@ def run_product(binary, label, work, fixture, provenance):
 
     binary = os.path.abspath(binary)
     service = HarnessJsonRpcService(
-        [binary, "--jsonrpc"], label, cwd=work
+        [binary, "--jsonrpc"], label, cwd=work,
+        read_deadline=RPC_READ_DEADLINE_SECONDS,
+        write_deadline=RPC_WRITE_DEADLINE_SECONDS,
     )
     try:
         product["binary"] = file_evidence(binary)
