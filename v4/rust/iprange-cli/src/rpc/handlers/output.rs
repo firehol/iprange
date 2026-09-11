@@ -657,7 +657,7 @@ mod tests {
             // round 19.14 astra parity finding): "\\?\C:\...\db.bin.readers"
             // names the same file as the ordinary sidecar path and
             // must be refused.
-            let verbatim = PathBuf::from(format!("\\?\\{}", dir.display()))
+            let verbatim = PathBuf::from(format!("\\\\?\\\\{}", dir.display()))
                 .join("db.bin.readers");
             if refuse_output_over_source(&verbatim, &identity, None).is_ok() {
                 return Err(format!(
