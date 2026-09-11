@@ -11499,6 +11499,108 @@ Follow-up map for this wave:
   test environment, immutable file-lock cleanup) remain documented
   environment limitations, re-measured each native round.
 
-The seven role reviews are re-anchored at the wave-19.14 HEAD;
-astra (the same review session) remains the milestone-4 closure
-gate.
+Role round at the wave-19.14 HEAD `15043969` (2026-09-11): NOT
+all-PASS.  Tester, portability, performance, and the glm-role
+review PASSed; operations reported one P0, parity one P2, and
+security one P1 plus one P2 (listed with fixes in the wave-19.15
+section below).  The wave-19.14 evidence and identity records
+themselves were verified accurate; the blockers are new spellings
+of the guard surface and one pre-existing create-path gap.
+Astra (the same review session) remains the milestone-4 closure
+gate and will resume only after every role PASSes the fixed HEAD.
+
+#### Wave 19 round 19.15 (2026-09-11) — closure-role blockers and user decision
+
+User decision (2026-09-11, decision 2): keep the qualified
+ASCII-name-then-rename workaround (`c47fc071`) for the Windows
+create surface and record an explicit tracked carve-out; the Go
+create path continues to reject non-Latin-1 main names with
+`name_invalid` before any file exists while the Rust engine binds
+UTF-16 units.  This is a recorded exception to the identical-wire
+parity contract for the Windows live create surface: milestone
+records must not claim create-name parity until SOW-0030 closes
+the gap.  The carve-out stays on the SOW-0030 follow-up map; the
+parity role's closure block is lifted only by this explicit
+decision record, not by a code claim.
+
+Blockers fixed in this wave:
+
+1. P0 (operations role) — Rust `windows_strip_extended` indexed
+   `rest[..4]` on a byte boundary assumption: a non-ASCII head
+   after the `\\?\` / `\\.\` / `\\??\` prefix (for example
+   `\\?\abc\u00e9\<name>.readers`) panics with "byte index 4 is
+   not a char boundary" and the worker dies mid-session.  Go byte
+   slicing cannot panic, so the engines diverged on a crash.
+   Repaired: the UNC head check uses `rest.get(..4)` (no panic,
+   correct refusal); a Rust unit pin covers a non-ASCII head.
+2. P1 (security role) — the NT object-manager spelling `\\??\C:\...`
+   (the `\\?\` verbatim family sibling) bypassed the
+   same-source guard in both engines: the strip tables covered
+   only `\\?\` and `\\.\`, so `metadata.get` to
+   `\\??\C:\<work>\db.iprange.readers` published metadata text
+   over the absent live sidecar and made the source unreadable.
+   Repaired: `\\??\` joins the strip tables in both engines
+   (`\\??\UNC\...` maps to `\\server\share` like its
+   siblings); the guard harness gains a native `\\??\` case and
+   unit pins both engines.
+3. P2 (security role) — Go/Rust divergence on the forward-slash
+   verbatim spelling `\\?\C:/<dir>/db.iprange.readers`: Rust
+   refused canonically (`invalid_argument`/`not_started`) because
+   `PathBuf` normalizes separators eagerly; Go's
+   `canonicalAbsolute` preserved the slashed spelling through
+   `EvalSymlinks`, produced a mixed-separator identity, bypassed
+   the guard, and failed later at the kernel rename with
+   `io`/`read_only_failure`.  Repaired: Go normalizes `/` to `\`
+   for Windows path identities at the `canonicalAbsolute` entry
+   (mirroring Rust `Path` semantics), so both engines refuse the
+   spelling with the canonical guard error; the guard harness
+   gains a native forward-slash verbatim case.
+
+Re-qualified at the fixed HEAD `c2b2b0cf` (2026-09-11, product
+source; origin/master) with all evidence regenerated:
+
+- Linux battery (go1.27.0, rustc 1.91.1, fresh workdir): go suite
+  24 packages PASS, Rust workspace 918 passed / 0 failed; matrices
+  rust 38/38, go 38/38, rust_to_go 14 PASS + 24 legitimate skips,
+  go_to_rust 14 PASS + 24 skips; crash positive 16/16 both
+  directions + /bin/false negative control rc 1 as designed;
+  resource 8/8 + selftest; golden 55/38; sensitivity 14/14; kind
+  gate PASS (fresh evidence) + selftest; operations probe 39/39;
+  guard harness selftest PASS and POSIX negative control
+  (`guard-posix.json`) PASS.
+- Linux identities: go product
+  `51b0b2b4f1b36860b15421393aefef3a7d94ea2f12ed7dd6ed75a69b713733f3` /
+  worker `ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`;
+  rust product `20a43867baef341a874032bf424ee133f1a89bfe50832336e1c9eb3143fa457d` /
+  worker `d7a599886eaecccbef00f0a683e2c481d52c2a24352c533b3f7ad5c2d257775e` /
+  fixture `24401226902e2050d9377322649758c86826ab9290298185c3c4abba3b5e0637`.
+- Windows native (go1.26.5 windows/amd64, rustc 1.97.1, clean tree
+  at `c2b2b0cf`): guard harness PASS for both products with the two
+  new cases (`nt_namespace_sidecar`, `verbatim_fwd_sidecar`) plus
+  all wave-19.14 cases and strict success facts; housekeeping 2/2
+  (skipped=False); fixture database created natively by the fixture
+  tool (sha `d7126fc04b...`); Go guard/identity/strip suite PASS
+  natively including the new spellings; Rust strip pins PASS
+  natively (`strip_extended_literals`,
+  `strip_non_ascii_head_does_not_panic`).  Windows identities: go
+  product `877be0892f80f308d714adeb2d8f3c8e03997764326af980e89adc5c97f2d68a` /
+  worker `83fa0e17fd828a718b1f9b9825379d5b4c663bdf5306010f11168641d3b8525d`;
+  rust product `19503794b899aae8be65457f187d97ff6cb352d3d892ee5e27f6d281aeb25780` /
+  worker `1cf2f694e91bbbd3196fab4810d33e9e6e7c9e31091b8cda5989c20d6d695318`.
+- Native suite deltas vs the wave-19.14 record: the Go Windows suite
+  fails the same three documented host-environment classes; the Rust
+  iprange-cli suite now reports 309 passed / 2 failed (the six
+  worker-spawn PATH cases pass in this environment; the two
+  immutable file-lock cleanup cases remain).  The iprange-capi
+  `native_windows` integration test cannot run on the validation
+  host because the installed toolchain does not emit the GNU-style
+  `libiprange_v4.dll.a` import library the test requires; the C ABI
+  crate is the SOW-0017 surface, outside this milestone's scope, and
+  the limitation is recorded in the evidence README.
+- SHASUMS.txt updated (10/10 verify with sha256sum -c); evidence
+  JSONs regenerated into `v4/cli/evidence/` (matrices, crash,
+  resource, guard-posix, windows-guard, windows-housekeeping,
+  README head).
+
+A fresh role round over the final evidence commit and the astra
+same-session review follow as the milestone-4 closure gate.
