@@ -765,6 +765,39 @@ sensitivity 14, kind gate PASS, probe 39/39, Windows housekeeping
 HEAD; astra turn 18 remains the milestone-4 closure gate (no commit
 after its PASS).
 
+
+Wave-19.18 review-generation state (2026-09-12, handoff): the final
+wave-19.18 revision `40c11557e05f4d0ceb2b2ed0eeaddac3998c548e` is
+committed and pushed (HEAD == origin/master; working tree clean apart
+from the two known untracked Linux Go binaries under
+`v4/go/cmd/iprange/`).  Both qualification workers completed and
+their reports are recorded in the handoff section at the end of this
+SOW (Linux battery: matrices 38/38 per language, mixed 14 executed +
+24 documented skips per direction zero failures, crash 16/16 both
+directions with the false-producer negative control failing as
+designed, resource 8/8, golden 55, sensitivity 14/14, kind gate PASS;
+Windows native on the authorized Windows validation host: 69 PASS
+with the three documented host-environment failures, all required
+pins PASS, 12/12 lowercase-namespace refusals on both engines, guard
+26 cases per product PASS, housekeeping PASS).  The eight-role review
+generation at this revision (tester, operations, parity, portability,
+security, performance, the whole-milestone validator role, and the
+closure/records role) ran approximately two hours and was stopped by
+the user before any role wrote its verdict file: the reviewer context
+window (256k) forced repeated compaction without progress, and the
+user raised it to 512k.  After that reconfiguration the interrupted
+session lost agent dispatch entirely (spawn, message, and close calls
+all rejected), so the role generation must be relaunched from a fresh
+session against the same exact revision.  All role sandboxes and
+their accumulated scratch (staged builds, mutation batteries, probes)
+are preserved under `.local/` and must be reused, not recreated.  The
+milestone-4 closure gate is unchanged: every role PASSes at the exact
+final revision and the external whole-milestone control session
+(resumed, never restarted) PASSes at the same revision, with no
+repository commit after that review.  The relaunch script, current
+identities, and standing safety rules are in the
+"Wave-19.18 review-generation handoff" section at the end of this
+SOW.
 ## Requirements
 
 ### Purpose
@@ -5290,8 +5323,8 @@ gate CLI itself:
   `_argv_value` reads the first repeated flag while the runner's
   argparse uses the final value; `--go /bin/false`, a trailing extra
   `--matrix go`, and a trailing `--producer /bin/false` all pass the
-  gate CLI.  Additional lineage mutations verified by the lead to
-  pass: fabricated consumer opens, nonexistent actor/operation
+  gate CLI.  Additional lineage mutations the lead verified as
+  accepted: fabricated consumer opens, nonexistent actor/operation
   references, contradictory scenario state, unknown-matrix-actor
   credits.
 - P2 — artifact lineage omits real sidecar and adapter-output opens:
@@ -12081,3 +12114,137 @@ byte-verified on both hosts.
 The milestone stays gated on the re-anchor PASS of every available
 role at the final wave-19.18 revision (this commit, pushed to
 origin/master) and the astra same-session review at that revision.
+
+## Wave-19.18 review-generation handoff (2026-09-12)
+
+Purpose: durable state so a fresh session can relaunch the interrupted
+role-review generation without re-deriving anything.  This section is
+the authoritative restart record until the roles deliver their
+verdicts at `40c11557…` (or a later re-anchored final revision).
+
+### Anchor
+
+- Repository: this repo, branch `master`.
+- Exact revision under review: `40c11557e05f4d0ceb2b2ed0eeaddac3998c548e`
+  (== `origin/master` at handoff time).
+- Allowed untracked files (never commit, never delete):
+  `v4/go/cmd/iprange/iprange`, `v4/go/cmd/iprange/iprange-v4-worker`.
+- Verify at start: `git rev-parse HEAD` and `git rev-parse origin/master`
+  agree with the anchor above (they will differ once the closure
+  records for the role round land; re-anchor roles to the exact final
+  code revision per the project-final-review rule — no record-only
+  commit after the final review verdict).
+
+### Role generation to relaunch (eight roles, own-model subagents)
+
+One subagent per role directory.  The assignment message for every
+role follows this pattern verbatim:
+
+> Review the SOW-0028 milestone 4 wave-19.18 final revision
+> `40c11557e05f4d0ceb2b2ed0eeaddac3998c548e` (HEAD, pushed to
+> origin/master, working tree must be clean at start — verify).  Your
+> role and responsibilities are described in `.local/<role>/ROLE.md`,
+> read this file in whole, do not skim it, if you do not have it in
+> memory already.
+
+Roles (nickname → directory): Curie → `tester`, Kierkegaard →
+`operations`, Einstein → `parity`, Carver → `portability`, Mill →
+`security`, Huygens → `performance`, Popper → `glm` (whole-milestone
+adversarial validator), Sagan → `closure` (records truthfulness).
+The `closure` role (`.local/closure/ROLE.md`, user-approved) audits
+status/directory contradictions, stale counts or identities, review
+claims unsupported by the commit trail, and closure claims.
+
+Standing role rules:
+- Each role writes ONLY inside its own `.local/<role>/` sandbox; the
+  repository is read-only for every role.
+- Verdict file per role per revision: `.local/<role>/VERDICT-<shortsha>.md`
+  (here `VERDICT-40c11557.md`), ending with an explicit PASS or FAIL;
+  every finding carries severity (P1/P2/P3), `file:line` evidence, and
+  a reproducer where possible.
+- Scratch from the stopped generation is preserved and must be reused:
+  staged builds `buildA1919`/`buildB1919`, mutation batteries, and
+  probe scripts written during the 02:54–03:07 run survive in the role
+  directories.  No role wrote a verdict file before the stop.
+- Heavy steps run under `nice`; roles run targeted adversarial checks,
+  not whole batteries (battery evidence is committed under
+  `v4/cli/evidence/`).
+- `ssh` access to the authorized Windows validation host is granted to
+  roles for SOW-0028 Windows qualification checks only; roles do not
+  rewrite remote state outside the recorded qualification trees.
+- If a role stalls, nudge it with "continue"; never stop a running
+  worker or reviewer without the user's fresh confirmation.
+
+### Completed qualification workers (do not rerun)
+
+- Linux battery worker (nickname Linnaeus), full-green at the exact
+  final identity: go tests green (24 packages), Rust workspace
+  918/0, guard selftest + POSIX negative PASS, matrices rust 38/38 and
+  go 38/38 single-language, `rust_to_go` and `go_to_rust` each
+  14 executed / 24 documented skips / 0 failures, crash 16/16 both
+  directions with the false-producer negative control rc 1, resource
+  8/8 with self-test controls, golden exchanges 55 over 38 case
+  files, sensitivity 14/14, kind-coverage gate PASS.
+- Windows-native worker (nickname Aquinas) on the authorized Windows
+  validation host: 69 PASS / 0 SKIP with exactly the three documented
+  host-environment failures; all required pins PASS; lowercase
+  refusal matrix 12/12 `invalid_argument` on both engines through the
+  production JSON-RPC surface; guard harness PASS both products
+  (26 cases each); housekeeping PASS (`windows_qualified=true`,
+  `failed=0`); evidence files regenerated and byte-verified on both
+  hosts.
+
+### Current identities
+
+- Linux: go product `e2377a2c5fea0961a4556a2364e85f3efdd67112470c574126352ea3a14a735a`,
+  go worker `ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`;
+  Rust product `e59c0f08…`, Rust worker `d7a59988…`, Rust CLI
+  `24401226…`, fixture database `d7126fc0…` (full pins recorded in the
+  wave-19.18 section above).
+- Windows host: go product `630bc0508a7c6b69473f0b88fc59c394f35d1ed4371bdc04775a5f0a2d4e2019`,
+  go worker `d5054a29848c568a28e4f1e97e3ce028dc318a0378c73ca9573476f01a884a1e`
+  (delta from the earlier hash is the embedded staging path, not
+  code — `go list -deps` links zero handler packages); Rust
+  `2d5ea513…`/`1cf2f694…`/`570e81cd…` unchanged, re-verified.
+- Staging ledger `.local/shared/binaries/SHASUMS.txt` (gitignored):
+  `sha256sum -c` verifies 10/10.  Shared read-only probes and the
+  binary staging tree live under `.local/shared/`.
+- Ephemeral artifacts (builds, battery script) under `/tmp/qualsvc/`
+  may not survive reboots; the durable copies are the committed
+  evidence under `v4/cli/evidence/` and the staging ledger above.
+
+### External whole-milestone control review
+
+- Same-session rule (user-mandated): resume the existing external
+  control session `4ffb1eb136144296b1f60bd7a69d3903`; never restart it
+  fresh.
+- Order of operations: all eight internal roles PASS at the exact
+  final revision first; only then the external same-session review at
+  that revision.  Its verdict is reported outside the repository
+  (`.local/astra-verdicts.md` accumulates the turns); no repository
+  commit follows its PASS.
+
+### Incident record for this stop (for the project record)
+
+- The 256k reviewer context window caused repeated automatic
+  compaction of long-running role sessions without forward progress;
+  the user ordered a full stop and raised the context budget to 512k.
+- During the interrupted session the agent dispatch became
+  unavailable (`spawn`, `message`, and `close` calls for subagents all
+  rejected), so relaunch must occur from a fresh session.
+- Process lesson recorded with the user's approval: after any
+  compaction, the lead reconciles pending instructions against this
+  SOW's records before any destructive action (closing agents,
+  respawning, file deletion); an order that appears already-executed
+  is confirmed with the user before acting on it.
+
+### Milestone state (unchanged by this handoff)
+
+- Milestone 4 functional qualification: green at `40c11557…` as
+  recorded above; closure gate remains the eight-role PASS plus the
+  external same-session PASS at the exact final revision.
+- The <=1.3x engine performance requirement: FAILED, not waived;
+  owned by pending SOW-0030.
+- Milestone 5 (delivery step 6, dual-language CLI conformance
+  benchmarks): unstarted per user decision 1A.
+- SOW-0017 (snapshot signing): paused; do not start.
