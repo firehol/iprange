@@ -77,24 +77,39 @@ func base64Decode(text string) ([]byte, error) {
 
 // readMetadataFile reads a metadata source with the exact 20 MiB cap,
 // so a file that grows between the size check and the read cannot
-// drive an unbounded heap allocation.
+// drive an unbounded heap allocation. The path is statted before the
+// open (Rust lifecycle::read_file_exact): a missing or non-regular
+// source is refused with invalid_path before any open can block on a
+// FIFO, and an over-limit source is refused with invalid_argument.
 func readMetadataFile(path string) ([]byte, *rpc.HandlerError) {
 	const maxMetadata = int(iprangedb.MaxMetadataUncompressed)
-	file, err := os.Open(path)
-	if err != nil {
+	info, err := os.Stat(path)
+	switch {
+	case err == nil && info.Mode().IsRegular():
+	case err == nil:
+		return nil, rpc.NewHandlerError("invalid_path", "not_started",
+			"metadata source is not a regular file: "+path)
+	case errors.Is(err, os.ErrNotExist):
+		return nil, rpc.NewHandlerError("invalid_path", "not_started",
+			"metadata source does not exist: "+path)
+	default:
 		return nil, rpc.NewHandlerError("io", "not_started",
-			"cannot read metadata file: "+err.Error())
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, rpc.NewHandlerError("io", "not_started",
-			"cannot inspect metadata file: "+err.Error())
+			"inspect metadata source "+path+": "+err.Error())
 	}
 	if info.Size() > int64(maxMetadata) {
 		return nil, rpc.NewHandlerError("invalid_argument", "not_started",
 			fmt.Sprintf("metadata file is %d bytes, limit is %d", info.Size(), iprangedb.MaxMetadataUncompressed))
 	}
+	file, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, rpc.NewHandlerError("invalid_path", "not_started",
+				"metadata source does not exist: "+path)
+		}
+		return nil, rpc.NewHandlerError("io", "not_started",
+			"cannot read metadata file: "+err.Error())
+	}
+	defer file.Close()
 	bytes := make([]byte, info.Size())
 	if _, err := file.Read(bytes); err != nil {
 		return nil, rpc.NewHandlerError("io", "not_started",

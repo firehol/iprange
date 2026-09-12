@@ -17,8 +17,27 @@ import (
 
 // openDestinationNoFollow opens the destination main name without
 // following a final symlink (Rust Directory::open_regular O_NOFOLLOW).
+// O_NONBLOCK makes a FIFO swapped in between the caller's lstat and
+// this open return immediately instead of blocking until a writer
+// appears; the authoritative-fd regular check then refuses the fifo
+// with the same conflict class the caller already returns for a
+// deterministic non-regular destination (regular files ignore
+// O_NONBLOCK, so publication behavior is unchanged).
 func openDestinationNoFollow(path string) (*os.File, error) {
-	return os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW, 0)
+	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil {
+		file.Close()
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		file.Close()
+		return nil, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
+	}
+	return file, nil
 }
 
 // fileIdentityOf captures the device+inode of one open descriptor.

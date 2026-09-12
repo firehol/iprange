@@ -310,3 +310,40 @@ fn namespace_error(error: NamespaceError) -> Error {
         | NamespaceError::AccessPolicy => Error::WrongMode("live file ownership changed"),
     }
 }
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// The quiescent live open arm must refuse a FIFO promptly with
+    /// WrongMode (wire wrong_state), never block waiting for a writer:
+    /// Directory::open_regular opens O_NONBLOCK and regular_identity
+    /// maps the fifo to NotRegular (wave-19.21 parity pin: the Go
+    /// quiescent arm reported invalid_argument for every non-regular
+    /// file; the Rust arm is authoritative and reports WrongMode).
+    #[test]
+    fn open_rw_refuses_fifo_as_wrong_mode() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-openrw-fifo-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fifo");
+        let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        let rc = unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) };
+        assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
+        let result = open_rw(&path);
+        std::fs::remove_dir_all(&dir).ok();
+        let err = result.expect_err("fifo must not open as a live database file");
+        assert!(
+            matches!(err, crate::error::Error::WrongMode(_)),
+            "unexpected error: {err:?}"
+        );
+    }
+}

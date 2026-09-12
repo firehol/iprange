@@ -24,16 +24,36 @@ const (
 
 // openNoFollow opens the final path component without following a
 // symlink, mapping the POSIX O_NOFOLLOW refusal of the Rust
-// open path. The caller maps every failure to the IO class with the
-// "open" label (Rust open_read_only).
+// open path (open_read_only for the read-only arm, open_rw for the
+// live read-write arm). The caller maps every failure to the IO
+// class with the "open" label.
+//
+// O_NONBLOCK makes a FIFO swapped in between the caller's first stat
+// and this open return immediately instead of blocking until a writer
+// appears; the authoritative-fd regular check below then refuses the
+// fifo (regular files ignore O_NONBLOCK, so database behavior is
+// unchanged). The fd, not any earlier path stat, is the identity: a
+// path replaced between stat and open is judged on the bytes actually
+// opened. The refusal class mirrors Rust: require_regular_file ->
+// invalid_argument for read-only, open_rw NotRegular -> WrongMode ->
+// wrong_state for read-write.
 func openNoFollow(clean string, rdwr bool) (*os.File, error) {
 	flags := os.O_RDONLY
 	if rdwr {
 		flags = os.O_RDWR
 	}
-	f, err := os.OpenFile(clean, flags|unix.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(clean, flags|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "open: " + err.Error()}
+	}
+	st, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
+	}
+	if !st.Mode().IsRegular() {
+		f.Close()
+		return nil, &format.Error{Code: notRegularCode(rdwr), Detail: "not a regular file"}
 	}
 	return f, nil
 }

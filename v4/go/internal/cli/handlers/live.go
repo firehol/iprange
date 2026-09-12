@@ -202,31 +202,139 @@ func ValidateCommitResolve(params json.RawMessage) error {
 
 // ValidateDirectReplace enforces {path, input, metadata,
 // writer_budget} with the direct CSV descriptor.
+// ValidateDirectReplace enforces the strict direct.replace schema
+// without touching the filesystem (Rust live.rs validate_direct_replace):
+// the metadata replace_file source is read by the handler, so a FIFO or
+// missing metadata source is a handler-time domain error (invalid_path),
+// never a validation error.
 func ValidateDirectReplace(params json.RawMessage) error {
-	_, herr := decodeDirectReplaceParams(params)
-	if herr != nil {
+	object, err := exactObject(params, "path", "input", "metadata", "writer_budget")
+	if err != nil {
+		return errors.New("params are invalid")
+	}
+	path, err := asString(object, "path")
+	if err != nil || validatePath(path) != nil {
+		return errors.New("path is invalid")
+	}
+	input, err := memberObject(object, "input")
+	if err != nil {
+		return errors.New("input must be an object")
+	}
+	if err := exactObjectRaw(input, "path", "max_line_bytes"); err != nil {
+		return errors.New("input is invalid")
+	}
+	inputPath, err := asString(input, "path")
+	if err != nil || validatePath(inputPath) != nil {
+		return errors.New("input.path is invalid")
+	}
+	maxLineBytes, err := asUint32(input, "max_line_bytes")
+	if err != nil || maxLineBytes < 1 || maxLineBytes > 1_048_576 {
+		return errors.New("max_line_bytes must be 1 through 1048576")
+	}
+	metadataRaw, ok := object["metadata"]
+	if !ok {
+		return errors.New("metadata must be an object")
+	}
+	// Schema-only metadata validation (Rust lifecycle::validate_metadata
+	// allow_keep=true): the metadata source file is read by the handler,
+	// where a missing/non-regular source is a domain invalid_path error.
+	if err := validateMetadata(metadataRaw, true); err != nil {
+		return err
+	}
+	budget, err := memberObject(object, "writer_budget")
+	if err != nil {
+		return errors.New("writer_budget must be an object")
+	}
+	return validateWriterBudgetObject(budget)
+}
+
+// validateRefreshSchema enforces the strict retention-refresh schema
+// without touching the filesystem (Rust live.rs
+// validate_first_seen_refresh / validate_last_seen_refresh): the metadata
+// replace_file source is read by the handler, where a FIFO or missing
+// source is a handler-time domain error (invalid_path), never a
+// validation error.
+func validateRefreshSchema(params json.RawMessage, lastSeen bool) error {
+	var required []string
+	var optional []string
+	if lastSeen {
+		required = []string{"path", "current", "refresh_value", "cutoff", "metadata", "writer_budget"}
+	} else {
+		required = []string{"path", "current", "refresh_value", "metadata", "writer_budget"}
+		optional = []string{"removals_output"}
+	}
+	object, err := exactObjectOpt(params, required, optional)
+	if err != nil {
+		return errors.New("params are invalid")
+	}
+	path, err := asString(object, "path")
+	if err != nil || validatePath(path) != nil {
+		return errors.New("path is invalid")
+	}
+	current, err := memberObject(object, "current")
+	if err != nil {
+		return errors.New("current must be an object")
+	}
+	if err := exactObjectRaw(current, "source", "feed"); err != nil {
+		return errors.New("current is invalid")
+	}
+	source, err := memberObject(current, "source")
+	if err != nil {
+		return errors.New("current.source must be an object")
+	}
+	if _, _, herr := decodeSource(source, "current.source"); herr != nil {
 		return errors.New(herr.Message)
 	}
-	return nil
+	feed, err := asString(current, "feed")
+	if err != nil {
+		return errors.New("current.feed must be a string")
+	}
+	if _, err := iprangedb.NewFeedName(feed); err != nil {
+		return errors.New("current.feed is invalid")
+	}
+	if _, err := asUint32(object, "refresh_value"); err != nil {
+		return errors.New("refresh_value must be a u32 integer")
+	}
+	if lastSeen {
+		if _, err := asUint32(object, "cutoff"); err != nil {
+			return errors.New("cutoff must be a u32 integer")
+		}
+	} else if raw, ok := object["removals_output"]; ok {
+		output, err := decodeObject(raw)
+		if err != nil {
+			return errors.New("removals_output must be an object")
+		}
+		if _, herr := decodeRemovalsSettings(output); herr != nil {
+			return errors.New(herr.Message)
+		}
+	}
+	metadataRaw, ok := object["metadata"]
+	if !ok {
+		return errors.New("metadata must be an object")
+	}
+	// Schema-only metadata validation (Rust lifecycle::validate_metadata
+	// allow_keep=true); the metadata source file read happens in the
+	// handler where domain errors surface.
+	if err := validateMetadata(metadataRaw, true); err != nil {
+		return err
+	}
+	budget, err := memberObject(object, "writer_budget")
+	if err != nil {
+		return errors.New("writer_budget must be an object")
+	}
+	return validateWriterBudgetObject(budget)
 }
 
 // ValidateFirstSeenRefresh enforces the first_seen refresh schema with
-// the optional removals_output.
+// the optional removals_output (schema-only, no file access).
 func ValidateFirstSeenRefresh(params json.RawMessage) error {
-	_, herr := decodeRefreshParams(params, false)
-	if herr != nil {
-		return errors.New(herr.Message)
-	}
-	return nil
+	return validateRefreshSchema(params, false)
 }
 
-// ValidateLastSeenRefresh enforces the last_seen refresh schema.
+// ValidateLastSeenRefresh enforces the last_seen refresh schema
+// (schema-only, no file access).
 func ValidateLastSeenRefresh(params json.RawMessage) error {
-	_, herr := decodeRefreshParams(params, true)
-	if herr != nil {
-		return errors.New(herr.Message)
-	}
-	return nil
+	return validateRefreshSchema(params, true)
 }
 
 // validatePathFrom validates one path-valued member.
@@ -699,7 +807,7 @@ func openDirectCsv(path string, maxLineBytes int, ipv6 bool) (*directCsvSource, 
 	default:
 		return nil, csvFailure("io", fmt.Sprintf("inspect direct CSV input %s: %v", path, err))
 	}
-	file, err := os.Open(path)
+	file, err := openDirectCsvNoBlock(path)
 	if err != nil {
 		return nil, csvFailure("io", fmt.Sprintf("open direct CSV input %s: %v", path, err))
 	}

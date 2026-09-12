@@ -56,7 +56,7 @@
         "iprange.v1.system.describe",
         "iprange.v1.validate"
       ],
-      "path": "/tmp/iprange-w1921/bin/go/iprange",
+      "path": "/tmp/iprange-w1922/bin/go/iprange",
       "result": {
         "api_version": "1",
         "export_formats": [
@@ -149,7 +149,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31"
+      "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d"
     },
     "rust": {
       "available": true,
@@ -207,7 +207,7 @@
         "iprange.v1.system.describe",
         "iprange.v1.validate"
       ],
-      "path": "/tmp/iprange-w1921/bin/rust/iprange",
+      "path": "/tmp/iprange-w1922/bin/rust/iprange",
       "result": {
         "api_version": "1",
         "export_formats": [
@@ -300,7 +300,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2"
+      "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab"
     }
   },
   "cases": [
@@ -349,22 +349,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.database.metadata.replace"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 2
         }
       },
@@ -421,7 +421,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.reader.open",
@@ -429,11 +429,11 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 5
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.create",
@@ -441,7 +441,7 @@
             "iprange.v1.direct.replace",
             "iprange.v1.history.project"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 6
         }
       },
@@ -497,22 +497,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.join.direct"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 2
         }
       },
@@ -558,16 +558,16 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.create",
@@ -577,7 +577,7 @@
             "iprange.v1.database.create.resolve",
             "iprange.v1.database.reset_live"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 6
         }
       },
@@ -626,23 +626,23 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.maintenance.remove",
             "iprange.v1.database.create",
             "iprange.v1.database.reclaim"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 3
         }
       },
@@ -679,7 +679,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.reader.open",
@@ -688,17 +688,17 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 7
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 2
         }
       },
@@ -731,7 +731,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.reader.open",
@@ -740,11 +740,11 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 5
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.create",
@@ -757,7 +757,7 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 13
         }
       },
@@ -799,7 +799,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.reader.open",
@@ -809,17 +809,17 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 7
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.feeds.create"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 2
         }
       },
@@ -852,7 +852,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.snapshot",
@@ -860,17 +860,17 @@
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 4
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 2
         }
       },
@@ -912,23 +912,23 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.publication.inspect"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.current.publish",
             "iprange.v1.publication.resolve",
             "iprange.v1.publication.residue.remove"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 3
         }
       },
@@ -1006,7 +1006,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.validate",
@@ -1014,18 +1014,18 @@
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 5
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.recovery.inspect",
             "iprange.v1.recover",
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 3
         }
       },
@@ -1083,24 +1083,24 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.reader.open",
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 3
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.snapshot",
             "iprange.v1.publication.resolve"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 2
         }
       },
@@ -1130,22 +1130,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.validate",
             "iprange.v1.recovery.inspect"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 2
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.recover"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 1
         }
       },
@@ -1166,7 +1166,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1921/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1922/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.reader.open",
@@ -1181,11 +1181,11 @@
             "iprange.v1.recovery.inspect",
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2",
+          "sha256": "2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab",
           "steps": 33
         },
         "producer": {
-          "argv": "/tmp/iprange-w1921/bin/go/iprange",
+          "argv": "/tmp/iprange-w1922/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.current.publish",
@@ -1202,7 +1202,7 @@
             "iprange.v1.snapshot",
             "iprange.v1.database.reclaim"
           ],
-          "sha256": "124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31",
+          "sha256": "4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d",
           "steps": 20
         }
       },
@@ -1382,18 +1382,18 @@
   "command": [
     "v4/cli/run.py",
     "--go",
-    "/tmp/iprange-w1921/bin/go/iprange",
+    "/tmp/iprange-w1922/bin/go/iprange",
     "--rust",
-    "/tmp/iprange-w1921/bin/rust/iprange",
+    "/tmp/iprange-w1922/bin/rust/iprange",
     "--fixture-tool",
-    "/tmp/iprange-w1921/bin/rust/v4-fixture",
+    "/tmp/iprange-w1922/bin/rust/v4-fixture",
     "--matrix",
     "go_to_rust",
     "--work-dir",
-    "/tmp/iprange-w1921/W-go_to_rust",
+    "/tmp/iprange-w1922/W-go_to_rust",
     "--allow-skips",
     "--json-report",
-    "/tmp/iprange-w1921/reports/matrix-go_to_rust.json"
+    "/tmp/iprange-w1922/reports/matrix-go_to_rust.json"
   ],
   "environment_allowlist": [
     "PATH",
@@ -1480,8 +1480,8 @@
     }
   },
   "fixture_tool": {
-    "path": "/tmp/iprange-w1921/bin/rust/v4-fixture",
-    "sha256": "85e00d616b7fcefeb57d8bc01313b9d0d28e50d1005c75296173b473d2efb0d1"
+    "path": "/tmp/iprange-w1922/bin/rust/v4-fixture",
+    "sha256": "e130971f3ee80434d382cb70ec9499dc7e21ac3ebe9fea3d8a40839c49a6e7d8"
   },
   "frame_sizes": {
     "iprange.v1.algebra.publish": {

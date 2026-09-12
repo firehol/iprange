@@ -1,3 +1,92 @@
+Current evidence regenerated at the wave-19.22 final revision
+(SOW-0028 "Wave 19 round 19.22", 2026-09-12; product identities in
+the identity block below).  Wave 19.22 repairs the product defects
+the eight-role review round reported at the wave-19.21 final
+revision (FAIL: tester, operations, parity, portability,
+performance, glm, closure; security PASS):
+
+- Go mapping-owner FIFO wedge (operations/performance/portability,
+  P1): the mapping owner's `openNoFollow` opened without
+  `O_NONBLOCK`, so a FIFO swapped in between the pre-stat and the
+  open wedged every mapping-based arm (`reader.open`,
+  `database.info`, `database.metadata.get`, `validate.live`,
+  `recovery.inspect` live, `export`, `OpenLiveReader`).  It now
+  opens `O_NONBLOCK` and refuses non-regular files through the
+  authoritative opened fd with the arm-exact refusal class per
+  Rust (read-only `invalid_argument` via `require_regular_file`,
+  read-write `wrong_state` via `open_rw`).  The same class was
+  applied to the snapshot destination probe, the feed input open,
+  and the direct CSV input open (`v4/go/internal/mapping/`,
+  `snapshot/snapshot_unix.go`, `cli/fileio/input*.go`,
+  `cli/handlers/{live,feeds}.go` open helpers).
+- Go `readMetadataFile` FIFO wedge (operations/glm, P1): the Go
+  metadata reader now mirrors Rust `read_file_exact` exactly
+  (stat before open; `invalid_path` for not-found and non-regular,
+  `invalid_path` again if the path disappears between stat and
+  open, `invalid_argument` over the 20 MiB cap)
+  (`cli/handlers/lifecycle_facts.go`).
+- Go validation-layer parity (parity, P1, found by the FIFO
+  surface probe): the Go validators for `direct.replace` and the
+  retention refresh methods called the full decoders, which read
+  the metadata replace_file during validation, so a FIFO or
+  missing replace_file surfaced as `-32602 invalid_params` instead
+  of the handler domain error `-32010 invalid_path` (Rust
+  validators are schema-only).  The Go validators are now
+  schema-only, mirroring Rust; the metadata reads stay in the
+  handlers (`cli/handlers/live.go`, `cli/handlers/feeds.go`).
+- Go recovery quiescent-arm parity (parity/glm/closure, P2): the
+  Go recovery read-write arm now maps non-regular refusals to
+  `wrong_state` like Rust `open_rw`; the Rust `open_rw` FIFO pin
+  was added (`live_namespace.rs`).
+- Records corrections (tester/parity/closure, P2): wave-19.21's
+  written "18/18 `invalid_argument`" claim is corrected (17
+  `invalid_argument` + the Rust `recovery.inspect` offline arm
+  `wrong_state`, all `-32010`, all prompt); the probe is rewritten
+  with a per-arm expected-code table covering the offline and
+  metadata arms.
+
+The FIFO surface probe (12 arms x 2 engines, per-arm expected
+`data.code`) PASSes on the fresh binaries: 16 `invalid_argument`
+(read-only arms), 6 `wrong_state` (Go+Rust offline quiescent arms),
+2 `invalid_path` (direct.replace metadata replace_file); all
+prompt `-32010`, the regular-file controls unaffected.
+
+Fresh Linux battery at this revision (all steps under
+`nice`): Go module tests rc 0 (24 packages); Rust workspace tests
+rc 0 (from a fresh `CARGO_TARGET_DIR`, because the shared
+incremental target had produced a stale `iprange` binary earlier);
+GOOS matrix 7 PASS / 1 SKIP (dragonfly/arm64 unsupported by the
+installed Go toolchain); matrices rust 38/38, go 38/38,
+rust_to_go 14 PASS + 24 skips, go_to_rust 14 PASS + 24 skips;
+crash positive 16/16 scenarios in both directions with both
+`/bin/false` negatives rejected (rc 1, `failed: 16`); resource
+proofs 8/8 with the harness self-test rc 0; golden exchanges 55 /
+38 case files; sensitivity gate 14/14; guard POSIX negative
+control PASS for both products; the kind-coverage gate PASS on
+the fresh reports; the FIFO surface probe PASS (24 arms + 2
+regular controls, all prompt `-32010`, per-arm expected codes);
+`.local/shared/binaries/SHASUMS.txt` re-verified 10/10.
+
+Fresh identities (wave-19.22, Linux, measured from one clean
+battery): go product
+`4fd67c3ae91c9b36c3134a8a3b4418806c2e4cc5d5953f33cca177ee3870f66d`
+(rebuilt with `-trimpath -buildvcs=false`), go worker
+`94d115abb0782a65b9817f4173689e6400417b18a95029cc00063c8a36f54095`
+(rebuilt with `-trimpath -buildvcs=false`), rust product
+`2c2dd942079646f2a8c7c7bf4c4510cab34a22a9560688420177714ed58008ab`,
+rust worker
+`e81c56fb47b8751e49f7ab5583c48ce2f2e9f5b53ec47b749dccf72ced342b82`,
+rust fixture
+`e130971f3ee80434d382cb70ec9499dc7e21ac3ebe9fea3d8a40839c49a6e7d8`
+(rebuilt from the fixed tree with a fresh `CARGO_TARGET_DIR`).
+Windows identities are unchanged from the wave-19.19 record
+(native host not re-run in this wave).
+
+Previous wave blocks below (wave-19.21 and earlier) remain part of
+the historical record; they are not superseded, only
+superseded-in-position by this head.
+
+
 Current evidence regenerated at the wave-19.21 final revision
 (SOW-0028 "Wave 19 round 19.21", 2026-09-12; product identities in
 the identity block below).  Wave 19.21 repairs the one product
@@ -9,20 +98,22 @@ defects the eight-role round reported as records-only FAIL:
   `recover` blocked forever on a FIFO database path because the
   read-only open waited for a writer and wedged the Go session's
   single worker goroutine; `cancel` could not unblock it.  Both Go
-  unix open helpers (validation and recovery, read-only and
-  read-write arms) now open with `O_NONBLOCK` and refuse
-  non-regular files through the authoritative opened fd with the
-  invalid-argument SDK error, mirroring the Rust
-  `open_read_only`/`require_regular_file` behavior
-  (`v4/go/internal/validation/source_open_unix.go`,
-  `v4/go/internal/recovery/source_open_unix.go`).  Pinned by
+  unix open helpers (validation and recovery) now open with
+  `O_NONBLOCK` and refuse non-regular files through the
+  authoritative opened fd with the invalid-argument SDK error for
+  the read-only arms, mirroring Rust `open_read_only`/
+  `require_regular_file` (`v4/go/internal/validation/
+  source_open_unix.go`, `v4/go/internal/recovery/
+  source_open_unix.go`).  Pinned by
   `TestOpenReadOnlyFifoIsRefusedWithoutBlocking` and
   `TestOpenSourceFifoIsRefusedWithoutBlocking` (both arms).  A
   cross-binary surface probe on the fresh executables (nine
   user-path arms x both engines) now refuses instantly with
-  `-32010 invalid_argument` rc 0 on all 18 combinations,
-  including the three Go arms that hung at the wave-19.20
-  revision; regular files are unaffected (O_NONBLOCK is ignored).
+  `-32010` rc 0 on all 18 combinations — 17 with
+  `invalid_argument` and the Rust `recovery.inspect` offline arm
+  with its canonical `wrong_state` — including the three Go arms
+  that hung at the wave-19.20 revision; regular files are
+  unaffected (O_NONBLOCK is ignored).
 - Records corrections (tester/portability/security/performance/
   closure at the wave-19.20 anchor): the closing record mixed two
   busy-flood probe shapes into one "1.8x" claim and the same-probe

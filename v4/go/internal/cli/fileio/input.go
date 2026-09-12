@@ -907,7 +907,7 @@ func openInput(path string) (*os.File, *InputError) {
 	if !info.Mode().IsRegular() {
 		return nil, &InputError{kind: inputErrorInvalidPath, message: "input is not a regular file: " + path}
 	}
-	file, err := os.Open(path)
+	file, err := openInputNoBlock(path)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, &InputError{kind: inputErrorInvalidPath, message: "input does not exist: " + path}

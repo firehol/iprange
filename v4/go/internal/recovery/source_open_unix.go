@@ -31,7 +31,15 @@ func openSourceFilePlatform(path string, flags int) (*os.File, error) {
 	}
 	if !info.Mode().IsRegular() {
 		file.Close()
-		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "database path is not a regular file"}
+		// The refusal class mirrors the Rust arm: open_read_only
+		// require_regular_file -> invalid_argument for the immutable
+		// arm, live_namespace::open_rw NotRegular -> WrongMode ->
+		// wrong_state for the quiescent arm.
+		code := format.CodeInvalidArgument
+		if flags&os.O_RDWR != 0 {
+			code = format.CodeWrongState
+		}
+		return nil, &format.Error{Code: code, Detail: "database path is not a regular file"}
 	}
 	return file, nil
 }

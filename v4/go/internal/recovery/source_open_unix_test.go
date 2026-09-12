@@ -15,9 +15,16 @@ import (
 // A FIFO database path must be refused promptly, not blocked waiting
 // for a writer, in both recovery open arms (Rust open_read_only and
 // live_namespace open_rw). The wave-19.21 Go defect: the immutable
-// arm hung forever on a FIFO and the quiescent arm accepted it.
+// arm hung forever on a FIFO and the quiescent arm accepted it. The
+// code class mirrors the Rust arms: invalid_argument for the
+// read-only arm (require_regular_file) and wrong_state for the
+// read-write arm (open_rw NotRegular -> WrongMode).
 func TestOpenSourceFifoIsRefusedWithoutBlocking(t *testing.T) {
 	for _, flags := range []int{os.O_RDONLY, os.O_RDWR} {
+		want := format.CodeInvalidArgument
+		if flags&os.O_RDWR != 0 {
+			want = format.CodeWrongState
+		}
 		path := t.TempDir() + "/fifo"
 		if err := unix.Mkfifo(path, 0o600); err != nil {
 			t.Fatalf("mkfifo: %v", err)
@@ -33,8 +40,8 @@ func TestOpenSourceFifoIsRefusedWithoutBlocking(t *testing.T) {
 		select {
 		case err := <-opened:
 			var typed *format.Error
-			if !errors.As(err, &typed) || typed.Code != format.CodeInvalidArgument {
-				t.Fatalf("flags %v: error = %v, want invalid-argument", flags, err)
+			if !errors.As(err, &typed) || typed.Code != want {
+				t.Fatalf("flags %v: error = %v, want %v", flags, err, want)
 			}
 		case <-time.After(5 * time.Second):
 			t.Fatalf("flags %v: open blocked on the fifo", flags)

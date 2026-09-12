@@ -65,14 +65,86 @@ func ValidateFeedsImport(params json.RawMessage) error {
 	return feedMutationValidator(params, []string{"path", "source", "metadata", "writer_budget"})
 }
 
-// feedMutationValidator runs the shared strict decode of one feed
-// mutation params object.
+// feedMutationValidator enforces the strict feed-mutation schema
+// without touching the filesystem (Rust feeds.rs validate_feed_mutation):
+// the metadata replace_file source is read by the handler, so a FIFO or
+// missing metadata source is a handler-time domain error (invalid_path),
+// never a validation error.
 func feedMutationValidator(params json.RawMessage, required []string) error {
-	_, herr := decodeFeedParams(params, required)
-	if herr != nil {
-		return errors.New(herr.Message)
+	object, err := exactObject(params, required...)
+	if err != nil {
+		return errors.New("params are invalid")
 	}
-	return nil
+	path, err := asString(object, "path")
+	if err != nil || validatePath(path) != nil {
+		return errors.New("path is invalid")
+	}
+	for _, member := range []string{"feed", "old_feed", "new_feed"} {
+		raw, ok := object[member]
+		if !ok {
+			continue
+		}
+		if isRawNull(raw) {
+			return errors.New(member + " must be a string; null is not valid")
+		}
+		var text string
+		if err := json.Unmarshal(raw, &text); err != nil {
+			return errors.New(member + " must be a string")
+		}
+		if _, err := iprangedb.NewFeedName(text); err != nil {
+			return errors.New("feed does not use the v4 FeedName grammar")
+		}
+	}
+	if raw, ok := object["current"]; ok {
+		current, err := decodeObject(raw)
+		if err != nil {
+			return errors.New("current must be an object")
+		}
+		if err := exactObjectRaw(current, "source", "feed"); err != nil {
+			return errors.New("current is invalid")
+		}
+		source, err := memberObject(current, "source")
+		if err != nil {
+			return errors.New("current.source must be an object")
+		}
+		if _, _, herr := decodeSource(source, "current.source"); herr != nil {
+			return errors.New(herr.Message)
+		}
+		feed, err := asString(current, "feed")
+		if err != nil {
+			return errors.New("current.feed must be a string")
+		}
+		if _, err := iprangedb.NewFeedName(feed); err != nil {
+			return errors.New("current.feed is invalid")
+		}
+	}
+	if raw, ok := object["source"]; ok {
+		source, err := decodeObject(raw)
+		if err != nil {
+			return errors.New("source must be an object")
+		}
+		if _, _, herr := decodeSource(source, "source"); herr != nil {
+			return errors.New(herr.Message)
+		}
+	}
+	if _, ok := object["metadata"]; !ok {
+		return errors.New("metadata must be an object")
+	}
+	// Schema-only metadata validation (Rust lifecycle::validate_metadata
+	// allow_keep=true); the metadata source file read happens in the
+	// handler where domain errors surface.
+	if err := validateMetadata(object["metadata"], true); err != nil {
+		return err
+	}
+	budgetRaw, ok := object["writer_budget"]
+	if !ok {
+		return errors.New("writer_budget must be an object")
+	}
+	budget, err := decodeObject(budgetRaw)
+	if err != nil {
+		return errors.New("writer_budget must be an object")
+	}
+	return validateWriterBudgetObject(budget)
 }
 
 // ---------------------------------------------------------------------------

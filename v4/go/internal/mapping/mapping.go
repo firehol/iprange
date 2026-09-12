@@ -79,6 +79,17 @@ type Mapping struct {
 // this predicate so the native matrix is honest.
 func CoordinationSupported() bool { return coordinationSupported }
 
+// notRegularCode maps a non-regular open refusal to the Rust wire
+// class: the read-only arm mirrors open_read_only
+// require_regular_file -> invalid_argument, and the live read-write
+// arm mirrors open_rw NotRegular -> WrongMode -> wrong_state.
+func notRegularCode(rdwr bool) format.ErrorCode {
+	if rdwr {
+		return format.CodeWrongState
+	}
+	return format.CodeInvalidArgument
+}
+
 func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func(checked string) error) (*Mapping, error) {
 	// Refuse read-write live opens on platforms without proven live
 	// coordination before any path access, mirroring Rust
@@ -102,7 +113,7 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 	}
 	if !before.Mode().IsRegular() {
-		return nil, &format.Error{Code: format.CodeInvalidArgument, Detail: "not a regular file"}
+		return nil, &format.Error{Code: notRegularCode(rdwr), Detail: "not a regular file"}
 	}
 	prot := protRead
 	if rdwr {
@@ -125,7 +136,7 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 			return &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 		}
 		if !st.Mode().IsRegular() {
-			return &format.Error{Code: format.CodeInvalidArgument, Detail: "not a regular file"}
+			return &format.Error{Code: notRegularCode(rdwr), Detail: "not a regular file"}
 		}
 		// Re-stat the path itself (no symlink following) and compare
 		// against the opened inode: this is the check that detects
