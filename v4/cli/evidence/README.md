@@ -1,12 +1,24 @@
 # SOW-0028 delivery step 5 (milestone 4) — qualification evidence
 
-Current evidence regenerated after the wave-19.18 repairs
-(SOW-0028 "Wave 19 round 19.18", 2026-09-12).  The product and
-harness revision is the final wave-19.18 tree (pushed to
-origin/master; product identities in the identity block below).  The
-wave-19.18 repairs complete the wave-19.17 GLOBALROOT fallback gate:
-the gate now covers the whole device-namespace family
-case-insensitively, its literals are byte-verified single-separator
+Current evidence regenerated at the wave-19.19 final revision
+(SOW-0028 "Wave 19 round 19.19", 2026-09-12, pushed to
+origin/master; product identities in the identity block below).
+Wave 19.19 repairs the free-lock fast path of the "bounded"
+session-loop reply write in both engines: with the writer lock free
+and the stdout pipe full undrained, the next session-loop reply
+(-32001, envelope error, busy, all-rejected batch, unanswerable)
+previously blocked the session loop forever ahead of shutdown
+(wave-19.18 P1; FAIL from operations, portability, security,
+performance, and the glm-5.3 whole-milestone validator).  Every
+session-loop reply is now delivered from the detached bounded path;
+the Rust final-drain deadline also reports a worker transport
+failure recorded before wedging instead of dropping it.  Full
+record: the wave-19.19 section of SOW-0028.  The wave-19.18
+GLOBALROOT repairs summarized below remain part of this evidence
+set.  Identities below are freshly measured at this revision; the
+wave-19.18-recorded Linux rust product identity was a cached
+pre-fix artifact (see the identity note).  That gate now covers the
+whole device-namespace family case-insensitively, its literals are byte-verified single-separator
 raw strings, and the family/probe tables are pinned by
 platform-independent unit tests so a broken literal or a
 case-sensitive comparison fails Linux CI instead of surviving to a
@@ -108,24 +120,26 @@ executables on the authorized Windows validation host):
   `failed=0`), and both harness self-tests exit 0 on the host and
   on Linux.
 
-Linux identities at the final wave-19.18 revision (fresh battery,
-go1.27.0 / rustc 1.91.1, Go built with `-trimpath`): go product
-`d7973a909ce801f16e1bcc7d355bff0426459080ad5ca791da9cebf4efcd7b53`,
+Linux identities at the final wave-19.19 revision (fresh battery,
+go1.27.0 / rustc 1.91.1, Go built with `-trimpath` and
+`-buildvcs=false`, all five binaries from one clean battery build):
+go product
+`7e6af62bdd3913c664cb71075f4ceab04ccc89b4d2b5131b07fb8ed31927c334`,
 go worker `f4af92048e612b9e413b5009d98bd4771eb89b4807ef2d50fe54ef207e641e4b`,
-rust product `79fd1cd09901bd825f1e97f9e129ce1c366922ce3ca69434ad58e74ddc7caec9`,
+rust product `bdbf10d8d13a51c6424cc8287ab3824352d869b22c4fd82f935d3b73e86efd25`,
 rust worker `cfe604d262f8ea871ca56c21bc54f390e92945695ffdaadf7c4f302ed32e7824`,
 rust fixture `e071f3cd849f62db1abe3fbfda8ce15596a5c4d2a828ba5cedffbcf7337c10e7`.
 
-Windows identities at the final wave-19.18 revision (measured on
+Windows identities at the final wave-19.19 revision (measured on
 the authorized Windows validation host, prose-recorded per user
 decision 2 of 2026-09-11): go product
-`ed9d09ea23f61c707d406f68bcd5781ec8201d247382f7e6ad52385b48c8794b`,
-go worker `470d380c5fe6abb38a9f85e6f12bb093a7702db7428c7e80dd215886b2d51992`,
-rust product `06532ec31ac2b2d5063a2b966243ea58c7cfb7ed34a23673e1ecac99f7ed643d`,
-rust worker `806a5adc986273e10eb9d3c98e05c0a75e460d0378c028e240c1aebcfc052653`,
-fixture `1c599446d7a021d6c447ead57e5878585cf57516f7cc2a2d90fc3d8d7ee6050c`;
+`1c0297bbee18a06685e06e4d652b8eacd893d4b1773d2850a5a7e9bce4c69fad`,
+go worker `9b9e2658bb2aedbad3a2bbf78760c20ffd7860416a24278b46eff46760b6ec39`,
+rust product `4c4f20b854bbaec0db4004b48ad6185ca39e6e8f59388d7182f70b453e59272f`,
+rust worker `0100c4252ca851707e3be855e1789d098b9a008bb80c3174ea223015ed1927cb`,
+fixture `898b1c84f0f128b9007c2d1b69d88885c32e9a8d13b16672645f93fc728ebc2c`;
 fixture database created natively by the fixture tool sha256
-`e40adfc4e722423c4ab177d34059cd287afd9de751c764057dd5cec39bb908b8`.
+`d1d0275be06736535d8f63e3231f29de5067b838ee6d749f9c58777265486353`.
 
 Identity note: the Linux Rust product identity embeds absolute
 build inputs (standard cargo release build, no
@@ -138,11 +152,21 @@ only when built with `-trimpath`; without it they embed the staging
 path (verified in the 2026-09-12 repair wave: two byte-identical
 clean stagings built without `-trimpath` produced different hashes,
 with `-trimpath` byte-identical).  The final-wave Linux Go
-identities `d7973a90…`/`f4af9204…` were built from a clean staging
+identities `7e6af62b…`/`f4af9204…` were built from a clean staging
 with `-trimpath` and reproduce byte-exactly; they supersede the
-earlier `e2377a2c…`/`ee213ca1…` (built without `-trimpath` from the
+earlier `d7973a90…`/`f4af9204…` (wave-19.18) and the
+`e2377a2c…`/`ee213ca1…` values (built without `-trimpath` from the
 live tree, not re-derivable from an arbitrary clean staging).  The
 Rust worker and the fixture reproduce from any clean staging.  The
+wave-19.18-recorded Linux rust product identity `79fd1cd0…` was a
+cached pre-fix `[[bin]]` artifact: the Linux battery's Rust step
+previously ran `cargo build --release --examples`, which rebuilds
+examples but not `[[bin]]` targets, so the release bins were
+silently re-staged from older builds.  The wave-19.19 battery builds
+with `cargo build --release --bins --examples`; the rust product at
+this revision is `bdbf10d8…`, differing from `79fd1cd0…` exactly by
+the wave-19.19 session fix, and the free-lock full-pipe probe on the
+fresh binaries self-exits on both engines (no wedge).  The
 Windows Go executables embed their build
 directory (no `-trimpath`), so their identity is tied to the exact
 staging directory of the recorded build (verified by dependency
@@ -174,9 +198,9 @@ destination as the committed evidence
 (`{6df78126-8d52-4afa-ac58-1b1925131887}`).
 
 The final-wave native guard report and the POSIX negative control
-`guard-posix.json` were regenerated from the wave fixture
-(sha256 `65ea5afd03070919d19baffa0c1cc54e68aa2dfdfa1347463fecf6fbf177dcc1`,
-16 KiB) so that every report in this wave shares one fixture
+`guard-posix.json` were regenerated from the wave fixture database
+(sha256 `9ad6279b79810f19f623475e55a4e7f58f612daf850c3c7ccdb02c18f4652b88`,
+16 KiB) so that every Linux report in this wave shares one fixture
 identity.
 
 ### Building the Go binaries (corrected 2026-09-12)
@@ -300,6 +324,27 @@ guard harness selftest PASS and the POSIX negative control
 (`guard-posix.json`) PASS for both products.  The Go suite (24
 packages) and the Rust workspace (918 passed, 0 failed) are green on
 Linux.
+
+Wave-19.19 requalification (2026-09-12, final wave-19.19 tree):
+the complete Linux battery was re-run on freshly built binaries
+(go `7e6af62b...`, rust `bdbf10d8...`), and the Windows native
+evidence was regenerated on the authorized host (go `1c0297bb...`,
+rust `4c4f20b8...`).  Results: Go module tests 24 packages rc 0;
+Rust workspace tests rc 0; GOOS matrix 7 PASS / 1 SKIP; matrices
+rust 38/38, go 38/38, rust_to_go 14 PASS + 24 skips, go_to_rust
+14 PASS + 24 skips; crash positive 16/16 per direction with both
+`/bin/false` negatives rejected (rc 1); resource proofs 8/8 with
+self-test rc 0; golden exchanges 55 / 38 case files; sensitivity
+14/14; guard POSIX negative control PASS both products (50 keys:
+44 refused + 3 allowed + 3 facts, zero Go/Rust mismatches);
+Windows guard PASS (same 50-key split) and housekeeping PASS
+(`windows_qualified=true`, `skipped=false`, `failed=0`); the
+kind-coverage gate, the forgery battery, and `--self-test` PASS
+on the rotated evidence; SHASUMS.txt verifies 10/10.  The
+free-lock full-pipe probe on the fresh binaries self-exits on both
+engines with `WEDGED=` empty.  Evidence JSONs were regenerated
+under `/tmp/iprange-w1919/` and rotated into this directory; all
+recorded binary paths stay under that authorized scratch root.
 
 Windows native at `e576d4e8`: guard harness PASS for both products
 with 22 report keys per product (`windows-guard.json`, all_ok true)

@@ -123,6 +123,17 @@ func TestTerminationSignalHelperProcess(t *testing.T) {
 		// never armed and the process leaked until a signal killed
 		// it.
 		err = NewSession().Run(os.Stdin, os.Stdout)
+	case "oversize-fullpipe-free-lock":
+		// Wave-19.19 integration review, production shape: one batch
+		// frame whose encoded response fits the real stdout pipe
+		// exactly (the worker completes the write and releases the
+		// writer lock, leaving the pipe full), then an oversized
+		// input frame (LIMIT+1 bytes) and EOF.  The -32001 reply
+		// write must be bounded even with the lock free: pre-fix the
+		// main loop wrote -32001 inline on the free lock and wedged
+		// in write(2) ahead of shutdown, leaking the process until a
+		// signal killed it.
+		err = NewSession().Run(os.Stdin, os.Stdout)
 	case "full-stderr":
 		// Watcher force-exit independence (external review finding):
 		// the parent gives this session a stderr that is a full,
@@ -276,11 +287,21 @@ func TestTerminationSignalDrainWedgeForcesNonZeroExit(t *testing.T) {
 // far beyond the 64 KiB pipe buffer, which is what wedges the worker
 // when the client stops reading (operations p9 shape).
 func bigBatchFrame() []byte {
+	return bigBatchFrameIDLen(60000)
+}
+
+// bigBatchFrameIDLen builds one 16-member describe batch whose ids
+// are idLen 'x' characters plus the member index. The free-lock
+// full-pipe pins pass an id length calibrated so the whole encoded
+// response fits the 64 KiB stdout pipe but leaves less room than the
+// 91-byte -32001 reply (engine-specific, see
+// TestOversizeFullpipeFreeLockSelfExitsNonZero).
+func bigBatchFrameIDLen(idLen int) []byte {
 	members := make([]any, 16)
 	for i := range members {
 		members[i] = map[string]any{
 			"jsonrpc": "2.0",
-			"id":      strings.Repeat("x", 60000) + strconv.Itoa(i),
+			"id":      strings.Repeat("x", idLen) + strconv.Itoa(i),
 			"method":  "iprange.v1.system.describe",
 			"params":  map[string]any{},
 		}
@@ -291,7 +312,6 @@ func bigBatchFrame() []byte {
 	}
 	return append(b, '\n')
 }
-
 func TestEOFDrainWedgeSelfExitsZero(t *testing.T) {
 	// Operations P2 (wave-19.18): EOF shutdown must terminate by
 	// itself with exit 0 within the bounded final drain even when the
@@ -437,6 +457,84 @@ func TestOversizeFullpipeWedgeSelfExitsNonZero(t *testing.T) {
 			stdoutR.Close()
 			<-writeDone
 			t.Fatalf("oversize-fullpipe-wedge: helper did not self-exit within 6s")
+		}
+		stdoutR.Close()
+		<-writeDone
+	}
+}
+
+func TestOversizeFullpipeFreeLockSelfExitsNonZero(t *testing.T) {
+	// Wave-19.19 integration review: an oversized input frame
+	// arriving when the writer lock is free but the stdout pipe is
+	// full must not wedge the -32001 reply write.  The batch
+	// response is calibrated to fit the 64 KiB pipe buffer exactly
+	// (16 ids of 1840 bytes: 65,512 B, 24 B headroom), so the worker
+	// completes the write and releases the writer lock before the
+	// oversized frame lands; the 91-byte -32001 reply then cannot
+	// fit and a synchronous write on the free lock would block the
+	// main loop forever ahead of shutdown.  Pre-fix the fast path
+	// wedged exactly this way and the process leaked until a signal
+	// killed it; post-fix the reply is abandoned after the bounded
+	// grace and the process self-exits non-zero (framing failure).
+	idLen, err := strconv.Atoi(os.Getenv("IPRANGE_TEST_BATCH_IDLEN"))
+	if err != nil {
+		idLen = 1840 // Go engine calibration; the Rust helper passes 1839.
+	}
+	frame := bigBatchFrameIDLen(idLen)
+	for iteration := 0; iteration < 2; iteration++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestTerminationSignalHelperProcess$")
+		cmd.Env = append(os.Environ(), signalTestHelperEnv+"=oversize-fullpipe-free-lock")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatalf("stdin pipe: %v", err)
+		}
+		stdoutR, stdoutW, err := os.Pipe()
+		if err != nil {
+			stdin.Close()
+			t.Fatalf("stdout pipe: %v", err)
+		}
+		cmd.Stdout = stdoutW
+		cmd.Stderr = &bytes.Buffer{}
+		if err := cmd.Start(); err != nil {
+			stdin.Close()
+			stdoutR.Close()
+			stdoutW.Close()
+			t.Fatalf("start helper: %v", err)
+		}
+		stdoutW.Close() // the parent never reads; the pipe stays full
+		if _, err := stdin.Write(frame); err != nil {
+			stdin.Close()
+			t.Fatalf("write batch frame: %v", err)
+		}
+		// Give the worker time to complete the response and release
+		// the writer lock before the oversized frame lands.
+		time.Sleep(150 * time.Millisecond)
+		writeDone := make(chan struct{})
+		go func() {
+			defer close(writeDone)
+			body := make([]byte, InputFrameLimit+1)
+			for i := range body {
+				body[i] = 'x'
+			}
+			stdin.Write(append(body, '\n'))
+			stdin.Close()
+		}()
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case err := <-done:
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 {
+				stdoutR.Close()
+				<-writeDone
+				t.Fatalf("oversize-fullpipe-free-lock: exit = %v, want 1", err)
+			}
+		case <-time.After(8 * time.Second):
+			cmd.Process.Kill()
+			cmd.Wait()
+			stdoutR.Close()
+			<-writeDone
+			t.Fatalf("oversize-fullpipe-free-lock: helper did not self-exit within 8s")
 		}
 		stdoutR.Close()
 		<-writeDone

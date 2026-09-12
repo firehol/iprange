@@ -833,6 +833,33 @@ reviewers (parity, session, kind-gate, portability) PASSed the
 pre-commit repair tree; the eight-role generation and the external
 same-session control re-anchor at this final commit.
 
+Wave-19.19 state (2026-09-12): the eight-role re-review at the
+final wave-19.18 revision `6069f6cb` returned PASS for tester,
+parity, and closure but FAIL for operations, portability, security,
+performance, and the glm-5.3 whole-milestone validator — all on the
+same P1: the free-lock fast path of the "bounded" session-loop reply
+write blocks forever on a full undrained stdout pipe.  The repair
+(option 1A-style, same SOW, user-approved) removes the fast path in
+both engines, bounds every session-loop reply, and fixes the Rust
+final-drain fatal-error reporting; the whole qualification battery
+was re-run at the repair tree with a corrected Rust build recipe
+(`--bins --examples`; the previous `--examples`-only step silently
+re-staged cached `[[bin]]` artifacts) and every gate is green —
+matrices 38/38 and 14+24 both directions, crash positive 16/16 per
+direction with `/bin/false` negatives rejected, resource proofs 8/8,
+golden 55/38, sensitivity 14/14, guard POSIX + native Windows PASS
+(50 keys per product, zero Go/Rust mismatches), kind gate + forgery
+battery + self-test PASS on the rotated evidence, SHASUMS 10/10, and
+the free-lock full-pipe probe self-exits on both fresh binaries.
+Fresh identities are recorded in the wave-19.19 section at the end
+of this SOW.  Milestone-4 functional qualification stands at this
+commit; the <=1.3x engine performance gate remains FAILED-not-waived
+(owned by pending SOW-0030); milestone 5 unstarted; SOW-0017 paused.
+The eight-role review and the external same-session control (astra
+session, resumed never restarted) re-anchor at this exact final
+revision; no repository commit follows the control PASS.
+
+
 ## Requirements
 
 ### Purpose
@@ -12694,3 +12721,159 @@ the exact final revision (this commit, HEAD == origin/master) and
 the external same-session control review PASSes at the same revision,
 then no further repository commit is made (project-final-review rule
 — even a record-only commit invalidates the verdict).
+
+## Wave-19.19 repair and qualification (2026-09-12)
+
+### Finding — P1: the free-lock fast path of the bounded session-loop reply write is unbounded (four roles + glm)
+
+The eight-role re-review at the wave-19.18 final revision `6069f6cb` returned
+PASS for tester, parity, and closure, but FAIL for operations, portability,
+security, and performance, plus glm — all on the same P1 class, with
+independent first-hand probes:
+
+- `writeLineBounded` (Go, `v4/go/internal/cli/rpc/session.go`) and
+  `write_response_bounded` (Rust, `v4/rust/iprange-cli/src/rpc/session.rs`)
+  kept a synchronous inline fast path when the writer lock was free
+  (`TryLock`/`try_lock`). A client that stops reading right after a completed
+  worker response leaves the stdout pipe full with the lock released; the
+  next session-loop reply (-32001, envelope error, busy, all-rejected
+  batch, unanswerable) then blocks forever in `write(2)` ahead of shutdown.
+  stdin EOF is never processed, the 1 s / 2 s force-exit watchdogs never
+  arm, and the process leaks until an external signal — the exact class the
+  wave-19.18 session repair claimed to close. Reproduced on both engines at
+  the staged final binaries (all five session-loop call sites per engine
+  shared the fast path).
+- Contract violated: `iprange-jsonrpc-v1.md` Shutdown ("session-loop
+  response writes ... never block the session loop ahead of shutdown") and
+  the wave-19.18 repair record, which covered only the lock-held shape.
+- The committed regression tests wedged only a lock-**held** worker
+  (`TestOversizeFullpipeWedgeSelfExitsNonZero`,
+  `handle_frame_reply_is_bounded_while_the_writer_lock_is_wedged`); the
+  Rust test `handle_frame_reply_takes_the_free_lock_fast_path` actually
+  pinned the unbounded fast path as desired behavior.
+- Reproducers preserved in the role sandboxes (`.local/operations/`,
+  `.local/portability/w1918/`, `.local/security/w19-18-probe/`,
+  `.local/performance/w1920/`, `.local/glm/current/free_lock_oversize.py`).
+
+### Repair (this commit)
+
+- Go: the `TryLock` fast path is removed from `writeLineBounded`; every
+  session-loop reply is delivered from the detached goroutine and the loop
+  waits only the bounded grace, so the reply is abandoned as undeliverable
+  when the pipe cannot drain. New pins:
+  `TestFreeLockFullPipeReplyIsBounded` (unit) and
+  `TestOversizeFullpipeFreeLockSelfExitsNonZero` (process-level, id-length
+  calibrated so the completed worker response exactly fills the 64 KiB pipe
+  and the 91-byte -32001 reply cannot fit).
+- Rust: the `try_lock` fast path is removed from `write_response_bounded`
+  (same detached-thread bounded delivery); the pin
+  `handle_frame_reply_takes_the_free_lock_fast_path` is replaced by
+  `handle_frame_reply_is_bounded_when_the_pipe_is_full_and_the_lock_is_free`.
+- Rust `FinalDrain::Deadline` additionally reads `control.fatal_error`
+  before returning (tester-role F2 at `6069f6cb`): a broken-stdout
+  transport failure recorded by the worker was previously dropped when the
+  drain deadline expired first, making the graceful-fatal exit status
+  flaky under full-suite load.
+- Carried P3 (recorded, not fixed): Go force-exit diagnostic text still
+  reads "EOF shutdown" on the -32001 framing-force-exit path (cosmetic
+  stderr wording; the exit code and the returned framing error are
+  correct, and the text is pinned by no test — noted for a future
+  wording-only cleanup).
+
+### Validation (this commit)
+
+Final qualification battery re-run at the wave-19.19 tree with the
+corrected Rust build recipe (see the staging correction below; every
+step ran under `nice`):
+
+- Go module tests 24 packages: rc 0.  Rust workspace tests: rc 0.
+- BSD/GOOS architecture matrix: PASS (7 PASS / 1 SKIP
+  dragonfly/arm64 — unsupported by the installed Go toolchain).
+- Matrices: rust 38/38 PASS, go 38/38 PASS, rust_to_go 14 PASS + 24
+  legitimate skips, go_to_rust 14 PASS + 24 legitimate skips.
+- Crash positive: 16/16 scenarios in each direction (rust->go,
+  go->rust), rc 0.  `/bin/false` negative controls: rejected as
+  designed (rc 1; consumer=false report records failed=16).
+- Resource proofs: 8/8 PASS; harness self-test rc 0 (bounded read
+  and write deadline controls).
+- Golden corpus: 55 exchanges / 38 case files PASSED.
+- Sensitivity gate: 14/14 PASSED.
+- Guard POSIX negative control: PASS for both products (50 case
+  keys per product: 44 refused + 3 allowed + 3 success-fact
+  booleans, zero Go<->Rust mismatches).
+- Windows native on the authorized host (go1.26.5 / rustc 1.97.1):
+  guard PASS (50 keys per product, same split, zero mismatches);
+  housekeeping PASS (`windows_qualified=true`, `skipped=false`,
+  `failed=0`); both harness self-tests exit 0 on the host and on
+  Linux.
+- Kind-coverage gate on the committed evidence: PASS; forgery
+  battery: PASS (every falsification class rejected, genuine
+  evidence accepted); `check_kind_coverage.py --self-test`: PASS.
+- Free-lock full-pipe behavioral probe (the exact wave-19.18
+  reproducer, `free_lock_oversize.py`) on the freshly built
+  binaries: both engines self-exit rc 1 and `WEDGED=` is empty —
+  the P1 is closed on the exact shipped binaries, not only in
+  unit pins.
+- Staged identities: `.local/shared/binaries/SHASUMS.txt` 10/10
+  entries verify with `sha256sum -c` (five Linux + five Windows).
+
+Fresh identities (measurements this wave):
+
+- Linux (go1.27.0 / rustc 1.91.1, Go `-trimpath -buildvcs=false`,
+  all five binaries in one clean battery build): go product
+  `7e6af62bdd3913c664cb71075f4ceab04ccc89b4d2b5131b07fb8ed31927c334`,
+  go worker `f4af92048e612b9e413b5009d98bd4771eb89b4807ef2d50fe54ef207e641e4b`,
+  rust product `bdbf10d8d13a51c6424cc8287ab3824352d869b22c4fd82f935d3b73e86efd25`,
+  rust worker `cfe604d262f8ea871ca56c21bc54f390e92945695ffdaadf7c4f302ed32e7824`,
+  rust fixture `e071f3cd849f62db1abe3fbfda8ce15596a5c4d2a828ba5cedffbcf7337c10e7`.
+- Windows (authorized validation host, go1.26.5 / rustc 1.97.1):
+  go product `1c0297bbee18a06685e06e4d652b8eacd893d4b1773d2850a5a7e9bce4c69fad`,
+  go worker `9b9e2658bb2aedbad3a2bbf78760c20ffd7860416a24278b46eff46760b6ec39`,
+  rust product `4c4f20b854bbaec0db4004b48ad6185ca39e6e8f59388d7182f70b453e59272f`,
+  rust worker `0100c4252ca851707e3be855e1789d098b9a008bb80c3174ea223015ed1927cb`,
+  rust fixture `898b1c84f0f128b9007c2d1b69d88885c32e9a8d13b16672645f93fc728ebc2c`.
+- Fixture databases created natively by the fixture tool: Linux
+  `9ad6279b79810f19f623475e55a4e7f58f612daf850c3c7ccdb02c18f4652b88`
+  (16 KiB), Windows `d1d0275be06736535d8f63e3231f29de5067b838ee6d749f9c58777265486353`.
+
+### Staging correction (battery bug, recorded this wave)
+
+The Linux battery's Rust build step previously ran
+`cargo build --release --examples`, which rebuilds examples but not
+`[[bin]]` targets; the release bins were silently re-staged from
+cached earlier artifacts.  Rebuilding with
+`cargo build --release --bins --examples` produces a rust product
+hash (`bdbf10d8...`) that differs from the wave-19.18 record
+(`79fd1cd0...`) exactly because the wave-19.19 session fix is now in
+the binary; the free-lock probe above is the behavioral proof.  The
+pre-rotation staging also held a Go product already rebuilt at this
+tree while the Rust triple still bound an older build; staging now
+stores exactly the measured binaries (SHASUMS.txt, 10/10 verified).
+
+
+### Records corrections from the `6069f6cb` review round
+
+- Tester F1 (P2): the wave-19.18 parity repair of the trailing-dot/space
+  leaf × namespace-head class (Go `windowsTrimFinalLeaf`, Rust
+  `windows_unc_rewrite`) was pinned by tests and evidence but not recorded
+  in the wave-19.18 SOW section. It is recorded here: the 65-row native
+  probe found 20 divergent rows (12 Go-allowed namespace-head destinations
+  Rust refused; 8 Rust-allowed UNC destinations Go refused); the repair
+  refuses all 20 rows identically on both engines; the class is pinned by
+  four committed tests (two platform-independent, two native) and by the
+  50-key guard evidence per product (44 refused + 3 allowed + 3 facts,
+  zero Go↔Rust mismatches).
+- Tester F2 (P2): Rust `graceful_fatal_full_stderr_exits_nonzero` flaked
+  once under full-suite load; root cause and fix recorded in the repair
+  bullet above.
+- Closure P3: `.local/astra-verdicts.md` outside the commit trail — the
+  external same-session control remains the standing gate below.
+
+### Milestone state after this wave
+
+MS4 functional qualification re-earned at this commit; the ≤1.3× engine
+performance gate remains FAILED-not-waived (owned by pending SOW-0030);
+milestone 5 unstarted; SOW-0017 paused. The eight-role review is re-anchored
+to this exact revision; the external same-session control review (astra
+session) runs after the eight roles PASS, and no further repository commit
+is made after it.

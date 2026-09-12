@@ -550,17 +550,17 @@ var errResponseUndeliverable = errors.New("response undeliverable within bounded
 // the delivery, never the loop) and an undeliverable write is
 // reported as a failure so callers take the same fatal path as a
 // broken writer (session P2, wave-19.18 integration review).
+//
+// The writer lock being free does not make an inline write safe: the
+// client can stop reading right after a worker response completed,
+// leaving the pipe full with the lock released, and a synchronous
+// write would then block the session loop forever ahead of shutdown
+// (wave-19.19 integration review). Every session-loop reply is
+// therefore delivered from the detached goroutine and the loop waits
+// only the bounded grace. The common case (pipe writable, worker
+// idle) costs one short-lived goroutine per session-loop reply; only
+// error-path replies use this helper, never normal worker responses.
 func writeLineBounded(fw *FrameWriter, writerMu *sync.Mutex, text string) error {
-	// Fast path: the writer lock is free (the worker is not
-	// mid-write), write inline. This is the common case for the
-	// busy-flood and error responses and avoids a goroutine per
-	// reply; TryLock never blocks, so a momentarily busy writer
-	// falls through to the detached delivery below.
-	if writerMu.TryLock() {
-		werr := fw.WriteLine(text)
-		writerMu.Unlock()
-		return werr
-	}
 	writeDone := make(chan error, 1)
 	go func() {
 		writerMu.Lock()

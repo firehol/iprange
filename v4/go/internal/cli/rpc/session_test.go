@@ -1198,3 +1198,80 @@ func TestWaitSignalRecordedPinsEOFExitZero(t *testing.T) {
 		t.Fatalf("closed channel: got %v, want the recorded signal error", err)
 	}
 }
+
+// wedgedWriter absorbs writes while the wedge is engaged and blocks
+// the writer (like a full undrained stdout pipe); release() lets a
+// blocked write complete. The output accumulates only under the mutex,
+// so a concurrent observer can call captured() after release without
+// a data race. Used to pin the free-lock full-pipe reply bound: the
+// writer lock is free (no worker holds it) but the pipe is full, so
+// only the bounded detached delivery can save the session loop.
+type wedgedWriter struct {
+	mu     sync.Mutex
+	wedged bool
+	out    bytes.Buffer
+}
+
+func (w *wedgedWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	for w.wedged {
+		w.mu.Unlock()
+		time.Sleep(10 * time.Millisecond)
+		w.mu.Lock()
+	}
+	n, err := w.out.Write(p)
+	w.mu.Unlock()
+	return n, err
+}
+
+func (w *wedgedWriter) release() {
+	w.mu.Lock()
+	w.wedged = false
+	w.mu.Unlock()
+}
+
+func (w *wedgedWriter) captured() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.out.String()
+}
+
+// TestFreeLockFullPipeReplyIsBounded pins the wave-19.19 repair: a
+// session-loop reply write must be bounded even when the writer lock
+// is free and the stdout pipe is full. Pre-fix the inline fast path
+// in writeLineBounded wrote synchronously on the free lock, so an
+// invalid frame after a completed worker response wedged the session
+// loop forever in write(2) ahead of shutdown.
+func TestFreeLockFullPipeReplyIsBounded(t *testing.T) {
+	w := &wedgedWriter{wedged: true}
+	session := NewSession()
+	fw := NewFrameWriter(w)
+	var writerMu sync.Mutex
+
+	err := session.handleFrame([]byte("this is not json\n"), fw, &writerMu)
+	if err == nil {
+		t.Fatal("undeliverable reply on a full pipe must be a transport failure")
+	}
+	if !errors.Is(err, errResponseUndeliverable) {
+		t.Fatalf("reply must report the undeliverable grace, got: %v", err)
+	}
+	// The session loop returned within the bound. It must not try to
+	// acquire the writer lock itself here: the detached delivery
+	// goroutine may still hold it, wedged in the blocked write until
+	// the writer is released below.
+
+	w.release()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		// The envelope error message differs per engine for a
+		// terminator-bearing test input (Rust strips the trailing LF
+		// before parsing, Go's DecodeFrame sees the raw line); assert
+		// on the stable parts shared by both -32700 envelopes.
+		got := w.captured()
+		if strings.Contains(got, "-32700") {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("envelope error reply was never delivered after the pipe drained; captured=%q", w.captured())
+}

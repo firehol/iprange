@@ -2,9 +2,9 @@
   "all_ok": true,
   "build_provenance": null,
   "fixture": {
-    "mtime": 1789218143.0667238,
-    "path": "/tmp/iprange-wfinal/fixture.iprange",
-    "sha256": "65ea5afd03070919d19baffa0c1cc54e68aa2dfdfa1347463fecf6fbf177dcc1",
+    "mtime": 1789228096.9185388,
+    "path": "/tmp/iprange-w1919/fixture-3518146.iprange",
+    "sha256": "9ad6279b79810f19f623475e55a4e7f58f612daf850c3c7ccdb02c18f4652b88",
     "size": 16384
   },
   "platform": "posix",
@@ -12,14 +12,14 @@
     "go": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789217697.554909,
-        "path": "/tmp/iprange-wfinal/bin/go/iprange",
-        "sha256": "d7973a909ce801f16e1bcc7d355bff0426459080ad5ca791da9cebf4efcd7b53",
-        "size": 14321604
+        "mtime": 1789227803.2974892,
+        "path": "/tmp/iprange-w1919/bin/go/iprange",
+        "sha256": "7e6af62bdd3913c664cb71075f4ceab04ccc89b4d2b5131b07fb8ed31927c334",
+        "size": 14321268
       },
       "cases": {
         "absolute_trailing_dot": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/go/db.iprange.readers.",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/go/db.iprange.readers.",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -28,7 +28,7 @@
           "refused": false
         },
         "absolute_trailing_space": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/go/db.iprange.readers ",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/go/db.iprange.readers ",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -37,7 +37,7 @@
           "refused": false
         },
         "absolute_upper": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/go/DB.IPRANGE.READERS",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/go/DB.IPRANGE.READERS",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -46,7 +46,7 @@
           "refused": false
         },
         "control_allowed": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/go/meta.txt",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/go/meta.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -55,7 +55,7 @@
           "refused": false
         },
         "non_ascii": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/go/DB_\u00c4.IPRANGE.READERS",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/go/DB_\u00c4.IPRANGE.READERS",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -64,7 +64,7 @@
           "refused": false
         },
         "ntfs_final_sigma": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/go/A\u03c21.iprange.readers",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/go/A\u03c21.iprange.readers",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -73,7 +73,7 @@
           "refused": false
         },
         "ntfs_sigma": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/go/A\u03c31.iprange.readers",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/go/A\u03c31.iprange.readers",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -82,7 +82,7 @@
           "refused": false
         },
         "relative_source_control_allowed": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/go/meta-rel.txt",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/go/meta-rel.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -96,16 +96,16 @@
       },
       "implementation": "go",
       "sources_before": {
-        "/tmp/iprange-wfinal/W-guard-final/go/A\u03a31.iprange": {
-          "sha256_before": "65ea5afd03070919d19baffa0c1cc54e68aa2dfdfa1347463fecf6fbf177dcc1",
+        "/tmp/iprange-w1919/work-3518146/guard/go/A\u03a31.iprange": {
+          "sha256_before": "9ad6279b79810f19f623475e55a4e7f58f612daf850c3c7ccdb02c18f4652b88",
           "sidecar_absent_before": true
         },
-        "/tmp/iprange-wfinal/W-guard-final/go/db.iprange": {
-          "sha256_before": "65ea5afd03070919d19baffa0c1cc54e68aa2dfdfa1347463fecf6fbf177dcc1",
+        "/tmp/iprange-w1919/work-3518146/guard/go/db.iprange": {
+          "sha256_before": "9ad6279b79810f19f623475e55a4e7f58f612daf850c3c7ccdb02c18f4652b88",
           "sidecar_absent_before": true
         },
-        "/tmp/iprange-wfinal/W-guard-final/go/db_\u00e4.iprange": {
-          "sha256_before": "65ea5afd03070919d19baffa0c1cc54e68aa2dfdfa1347463fecf6fbf177dcc1",
+        "/tmp/iprange-w1919/work-3518146/guard/go/db_\u00e4.iprange": {
+          "sha256_before": "9ad6279b79810f19f623475e55a4e7f58f612daf850c3c7ccdb02c18f4652b88",
           "sidecar_absent_before": true
         }
       }
@@ -113,14 +113,14 @@
     "rust": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789217698.4425166,
-        "path": "/tmp/iprange-wfinal/bin/rust/iprange",
-        "sha256": "79fd1cd09901bd825f1e97f9e129ce1c366922ce3ca69434ad58e74ddc7caec9",
-        "size": 6904416
+        "mtime": 1789227803.3372831,
+        "path": "/tmp/iprange-w1919/bin/rust/iprange",
+        "sha256": "bdbf10d8d13a51c6424cc8287ab3824352d869b22c4fd82f935d3b73e86efd25",
+        "size": 6904648
       },
       "cases": {
         "absolute_trailing_dot": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/rust/db.iprange.readers.",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/rust/db.iprange.readers.",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -129,7 +129,7 @@
           "refused": false
         },
         "absolute_trailing_space": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/rust/db.iprange.readers ",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/rust/db.iprange.readers ",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -138,7 +138,7 @@
           "refused": false
         },
         "absolute_upper": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/rust/DB.IPRANGE.READERS",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/rust/DB.IPRANGE.READERS",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -147,7 +147,7 @@
           "refused": false
         },
         "control_allowed": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/rust/meta.txt",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/rust/meta.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -156,7 +156,7 @@
           "refused": false
         },
         "non_ascii": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/rust/DB_\u00c4.IPRANGE.READERS",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/rust/DB_\u00c4.IPRANGE.READERS",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -165,7 +165,7 @@
           "refused": false
         },
         "ntfs_final_sigma": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/rust/A\u03c21.iprange.readers",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/rust/A\u03c21.iprange.readers",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -174,7 +174,7 @@
           "refused": false
         },
         "ntfs_sigma": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/rust/A\u03c31.iprange.readers",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/rust/A\u03c31.iprange.readers",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -183,7 +183,7 @@
           "refused": false
         },
         "relative_source_control_allowed": {
-          "destination": "/tmp/iprange-wfinal/W-guard-final/rust/meta-rel.txt",
+          "destination": "/tmp/iprange-w1919/work-3518146/guard/rust/meta-rel.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -197,16 +197,16 @@
       },
       "implementation": "rust",
       "sources_before": {
-        "/tmp/iprange-wfinal/W-guard-final/rust/A\u03a31.iprange": {
-          "sha256_before": "65ea5afd03070919d19baffa0c1cc54e68aa2dfdfa1347463fecf6fbf177dcc1",
+        "/tmp/iprange-w1919/work-3518146/guard/rust/A\u03a31.iprange": {
+          "sha256_before": "9ad6279b79810f19f623475e55a4e7f58f612daf850c3c7ccdb02c18f4652b88",
           "sidecar_absent_before": true
         },
-        "/tmp/iprange-wfinal/W-guard-final/rust/db.iprange": {
-          "sha256_before": "65ea5afd03070919d19baffa0c1cc54e68aa2dfdfa1347463fecf6fbf177dcc1",
+        "/tmp/iprange-w1919/work-3518146/guard/rust/db.iprange": {
+          "sha256_before": "9ad6279b79810f19f623475e55a4e7f58f612daf850c3c7ccdb02c18f4652b88",
           "sidecar_absent_before": true
         },
-        "/tmp/iprange-wfinal/W-guard-final/rust/db_\u00e4.iprange": {
-          "sha256_before": "65ea5afd03070919d19baffa0c1cc54e68aa2dfdfa1347463fecf6fbf177dcc1",
+        "/tmp/iprange-w1919/work-3518146/guard/rust/db_\u00e4.iprange": {
+          "sha256_before": "9ad6279b79810f19f623475e55a4e7f58f612daf850c3c7ccdb02c18f4652b88",
           "sidecar_absent_before": true
         }
       }

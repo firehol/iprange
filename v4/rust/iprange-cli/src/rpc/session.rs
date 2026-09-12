@@ -556,14 +556,26 @@ impl Session {
                         .map(|(kind, message)| io::Error::new(kind, message));
                 }
                 FinalDrain::Deadline => {
-                    // The worker is wedged writing to an undrained
-                    // full stdout pipe: the client closed stdin and is
-                    // not reading, so the drained responses are
-                    // undeliverable. That is not a transport failure
-                    // (the pipe is intact), so EOF still exits zero:
-                    // abandon the wedged worker (the process exits
-                    // when rpc::run returns) and close connection
-                    // resources below.
+                    // The worker is wedged leaving the final drain
+                    // (for example writing to an undrained full stdout
+                    // pipe, or blocked on a full stderr diagnostic
+                    // after a broken stdout): abandon it - the process
+                    // exits when rpc::run returns. A wedged write to
+                    // an intact full pipe is not a transport failure,
+                    // so EOF still exits zero in that case; but when
+                    // the worker recorded a real transport failure
+                    // (broken stdout) before wedging, that error must
+                    // be reported - it was previously dropped here,
+                    // making the graceful-fatal exit flaky when the
+                    // drain deadline expired first (wave-19.19 tester
+                    // finding).
+                    worker_failed = self
+                        .control
+                        .lock()
+                        .unwrap()
+                        .fatal_error
+                        .take()
+                        .map(|(kind, message)| io::Error::new(kind, message));
                 }
             }
         }
@@ -783,27 +795,25 @@ fn worker_loop<W: Write + Send + 'static>(
 /// of shutdown(), so neither the bounded final drain nor the shutdown
 /// grace could ever arm and the process would leak until a signal
 /// killed it (session P2, wave-19.18 integration review). This helper
-/// takes the free-lock fast path and, only when the lock is held,
-/// delivers the reply from a detached thread with a wait bounded by
-/// [`FINAL_DRAIN_GRACE`]. The detached thread is never joined and
+/// delivers every reply from a detached thread with a wait bounded by
+/// [`FINAL_DRAIN_GRACE`]; the detached thread is never joined and
 /// dies with the process when `run()` returns.
+///
+/// A free writer lock does not make an inline write safe: the client
+/// can stop reading right after a worker response completed, leaving
+/// the pipe full with the lock released, and a synchronous write
+/// would then block the session loop forever ahead of shutdown
+/// (wave-19.19 integration review). The common case (pipe writable,
+/// worker idle) costs one short-lived thread per session-loop reply;
+/// only error-path replies use this helper, never normal worker
+/// responses.
 fn write_response_bounded<W: Write + Send + 'static>(
     writer: &Arc<Mutex<FrameWriter<W>>>,
     text: &str,
 ) -> io::Result<()> {
-    // Fast path: the worker is not mid-write, write inline. This is
-    // the common case (busy-flood responses, returned errors) and
-    // avoids a thread per reply; try_lock never blocks, so a
-    // momentarily busy writer falls through to the detached delivery
-    // below.
-    if let Ok(mut w) = writer.try_lock() {
-        return w.write_line(text);
-    }
-    // The writer lock is held (a wedged worker mid-write on an
-    // undrained stdout): deliver from a detached thread and bound
-    // the wait. A thread creation failure must not block the session
-    // loop nor defeat the bound this helper serves: the reply is
-    // undeliverable.
+    // Deliver from a detached thread and bound the wait. A thread
+    // creation failure must not block the session loop nor defeat
+    // the bound this helper serves: the reply is undeliverable.
     let writer_handle = Arc::clone(writer);
     let text = text.to_string();
     let (reply_tx, reply_rx) = std::sync::mpsc::channel();
@@ -3779,27 +3789,57 @@ mod tests {
     }
 
     #[test]
-    fn handle_frame_reply_takes_the_free_lock_fast_path() {
-        // The common case: the writer lock is free, so the
-        // envelope-error reply must be written inline (no detached
-        // delivery) and handle_frame returns Ok.
+    fn handle_frame_reply_is_bounded_when_the_pipe_is_full_and_the_lock_is_free() {
+        // Wave-19.19 integration review: a client that stops reading
+        // right after a completed worker response leaves the stdout
+        // pipe full with the writer lock free. A reply written
+        // synchronously on the free lock would then block the session
+        // loop forever ahead of shutdown, leaking the process. Every
+        // session-loop reply must stay bounded even when the lock is
+        // free: the detached delivery must time out within
+        // FINAL_DRAIN_GRACE and handle_frame must report the
+        // undeliverable reply as a transport failure.
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
-        let wedge = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let wedge = Arc::new((Mutex::new(true), std::sync::Condvar::new()));
         let writer: Arc<Mutex<FrameWriter<WedgeWriter>>> =
             Arc::new(Mutex::new(FrameWriter::new(WedgeWriter {
                 output: output.clone(),
                 wedge: wedge.clone(),
             })));
-        let mut session = Session::new();
-        handle_frame(&mut session, b"this is not json\n".to_vec(), &writer)
-            .expect("free-lock envelope reply must succeed");
+        // The lock is free: nobody else holds the writer, exactly the
+        // state after a completed worker response with the pipe full.
         assert!(
+            writer.try_lock().is_ok(),
+            "this test requires the free-lock state"
+        );
+
+        let mut session = Session::new();
+        let started = std::time::Instant::now();
+        let err = handle_frame(&mut session, b"this is not json\n".to_vec(), &writer)
+            .expect_err("undeliverable reply on a full pipe must be a transport failure");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            err.to_string().contains("response undeliverable"),
+            "reply must report the undeliverable grace: {err}"
+        );
+        assert!(
+            started.elapsed() <= FINAL_DRAIN_GRACE + std::time::Duration::from_secs(2),
+            "reply must return within the bounded grace even with a free lock"
+        );
+
+        // Drain the pipe; the detached reply writer then lands the
+        // envelope and the abandoned thread finishes.
+        WedgeWriter {
+            output: output.clone(),
+            wedge: wedge.clone(),
+        }
+        .release();
+        wait_until("envelope delivered after release", || {
             output
                 .lock()
                 .unwrap()
                 .windows(b"parse error:".len())
-                .any(|window| window == b"parse error:"),
-            "envelope reply must be written on the fast path"
-        );
+                .any(|window| window == b"parse error:")
+        });
     }
 }
