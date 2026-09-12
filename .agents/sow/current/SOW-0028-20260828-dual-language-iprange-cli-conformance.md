@@ -858,8 +858,44 @@ of this SOW.  Milestone-4 functional qualification stands at this
 commit; the <=1.3x engine performance gate remains FAILED-not-waived
 (owned by pending SOW-0030); milestone 5 unstarted; SOW-0017 paused.
 The eight-role review and the external same-session control (astra
-session, resumed never restarted) re-anchor at this exact final
-revision; no repository commit follows the control PASS.
+session, resumed never restarted) re-anchored at that exact revision;
+that anchor is superseded by the wave-19.20 records correction
+`ff5bc3f9` and the wave-19.21 repair below.
+
+Wave-19.20 state (2026-09-12): the eight-role re-review at the
+wave-19.19 final revision `d1fc9c8d` returned FAIL on four classes —
+Rust FIFO hang (operations, P1), Rust busy-reply throughput
+regression (performance, P2), missing Go unanswerable-id wire pin
+(tester, P1), and records wording (portability, security, glm,
+closure, P2) — all repaired in `9c111954`: Rust `open_read_only`
+refuses FIFOs through an `O_NONBLOCK` authoritative-fd regular check
+(pinned by `fifo_is_refused_without_blocking`), the Rust session
+loop gained a dedicated reply-writer thread, Go pinned the
+unanswerable-id wire shape, and the records were corrected.  The
+wave-19.20 closing record initially mixed two busy-flood probe
+shapes into one "1.8x" claim (tester and portability findings);
+the records-only correction `ff5bc3f9` restated the same-probe
+figures (85,709 vs 45,703 replies/s, a 1.88x restoration) and is
+included in the final reviewed revision of this wave.  Milestone-4
+functional qualification stands at the wave-19.20 revision; the
+<=1.3x engine performance gate remains FAILED-not-waived (owned by
+pending SOW-0030); milestone 5 unstarted; SOW-0017 paused.
+
+Wave-19.21 state (2026-09-12): the review round at the wave-19.20
+revision found one remaining product defect (glm, P1): the Go
+`validate`, `recovery.inspect`, and `recover` arms still blocked
+forever on a FIFO database path while Rust refused the identical
+requests instantly, because the Go unix open helpers had neither
+`O_NONBLOCK` nor the authoritative-fd regular check.  The repair
+mirrors the Rust `open_read_only` in both Go open helpers
+(validation and recovery), pins the class with Go unit tests, and
+re-runs the full qualification battery; the cross-binary FIFO
+surface probe now refuses all nine user-path open arms promptly
+with `-32010 invalid_argument` in both engines (wave-19.21 section
+at the end of this SOW).  The eight-role review and the external
+same-session control (astra session, resumed never restarted)
+re-anchor at this exact final revision; no repository commit
+follows the control PASS.
 
 
 ## Requirements
@@ -12981,9 +13017,8 @@ product decision was required:
   after EOF); free-lock full-pipe probe self-exits rc 1 with
   `WEDGED=` empty in both engines.
 - Busy-flood throughput re-measured with the saved probe
-  (raw probe script and trial logs in the battery scratch
-  `/tmp/iprange-w1920/reports/busy_flood.py`,
-  `perf-busyflood-rust.log`, `perf-busyflood-go.log`):
+  (raw probe script and trial logs kept in the wave-19.20
+  battery scratch root, not committed):
   Rust median 85,709 replies/s (fresh `8ce0cd6e...`) vs
   45,703 replies/s (wave-19.19 staged `bdbf10d8...`) on the
   identical probe shape — a same-probe 1.88x restoration; Go is
@@ -13019,6 +13054,139 @@ control, the fresh resource report, and the fresh POSIX guard
 report replaced their wave-19.19 counterparts in
 `v4/cli/evidence/`; the negative control is never fed to the kind
 gate.
+
+### Milestone state after this wave
+
+MS4 functional qualification re-earned at this revision; the
+<=1.3x engine performance gate remains FAILED-not-waived (owned by
+pending SOW-0030); milestone 5 unstarted; SOW-0017 paused.  The
+in-round records-only correction `ff5bc3f9` (same-probe busy-flood
+wording) is part of the reviewed HEAD; the review round at
+`9c111954`/`ff5bc3f9` is recorded in the wave-19.21 section at the
+end of this SOW, which repaired the Go validation/recovery FIFO
+hang and holds the final re-anchor.
+
+## Wave-19.21 repair and qualification (2026-09-12)
+
+### Review round at the wave-19.20 final revision
+
+The eight-role review at `9c111954` (HEAD including the in-round
+records correction `ff5bc3f9`) returned PASS for operations and
+parity and FAIL for tester, portability, security, performance, and
+closure — all on records at the wave-19.20 anchor: the closing
+record mixed two busy-flood probe shapes into one "1.8x" claim
+(tester, portability), the status area had no wave-19.20 state
+paragraph (security), and the wave-19.20 finality sentences were
+stale after the in-round correction (closure).  `ff5bc3f9` restated
+the same-probe busy-flood figures (85,709 vs 45,703 replies/s,
+1.88x; Go flat at ~72k; only same-probe comparisons are
+meaningful); the remaining record repairs are applied in this
+section, and wave-19.20 / wave-19.21 state paragraphs now sit in
+the status area.
+
+The glm-5.3 whole-milestone validator returned FAIL with one
+product defect (P1): the Go `validate` (`cli/handlers/recovery.go`
+-> `validation.Validate` -> `validateImmutable` ->
+`OpenImmutableSource`), `recovery.inspect` (immutable arm through
+`OpenImmutableSource`, live/offline arms through the recovery
+package open), and `recover` (`source_mode=immutable`) arms still
+blocked forever on a FIFO database path — the exact class the
+wave-19.20 Rust repair closed for `reader.open` /
+`database.info` / `database.metadata.get`.  Rust refused the
+identical requests instantly with `-32010 invalid_argument`
+(`iprange-livedb/src/database_file.rs:229-239`); the Go unix open
+helpers (`v4/go/internal/validation/source_open_unix.go`,
+`v4/go/internal/recovery/source_open_unix.go`) had neither
+`O_NONBLOCK` nor the authoritative-fd regular check, so
+`os.OpenFile(O_RDONLY|O_NOFOLLOW)` waited for a FIFO writer
+forever, wedging the Go session's single worker goroutine and
+leaving later requests unanswered; `cancel` could not unblock it.
+No Go unit test covered the class (the Rust
+`fifo_is_refused_without_blocking` pin was Rust-only).
+
+### Repairs
+
+- Go FIFO refusal: both unix open helpers now open with
+  `O_NONBLOCK` and refuse non-regular files through the
+  authoritative opened fd with the invalid-argument SDK error
+  ("database path is not a regular file"), mirroring the Rust
+  `open_read_only` for both the immutable and the quiescent
+  (read-write) arms (`v4/go/internal/validation/
+  source_open_unix.go`, `v4/go/internal/recovery/
+  source_open_unix.go`).  Regular files ignore `O_NONBLOCK`, so
+  database behavior is unchanged; every user-path open of the
+  validation and recovery method families routes through these
+  two helpers.
+- Go unit pins: `TestOpenReadOnlyFifoIsRefusedWithoutBlocking`
+  (validation) and `TestOpenSourceFifoIsRefusedWithoutBlocking`
+  (recovery, both the read-only and the read-write arm) create a
+  FIFO and prove the open returns promptly with the
+  invalid-argument code (`v4/go/internal/validation/
+  source_open_unix_test.go`, `v4/go/internal/recovery/
+  source_open_unix_test.go`).
+- Records: the status area now carries wave-19.20 and wave-19.21
+  state paragraphs; the wave-19.20 section names `ff5bc3f9` in its
+  closing milestone-state block; the busy-flood wording stands as
+  corrected by `ff5bc3f9`; scratch-root paths were removed from
+  the wave-19.20 section and the evidence README.
+
+### Validation (this wave, all steps under `nice`)
+
+- Fresh Linux battery at this revision (all steps under `nice`):
+  Go module tests 24 packages rc 0; Rust workspace tests rc 0;
+  GOOS/BSD cross-build matrix 7 PASS / 1 SKIP (dragonfly/arm64 not
+  supported by the installed toolchain); matrices rust 38/38, go
+  38/38, rust_to_go 14 PASS + 24 skips, go_to_rust 14 PASS + 24
+  skips (oracle checks 37/22/22 per matrix label); crash positive
+  16/16 scenarios in both invocation labels (rust producer -> go
+  consumer and go producer -> rust consumer) with both
+  `/usr/bin/false` negative controls rejected (rc 1); resource
+  proofs 8/8 with the harness self-test rc 0; golden exchanges 55
+  passed / 38 case files checked; sensitivity gate 14/14; kind
+  gate PASS on the fresh reports and on the rotated committed
+  evidence; POSIX guard negative control PASS for both products
+  (8 expected-allowed case keys + 3 success-fact booleans per
+  product, zero refusals); battery end marker ALLDONE.
+
+
+- Cross-binary FIFO surface probe on the fresh binaries (nine
+  user-path open arms: `reader.open`, `database.info`,
+  `database.metadata.get`, `validate` immutable+live,
+  `recovery.inspect` immutable+live+offline, `recover`
+  immutable): all 18 engine/arm combinations answer instantly
+  with `-32010 invalid_argument` rc 0 — including the three Go
+  arms that hung forever at the wave-19.20 revision; the
+  regular-file control (O_NONBLOCK must not regress normal
+  opens) passes on both engines.  The only code divergence is
+  the Rust `recovery.inspect` offline arm's pre-existing
+  `wrong_state` refusal (also `-32010`, also prompt), which is
+  Rust's own canonical answer for that arm.
+- Free-lock full-pipe probe on the fresh binaries: both engines
+  self-exit rc 1 with `WEDGED=` empty (no wedge).
+- Go module tests, Rust workspace tests, GOOS/BSD matrix, kind
+  gate on the fresh reports and on the rotated committed
+  evidence, forgery battery, `--self-test`: PASS (details in the
+  battery list above).
+
+Fresh identities (measurements this wave):
+
+- Linux: go product `124ed9f7553bf462a6d51f4e77a3746b4fe84d6a52f5c187c5fa389d9d59de31`, go worker `1fff6a3a63d4f9cf2d26b0490f6d167c9893b2645388ad4abbb6ba4544b541f5` (both rebuilt
+  by this wave with `-trimpath -buildvcs=false`); rust product
+  `8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2`,
+  rust worker
+  `169ec999ca44d98c78acf3aa78565111874fa16424878f8a067b9e6158d33d12`,
+  rust fixture
+  `85e00d616b7fcefeb57d8bc01313b9d0d28e50d1005c75296173b473d2efb0d1`
+  (unchanged by this wave).
+- Windows: unchanged from the wave-19.19 record (native host not
+  re-run this wave).
+
+Evidence rotation: the four fresh matrix reports, the fresh crash
+positive and negative-control reports, the fresh resource report,
+and the fresh POSIX guard report replaced their wave-19.20
+counterparts in `v4/cli/evidence/`; the negative control is never
+fed to the kind gate; `.local/shared/binaries/SHASUMS.txt`
+re-verified 10/10.
 
 ### Milestone state after this wave
 
