@@ -23,9 +23,16 @@ classes of the eight-role review at the wave-19.19 final revision
   bounded grace.  The wave-19.19 wedge probes (writer lock wedged;
   pipe full with the lock free) still pass, and the busy-flood
   probe (500k-line export + 10,000 pipelined describes with a
-  concurrent reader drain) restores ~1.8x of the lost throughput
-  (median 81,235 replies/s vs 43,209-44,317 replies/s at the
-  wave-19.19 tree).
+  concurrent reader drain; raw probe and trial logs in the battery
+  scratch `/tmp/iprange-w1920/reports/busy_flood.py`,
+  `perf-busyflood-rust.log`, `perf-busyflood-go.log`) restores
+  ~1.9x of the lost throughput on the same probe shape (Rust
+  median 85,709 replies/s vs 45,703 replies/s at the wave-19.19
+  tree; Go flat at ~72k replies/s, unchanged binary).  The
+  wave-19.19 performance review's own probe measured the same
+  repair at ~94% of its pre-regression figure (107,608 vs
+  ~113,870 replies/s); absolute rates differ across probe shapes,
+  so only same-probe comparisons are meaningful.
 - Go unanswerable-id wire pins (tester P1): Go had no wire test for
   the request id that cannot be echoed within the response-object
   ceiling; `unanswerableResponse()` was uncovered.  Two new tests

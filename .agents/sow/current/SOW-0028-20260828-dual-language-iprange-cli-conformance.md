@@ -12979,12 +12979,22 @@ product decision was required:
   probe refuses instantly with `-32010 invalid_argument` rc 0 on
   all three methods in both engines (previously Rust hung >6 s
   after EOF); free-lock full-pipe probe self-exits rc 1 with
-  `WEDGED=` empty in both engines; busy-flood probe (500k-line
-  export + 10,000 pipelined describes, concurrent reader drain)
-  measures a median 81,235 replies/s (Rust; Go 74,086 replies/s),
-  restoring about 1.8x of the throughput lost by the wave-19.19
-  per-reply thread spawn (pre-regression ~113,870, regressed
-  ~57,360 — measured by the performance role at wave-19.19).
+  `WEDGED=` empty in both engines.
+- Busy-flood throughput re-measured with the saved probe
+  (raw probe script and trial logs in the battery scratch
+  `/tmp/iprange-w1920/reports/busy_flood.py`,
+  `perf-busyflood-rust.log`, `perf-busyflood-go.log`):
+  Rust median 85,709 replies/s (fresh `8ce0cd6e...`) vs
+  45,703 replies/s (wave-19.19 staged `bdbf10d8...`) on the
+  identical probe shape — a same-probe 1.88x restoration; Go is
+  flat (72,669 vs 72,149, binary unchanged this wave).  The
+  wave-19.19 performance review used its own probe and measured
+  ~113,870 (pre-regression) / ~57,360 (staged) / 107,608 (fresh
+  `8ce0cd6e...`) — about 94% of its pre-regression figure.
+  Absolute rates differ across probe shapes (the same staged
+  binary reads 45,703 here vs ~57,360 there), so only
+  same-probe comparisons are meaningful; both probes attest the
+  repair.
 - Staged identities: `.local/shared/binaries/SHASUMS.txt` 10/10
   entries verify with `sha256sum -c`.
 
