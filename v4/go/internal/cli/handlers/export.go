@@ -2228,6 +2228,35 @@ func refusedSameSource() *rpc.HandlerError {
 		"destination must differ from the source database")
 }
 
+// windowsTrimFinalLeaf returns the path with the Win32
+// create-normalization characters (trailing dots and spaces) removed
+// from its FINAL component only, leaving "." and ".." untouched:
+// exactly the final-component fold windowsFoldPath applies to
+// identities, without the case fold, so a split walk probes the name
+// the kernel resolves.  A "\\?\GLOBALROOT\...\db.iprange.readers.."
+// spelling names the reader sidecar file (the trailing-dot/space
+// spelling folds to it at the Win32 layer), but EvalSymlinks and
+// os.Stat see the literal NT name under the extended-length namespace
+// heads and fail, so an untrimmed walk collects the literal leaf into
+// the missing suffix while the existing sidecar's walk collects
+// nothing: the suffix lengths diverge and the same-ancestor guard
+// lets the destination through (wave-19.18 parity P1: 12
+// namespace-head x trailing-dot/space destinations published in Go
+// while Rust refused them, .local/parity/w1920/remote/report7.json).
+// Call sites are Windows-gated; the function itself is pure string
+// logic so Linux CI pins it (TestWindowsTrimFinalLeaf).
+func windowsTrimFinalLeaf(path string) string {
+	i := strings.LastIndexAny(path, `\/`)
+	comp := path[i+1:]
+	if comp == "." || comp == ".." {
+		return path
+	}
+	if trimmed := strings.TrimRight(comp, ". "); trimmed != "" && trimmed != comp {
+		return path[:len(path)-len(comp)] + trimmed
+	}
+	return path
+}
+
 // sameAncestorPath reports whether two path spellings denote the
 // same eventual file by comparing the kernel file identity of their
 // deepest existing ancestors plus the folded relative suffix: the
@@ -2237,6 +2266,14 @@ func sameAncestorPath(a, b string) bool {
 	if runtime.GOOS == "windows" {
 		a = strings.ReplaceAll(a, "/", `\`)
 		b = strings.ReplaceAll(b, "/", `\`)
+		// Probe the spliced spellings under the final name the kernel
+		// resolves: a trailing-dot/space leaf folds to the sidecar
+		// name, so the walk must see the folded leaf or the lengths of
+		// the missing suffixes diverge from the existing sidecar's
+		// (empty) suffix and the leaf-class escape passes the guard
+		// (wave-19.18 parity P1).
+		a = windowsTrimFinalLeaf(a)
+		b = windowsTrimFinalLeaf(b)
 	}
 	// Anchor relative spellings at the process working directory
 	// before the split walk, exactly like Rust canonical_split (the
@@ -2338,7 +2375,7 @@ func canonicalAbsolute(path string) string {
 
 // windowsUncProbe rewrites a leading verbatim-family UNC prefix
 // ("\\?\UNC\server\share" or the NT object-manager twin
-// "\\??\UNC\server\share") to the ordinary UNC spelling
+// "\??\UNC\server\share") to the ordinary UNC spelling
 // ("\\server\share") for filesystem probes: the two spellings name
 // the same shares and the ordinary form is walkable by Go's
 // EvalSymlinks, which cannot open the verbatim "server" prefix

@@ -1345,3 +1345,56 @@ func TestWindowsUncProbeCaseFold(t *testing.T) {
 		}
 	}
 }
+
+// TestWindowsTrimFinalLeaf pins the same-ancestor split's Win32
+// final-leaf normalization platform-independently: the guard folds a
+// trailing-dot/trailing-space final leaf before the
+// deepest-existing-ancestor walk, so a namespace-head spelling of the
+// live sidecar (for example "\\?\GLOBALROOT\...\db.iprange.readers.."
+// or "\\?\Volume{...}\...\db.iprange.readers ") is probed as the
+// folded name the kernel resolves.  The twelve rows below are the
+// wave-19.18 parity probe destinations Go published while Rust
+// refused them (six namespace heads, canonical and lowercase, times
+// the trailing-dot and trailing-space leaf classes; rows
+// F-traildot|* and G-trailspace|* in
+// .local/parity/w1920/remote/report7.json).  The trim itself runs
+// only under Windows (the same-ancestor arm is Windows-gated), so
+// without this unit pin a regression of the trim (the wave-19.18
+// regression class: a broken literal silently reverting the gate)
+// would survive until a Windows host run.
+func TestWindowsTrimFinalLeaf(t *testing.T) {
+	heads := []string{
+		`\\?\GLOBALROOT\Device\HarddiskVolume3\Temp\parity\dir\`,
+		`\\?\globalroot\device\harddiskvolume3\temp\parity\dir\`,
+		`\??\GLOBALROOT\Device\HarddiskVolume3\Temp\parity\dir\`,
+		`\??\globalroot\device\harddiskvolume3\temp\parity\dir\`,
+		`\\?\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\Temp\parity\dir\`,
+		`\\?\volume{6df78126-8d52-4afa-ac58-1b1925131887}\temp\parity\dir\`,
+	}
+	leaf := `db.iprange.readers`
+	for _, head := range heads {
+		for _, foldedLeaf := range []string{leaf + "..", leaf + " "} {
+			got := windowsTrimFinalLeaf(head + foldedLeaf)
+			if got != head+leaf {
+				t.Errorf("windowsTrimFinalLeaf(%q) = %q, want %q", head+foldedLeaf, got, head+leaf)
+			}
+		}
+	}
+	// Plain and distinct spellings: the exact leaf is untouched, a
+	// distinct name with no trailing fold characters is untouched, a
+	// "." / ".." component is never trimmed, an empty final component
+	// (trailing separator) is untouched, and a leaf made only of fold
+	// characters is untouched (windowsFoldPath parity).
+	for _, spelling := range []string{
+		`C:\Temp\parity\dir\db.iprange.readers`,
+		`\\?\GLOBALROOT\Device\HarddiskVolume3\dir\db.iprange.readers.txt`,
+		`C:\Temp\parity\dir\.`,
+		`C:\Temp\parity\dir\..`,
+		`\\?\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\dir\`,
+		`C:\Temp\parity\dir\...`,
+	} {
+		if got := windowsTrimFinalLeaf(spelling); got != spelling {
+			t.Errorf("windowsTrimFinalLeaf(%q) = %q, want unchanged", spelling, got)
+		}
+	}
+}

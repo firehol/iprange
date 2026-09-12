@@ -59,7 +59,14 @@
 //! - broken stdout, termination signals, and stdin read errors are
 //!   fatal transport failures: the main loop runs the same
 //!   cancellation/handle-cleanup path as EOF and the process exits
-//!   non-zero.
+//!   non-zero;
+//! - the EOF/fatal final drain is bounded: a worker blocked in
+//!   `write(2)` on a full undrained stdout pipe (the client closed
+//!   stdin and stopped reading) can never finish by itself, so
+//!   shutdown abandons the wedged worker after [`FINAL_DRAIN_GRACE`]
+//!   and still terminates: zero on EOF (the response data is
+//!   undeliverable but the transport is intact), non-zero on the
+//!   fatal path.
 
 use std::collections::HashSet;
 use std::io::{self, BufRead, Write};
@@ -202,6 +209,55 @@ enum SessionEvent {
     Fatal(io::Error),
 }
 
+/// Bounded final drain for EOF and fatal shutdown.
+///
+/// After shutdown begins, the worker gets this long to drain admitted
+/// units and write their responses before the session abandons it. A
+/// worker blocked in `write(2)` on a full undrained stdout pipe never
+/// wakes by itself (a pipe write wakes only on space, a closed read
+/// end, or a signal), so an unbounded join would hang shutdown
+/// forever; the grace period is the EOF-termination bound (spec
+/// iprange-jsonrpc-v1.md: stdin EOF terminates the process by
+/// itself). The termination-signal path keeps its own 1 s
+/// process-lifetime force-exit. The same grace bounds the -32001
+/// framing reply written on the frame-over-limit path: the reply runs
+/// on a detached thread and the session loop waits at most this long
+/// before entering the bounded shutdown, so a wedged writer cannot
+/// stall the framing exit (session P2, wave-19.18 integration
+/// review).
+const FINAL_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Outcome of the bounded final drain.
+enum FinalDrain {
+    /// The worker finished within the grace window and was joined.
+    Joined,
+    /// The grace window expired while the worker was still running
+    /// (wedged writing to an undrained stdout pipe). The worker is
+    /// abandoned, never joined: the process terminates when
+    /// `rpc::run` returns and the OS reclaims everything.
+    Deadline,
+}
+
+/// Join the worker with a bounded grace; never blocks past `grace`.
+/// Once a thread has finished, `is_finished` stays true and `join`
+/// returns immediately, so the finished case cannot race.
+fn join_worker_bounded(
+    worker: std::thread::JoinHandle<()>,
+    grace: std::time::Duration,
+) -> FinalDrain {
+    let deadline = std::time::Instant::now() + grace;
+    loop {
+        if worker.is_finished() {
+            let _ = worker.join();
+            return FinalDrain::Joined;
+        }
+        if std::time::Instant::now() >= deadline {
+            return FinalDrain::Deadline;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
 pub struct Session {
     /// Resources and active-request identity; the worker holds this
     /// lock for the whole duration of a handler call.
@@ -314,21 +370,32 @@ impl Session {
                     );
                     let text = schema::encode_response_frame(&payload)
                         .expect("constant transport error within limits");
-                    // Scope the writer guard to the -32001 write only:
-                    // shutdown() joins the worker below, and an admitted
-                    // unit still executing must be able to flush its
-                    // factual response. Holding the guard across the
-                    // join deadlocks the session (the worker blocks on
-                    // the writer mutex); the worker's own write-failure
-                    // path drops the guard before reporting Fatal, and
-                    // the Go session writes under the lock, unlocks,
-                    // then shuts down.
-                    let write_result = {
-                        let mut w = writer.lock().unwrap();
-                        w.write_line(&text)
-                    };
-                    if let Err(err) = write_result {
-                        return self.fatal(err);
+                    // The -32001 reply must not wedge the session loop
+                    // on a full undrained stdout (the client closed
+                    // stdin and stopped reading): a wedged worker owns
+                    // the writer mutex mid-write, and a synchronous
+                    // reply write would sit ahead of shutdown(), so
+                    // neither the bounded drain nor the grace could
+                    // ever arm. write_response_bounded delivers the
+                    // reply with a bounded wait (inline when the lock
+                    // is free, from a detached thread otherwise); when
+                    // the bound expires the reply is undeliverable, and
+                    // the bounded shutdown below abandons a wedged
+                    // worker and still returns the framing failure
+                    // (non-zero exit). The writer guard never spans the
+                    // worker join: an admitted unit still executing
+                    // must be able to flush its factual response.
+                    match write_response_bounded(&writer, &text) {
+                        Ok(()) => {}
+                        // Undeliverable within the bounded grace:
+                        // the framing failure itself is the reported
+                        // error, and the bounded shutdown below
+                        // abandons the wedged worker and still exits
+                        // non-zero. A real write failure (e.g. EPIPE
+                        // on a closed stdout) is a fatal transport
+                        // failure.
+                        Err(err) if err.kind() == io::ErrorKind::TimedOut => {}
+                        Err(err) => return self.fatal(err),
                     }
                     // A frame over the input ceiling is a framing
                     // failure: drain and clean up like EOF, but exit
@@ -467,7 +534,8 @@ impl Session {
 
     /// EOF shutdown: stop acceptance, cancel queued units, request
     /// cancellation of the active unit, wait for its factual terminal
-    /// outcome, and close every connection resource.
+    /// outcome within the bounded final drain, and close every
+    /// connection resource.
     ///
     /// Exits zero unless the transport itself failed: a worker write
     /// failure observed while draining queued units (broken stdout)
@@ -475,14 +543,30 @@ impl Session {
     /// failure (non-zero exit).
     fn shutdown(&mut self) -> io::Result<()> {
         self.begin_shutdown();
-        let worker_failed = if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-            self.control.lock().unwrap().fatal_error.take().map(|(kind, message)| {
-                io::Error::new(kind, message)
-            })
-        } else {
-            None
-        };
+        let mut worker_failed = None;
+        if let Some(worker) = self.worker.take() {
+            match join_worker_bounded(worker, FINAL_DRAIN_GRACE) {
+                FinalDrain::Joined => {
+                    worker_failed = self
+                        .control
+                        .lock()
+                        .unwrap()
+                        .fatal_error
+                        .take()
+                        .map(|(kind, message)| io::Error::new(kind, message));
+                }
+                FinalDrain::Deadline => {
+                    // The worker is wedged writing to an undrained
+                    // full stdout pipe: the client closed stdin and is
+                    // not reading, so the drained responses are
+                    // undeliverable. That is not a transport failure
+                    // (the pipe is intact), so EOF still exits zero:
+                    // abandon the wedged worker (the process exits
+                    // when rpc::run returns) and close connection
+                    // resources below.
+                }
+            }
+        }
         let close_failed = self.close_registered_resources();
         match (worker_failed, close_failed) {
             (Some(first), Some(second)) => Err(io::Error::new(
@@ -496,11 +580,21 @@ impl Session {
 
     /// Fatal transport failure: same cancellation and handle cleanup
     /// as EOF (including closing connection resources), then report
-    /// the failure (non-zero exit).
+    /// the failure (non-zero exit). The final drain is bounded like
+    /// EOF: a worker wedged on an undrained stdout pipe is abandoned
+    /// and the failure is reported anyway.
     fn fatal(&mut self, err: io::Error) -> io::Result<()> {
         self.begin_shutdown();
         if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+            if let FinalDrain::Deadline = join_worker_bounded(worker, FINAL_DRAIN_GRACE) {
+                return Err(io::Error::new(
+                    err.kind(),
+                    format!(
+                        "{err}; worker did not finish the final drain within the \
+                         bounded grace (stdout is not being read)"
+                    ),
+                ));
+            }
         }
         let close_failed = self.close_registered_resources();
         match close_failed {
@@ -679,9 +773,76 @@ fn worker_loop<W: Write + Send + 'static>(
     }
 }
 
+/// Bounded response write for replies the session loop emits itself:
+/// transport errors, busy/unanswerable rejections, all-rejected
+/// batches, and the frame-over-limit reply.
+///
+/// A wedged worker owns the writer mutex while blocked in write(2)
+/// on a full undrained stdout pipe (the client closed stdin and
+/// stopped reading). A synchronous reply write would then sit ahead
+/// of shutdown(), so neither the bounded final drain nor the shutdown
+/// grace could ever arm and the process would leak until a signal
+/// killed it (session P2, wave-19.18 integration review). This helper
+/// takes the free-lock fast path and, only when the lock is held,
+/// delivers the reply from a detached thread with a wait bounded by
+/// [`FINAL_DRAIN_GRACE`]. The detached thread is never joined and
+/// dies with the process when `run()` returns.
+fn write_response_bounded<W: Write + Send + 'static>(
+    writer: &Arc<Mutex<FrameWriter<W>>>,
+    text: &str,
+) -> io::Result<()> {
+    // Fast path: the worker is not mid-write, write inline. This is
+    // the common case (busy-flood responses, returned errors) and
+    // avoids a thread per reply; try_lock never blocks, so a
+    // momentarily busy writer falls through to the detached delivery
+    // below.
+    if let Ok(mut w) = writer.try_lock() {
+        return w.write_line(text);
+    }
+    // The writer lock is held (a wedged worker mid-write on an
+    // undrained stdout): deliver from a detached thread and bound
+    // the wait. A thread creation failure must not block the session
+    // loop nor defeat the bound this helper serves: the reply is
+    // undeliverable.
+    let writer_handle = Arc::clone(writer);
+    let text = text.to_string();
+    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+    if std::thread::Builder::new()
+        .name("iprange-loop-reply".into())
+        .spawn(move || {
+            let result = {
+                let mut w = writer_handle.lock().unwrap();
+                w.write_line(&text)
+            };
+            let _ = reply_tx.send(result);
+        })
+        .is_err()
+    {
+        return Err(response_undeliverable());
+    }
+    match reply_rx.recv_timeout(FINAL_DRAIN_GRACE) {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(err)) => Err(err),
+        Err(_) => Err(response_undeliverable()),
+    }
+}
+
+/// The session-loop reply could not be delivered within the bounded
+/// grace: the client closed stdin and is not reading, so the writer
+/// is wedged on a full undrained stdout pipe. `TimedOut` doubles as
+/// the undeliverable marker: the frame-over-limit caller reports the
+/// framing failure itself, every other caller treats it as a fatal
+/// transport failure.
+fn response_undeliverable() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::TimedOut,
+        "response undeliverable within bounded grace: stdout not read",
+    )
+}
+
 /// Decode one input frame, apply cancellation, admit requests, and
 /// queue or directly answer the resulting work unit.
-fn handle_frame<W: Write>(
+fn handle_frame<W: Write + Send + 'static>(
     session: &mut Session,
     line: Vec<u8>,
     writer: &Arc<Mutex<FrameWriter<W>>>,
@@ -700,8 +861,7 @@ fn handle_frame<W: Write>(
             let payload = bounded_schema_response(None, err);
             let text = schema::encode_response_frame(&payload)
                 .expect("bounded schema error within frame limit");
-            let mut w = writer.lock().unwrap();
-            w.write_line(&text)?;
+            write_response_bounded(writer, &text)?;
             return Ok(());
         }
     };
@@ -745,8 +905,7 @@ fn handle_frame<W: Write>(
             let payload = Value::Array(responses);
             let text = schema::encode_response_frame(&payload)
                 .expect("bounded batch response within ceiling");
-            let mut w = writer.lock().unwrap();
-            w.write_line(&text)?;
+            write_response_bounded(writer, &text)?;
             return Ok(());
         }
         session
@@ -767,14 +926,12 @@ fn handle_frame<W: Write>(
                 let payload = bounded_response(busy_response(request), request);
                 let text = schema::encode_response_frame(&payload)
                     .expect("bounded response within frame limit");
-                let mut w = writer.lock().unwrap();
-                w.write_line(&text)?;
+                write_response_bounded(writer, &text)?;
             }
             Some(WorkEntry::Unanswerable(_)) => {
                 let text = schema::encode_response_frame(&unanswerable_response())
                     .expect("constant transport error within limits");
-                let mut w = writer.lock().unwrap();
-                w.write_line(&text)?;
+                write_response_bounded(writer, &text)?;
             }
             _ => {
                 session
@@ -3355,5 +3512,294 @@ mod tests {
         let err = result.unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::Interrupted);
         assert!(err.to_string().contains("terminated by signal 15"));
+    }
+
+    /// Writer that blocks in `write` until released, standing in for
+    /// a full undrained stdout pipe: the session worker wedges in
+    /// `write` exactly like the production 64 KiB pipe with a reader
+    /// that stopped reading. Releasing simulates the client draining
+    /// again; the pending write then completes into the capture, so a
+    /// test can also prove the abandoned worker finishes cleanly.
+    #[derive(Clone)]
+    struct WedgeWriter {
+        output: Arc<Mutex<Vec<u8>>>,
+        wedge: Arc<(Mutex<bool>, std::sync::Condvar)>,
+    }
+
+    impl WedgeWriter {
+        fn release(&self) {
+            let (lock, cv) = &*self.wedge;
+            *lock.lock().unwrap() = false;
+            cv.notify_all();
+        }
+    }
+
+    impl Write for WedgeWriter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            let (lock, cv) = &*self.wedge;
+            let mut wedged = lock.lock().unwrap();
+            while *wedged {
+                wedged = cv.wait(wedged).unwrap();
+            }
+            self.output.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn eof_shutdown_is_bounded_while_the_writer_is_wedged() {
+        // P2 (EOF-shutdown liveness): a client that closes stdin
+        // while the worker is blocked writing to an undrained stdout
+        // pipe must still get a prompt exit-zero session. Pre-fix
+        // shutdown() joined the worker unboundedly and hung forever;
+        // post-fix the final drain is bounded and EOF exits zero (the
+        // response data is undeliverable, the transport is intact).
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let wedge = Arc::new((Mutex::new(true), std::sync::Condvar::new()));
+        let reader = PlainEofReader {
+            remaining:
+                b"{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n",
+        };
+        let session = Session::new();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<io::Result<()>>();
+        let run_output = output.clone();
+        let run_wedge = wedge.clone();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(session.run(
+                reader,
+                WedgeWriter {
+                    output: run_output,
+                    wedge: run_wedge,
+                },
+            ));
+        });
+        done_rx
+            .recv_timeout(FINAL_DRAIN_GRACE + std::time::Duration::from_secs(3))
+            .expect("EOF shutdown must return within the final-drain bound")
+            .expect("EOF with undeliverable responses must exit zero");
+
+        // The wedged worker unblocks once the writer drains (the
+        // release simulates the client reading again) and finishes by
+        // itself; the session already returned, so nothing may hang.
+        WedgeWriter {
+            output: output.clone(),
+            wedge: wedge.clone(),
+        }
+        .release();
+        wait_until("wedged response delivered after release", || {
+            output
+                .lock()
+                .unwrap()
+                .windows(b"\"id\":\"1\"".len())
+                .any(|window| window == b"\"id\":\"1\"")
+        });
+    }
+
+    #[test]
+    fn fatal_shutdown_is_bounded_while_the_writer_is_wedged() {
+        // The same P2 bound applies on the fatal path: a fatal
+        // transport failure (here: a stdin read error) while the
+        // worker is wedged on an undrained stdout pipe must still end
+        // the session promptly and report the failure (the CLI exits
+        // non-zero).
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let wedge = Arc::new((Mutex::new(true), std::sync::Condvar::new()));
+        let reader = ErrorAfterFrameReader {
+            remaining:
+                b"{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n",
+        };
+        let session = Session::new();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<io::Result<()>>();
+        let run_output = output.clone();
+        let run_wedge = wedge.clone();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(session.run(
+                reader,
+                WedgeWriter {
+                    output: run_output,
+                    wedge: run_wedge,
+                },
+            ));
+        });
+        let err = done_rx
+            .recv_timeout(FINAL_DRAIN_GRACE + std::time::Duration::from_secs(3))
+            .expect("fatal shutdown must return within the final-drain bound")
+            .expect_err("wedged fatal shutdown must report the transport failure");
+        assert_eq!(err.kind(), io::ErrorKind::BrokenPipe);
+        assert!(
+            err.to_string().contains("final drain"),
+            "fatal error must record the abandoned drain: {err}"
+        );
+
+        WedgeWriter {
+            output: output.clone(),
+            wedge: wedge.clone(),
+        }
+        .release();
+        wait_until("wedged response delivered after release", || {
+            output
+                .lock()
+                .unwrap()
+                .windows(b"\"id\":\"1\"".len())
+                .any(|window| window == b"\"id\":\"1\"")
+        });
+    }
+
+    #[test]
+    fn frame_over_limit_shutdown_is_bounded_while_the_writer_is_wedged() {
+        // Session P2 (wave-19.18 integration review): an oversized
+        // input frame arriving while the session writer is wedged on
+        // an undrained stdout pipe must not hang the session. The
+        // -32001 reply attempt is bounded, then the bounded final
+        // drain abandons the wedged worker and run() returns the
+        // framing failure (non-zero exit). Pre-fix the session loop
+        // wrote -32001 synchronously before shutdown, so the
+        // final-drain bound could never arm and the process leaked
+        // until a signal killed it.
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let wedge = Arc::new((Mutex::new(true), std::sync::Condvar::new()));
+        let mut frames =
+            b"{\"jsonrpc\":\"2.0\",\"id\":\"1\",\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n"
+                .to_vec();
+        frames.extend_from_slice(&{
+            let mut oversized = vec![b'x'; super::super::framing::INPUT_FRAME_LIMIT + 1];
+            oversized.push(b'\n');
+            oversized
+        });
+        let reader = PlainEofReader {
+            remaining: Box::leak(frames.into_boxed_slice()),
+        };
+        let session = Session::new();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<io::Result<()>>();
+        let run_output = output.clone();
+        let run_wedge = wedge.clone();
+        std::thread::spawn(move || {
+            let _ = done_tx.send(session.run(
+                reader,
+                WedgeWriter {
+                    output: run_output,
+                    wedge: run_wedge,
+                },
+            ));
+        });
+        let err = done_rx
+            .recv_timeout(FINAL_DRAIN_GRACE + FINAL_DRAIN_GRACE + std::time::Duration::from_secs(3))
+            .expect("frame-over-limit shutdown must return within the bounded reply + drain window")
+            .expect_err("wedged frame-over-limit must report the framing failure");
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("frame over input limit"),
+            "framing failure must be reported: {err}"
+        );
+
+        // The detached -32001 writer (and the abandoned worker when
+        // it held the writer lock) unblocks once the writer drains;
+        // the session already returned, so nothing may hang. When the
+        // reply was the wedged write, releasing must let it land.
+        WedgeWriter {
+            output: output.clone(),
+            wedge: wedge.clone(),
+        }
+        .release();
+        wait_until("framing reply delivered after release", || {
+            output
+                .lock()
+                .unwrap()
+                .windows(b"frame over input limit".len())
+                .any(|window| window == b"frame over input limit")
+        });
+    }
+
+    #[test]
+    fn handle_frame_reply_is_bounded_while_the_writer_lock_is_wedged() {
+        // Session P2 (wave-19.18 integration review): every
+        // session-loop reply write must be bounded, not only the
+        // -32001 framing reply. A client that closed stdin without
+        // reading can wedge the writer lock in write(2) while the
+        // worker holds it, so a synchronous envelope-error reply
+        // would sit ahead of shutdown and the process would leak.
+        // This test wedges the lock deterministically (a holder
+        // thread blocks in write(2)) and proves the envelope-error
+        // reply returns the undeliverable transport failure within
+        // the bounded grace instead of blocking forever.
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let wedge = Arc::new((Mutex::new(true), std::sync::Condvar::new()));
+        let writer: Arc<Mutex<FrameWriter<WedgeWriter>>> =
+            Arc::new(Mutex::new(FrameWriter::new(WedgeWriter {
+                output: output.clone(),
+                wedge: wedge.clone(),
+            })));
+        // The holder thread locks the writer and blocks in write(2),
+        // exactly like a worker wedged on a full undrained stdout.
+        let holder_writer = Arc::clone(&writer);
+        let holder = std::thread::spawn(move || {
+            let mut w = holder_writer.lock().unwrap();
+            let _ = w.write_line("wedged holder write");
+        });
+        // Make sure the holder owns the lock before the reply
+        // attempt, so try_lock deterministically falls through to
+        // the detached bounded delivery.
+        wait_until("holder owns the wedged writer lock", || {
+            writer.try_lock().is_err()
+        });
+
+        let mut session = Session::new();
+        let started = std::time::Instant::now();
+        let err = handle_frame(&mut session, b"this is not json\n".to_vec(), &writer)
+            .expect_err("undeliverable envelope reply must be a transport failure");
+        assert_eq!(err.kind(), io::ErrorKind::TimedOut);
+        assert!(
+            err.to_string().contains("response undeliverable"),
+            "reply must report the undeliverable grace: {err}"
+        );
+        assert!(
+            started.elapsed() <= FINAL_DRAIN_GRACE + std::time::Duration::from_secs(2),
+            "envelope reply must return within the bounded grace"
+        );
+
+        // The detached reply writer unblocks once the holder's write
+        // finishes; the session already returned, so nothing may
+        // hang.
+        WedgeWriter {
+            output: output.clone(),
+            wedge: wedge.clone(),
+        }
+        .release();
+        holder.join().expect("holder write completes");
+        wait_until("envelope error delivered after release", || {
+            output
+                .lock()
+                .unwrap()
+                .windows(b"parse error:".len())
+                .any(|window| window == b"parse error:")
+        });
+    }
+
+    #[test]
+    fn handle_frame_reply_takes_the_free_lock_fast_path() {
+        // The common case: the writer lock is free, so the
+        // envelope-error reply must be written inline (no detached
+        // delivery) and handle_frame returns Ok.
+        let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
+        let wedge = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        let writer: Arc<Mutex<FrameWriter<WedgeWriter>>> =
+            Arc::new(Mutex::new(FrameWriter::new(WedgeWriter {
+                output: output.clone(),
+                wedge: wedge.clone(),
+            })));
+        let mut session = Session::new();
+        handle_frame(&mut session, b"this is not json\n".to_vec(), &writer)
+            .expect("free-lock envelope reply must succeed");
+        assert!(
+            output
+                .lock()
+                .unwrap()
+                .windows(b"parse error:".len())
+                .any(|window| window == b"parse error:"),
+            "envelope reply must be written on the fast path"
+        );
     }
 }

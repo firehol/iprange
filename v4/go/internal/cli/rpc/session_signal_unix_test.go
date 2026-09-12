@@ -95,6 +95,34 @@ func TestTerminationSignalHelperProcess(t *testing.T) {
 		// (role-round finding).
 		input := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n"
 		err = NewSession().Run(strings.NewReader(input), blockingWriter{})
+	case "eof-drain-wedge":
+		// Operations P2 (wave-19.18): one request whose response
+		// blocks the writer forever, then EOF, with no signal.  The
+		// bounded EOF final drain must terminate the process by
+		// itself with exit 0; pre-fix shutdown joined the wedged
+		// worker unboundedly and the process leaked.
+		input := "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n"
+		err = NewSession().Run(strings.NewReader(input), blockingWriter{})
+	case "eof-fullpipe-wedge":
+		// Operations P2 (wave-19.18), production shape (p9): one
+		// batch frame whose encoded response is ~961 KB, written to
+		// the real stdout pipe the parent never drains, then stdin
+		// EOF.  The worker blocks in write(2) once the 64 KiB pipe
+		// buffer fills; the bounded EOF final drain must exit 0 by
+		// itself.
+		err = NewSession().Run(os.Stdin, os.Stdout)
+	case "oversize-fullpipe-wedge":
+		// Session P2 (wave-19.18 integration review), production
+		// shape: one batch frame whose encoded response is ~961 KB is
+		// written to the real stdout pipe the parent never drains
+		// (the worker blocks in write(2) holding the writer lock),
+		// then an oversized input frame (LIMIT+1 bytes) and EOF.  The
+		// -32001 reply write must be bounded and the framing exit
+		// must be non-zero; pre-fix the main loop wrote -32001
+		// synchronously before shutdown(1), so the bounded drain
+		// never armed and the process leaked until a signal killed
+		// it.
+		err = NewSession().Run(os.Stdin, os.Stdout)
 	case "full-stderr":
 		// Watcher force-exit independence (external review finding):
 		// the parent gives this session a stderr that is a full,
@@ -241,6 +269,178 @@ func TestTerminationSignalDrainWedgeForcesNonZeroExit(t *testing.T) {
 	// process-lifetime watchdog can serve the signal.
 	runSignalTrials(t, "drain-wedge", syscall.SIGTERM, 1)
 	runSignalTrials(t, "drain-wedge", syscall.SIGINT, 1)
+}
+
+// bigBatchFrame builds one 16-member describe batch whose ids are
+// 60,000 characters each, so the encoded response frame is ~961 KB:
+// far beyond the 64 KiB pipe buffer, which is what wedges the worker
+// when the client stops reading (operations p9 shape).
+func bigBatchFrame() []byte {
+	members := make([]any, 16)
+	for i := range members {
+		members[i] = map[string]any{
+			"jsonrpc": "2.0",
+			"id":      strings.Repeat("x", 60000) + strconv.Itoa(i),
+			"method":  "iprange.v1.system.describe",
+			"params":  map[string]any{},
+		}
+	}
+	b, err := json.Marshal(members)
+	if err != nil {
+		panic(err)
+	}
+	return append(b, '\n')
+}
+
+func TestEOFDrainWedgeSelfExitsZero(t *testing.T) {
+	// Operations P2 (wave-19.18): EOF shutdown must terminate by
+	// itself with exit 0 within the bounded final drain even when the
+	// session writer is blocked on an undrained full stdout pipe.
+	// Pre-fix shutdown waited unboundedly for the worker, so a
+	// supervisor that relies on EOF termination leaked a live process
+	// until a signal killed it.
+	for iteration := 0; iteration < 2; iteration++ {
+		cmd := startSignalHelper(t, "eof-drain-wedge")
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("start helper: %v", err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("eof-drain-wedge: exit = %v, want clean exit 0", err)
+			}
+		case <-time.After(4 * time.Second):
+			cmd.Process.Kill()
+			cmd.Wait()
+			t.Fatalf("eof-drain-wedge: helper did not self-exit within 4s")
+		}
+	}
+}
+
+func TestEOFFullPipeWedgeSelfExitsZero(t *testing.T) {
+	// Same contract over a real pipe (the production shape): the
+	// parent gives the helper a stdout pipe it never drains and a
+	// batch frame whose ~961 KB response cannot fit the pipe buffer;
+	// stdin EOF follows while the worker is blocked in write.  The
+	// session must self-exit 0 within the bounded drain.
+	frame := bigBatchFrame()
+	for iteration := 0; iteration < 2; iteration++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestTerminationSignalHelperProcess$")
+		cmd.Env = append(os.Environ(), signalTestHelperEnv+"=eof-fullpipe-wedge")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatalf("stdin pipe: %v", err)
+		}
+		stdoutR, stdoutW, err := os.Pipe()
+		if err != nil {
+			stdin.Close()
+			t.Fatalf("stdout pipe: %v", err)
+		}
+		cmd.Stdout = stdoutW
+		cmd.Stderr = &bytes.Buffer{}
+		if err := cmd.Start(); err != nil {
+			stdin.Close()
+			stdoutR.Close()
+			stdoutW.Close()
+			t.Fatalf("start helper: %v", err)
+		}
+		stdoutW.Close() // the parent never reads; the pipe stays full
+		if _, err := stdin.Write(frame); err != nil {
+			stdin.Close()
+			t.Fatalf("write batch frame: %v", err)
+		}
+		stdin.Close() // EOF with the response still undrainable
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case err := <-done:
+			stdoutR.Close()
+			if err != nil {
+				t.Fatalf("eof-fullpipe-wedge: exit = %v, want clean exit 0", err)
+			}
+		case <-time.After(4 * time.Second):
+			cmd.Process.Kill()
+			cmd.Wait()
+			stdoutR.Close()
+			t.Fatalf("eof-fullpipe-wedge: helper did not self-exit within 4s")
+		}
+	}
+}
+
+func TestOversizeFullpipeWedgeSelfExitsNonZero(t *testing.T) {
+	// Session P2 (wave-19.18 integration review): an oversized input
+	// frame arriving while the session writer is blocked on a full
+	// undrained stdout pipe must not wedge the -32001 reply write.
+	// The main loop bounds the reply write, then the bounded final
+	// drain terminates the process by itself non-zero (framing
+	// failure).  Pre-fix the -32001 write ran synchronously before
+	// shutdown(1), so neither the drain nor its watchdog was ever
+	// reached: a supervisor relying on EOF-termination leaked the
+	// process until a signal killed it.
+	frame := bigBatchFrame()
+	for iteration := 0; iteration < 2; iteration++ {
+		cmd := exec.Command(os.Args[0], "-test.run=^TestTerminationSignalHelperProcess$")
+		cmd.Env = append(os.Environ(), signalTestHelperEnv+"=oversize-fullpipe-wedge")
+		stdin, err := cmd.StdinPipe()
+		if err != nil {
+			t.Fatalf("stdin pipe: %v", err)
+		}
+		stdoutR, stdoutW, err := os.Pipe()
+		if err != nil {
+			stdin.Close()
+			t.Fatalf("stdout pipe: %v", err)
+		}
+		cmd.Stdout = stdoutW
+		cmd.Stderr = &bytes.Buffer{}
+		if err := cmd.Start(); err != nil {
+			stdin.Close()
+			stdoutR.Close()
+			stdoutW.Close()
+			t.Fatalf("start helper: %v", err)
+		}
+		stdoutW.Close() // the parent never reads; the pipe stays full
+		if _, err := stdin.Write(frame); err != nil {
+			stdin.Close()
+			t.Fatalf("write batch frame: %v", err)
+		}
+		// The ~961 KB response cannot fit the pipe buffer, so the
+		// worker is wedged in write(2) by the time the oversized
+		// frame lands.  The child reads the oversized bytes until the
+		// ceiling, so the parent's write may only finish after the
+		// child exits (EPIPE) — deliver it detached and ignore that
+		// outcome.
+		writeDone := make(chan struct{})
+		go func() {
+			defer close(writeDone)
+			body := make([]byte, InputFrameLimit+1)
+			for i := range body {
+				body[i] = 'x'
+			}
+			stdin.Write(append(body, '\n'))
+			stdin.Close()
+		}()
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case err := <-done:
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 1 {
+				stdoutR.Close()
+				<-writeDone
+				t.Fatalf("oversize-fullpipe-wedge: exit = %v, want 1", err)
+			}
+		case <-time.After(6 * time.Second):
+			cmd.Process.Kill()
+			cmd.Wait()
+			stdoutR.Close()
+			<-writeDone
+			t.Fatalf("oversize-fullpipe-wedge: helper did not self-exit within 6s")
+		}
+		stdoutR.Close()
+		<-writeDone
+	}
 }
 
 func TestOversizedEOFExitsNonZero(t *testing.T) {

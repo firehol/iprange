@@ -766,26 +766,44 @@ HEAD; astra turn 18 remains the milestone-4 closure gate (no commit
 after its PASS).
 
 
-Wave-19.18 review-generation state (2026-09-12, handoff): the final
-wave-19.18 revision `40c11557e05f4d0ceb2b2ed0eeaddac3998c548e` is
-committed and pushed (HEAD == origin/master; working tree clean apart
-from the two known untracked Linux Go binaries under
-`v4/go/cmd/iprange/`).  Both qualification workers completed and
+Wave-19.18 review-generation state (2026-09-12): the final
+wave-19.18 revision is this single repair-wave commit (HEAD ==
+origin/master after this commit; working tree clean apart from the
+two known untracked Linux Go binaries under
+`v4/go/cmd/iprange/`; the earlier anchor `40c11557…` was superseded
+by the repair wave and this qualification commit).  Both qualification workers completed and
 their reports are recorded in the handoff section at the end of this
 SOW (Linux battery: matrices 38/38 per language, mixed 14 executed +
 24 documented skips per direction zero failures, crash 16/16 both
 directions with the false-producer negative control failing as
 designed, resource 8/8, golden 55, sensitivity 14/14, kind gate PASS;
-Windows native on the authorized Windows validation host: 69 PASS
-with the three documented host-environment failures, all required
-pins PASS, 12/12 lowercase-namespace refusals on both engines, guard
-26 cases per product PASS, housekeeping PASS).  The eight-role review
+Windows native on the authorized Windows validation host: at HEAD
+b9e49132 the native re-run measures 70 PASS / 0 SKIP with the three
+documented host-environment failures (the recorded 69-count suite
+predates the wave-19.18 pin `TestWindowsUncProbeCaseFold`; the final
+revision re-measured in the qualification wave below), all required
+pins PASS including `TestWindowsUncProbeCaseFold`, the 12/12
+lowercase-namespace refusal matrix on both engines (attestation plus
+committed unit/native pins; the committed harness driver lands with
+the harness-rows work in this repair wave), guard 50 case keys per
+product PASS (44 canonical refusals + 3 allowed controls + 3
+success-fact booleans), housekeeping PASS
+(`windows_qualified=true`, `skipped=false`, `failed=0`, both
+harness self-tests exit 0 on the host and on Linux after the F1
+host-interpreter fix recorded below)).  The eight-role review
 generation at this revision (tester, operations, parity, portability,
 security, performance, the whole-milestone validator role, and the
 closure/records role) ran approximately two hours and was stopped by
-the user before any role wrote its verdict file: the reviewer context
-window (256k) forced repeated compaction without progress, and the
-user raised it to 512k.  After that reconfiguration the interrupted
+the user.  After the stop, the preserved sandbox shows one verdict
+already existed before the handoff: the portability verdict
+`.local/portability/VERDICT-40c11557.md` (a complete FAIL: P1 — the
+Go product cannot be built for freebsd/openbsd/netbsd/dragonfly —
+plus seven further findings) was written at 03:54:12 on 2026-09-12,
+5.5 hours before the handoff commit b9e49132 (09:20:25), was not
+mentioned in the handoff, and was reconciled only in this repair
+wave.  The reviewer context window (256k) forced repeated compaction
+without progress, and the user raised it to 512k.  After that
+reconfiguration the interrupted
 session lost agent dispatch entirely (spawn, message, and close calls
 all rejected), so the role generation must be relaunched from a fresh
 session against the same exact revision.  All role sandboxes and
@@ -794,10 +812,27 @@ are preserved under `.local/` and must be reused, not recreated.  The
 milestone-4 closure gate is unchanged: every role PASSes at the exact
 final revision and the external whole-milestone control session
 (resumed, never restarted) PASSes at the same revision, with no
-repository commit after that review.  The relaunch script, current
-identities, and standing safety rules are in the
+repository commit after that review.  The preserved sandbox also
+holds the portability FAIL verdict for the exact anchor revision
+(recorded above); that FAIL was reconciled only in this repair wave
+— the records findings by this records-repair work and the P1
+product fix by the parallel product workers — and is re-qualified at
+the final revision.  The relaunch is driven by the review
+instructions (the per-role assignment text, not a script — no
+relaunch script exists), and the current identities and standing
+safety rules are in the
 "Wave-19.18 review-generation handoff" section at the end of this
-SOW.
+SOW.  The final-wave native qualification completed in this commit
+(F1 host-interpreter robustness on the authorized Windows validation
+host; guard 50 case keys per product; housekeeping 2/2; both harness
+self-tests green on the host and on Linux; guard-posix regenerated
+from the wave fixture; evidence and the SHASUMS ledger re-recorded
+for the `-trimpath`/session-repaired builds) — recorded in the
+repair-wave section at the end of this SOW.  Four integration
+reviewers (parity, session, kind-gate, portability) PASSed the
+pre-commit repair tree; the eight-role generation and the external
+same-session control re-anchor at this final commit.
+
 ## Requirements
 
 ### Purpose
@@ -11797,7 +11832,7 @@ follow-up commit, plus one falsified report:
    is 13 tests, not 12.
 
 Windows native re-verification at the follow-up HEAD (go1.26.5 /
-rustc 1.97.1, win11 validation host, clean worktree): both corrected
+rustc 1.97.1, authorized Windows validation host, clean worktree): both corrected
 pins PASS natively (`refuse_output_over_source_windows_cross_family_spellings`
 and `strip_non_ascii_head_does_not_panic`).  Scratch-revert proofs
 confirm both pins detect their defect classes: restoring the
@@ -11849,7 +11884,7 @@ this round:
    astra P1 and restores the volume-GUID arm.  New pin:
    `TestRefuseOutputOverSourceWindowsVolumeGuidSidecar` (guard and
    session call site) plus the tightened harness case; scratch-proof
-   checked on win11 — the 6de5b630 shape FAILs the new pin and the
+   checked on the authorized Windows validation host — the 6de5b630 shape FAILs the new pin and the
    narrowed anchor PASSes it.
 
 Re-qualification at the wave-19.17 final revision (`8a386af4`, pushed origin/master):
@@ -11861,7 +11896,7 @@ Re-qualification at the wave-19.17 final revision (`8a386af4`, pushed origin/mas
   crash positive 16/16 both directions, /bin/false negative rc=1 as
   designed, resource 8/8 + selftest, golden 55 exchanges, sensitivity
   14/14, kind coverage PASS.
-- Windows native (win11 validation host, go1.26.5 / rustc 1.97.1):
+- Windows native (authorized Windows validation host, go1.26.5 / rustc 1.97.1):
   Go Windows handler suite 15/15 PASS at that revision (the 13
   pre-wave tests plus the relative-source and volume-GUID pins;
   the 16th, the GLOBALROOT pin, lands in the security follow-up
@@ -11912,7 +11947,7 @@ wave-19.17 binaries before any fix, repaired in `a8fcadaa`
   `\??\GLOBALROOT` prefixes) and the harness cases
   `globalroot_sidecar` / `globalroot_device_sidecar`.
 
-Native verification at `a8fcadaa` (win11 validation host): Go
+Native verification at `a8fcadaa` (authorized Windows validation host): Go
 Windows suite 16/16 PASS (Windows-gated handler tests including the
 new GLOBALROOT pin); guard harness PASS for both products with 20
 sidecar spellings refused canonically per product (verbatim, NT,
@@ -11978,7 +12013,7 @@ observed HEAD together.
 
 #### Wave 19 round 19.18 (2026-09-12) — GLOBALROOT/UNC case-insensitivity parity P1, the dead-literal regression class, CI-catchable namespace pins, and full re-qualification
 
-Parity P1 (native win11 reproduction against the wave-19.17 product
+Parity P1 (native reproduction on the authorized Windows validation host against the wave-19.17 product
 `f5b9d48f…`): the NT device and UNC namespaces resolve path heads
 case-insensitively, but Go gated the two namespace rewrites on
 case-sensitive prefix comparisons — `strings.CutPrefix` for the
@@ -12004,7 +12039,7 @@ never equal a fifteen-character real path).  The gate was dead code
 and the tree regressed against the committed HEAD: all six
 GLOBALROOT spellings, canonical and lowercase, delivered over the
 live sidecar on the defective win build `d1bdb8e6…`/`03faccf1…`
-(preserved for forensics on the win11 validation host at
+(preserved for forensics on the authorized Windows validation host at
 `C:/Temp/iprange-w1917c/defective-1918/`).  The native end-to-end
 pins caught it: the lowercase refusal matrix on the defective build
 returned delivered-allow for every GLOBALROOT row on Go while Rust
@@ -12065,23 +12100,50 @@ the GLOBALROOT family gate.  The symbol-only head check at
 `export.go` (verbatim-prefix strip preflight) already compares
 case-insensitively and needed no change.
 
-Final wave-19.18 identities (Linux go1.27.0 / rustc 1.91.1,
-CGO_ENABLED=0, `-buildvcs=false`, clean staging; win go1.26.5 on
-the win11 validation host, `-buildvcs=false`): Linux go product
-`e2377a2c5fea0961a4556a2364e85f3efdd67112470c574126352ea3a14a735a`
-(replaces the broken-gate build), Linux go worker
-`ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`
-unchanged (its dependency closure excludes `cli/handlers`);
-Windows go product `630bc0508a7c6b69473f0b88fc59c394f35d1ed4371bdc04775a5f0a2d4e2019`,
-Windows go worker `d5054a29848c568a28e4f1e97e3ce028dc318a0378c73ca9573476f01a884a1e`
-(hash shift from `cf3b4d2c…` is the embedded staging directory, not
-a code change: `go list -deps` links zero handler packages and the
-embedded staging path string was located in the binary).  Rust on
-both platforms unchanged and re-verified against the pins: Linux
-`e59c0f08…`/`d7a59988…`/`2440122…`, Windows
-`2d5ea513…`/`1cf2f694…`/`570e81cd…`, fixture database
-`d7126fc0…`.  The staging ledger `.local/shared/binaries/SHASUMS.txt`
-(gitignored) was rotated and `sha256sum -c` verifies 10/10.
+Final wave-19.18 identities (fresh battery, Linux go1.27.0 /
+rustc 1.91.1, CGO_ENABLED=0, Go built with `-trimpath`; Windows
+go1.26.5 on the authorized Windows validation host): Linux go
+product `d7973a909ce801f16e1bcc7d355bff0426459080ad5ca791da9cebf4efcd7b53`,
+Linux go worker
+`f4af92048e612b9e413b5009d98bd4771eb89b4807ef2d50fe54ef207e641e4b`
+(rebuild with `-trimpath`; its dependency closure excludes
+`cli/handlers`); Linux Rust product
+`79fd1cd09901bd825f1e97f9e129ce1c366922ce3ca69434ad58e74ddc7caec9`,
+Linux Rust worker
+`cfe604d262f8ea871ca56c21bc54f390e92945695ffdaadf7c4f302ed32e7824`,
+Linux Rust fixture tool binary
+`e071f3cd849f62db1abe3fbfda8ce15596a5c4d2a828ba5cedffbcf7337c10e7`;
+Windows go product `ed9d09ea23f61c707d406f68bcd5781ec8201d247382f7e6ad52385b48c8794b`,
+Windows go worker
+`470d380c5fe6abb38a9f85e6f12bb093a7702db7428c7e80dd215886b2d51992`
+(hash shift from `630bc05…` is the embedded staging directory plus
+the session-loop repair, not a code-class change: `go list -deps`
+links zero handler packages and the embedded staging path string was
+located in the binary), Windows Rust product
+`06532ec31ac2b2d5063a2b966243ea58c7cfb7ed34a23673e1ecac99f7ed643d`,
+Windows Rust worker
+`806a5adc986273e10eb9d3c98e05c0a75e460d0378c028e240c1aebcfc052653`,
+Windows Rust fixture tool binary
+`1c599446d7a021d6c447ead57e5878585cf57516f7cc2a2d90fc3d8d7ee6050c`.
+These supersede the earlier identities
+(`e2377a2c…`/`ee213ca1…`/`e59c0f08…`/`d7a59988…`/`24401226…`
+and `630bc05…`/`d5054a2…`/`2d5ea51…`/`1cf2f69…`/`570e81c…`),
+which were recorded before the `-trimpath` rebuild of the Go
+binaries and the session-over-limit repair of the Rust binaries.
+The fixture database `e40adfc4e722423c4ab177d34059cd287afd9de751c764057dd5cec39bb908b8`
+is a data artifact, not a binary: 16384 bytes, created natively by
+the fixture tool on the authorized Windows validation host with the
+same source data as the wave fixture
+(sha `65ea5afd…`), recorded as `fixture.sha256` in
+`windows-guard.json` (the fixture database hash differs from the
+wave fixture hash because the native tool writes the platform's
+native endian/layout bytes for the same semantic content).  The
+staging ledger `.local/shared/binaries/SHASUMS.txt` (gitignored)
+was rotated to these identities and `sha256sum -c` verifies 10/10.
+The `-trimpath` recipe is documented in `v4/cli/evidence/README.md`
+and changes binary hashes, so every evidence hash and the ledger are
+re-recorded together by the qualification re-run at the final
+revision in this commit.
 
 Battery at the final identity — Linux: go tests green (24 packages),
 Rust workspace 918/0, guard selftest + POSIX negative PASS,
@@ -12094,22 +12156,37 @@ gate PASS.  All eight Linux evidence files regenerated from the new
 identity; a tree-wide scan finds zero references to any superseded
 hash.
 
-Windows native at the final identity (win11 validation host):
-full Go handlers package 69 PASS / 0 SKIP with exactly the three
-documented host-environment failures (msys-`TMPDIR` worker-spawn
-`%PATH%`; two immutable-file-lock `TempDir` cleanups); all required
-pins PASS (`TestGlobalrootFamilyProbe`, GLOBALROOT six-spelling
+Windows native at the final identity (authorized Windows
+validation host): the recorded 69 PASS / 0 SKIP count measures a
+suite one test behind HEAD — it predates the wave-19.18 pin; at
+HEAD b9e49132 the native re-run measures 70 PASS / 0 SKIP with
+exactly the three documented
+host-environment failures (msys-`TMPDIR` worker-spawn
+`%PATH%`; two immutable-file-lock `TempDir` cleanups), the extra
+PASS being `TestWindowsUncProbeCaseFold`.  All required
+pins PASS (`TestGlobalrootFamilyProbe`,
+`TestWindowsUncProbeCaseFold`, GLOBALROOT six-spelling
 pin, sidecar-spellings pin, session sidecar-spellings pin,
 volume-GUID pin); the lowercase refusal matrix — six GLOBALROOT and
 six lowercase verbatim/object-manager UNC/volume-GUID spellings
 driven through the production JSON-RPC surface against the live
-sidecar — REFUSED `invalid_argument` on both engines 12/12; guard
-harness PASS both products (26 cases per product: 22 canonical
-refusals including the GLOBALROOT rows, four distinct-destination
-controls allowed); housekeeping PASS (`windows_qualified=true`,
-`failed=0`).  Windows evidence files `windows-guard.json` and
-`windows-housekeeping.json` regenerated from the new identity and
-byte-verified on both hosts.
+sidecar — REFUSED `invalid_argument` on both engines 12/12 (verified
+by the native probe scripts in the review sandbox
+`.local/parity/w1920/` and `.local/security/w1918-win/`, pinned
+by the committed unit/native tests listed above, and driven by the
+committed harness rows added in this repair wave).  Final-wave
+native qualification (2026-09-12, this commit): guard harness PASS
+both products (50 case keys per product: 44 canonical
+refusals + 3 allowed controls + 3 success-fact booleans, matching
+the committed `windows-guard.json`); housekeeping PASS
+(`windows_qualified=true`, `skipped=false`,
+`failed=0`, refresh flow 150 removal rows / 123456 / 200 target
+CSV rows); both harness self-tests exit 0 on the host and on Linux
+after the F1 host-interpreter fix (recorded below).  Windows
+evidence files `windows-guard.json` and
+`windows-housekeeping.json` regenerated from the new identity, and
+`guard-posix.json` regenerated from the wave fixture
+(sha `65ea5afd…`), all byte-verified on both hosts.
 
 The milestone stays gated on the re-anchor PASS of every available
 role at the final wave-19.18 revision (this commit, pushed to
@@ -12117,23 +12194,29 @@ origin/master) and the astra same-session review at that revision.
 
 ## Wave-19.18 review-generation handoff (2026-09-12)
 
-Purpose: durable state so a fresh session can relaunch the interrupted
-role-review generation without re-deriving anything.  This section is
-the authoritative restart record until the roles deliver their
-verdicts at `40c11557…` (or a later re-anchored final revision).
+Purpose: durable state so a fresh session can relaunch the
+role-review generation at the final wave-19.18 revision without
+re-deriving anything.  This section is the authoritative restart
+record until the roles deliver their verdicts at that revision.
 
 ### Anchor
 
 - Repository: this repo, branch `master`.
-- Exact revision under review: `40c11557e05f4d0ceb2b2ed0eeaddac3998c548e`
-  (== `origin/master` at handoff time).
+- Exact revision under review: the single repair-wave commit that
+  closes wave 19.18 (this commit; == `origin/master` at the
+  relaunch).  The exact hash is a property of this commit, so it
+  cannot be pre-printed here: the relaunching lead MUST take it from
+  `git rev-parse HEAD` at relaunch time and fill it into every role
+  assignment message below.
 - Allowed untracked files (never commit, never delete):
   `v4/go/cmd/iprange/iprange`, `v4/go/cmd/iprange/iprange-v4-worker`.
 - Verify at start: `git rev-parse HEAD` and `git rev-parse origin/master`
-  agree with the anchor above (they will differ once the closure
-  records for the role round land; re-anchor roles to the exact final
-  code revision per the project-final-review rule — no record-only
-  commit after the final review verdict).
+  agree with the hash the lead prints in the assignment messages, and
+  `git status --short` shows a clean tree apart from the two allowed
+  untracked binaries.  No repository commit may follow the role round
+  before the external same-session control review (project-final-review
+  rule: even a record-only commit after the final review verdict
+  invalidates it).
 
 ### Role generation to relaunch (eight roles, own-model subagents)
 
@@ -12141,11 +12224,11 @@ One subagent per role directory.  The assignment message for every
 role follows this pattern verbatim:
 
 > Review the SOW-0028 milestone 4 wave-19.18 final revision
-> `40c11557e05f4d0ceb2b2ed0eeaddac3998c548e` (HEAD, pushed to
-> origin/master, working tree must be clean at start — verify).  Your
-> role and responsibilities are described in `.local/<role>/ROLE.md`,
-> read this file in whole, do not skim it, if you do not have it in
-> memory already.
+> `<EXACT-HEAD-HASH>` (the value of `git rev-parse HEAD` at relaunch,
+> supplied by the lead; HEAD == origin/master, working tree must be
+> clean at start — verify).  Your role and responsibilities are
+> described in `.local/<role>/ROLE.md`, read this file in whole, do
+> not skim it, if you do not have it in memory already.
 
 Roles (nickname → directory): Curie → `tester`, Kierkegaard →
 `operations`, Einstein → `parity`, Carver → `portability`, Mill →
@@ -12165,7 +12248,13 @@ Standing role rules:
 - Scratch from the stopped generation is preserved and must be reused:
   staged builds `buildA1919`/`buildB1919`, mutation batteries, and
   probe scripts written during the 02:54–03:07 run survive in the role
-  directories.  No role wrote a verdict file before the stop.
+  directories.  One verdict predates the handoff: the portability
+  FAIL verdict `.local/portability/VERDICT-40c11557.md` (written
+  03:54:12 on 2026-09-12; P1 — the Go product unbuildable for the
+  four BSD targets — plus seven further findings) for the exact
+  anchor revision `40c11557…`, unmentioned in the original handoff
+  and reconciled only in this repair wave; the other seven roles
+  wrote no verdict before the stop.
 - Heavy steps run under `nice`; roles run targeted adversarial checks,
   not whole batteries (battery evidence is committed under
   `v4/cli/evidence/`).
@@ -12186,29 +12275,48 @@ Standing role rules:
   8/8 with self-test controls, golden exchanges 55 over 38 case
   files, sensitivity 14/14, kind-coverage gate PASS.
 - Windows-native worker (nickname Aquinas) on the authorized Windows
-  validation host: 69 PASS / 0 SKIP with exactly the three documented
-  host-environment failures; all required pins PASS; lowercase
-  refusal matrix 12/12 `invalid_argument` on both engines through the
-  production JSON-RPC surface; guard harness PASS both products
-  (26 cases each); housekeeping PASS (`windows_qualified=true`,
+  validation host: the recorded 69 PASS / 0 SKIP count predates the
+  wave-19.18 pin; at HEAD b9e49132 the native re-run measures 70 PASS
+  / 0 SKIP with exactly the three documented host-environment
+  failures; all required pins PASS including
+  `TestWindowsUncProbeCaseFold`; lowercase refusal matrix 12/12
+  `invalid_argument` on both engines through the production JSON-RPC
+  surface (attestation verified by the review-sandbox native probes
+  `.local/parity/w1920/` and `.local/security/w1918-win/` and pinned
+  by committed unit/native tests; the committed harness driver lands
+  with the harness-rows work); guard harness PASS both products (26
+  report keys each at that measurement; the final-wave re-run at the
+  committed harness rows measures 50 case keys per product: 44
+  refusals + 3 controls + 3 facts — recorded below);
+  housekeeping PASS (`windows_qualified=true`,
   `failed=0`); evidence files regenerated and byte-verified on both
   hosts.
 
-### Current identities
+### Current identities (final wave revision, this commit)
 
-- Linux: go product `e2377a2c5fea0961a4556a2364e85f3efdd67112470c574126352ea3a14a735a`,
-  go worker `ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`;
-  Rust product `e59c0f08…`, Rust worker `d7a59988…`, Rust CLI
-  `24401226…`, fixture database `d7126fc0…` (full pins recorded in the
-  wave-19.18 section above).
-- Windows host: go product `630bc0508a7c6b69473f0b88fc59c394f35d1ed4371bdc04775a5f0a2d4e2019`,
-  go worker `d5054a29848c568a28e4f1e97e3ce028dc318a0378c73ca9573476f01a884a1e`
-  (delta from the earlier hash is the embedded staging path, not
-  code — `go list -deps` links zero handler packages); Rust
-  `2d5ea513…`/`1cf2f694…`/`570e81cd…` unchanged, re-verified.
+- Linux: go product
+  `d7973a909ce801f16e1bcc7d355bff0426459080ad5ca791da9cebf4efcd7b53`,
+  go worker
+  `f4af92048e612b9e413b5009d98bd4771eb89b4807ef2d50fe54ef207e641e4b`
+  (both built with `-trimpath`, byte-reproducible from a clean
+  staging); Rust product `79fd1cd0…`, Rust worker `cfe604d2…`,
+  Rust v4-fixture tool binary `e071f3cd…` (`e40adfc4…` is the
+  fixture DATABASE, a 16384-byte data artifact created natively by
+  the fixture tool on the authorized Windows validation host and
+  recorded in the Windows evidence — not a Linux binary; full pins
+  recorded in the wave-19.18 section above).
+- Windows host: go product
+  `ed9d09ea23f61c707d406f68bcd5781ec8201d247382f7e6ad52385b48c8794b`,
+  go worker
+  `470d380c5fe6abb38a9f85e6f12bb093a7702db7428c7e80dd215886b2d51992`
+  (delta from `630bc05…` is the embedded staging path plus the
+  session-loop repair — `go list -deps` links zero handler
+  packages); Rust `06532ec3…`/`806a5adc…`/`1c599446…`, rebuilt
+  with the session-loop repair.
 - Staging ledger `.local/shared/binaries/SHASUMS.txt` (gitignored):
-  `sha256sum -c` verifies 10/10.  Shared read-only probes and the
-  binary staging tree live under `.local/shared/`.
+  `sha256sum -c` verifies 10/10 at the identities above.  Shared
+  read-only probes and the binary staging tree live under
+  `.local/shared/`.
 - Ephemeral artifacts (builds, battery script) under `/tmp/qualsvc/`
   may not survive reboots; the durable copies are the committed
   evidence under `v4/cli/evidence/` and the staging ledger above.
@@ -12248,3 +12356,341 @@ Standing role rules:
 - Milestone 5 (delivery step 6, dual-language CLI conformance
   benchmarks): unstarted per user decision 1A.
 - SOW-0017 (snapshot signing): paused; do not start.
+
+## Repair wave — 2026-09-12
+
+This section records the corrections applied to the wave-19.18
+records by the SOW-0028 milestone-4 repair wave (worker G, records
+scope), acting on the closure, portability, tester, and operations
+verdicts for HEAD b9e49132.  Product code was not touched by this
+worker; the verdicts' product findings are repaired by the parallel
+product workers and re-qualified at the final revision.
+
+### Corrected records
+
+1. **Handoff truth (closure P2-1; portability F1; the wave-19.18
+   state paragraph and handoff).**  The records claimed no role wrote
+   a verdict file before the stop.  That was false:
+   `.local/portability/VERDICT-40c11557.md` exists with mtime
+   2026-09-12 03:54:12 (+0300), 5.5 hours before the handoff commit
+   b9e49132 (2026-09-12 09:20:25), and is a complete FAIL verdict for
+   the exact anchor revision `40c11557…` — P1: the Go product cannot
+   be built for freebsd/openbsd/netbsd/dragonfly
+   (`v4/go/internal/cli/legacy/parse.go:968-969`, `syscall.ENODATA`/
+   `syscall.ETIME` undefined, plus further target errors), plus seven
+   further findings.  The SOW now records that verdict and that it
+   was reconciled only in this repair wave (records findings here;
+   the P1 product fix and gate by the product workers).  The
+   "relaunch script" claim (SOW:797-799) was also false: the handoff
+   section carries the per-role assignment text and standing rules,
+   not a script; the relaunch is driven by those review
+   instructions.
+2. **Stale Windows count (closure P2-2; portability F3; SOW:779,
+   12097-12098, 12189; evidence README:91-92).**  "69 PASS / 0 SKIP"
+   measured a suite one test behind HEAD: the wave-19.18 pin
+   `TestWindowsUncProbeCaseFold` (exists at HEAD,
+   `v4/go/internal/cli/handlers/samefile_test.go:1320`) never ran in
+   that measurement.  At HEAD b9e49132 the native re-run measures
+   **70 PASS / 0 SKIP / 3 documented host failures** (worker `%PATH%`
+   spawn plus two TempDir cleanup Access-denied).  The record's "all
+   required pins PASS" list now includes
+   `TestWindowsUncProbeCaseFold`.  The final revision re-measures in
+   the qualification wave; no number was invented for the future
+   revision.
+3. **Guard split (closure P2-3; tester F1; portability N1;
+   SOW:12107-12108; evidence README:99-101).**  "22 canonical
+   refusals + four distinct-destination controls" contradicts the
+   committed evidence.  `v4/cli/evidence/windows-guard.json` holds
+   **26 report keys per product: 20 cases with
+   `expected_refused: true` + 3 allowed controls**
+   (`control_allowed`, `drive_root_allowed`,
+   `relative_source_control_allowed`) **+ 3 success-fact booleans**
+   (`reopen_allowed`, `sidecar_absent_after`, `source_unchanged`).
+   All stale renderings now read 20+3(+3)=26, aligned with the
+   wave-19.17 sentence (SOW:11917).
+4. **12/12 lowercase refusal matrix (closure P2-4; portability F8;
+   operations P3.3; SOW:781, 12103-12106, 12191-12192; evidence
+   README:96-98).**  No committed driver produced the 12/12 matrix;
+   the recorded claim was attestation-only.  The matrix is verified
+   by the native probe scripts in the review sandbox
+   (`.local/parity/w1920/`, `.local/security/w1918-win/`) and pinned
+   by committed unit/native tests (`TestWindowsUncProbeCaseFold`,
+   the six-spelling GLOBALROOT native pin).  The committed driver
+   (lowercase rows in `v4/cli/windows_guard_harness.py`) is added in
+   this repair wave by the harness-rows work (worker C).  Records now
+   state "attestation + unit/native pins until the harness rows
+   land" — no committed-driver claim.
+5. **Reproducibility trap (closure P2-5; portability F2/F4; evidence
+   README:186, :284).**  The documented recipes
+   `CGO_ENABLED=0 go -C v4/go build -buildvcs=false` (module root is
+   the library `iprangedb`) and the multi-package form
+   `go build ./cmd/iprange ./cmd/iprange-v4-worker` both exit 0
+   writing NO executable (re-verified in this repair wave; multiple
+   packages are compiled and discarded).  The corrected recipe names
+   one main package per invocation and records the output paths
+   (`v4/go/iprange`, `v4/go/iprange-v4-worker`; or `-o <dir>/` for
+   both).  Recorded honestly: Linux Go binaries are NOT
+   byte-reproducible from arbitrary staging without `-trimpath` —
+   they embed the staging path (two byte-identical clean stagings
+   built without `-trimpath` in this wave produced different hashes;
+   with `-trimpath` they were byte-identical).  The `-trimpath`
+   recipe is documented as the long-term-best recipe; the
+   qualification re-run uses it, which changes binary hashes — the
+   SHASUMS ledger and all evidence hashes are re-recorded by that
+   wave, not edited in this repair wave.
+6. **Identity conflation (closure P3.3; SOW:12082, 12179-12180).**
+   `24401226…` is the Linux Rust **v4-fixture tool binary**, not a
+   "Rust CLI" binary; `d7126fc0…` is the **Windows fixture
+   database** (a 16384-byte data artifact created natively by the
+   fixture tool on the authorized Windows validation host,
+   recorded as `fixture.sha256` in
+   `windows-guard.json`), not a Linux binary.  The labels now name
+   the artifact each identity refers to (mapping per
+   `.local/shared/binaries/SHASUMS.txt` and the evidence README
+   identity blocks).
+7. **Operations EOF-shutdown claim (operations verdict P2 note).**
+   The unconditional "EOF shutdown must terminate by itself with
+   exit code 0" wording lives in `v4/cli/resource_harness.py:622-624`
+   and `:1063-1066` — harness/product scope, fixed by the product
+   workers in this repair wave and re-qualified at the final
+   revision.  The SOW, evidence README, and `v4/cli/resource-record.md`
+   do not repeat the unconditional claim and do not pre-acknowledge
+   the wedge as an accepted limitation, so no prose correction was
+   required there; the wave-14 "signal-bounded over-limit close on a
+   full undrained stdout" P3 carry-over (recorded at SOW:7303-7310,
+   cited above as 7287-7288) is the signal-path sibling.  The
+   wave-19.18 claim that it is "resolved by the same product repair"
+   was FALSE at the exact revision `b9e49132` (session over-limit
+   write liveness, corrected below): the session-loop reply writes
+   were still synchronous, so an over-limit/-32001 reply write still
+   wedged ahead of shutdown on a full undrained stdout.
+8. **Tester F1 (SOW:12107-12108; evidence README:99-101).**  Same
+   guard-split correction as item 3; the separate "26 cases per
+   product PASS" statement in the wave-19.18 state paragraph was
+   already correct and is unchanged.
+
+
+### Session over-limit write liveness (integration review P2 — 2026-09-12)
+
+The wave-19.18 integration review (session role,
+`.local/int-session/REPORT.md`) reproduced a P2 on BOTH engines at the
+exact revision `b9e49132`.
+
+**Failure.** A client that closes stdin and stops reading stdout
+wedges the worker in `write(2)` on the full undrained stdout pipe
+while holding the writer lock. Any reply the session loop writes
+itself (-32001 framing reply, envelope/schema errors,
+busy/unanswerable rejections, all-rejected batch arrays) used to be a
+synchronous write under the same writer lock: it sat ahead of
+`shutdown()`, so neither the bounded EOF drain (Go 1 s
+`eofForceExitTimeout` / Rust 2 s `FINAL_DRAIN_GRACE`) nor any
+watchdog could ever arm. The process leaked until a signal killed it.
+
+**Item 7 correction.** The repair-wave item 7 above claimed the
+wave-14 "signal-bounded over-limit close on a full undrained stdout"
+P3 carry-over (recorded at SOW:7303-7310, cited there as 7287-7288)
+is "resolved by the same product repair". That was false at
+`b9e49132`: the session-loop reply writes were still synchronous, and
+the reviewer's probe (`.local/int-session/w1918/int_oversize_wedge.py`)
+hung both engines for more than 12 s. The probe sends exactly
+`INPUT_FRAME_LIMIT` bytes plus `\n` - a legal frame whose invalid
+JSON lands on the envelope-error write site, not the -32001 site; the
+fix below covers every session-loop write site.
+
+**Repair (this wave, both engines).**
+
+- Go (`v4/go/internal/cli/rpc/session.go`): new `writeLineBounded`
+  helper (free-lock `TryLock` fast path; otherwise the write runs in
+  a detached goroutine and the caller waits at most
+  `eofForceExitTimeout`); all four `handleFrame` session-loop write
+  sites and the -32001 reply route through it; `fatal()` is now
+  bounded exactly like `shutdown()` (a wedged worker force-exits 1
+  after the same grace, closing the unbounded-Go-`fatal` P3); the
+  -32001 branch on `errResponseUndeliverable` proceeds directly to
+  the bounded `shutdown(1)` (the framing failure is the reported
+  outcome), and only a real write failure (EPIPE) is a fatal
+  transport failure.
+- Rust (`v4/rust/iprange-cli/src/rpc/session.rs`): new
+  `write_response_bounded` helper (free-lock `try_lock` fast path;
+  detached `Builder` thread with `recv_timeout(FINAL_DRAIN_GRACE)`
+  otherwise; spawn failure counts as undeliverable); all four
+  `handle_frame` write sites route through it; the -32001 branch was
+  consolidated onto the helper and on `TimedOut` (undeliverable)
+  proceeds to the bounded shutdown with the framing failure, while a
+  real write error is fatal.
+
+**Pinned regression tests (both engines).**
+
+- Go: `v4/go/internal/cli/rpc/session_signal_unix_test.go`
+  `TestOversizeFullpipeWedgeSelfExitsNonZero` (production shape: a
+  ~961 KB batch response wedges the worker, then LIMIT+1 bytes + EOF;
+  the child must self-exit rc=1 within 6 s).
+- Rust: `rpc::session::tests::frame_over_limit_shutdown_is_bounded_while_the_writer_is_wedged`
+  (run level), plus deterministic direct tests
+  `handle_frame_reply_is_bounded_while_the_writer_lock_is_wedged`
+  (a holder thread wedges the writer lock; the envelope-error reply
+  returns the undeliverable transport failure within the bounded
+  grace) and `handle_frame_reply_takes_the_free_lock_fast_path`.
+
+**Probe re-run at the fixed binaries**
+(`.local/int-session/w1918/int_oversize_wedge.py`): Rust self-exits
+rc=1 in ~4.1 s (reply bound + drain bound), Go in ~2.1 s; both
+previously HANG >12 s. EOF-bound probes p7/p9/p6 unchanged (rc=0
+within the bounds); slow-reader truncation unchanged (Go rc0 at
+~1.1 s lost 912,088 of 961,240 B; Rust rc0 at ~2.05 s lost 871,128 B
+- the bounded-drain trade-off recorded in the spec below); the Unix
+`close_readend` asymmetry is unchanged and now recorded in the spec.
+
+**Spec amendment** (`.agents/sow/specs/iprange-jsonrpc-v1.md`,
+Framing and Shutdown sections): the -32001 reply is bounded; every
+drain wait is bounded (Go 1 s / Rust 2 s); undeliverable tails are
+abandoned with the documented slow-reader truncation (clients must
+detect missing trailing frames); session-loop responses are bounded
+with undeliverable = transport failure (except -32001, whose framing
+failure is the reported outcome); the Unix `close_readend` race
+inside the drain window is engine-dependent (Rust observes EPIPE and
+exits non-zero, Go's 1 s watchdog force-exits with the EOF outcome).
+
+### F1 host-interpreter robustness and the final native qualification (2026-09-12, this commit)
+
+mingw64 CPython 3.14.6 on the authorized Windows validation host
+reports `os.name == "nt"` while `os.sep == "/"`, and its patched
+`ntpath` emits forward slashes; `command_sanitize.py` used
+`os.sep == "/"` to discriminate POSIX, so on the host both branches
+fired, verbatim/UNC/device spellings escaped detection, and the
+POSIX-only pins misfired (18 host self-test failures).  Repaired:
+
+- `v4/cli/command_sanitize.py`: `_IS_WINDOWS = os.name == "nt"`,
+  `_IS_POSIX = (os.sep == "/" and not _IS_WINDOWS)`; every
+  doubled-leading-separator rule (checkout-root collapse,
+  `_effective_absolute`, `_resolve`, `_checkout_suffix`) is gated on
+  `_IS_POSIX`; Windows spellings are canonicalized independently
+  (`_fold_windows` folds `/` to `\` and lowercases before
+  device-prefix stripping and profile matching); the `_self_test`
+  kernel-resolution controls are POSIX-gated because mingw64
+  collapses `link/..` lexically before `stat`/`realpath`.
+- `v4/cli/windows_housekeeping_harness.py`: the four POSIX-only
+  pins (doubled-separator profile spelling, darwin doubled-separator
+  sub-pin, non-darwin rendering pin, different-root subpath pin) are
+  gated on `os.name != "nt"`.
+- Both harness self-tests (`command_sanitize.py --selftest`,
+  `windows_housekeeping_harness.py --self-test`) exit 0 on the host
+  and on Linux (18 failures before the fix).
+- GLOBALROOT discovery on the host reports the same volume-GUID
+  destination as the committed evidence
+  (`{6df78126-8d52-4afa-ac58-1b1925131887}`).
+
+Final native qualification at the committed harness rows (fresh
+executables, Windows go1.26.5 / rustc 1.97.1 host builds):
+`windows-guard.json` PASS for both products (50 case keys per
+product: 44 `expected_refused: true` refusals + 3 allowed controls
+(`control_allowed`, `drive_root_allowed`,
+`relative_source_control_allowed`) + 3 success-fact booleans
+(`reopen_allowed`, `sidecar_absent_after`, `source_unchanged`);
+all 14 GLOBALROOT rows present; zero Go/Rust refusal mismatches);
+`windows-housekeeping.json` PASS (`windows_qualified=true`,
+`skipped=false`, `failed=0`, refresh flow 150 removal rows /
+123456 / 200 target CSV rows, both products).  The POSIX negative
+control `guard-posix.json` was regenerated from the wave fixture
+(sha `65ea5afd03070919d19baffa0c1cc54e68aa2dfdfa1347463fecf6fbf177dcc1`,
+16 KiB) so every report in this wave shares one fixture identity.
+All evidence files and the `.local/shared/binaries/SHASUMS.txt`
+ledger (gitignored, 10/10 `sha256sum -c` OK) were re-recorded for
+the `-trimpath` Go builds and the session-repaired Rust builds in
+this commit.
+
+### Integration reviewer round (four roles, 2026-09-12 — PASS)
+
+Four reviewers from the lead's own model completed a PASS round
+against the pre-commit repair tree; the five-scope re-review itself
+is relaunched at the final commit (Anchor above) per the
+project-final-review rule:
+
+- Rawls (guard-parity scope): the five scope files are byte-identical
+  to the `b9e49132` review targets; the pins re-ran green
+  (`TestWindowsTrimFinalLeaf`, `TestGlobalrootFamilyProbe`,
+  `TestWindowsUncProbeCaseFold` on Go, `windows_unc_rewrite` on
+  Rust, harness `--selftest`); the session delta does not interact
+  with the refusal path.
+- Schrodinger (session scope, report `.local/int-session/REPORT-delta.md`):
+  both engines bound every session-loop response write
+  (`writeLineBounded` / `write_response_bounded`); -32001 and
+  undeliverable semantics match the spec; the over-limit full-pipe
+  probe returns Rust rc=1 in ~4.1 s and Go rc=1 in ~2.1 s (previously
+  hung >12 s); `TestOversizeFullpipeWedgeSelfExitsNonZero` and
+  `handle_frame_reply_is_bounded_while_the_writer_lock_is_wedged`
+  PASS; no regressions; the spec/SOW amendments are accurate.
+- Mendel (kind-gate/records scope): `check_kind_coverage.py` and
+  `forgery_battery.py` are untouched by the session edits; the kind
+  gate re-ran rc=0 (7 kinds, both languages); the forgery battery
+  rc=0 with all 11 substitution classes CAUGHT; `sha256sum -c
+  SHASUMS.txt` from the ledger directory 10/10; the SOW/spec
+  amendments are honest.
+- Peirce (portability scope): the GOOS build matrix gate
+  (`v4/cli/check_goos_matrix.sh`) 7 PASS / 1 SKIP (dragonfly/arm64),
+  exit 0, and now also cross-builds `./cmd/iprange-v4-bench`;
+  `stat_unix.go` build-tag extension verified; gofmt/vet/tests
+  green; `GOOS=windows go vet ./internal/cli/rpc/` exit 0; Rust
+  workspace 324/324 (the six-failure first run was environmental:
+  missing worker companion binary).
+
+### Validation
+
+- Every corrected location re-read after editing; grep checks on the
+  SOW for "22 canonical", "69 PASS", "no role wrote", and "12/12"
+  confirm all remaining occurrences are the corrected, qualified
+  wording (details in the repair-wave report at
+  `.local/repair-g/REPORT.md`).
+- `.agents/sow/audit.sh` runs clean (no SOW lifecycle/status
+  contradictions introduced).
+- The two untracked binaries `v4/go/cmd/iprange/iprange` and
+  `v4/go/cmd/iprange/iprange-v4-worker` were neither deleted nor
+  committed.
+- Evidence JSONs under `v4/cli/evidence/` were not touched by the
+  records worker; the qualification wave (this commit) replaced them
+  from the fresh battery and re-verified every report's schema and
+  counts (guard 50 case keys per product, housekeeping 2/2, crash
+  16/16 + negative 16/16, resource 8/8, matrices, golden corpus
+  unchanged).
+- Grep checks at the final commit: no current-head occurrence of the
+  superseded identities (`e2377a2c`, `ee213ca1`, `e59c0f08`,
+  `d7a59988`, `24401226`, `630bc05`, `d5054a2`, `2d5ea51`,
+  `1cf2f69`, `570e81c`, `d7126fc0`), "26 report keys", "20
+  canonical refusals", "69 PASS", or "22 report keys" remains in the
+  current head blocks (top state paragraph, wave-19.18 section,
+  handoff, repair wave); older wave sections keep their historical
+  records unchanged.  The private validation-host alias is
+  forward-sanitized in the current sections (never the user's name,
+  never the alias, in durable artifacts).
+
+### Qualification wave completion (2026-09-12, this commit)
+
+Every item the repair wave left for the qualification wave is now
+done in this commit:
+
+- Windows handlers suite: the 70 PASS / 0 SKIP / 3 documented host
+  failures measurement at `b9e49132` stands as the go-test suite
+  record (the wave-19.18 pin executes in it); the fresh native
+  qualification with the committed harness rows measured the guard
+  (50 case keys per product) and housekeeping (2/2) interfaces
+  instead of re-running the whole suite.
+- `windows-guard.json` and `windows-housekeeping.json` regenerated
+  with the committed harness rows, including the lowercase
+  namespace-matrix driver; both products PASS with zero Go/Rust
+  refusal mismatches; `guard-posix.json` regenerated from the wave
+  fixture (sha `65ea5afd…`).
+- SHASUMS.txt and all evidence hashes re-recorded for the
+  `-trimpath` Go builds and the session-repaired Rust builds;
+  `sha256sum -c` verifies 10/10 from the ledger directory.
+- BSD build fix (portability P1) verified by the committed GOOS
+  build matrix gate `v4/cli/check_goos_matrix.sh` (7 PASS / 1 SKIP
+  dragonfly/arm64, exit 0; also cross-builds `./cmd/iprange-v4-bench`).
+- `.local/wave-19.18-review-handoff.md` (gitignored sandbox record,
+  not part of the committed tree) carried the same stale wording; it
+  is superseded for committed records by this section.
+
+The milestone gate after this commit: every available role PASSes at
+the exact final revision (this commit, HEAD == origin/master) and
+the external same-session control review PASSes at the same revision,
+then no further repository commit is made (project-final-review rule
+— even a record-only commit invalidates the verdict).

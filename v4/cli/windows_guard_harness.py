@@ -18,6 +18,14 @@ product interface, while still allowing distinct destinations:
 - forward-slash verbatim "\\\\?\\C:/review/db.iprange.readers"
   (same guarded identity; the kernel rejects the slash form for I/O,
   both engines still refuse it canonically, wave 19 round 19.15)
+- namespace head x trailing-dot/space leaf (wave-19.18 parity P1-2 /
+  P2-3): every namespace-head spelling of the sidecar whose final
+  component carries a trailing dot or space (verbatim/NT UNC,
+  GLOBALROOT verbatim/dos/object-manager, volume GUID, canonical and
+  lowercase heads) denotes the same absent sidecar, because Win32
+  strips the decoration at create/open.  The 65-row reviewer probe
+  found this combined class divergent (12 rows Go allowed, 8 Rust
+  allowed) and no committed test constructed it.
 
 The distinct-destination controls publish real metadata bytes and the
 harness validates the exact success response schema plus the delivered
@@ -66,6 +74,22 @@ RPC_WRITE_DEADLINE_SECONDS = 120.0
 ACCEPTED_MESSAGE = "destination must differ from the source database"
 IS_WINDOWS = os.name == "nt"
 METHOD = "iprange.v1.database.metadata.get"
+
+
+def native_join(*parts):
+    """os.path.join normalized to the native Windows separator.
+
+    Some Windows interpreters (MSYS2 mingw64 CPython 3.14.x) patch
+    ntpath so join/normpath emit "/"; every extended-length case
+    destination needs backslashes throughout, and plain-path rows
+    should stay canonical for evidence comparability.  No-op on
+    interpreters with stock ntpath and on POSIX (wave-19.18 security
+    verdict F1 harness reproducibility).
+    """
+    joined = os.path.join(*parts)
+    if IS_WINDOWS:
+        joined = joined.replace("/", "\\")
+    return joined
 OUTPUT_FACTS = ("bytes", "path", "rows", "sha256")
 
 # The guard fixture carries the direct-v4 metadata record written by
@@ -281,6 +305,14 @@ def selftest():
     # POSIX negative control crash with an unpacking TypeError).
     posix_cases = guard_cases("/tmp/guard-work")
     win_cases = guard_cases("C:\\guard-work")
+    # The extended-length destination families require backslash
+    # separators; a forward-slash work spelling must generate the same
+    # canonical destinations (wave-19.18 security verdict F1 harness
+    # reproducibility).
+    if IS_WINDOWS:
+        expect("forward-slash work builds identical destinations",
+               {(c[0], c[2]) for c in guard_cases("C:/guard-work")}
+               == {(c[0], c[2]) for c in win_cases})
     expect("posix cases non-empty", len(posix_cases) > 0)
     expect("win cases non-empty", len(win_cases) > 0)
     expect("every case is a triple",
@@ -314,6 +346,38 @@ def selftest():
            ("volume_guid_sidecar" in names_win) == IS_WINDOWS)
     expect("posix skips the volume-GUID sidecar",
            "volume_guid_sidecar" not in names_posix)
+    # Namespace head x trailing-dot/space leaf class (wave-19.18
+    # parity P1-2 / P2-3): the UNC-head rows are static spellings and
+    # must exist on Windows and be skipped on POSIX; the GLOBALROOT
+    # and volume-GUID rows use natively discovered heads and must
+    # exist only on native Windows runs, like their exact-leaf
+    # siblings.
+    unc_trail = ("verbatim_unc_trailing_dot", "verbatim_unc_trailing_space",
+                 "verbatim_unc_lower_trailing_dot", "verbatim_unc_lower_trailing_space",
+                 "nt_unc_trailing_dot", "nt_unc_trailing_space",
+                 "nt_unc_lower_trailing_dot", "nt_unc_lower_trailing_space")
+    expect("win covers the UNC head x trailing leaf class",
+           all(name in names_win for name in unc_trail))
+    expect("posix skips the UNC head x trailing leaf class",
+           not any(name in names_posix for name in unc_trail))
+    globalroot_trail = ("globalroot_trailing_dot", "globalroot_trailing_space",
+                        "globalroot_dos_trailing_dot", "globalroot_dos_trailing_space",
+                        "globalroot_objectmgr_trailing_dot", "globalroot_objectmgr_trailing_space",
+                        "globalroot_lower_trailing_dot", "globalroot_lower_trailing_space",
+                        "globalroot_dos_lower_trailing_dot", "globalroot_dos_lower_trailing_space",
+                        "globalroot_objectmgr_lower_trailing_dot",
+                        "globalroot_objectmgr_lower_trailing_space")
+    expect("win GLOBALROOT trail rows ride native head discovery",
+           (all(name in names_win for name in globalroot_trail))
+           == ("globalroot_sidecar" in names_win))
+    expect("posix skips the GLOBALROOT head x trailing leaf class",
+           not any(name in names_posix for name in globalroot_trail))
+    volume_guid_trail = ("volume_guid_trailing_dot", "volume_guid_trailing_space",
+                         "volume_guid_lower_trailing_dot", "volume_guid_lower_trailing_space")
+    expect("win covers the volume-GUID head x trailing leaf class natively only",
+           (all(name in names_win for name in volume_guid_trail)) == IS_WINDOWS)
+    expect("posix skips the volume-GUID head x trailing leaf class",
+           not any(name in names_posix for name in volume_guid_trail))
     return ok
 
 
@@ -368,14 +432,24 @@ def guard_cases(work):
     targets ("db.iprange" for the primary source, "db_\\u00e4.iprange"
     for the non-ASCII fold pair, "A\\u03a31.iprange" for the NTFS
     sigma family)."""
+    # Extended-length destinations are NT object-namespace spellings
+    # where "/" is a literal name character, never a separator: every
+    # "\\?\<work>\..." case (and the GLOBALROOT/volume-GUID head
+    # discovery) requires backslashes throughout.  The interpreter's
+    # ntpath may rewrite separators to "/", so force the canonical
+    # spelling here; a forward-slash caller must produce the identical
+    # case set (wave-19.18 harness reproducibility, security verdict
+    # F1).
+    if IS_WINDOWS:
+        work = work.replace("/", "\\")
     drive = work[:2] if len(work) >= 2 and work[1] == ":" else None
     # Win32 strips trailing dots and spaces at create, so these
     # spellings denote the absent sidecar db.iprange.readers.
     dot_space = [
         ("absolute_trailing_dot",
-         os.path.join(work, "db.iprange") + ".readers."),
+         native_join(work, "db.iprange") + ".readers."),
         ("absolute_trailing_space",
-         os.path.join(work, "db.iprange") + ".readers "),
+         native_join(work, "db.iprange") + ".readers "),
     ]
     candidates = (
         [
@@ -386,7 +460,7 @@ def guard_cases(work):
         else []
     )
     candidates += [
-        ("absolute_upper", os.path.join(work, "DB.IPRANGE.READERS")),
+        ("absolute_upper", native_join(work, "DB.IPRANGE.READERS")),
     ]
     # Relative-source spellings (astra turn-5 P1): the service runs
     # with cwd=work, so a "$rel:" source names the same fixture the
@@ -395,16 +469,16 @@ def guard_cases(work):
     # to collapse the relative spelling's ancestor to the drive root).
     candidates.append(
         ("relative_source_control_allowed", "$rel:./db.iprange",
-         os.path.join(work, "meta-rel.txt")))
+         native_join(work, "meta-rel.txt")))
     if drive:
         # rooted-without-volume spelling exists only on Windows; on
         # POSIX the same string is a plain relative file name.
         candidates.append(
             ("rooted_sidecar",
-             os.path.sep + work[len(drive):].lstrip("\\/")
-             + os.path.sep + "db.iprange.readers"))
+             "\\" + work[len(drive):].lstrip("\\/")
+             + "\\db.iprange.readers"))
     candidates += dot_space + [
-        ("non_ascii", os.path.join(work, "DB_\u00c4.IPRANGE.READERS")),
+        ("non_ascii", native_join(work, "DB_\u00c4.IPRANGE.READERS")),
         # NTFS upcase-name equivalence of the Greek sigma class (wave
         # 19 round 19.14 astra P1): "\u03c3" spells the absent sidecar
         # of source "A\u03a31.iprange" (the contextual lowercase fold
@@ -412,8 +486,8 @@ def guard_cases(work):
         # escape); the final-sigma U+03C2 spelling is refused
         # conservatively on volumes that separate it, matching the
         # fold.
-        ("ntfs_sigma", os.path.join(work, "A\u03c31.iprange.readers")),
-        ("ntfs_final_sigma", os.path.join(work, "A\u03c21.iprange.readers")),
+        ("ntfs_sigma", native_join(work, "A\u03c31.iprange.readers")),
+        ("ntfs_final_sigma", native_join(work, "A\u03c21.iprange.readers")),
     ]
     if drive:
         # Extended-length spelling (wave 19 round 19.14 astra P1): the
@@ -460,11 +534,32 @@ def guard_cases(work):
         candidates.append(
             ("nt_unc_loopback_sidecar",
              "\\??\\UNC\\localhost\\C$" + work[2:] + "\\db.iprange.readers"))
+        # Namespace head x trailing-dot/space leaf (wave-19.18 parity
+        # P1-2 / P2-3): Win32 strips a trailing dot or space from the
+        # final component at create/open, so each head spelling below
+        # denotes the same absent reader sidecar as the plain spelling
+        # and must be refused.  These rows pin the combined class of
+        # the 65-row reviewer probe (canonical and lowercase UNC
+        # heads; GLOBALROOT and volume-GUID rows follow with their
+        # natively discovered heads).
+        for head, stem in (
+                (r"\\?\UNC\localhost\C$", "verbatim_unc"),
+                (r"\\?\unc\localhost\c$", "verbatim_unc_lower"),
+                (r"\??\UNC\localhost\C$", "nt_unc"),
+                (r"\??\unc\localhost\c$", "nt_unc_lower")):
+            for leaf, leaf_name in ((".", "trailing_dot"), (" ", "trailing_space")):
+                candidates.append((stem + "_" + leaf_name,
+                                   head + work[2:] + "\\db.iprange.readers" + leaf))
         volume_guid = windows_c_volume_guid()
         if volume_guid:
             candidates.append(
                 ("volume_guid_sidecar",
                  volume_guid + work[2:] + "\\db.iprange.readers"))
+            for head, stem in ((volume_guid, "volume_guid"),
+                               (volume_guid.lower(), "volume_guid_lower")):
+                for leaf, leaf_name in ((".", "trailing_dot"), (" ", "trailing_space")):
+                    candidates.append((stem + "_" + leaf_name,
+                                       head + work[2:] + "\\db.iprange.readers" + leaf))
         # NT device-root spellings (wave-19.17 security P1): the
         # GLOBALROOT device namespace names the same real files as the
         # drive-letter spelling; the guard must refuse it through the
@@ -480,6 +575,28 @@ def guard_cases(work):
                 ("globalroot_device_sidecar",
                  globalroot.replace(r"\\?\GLOBALROOT", r"\\.\GLOBALROOT")
                  + work[2:] + "\\db.iprange.readers"))
+            # GLOBALROOT device-root heads x trailing-dot/space leaf
+            # (wave-19.18 parity P1-2 / P2-3).  The replace-based
+            # derivations follow the existing globalroot_device_sidecar
+            # pattern; the object-manager twin and the lowercase heads
+            # are the spellings the 65-row probe diverged on
+            # (report7.json F-traildot/G-trailspace x
+            # globalroot_objectmgr[,_lower], globalroot_verbatim[,_lower],
+            # volume_guid[,_lower]) together with the UNC rows above.
+            for head, stem in (
+                    (globalroot, "globalroot"),
+                    (globalroot.replace(r"\\?\GLOBALROOT", r"\\.\GLOBALROOT"),
+                     "globalroot_dos"),
+                    (globalroot.replace(r"\\?\GLOBALROOT", r"\??\GLOBALROOT"),
+                     "globalroot_objectmgr"),
+                    (globalroot.lower(), "globalroot_lower"),
+                    (globalroot.replace(r"\\?\GLOBALROOT", r"\\.\GLOBALROOT")
+                     .lower(), "globalroot_dos_lower"),
+                    (globalroot.replace(r"\\?\GLOBALROOT", r"\??\GLOBALROOT")
+                     .lower(), "globalroot_objectmgr_lower")):
+                for leaf, leaf_name in ((".", "trailing_dot"), (" ", "trailing_space")):
+                    candidates.append((stem + "_" + leaf_name,
+                                       head + work[2:] + "\\db.iprange.readers" + leaf))
         # Distinct drive-root control with the SAME basename as the
         # absent sidecar (wave 19 round 19.14 astra P1): with the
         # source in the per-drive working directory,
@@ -495,7 +612,7 @@ def guard_cases(work):
         candidates.append(
             ("relative_source_unc_loopback_sidecar", "$rel:./db.iprange",
              "\\\\localhost\\C$" + work[2:] + "\\db.iprange.readers"))
-    candidates.append(("control_allowed", os.path.join(work, "meta.txt")))
+    candidates.append(("control_allowed", native_join(work, "meta.txt")))
     source_base = {
         "non_ascii": "db_\u00e4.iprange",
         "ntfs_sigma": "A\u03a31.iprange",
@@ -528,7 +645,7 @@ def run_product(binary, label, work, fixture, provenance):
 
         sources = {}
         for base in ("db.iprange", "db_\u00e4.iprange", "A\u03a31.iprange"):
-            path = os.path.join(work, base)
+            path = native_join(work, base)
             shutil.copyfile(fixture, path)
             sources[path] = {
                 "sha256_before": hashlib.sha256(
@@ -547,7 +664,7 @@ def run_product(binary, label, work, fixture, provenance):
             if source_base.startswith("$rel:"):
                 source = source_base[len("$rel:"):]
             else:
-                source = os.path.join(work, source_base)
+                source = native_join(work, source_base)
             response = service.call(
                 "g1", METHOD,
                 metadata_get_frame(source, destination),
@@ -631,10 +748,10 @@ def run_product(binary, label, work, fixture, provenance):
         # before the call) and must match the claimed digest/bytes
         # (wave 19 round 19.14 astra P2 counterexample: an empty
         # pre-existing reopen file must never count as success).
-        reopen = os.path.join(work, "meta-reopen.txt")
+        reopen = native_join(work, "meta-reopen.txt")
         if os.path.exists(reopen):
             os.remove(reopen)
-        primary = os.path.join(work, "db.iprange")
+        primary = native_join(work, "db.iprange")
         response = service.call(
             "g2", METHOD, metadata_get_frame(primary, reopen),
         )
@@ -701,6 +818,8 @@ def main():
         # backslashes throughout (forward slashes fail the create
         # with error 123).
         work = os.path.normpath(os.path.join(args.work, label))
+        if IS_WINDOWS:
+            work = work.replace("/", "\\")
         os.makedirs(work, exist_ok=True)
         product = run_product(binary, label, work, args.fixture, provenance)
         product["all_ok"] = product_all_ok(product)

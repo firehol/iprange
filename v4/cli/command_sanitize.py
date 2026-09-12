@@ -29,6 +29,17 @@ import sys
 import tempfile
 import unicodedata
 
+# Platform discrimination must not depend on ``os.sep`` alone: the
+# msys2-mingw64 NT interpreter reports ``os.sep == "/"`` while
+# ``os.name == "nt"`` and its ntpath emits forward slashes.  The
+# doubled-leading-separator rule is POSIX kernel semantics (on Windows
+# ``//C:`` is a UNC server spelling, never a repeated root), and the
+# Windows privacy spellings must be canonical backslashes so the
+# device/verbatim prefix rules (spelled in backslashes) always match.
+_IS_WINDOWS = os.name == "nt"
+_IS_POSIX = os.sep == "/" and not _IS_WINDOWS
+_WIN_SEP = chr(92)
+
 # Repository root that owns this module (v4/cli -> repo root).  All
 # relative spellings are resolved against this root, never against the
 # process working directory, so sanitized records and harness
@@ -43,7 +54,7 @@ _CHECKOUT = os.path.normpath(
 # checkout root must use the same
 # single-root spelling as every candidate path or containment
 # fails and personal paths survive sanitization.
-if os.sep == "/" and _CHECKOUT.startswith("//") \
+if _IS_POSIX and _CHECKOUT.startswith("//") \
         and not _CHECKOUT.startswith("///"):
     _CHECKOUT = _CHECKOUT[1:]
 
@@ -127,7 +138,7 @@ def _effective_absolute(value):
         probe = value
     else:
         probe = os.path.join(_CHECKOUT, value)
-    if os.sep == "/" and probe.startswith("//") \
+    if _IS_POSIX and probe.startswith("//") \
             and not probe.startswith("///"):
         probe = probe[1:]
     if os.path.exists(probe):
@@ -153,7 +164,7 @@ def _resolve(value):
         norm = os.path.normpath(value)
     else:
         norm = os.path.normpath(os.path.join(_CHECKOUT, value))
-    if os.sep == "/" and norm.startswith("//") and not norm.startswith("///"):
+    if _IS_POSIX and norm.startswith("//") and not norm.startswith("///"):
         return norm[1:]
     return norm
 
@@ -234,13 +245,30 @@ def _normcase(path):
     return norm
 
 
+def _fold_windows(path):
+    """Windows case fold for the privacy comparison layer.
+
+    Converts every separator to the canonical backslash and folds to
+    lower case (case-insensitive volume), independent of ntpath's
+    separator conventions.  The msys2-mingw64 NT interpreter reports
+    ``os.name == "nt"`` but ``os.sep == "/"`` and its ntpath emits
+    forward slashes; the device/verbatim prefix rules are spelled in
+    backslashes, so the privacy candidates must be canonical
+    backslashes or a mixed-separator device spelling escapes every
+    comparison."""
+    return path.replace("/", _WIN_SEP).lower()
+
+
 def profile_path():
     """Normcased operator profile root, or an empty string when the
     platform cannot determine it (never match in that case)."""
     home = os.path.expanduser("~")
     if not home:
         return ""
-    norm = _normcase(os.path.normpath(home))
+    if _IS_WINDOWS:
+        norm = _fold_windows(os.path.normpath(home))
+    else:
+        norm = _normcase(os.path.normpath(home))
     return norm if len(norm) >= 3 else ""
 
 
@@ -359,29 +387,35 @@ def _privacy_spellings(value):
     consults the per-drive current directory) for the kernel's own
     resolution semantics.
     """
-    norm = value.replace("/", os.sep).replace("\\", os.sep)
+    if _IS_WINDOWS:
+        norm = value.replace("/", _WIN_SEP)
+    else:
+        norm = value.replace("/", os.sep).replace("\\", os.sep)
     if "%" in norm or "$" in norm:
         norm = _expand_env_vars(norm)
-    if os.name == "nt":
+    if _IS_WINDOWS:
         norm = _strip_device_prefix(norm)
-    out = [_normcase(norm)]
-    resolved = _normcase(os.path.normpath(norm)) if norm else norm
-    if os.sep == "/" and resolved.startswith("//"):
+        fold = _fold_windows
+    else:
+        fold = _normcase
+    out = [fold(norm)]
+    resolved = fold(os.path.normpath(norm)) if norm else norm
+    if not _IS_WINDOWS and resolved.startswith("//"):
         resolved = "/" + resolved.lstrip("/")
     if resolved != out[0]:
         out.append(resolved)
-    if os.name == "nt" and _is_drive_relative(norm):
-        anchored = _normcase(os.path.normpath(os.path.abspath(norm)))
+    if _IS_WINDOWS and _is_drive_relative(norm):
+        anchored = fold(os.path.normpath(os.path.abspath(norm)))
         if anchored not in out:
             out.append(anchored)
-    if os.name == "nt":
+    if _IS_WINDOWS:
         # re.sub interprets backslashes in a string replacement as
         # escapes, so the two-separator root is supplied through a
         # function replacement.
         inline = _DEVICE_INLINE_UNC_RE.sub(
-            lambda _match: _BS + _BS, norm)
+            lambda _match: _WIN_SEP + _WIN_SEP, norm)
         inline = _DEVICE_INLINE_RE.sub("", inline)
-        inline = _normcase(inline)
+        inline = fold(inline)
         if inline not in out:
             out.append(inline)
     return out
@@ -405,7 +439,8 @@ def _profile_comparisons(profile):
 def _matches_profile(spelling, profile):
     """True when one normcased spelling is at or under any of the
     profile's comparison forms."""
-    return any(spelling == form or spelling.startswith(form + os.sep)
+    sep = _WIN_SEP if _IS_WINDOWS else os.sep
+    return any(spelling == form or spelling.startswith(form + sep)
                for form in _profile_comparisons(profile))
 
 
@@ -419,7 +454,7 @@ def _checkout_suffix(path):
     case-insensitive volume) is consumed entirely and the suffix is
     taken from the raw components below the checkout."""
     norm = os.path.normpath(path)
-    if os.sep == "/" and norm.startswith("//") and not norm.startswith("///"):
+    if _IS_POSIX and norm.startswith("//") and not norm.startswith("///"):
         norm = norm[1:]
     raw = norm.split(os.sep)
     base = _CHECKOUT.split(os.sep)
@@ -482,9 +517,13 @@ def under_profile(path):
         if _matches_profile(spelling, profile):
             return True
     try:
-        real = _normcase(os.path.normpath(os.path.realpath(path)))
+        real = os.path.normpath(os.path.realpath(path))
     except OSError:
         return False
+    if _IS_WINDOWS:
+        real = _fold_windows(real)
+    else:
+        real = _normcase(real)
     return _matches_profile(real, profile)
 
 
@@ -684,6 +723,13 @@ def _self_test():
     Also pins the checkout-relative rendering invariant for an
     existing value genuinely inside the checkout: it still renders
     checkout-relative.
+
+    The kernel-resolution controls are POSIX-only.  A Windows
+    interpreter must still normalise ``link/..`` lexically before the
+    kernel sees it (the msys2-mingw64 ntpath collapses ``..`` before
+    ``stat``/``realpath``), so the symlink-plus-parent premise cannot
+    be exercised there; on Windows the runner and the sanitizer share
+    the same ntpath resolution, so their agreement is automatic.
     """
 
     import tempfile
@@ -697,53 +743,58 @@ def _self_test():
         # the containment and privacy invariants are exercised without
         # depending on the real checkout's location.
         _CHECKOUT = root
-        outside = os.path.join(neutral_temp_root(),
-                               "qual-selftest-bin")
-        os.makedirs(os.path.join(outside, "rust"), exist_ok=True)
-        os.makedirs(os.path.join(outside, "go"), exist_ok=True)
-        binary = os.path.join(outside, "go", "iprange")
-        with open(binary, "w", encoding="ascii") as stream:
-            stream.write("selftest binary\n")
-        os.symlink(os.path.join(outside, "rust"),
-                   os.path.join(root, "link"))
-        traversal = os.path.join(root, "link", "..", "go", "iprange")
+        if _IS_POSIX:
+            outside = os.path.join(neutral_temp_root(),
+                                   "qual-selftest-bin")
+            os.makedirs(os.path.join(outside, "rust"), exist_ok=True)
+            os.makedirs(os.path.join(outside, "go"), exist_ok=True)
+            binary = os.path.join(outside, "go", "iprange")
+            with open(binary, "w", encoding="ascii") as stream:
+                stream.write("selftest binary\n")
+            os.symlink(os.path.join(outside, "rust"),
+                       os.path.join(root, "link"))
+            traversal = os.path.join(root, "link", "..", "go",
+                                     "iprange")
 
-        rendered_traversal = sanitized_path_value(traversal)
-        rendered_direct = sanitized_path_value(binary)
+            rendered_traversal = sanitized_path_value(traversal)
+            rendered_direct = sanitized_path_value(binary)
         # The traversal value lives lexically under the checkout, so
         # the pre-fix sanitizer recorded ``go/iprange`` and the record
         # resolved to a different (nonexistent) file; the rendered
         # command must name the effective executable instead.
-        if rendered_traversal == "go/iprange":
-            raise AssertionError(
-                "symlink-plus-parent traversal rendered the lexical "
-                "checkout spelling; the recorded command would name a "
-                "different file than the kernel executes")
-        if not os.path.isabs(rendered_traversal):
-            raise AssertionError(
-                f"symlink-plus-parent traversal rendered a relative "
-                f"spelling {rendered_traversal!r} for an "
-                "outside-checkout effective executable")
-        if os.path.realpath(rendered_traversal) != \
-                os.path.realpath(binary):
-            raise AssertionError(
-                f"rendered traversal {rendered_traversal!r} does not "
-                f"resolve to the executed binary {binary!r}")
-        if rendered_direct != binary:
-            raise AssertionError(
-                f"direct outside-checkout value {binary!r} was rewritten "
-                f"to {rendered_direct!r}; it must pass through verbatim")
-        # The recorded-command resolution (checkout-relative values
-        # resolve against the checkout root) must agree with the
-        # kernel resolution for both spellings.
-        if os.path.realpath(
-                os.path.join(_CHECKOUT, rendered_traversal
-                             if not os.path.isabs(rendered_traversal)
-                             else rendered_traversal)) != \
-                os.path.realpath(binary):
-            raise AssertionError(
-                "recorded-command resolution of the traversal spelling "
-                "does not select the executed file")
+            if rendered_traversal == "go/iprange":
+                raise AssertionError(
+                    "symlink-plus-parent traversal rendered the "
+                    "lexical checkout spelling; the recorded command "
+                    "would name a different file than the kernel "
+                    "executes")
+            if not os.path.isabs(rendered_traversal):
+                raise AssertionError(
+                    f"symlink-plus-parent traversal rendered a "
+                    f"relative spelling {rendered_traversal!r} for an "
+                    "outside-checkout effective executable")
+            if os.path.realpath(rendered_traversal) != \
+                    os.path.realpath(binary):
+                raise AssertionError(
+                    f"rendered traversal {rendered_traversal!r} does "
+                    f"not resolve to the executed binary {binary!r}")
+            if rendered_direct != binary:
+                raise AssertionError(
+                    f"direct outside-checkout value {binary!r} was "
+                    f"rewritten to {rendered_direct!r}; it must pass "
+                    "through verbatim")
+            # The recorded-command resolution (checkout-relative
+            # values resolve against the checkout root) must agree
+            # with the kernel resolution for both spellings.
+            if os.path.realpath(
+                    os.path.join(_CHECKOUT, rendered_traversal
+                                 if not os.path.isabs(
+                                     rendered_traversal)
+                                 else rendered_traversal)) != \
+                    os.path.realpath(binary):
+                raise AssertionError(
+                    "recorded-command resolution of the traversal "
+                    "spelling does not select the executed file")
         # Existing value inside the checkout keeps the invariant
         # checkout-relative rendering.
         inside = os.path.join(root, "sub", "file.txt")

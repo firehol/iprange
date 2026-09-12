@@ -46,12 +46,6 @@ func readInt(b []byte, off, size uintptr) (u uint64, ok bool) {
 	}
 }
 
-// direntReclen returns the record length of one dirent record (Go os
-// dir_unix.go direntReclen over the platform Dirent layout).
-func direntReclen(buf []byte) (uint64, bool) {
-	return readInt(buf, unsafe.Offsetof(unix.Dirent{}.Reclen), unsafe.Sizeof(unix.Dirent{}.Reclen))
-}
-
 // direntName returns the name field of one dirent record followed by
 // the record's leftover padding (Go os dir_unix.go). The caller trims
 // the NUL terminator and any padding.

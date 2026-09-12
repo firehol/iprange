@@ -1946,7 +1946,7 @@ def _self_test():
         print("[P2-7] env-var profile spelling detected")
 
     doubled = None
-    if os.sep == "/":
+    if os.sep == "/" and os.name != "nt":
         profile_abs = os.path.normpath(os.path.abspath(
             os.path.expanduser("~")))
         doubled = "//" + profile_abs.lstrip("/")
@@ -2268,8 +2268,11 @@ def _self_test():
         # a single-root mismatch would fall out of containment and
         # emit a ``..``-walk repeating the account path (astra
         # turn-13 finding).  POSIX-only: on Windows ``//C:`` is a
-        # UNC server spelling, not the same path.
-        if os.sep == "/":
+        # UNC server spelling, not the same path (the msys2
+        # mingw64 interpreter reports ``os.sep == "/"``, which
+        # would otherwise run this POSIX pin with Windows path
+        # semantics).
+        if os.sep == "/" and os.name != "nt":
             # Exactly two leading separators: ``varied_checkout``
             # already starts with one, so prefixing another keeps the
             # ``//``-root spelling that POSIX normpath preserves
@@ -2295,7 +2298,7 @@ def _self_test():
                       "privacy-clean")
     finally:
         sys.platform = saved_platform
-    if os.sep == "/" and sys.platform != "darwin":
+    if os.sep == "/" and os.name != "nt" and sys.platform != "darwin":
         # The rendering pin must be non-vacuous: without the darwin flag
         # the same spelling renders as a ``..``-walk on case-sensitive
         # hosts.  ntpath folds case on Windows and the darwin branch is
@@ -2337,7 +2340,7 @@ def _self_test():
             print("[P2-7] non-darwin rendering keeps the raw spelling "
                   "(pin is darwin-specific)")
 
-    if os.sep == "/":
+    if os.sep == "/" and os.name != "nt":
         parent = os.path.dirname(profile_abs)
         diff_root = os.path.join(
             "/var/backups", parent.lstrip(os.sep),

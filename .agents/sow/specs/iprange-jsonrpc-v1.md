@@ -57,9 +57,13 @@ bitmap words, allocator state, or file-backed mapping addresses.
   `history.project` (window count) and `algebra.publish` (live-source count);
   read-only methods may keep the post-hoc conversion because no durable fact
   is at risk.
-- A frame over the limit produces error `-32001` with `id: null` when stdout is
-  writable, then the process closes. Bytes after the limit are discarded only
-  as part of process shutdown; they are never parsed as another frame.
+- A frame over the limit produces error `-32001` with `id: null`, then the
+  process closes non-zero. The `-32001` write itself is bounded: when the
+  session writer is wedged on a full undrained stdout pipe (the client closed
+  stdin and stopped reading), the reply is abandoned after the bounded drain
+  grace and the process still closes non-zero within the bound. Bytes after
+  the limit are discarded only as part of process shutdown; they are never
+  parsed as another frame.
 - A request whose id alone cannot be echoed within the 65,000-byte
   response-object limit receives a `-32001` response with `id: null` and does
   not close the connection.
@@ -111,6 +115,25 @@ bitmap words, allocator state, or file-backed mapping addresses.
 - A protocol error does not change the process exit status while the service
   can continue. Startup/framing failure and unrecoverable stdout failure exit
   non-zero.
+- Every drain wait is bounded (Go: 1 s; Rust: 2 s). When the worker is
+  blocked writing a response to a full undrained stdout pipe, the session
+  abandons the undeliverable tail and reaches its terminal exit by itself
+  instead of leaking the process. A slow-but-progressing client is truncated
+  at the same bound: the process exits zero with only the delivered frames on
+  stdout, so clients must detect a missing trailing frame and treat the
+  interaction as incomplete.
+- Session-loop response writes (envelope errors, busy/unanswerable rejections,
+  all-rejected batch arrays, and the `-32001` framing reply) are bounded the
+  same way: a reply that cannot be delivered within the grace is abandoned,
+  never blocking the session loop ahead of shutdown. For the `-32001` framing
+  reply the framing failure itself is the reported outcome (still non-zero).
+  For every other session-loop reply an undeliverable response is a transport
+  failure (non-zero).
+- A Unix read-end close (the client closes its pipe read end) inside the drain
+  window is engine-dependent by design: Rust's longer (2 s) grace observes
+  EPIPE and exits non-zero, Go's shorter (1 s) watchdog force-exits first with
+  the EOF outcome. Clients that close the read end must not rely on the exit
+  status.
 
 ## JSON conventions
 

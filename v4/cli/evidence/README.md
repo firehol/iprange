@@ -45,7 +45,7 @@ Windows host run:
   look-alike device component `\\?\\GLOBALROOTX\\` stays
   outside the gate (wave-19.18 parity P1: the case-sensitive gate
   let all-lowercase `globalroot` spellings deliver metadata over
-  the live sidecar while Rust refused; win11 native probes refuse
+  the live sidecar while Rust refused; native probes on the authorized Windows validation host refuse
   all six spellings on both engines).  An ungated form regressed
   the relative symlink-plus-".." canonicalAbsolute pin (wave-19.17
   portability P1), which is restored and pinned by the same
@@ -77,8 +77,8 @@ Windows host run:
   harness `volume_guid_sidecar` case.
 
 Re-qualification at the final wave-19.18 tree (fresh Linux battery
-on the rebuilt Go product; win11 native runs on the rebuilt Go
-executables; Rust binaries unchanged on both platforms):
+on the rebuilt Go and Rust products; native runs on the rebuilt
+executables on the authorized Windows validation host):
 
 - Linux battery (go1.27.0 / rustc 1.91.1, clean staging): go tests
   green (24 packages), Rust workspace 918 passed 0 failed, guard
@@ -88,35 +88,44 @@ executables; Rust binaries unchanged on both platforms):
   /bin/false negative control fails as designed (rc 1), resource
   proofs 8/8 with self-test controls PASS, golden exchanges 55 /
   38 case files, sensitivity gate 14/14, kind-coverage gate PASS.
-- Windows native (win11 validation host, go1.26.5 / rustc 1.97.1):
-  full native Go handlers package 69 PASS / 0 SKIP with exactly the
-  three documented host-environment failures (msys-`TMPDIR`
-  worker-spawn `%PATH%`; two immutable-file-lock `TempDir`
-  cleanups), the Windows-gated GLOBALROOT pin PASS for all six
-  spellings, the lowercase refusal matrix (six GLOBALROOT plus six
-  lowercase UNC/volume-GUID spellings) REFUSED on both engines
-  through the production JSON-RPC surface, guard harness PASS for
-  both products (26 cases per product: 22 sidecar spellings
-  refused canonically including the GLOBALROOT rows, four
-  distinct-destination controls allowed), housekeeping PASS
-  (`windows_qualified=true`, `skipped=false`, `failed=0`).
+- Windows native (authorized Windows validation host): at HEAD
+  `b9e49132` the native go-test re-run measures 70 PASS / 0 SKIP
+  with exactly the three documented host-environment failures
+  (msys-`TMPDIR` worker-spawn `%PATH%`; two immutable-file-lock
+  `TempDir` cleanups), the extra PASS being the wave-19.18 pin
+  `TestWindowsUncProbeCaseFold`.  The Windows-gated GLOBALROOT pin
+  PASSes for all six spellings, and the lowercase refusal matrix
+  (six GLOBALROOT plus six lowercase UNC/volume-GUID spellings)
+  REFUSED on both engines through the production JSON-RPC surface
+  (attestation verified by the review-sandbox native probes
+  `.local/parity/w1920/` and `.local/security/w1918-win/` and
+  pinned by the committed unit/native tests).  Final-wave native
+  qualification (2026-09-12, mingw64 CPython 3.14.6): guard
+  harness PASS for both products (50 case keys per product: 44
+  canonical refusals + 3 allowed controls + 3 success-fact
+  booleans, matching the committed `windows-guard.json`),
+  housekeeping PASS (`windows_qualified=true`, `skipped=false`,
+  `failed=0`), and both harness self-tests exit 0 on the host and
+  on Linux.
 
-Linux identities at the final wave-19.18 revision: go product
-`e2377a2c5fea0961a4556a2364e85f3efdd67112470c574126352ea3a14a735a`,
-go worker `ee213ca1eb4e008f5e446b6ad0f56ddbb09bb63a75dfd1c3802241f735de6ea0`,
-rust product `e59c0f08bc58bf9a95d841e0acb5d29d6d873a984c219bb8d2dce7f18f855a77`,
-rust worker `d7a599886eaecccbef00f0a683e2c481d52c2a24352c533b3f7ad5c2d257775e`,
-rust fixture `24401226902e2050d9377322649758c86826ab9290298185c3c4abba3b5e0637`.
+Linux identities at the final wave-19.18 revision (fresh battery,
+go1.27.0 / rustc 1.91.1, Go built with `-trimpath`): go product
+`d7973a909ce801f16e1bcc7d355bff0426459080ad5ca791da9cebf4efcd7b53`,
+go worker `f4af92048e612b9e413b5009d98bd4771eb89b4807ef2d50fe54ef207e641e4b`,
+rust product `79fd1cd09901bd825f1e97f9e129ce1c366922ce3ca69434ad58e74ddc7caec9`,
+rust worker `cfe604d262f8ea871ca56c21bc54f390e92945695ffdaadf7c4f302ed32e7824`,
+rust fixture `e071f3cd849f62db1abe3fbfda8ce15596a5c4d2a828ba5cedffbcf7337c10e7`.
 
-Windows identities at the final wave-19.18 revision (measured,
-prose-recorded per user decision 2 of 2026-09-11): go product
-`630bc0508a7c6b69473f0b88fc59c394f35d1ed4371bdc04775a5f0a2d4e2019`,
-go worker `d5054a29848c568a28e4f1e97e3ce028dc318a0378c73ca9573476f01a884a1e`,
-rust product `2d5ea513bd0f15fc6eebe86da904496f1e128267c7ec604663fd1ea966d01c87`,
-rust worker `1cf2f694e91bbbd3196fab4810d33e9e6e7c9e31091b8cda5989c20d6d695318`,
-fixture `570e81cdabd38fe132a84b8d07f2a7ea6256eef050d2d7765319677d074d5050`;
+Windows identities at the final wave-19.18 revision (measured on
+the authorized Windows validation host, prose-recorded per user
+decision 2 of 2026-09-11): go product
+`ed9d09ea23f61c707d406f68bcd5781ec8201d247382f7e6ad52385b48c8794b`,
+go worker `470d380c5fe6abb38a9f85e6f12bb093a7702db7428c7e80dd215886b2d51992`,
+rust product `06532ec31ac2b2d5063a2b966243ea58c7cfb7ed34a23673e1ecac99f7ed643d`,
+rust worker `806a5adc986273e10eb9d3c98e05c0a75e460d0378c028e240c1aebcfc052653`,
+fixture `1c599446d7a021d6c447ead57e5878585cf57516f7cc2a2d90fc3d8d7ee6050c`;
 fixture database created natively by the fixture tool sha256
-`d7126fc04b502f3aee316ef98d192514246ec39adecf68c747b35ce43e1eabd4`.
+`e40adfc4e722423c4ab177d34059cd287afd9de751c764057dd5cec39bb908b8`.
 
 Identity note: the Linux Rust product identity embeds absolute
 build inputs (standard cargo release build, no
@@ -124,13 +133,88 @@ build inputs (standard cargo release build, no
 source-checkout path and toolchain, but a different checkout path
 or environment yields a different hash, so byte-identity claims are
 limited to the exact recorded build inputs.  The Linux Go
-product/worker, the Rust worker, and the fixture reproduce from any
-clean staging; the Windows Go executables embed their build
+product and worker reproduce byte-exactly from any clean staging
+only when built with `-trimpath`; without it they embed the staging
+path (verified in the 2026-09-12 repair wave: two byte-identical
+clean stagings built without `-trimpath` produced different hashes,
+with `-trimpath` byte-identical).  The final-wave Linux Go
+identities `d7973a90…`/`f4af9204…` were built from a clean staging
+with `-trimpath` and reproduce byte-exactly; they supersede the
+earlier `e2377a2c…`/`ee213ca1…` (built without `-trimpath` from the
+live tree, not re-derivable from an arbitrary clean staging).  The
+Rust worker and the fixture reproduce from any clean staging.  The
+Windows Go executables embed their build
 directory (no `-trimpath`), so their identity is tied to the exact
 staging directory of the recorded build (verified by dependency
 closure: the Windows worker links zero `cli/handlers` packages, so
-its hash shift between rounds is the staging-path artifact, not a
-code change).
+its hash shift between rounds is partly the staging-path artifact,
+partly the repair-wave code changes to the session loop).
+
+### Host interpreter robustness (F1, 2026-09-12)
+
+mingw64 CPython 3.14.6 on the authorized Windows validation host
+reports `os.name == "nt"` while `os.sep == "/"`, and its patched
+`ntpath` emits forward slashes; `command_sanitize.py` previously
+used `os.sep == "/"` to discriminate POSIX, so on the host both
+branches fired, verbatim/UNC/device spellings escaped detection,
+and the POSIX-only pins misfired (18 host self-test failures).
+`command_sanitize.py` now derives `_IS_WINDOWS = os.name == "nt"`
+and `_IS_POSIX = (os.sep == "/" and not _IS_WINDOWS)`, gates every
+doubled-leading-separator rule (checkout-root collapse,
+`_effective_absolute`, `_resolve`, `_checkout_suffix`) on
+`_IS_POSIX`, and canonicalizes Windows spellings independently
+(`_fold_windows` folds `/` to `\` and lowercases before
+device-prefix stripping and profile matching; `_self_test` kernel
+resolution is POSIX-gated because mingw64 collapses `link/..`
+lexically before `stat`/`realpath`).  The four POSIX-only pins in
+`windows_housekeeping_harness.py` are gated on `os.name != "nt"`.
+Both harness self-tests now exit 0 on the host and on Linux.
+GLOBALROOT discovery on the host reports the same volume-GUID
+destination as the committed evidence
+(`{6df78126-8d52-4afa-ac58-1b1925131887}`).
+
+The final-wave native guard report and the POSIX negative control
+`guard-posix.json` were regenerated from the wave fixture
+(sha256 `65ea5afd03070919d19baffa0c1cc54e68aa2dfdfa1347463fecf6fbf177dcc1`,
+16 KiB) so that every report in this wave shares one fixture
+identity.
+
+### Building the Go binaries (corrected 2026-09-12)
+
+The module root of `v4/go` is the library `iprangedb`, not a main
+package.  Both `CGO_ENABLED=0 go -C v4/go build -buildvcs=false`
+(no package argument) and the multi-package form
+`go build -buildvcs=false ./cmd/iprange ./cmd/iprange-v4-worker`
+exit 0 writing NO executable (multiple packages are compiled and
+discarded) — an auditor following either recipe can hash a stale
+binary and "confirm" an identity that was never built.  Build one
+main package per invocation, or direct both into a directory:
+
+```bash
+CGO_ENABLED=0 go -C v4/go build -buildvcs=false ./cmd/iprange
+CGO_ENABLED=0 go -C v4/go build -buildvcs=false ./cmd/iprange-v4-worker
+# outputs: v4/go/iprange and v4/go/iprange-v4-worker
+
+CGO_ENABLED=0 go -C v4/go build -buildvcs=false -o ./bin/ ./cmd/iprange ./cmd/iprange-v4-worker
+# outputs: v4/go/bin/iprange and v4/go/bin/iprange-v4-worker
+```
+
+Long-term-best recipe (reproducible from any clean staging):
+
+```bash
+CGO_ENABLED=0 go -C v4/go build -trimpath -buildvcs=false ./cmd/iprange
+CGO_ENABLED=0 go -C v4/go build -trimpath -buildvcs=false ./cmd/iprange-v4-worker
+```
+
+`-trimpath` removes the staging path from the binaries; two
+byte-identical clean stagings then produce byte-identical binaries,
+while without `-trimpath` each build embeds its own staging path (a
+warm shared build cache can mask the divergence by serving cached
+artifacts, so identity checks must use a cold full build).  The
+qualification re-run uses the `-trimpath` recipe; the resulting
+hashes differ from the pre-repair identities, so SHASUMS.txt and the
+evidence hashes are re-recorded by that wave (not edited here).
+
 All recorded hashes are the measured values from the canonical
 staging (portability-role verification and lead reproduction,
 recorded with wave-19.17).
@@ -182,8 +266,13 @@ harness JSONs carry the per-product sha256 inline while
 matching the wave-19.15 recording practice.
 
 Product source revision `e576d4e8` (pushed, origin/master).  Linux
-toolchain go1.27.0 / rustc 1.91.1 stable (Go product and worker with
-`CGO_ENABLED=0 go -C v4/go build -buildvcs=false`; Rust product,
+toolchain go1.27.0 / rustc 1.91.1 stable (Go product and worker one
+main package per invocation with
+`CGO_ENABLED=0 go -C v4/go build -buildvcs=false ./cmd/iprange` and
+`CGO_ENABLED=0 go -C v4/go build -buildvcs=false ./cmd/iprange-v4-worker`,
+writing `v4/go/iprange` and `v4/go/iprange-v4-worker` — the
+package-less module-root recipe and the multi-package form both exit
+0 writing nothing, see the build note below; Rust product,
 worker, and fixture with `cargo build --release --all-features` on
 `iprange-cli`, `iprange-livedb`, and the `v4-fixture` example);
 Windows toolchain go1.26.5 windows/amd64 / rustc 1.97.1 on the
@@ -280,8 +369,11 @@ ASCII-name-then-rename; this is a recorded carve-out, not a code
 claim of create-name parity.
 
 Product source revision `c2b2b0cf` (pushed, origin/master).  Linux
-toolchain go1.27.0 / rustc 1.91.1 stable (Go product and worker
-with `CGO_ENABLED=0 go build -buildvcs=false`; Rust product, worker,
+toolchain go1.27.0 / rustc 1.91.1 stable (Go product and worker one
+main package per invocation with
+`CGO_ENABLED=0 go -C v4/go build -buildvcs=false ./cmd/iprange` and
+`CGO_ENABLED=0 go -C v4/go build -buildvcs=false ./cmd/iprange-v4-worker`;
+see the build note below; Rust product, worker,
 and fixture with `cargo build --release --all-features`); Windows
 toolchain go1.26.5 windows/amd64 / rustc 1.97.1 on the authorized
 validation host.

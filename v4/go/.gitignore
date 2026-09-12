@@ -1,0 +1,4 @@
+# Go product executables written by `go build` run inside v4/go or
+# from cmd/iprange (anchored so the cmd/iprange sources stay visible).
+/cmd/iprange/iprange
+/cmd/iprange/iprange-v4-worker

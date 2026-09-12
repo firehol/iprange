@@ -319,28 +319,41 @@ loop:
 			case ev.err != nil:
 				if ev.err.FrameTooLarge {
 					payload := (&SchemaError{Code: TransportFrameTooLarge, Message: "frame over input limit"}).Response(nil)
-					writerMu.Lock()
-					werr := fw.WriteLine(string(payload))
-					writerMu.Unlock()
-					if werr != nil {
+					// The -32001 reply is bounded like every other
+					// session-loop response write: a wedged worker
+					// owns writerMu mid-write on a full undrained
+					// stdout, and an unbounded reply write would sit
+					// ahead of shutdown and prevent any liveness bound
+					// from arming (session P2, wave-19.18 integration
+					// review). An undeliverable reply is not itself
+					// the failure: the framing failure is, so the
+					// bounded shutdown drain runs directly (its forced
+					// exit keeps the framing exit non-zero); routing
+					// through fatal would add a second bounded wait
+					// for the same wedged worker. A real write failure
+					// (e.g. EPIPE on a closed stdout) is a fatal
+					// transport failure (spec iprange-jsonrpc-v1.md
+					// shutdown section).
+					werr := writeLineBounded(fw, writerMu, string(payload))
+					if werr != nil && !errors.Is(werr, errResponseUndeliverable) {
 						runErr = s.fatal(werr, writer, fw)
+						break loop
+					}
+					// Drain queued work and close resources exactly
+					// like EOF, then report the framing failure. The
+					// bounded drain's forced exit keeps the framing
+					// exit non-zero (shutdown(1)).
+					if err := s.shutdown(1); err != nil {
+						runErr = err
 					} else {
-						// Framing failures exit non-zero (spec
-						// iprange-jsonrpc-v1.md shutdown section): drain
-						// queued work and close resources exactly like EOF,
-						// then report the framing failure.
-						if err := s.shutdown(); err != nil {
-							runErr = err
-						} else {
-							runErr = errors.New("frame over input limit: framing failure")
-						}
+						runErr = errors.New("frame over input limit: framing failure")
 					}
 					break loop
 				}
 				runErr = s.fatal(errors.New("stdin read failed: "+ev.err.Error()), writer, fw)
 				break loop
 			case ev.eof:
-				runErr = s.shutdown()
+				runErr = s.shutdown(0)
 				break loop
 			default:
 				if err := s.handleFrame(ev.line, fw, writerMu); err != nil {
@@ -446,10 +459,36 @@ func (s *Session) closeRegisteredResources() error {
 
 // shutdown is the EOF path: stop acceptance, cancel queued and active
 // work, wait for the worker, close resources; zero unless the
-// transport itself failed.
-func (s *Session) shutdown() error {
+// transport itself failed. The worker join is bounded by
+// eofForceExitTimeout: when the client closed stdin and stopped
+// reading, the worker may be blocked forever writing to an undrained
+// full stdout pipe, and shutdown must still terminate the process by
+// itself (exit forceExitCode) instead of leaking a live session
+// (operations P2 wave-19.18). A termination signal recorded before
+// the deadline still wins over the exit-zero EOF outcome.
+func (s *Session) shutdown(forceExitCode int) error {
 	s.beginShutdown()
-	<-s.workerDone
+	select {
+	case <-s.workerDone:
+	case <-time.After(eofForceExitTimeout):
+		st := s.state
+		st.controlMu.Lock()
+		exitCode := forceExitCode
+		if st.control.terminationSignal {
+			exitCode = 1
+		}
+		st.controlMu.Unlock()
+		// Best-effort diagnostic: stderr may itself be the same full
+		// undrained pipe, so the write runs detached and os.Exit is
+		// bounded by the same grace the signal watcher uses
+		// (forceExitDiagnosticGrace); a blocked diagnostic must
+		// never delay the forced exit.
+		go fmt.Fprintf(os.Stderr,
+			"iprange: EOF shutdown: worker blocked on undeliverable stdout for %v; forcing exit\n",
+			eofForceExitTimeout)
+		time.Sleep(forceExitDiagnosticGrace)
+		os.Exit(exitCode)
+	}
 	var workerErr error
 	s.state.controlMu.Lock()
 	workerErr = s.state.control.fatalWrite
@@ -467,15 +506,74 @@ func (s *Session) shutdown() error {
 }
 
 // fatal is the fatal-failure path: same cancellation/handle cleanup as
-// EOF, then report the failure (non-zero exit).
+// EOF, then report the failure (non-zero exit). The worker join is
+// bounded like the EOF drain: a worker wedged writing to an undrained
+// full stdout pipe must not leak the process, so the bounded watchdog
+// force-exits 1 (cross-engine parity with the Rust fatal deadline;
+// session P3, wave-19.18 integration review).
 func (s *Session) fatal(err error, _ io.Writer, _ *FrameWriter) error {
 	s.beginShutdown()
-	<-s.workerDone
+	select {
+	case <-s.workerDone:
+	case <-time.After(eofForceExitTimeout):
+		// Best-effort diagnostic: stderr may itself be the same full
+		// undrained pipe, so the write runs detached and os.Exit is
+		// bounded by forceExitDiagnosticGrace (mirrors shutdown()).
+		go fmt.Fprintf(os.Stderr,
+			"iprange: fatal shutdown: worker blocked on undeliverable stdout for %v; forcing exit\n",
+			eofForceExitTimeout)
+		time.Sleep(forceExitDiagnosticGrace)
+		os.Exit(1)
+	}
 	closeErr := s.closeRegisteredResources()
 	if closeErr != nil {
 		return errors.New(err.Error() + "; " + closeErr.Error())
 	}
 	return err
+}
+
+// errResponseUndeliverable reports a session-loop response write
+// that could not be delivered within the bounded grace: the client
+// closed stdin and is not reading, so the writer is wedged on a full
+// undrained stdout pipe. Session-loop callers treat it as a fatal
+// transport failure, except the frame-over-limit reply, which
+// reports the framing failure itself and runs the bounded shutdown
+// drain directly (session P2, wave-19.18 integration review).
+var errResponseUndeliverable = errors.New("response undeliverable within bounded grace: stdout not read")
+
+// writeLineBounded delivers one session-loop response frame and waits
+// up to eofForceExitTimeout for the write to finish. A wedged worker
+// owns writerMu mid-write on a full undrained stdout pipe, so the
+// session loop must never wait unboundedly on a response it writes
+// itself: every direct session-loop response write goes through this
+// helper. The write runs detached (so a wedged lock owner stalls only
+// the delivery, never the loop) and an undeliverable write is
+// reported as a failure so callers take the same fatal path as a
+// broken writer (session P2, wave-19.18 integration review).
+func writeLineBounded(fw *FrameWriter, writerMu *sync.Mutex, text string) error {
+	// Fast path: the writer lock is free (the worker is not
+	// mid-write), write inline. This is the common case for the
+	// busy-flood and error responses and avoids a goroutine per
+	// reply; TryLock never blocks, so a momentarily busy writer
+	// falls through to the detached delivery below.
+	if writerMu.TryLock() {
+		werr := fw.WriteLine(text)
+		writerMu.Unlock()
+		return werr
+	}
+	writeDone := make(chan error, 1)
+	go func() {
+		writerMu.Lock()
+		werr := fw.WriteLine(text)
+		writerMu.Unlock()
+		writeDone <- werr
+	}()
+	select {
+	case werr := <-writeDone:
+		return werr
+	case <-time.After(eofForceExitTimeout):
+		return errResponseUndeliverable
+	}
 }
 
 // signalForceExitTimeout bounds the process lifetime from the moment
@@ -486,6 +584,20 @@ func (s *Session) fatal(err error, _ io.Writer, _ *FrameWriter) error {
 // process-lifetime bound, deliberately independent of whether the
 // fatal event delivery can block (second role-round finding).
 const signalForceExitTimeout = 1 * time.Second
+
+// eofForceExitTimeout bounds the EOF final drain: after stdin EOF the
+// session waits this long for the worker to deliver admitted
+// responses and join; a worker wedged writing to an undrained full
+// stdout pipe (the client closed stdin and is not reading) cannot
+// deliver, so the session force-exits with code 0 (unless a
+// termination signal was recorded). EOF recovery is bounded exactly
+// like signal recovery: neither may leak a live process (operations
+// P2 wave-19.18). The same bound guards the -32001 framing reply
+// written on the frame-over-limit path: the reply write runs
+// detached and the main loop waits at most this long before entering
+// the bounded shutdown, so a wedged writer cannot stall the framing
+// exit (session P2, wave-19.18 integration review).
+const eofForceExitTimeout = 1 * time.Second
 
 // forceExitDiagnosticGrace bounds the best-effort stderr diagnostic
 // the signal watcher writes before its forced exit.  The diagnostic is
@@ -647,10 +759,7 @@ func (s *Session) handleFrame(line []byte, fw *FrameWriter, writerMu *sync.Mutex
 		// the 65,000-byte response-object bound or the 1,048,576-byte
 		// frame bound.
 		text := boundedErrorResponse(serr)
-		writerMu.Lock()
-		werr := fw.WriteLine(text)
-		writerMu.Unlock()
-		return werr
+		return writeLineBounded(fw, writerMu, text)
 	}
 	var entries []*workEntry
 	batch := false
@@ -697,10 +806,7 @@ func (s *Session) handleFrame(line []byte, fw *FrameWriter, writerMu *sync.Mutex
 			if err != nil {
 				return errors.New("bounded response encoding failed")
 			}
-			writerMu.Lock()
-			werr := fw.WriteLine(text)
-			writerMu.Unlock()
-			return werr
+			return writeLineBounded(fw, writerMu, text)
 		}
 		s.workTx <- workUnit{entries: entries, batch: true}
 		return nil
@@ -712,17 +818,11 @@ func (s *Session) handleFrame(line []byte, fw *FrameWriter, writerMu *sync.Mutex
 		if err != nil {
 			return errors.New("bounded response encoding failed")
 		}
-		writerMu.Lock()
-		werr := fw.WriteLine(text)
-		writerMu.Unlock()
-		return werr
+		return writeLineBounded(fw, writerMu, text)
 	case workUnanswerable:
 		payload := unanswerableResponse()
 		text, _ := encodeResponseFrame(payload)
-		writerMu.Lock()
-		werr := fw.WriteLine(text)
-		writerMu.Unlock()
-		return werr
+		return writeLineBounded(fw, writerMu, text)
 	default:
 		s.workTx <- workUnit{entries: entries, batch: false}
 		return nil

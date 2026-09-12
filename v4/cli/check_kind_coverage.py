@@ -5,9 +5,13 @@ The mechanical file-kind ledger can only prove what the executed cases
 observe.  This gate reads every matrix report (``--matrix``) and the
 crash report (``--crash``) of one evidence revision and enforces the
 cross-language file-kind contract: every persistent artifact kind is
-created by each product language (Rust and Go) and, whenever the suite
-records any service opening one, opened by each language too; the
-required kind universe is exactly the six journaled kinds plus
+created by each product language (Rust and Go), and every kind whose
+contract implies a cross-process reader (``v4_main``,
+``live_sidecar``, ``adapter_output``) must be shown opened by both
+languages -- the acceptance criterion requires every kind to be opened
+with both consumers, so an evidence revision that records no opens
+fails instead of vacuously satisfying the requirement.  The required
+kind universe is exactly the six journaled kinds plus
 ``publication_temp`` (a production maintenance kind); and "zero
 unknown" means exactly that — PASS evidence containing any kind outside
 the universe fails the gate.
@@ -100,10 +104,16 @@ Evidence integrity rules:
   scenario records a non-empty ``destination_state`` object and a
   ``reopen_outcome`` object; emptied or missing state is a report
   defect.
-- ``live_sidecar`` and ``adapter_output`` imply a cross-process
-  reader: both-language opened coverage is required, and empty
-  opened coverage fails the gate instead of vacating the
-  requirement.
+- ``v4_main``, ``live_sidecar`` and ``adapter_output`` imply a
+  cross-process reader: both-language opened coverage is required,
+  and empty opened coverage fails the gate instead of vacating the
+  requirement.  Opened coverage is required PER EVIDENCE SOURCE:
+  the matrix evidence must show both languages opening
+  ``v4_main`` and ``live_sidecar``, and the crash evidence must
+  show both consumer languages opening ``v4_main`` and
+  ``live_sidecar`` through the scenarios' own executed open
+  records.  Stripping open records from one source cannot be
+  repaid from another source's coverage.
 - Counters are cross-validated with the per-case records: the number
   of matrix cases that are not PASS/SKIP must equal ``failed``, and
   the number of crash scenarios whose ``pass`` is not true must equal
@@ -160,7 +170,28 @@ Evidence integrity rules:
   Malformed lineage (non-object kinds, missing keys, unknown actor
   prefixes, empty ``created_by``) fails; the old flat kind list
   carries no actor lineage and is rejected as legacy evidence.
-
+- Case identity binds to the committed case definitions: a PASS
+  matrix case whose name is not a case defined under
+  ``v4/cli/cases/`` fails, and each actor's recorded executed
+  operations must be methods the named case definition declares for
+  that actor (a PASS case crediting another case's operations is a
+  fabricated cross-matrix rewrite).
+- Mixed matrices can only PASS cases whose definition requires both
+  producer and consumer services: the runner skips single-actor
+  cases in a mixed pair, so a mixed-matrix PASS on a known
+  single-actor case (for example ``algebra.publish``) is a
+  fabricated cross-matrix PASS even when its actors, argv and
+  lineage are internally consistent.
+- A matrix binary record that carries a top-level
+  ``implementation`` label is accepted only when its
+  ``system.describe`` result confirms the same language: language
+  attribution comes from the capability result, never from labels,
+  and a label that contradicts (or substitutes for) the result is a
+  relabel attack on the record root.
+- Every recorded executable binding is on-disk verified when the
+  gate runs on the CLI: the matrix ``binaries`` records, the matrix
+  ``fixture_tool`` record and the crash root binaries table paths
+  must exist and their sha256 must match the recorded identities.
 Honest limitations.  This gate is a mechanical consistency and
 identity anchor: every check compares fields inside and across the
 supplied reports.  A fully consistent offline forgery of ALL reports
@@ -170,9 +201,19 @@ per-case argv consistently -- is not mechanically distinguishable by
 this gate alone; such forgeries are caught by the adversarial review
 reruns that remain part of the gate process.  Fixture identity is
 enforced as a cross-report consistency anchor: the crash report root
-binaries table is the authority every recorded command must name, but
-no on-disk hash of the fixture binary can be required for committed
-evidence whose build-time paths no longer exist on the review machine.
+binaries table is the authority every recorded command must name.
+
+On-disk binary binding: when the gate runs on the CLI
+(``verify_binaries``), every binary path a report records as executed
+(matrix ``binaries`` records, matrix ``fixture_tool`` records, and the
+crash root binaries table) must exist on the review machine and its
+sha256 must equal the recorded sha256.  Committed evidence is
+qualified together with the staged binaries, so a recorded path that
+does not exist -- or a path whose file no longer matches the recorded
+identity -- is a report defect, not a missing-hash excuse.  The
+synthetic self-test battery disables this on-disk verification (its
+``/tmp`` paths are never staged) and exercises it explicitly through
+the F11 control.
 
 Exit status 0 when every required kind has both-language evidence and
 no report problem exists; 1 otherwise.
@@ -225,7 +266,9 @@ CRASH_ONLY_KINDS = (
 # Kinds whose contract implies a cross-process reader: both-language
 # opened coverage is mandatory; empty opened coverage is a FAIL, not a
 # vacuous pass.
-REQUIRED_OPENED_KINDS = ("live_sidecar", "adapter_output")
+REQUIRED_OPENED_KINDS = (
+    "v4_main", "live_sidecar",
+    "adapter_output")
 # Per-kind method-capability maps.  A lineage ref must name an
 # operation that can actually create (respectively open) that kind;
 # an in-range ordinal naming maintenance.list or reader.close is a
@@ -381,6 +424,100 @@ def _matrix_binary_declarations(report):
             implementation = result.get("implementation")
         if isinstance(sha, str) and implementation in PRODUCT_LANGUAGES:
             yield sha, implementation
+
+
+_CASE_DEFINITIONS = None
+_CASE_DEFINITIONS_ERROR = None
+
+
+def _case_definitions():
+    """Committed case definitions: ``{name: {"requirements": frozenset,
+    "methods": {actor: frozenset(methods)}}}``.
+
+    Built once from ``v4/cli/cases/*.json`` through the runner's own
+    loader (the single authority for what each case executes).  The
+    gate uses the definitions to bind PASS-case identity: a case name
+    that is not defined cannot have run, a mixed matrix cannot PASS a
+    case that does not require both services, and an actor's recorded
+    executed operations must be methods the named case declares for
+    that actor.  ``actor_requirements`` and ``declared_actor`` are the
+    runner's own functions so the two can never drift.  Returns
+    ``(definitions, None)`` or ``(None, error-text)``; the load error
+    is cached so the gate reports it once.
+    """
+
+    global _CASE_DEFINITIONS, _CASE_DEFINITIONS_ERROR
+    if _CASE_DEFINITIONS is None and _CASE_DEFINITIONS_ERROR is None:
+        try:
+            import run as _run
+            definitions = {}
+            for case in _run.load_cases(_run.DEFAULT_CASE_DIR):
+                methods = {}
+                for step in case.get("steps", []):
+                    if step.get("kind") == "rpc":
+                        actor = _run.declared_actor(step)
+                        method = step.get("method")
+                    else:
+                        # Legacy CLI steps run on the consumer binary
+                        # and record the literal ``legacy`` operation
+                        # (run.py run_legacy_step).
+                        actor = "consumer"
+                        method = "legacy"
+                    if isinstance(actor, str) and isinstance(method, str):
+                        methods.setdefault(actor, set()).add(method)
+                definitions[case["name"]] = {
+                    "requirements": frozenset(_run.actor_requirements(case)),
+                    "methods": {actor: frozenset(ops)
+                                for actor, ops in methods.items()},
+                }
+            _CASE_DEFINITIONS = definitions
+        except Exception as exc:  # noqa: BLE001 - report, never crash
+            _CASE_DEFINITIONS_ERROR = (
+                f"cannot load the committed case definitions from "
+                f"v4/cli/cases: {exc}")
+    return _CASE_DEFINITIONS, _CASE_DEFINITIONS_ERROR
+
+
+def _binary_label_conflict(record):
+    """Problem text when a matrix binary record's top-level
+    ``implementation`` label contradicts (or replaces) the language
+    its ``system.describe`` capability result declares.
+
+    Language attribution is anchored in the capability result only; a
+    top-level implementation label is a label.  A label that differs
+    from the result -- or claims a product language the result does
+    not confirm -- is a relabel attack on the record root, and the
+    gate must reject it (the global map still catches result-level
+    rewrites across reports; this closes the root-level variant).
+    """
+
+    if not isinstance(record, dict):
+        return None
+    top = record.get("implementation")
+    result = record.get("result")
+    declared = (
+        result.get("implementation")
+        if isinstance(result, dict) else None)
+    if not isinstance(top, str) or top not in PRODUCT_LANGUAGES:
+        return None
+    if declared not in PRODUCT_LANGUAGES or top != declared:
+        return (
+            f"binary record declares a top-level implementation "
+            f"label {top!r} that its system.describe result "
+            f"({declared!r}) does not confirm")
+    return None
+
+
+def _sha256_file(path):
+    """SHA-256 of one file, streamed (the recorded binaries are a few
+    tens of MB at most; hashing is a fraction of a second)."""
+
+    import hashlib
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
 
 
 def _crash_consumer_opened_main(scenario):
@@ -700,6 +837,13 @@ def _global_implementation_map(matrix_paths, crash_paths, problems):
         report = _load_report(path, [])
         if report is None:
             continue
+        # Root-level relabel guard: a binary record may carry a
+        # top-level ``implementation`` label only when its
+        # system.describe result confirms the same language (F7).
+        for record in (report.get("binaries") or {}).values():
+            conflict = _binary_label_conflict(record)
+            if conflict:
+                problems.append(f"{path}: {conflict}")
         for sha, implementation in _matrix_binary_declarations(report):
             declarations.setdefault(sha, set()).add(implementation)
     implementation_of = {}
@@ -714,7 +858,7 @@ def _global_implementation_map(matrix_paths, crash_paths, problems):
 
 
 def matrix_evidence(path, report, implementation_of, fixture_paths,
-                      problems):
+                      problems, verify_cases=False):
     """Kind -> created/opened language sets observed by one matrix.
 
     Returns ``(matrix, evidence, stats, problems)``.  ``stats`` holds
@@ -893,11 +1037,77 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
     evidence = {}
     pass_cases = 0
     contributing = 0
+    # Case-identity authority: the committed case definitions.  Only
+    # loaded when a PASS case exists and either the report is a mixed
+    # matrix (single-actor cases cannot PASS there) or the gate runs
+    # with case verification enabled, so the synthetic self-test
+    # battery that names synthetic cases stays cheap.
+    case_definitions = None
+    case_load_error = None
+    if any(case.get("status") == "PASS" for case in cases) and (
+            matrix in ("rust_to_go", "go_to_rust") or verify_cases):
+        case_definitions, case_load_error = _case_definitions()
+        if case_load_error:
+            problems.append(f"matrix {path}: {case_load_error}")
     for case in cases:
         if case.get("status") != "PASS":
             continue
         pass_cases += 1
         case_name = case.get("name", "<unnamed>")
+        if matrix in ("rust_to_go", "go_to_rust") \
+                and case_definitions is not None:
+            # Mixed matrices execute both binaries for every PASS
+            # case; the runner skips cases that do not require both
+            # services, so a PASS on a known single-actor case is a
+            # fabricated cross-matrix PASS (F3) regardless of how
+            # consistent its actors and lineage look.
+            defined = case_definitions.get(case_name)
+            if defined is not None and \
+                    defined["requirements"] != frozenset(
+                        ("producer", "consumer")):
+                problems.append(
+                    f"matrix {path}: PASS case {case_name!r} requires "
+                    f"actors {sorted(defined['requirements'])} but is "
+                    f"recorded PASS in mixed matrix {matrix!r}; a mixed "
+                    f"matrix skips single-actor cases and can only PASS "
+                    f"cases requiring both producer and consumer")
+        if verify_cases:
+            if case_definitions is None:
+                if case_load_error:
+                    # Already reported above; the gate fails closed.
+                    continue
+                # Definitions were not loaded for a single-language
+                # matrix without PASS cases; this branch runs only
+                # when verify_cases is on and a PASS case exists, so
+                # force the load.
+                case_definitions, case_load_error = _case_definitions()
+                if case_load_error:
+                    problems.append(f"matrix {path}: {case_load_error}")
+                    continue
+            defined = (case_definitions or {}).get(case_name)
+            if defined is None:
+                problems.append(
+                    f"matrix {path}: PASS case {case_name!r} is not a "
+                    f"case defined in v4/cli/cases/")
+            else:
+                defined_methods = defined["methods"]
+                # Per-actor executed work must be work the named case
+                # definition declares for that actor: a PASS case that
+                # credits another case's operations is a fabricated
+                # rewrite even in a single-language matrix.
+                actors_ops = case.get("actors")
+                for actor in ALL_ACTORS:
+                    entry = (actors_ops or {}).get(actor)
+                    if not isinstance(entry, dict):
+                        continue
+                    for op in entry.get("operations", []):
+                        if op not in defined_methods.get(actor, ()):
+                            problems.append(
+                                f"matrix {path}: PASS case {case_name!r} "
+                                f"actor {actor!r} records executed "
+                                f"operation {op!r} that the case "
+                                f"definition of {case_name!r} never "
+                                f"executes for that actor")
         actors = case.get("actors")
         if (not isinstance(actors, dict)
                 or "producer" not in actors
@@ -1380,6 +1590,13 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
             f"but {fail_scenarios} scenario(s) are not pass=true")
     evidence = {}
     producers, consumers = set(), set()
+    # Kinds the scenarios' own executed open records prove the
+    # CONSUMER opened, per consumer language.  The crash battery must
+    # demonstrate both consumer languages opening v4_main and
+    # live_sidecar through the scenarios' executed steps; stripping
+    # consumer opens from one direction cannot be repaid by producer
+    # opens or by the other direction (F5).
+    consumer_opened = {}
     pass_scenarios = 0
     for scenario in scenarios:
         if scenario.get("pass") is not True:
@@ -1739,29 +1956,45 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
                 language = (producer_impl if actor == "producer"
                             else consumer_impl)
                 bucket["opened"].add(language or "?")
+                if actor == "consumer":
+                    consumer_opened.setdefault(kind, set()).add(
+                        language or "?")
     if not {"rust", "go"} <= producers or not {"rust", "go"} <= consumers:
         problems.append(
             f"crash {path}: PASS scenarios must span both language "
             f"directions (producers {sorted(producers)}, "
             f"consumers {sorted(consumers)})")
     stats = {"scenarios": len(scenarios), "pass_scenarios": pass_scenarios}
-    return evidence, stats, problems
+    return evidence, stats, consumer_opened, problems
 
 
-def assess(matrix_paths, crash_paths):
+def assess(matrix_paths, crash_paths, verify_binaries=False,
+            verify_cases=False):
     """Evaluate one evidence revision; testable without the CLI.
 
     Returns ``(problems, coverage, sources)`` where ``coverage`` maps
     each required kind to the set of languages that created it and the
     set of languages that opened it.
+
+    ``verify_binaries`` enables the on-disk binary binding: every
+    recorded executable path must exist and its sha256 must match the
+    recorded identity (F11).  ``verify_cases`` enables the case-identity
+    binding: PASS-case names must be cases defined under
+    ``v4/cli/cases/`` and each actor's recorded executed operations
+    must be methods the named case declares for that actor (F3).  The
+    CLI enables both; the synthetic self-test battery keeps them off
+    for its doctored reports and exercises each explicitly.
     """
 
     coverage = {kind: {"created": set(), "opened": set()}
                 for kind in REQUIRED_KINDS}
+    matrix_coverage = {kind: {"created": set(), "opened": set()}
+                       for kind in REQUIRED_KINDS}
     sources = []
     problems = []
     crash_pass_seen = False
     kind_sources = {}
+    crash_consumer_opened = {}
     implementation_of = _global_implementation_map(
         matrix_paths, crash_paths, problems)
     # Fixture identity of the battery: the crash report root binaries
@@ -1811,7 +2044,8 @@ def assess(matrix_paths, crash_paths):
         if report is None:
             continue
         matrix, evidence, stats, _, command_fixture = matrix_evidence(
-            path, report, implementation_of, fixture_paths, problems)
+            path, report, implementation_of, fixture_paths, problems,
+            verify_cases=verify_cases)
         if matrix in REQUIRED_MATRICES:
             if matrix in seen_matrices:
                 problems.append(
@@ -1890,8 +2124,23 @@ def assess(matrix_paths, crash_paths):
                                          {"created": set(), "opened": set()})
             bucket["created"].update(sides["created"])
             bucket["opened"].update(sides["opened"])
+            matrix_bucket = matrix_coverage.setdefault(
+                kind, {"created": set(), "opened": set()})
+            matrix_bucket["created"].update(sides["created"])
+            matrix_bucket["opened"].update(sides["opened"])
             kind_sources.setdefault(
                 kind, {"matrix": False, "crash": False})["matrix"] = True
+    # Non-vacuous per-source open requirement (F4): the matrix
+    # evidence alone must show both languages opening the kinds the
+    # matrix suite opens by contract.  Strip the matrix open records
+    # from every case and the crash evidence cannot repay the missing
+    # matrix-side coverage.
+    for kind in ("v4_main", "live_sidecar"):
+        matrix_opened = matrix_coverage.get(kind, {}).get("opened", set())
+        if not {"rust", "go"} <= matrix_opened:
+            problems.append(
+                f"kind {kind!r} must be opened by both languages in the "
+                f"matrix evidence: opened by {sorted(matrix_opened)}")
     for matrix in REQUIRED_MATRICES:
         if matrix not in seen_matrices:
             problems.append(f"missing matrix report for {matrix!r}")
@@ -1906,7 +2155,7 @@ def assess(matrix_paths, crash_paths):
         report = _load_report(path, problems)
         if report is None:
             continue
-        evidence, stats, _ = crash_evidence(
+        evidence, stats, consumer_opened, _ = crash_evidence(
             path, report, _crash_path_to_sha(report), implementation_of,
             problems)
         sources.append(
@@ -1924,6 +2173,21 @@ def assess(matrix_paths, crash_paths):
             bucket["opened"].update(sides["opened"])
             kind_sources.setdefault(
                 kind, {"matrix": False, "crash": False})["crash"] = True
+        for kind, languages in consumer_opened.items():
+            crash_consumer_opened.setdefault(kind, set()).update(languages)
+
+    # Crash-side consumer-open requirement (F5): the crash scenarios'
+    # own executed open records must prove both consumer languages
+    # opening the kinds the crash suite opens by contract through the
+    # consumer.  Stripping the consumer opens of one direction strips
+    # that consumer language's coverage entirely and must fail.
+    for kind in ("v4_main", "live_sidecar"):
+        consumer_languages = crash_consumer_opened.get(kind, set())
+        if not {"rust", "go"} <= consumer_languages:
+            problems.append(
+                f"kind {kind!r} must be consumer-opened by both "
+                f"languages in the crash evidence: consumer-opened by "
+                f"{sorted(consumer_languages)}")
 
     if not crash_paths:
         problems.append(
@@ -1958,7 +2222,85 @@ def assess(matrix_paths, crash_paths):
                 f"kind {kind!r} is crash-only and requires at least one "
                 f"crash scenario contributing it (no crash source "
                 f"observed)")
+    if verify_binaries:
+        _verify_recorded_binaries(matrix_paths, crash_paths, problems)
+
     return problems, coverage, sources
+
+
+def _verify_recorded_binaries(matrix_paths, crash_paths, problems):
+    """On-disk binary binding (F11).
+
+    Every executable path a report records as executed -- matrix
+    ``binaries`` records, matrix ``fixture_tool`` records, and the
+    crash root binaries table -- must exist on the review machine and
+    its sha256 must equal the recorded identity.  A recorded path that
+    does not exist is a report defect: the evidence claims the binary
+    ran, so the binary the gate can verify is the one the report's
+    sha256 names.  Path normalization resolves each value exactly like
+    the command binding (``_resolve_report_path``), so a spelling
+    variant cannot bypass the table and then hide behind a different
+    on-disk file.  When two records name the same resolved path with
+    different sha256 values, the duplicate identity is a defect too.
+    """
+
+    bindings = {}
+
+    def bind(raw_path, sha, label):
+        if not (isinstance(raw_path, str) and isinstance(sha, str)):
+            return
+        resolved = os.path.realpath(raw_path)
+        previous = bindings.get(resolved)
+        if previous is None:
+            bindings[resolved] = {"sha": sha, "labels": [label]}
+        else:
+            if previous["sha"] != sha:
+                problems.append(
+                    f"recorded binary {resolved!r} is bound with "
+                    f"conflicting sha256 values {previous['sha']!r} and "
+                    f"{sha!r} ({label} vs "
+                    f"{previous['labels'][0]})")
+            previous["labels"].append(label)
+
+    for path in matrix_paths:
+        report = _load_report(path, [])
+        if not isinstance(report, dict):
+            continue
+        basename = os.path.basename(path)
+        for key, record in (report.get("binaries") or {}).items():
+            if isinstance(record, dict):
+                bind(record.get("path"), record.get("sha256"),
+                     f"matrix {basename} binaries.{key}")
+        fixture = report.get("fixture_tool")
+        if isinstance(fixture, dict):
+            bind(fixture.get("path"), fixture.get("sha256"),
+                 f"matrix {basename} fixture_tool")
+    for path in crash_paths:
+        report = _load_report(path, [])
+        if not isinstance(report, dict):
+            continue
+        basename = os.path.basename(path)
+        binaries = report.get("binaries")
+        if isinstance(binaries, dict):
+            for key, sha in binaries.items():
+                if not (isinstance(key, str) and key.endswith("_sha256")):
+                    continue
+                bind(binaries.get(key[:-len("_sha256")]), sha,
+                     f"crash {basename} binaries.{key}")
+
+    for resolved, binding in sorted(bindings.items()):
+        if not os.path.isfile(resolved):
+            problems.append(
+                f"recorded binary path {resolved!r} does not exist on "
+                f"the review machine (bound by "
+                f"{', '.join(sorted(set(binding['labels'])))})")
+            continue
+        actual = _sha256_file(resolved)
+        if actual != binding["sha"]:
+            problems.append(
+                f"recorded binary {resolved!r} sha256 {actual} does not "
+                f"match the recorded identity {binding['sha']!r} (bound "
+                f"by {', '.join(sorted(set(binding['labels'])))})")
 
 
 def main():
@@ -1977,7 +2319,9 @@ def main():
     if not args.matrix and not args.crash:
         parser.error("at least one --matrix or --crash report is required")
 
-    problems, coverage, sources = assess(args.matrix, args.crash)
+    problems, coverage, sources = assess(
+        args.matrix, args.crash, verify_binaries=True,
+        verify_cases=True)
     print("Artifact-kind coverage gate")
     print("Sources: " + "; ".join(sources))
     for kind in REQUIRED_KINDS:
@@ -3003,7 +3347,7 @@ def _self_test():
         assert not problems, (
             f"genuine evidence failed the gate: {problems}")
 
-        def genuine_mutation_fails(label, mutator):
+        def genuine_mutation_fails(label, mutator, **assess_kwargs):
             matrices, crash = load_genuine()
             mutator(matrices, crash)
             paths = []
@@ -3015,7 +3359,8 @@ def _self_test():
             crash_mutated = os.path.join(
                 work, f"genuine-{label}-crash.json")
             assign(crash_mutated, crash)
-            problems, _c, _s = assess(paths, [crash_mutated])
+            problems, _c, _s = assess(
+                paths, [crash_mutated], **assess_kwargs)
             assert problems, (
                 f"mutation {label!r} did not fail the gate: {problems}")
             return problems
@@ -3684,6 +4029,154 @@ def _self_test():
                 f"fail the binding from the reviewing checkout: "
                 f"{problems}")
         cross_checkout_case()
+
+        # 49. F3 (kind-gate finding, wave-19.18): a fabricated
+        #     cross-matrix PASS.  The forgery rewrites the skipped
+        #     ``algebra.publish`` case (a producer-only case the mixed
+        #     runner skips) into a PASS case carrying another PASS
+        #     case's actors, operations and lineage.  The committed
+        #     case definitions bind PASS identity: a mixed matrix can
+        #     only PASS cases whose definition requires both services,
+        #     so the relabeled single-actor case must fail even though
+        #     its actors, argv and counters are internally consistent.
+        def forged_cross_matrix_pass(matrices, crash):
+            report = matrices[2]  # rust_to_go
+            donor = next(c for c in report["cases"]
+                         if c["status"] == "PASS")
+            target = next(c for c in report["cases"]
+                          if c["status"] == "SKIP"
+                          and c["name"] == "algebra.publish")
+            forged = {
+                "matrix": report["matrix"], "name": target["name"],
+                "status": "PASS",
+                "actors": _copy.deepcopy(donor["actors"]),
+                "file_kinds": _copy.deepcopy(donor["file_kinds"]),
+                "oracle_checks": donor.get("oracle_checks", 0),
+            }
+            report["cases"] = [
+                c for c in report["cases"] if c["name"] != target["name"]
+            ] + [forged]
+            report["passed"] = sum(
+                1 for c in report["cases"] if c["status"] == "PASS")
+            report["skipped"] = len(report["cases"]) - report["passed"]
+        genuine_mutation_fails("f3-forged-cross-matrix-pass",
+                               forged_cross_matrix_pass)
+
+        # 49b. F3 variant: a PASS case name that is not a committed
+        #      case definition (case-identity binding, CLI-enabled).
+        def invented_case_name(matrices, crash):
+            report = matrices[2]
+            case = next(c for c in report["cases"]
+                        if c["status"] == "PASS")
+            case["name"] = "invented.case"
+        genuine_mutation_fails("f3-invented-case-name",
+                               invented_case_name, verify_cases=True)
+
+        # 49c. F3 variant: a PASS case whose actor records an
+        #      executed operation the named case definition never
+        #      declares for that actor (case-identity binding,
+        #      CLI-enabled).
+        def foreign_operation_case(matrices, crash):
+            report = matrices[2]
+            case = next(c for c in report["cases"]
+                        if c["status"] == "PASS")
+            case["actors"]["producer"]["operations"].append(
+                "iprange.v1.export")
+        genuine_mutation_fails("f3-foreign-operation",
+                               foreign_operation_case,
+                               verify_cases=True)
+
+        # 50. F4 (kind-gate finding, wave-19.18): strip every
+        #     live_sidecar open record from the matrix evidence
+        #     (per-case lineage, by kind).  The open requirement is
+        #     non-vacuous per evidence source: the matrix evidence
+        #     itself must show both languages opening live_sidecar,
+        #     and the crash evidence cannot repay the missing
+        #     matrix-side coverage.
+        def stripped_matrix_sidecar_opens(matrices, crash):
+            for report in matrices:
+                root_kinds = report.get("file_kinds") or {}
+                if "live_sidecar" in root_kinds:
+                    root_kinds["live_sidecar"].pop("opened_by", None)
+                for case in report["cases"]:
+                    if case.get("status") != "PASS":
+                        continue
+                    for facts in (case.get("file_kinds") or {}).values():
+                        if facts.get("kind") == "live_sidecar":
+                            facts.pop("opened_by", None)
+        genuine_mutation_fails("f4-matrix-sidecar-opens-stripped",
+                               stripped_matrix_sidecar_opens)
+
+        # 51. F5 (kind-gate finding, wave-19.18): strip the consumer
+        #     opens from the go->rust crash scenarios.  The crash
+        #     evidence must itself prove both consumer languages
+        #     opening v4_main and live_sidecar through the scenarios'
+        #     own executed open records.
+        def stripped_crash_consumer_opens(matrices, crash):
+            stripped = 0
+            for scenario in crash["scenarios"]:
+                if "->rust" in scenario.get("scenario", "") \
+                        and stripped < 8:
+                    for facts in (scenario.get("kinds") or {}).values():
+                        if not isinstance(facts, dict):
+                            continue
+                        facts["opened_by"] = [
+                            ref for ref in facts.get("opened_by", [])
+                            if not ref.startswith("consumer")]
+                    open_facts = scenario.setdefault(
+                        "live_reader_opens", {})
+                    open_facts["consumer"] = 0
+                    stripped += 1
+        genuine_mutation_fails("f5-crash-consumer-opens-stripped",
+                               stripped_crash_consumer_opens)
+
+        # 52. F7 (kind-gate finding, wave-19.18): relabel the Go
+        #     binary record's top-level ``implementation`` to rust
+        #     while its system.describe result still declares go.
+        #     Language attribution comes from the capability result,
+        #     never from labels: a root-level label that contradicts
+        #     the result is a relabel attack.
+        def relabel_binary_record_root(matrices, crash):
+            matrices[1]["binaries"]["go"]["implementation"] = "rust"
+        genuine_mutation_fails("f7-binary-record-root-relabel",
+                               relabel_binary_record_root)
+
+        # 53. F11 (kind-gate finding, wave-19.18): bind the Go
+        #     binary record, command and per-case argv to a
+        #     nonexistent path while keeping the recorded sha256.
+        #     With on-disk binary verification enabled (the CLI
+        #     default) the recorded executable must exist and match;
+        #     a recorded path that does not exist is a report defect.
+        def missing_binary_path(matrices, crash):
+            report = matrices[1]  # matrix-go
+            report["binaries"]["go"]["path"] = "/nonexistent/iprange-go"
+            report["command"] = [
+                "/nonexistent/iprange-go"
+                if arg == "/tmp/qualsvc/w1916/bin/go/iprange" else arg
+                for arg in report["command"]]
+            for case in report["cases"]:
+                if case.get("status") != "PASS":
+                    continue
+                for entry in (case.get("actors") or {}).values():
+                    if entry.get("argv") == \
+                            "/tmp/qualsvc/w1916/bin/go/iprange":
+                        entry["argv"] = "/nonexistent/iprange-go"
+        genuine_mutation_fails("f11-binary-path-missing",
+                               missing_binary_path,
+                               verify_binaries=True)
+
+        # 54. Negative control for the strengthened gate: the genuine
+        #     committed evidence must still pass with BOTH CLI
+        #     verification modes enabled (case identity + on-disk
+        #     binary binding).  This is the exact CLI configuration;
+        #     the earlier genuine-pass assert covers the
+        #     self-test defaults only.
+        problems, _c, _s = assess(
+            genuine_paths, [genuine_crash], verify_binaries=True,
+            verify_cases=True)
+        assert not problems, (
+            f"genuine evidence failed the gate with CLI verification "
+            f"enabled: {problems}")
 
 
 if __name__ == "__main__":

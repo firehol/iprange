@@ -132,6 +132,44 @@ fn normalize_nt_namespace(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+/// Rewrite a leading verbatim-family UNC prefix ("\\?\UNC\server\share"
+/// or its NT object-manager twin "\??\UNC\server\share") to the
+/// ordinary UNC spelling ("\\server\share") before the ancestor
+/// walk, mirroring Go's windowsUncProbe: the two spellings name the
+/// same shares, and only the ordinary spelling lets the Win32
+/// create/open layer apply its trailing-dot/space normalization, so
+/// a decorated leaf that folds onto the reader sidecar is probed as
+/// the sidecar itself (wave-19.18 parity P1-2).  The head compares
+/// case-insensitively, like Go's EqualFold, because the NT namespace
+/// resolves the UNC head in any spelling case (wave-19.17 parity
+/// P1); the "\??\UNC\" twin is normally presented as "\\?\UNC\" by
+/// normalize_nt_namespace first and is carried defensively like Go,
+/// which keeps both prefixes.  Platform-independent string logic:
+/// on POSIX no anchored spelling can begin with the prefix (an
+/// absolute path starts with the separator), so the path is
+/// returned unchanged there, exactly like Go's windowsUncProbe
+/// running on POSIX.
+fn windows_unc_rewrite(path: &Path) -> std::borrow::Cow<'_, Path> {
+    let text = path.to_string_lossy();
+    for prefix in [r"\\?\UNC\", r"\??\UNC\"] {
+        // Byte-index safety: a multi-byte head after the prefix must
+        // never panic the worker with a byte-index fault (wave-19.15
+        // operations P0 class); the get(..) probe only matches an
+        // all-ASCII head, so the later byte slice is boundary-safe.
+        if text
+            .get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+        {
+            let mut out = String::with_capacity(text.len() - prefix.len() + 2);
+            out.push('\\');
+            out.push('\\');
+            out.push_str(&text[prefix.len()..]);
+            return std::borrow::Cow::Owned(PathBuf::from(out));
+        }
+    }
+    std::borrow::Cow::Borrowed(path)
+}
+
 /// The deepest existing ancestor is canonicalized and the missing
 /// suffix is re-appended lexically, so two spellings of the same
 /// eventual file (absolute vs relative, `./`/`..` decorations, a
@@ -184,7 +222,20 @@ fn canonical_split(path: &Path) -> CanonicalSplit {
         }
     };
     let mut missing: Vec<std::ffi::OsString> = Vec::new();
-    let mut probe = absolute.as_path();
+    // The verbatim-family UNC head is probed through the ordinary
+    // UNC spelling (wave-19.18 parity P1-2, mirror of Go's
+    // windowsUncProbe): "\\?\UNC\..." (and its "\??\UNC\" twin,
+    // already presented as "\\?\UNC\") name the same shares as
+    // "\\...", but only the ordinary spelling lets the Win32 layer
+    // strip a trailing dot/space from the final component, so a
+    // decorated sidecar leaf resolves to the sidecar and is refused.
+    // The head prefix is invariant under the leaf-by-leaf pop, so
+    // one rewrite at the start equals Go's per-iteration rewrite.
+    let rewrite = windows_unc_rewrite(&absolute);
+    let mut probe: &Path = match &rewrite {
+        std::borrow::Cow::Owned(rewritten) => rewritten.as_path(),
+        std::borrow::Cow::Borrowed(_) => absolute.as_path(),
+    };
     loop {
         match fs::canonicalize(probe) {
             Ok(resolved) => {
@@ -978,6 +1029,106 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
+    // wave-19.18 parity P1-2 (call-site pin, live shape): with the
+    // reader sidecar PRESENT, a verbatim-family loopback-UNC
+    // destination whose final component carries a trailing dot or
+    // space names the sidecar file: the Win32 create/open layer
+    // strips the decoration on the ordinary UNC spelling, so the
+    // canonical-split walk resolves the full spelling to the sidecar
+    // and the guard must refuse it.  Before the UNC-head rewrite in
+    // canonical_split the walk kept the "\\?\UNC\" identity verbatim
+    // (the decorated leaf stayed unresolved, suffix-length mismatch
+    // against the existing sidecar) and the guard allowed the
+    // destination, which the qualified-host probe then created as a
+    // distinct literal file (report7.json rows F-traildot /
+    // G-trailspace x {nt_unc, nt_unc_lower, verbatim_unc,
+    // verbatim_unc_lower}, rust=allowed).
+    #[cfg(windows)]
+    #[test]
+    fn refuse_output_over_source_windows_unc_trail_leaf_over_live_sidecar() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-guard-unctrail-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+
+        let source = dir.join("db.bin");
+        fs::write(&source, b"source").unwrap();
+        // Live shape: the reader-coordination sidecar exists, so the
+        // destination must be compared against the sidecar file, not
+        // an absent name.
+        let sidecar_path = dir.join("db.bin.readers");
+        fs::write(&sidecar_path, b"sidecar").unwrap();
+        let identity = FileIdentity {
+            path: source.clone(),
+            dev: 0,
+            ino: 0,
+        };
+        let sidecar_identity = FileIdentity {
+            path: sidecar_path,
+            dev: 0,
+            ino: 0,
+        };
+
+        // dir must sit on a drive-letter volume for the C$ admin
+        // share spelling to reach it.
+        let drive = match dir.components().next() {
+            Some(std::path::Component::Prefix(prefix)) => match prefix.kind() {
+                std::path::Prefix::Disk(letter) => char::from(letter),
+                _ => return,
+            },
+            _ => return,
+        };
+        let relative = dir.strip_prefix(Path::new(&format!("{drive}:"))).unwrap();
+        for head in [
+            format!("\\\\?\\UNC\\localhost\\{drive}$"),
+            format!("\\\\?\\unc\\localhost\\{drive}$"),
+            format!("\\??\\UNC\\localhost\\{drive}$"),
+            format!("\\??\\unc\\localhost\\{drive}$"),
+        ] {
+            for leaf in [".", " "] {
+                let destination = PathBuf::from(format!(
+                    "{head}{}\\db.bin.readers{leaf}",
+                    relative.display()
+                ));
+                if refuse_output_over_source(&destination, &identity, Some(&sidecar_identity))
+                    .is_ok()
+                {
+                    panic!(
+                        "verbatim UNC trail leaf {destination:?} naming the live sidecar accepted"
+                    );
+                }
+            }
+        }
+
+        // Distinct destination controls stay allowed: another name
+        // (existing and not-yet-existing decorated) in the same
+        // directory must not be refused by the suffix comparison.
+        let other = dir.join("other.bin");
+        fs::write(&other, b"other").unwrap();
+        for destination in [
+            PathBuf::from(format!(
+                "\\\\?\\UNC\\localhost\\{drive}${}\\other.bin",
+                relative.display()
+            )),
+            PathBuf::from(format!(
+                "\\\\?\\UNC\\localhost\\{drive}${}\\other.bin..",
+                relative.display()
+            )),
+        ] {
+            if refuse_output_over_source(&destination, &identity, Some(&sidecar_identity))
+                .is_err()
+            {
+                panic!("distinct verbatim UNC destination {destination:?} refused");
+            }
+        }
+
+        let _ = fs::remove_dir_all(&dir);
+    }
     #[cfg(windows)]
     #[test]
     fn same_canonical_folds_windows_case() {
@@ -1114,6 +1265,90 @@ mod tests {
         );
     }
 }
+
+    #[test]
+    fn windows_unc_rewrite_mirrors_go_pin() {
+        // wave-19.18 parity P1-2, mirror of the Go pin
+        // TestWindowsUncProbeCaseFold (samefile_test.go): the
+        // verbatim-family UNC head rewrites to the ordinary UNC
+        // spelling before the ancestor walk, case-insensitively (the
+        // NT namespace resolves the head in any spelling case), and
+        // look-alike or non-UNC heads pass through unchanged.  The
+        // function is platform-independent (on POSIX it runs but no
+        // anchored spelling can begin with the prefix), so Linux CI
+        // compiles and runs this pin exactly like the Go one.
+        let rest = "localhost\\C$\\dir\\db.bin.readers";
+        for head in [r"\\?\UNC\", r"\??\UNC\"] {
+            for spelling in [
+                format!("{head}{rest}"),
+                format!("{}{rest}", head.to_lowercase()),
+                format!("{}{}", head.to_uppercase(), rest.to_uppercase()),
+            ] {
+                let want = format!("\\\\{}", &spelling[head.len()..]);
+                let got = windows_unc_rewrite(Path::new(&spelling))
+                    .into_owned()
+                    .to_string_lossy()
+                    .into_owned();
+                assert_eq!(got, want, "rewrite {spelling:?}");
+            }
+        }
+        for spelling in [
+            r"\\?\UNCX\localhost\share", // look-alike head
+            r"\\?\UNC",                  // head without trailing separator
+            r"\??\UNC",
+            r"C:\Temp\plain.bin.readers",
+            r"\\server\share\dir", // ordinary UNC is never rewritten
+            r"relative\path",
+            "",
+        ] {
+            let got = windows_unc_rewrite(Path::new(spelling))
+                .into_owned()
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(got, spelling, "rewrite must not change {spelling:?}");
+        }
+        // The 8 divergent probe rows (report7.json F-traildot and
+        // G-trailspace x {nt_unc, nt_unc_lower, verbatim_unc,
+        // verbatim_unc_lower}, rust=allowed) fold to their ordinary
+        // UNC twins.
+        for (input, want) in [
+            (r"\\?\UNC\localhost\C$\Temp\parity\c020\db.iprange.readers..",
+             r"\\localhost\C$\Temp\parity\c020\db.iprange.readers.."),
+            (r"\\?\unc\localhost\c$\temp\parity\c021\db.iprange.readers..",
+             r"\\localhost\c$\temp\parity\c021\db.iprange.readers.."),
+            (r"\??\UNC\localhost\C$\Temp\parity\c023\db.iprange.readers ",
+             r"\\localhost\C$\Temp\parity\c023\db.iprange.readers "),
+            (r"\??\unc\localhost\c$\temp\parity\c024\db.iprange.readers ",
+             r"\\localhost\c$\temp\parity\c024\db.iprange.readers "),
+            (r"\\?\UNC\localhost\C$\Temp\parity\c036\db.iprange.readers ",
+             r"\\localhost\C$\Temp\parity\c036\db.iprange.readers "),
+            (r"\\?\unc\localhost\c$\temp\parity\c037\db.iprange.readers ",
+             r"\\localhost\c$\temp\parity\c037\db.iprange.readers "),
+            (r"\??\UNC\localhost\C$\Temp\parity\c033\db.iprange.readers ",
+             r"\\localhost\C$\Temp\parity\c033\db.iprange.readers "),
+            (r"\??\unc\localhost\c$\temp\parity\c034\db.iprange.readers ",
+             r"\\localhost\c$\temp\parity\c034\db.iprange.readers "),
+        ] {
+            let got = windows_unc_rewrite(Path::new(input))
+                .into_owned()
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(got, want, "rewrite {input:?}");
+        }
+        // A multi-byte head directly after the prefix must not panic
+        // (byte-index safety, wave-19.15 operations P0 class) and
+        // must pass through unchanged.
+        for input in [
+            "\\\\?\\abc\u{00e9}\\db.iprange.readers",
+            "\\??\\abc\u{00e9}\\db.iprange.readers",
+        ] {
+            let got = windows_unc_rewrite(Path::new(input))
+                .into_owned()
+                .to_string_lossy()
+                .into_owned();
+            assert_eq!(got, input, "non-UNC head must pass through: {input:?}");
+        }
+    }
     #[test]
     fn canonical_absolute_normalizes_decorated_spellings() {
         // Wave 19.4 parity with the Go engine: a trailing separator

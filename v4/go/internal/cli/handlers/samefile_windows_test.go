@@ -127,14 +127,7 @@ func TestSameCanonicalWindowsFold(t *testing.T) {
 // only by script case is refused.
 func TestRefuseOutputOverSourceWindowsNonASCII(t *testing.T) {
 	dir := t.TempDir()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(wd) })
+	chdirTest(t, dir)
 	source := filepath.Join(dir, "db_ä.bin")
 	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
 		t.Fatal(err)
@@ -151,14 +144,7 @@ func TestRefuseOutputOverSourceWindowsNonASCII(t *testing.T) {
 
 func TestRefuseOutputOverSourceWindowsSidecarSpellings(t *testing.T) {
 	dir := t.TempDir()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(wd) })
+	chdirTest(t, dir)
 	source := filepath.Join(dir, "db.bin")
 	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
 		t.Fatal(err)
@@ -204,14 +190,7 @@ func TestRefuseOutputOverSourceWindowsSidecarSpellings(t *testing.T) {
 // to a distinct destination.
 func TestSessionMetadataGetWindowsSidecarSpellings(t *testing.T) {
 	dir := t.TempDir()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(wd) })
+	chdirTest(t, dir)
 	source := newImmutableFeed(t, dir, "src.db", []byte("mymetadata"))
 	before, err := os.ReadFile(source)
 	if err != nil {
@@ -378,14 +357,7 @@ func TestPathLeafWindowsDriveRoot(t *testing.T) {
 // family let the fold split spellings and miss the sidecar).
 func TestRefuseOutputOverSourceWindowsSigmaSidecar(t *testing.T) {
 	dir := t.TempDir()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(wd) })
+	chdirTest(t, dir)
 	source := filepath.Join(dir, "A\u03a31.bin") // "AΣ1.bin"
 	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
 		t.Fatal(err)
@@ -409,14 +381,7 @@ func TestRefuseOutputOverSourceWindowsSigmaSidecar(t *testing.T) {
 // "<cwd>\db.bin.readers" (the sidecar) and is wrongly refused.
 func TestRefuseOutputOverSourceWindowsDriveRootDistinct(t *testing.T) {
 	dir := t.TempDir()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(wd) })
+	chdirTest(t, dir)
 	source := filepath.Join(dir, "db.bin")
 	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
 		t.Fatal(err)
@@ -435,14 +400,7 @@ func TestRefuseOutputOverSourceWindowsDriveRootDistinct(t *testing.T) {
 // finding).
 func TestSessionMetadataGetWindowsSigmaSidecar(t *testing.T) {
 	dir := t.TempDir()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(wd) })
+	chdirTest(t, dir)
 	// The database is built under an ASCII name and renamed to the
 	// sigma spelling: the v4 bytes are name-agnostic and the guard
 	// derivation is lexical, so the session exercises the protected
@@ -504,14 +462,7 @@ func TestSessionMetadataGetWindowsSigmaSidecar(t *testing.T) {
 // the verbatim prefix while the source-derived sidecar did not).
 func TestSessionMetadataGetWindowsVerbatimSidecar(t *testing.T) {
 	dir := t.TempDir()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(wd) })
+	chdirTest(t, dir)
 	source := newImmutableFeed(t, dir, "db.iprange", []byte("mymetadata"))
 	before, err := os.ReadFile(source)
 	if err != nil {
@@ -553,14 +504,7 @@ func TestSessionMetadataGetWindowsDriveRootDistinct(t *testing.T) {
 	defer os.Remove(probe)
 
 	dir := t.TempDir()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(wd) })
+	chdirTest(t, dir)
 	source := newImmutableFeed(t, dir, "db-"+fmt.Sprint(os.Getpid())+".iprange", []byte("mymetadata"))
 	before, err := os.ReadFile(source)
 	if err != nil {
@@ -639,14 +583,7 @@ func TestRefuseOutputOverSourceWindowsRelativeSourceCrossFamily(t *testing.T) {
 	if err := os.WriteFile(source, []byte("source"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(wd) })
+	chdirTest(t, dir)
 	sourceID := captureFileIdentity("db.bin")
 	if sourceID == nil {
 		t.Fatal("source identity not captured")
@@ -709,14 +646,7 @@ func TestRefuseOutputOverSourceWindowsVolumeGuidSidecar(t *testing.T) {
 	destination := device + strings.TrimLeft(dir[len(drive):], `\/`) +
 		`\` + filepath.Base(source) + format.CoordinationSuffix
 
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(wd) })
+	chdirTest(t, dir)
 
 	// Guard level: the destination names the absent sidecar through
 	// the volume-GUID namespace and must be refused preflight.
@@ -780,14 +710,7 @@ func TestRefuseOutputOverSourceWindowsGlobalrootSidecar(t *testing.T) {
 		t.Fatal(err)
 	}
 	sidecar := source + format.CoordinationSuffix
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(wd) })
+	chdirTest(t, dir)
 
 	for _, prefix := range []string{device, strings.Replace(device, `\\?\GLOBALROOT`, `\\.\GLOBALROOT`, 1),
 		strings.Replace(device, `\\?\GLOBALROOT`, `\??\GLOBALROOT`, 1),
@@ -815,5 +738,88 @@ func TestRefuseOutputOverSourceWindowsGlobalrootSidecar(t *testing.T) {
 	}
 	if _, err := os.Stat(sidecar); !os.IsNotExist(err) {
 		t.Fatalf("metadata.get created the sidecar: %v", err)
+	}
+}
+
+// TestRefuseOutputOverSourceWindowsTrailingLeafNamespace pins the
+// wave-19.18 parity P1 class at the guard and at the production call
+// site: a destination whose final leaf is the Win32 fold of the
+// LIVE sidecar name (trailing dot or trailing space) under a
+// namespace-family head names the sidecar file and must be refused
+// exactly like the exact-leaf spelling.  The literal spelling's
+// same-ancestor split collected the dot/space leaf into the missing
+// suffix while the EXISTING sidecar's split collected nothing; the
+// suffix lengths diverged and the guard published (the native
+// 65-row probe found Go allowing the 12 namespace-head x
+// trailing-dot/space rows Rust refuses; the same-ancestor arm now
+// folds the final leaf before the walk, windowsTrimFinalLeaf).  The
+// sidecar must EXIST for the class to trip: with an absent sidecar
+// both suffixes carry one component and the per-component fold
+// already refuses.
+func TestRefuseOutputOverSourceWindowsTrailingLeafNamespace(t *testing.T) {
+	dir := t.TempDir()
+	drive := filepath.VolumeName(dir)
+	if len(drive) != 2 || drive[1] != ':' || !strings.EqualFold(drive, "C:") {
+		t.Skip("temp dir is not on the C: volume")
+	}
+	source := filepath.Join(dir, "db.bin")
+	if err := os.WriteFile(source, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The reader-coordination sidecar is a live file, exactly the
+	// state the native probe exercised; its existence is what
+	// decouples the two splits' suffix lengths.
+	sidecar := source + format.CoordinationSuffix
+	if err := os.WriteFile(sidecar, []byte("sidecar"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sourceID := captureFileIdentity(source)
+	sidecarID := captureFileIdentity(sidecar)
+	if sourceID == nil || sidecarID == nil {
+		t.Fatal("source/sidecar identity not captured")
+	}
+	chdirTest(t, dir)
+
+	globalroot := cGlobalrootDevicePath(t, dir)
+	guid := cVolumeDevicePath(t)
+	heads := []string{
+		globalroot,
+		strings.Replace(globalroot, `\\?\GLOBALROOT`, `\??\GLOBALROOT`, 1),
+		strings.Replace(globalroot, `\\?\GLOBALROOT`, `\\.\GLOBALROOT`, 1),
+		guid,
+		// The NT namespace resolves each head case-insensitively; the
+		// all-lowercase spellings refuse exactly like the canonical
+		// ones (wave-19.17/19.18 parity rows).
+		strings.ToLower(globalroot),
+		strings.ToLower(strings.Replace(globalroot, `\\?\GLOBALROOT`, `\??\GLOBALROOT`, 1)),
+		strings.ToLower(strings.Replace(globalroot, `\\?\GLOBALROOT`, `\\.\GLOBALROOT`, 1)),
+		strings.ToLower(guid),
+	}
+	leaf := filepath.Base(source) + format.CoordinationSuffix
+	for _, head := range heads {
+		for _, foldedLeaf := range []string{leaf + ".", leaf + " "} {
+			destination := head + dir[len(drive):] + `\` + foldedLeaf
+			// Guard level: refused preflight before any SDK open.
+			if herr := refuseOutputOverSource(destination, source, sourceID, sidecarID); herr == nil {
+				t.Fatalf("trailing-leaf namespace destination %q naming the live sidecar accepted", destination)
+			}
+			// Production call site: refused canonically and the
+			// sidecar bytes are never touched.
+			frame := `{"jsonrpc":"2.0","id":"1","method":"iprange.v1.database.metadata.get","params":{"source":{"path":` +
+				mustJSONString(source) + `,"mode":"immutable"},"delivery":{"mode":"file","path":` +
+				mustJSONString(destination) + `,"publication_policy":"replace_existing","max_output_bytes":"1048576","max_open_files":8}}}`
+			out := runSession(t, frame)
+			if !strings.Contains(out, `"code":"invalid_argument"`) ||
+				!strings.Contains(out, "destination must differ from the source database") {
+				t.Fatalf("metadata.get to %q: output = %q, want the source-refusal error", destination, out)
+			}
+			after, err := os.ReadFile(sidecar)
+			if err != nil {
+				t.Fatalf("sidecar unreadable after refusal to %q: %v", destination, err)
+			}
+			if string(after) != "sidecar" {
+				t.Fatalf("sidecar bytes changed after refusal to %q: %q", destination, after)
+			}
+		}
 	}
 }
