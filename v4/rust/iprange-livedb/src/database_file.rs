@@ -226,8 +226,17 @@ pub(crate) fn require_sidecar_absent(sidecar: &Path) -> Result<()> {
 pub(crate) fn open_read_only(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true);
-    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC);
-    Ok(options.open(path)?)
+    // O_NONBLOCK: opening a FIFO read-only must return immediately
+    // instead of blocking until a writer appears; the regular-file
+    // check below then refuses the fifo through the authoritative
+    // fd (regular files ignore O_NONBLOCK, so this never changes
+    // database behavior). Nothing here stats `path`: the opened fd
+    // is the identity, so a file replaced between open and check is
+    // judged on the bytes actually opened (mirrors the Go reader).
+    options.custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK);
+    let file = options.open(path)?;
+    require_regular_file(&file)?;
+    Ok(file)
 }
 
 #[cfg(windows)]
@@ -254,4 +263,41 @@ pub(crate) fn open_read_only(_path: &Path) -> Result<File> {
     Err(Error::Unsupported(
         "safe no-follow file open is unavailable",
     ))
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    /// A FIFO database path must be refused promptly, not blocked
+    /// waiting for a writer (Rust handler hang reproduced at the
+    /// wave-19.19 operations review: reader.open / database.info /
+    /// database.metadata.get on a fifo never answered and the
+    /// process leaked after EOF). O_NONBLOCK makes the open return
+    /// immediately and the authoritative-fd regular check refuses.
+    #[test]
+    fn fifo_is_refused_without_blocking() {
+        use std::os::unix::ffi::OsStrExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-fifo-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fifo");
+        let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
+        let rc = unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) };
+        assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
+        let result = open_read_only(&path);
+        std::fs::remove_dir_all(&dir).ok();
+        let err = result.expect_err("fifo must not open as a database file");
+        assert!(
+            matches!(err, crate::error::Error::InvalidArgument(_)),
+            "unexpected error: {err:?}"
+        );
+    }
 }

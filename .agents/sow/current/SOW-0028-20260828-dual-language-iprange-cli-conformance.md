@@ -845,10 +845,12 @@ final-drain fatal-error reporting; the whole qualification battery
 was re-run at the repair tree with a corrected Rust build recipe
 (`--bins --examples`; the previous `--examples`-only step silently
 re-staged cached `[[bin]]` artifacts) and every gate is green —
-matrices 38/38 and 14+24 both directions, crash positive 16/16 per
-direction with `/bin/false` negatives rejected, resource proofs 8/8,
-golden 55/38, sensitivity 14/14, guard POSIX + native Windows PASS
-(50 keys per product, zero Go/Rust mismatches), kind gate + forgery
+matrices 38/38 and 14+24 both directions, crash positive 16/16
+scenarios PASS (8 producer-rust + 8 producer-go) with `/bin/false`
+negatives rejected, resource proofs 8/8, golden 55/38, sensitivity
+14/14, guard POSIX PASS (8 expected-allowed case keys + 3 facts per
+product) and native Windows guard PASS (50 keys: 44 refused + 3
+allowed + 3 facts), zero Go/Rust mismatches, kind gate + forgery
 battery + self-test PASS on the rotated evidence, SHASUMS 10/10, and
 the free-lock full-pipe probe self-exits on both fresh binaries.
 Fresh identities are recorded in the wave-19.19 section at the end
@@ -12791,16 +12793,20 @@ step ran under `nice`):
   dragonfly/arm64 — unsupported by the installed Go toolchain).
 - Matrices: rust 38/38 PASS, go 38/38 PASS, rust_to_go 14 PASS + 24
   legitimate skips, go_to_rust 14 PASS + 24 legitimate skips.
-- Crash positive: 16/16 scenarios in each direction (rust->go,
-  go->rust), rc 0.  `/bin/false` negative controls: rejected as
+- Crash positive: 16/16 scenarios PASS (8 producer-rust + 8
+  producer-go; the harness ran twice with the rust_to_go and
+  go_to_rust invocation labels and the committed evidence is one
+  crash.json), rc 0.  `/bin/false` negative controls: rejected as
   designed (rc 1; consumer=false report records failed=16).
 - Resource proofs: 8/8 PASS; harness self-test rc 0 (bounded read
   and write deadline controls).
 - Golden corpus: 55 exchanges / 38 case files PASSED.
 - Sensitivity gate: 14/14 PASSED.
-- Guard POSIX negative control: PASS for both products (50 case
-  keys per product: 44 refused + 3 allowed + 3 success-fact
-  booleans, zero Go<->Rust mismatches).
+- Guard POSIX negative control: PASS for both products (8
+  expected-allowed case keys + 3 success-fact booleans per product,
+  zero refusals, zero Go<->Rust mismatches).  The 50-key /
+  44-refused + 3-allowed + 3-facts split describes the Windows guard
+  evidence, not the POSIX control.
 - Windows native on the authorized host (go1.26.5 / rustc 1.97.1):
   guard PASS (50 keys per product, same split, zero mismatches);
   housekeeping PASS (`windows_qualified=true`, `skipped=false`,
@@ -12877,3 +12883,139 @@ milestone 5 unstarted; SOW-0017 paused. The eight-role review is re-anchored
 to this exact revision; the external same-session control review (astra
 session) runs after the eight roles PASS, and no further repository commit
 is made after it.
+
+## Wave-19.20 repair and qualification (2026-09-12)
+
+### Review round at the wave-19.19 final revision
+
+The eight-role review at `d1fc9c8d` (pushed, origin/master)
+returned four FAIL classes, all determined by the approved
+specification and the recorded qualification contracts — no new
+product decision was required:
+
+1.  Rust FIFO hang (operations, P1): `reader.open`,
+    `database.info`, and `database.metadata.get` on a FIFO database
+    path never answered and the process leaked after EOF, because
+    the read-only open blocked waiting for a writer.
+2.  Rust busy-reply throughput regression (performance, P2): the
+    wave-19.19 bounded-reply repair spawned one OS thread per
+    session-loop reply, cutting the busy-reject hot path to roughly
+    half of the pre-regression throughput.
+3.  Go missing wire pin (tester, P1): no wire test covered the
+    request id that cannot be echoed within the response-object
+    ceiling; `unanswerableResponse()` was uncovered while Rust had
+    session pins for the same contract.
+4.  Records wording (portability, security, glm, closure, P2): the
+    crash evidence was recorded as "16/16 per direction" although
+    the harness ran twice with the rust_to_go / go_to_rust
+    invocation labels (16/16 scenarios = 8 producer-rust + 8
+    producer-go), and the POSIX guard negative control is an
+    8-key / 3-facts per product gate, not the 50-key Windows
+    split.
+
+### Repairs
+
+- FIFO refusal (Rust): `open_read_only` on Unix now opens with
+  `O_NONBLOCK` and refuses through the authoritative fd
+  (`require_regular_file`), so a FIFO never blocks the open and is
+  rejected with `invalid_argument` immediately; regular files
+  ignore `O_NONBLOCK`, so database behavior is unchanged
+  (`v4/rust/iprange-livedb/src/database_file.rs:229-239`).  Pinned
+  by `fifo_is_refused_without_blocking`
+  (`v4/rust/iprange-livedb/src/database_file.rs:279`).  Mirror of
+  the Go reader, which already refused FIFOs promptly.
+- Dedicated reply-writer thread (Rust): `Session::run` now spawns
+  one long-lived `iprange-loop-reply` thread
+  (`v4/rust/iprange-cli/src/rpc/session.rs:362-371`, channel
+  `v4/rust/iprange-cli/src/rpc/session.rs:234`); every
+  session-loop reply (`-32001`, envelope error, busy,
+  all-rejected batch, unanswerable) is handed to that thread by
+  `write_response_bounded`
+  (`v4/rust/iprange-cli/src/rpc/session.rs:842-882`) with the
+  bounded grace preserved, so a wedged writer stalls only the
+  writer thread, never the session loop, and the busy-reject hot
+  path no longer pays a thread spawn per reply.  The two
+  wedge-boundedness tests still pass
+  (`v4/rust/iprange-cli/src/rpc/session.rs:3799,3865`); test
+  drivers use the test-only `test_reply_sink`
+  (`v4/rust/iprange-cli/src/rpc/session.rs:1052`).
+- Go unanswerable-id wire pins:
+  `TestUnanswerableIDStandaloneAnswersNullIDAndKeepsServing`
+  (single `-32001` object with `id:null`, connection keeps
+  serving) and
+  `TestBatchWithUnanswerableIDAnswersInOrderAndKeepsServing` (one
+  response array, member 0 `id:null`/`-32001`, sibling executes,
+  follow-up served) (`v4/go/internal/cli/rpc/session_test.go:287,330`).
+  `unanswerableResponse()` coverage is now 100%.
+- Records: the SOW status, the wave-19.19 validation record, and
+  the evidence README now state the crash evidence as 16/16
+  scenarios (8 producer-rust + 8 producer-go, one committed
+  crash.json) and the POSIX guard control as 8 expected-allowed
+  case keys + 3 facts per product with the 50-key / 44-refused
+  split explicitly Windows-only.
+
+### Validation (this wave, all steps under `nice`)
+
+- Go module tests 24 packages: rc 0.  Rust workspace tests: rc 0.
+- GOOS/BSD matrix: PASS (7 PASS / 1 SKIP dragonfly/arm64,
+  unsupported by the installed Go toolchain).
+- Matrices: rust 38/38 PASS, go 38/38 PASS, rust_to_go 14 PASS +
+  24 legitimate skips, go_to_rust 14 PASS + 24 skips.
+- Crash positive: 16/16 scenarios PASS under both invocation
+  labels (8 producer-rust + 8 producer-go), rc 0, no leftover
+  processes; both `/bin/false` negative controls rejected
+  (rc 1, failed=16).
+- Resource proofs: 8/8 PASS; harness self-test rc 0.
+- Golden corpus: 55 exchanges / 38 case files PASSED.
+- Sensitivity gate: 14/14 PASSED.
+- Guard POSIX negative control: PASS both products (8
+  expected-allowed case keys + 3 success-fact booleans per
+  product, zero refusals, zero Go<->Rust mismatches).
+- Kind-coverage gate: PASS on the fresh reports and PASS on the
+  rotated committed evidence; forgery battery PASS (every
+  falsification class rejected, genuine evidence accepted);
+  `--self-test` PASS.
+- Behavioral probes on the fresh binaries: FIFO cross-binary
+  probe refuses instantly with `-32010 invalid_argument` rc 0 on
+  all three methods in both engines (previously Rust hung >6 s
+  after EOF); free-lock full-pipe probe self-exits rc 1 with
+  `WEDGED=` empty in both engines; busy-flood probe (500k-line
+  export + 10,000 pipelined describes, concurrent reader drain)
+  measures a median 81,235 replies/s (Rust; Go 74,086 replies/s),
+  restoring about 1.8x of the throughput lost by the wave-19.19
+  per-reply thread spawn (pre-regression ~113,870, regressed
+  ~57,360 — measured by the performance role at wave-19.19).
+- Staged identities: `.local/shared/binaries/SHASUMS.txt` 10/10
+  entries verify with `sha256sum -c`.
+
+Fresh identities (measurements this wave):
+
+- Linux: go product
+  `7e6af62bdd3913c664cb71075f4ceab04ccc89b4d2b5131b07fb8ed31927c334`,
+  go worker
+  `f4af92048e612b9e413b5009d98bd4771eb89b4807ef2d50fe54ef207e641e4b`
+  (both unchanged by this wave); rust product
+  `8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2`,
+  rust worker
+  `169ec999ca44d98c78acf3aa78565111874fa16424878f8a067b9e6158d33d12`,
+  rust fixture
+  `85e00d616b7fcefeb57d8bc01313b9d0d28e50d1005c75296173b473d2efb0d1`.
+- Windows: unchanged from the wave-19.19 record (native host not
+  re-run this wave).
+
+Evidence rotation: the four fresh matrix reports, one fresh crash
+report (rust_to_go labels), the fresh consumer=false negative
+control, the fresh resource report, and the fresh POSIX guard
+report replaced their wave-19.19 counterparts in
+`v4/cli/evidence/`; the negative control is never fed to the kind
+gate.
+
+### Milestone state after this wave
+
+MS4 functional qualification re-earned at this revision; the
+<=1.3x engine performance gate remains FAILED-not-waived (owned by
+pending SOW-0030); milestone 5 unstarted; SOW-0017 paused.  The
+eight-role review re-anchors to this exact revision; the external
+same-session control review (astra session, resumed never
+restarted) runs after the eight roles PASS, and no further
+repository commit is made after it.

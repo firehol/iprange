@@ -1,4 +1,84 @@
-# SOW-0028 delivery step 5 (milestone 4) — qualification evidence
+Current evidence regenerated at the wave-19.20 final revision
+(SOW-0028 "Wave 19 round 19.20", 2026-09-12; product identities in
+the identity block below).  Wave 19.20 repairs the four FAIL
+classes of the eight-role review at the wave-19.19 final revision
+`d1fc9c8d`:
+
+- Rust FIFO hang (operations P1): `reader.open` / `database.info`
+  / `database.metadata.get` on a FIFO database path never answered
+  and the process leaked after EOF, because the read-only open
+  blocked waiting for a writer.  `iprange-livedb` `open_read_only`
+  now opens with `O_NONBLOCK` and refuses through the
+  authoritative fd (`require_regular_file`), mirroring the Go
+  reader; pinned by `fifo_is_refused_without_blocking`.  A
+  cross-binary probe on the fresh executables now refuses instantly
+  with `-32010 invalid_argument` rc 0 on all three methods in both
+  engines.
+- Rust busy-reply regression (performance P2): the wave-19.19
+  bounded-reply repair spawned one OS thread per session-loop
+  reply, cutting the busy-reject hot path to roughly half.  The
+  session loop now owns one long-lived dedicated reply-writer
+  thread (`iprange-loop-reply`, `sync_channel` capacity 1), and
+  `write_response_bounded` hands the frame to it and waits only the
+  bounded grace.  The wave-19.19 wedge probes (writer lock wedged;
+  pipe full with the lock free) still pass, and the busy-flood
+  probe (500k-line export + 10,000 pipelined describes with a
+  concurrent reader drain) restores ~1.8x of the lost throughput
+  (median 81,235 replies/s vs 43,209-44,317 replies/s at the
+  wave-19.19 tree).
+- Go unanswerable-id wire pins (tester P1): Go had no wire test for
+  the request id that cannot be echoed within the response-object
+  ceiling; `unanswerableResponse()` was uncovered.  Two new tests
+  pin the standalone reply (single `-32001` object with `id:null`,
+  connection keeps serving) and the batch reply (one array, member
+  0 `id:null`/`-32001`, sibling executes, follow-up served),
+  mirroring the Rust session pins; `unanswerableResponse()`
+  coverage is now 100%.
+- Records corrections (portability/security/glm/closure, P2): the
+  crash evidence is 16/16 scenarios (8 producer-rust + 8
+  producer-go), not 16/16 per direction, and the POSIX guard
+  negative control covers 8 expected-allowed case keys + 3
+  success-fact booleans per product (the 50-key / 44-refused
+  split describes only the Windows guard evidence).  Words to that
+  effect now appear in this README, the SOW status, and the
+  wave-19.19 validation record.
+
+Fresh Linux battery at this revision (all steps under `nice`; Go
+module tests 24 packages rc 0; Rust workspace tests rc 0; GOOS
+matrix 7 PASS / 1 SKIP); matrices rust 38/38, go 38/38,
+rust_to_go 14 PASS + 24 skips, go_to_rust 14 PASS + 24 skips;
+crash positive 16/16 scenarios pass under both invocation labels
+with both `/bin/false` negatives rejected (rc 1); resource proofs
+8/8 with the harness self-test rc 0; golden exchanges 55 / 38 case
+files; sensitivity gate 14/14; guard POSIX negative control PASS
+for both products (8 expected-allowed case keys + 3 facts per
+product, zero refusals, zero Go<->Rust mismatches); the
+kind-coverage gate PASS on both the fresh reports and the rotated
+committed evidence; the forgery battery PASS (every falsification
+class rejected); `--self-test` PASS; SHASUMS.txt verifies 10/10;
+the FIFO cross-binary probe self-exits on both engines and the
+free-lock full-pipe probe self-exits rc 1 with `WEDGED=` empty.
+Evidence JSONs were regenerated under `/tmp/iprange-w1920/` and
+rotated into this directory; all recorded binary paths stay under
+that authorized scratch root.
+
+Fresh identities (wave-19.20, Linux, measured from one clean
+battery): go product
+`7e6af62bdd3913c664cb71075f4ceab04ccc89b4d2b5131b07fb8ed31927c334`
+(unchanged by this wave), go worker
+`f4af92048e612b9e413b5009d98bd4771eb89b4807ef2d50fe54ef207e641e4b`
+(unchanged), rust product
+`8ce0cd6eae34d813417c3e7d95a801fb4a9339a313724a0f18539230acc372a2`,
+rust worker
+`169ec999ca44d98c78acf3aa78565111874fa16424878f8a067b9e6158d33d12`,
+rust fixture
+`85e00d616b7fcefeb57d8bc01313b9d0d28e50d1005c75296173b473d2efb0d1`.
+Windows identities are unchanged from the wave-19.19 record
+(native host not re-run in this wave).
+
+Previous wave blocks below (wave-19.19 and earlier) remain part of
+the historical record; they are not superseded, only
+superseded-in-position by this head.
 
 Current evidence regenerated at the wave-19.19 final revision
 (SOW-0028 "Wave 19 round 19.19", 2026-09-12, pushed to
@@ -332,12 +412,13 @@ evidence was regenerated on the authorized host (go `1c0297bb...`,
 rust `4c4f20b8...`).  Results: Go module tests 24 packages rc 0;
 Rust workspace tests rc 0; GOOS matrix 7 PASS / 1 SKIP; matrices
 rust 38/38, go 38/38, rust_to_go 14 PASS + 24 skips, go_to_rust
-14 PASS + 24 skips; crash positive 16/16 per direction with both
-`/bin/false` negatives rejected (rc 1); resource proofs 8/8 with
-self-test rc 0; golden exchanges 55 / 38 case files; sensitivity
-14/14; guard POSIX negative control PASS both products (50 keys:
-44 refused + 3 allowed + 3 facts, zero Go/Rust mismatches);
-Windows guard PASS (same 50-key split) and housekeeping PASS
+14 PASS + 24 skips; crash positive 16/16 scenarios (8 producer-rust + 8
+producer-go) with both `/bin/false` negatives rejected (rc 1);
+resource proofs 8/8 with self-test rc 0; golden exchanges 55 / 38
+case files; sensitivity 14/14; guard POSIX negative control PASS
+both products (8 expected-allowed case keys + 3 facts per product,
+zero refusals, zero Go/Rust mismatches); Windows guard PASS (50
+keys: 44 refused + 3 allowed + 3 facts) and housekeeping PASS
 (`windows_qualified=true`, `skipped=false`, `failed=0`); the
 kind-coverage gate, the forgery battery, and `--self-test` PASS
 on the rotated evidence; SHASUMS.txt verifies 10/10.  The

@@ -284,6 +284,103 @@ func TestUnanswerableIDNeverOccupiesQueue(t *testing.T) {
 	}
 }
 
+func TestUnanswerableIDStandaloneAnswersNullIDAndKeepsServing(t *testing.T) {
+	// Wire contract for an id that alone cannot be echoed within the
+	// response-object ceiling (spec iprange-jsonrpc-v1.md): the
+	// single request answers -32001 with id null, the connection
+	// keeps serving, and the reply is a standalone object, never a
+	// batch array (Rust session.rs pins: single_unanswerable_...
+	// and batch_with_unanswerable_id_...).
+	huge := strings.Repeat("I", ResponseObjectLimit+100)
+	out, err := runService(t,
+		`{"jsonrpc":"2.0","id":"`+huge+`","method":"iprange.v1.system.describe","params":{}}`+"\n"+
+			`{"jsonrpc":"2.0","id":"after","method":"iprange.v1.system.describe","params":{}}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := lines(out)
+	if len(got) != 2 {
+		t.Fatalf("want 2 response lines, got %d: %q", len(got), out)
+	}
+	var first map[string]any
+	if err := json.Unmarshal([]byte(got[0]), &first); err != nil {
+		t.Fatalf("first response is not an object: %v", err)
+	}
+	if _, isArray := first["result"]; isArray {
+		t.Fatalf("standalone reply must not be an array: %q", got[0])
+	}
+	if id, ok := first["id"]; !ok || id != nil {
+		t.Fatalf("first id = %v, want null", first["id"])
+	}
+	errorObj, ok := first["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("first response has no error object: %q", got[0])
+	}
+	if code, ok := errorObj["code"].(float64); !ok || int64(code) != TransportFrameTooLarge {
+		t.Fatalf("first error code = %v, want -32001", errorObj["code"])
+	}
+	if msg, _ := errorObj["message"].(string); !strings.Contains(msg, "request id cannot be echoed") {
+		t.Fatalf("first error message = %q", errorObj["message"])
+	}
+	if !strings.Contains(got[1], `"id":"after"`) || !strings.Contains(got[1], `"result"`) {
+		t.Fatalf("connection must keep serving after the unanswerable reply: %q", got[1])
+	}
+}
+
+func TestBatchWithUnanswerableIDAnswersInOrderAndKeepsServing(t *testing.T) {
+	// A batch element whose id cannot be echoed answers -32001 with
+	// id null in its position; the sibling executes normally and the
+	// connection keeps serving (spec batch contract: one response
+	// array, elements in frame order). Mirrors the Rust pin
+	// batch_with_unanswerable_id_answers_elements_in_order_and_keeps_serving.
+	huge := strings.Repeat("I", ResponseObjectLimit+100)
+	out, err := runService(t,
+		`[{"jsonrpc":"2.0","id":"`+huge+`","method":"iprange.v1.system.describe","params":{}},`+
+			`{"jsonrpc":"2.0","id":"ok","method":"iprange.v1.system.describe","params":{}}]`+"\n"+
+			`{"jsonrpc":"2.0","id":"after","method":"iprange.v1.system.describe","params":{}}`)
+	if err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := lines(out)
+	if len(got) != 2 {
+		t.Fatalf("want 2 response lines, got %d: %q", len(got), out)
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(got[0]), &raw); err != nil {
+		t.Fatalf("batch reply must be one array: %v (%q)", err, got[0])
+	}
+	if len(raw) != 2 {
+		t.Fatalf("batch must answer both elements, got %d: %q", len(raw), got[0])
+	}
+	var first map[string]any
+	if err := json.Unmarshal(raw[0], &first); err != nil {
+		t.Fatalf("member 0: %v", err)
+	}
+	if id, ok := first["id"]; !ok || id != nil {
+		t.Fatalf("member 0 id = %v, want null", first["id"])
+	}
+	errorObj, ok := first["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("member 0 has no error: %q", string(raw[0]))
+	}
+	if code, ok := errorObj["code"].(float64); !ok || int64(code) != TransportFrameTooLarge {
+		t.Fatalf("member 0 error code = %v, want -32001", errorObj["code"])
+	}
+	var second map[string]any
+	if err := json.Unmarshal(raw[1], &second); err != nil {
+		t.Fatalf("member 1: %v", err)
+	}
+	if id, _ := second["id"].(string); id != "ok" {
+		t.Fatalf("member 1 id = %v, want ok", second["id"])
+	}
+	if _, ok := second["error"]; ok {
+		t.Fatalf("member 1 must not be an error: %q", string(raw[1]))
+	}
+	if !strings.Contains(got[1], `"id":"after"`) || !strings.Contains(got[1], `"result"`) {
+		t.Fatalf("connection must keep serving after the batch: %q", got[1])
+	}
+}
+
 func TestEOFShutdownExecutesAdmittedUnit(t *testing.T) {
 	// EOF arrives immediately after the request; the admitted unit
 	// must still answer factually.

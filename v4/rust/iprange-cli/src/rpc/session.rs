@@ -227,6 +227,12 @@ enum SessionEvent {
 /// review).
 const FINAL_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// One session-loop reply handed to the dedicated reply-writer
+/// thread: the encoded frame plus a one-shot ack channel carrying
+/// the write result back to the session loop within the bounded
+/// grace.
+type ReplyWrite = (String, SyncSender<io::Result<()>>);
+
 /// Outcome of the bounded final drain.
 enum FinalDrain {
     /// The worker finished within the grace window and was joined.
@@ -341,6 +347,33 @@ impl Session {
             .expect("spawn jsonrpc worker");
         self.worker = Some(worker);
 
+        // Dedicated reply writer, spawned once like the reader and
+        // worker and never joined: it dies with the process when
+        // `run()` returns. Every session-loop reply (transport
+        // errors, busy/unanswerable rejections, all-rejected
+        // batches, the frame-over-limit reply) is written by this
+        // thread, never by the session loop, so a wedged author
+        // (worker blocked in write(2) on a full undrained stdout)
+        // stalls only this thread, never the loop ahead of
+        // shutdown(). One thread per session also keeps the
+        // busy-reject hot path free of per-reply thread spawns
+        // (wave-19.19 performance review: ~2x throughput regression
+        // from spawning an OS thread per session-loop reply).
+        let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel::<ReplyWrite>(1);
+        let reply_writer = Arc::clone(&writer);
+        std::thread::Builder::new()
+            .name("iprange-loop-reply".into())
+            .spawn(move || {
+                while let Ok((text, ack_tx)) = reply_rx.recv() {
+                    let result = {
+                        let mut w = reply_writer.lock().unwrap();
+                        w.write_line(&text)
+                    };
+                    let _ = ack_tx.send(result);
+                }
+            })
+            .expect("spawn reply writer");
+
         // Never joined: it ends by itself at EOF / frame-too-large and
         // is killed with the process on a fatal transport failure.
         let reader_events = events_tx.clone();
@@ -376,16 +409,16 @@ impl Session {
                     // the writer mutex mid-write, and a synchronous
                     // reply write would sit ahead of shutdown(), so
                     // neither the bounded drain nor the grace could
-                    // ever arm. write_response_bounded delivers the
-                    // reply with a bounded wait (inline when the lock
-                    // is free, from a detached thread otherwise); when
-                    // the bound expires the reply is undeliverable, and
-                    // the bounded shutdown below abandons a wedged
-                    // worker and still returns the framing failure
-                    // (non-zero exit). The writer guard never spans the
-                    // worker join: an admitted unit still executing
-                    // must be able to flush its factual response.
-                    match write_response_bounded(&writer, &text) {
+                    // ever arm. The dedicated reply-writer thread
+                    // writes the reply and write_response_bounded
+                    // waits only the bounded grace; when the bound
+                    // expires the reply is undeliverable, and the
+                    // bounded shutdown below abandons a wedged worker
+                    // and still returns the framing failure (non-zero
+                    // exit). The writer guard never spans the worker
+                    // join: an admitted unit still executing must be
+                    // able to flush its factual response.
+                    match write_response_bounded(&reply_tx, &text) {
                         Ok(()) => {}
                         // Undeliverable within the bounded grace:
                         // the framing failure itself is the reported
@@ -452,7 +485,7 @@ impl Session {
                     }
                 }
                 Ok(SessionEvent::Line(Ok(Some(line)))) => {
-                    if let Err(err) = handle_frame(&mut self, line, &writer) {
+                    if let Err(err) = handle_frame(&mut self, line, &reply_tx) {
                         return self.fatal(err);
                     }
                 }
@@ -789,48 +822,52 @@ fn worker_loop<W: Write + Send + 'static>(
 /// transport errors, busy/unanswerable rejections, all-rejected
 /// batches, and the frame-over-limit reply.
 ///
-/// A wedged worker owns the writer mutex while blocked in write(2)
+/// A wedged author owns the writer mutex while blocked in write(2)
 /// on a full undrained stdout pipe (the client closed stdin and
-/// stopped reading). A synchronous reply write would then sit ahead
-/// of shutdown(), so neither the bounded final drain nor the shutdown
-/// grace could ever arm and the process would leak until a signal
-/// killed it (session P2, wave-19.18 integration review). This helper
-/// delivers every reply from a detached thread with a wait bounded by
-/// [`FINAL_DRAIN_GRACE`]; the detached thread is never joined and
-/// dies with the process when `run()` returns.
+/// stopped reading). A synchronous reply write by the session loop
+/// would then sit ahead of shutdown(), so neither the bounded final
+/// drain nor the shutdown grace could ever arm and the process would
+/// leak until a signal killed it (session P2, wave-19.18 integration
+/// review). Every such reply is therefore written by the one
+/// dedicated reply-writer thread spawned by [`Session::run`] (never
+/// by the session loop), and this helper hands the frame to that
+/// thread and waits at most [`FINAL_DRAIN_GRACE`] for its result.
 ///
 /// A free writer lock does not make an inline write safe: the client
 /// can stop reading right after a worker response completed, leaving
 /// the pipe full with the lock released, and a synchronous write
 /// would then block the session loop forever ahead of shutdown
-/// (wave-19.19 integration review). The common case (pipe writable,
-/// worker idle) costs one short-lived thread per session-loop reply;
-/// only error-path replies use this helper, never normal worker
-/// responses.
-fn write_response_bounded<W: Write + Send + 'static>(
-    writer: &Arc<Mutex<FrameWriter<W>>>,
+/// (wave-19.19 integration review). Only error-path replies use this
+/// helper, never normal worker responses.
+fn write_response_bounded(
+    reply_tx: &SyncSender<ReplyWrite>,
     text: &str,
 ) -> io::Result<()> {
-    // Deliver from a detached thread and bound the wait. A thread
-    // creation failure must not block the session loop nor defeat
-    // the bound this helper serves: the reply is undeliverable.
-    let writer_handle = Arc::clone(writer);
+    // Hand the reply to the dedicated writer, bounded by the grace:
+    // a wedged writer stalls on the current or the single buffered
+    // reply, so a full channel means the reply is undeliverable
+    // within the bound and the wait must not grow without limit.
     let text = text.to_string();
-    let (reply_tx, reply_rx) = std::sync::mpsc::channel();
-    if std::thread::Builder::new()
-        .name("iprange-loop-reply".into())
-        .spawn(move || {
-            let result = {
-                let mut w = writer_handle.lock().unwrap();
-                w.write_line(&text)
-            };
-            let _ = reply_tx.send(result);
-        })
-        .is_err()
-    {
-        return Err(response_undeliverable());
+    let (ack_tx, ack_rx) = std::sync::mpsc::sync_channel::<io::Result<()>>(1);
+    let deadline = std::time::Instant::now() + FINAL_DRAIN_GRACE;
+    loop {
+        match reply_tx.try_send((text.clone(), ack_tx.clone())) {
+            Ok(()) => break,
+            Err(std::sync::mpsc::TrySendError::Full(_)) => {
+                if std::time::Instant::now() >= deadline {
+                    return Err(response_undeliverable());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            Err(std::sync::mpsc::TrySendError::Disconnected(_)) => {
+                // The reply writer is gone; the reply is
+                // undeliverable and the session loop must not block.
+                return Err(response_undeliverable());
+            }
+        }
     }
-    match reply_rx.recv_timeout(FINAL_DRAIN_GRACE) {
+    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+    match ack_rx.recv_timeout(remaining) {
         Ok(Ok(())) => Ok(()),
         Ok(Err(err)) => Err(err),
         Err(_) => Err(response_undeliverable()),
@@ -851,11 +888,13 @@ fn response_undeliverable() -> io::Error {
 }
 
 /// Decode one input frame, apply cancellation, admit requests, and
-/// queue or directly answer the resulting work unit.
-fn handle_frame<W: Write + Send + 'static>(
+/// queue or directly answer the resulting work unit. Immediate
+/// dispatcher replies go through [`write_response_bounded`] on the
+/// dedicated reply-writer channel.
+fn handle_frame(
     session: &mut Session,
     line: Vec<u8>,
-    writer: &Arc<Mutex<FrameWriter<W>>>,
+    reply_tx: &SyncSender<ReplyWrite>,
 ) -> io::Result<()> {
     let requests = match schema::decode_frame(&line) {
         Ok(requests) => requests,
@@ -871,7 +910,7 @@ fn handle_frame<W: Write + Send + 'static>(
             let payload = bounded_schema_response(None, err);
             let text = schema::encode_response_frame(&payload)
                 .expect("bounded schema error within frame limit");
-            write_response_bounded(writer, &text)?;
+            write_response_bounded(reply_tx, &text)?;
             return Ok(());
         }
     };
@@ -915,7 +954,7 @@ fn handle_frame<W: Write + Send + 'static>(
             let payload = Value::Array(responses);
             let text = schema::encode_response_frame(&payload)
                 .expect("bounded batch response within ceiling");
-            write_response_bounded(writer, &text)?;
+            write_response_bounded(reply_tx, &text)?;
             return Ok(());
         }
         session
@@ -936,12 +975,12 @@ fn handle_frame<W: Write + Send + 'static>(
                 let payload = bounded_response(busy_response(request), request);
                 let text = schema::encode_response_frame(&payload)
                     .expect("bounded response within frame limit");
-                write_response_bounded(writer, &text)?;
+                write_response_bounded(reply_tx, &text)?;
             }
             Some(WorkEntry::Unanswerable(_)) => {
                 let text = schema::encode_response_frame(&unanswerable_response())
                     .expect("constant transport error within limits");
-                write_response_bounded(writer, &text)?;
+                write_response_bounded(reply_tx, &text)?;
             }
             _ => {
                 session
@@ -1002,6 +1041,32 @@ fn admit_frame(requests: Vec<Request>, in_flight: &AtomicUsize) -> Vec<WorkEntry
         .into_iter()
         .map(|request| admit_one(request, in_flight))
         .collect()
+}
+
+/// Build a reply-writer channel whose consumer writes through the
+/// given FrameWriter, mirroring the dedicated reply-writer thread of
+/// `Session::run`. Test-only: lets every `handle_frame` driver
+/// deliver dispatcher replies synchronously into the captured
+/// writer.
+#[cfg(test)]
+fn test_reply_sink<W: Write + Send + 'static>(
+    writer: &Arc<Mutex<FrameWriter<W>>>,
+) -> SyncSender<ReplyWrite> {
+    let writer_handle = Arc::clone(writer);
+    let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel::<ReplyWrite>(1);
+    std::thread::Builder::new()
+        .name("test-reply-writer".into())
+        .spawn(move || {
+            while let Ok((text, ack_tx)) = reply_rx.recv() {
+                let result = {
+                    let mut w = writer_handle.lock().unwrap();
+                    w.write_line(&text)
+                };
+                let _ = ack_tx.send(result);
+            }
+        })
+        .expect("spawn test reply writer");
+    reply_tx
 }
 
 fn busy_response(request: &Request) -> Value {
@@ -1843,7 +1908,8 @@ mod tests {
         let mut session = Session::new();
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
-        handle_frame(&mut session, serde_json::to_vec(&frame).unwrap(), &writer).unwrap();
+        let reply_tx = test_reply_sink(&writer);
+        handle_frame(&mut session, serde_json::to_vec(&frame).unwrap(), &reply_tx).unwrap();
         let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
         let line = text.lines().next().expect("one response line");
         assert!(
@@ -1942,7 +2008,8 @@ mod tests {
         let mut session = Session::new();
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
-        handle_frame(&mut session, serde_json::to_vec(&frame).unwrap(), &writer).unwrap();
+        let reply_tx = test_reply_sink(&writer);
+        handle_frame(&mut session, serde_json::to_vec(&frame).unwrap(), &reply_tx).unwrap();
         let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
         let line = text.lines().next().expect("one response line");
         assert!(
@@ -2050,10 +2117,11 @@ mod tests {
                 })
             })
             .collect();
+        let reply_tx = test_reply_sink(&writer);
         handle_frame(
             &mut session,
             serde_json::to_vec(&Value::Array(batch)).unwrap(),
-            &writer,
+            &reply_tx,
         )
         .unwrap();
 
@@ -2079,7 +2147,9 @@ mod tests {
                 "method": "iprange.v1.system.describe",
                 "params": {},
             });
-            handle_frame(&mut session, serde_json::to_vec(&frame).unwrap(), &writer).unwrap();
+            let reply_tx = test_reply_sink(&writer);
+            handle_frame(&mut session, serde_json::to_vec(&frame).unwrap(), &reply_tx)
+                .unwrap();
         }
         assert_eq!(
             session.in_flight.load(Ordering::Relaxed),
@@ -2788,7 +2858,8 @@ mod tests {
         let line = serde_json::to_vec(&batch).unwrap();
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
-        handle_frame(&mut session, line, &writer).unwrap();
+        let reply_tx = test_reply_sink(&writer);
+        handle_frame(&mut session, line, &reply_tx).unwrap();
         {
             let c = session.control.lock().unwrap();
             assert!(c.pending.contains("s:a"), "earlier sibling must be pending");
@@ -2821,7 +2892,8 @@ mod tests {
         let line = serde_json::to_vec(&batch).unwrap();
         let output: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         let writer = Arc::new(Mutex::new(FrameWriter::new(SharedVec(output.clone()))));
-        handle_frame(&mut session, line, &writer).unwrap();
+        let reply_tx = test_reply_sink(&writer);
+        handle_frame(&mut session, line, &reply_tx).unwrap();
         assert!(
             !session.control.lock().unwrap().cancelled.contains("s:a"),
             "a not-yet-admitted element must not be a cancellation target"
@@ -3757,8 +3829,9 @@ mod tests {
         });
 
         let mut session = Session::new();
+        let reply_tx = test_reply_sink(&writer);
         let started = std::time::Instant::now();
-        let err = handle_frame(&mut session, b"this is not json\n".to_vec(), &writer)
+        let err = handle_frame(&mut session, b"this is not json\n".to_vec(), &reply_tx)
             .expect_err("undeliverable envelope reply must be a transport failure");
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
         assert!(
@@ -3814,8 +3887,9 @@ mod tests {
         );
 
         let mut session = Session::new();
+        let reply_tx = test_reply_sink(&writer);
         let started = std::time::Instant::now();
-        let err = handle_frame(&mut session, b"this is not json\n".to_vec(), &writer)
+        let err = handle_frame(&mut session, b"this is not json\n".to_vec(), &reply_tx)
             .expect_err("undeliverable reply on a full pipe must be a transport failure");
         assert_eq!(err.kind(), io::ErrorKind::TimedOut);
         assert!(
