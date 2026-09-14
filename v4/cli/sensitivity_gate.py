@@ -27,7 +27,12 @@ import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from command_sanitize import owned_temp_root  # noqa: E402  (side-effect free)
+from command_sanitize import (  # noqa: E402  (side-effect free)
+    owned_temp_root,
+    recorded_checkout_root,
+    recorded_git_identity,
+    sanitized_command,
+)
 from run import CaseRunner, JsonRpcService  # noqa: E402
 from schema.engine import ValidationError  # noqa: E402
 
@@ -148,15 +153,45 @@ def run_mode(mode, steps, want):
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--json-report", metavar="PATH",
+                        help="write the per-mode outcomes and the reviewed "
+                             "revision to a JSON evidence file")
+    args = parser.parse_args()
+
     failures = []
+    modes = []
     for mode, steps, want, marker in MODES:
         passed, detail = run_mode(mode, steps, want)
         ok = (passed and want == "PASS") or (not passed and want == "FAIL"
                                              and marker in detail)
         status = "OK " if ok else "BAD"
         print(f"{status} {mode:24s} want={want:4s} got={detail[:90]}")
+        modes.append({"mode": mode, "want": want, "got": detail,
+                     "expected_marker": marker, "ok": ok})
         if not ok:
             failures.append((mode, want, marker, detail))
+    if args.json_report:
+        target = args.json_report
+        if not os.path.isabs(target):
+            target = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  target)
+        report = {
+            "schema": "iprange-cli-sensitivity-report-v1",
+            "git_head": recorded_git_identity(),
+            "checkout_root": recorded_checkout_root(),
+            "command": sanitized_command(),
+            "modes": modes,
+            "mode_count": len(modes),
+            "failures": [list(entry) for entry in failures],
+            "result": "PASS" if not failures else "FAIL",
+        }
+        with open(target, "w", encoding="utf-8") as stream:
+            json.dump(report, stream, indent=1, sort_keys=True)
+            stream.write("\n")
+
     print()
     if failures:
         for mode, want, marker, detail in failures:

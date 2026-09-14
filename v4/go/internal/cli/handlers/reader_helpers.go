@@ -125,7 +125,10 @@ func ValidateDelivery(value rawObject) error {
 		if bytesLimit == 0 {
 			return fmt.Errorf("delivery.max_output_bytes must be positive")
 		}
-		if _, err := asUint64(delivery, "max_open_files"); err != nil {
+		// Zero is refused here, not only by the re-checking caller, so no
+		// composition of this validator can reach a reader that cannot
+		// open its own descriptors.
+		if _, err := asPositiveU32(delivery, "max_open_files"); err != nil {
 			return fmt.Errorf("delivery.max_open_files must be u32")
 		}
 		return nil

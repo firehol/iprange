@@ -31,6 +31,7 @@ import (
 	"unicode/utf8"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
+	"github.com/firehol/iprange/v4/go/internal/cli/fileio"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/pathname"
@@ -807,8 +808,15 @@ func openDirectCsv(path string, maxLineBytes int, ipv6 bool) (*directCsvSource, 
 	default:
 		return nil, csvFailure("io", fmt.Sprintf("inspect direct CSV input %s: %v", path, err))
 	}
+	// The open judges the descriptor it opened, not the path stat above
+	// (which may already be stale): a swapped-in FIFO is refused with
+	// this arm's non-regular class instead of being read as an empty
+	// input (Rust io::caller_open::open_regular).
 	file, err := openDirectCsvNoBlock(path)
 	if err != nil {
+		if errors.Is(err, errOpenedNotRegular) {
+			return nil, csvFailure("invalid_path", fmt.Sprintf("direct CSV input is not a regular file: %s", path))
+		}
 		return nil, csvFailure("io", fmt.Sprintf("open direct CSV input %s: %v", path, err))
 	}
 	source := &directCsvSource{
@@ -1164,13 +1172,18 @@ func runRefresh(st *rpc.SessionState, params json.RawMessage, lastSeen bool) (an
 	if herr := requireExistingDatabase(decoded.path); herr != nil {
 		return nil, herr
 	}
-	reader, herr := openDatabaseSource(decoded.sourcePath, decoded.sourceMode, "current coverage source", st.Token())
+	reader, herr := openRefreshSource(decoded.sourcePath, decoded.sourceMode, st.Token())
 	if herr != nil {
 		return nil, herr
 	}
 	info, err := readerInfoErr(reader)
 	if err != nil {
-		return nil, CloseOnError([]*rpc.ReaderValue{reader}, readError(err))
+		// Rust live.rs reports this pre-work failure with the refresh
+		// outcome not_started (lifecycle::sdk_error(&error,
+		// "not_started")): neither the reader table nor the writer was
+		// used, so read_only_failure would claim a read that never
+		// started.
+		return nil, CloseOnError([]*rpc.ReaderValue{reader}, SDKError(err, "not_started"))
 	}
 	writer, err := iprangedb.OpenLiveWriter(decoded.path, decoded.budget, st.Token())
 	if err != nil {
@@ -1622,7 +1635,7 @@ func (c *removalCollector) publishInner() (map[string]any, *rpc.HandlerError) {
 			return nil, fileError(err, "remove removal temporary")
 		}
 	case iprangedb.PolicyReplaceExisting, iprangedb.PolicyReplaceExistingNoRollback:
-		if err := os.Rename(c.temporary, c.destination); err != nil {
+		if err := fileio.RenameReplace(c.temporary, c.destination); err != nil {
 			return nil, fileError(err, "publish removal output")
 		}
 	}

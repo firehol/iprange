@@ -53,9 +53,11 @@ Shared, read-only review material lives under `.local/shared/`
 (`binaries/` with SHASUMS, `probes/` with the accumulated failure
 reproducers, `README.md`).  The tree is read-only for every role;
 roles run probes, stub products, and mutate evidence only inside their
-own sandbox.  The repository reviewers' own-model roles are spawned
-with the lead's model except `.local/glm/`, which uses
-glm-5.3-responses.
+own sandbox.  All eight role agents, including `.local/glm/`, inherit the
+lead assistant's current model (user instruction 2026-09-14:
+internal reviewers use the lead's model exclusively).  The
+cross-model independent control is the persistent external
+astra/sol session invoked through the external-reviewers skill.
 
 Binding severity convention for all roles (from the user): P0 = data
 corruption/crash/security; P1 = wrong behavior on valid input, OR a
@@ -74,6 +76,42 @@ user as an independent check.
 ## Status
 
 Status: in-progress
+
+Wave-19.23 state (2026-09-14): the eight-role adversarial round
+reviewed the wave-19.22 final revision `cfbee7887fb71de67df35ea913d6f7ae70c5c011`
+and every role returned FAIL — 38 numbered findings total
+(1 P0, 16 P1, 19 P2, 2 P3) plus non-blocking P3 notes.  This wave's
+single integration commit closes all of them: the Go metadata source
+read is a bounded loop-to-EOF read behind an `O_NONBLOCK` open owner
+(the wave-19.22 stat-sized single-`Read` regression is gone); the
+remaining caller-path wedge surface is closed on both engines (Go
+per-arm open owners, one new Rust owner
+`v4/rust/iprange-cli/src/io/caller_open.rs`), with all swap races
+prompt (hangs=0) and strace-verified `O_NONBLOCK`; the 22-arm/path-kind
+refusal-class divergences are resolved to DIVERGENCES: 0 under the
+recorded rulings below (one approved Rust-side class fold: quiescent
+validate sidecar open -> `live_recovery_coordination_unavailable`);
+Go now refuses `writer_budget.max_open_files = 0` with `-32602` on
+every writer method; the legacy `@directory` symlink drop is fixed
+with a committed `tests.d` case; `publication.resolve`, refresh
+`data.outcome`, and directory-output-destination classes are aligned
+to Rust; the qualification corpus gained eleven cases (params
+negatives, `replace_file` byte-exactness on all three publishers,
+`@`-path expansion, cross-language export) and two committed gates
+(`check_fifo_surface.py` 17 arms x 2 engines, `throughput_harness.py`
+with thread-structure attestation); the known-defects ledger is
+enforced in both directions and is empty; every report carries
+`git_head`; Windows evidence was regenerated natively on the
+authorized Windows validation host and `GOOS=windows go vet ./...`
+is now a committed gate; the Windows `samefile_test.go` portability
+failures are fixed and the native Windows Go suite is green.  The
+full battery is green (wave-19.23 head block of
+`v4/cli/evidence/README.md`).  The eight-role re-anchor runs against
+this exact integration commit; milestone 4 closure remains a user
+decision; the <=1.3x performance requirement remains FAILED and not
+waived (engine residuals owned by pending SOW-0030); SOW-0017
+(snapshot signing) remains paused; milestone 5 (delivery step 6) is
+unstarted.
 
 Wave-10 state (2026-09-06): the first role-based review round
 FAILed with eleven verified findings; all four user decisions
@@ -13377,3 +13415,275 @@ eight-role review re-anchors to this exact revision; the external
 same-session control review (astra session, resumed never
 restarted) runs after the eight roles PASS, and no further
 repository commit is made after it.
+
+## Wave-19.23 repair and qualification (2026-09-14)
+
+### Review round anchor
+
+The eight-role adversarial round reviewed exactly
+`cfbee7887fb71de67df35ea913d6f7ae70c5c011` (== `origin/master`,
+clean working tree verified by every role at review start).  All
+eight roles returned FAIL.  Full per-role reports live in the
+review sandboxes (`.local/<role>/report.md`, gitignored); the
+numbered findings and their dispositions are recorded below, which
+also repairs the wave-19.22 record defect of leaving verdicts
+unanchored to a revision (closure F7).
+
+Findings by role: tester 2 P1 + 2 P2; operations 2 P1; parity
+1 P0 + 2 P1 + 2 P2; portability 3 P1 + 2 P2; security 1 P1 + 4 P2;
+performance 3 P1 + 1 P2; glm 2 P1 + 2 P2 + 2 P3; closure 1 P1 +
+6 P2.
+
+### Rulings recorded for this wave (user decisions/ratifications)
+
+1. Rust remains the authority for refusal classes where the
+   specification does not pin behavior explicitly; Go aligns to
+   Rust.
+2. Ratified single Rust-side class change: the quiescent
+   (`live_current`) validate path's live-sidecar open failure folds
+   through `live_coordination_error` and answers
+   `live_recovery_coordination_unavailable`, matching the
+   `recovery.inspect` sibling
+   (`v4/rust/iprange-livedb/src/validation/source.rs:165-172`).
+   The class sweep moved 22 -> 21 with this change and 21 -> 0
+   with the Go alignments.
+3. Ratified the known-defects ledger
+   (`v4/cli/evidence/known-defects.json`): enforced in both
+   directions — an unlisted FAIL fails the kind gate, and a listed
+   defect that passes fails it.  The ledger is currently empty.
+4. Accepted P3: `validation/source.rs:173` does not wrap the
+   sidecar lock-gate error while `recovery/inspection.rs:112`
+   wraps its gate lock; no committed probe reaches the state, and
+   wrapping it would move a class no reviewer flagged.
+5. P3 precedent reaffirmed: parity acceptance compares `data.code`
+   and outcome class, not human-readable message text.
+6. Unchanged: the <=1.3x performance gate is FAILED, not waived;
+   engine residuals belong to pending SOW-0030; SOW-0017 stays
+   paused; milestone 5 is unstarted.
+7. The authorized Windows validation host remains restricted to
+   SOW-0028 compilation and qualification.
+
+### Repairs, per finding cluster, with verification
+
+A. Go metadata source read (parity P0; tester F1; glm 5-class;
+performance 1; portability F1).  The wave-19.22 regression
+(single `Read` sized by `stat`, count discarded, NUL padding or
+silent truncation persisted for procfs/sysfs sources) is replaced:
+`readMetadataFile` keeps the pre-stat refusals, opens
+`O_RDONLY|O_NONBLOCK` through new owners
+`v4/go/internal/cli/handlers/metadata_open_unix.go` /
+`metadata_open_windows.go`, and loops to EOF appending only bytes
+actually read, with the 20 MiB cap enforced against bytes read
+(`lifecycle_facts.go`, `readMetadataBounded`).  Verification:
+committed pins `metadata_source_read_test.go` (procfs zero-size
+and sysfs oversized-`st_size` arms; restoring the pre-fix read
+fails both), live byte-identical parity against the staged Rust
+product (`/proc/self/net/route` 1280 B, sysfs `mtu` 6 B,
+`scaling_governor` 10 B), and new corpus cases
+`metadata.replace_file.{direct,replace,publish}` +
+`mixed.metadata-replace-file` asserting byte-exact base64
+persistence on every publisher.
+
+B. Regular-to-FIFO swap wedge class (operations F1-F2; parity 3;
+portability F2-F4; performance 2-3; glm 1-3).  Remaining bare
+caller-path opens on both engines now open `O_NONBLOCK` and judge
+the opened descriptor inside the open owner, refusing with the
+class byte-identical to that arm's pre-check ("input is not a
+regular file", "file list is not a regular file", "direct CSV
+input is not a regular file", "metadata source is not a regular
+file").  Go owners: `fileio/opened_regular.go`,
+`fileio/input_open_unix.go`, `fileio/csv_open_unix.go`,
+`handlers/opened_regular.go`, `handlers/metadata_open_unix.go`
+(+ Windows counterparts).  Rust: single new owner
+`v4/rust/iprange-cli/src/io/caller_open.rs` wired at
+`io/input.rs` (`open_input_file`, `open_file_list`),
+`rpc/handlers/lifecycle.rs` (`open_metadata_source`), and
+`rpc/handlers/live.rs` (`open_direct_csv_file`); `read_bounded`
+now takes the opened `File` (loop-to-EOF and cap logic verbatim).
+Verification: swap races hangs=0 on all arms (operations
+30-attempt x 4 arms; parity 120-trial / 1,302,172-flip race, both
+engines; glm LD_PRELOAD shim race; performance strace-observed
+arms showing `O_RDONLY|O_NONBLOCK|O_CLOEXEC`); deleting the flag
+makes the committed pins FAIL within 5 s (bounded-wait guards on
+the Rust livedb FIFO pins so sensitivity cannot hang);
+`@file-list` static-FIFO classes unchanged on both engines.
+
+C. Refusal-class parity (closure F1; parity 4; security 3-5).
+Go alignments: removed the symlink-following pre-stat veto in
+`v4/go/internal/mapping/mapping.go`; quiescent recovery/validate
+rw opens go through the retained parent directory
+(`v4/go/internal/live/open_retained.go`,
+`recovery/source_open_{unix,windows}.go`) enforcing Rust's
+single-link/same-filesystem rules (vanished source ->
+`name_not_found`, one committed test updated with the citation);
+`publication.resolve` missing ancestor -> `name_not_found`
+(`publication_resolve_ancestor_test.go`); directory output
+destinations -> `io` via raw `rename(2)`
+(`fileio/rename_{unix,windows}.go`, `RenameReplace` used by all
+three publication sites, because Go `os.Rename` converts `EISDIR`
+to `os.ErrExist`); refresh arms answer `not_started` outcome
+(`refresh_source_outcome_test.go`); namespace errors fold through
+the canonical table (`live.MapNamespaceError`, `ns_error.go`).
+Verification: closure class sweep over all arms x path-kinds
+reports DIVERGENCES: 0 on the qualification binaries (was 22).
+
+D. Go writer-budget validation (security 1).  Go accepted
+`writer_budget.max_open_files = 0` where Rust refused before any
+path access; `parsePositiveU32Member` now enforces positivity in
+both the validator and the decoder (`validateWriterBudgetObject`,
+`decodeWriterBudget`), and `ValidateDelivery` was hardened in the
+same-failure search.  Verification: committed pins
+`writer_budget_zero_test.go` (restore-the-pre-fix-validator
+mutation fails), corpus cases `params.negative.*` (five) answer
+`-32602` with an empty target directory (no writer opened), and
+the corpus mode `expect_params_rejected` aborts if the committed
+schema ever drifts to accept the params it asserts against.
+
+E. Legacy CLI `@directory` (parity 2).
+`v4/go/internal/cli/legacy/parse.go` classifies entries with
+`os.Stat` (follows symlinks), matching C (`src/iprange.h:73-82`)
+and Rust (`fs::metadata`), so a symlinked regular file inside an
+`@directory` participates in the merge.  Verification: new
+committed case `tests.d/101-directory-symlink-input` (reverting
+the classifier fails it); full `tests.d` 101/101 against both the
+C binary and the Go binary.
+
+F. Qualification corpus and gates (tester F2-F4; security 2;
+parity 5; closure F2/F5/F6; performance 4).  New committed
+harness assets: `v4/cli/check_fifo_surface.py` (17 arms x 2
+engines never-block gate, `--self-test` 18 cases),
+`v4/cli/throughput_harness.py` (busy-reply rate + thread
+structure; go 16-17 clone calls / <=11 unique child tids, rust 4/4;
+median 38,350.3 vs 62,524.5 replies/s; attestation, not a
+threshold; `--self-test` 10 cases), 11 new cases (see A/D/B),
+`evidence/known-defects.json` ledger (bidirectional, empty),
+`git_head` embedded in every harness report
+(`command_sanitize.recorded_git_identity()`), kind gate iterating
+the full `REQUIRED_OPENED_KINDS` (adapter_output and
+metadata_delivery carry both-language open evidence; export
+consumer evidence added), and 11 additional negative controls in
+`check_kind_coverage.py --self-test`.  `v4/cli/schema/results.py`
+`_self_test()` TypeError fixed.  Verification: every gate re-run
+against genuine evidence PASSes and every mutation control FAILs
+(forgery battery PASS, FIFO/throughput self-tests PASS, negative
+controls demonstrated).
+
+G. Windows portability and re-qualification (portability F5;
+closure F4; glm 4).  Native Windows `go test ./...` now builds
+(`//go:build unix` tags on the three `x/sys/unix` test files) and
+runs green: `samefile_test.go` emits the `.exe` worker name under
+`runtime.GOOS` and closes pinned readers (explicit
+`iprange.v1.reader.close`) before temp-dir cleanup — Linux and
+native Windows both verified.  `check_goos_matrix.sh` adds a
+committed `GOOS=windows CGO_ENABLED=0 go vet ./...` step
+(overlay mutation removing a build tag makes it FAIL).
+`windows-guard.json` (PASS both products, 50 keys) and
+`windows-housekeeping.json` (`windows_qualified=true`, 2/2, 50
+removal rows, removal log sha identical to the prior native wave)
+were regenerated natively on the authorized Windows validation host
+from the wave-19.23 tree with recorded toolchains (go1.26.5,
+rustc 1.97.1-msvc, harness CPython 3.14.6 mingw64) and build
+commands; host-side artifacts were retained for verification and
+the checkout under the operator profile was removed after the run.
+
+H. Records (closure F5/F7; security role records findings).
+This section anchors the eight-role round to `cfbee788`.  The
+evidence head block in `v4/cli/evidence/README.md` records the
+wave-19.23 repairs, the full battery, the Linux identities from
+one clean battery (go `d791b1d2…`, go worker `6442c259…`, rust
+`47679f55…`, rust worker `e72d7d45…`, fixture `a3731288…`), the
+native Windows identities (go `45f388b2…`, go worker
+`ea0e974c…`, rust `69962ed1…`, rust worker `9df3efac…`, fixture
+tool `99223976…`, fixture database `1e4a316e…`) and toolchains,
+plus the identity note that the battery executed at the pre-commit
+wave tree so reports embed `git_head=cfbee788` while the product
+source is this wave's integration commit.  The Rust identity is
+re-derivable from the recorded canonical recipe (fixed staging
+path, fresh `CARGO_TARGET_DIR`; Go `-trimpath
+-buildvcs=false` from a clean staging copy); stale binaries were
+quarantined under `.local/shared/binaries/_stale-1923*` and
+`SHASUMS.txt` regenerated over all 11 staged files including the
+Windows builds.
+
+### Battery (wave-19.23, all steps rc 0 under `nice`)
+
+Go module tests 24 packages; Rust workspace tests (fresh target
+dir); GOOS matrix 7 PASS / 1 SKIP + `windows/amd64 vet` PASS;
+matrices rust 49/49, go 49/49, rust_to_go 25 PASS + 24 skips,
+go_to_rust 25 PASS + 24 skips; crash 16/16 both directions with
+`/bin/false` producer and consumer negatives each rejected
+0-passed/16-failed; resource 8/8 + self-test PASS; throughput PASS
+(values above); golden 55 exchanges / 49 case files; sensitivity
+14/14; POSIX guard negative control PASS both products;
+kind-coverage gate PASS + self-test PASS; FIFO surface gate PASS
+(17 x 2) + self-test PASS; class sweep DIVERGENCES: 0; swap races
+hangs=0; `tests.d` 101/101 both engines; forgery battery PASS;
+Rust source graph complete (506 sources); SHASUMS re-verified.
+
+### Open P3 residuals (documented, non-gating, owned here)
+
+1. Rust `sync_directory()` opens the parent with bare
+   `File::open` (`iprange-cli/src/rpc/handlers/live.rs:1951`,
+   `output.rs:689`, `io/export_writer.rs:326`): a FIFO named as
+   the parent directory would block, but the call is
+   post-operation durability work, not an arm-facing refusal
+   point; requires an is-directory judgment before any class
+   claim.  Criterion for removal: an arm-exact ruling plus a pin.
+2. `validation/source.rs:173` lock-gate asymmetry (ruling 4).
+3. Rust `read_bounded`'s 20 MiB-during-read loop has no direct
+   unit test (pre-existing; loop moved verbatim this wave;
+   end-to-end happy path byte-exact).
+4. Repo-wide `cargo fmt --check` drift and pre-existing clippy
+   warnings outside this wave's files (per-file hunk counts equal
+   the base; wave-touched code canonical).
+5. Message-text divergences (ruling 5).
+
+### Validation gate (this wave)
+
+- Acceptance-criteria evidence: battery above + this section.
+- Tests or equivalent validation: committed pins and cases cited
+  per cluster; mutation proofs listed per worker report retained
+  in the role/worker sandboxes.
+- Real-use evidence: both engines execute the full external case
+  corpus; legacy `tests.d` suite green for the Go engine.
+- Reviewer findings and handling: this section.
+- Same-failure searches: bare-open audit (finding B residual list
+  -> open P3-1); validator/decoder `max_open_files` audit;
+  symlink-following pre-stat audit across mapping/recovery owners.
+- Sensitive-data gate: evidence JSONs scrub `checkout_root` to
+  null; no personal home paths or validation-host aliases in
+  committed artifacts (Windows host referenced as "the authorized
+  Windows validation host"); SOW historical examples use generic
+  placeholders only.
+- Artifact maintenance gate: `v4/cli/README.md` and
+  `v4/cli/evidence/README.md` updated this wave; `AGENTS.md`
+  unchanged (no workflow change); project skills unchanged (role
+  protocol text updated in this SOW only); specs unchanged — the
+  repairs align implementations to the frozen
+  `iprange-jsonrpc-v1`/`binary-format-v4` contracts, and the one
+  Rust-side fold is recorded above under user ratification;
+  end-user/operator docs outside `v4/cli` unaffected (CLI surface
+  additions are qualification-only); operator skills unaffected.
+- SOW status/directory consistency: `Status: in-progress` in
+  `.agents/sow/current/` — milestone 4 re-anchor review and the
+  user's closure decision are pending, so this SOW stays current.
+- Lessons: (1) gates must derive identity from executed-actor
+  provenance, never from labels; (2) any post-review commit — even
+  record-only — invalidates verdicts, so the close-out is one
+  integration commit followed by the exact-revision round; (3)
+  evidence files must be rotated together with the binaries they
+  record, including cross-OS artifacts; (4) reviewer claims about
+  staged artifacts need a ledger (SHASUMS) that covers every
+  directory the battery consumes.
+- Follow-up mapping: open P3 residuals tracked above; no new SOW
+  opened by this wave; performance gate ownership stays with
+  pending SOW-0030; SOW-0017 stays paused; milestone 5 unstarted.
+
+### Verdict protocol for the re-anchor round
+
+The eight roles re-run against this exact integration commit (all
+on the lead assistant's model per the user's standing instruction;
+the astra external session remains the cross-model control).  Each
+role's report is retained in its sandbox and its verdict is
+delivered out-of-band; no repository commit follows the accepted
+round, so the reviewed revision remains HEAD at closure.

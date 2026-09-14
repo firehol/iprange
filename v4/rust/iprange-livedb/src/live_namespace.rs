@@ -314,36 +314,97 @@ fn namespace_error(error: NamespaceError) -> Error {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::test_support_tests::{open_is_prompt, writerless_fifo};
 
     /// The quiescent live open arm must refuse a FIFO promptly with
     /// WrongMode (wire wrong_state), never block waiting for a writer:
-    /// Directory::open_regular opens O_NONBLOCK and regular_identity
-    /// maps the fifo to NotRegular (wave-19.21 parity pin: the Go
-    /// quiescent arm reported invalid_argument for every non-regular
-    /// file; the Rust arm is authoritative and reports WrongMode).
+    /// `Directory::open_regular` opens `O_NONBLOCK` and `regular_identity`
+    /// maps the fifo to NotRegular (the Go quiescent arm reported
+    /// invalid_argument for every non-regular file; the Rust arm is
+    /// authoritative and reports WrongMode).
+    ///
+    /// The open runs off-thread with a bounded join, so dropping
+    /// `O_NONBLOCK` fails this pin instead of hanging the suite.
     #[test]
     fn open_rw_refuses_fifo_as_wrong_mode() {
-        use std::os::unix::ffi::OsStrExt;
-
-        let dir = std::env::temp_dir().join(format!(
-            "iprange-openrw-fifo-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("fifo");
-        let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-        let rc = unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) };
-        assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
-        let result = open_rw(&path);
-        std::fs::remove_dir_all(&dir).ok();
-        let err = result.expect_err("fifo must not open as a live database file");
+        let (directory, path) = writerless_fifo("open-rw");
+        let opened = open_is_prompt("open_rw fifo", move || open_rw(&path));
+        let _ = std::fs::remove_dir_all(&directory);
+        let error = opened.expect_err("fifo must not open as a live database file");
         assert!(
-            matches!(err, crate::error::Error::WrongMode(_)),
-            "unexpected error: {err:?}"
+            matches!(error, Error::WrongMode(_)),
+            "unexpected error: {error:?}"
         );
+    }
+
+    /// The refusal arm one opened descriptor is classified as.
+    #[cfg(target_os = "linux")]
+    #[derive(Debug, PartialEq, Eq)]
+    enum Arm {
+        WrongMode,
+        Io,
+        DurabilityUnsupported,
+        NameNotFound,
+    }
+
+    #[cfg(target_os = "linux")]
+    fn arm_of(error: &Error) -> Arm {
+        match error {
+            Error::WrongMode(_) => Arm::WrongMode,
+            Error::Io(_) => Arm::Io,
+            Error::DurabilityUnsupported(_) => Arm::DurabilityUnsupported,
+            Error::NameNotFound => Arm::NameNotFound,
+            other => panic!("{other:?} is not a refusal arm of this open"),
+        }
+    }
+
+    /// The refusal classes of the quiescent live (read-write) open arm, one
+    /// case per non-regular path kind. The Go reader conforms to these
+    /// classes, so each is pinned rather than inferred from the FIFO case
+    /// alone:
+    ///
+    /// * FIFO: an `O_RDWR` open never waits for a partner, the opened
+    ///   descriptor is what is judged, and `regular_identity` reports
+    ///   NotRegular, so the arm maps it to WrongMode (wire wrong_state).
+    /// * symlink to a FIFO or a directory: the open is refused for the link
+    ///   (`ELOOP` from `O_NOFOLLOW`), which `is_nofollow_symlink` also
+    ///   reports as NotRegular, so the arm maps it to WrongMode.
+    /// * directory and AF_UNIX socket: the open itself is refused
+    ///   (`EISDIR`, `ENXIO`), so the arm reports Io.
+    /// * character device: the containing directory `/dev` is not one of the
+    ///   local filesystems the namespace accepts, so the arm reports
+    ///   DurabilityUnsupported before the name is opened at all.
+    /// * missing name: NameNotFound.
+    ///
+    /// The non-FIFO kinds are Linux-only because whether opening a directory
+    /// or a socket inode succeeds differs across the supported unixes; those
+    /// arm classes are qualified where the dual-language battery runs and are
+    /// not claimed elsewhere. Each open still runs off-thread with a bounded
+    /// join, so an open that ever waits for a FIFO writer fails the pin
+    /// instead of hanging the suite.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn open_rw_refusal_class_is_exact_per_non_regular_path() {
+        use crate::test_support_tests::{non_regular, NonRegularPath};
+
+        let cases = [
+            (NonRegularPath::Fifo, Arm::WrongMode),
+            (NonRegularPath::SymlinkFifo, Arm::WrongMode),
+            (NonRegularPath::SymlinkDirectory, Arm::WrongMode),
+            (NonRegularPath::Directory, Arm::Io),
+            (NonRegularPath::Socket, Arm::Io),
+            (NonRegularPath::CharacterDevice, Arm::DurabilityUnsupported),
+            (NonRegularPath::Missing, Arm::NameNotFound),
+        ];
+        for (kind, expected) in cases {
+            let fixture = non_regular(kind, "open-rw-matrix");
+            let path = fixture.path.clone();
+            let opened = open_is_prompt(&format!("{kind:?} rw"), move || open_rw(&path));
+            fixture.cleanup();
+            let error = opened
+                .err()
+                .unwrap_or_else(|| panic!("{kind:?} must not open as a live database file"));
+            assert_eq!(arm_of(&error), expected, "{kind:?} rw arm");
+        }
     }
 }

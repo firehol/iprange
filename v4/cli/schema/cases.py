@@ -9,6 +9,18 @@ runner writes one frame without an id and never reads a response for it, so the
 step must not carry ``expect_result``, ``expect_error``, ``capture``, or
 ``assert_files``.  The transport accepts only ``iprange.v1.cancel`` as a
 notification, so a notification step must use that method (frame.py contract).
+
+An rpc step with ``"expect_params_rejected"`` is a negative-params test: the
+request is intentionally outside the published params contract, the runner
+sends it verbatim instead of rejecting it client-side, and the step asserts
+the JSON-RPC params-validator answer (transport code ``-32602``, optionally a
+message substring).  The mode exists because the runner otherwise validates
+every request against this schema before sending it, so a corpus could not
+express "the service must refuse this params object" at all.  It is
+non-vacuous by construction: the runner re-validates the request and fails
+the step when the client-side schema accepts it, which would mean the step
+proves nothing about the service validator while the committed schema still
+disagrees with the service (schema/cases.py ``validate_rpc_request``).
 """
 
 import os
@@ -81,6 +93,15 @@ def _rpc_step(expectation):
         },
         "assert_files": {"type": "array", "items": _ASSERT_FILE, "max": 64},
         "notification": {"type": "boolean"},
+        # Digest-group label.  Steps that must produce byte-identical
+        # artifacts label the artifact with the same group; the runner
+        # records the observed artifact digest per group and per
+        # language, and the kind gate requires one digest per group
+        # attested by both product languages.  It exists so a
+        # cross-language equivalence claim (for example "Go exports a
+        # Rust-written database to the same netset bytes Rust exports")
+        # is bound to executed evidence instead of to a prose constant.
+        "digest_group": {"type": "string", "min_len": 1, "max_len": 64},
     }
     required = ["kind", "actor", "method", "params"]
     if expectation is not None:
@@ -111,10 +132,25 @@ _EXPECT_ERROR = {
         "additional": False,
     }
 }
+_EXPECT_PARAMS_REJECTED = {
+    "expect_params_rejected": {
+        "type": "object",
+        "properties": {
+            # Optional substring of the JSON-RPC error message.  Message
+            # text is diagnostic-only across engines (an accepted P3
+            # difference), so a case pins it only where the Rust
+            # authority and the Go port provably share the text; every
+            # other negative asserts the transport code alone.
+            "message_contains": {"type": "string", "min_len": 1},
+        },
+        "additional": False,
+    }
+}
 _RPC_STEPS = (
     _rpc_step(None),
     _rpc_step(_EXPECT_RESULT),
     _rpc_step(_EXPECT_ERROR),
+    _rpc_step(_EXPECT_PARAMS_REJECTED),
 )
 
 _LEGACY_STEP = {
@@ -148,8 +184,18 @@ CASE = {
                         "type": "one_of",
                         "options": [
                             {
+                                # text_expand_work rewrites every
+                                # "$WORK/" occurrence in the text to the
+                                # absolute per-case work directory before
+                                # the file is written.  It exists for
+                                # @file-list inputs: the list contents
+                                # are paths the service reads, so they
+                                # cannot be substituted through params.
                                 "type": "object",
-                                "properties": {"text": {"type": "string"}},
+                                "properties": {
+                                    "text": {"type": "string"},
+                                    "text_expand_work": {"type": "boolean"},
+                                },
                                 "required": ["text"],
                                 "additional": False,
                             },
@@ -184,6 +230,23 @@ CASE = {
                                     },
                                 },
                                 "required": ["csv_db"],
+                                "additional": False,
+                            },
+                            {
+                                # A symbolic link whose target is another
+                                # fixture path in the same work directory,
+                                # spelled absolute so the link resolves
+                                # when the engine follows it from any
+                                # working directory.  Directory scans
+                                # classify entries through the followed
+                                # stat, so a symlink to a regular file
+                                # must be read by the engine; this source
+                                # is what pins that class.
+                                "type": "object",
+                                "properties": {
+                                    "symlink_to": C.PATH,
+                                },
+                                "required": ["symlink_to"],
                                 "additional": False,
                             },
                         ],
@@ -260,6 +323,14 @@ def validate_case(case):
     fixture_paths = []
     for index, fixture in enumerate(case["fixtures"]):
         _relative_work_path(fixture["path"], f"fixtures[{index}].path")
+        source = fixture["source"]
+        if "symlink_to" in source:
+            # The link target is a work-dir path like every other
+            # fixture reference: it can never name anything outside
+            # $WORK, so a directory-expansion case cannot reach a file
+            # the operator did not declare.
+            _relative_work_path(source["symlink_to"],
+                                f"fixtures[{index}].source.symlink_to")
         fixture_paths.append(fixture["path"])
     if len(fixture_paths) != len(set(fixture_paths)):
         raise ValidationError("fixtures", "fixture paths must be unique")
@@ -290,7 +361,9 @@ def validate_case(case):
                     f"steps[{index}].method",
                     "only iprange.v1.cancel may be sent as a notification",
                 )
-            for member in ("expect_result", "expect_error", "capture", "assert_files"):
+            for member in ("expect_result", "expect_error",
+                           "expect_params_rejected", "capture",
+                           "assert_files"):
                 if member in step:
                     raise ValidationError(
                         f"steps[{index}].{member}",
@@ -301,6 +374,39 @@ def validate_case(case):
                 f"steps[{index}].notification",
                 "iprange.v1.cancel is a notification and requires \"notification\": true",
             )
+
+        if "digest_group" in step:
+            if step["method"] != "iprange.v1.export":
+                raise ValidationError(
+                    f"steps[{index}].digest_group",
+                    "digest_group is only meaningful on iprange.v1.export, "
+                    "the one method whose artifact both languages must "
+                    "produce identically")
+            if "expect_params_rejected" in step or "expect_error" in step:
+                raise ValidationError(
+                    f"steps[{index}].digest_group",
+                    "a step that must produce an artifact cannot also "
+                    "expect to be refused")
+
+        if "expect_params_rejected" in step:
+            # A params refusal happens before the service opens the
+            # named paths, so capturing from the response or asserting a
+            # produced file would encode an expectation the step cannot
+            # legitimately have.
+            for member in ("capture", "assert_files", "expect_result",
+                           "expect_error"):
+                if member in step:
+                    raise ValidationError(
+                        f"steps[{index}].{member}",
+                        "expect_params_rejected steps cannot capture, "
+                        "assert files, or expect a result/product error",
+                    )
+            if step["method"] == CANCEL_METHOD:
+                raise ValidationError(
+                    f"steps[{index}].method",
+                    "iprange.v1.cancel is a notification and cannot be "
+                    "asserted as a params rejection",
+                )
 
         captures = []
         for pointer_index, spec in enumerate(step.get("capture", [])):

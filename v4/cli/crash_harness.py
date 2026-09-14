@@ -108,6 +108,7 @@ from command_sanitize import (  # noqa: E402  (side-effect free)
     checkout_root,
     personal_path_in_report,
     recorded_checkout_root,
+    recorded_git_identity,
     sanitized_command,
     under_profile,
 )
@@ -3007,6 +3008,7 @@ def main():
         "schema": "iprange-cli-crash-report-v1",
         "command": sanitized_command(),
         "checkout_root": recorded_checkout_root(),
+        "git_head": recorded_git_identity(),
         "platform": {
             "system": platform.system(),
             "release": platform.release(),

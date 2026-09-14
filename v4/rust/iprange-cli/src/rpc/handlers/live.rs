@@ -1371,6 +1371,23 @@ fn parse_ipv6(text: &str) -> Result<Ipv6Key, String> {
         .map_err(|_| format!("invalid IPv6 address: {text}"))
 }
 
+/// Open one already-inspected direct CSV input.
+///
+/// The `fs::metadata()` check in `DirectCsvSource::open` cannot close the
+/// window before the open, so only this descriptor decides what will be
+/// read: a FIFO swapped into the path after that check is refused with the
+/// same class the check uses for a non-regular path, never read.
+fn open_direct_csv_file(path: &str) -> Result<File, CsvFailure> {
+    let opened = crate::io::caller_open::open_regular(Path::new(path))
+        .map_err(|error| CsvFailure::io(format!("open direct CSV input {path}: {error}")))?;
+    match opened {
+        Some(file) => Ok(file),
+        None => Err(CsvFailure::invalid_path(format!(
+            "direct CSV input is not a regular file: {path}"
+        ))),
+    }
+}
+
 /// Streaming `from,to,value` CSV reader for `direct.replace`. One bounded
 /// line and one bounded batch are retained; rows may be unordered,
 /// duplicate, or overlapping, exactly as the direct-replacement workflow
@@ -1412,8 +1429,7 @@ where
                 )))
             }
         }
-        let file = File::open(path)
-            .map_err(|error| CsvFailure::io(format!("open direct CSV input {path}: {error}")))?;
+        let file = open_direct_csv_file(path)?;
         let mut source = Self {
             reader: BufReader::new(file),
             max_line_bytes,
@@ -2241,5 +2257,36 @@ mod tests {
         assert_eq!(details["writer_close"]["outcome"], "closed");
         assert_eq!(details["source_close"]["outcome"], "closed");
         remove_live(&target);
+    }
+}
+
+/// The direct CSV input is inspected before it is opened, and an inspection
+/// cannot close the window before the open. This pin calls the arm's own
+/// open helper with a writerless FIFO already at the path, so the open
+/// itself is what must refuse, with the arm's non-regular class. The helper
+/// runs on a bounded thread: an open that waits for a writer fails the test
+/// instead of hanging the suite.
+#[cfg(all(test, unix))]
+mod open_refusal_tests {
+    use super::open_direct_csv_file;
+    use crate::io::caller_open::pin_support;
+
+    #[test]
+    fn direct_csv_open_refuses_fifo_as_invalid_path() {
+        let directory = pin_support::scratch_dir("csv");
+        let path = directory.join("in.csv");
+        pin_support::mkfifo(&path);
+        let refusal = pin_support::prompt("csv", move || {
+            open_direct_csv_file(&path.to_string_lossy())
+                .err()
+                .map(|failure| (failure.code, failure.message))
+        });
+        pin_support::remove_dir(&directory);
+        let (code, message) = refusal.expect("a writerless fifo must not open as a csv input");
+        assert_eq!(code, "invalid_path");
+        assert!(
+            message.contains("direct CSV input is not a regular file"),
+            "unexpected refusal: {message}"
+        );
     }
 }

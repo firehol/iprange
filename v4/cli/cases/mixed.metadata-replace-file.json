@@ -1,0 +1,184 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "mixed.metadata-replace-file",
+ "requires": "iprange.v1.direct.replace",
+ "fixtures": [
+  {
+   "path": "data.csv",
+   "source": {
+    "text": "from,to,value\n192.0.2.10,192.0.2.14,10\n198.51.100.30,198.51.100.31,30\n"
+   }
+  },
+  {
+   "path": "meta.bin",
+   "source": {
+    "base64": "21qIRotO3egUD5ARu/hUK7U9o3dN1H/8hgobSsXRJrcH7yXL9YNmViwrVplIYuXgoUhQ5b+zSl/tVthtISZCo+EOPCa8MoSJz1plzBJbgM51yFGHx7SLT7eS1CxPZ+r3PaMmVzHZRHnyYX79Ma5mYKEtvdeOdYNXDwBcCWBmmBl7w1YQBKBpGmf0YhnL39wKG8fRdUtaZJXy2WboUhaOu59hFBkOiHhOrj0oOEgZSPSdivon5JanNNQetlJhCgQjQpjOw7ecOy90NrqaUcUBpP6CrflMA6PjJJazmATwgt/5iFIVmrwPDPuZiu24gEi15TNW/yKWssTeiG81KH15CC1cMu9wYQng8cr5CfGTfECKomnbsHVLbDseoumrT+iJqeWVHrPt01vL172rvVy98aU6GYPOSeLkbYk9ZNyKeeOzBSkufHHnjcDtSm8l8iPtc4aPdvqijiNiROLphUQDGoPIS5DX0U1rDzBh+eZDT7NgR7JkCXeRw5W5UaBR+xr0r/eL5tJghREpj/1orgUI0pCPLCVApT7LoId93jIVFqUYJBiBEeBc3meD7jMpGk3HuZY6TLtz34OWbuVgqjaRLhdwlA9lRtyK8QW9SxrEK2lBjuGVhvYggGon8j325paMtwIwcV4oz1gMEuncrOVli30yV4Pmn4CYvUChnLTBJ6OJw6KdIR9cyUMIpbsFfp2cokNxEIg0Dsp32sopVbfvuu6SGGG42zZ0STxP1vf4Ic/J8CqYufwA7UUaGv/z++Tqm6hwJGiC73occcWn6J731haSD96gRDsYJBIM41sHUR1jPOaafNAki70oHNhI1w3kGXhhCf5tHlcdDeCCebZM6LEIiU1TKVYylB7w3x5jGRTg88aVwKVfP/MOe9lM3JoJVYvdsYB0u5UL9ys1emm5QWhQ5MEI08iY19PqEjhK9d142//4WFsOahsLX3+Wd7cxwtJ+vYTIdzma/CnmvpaWqX6hteXOJm/KYH+ZunzYm8VBxxgJdnTuFE/U36d9Qu82y5pvvy+aUeW72k85CSouS09hDmtin6gCsJZQKoscY3NZ4/uyNlMqd3sG/FVTCk+bDRfjNsHKXJha7HWInC6GWFnzFm6Z/p2WrFRTOn5R3HaOvnRZpWVQGgtIj6YJvjC5TuhFvWldPProCAz8M8lf5HjP/2mH9ewK5avfLMl2iCbQueyuT+f+187ETGp84tpIP+rcDObeQSiOk3oK+LJemkCOSEfg785Euko2g6TYRy5IFPrBGgYzJHOT8tmeotlf7iDYOr8uCwltOkglB0N3l4L9dGalecQdjPUPcUHVDPzGa/056/anxw3h8VrkxkInNzZMeabWoHc6NgumhibszA=="
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "path": "$WORK/rf.iprange",
+    "family": "ipv4",
+    "value_kind": "direct",
+    "structure_kind": "none",
+    "value_tag": {
+     "text": "rftag"
+    },
+    "reader_capacity": 8
+   },
+   "expect_result": {
+    "address_family": "ipv4",
+    "value_kind": "direct",
+    "structure_kind": "none",
+    "main_basename": "rf.iprange",
+    "reader_capacity": 8,
+    "state": "created",
+    "residue_possible": false,
+    "housekeeping": {
+     "artifacts": []
+    },
+    "visible_housekeeping": [],
+    "value_tag": {
+     "hex": "7266746167"
+    },
+    "database_id": {
+     "$ignore": true
+    },
+    "commit_nonce": {
+     "$ignore": true
+    },
+    "sidecar_id": {
+     "$ignore": true
+    },
+    "directory_identity": {
+     "$ignore": true
+    },
+    "main_identity": {
+     "$ignore": true
+    },
+    "sidecar_identity": {
+     "$ignore": true
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.direct.replace",
+   "params": {
+    "path": "$WORK/rf.iprange",
+    "input": {
+     "path": "$WORK/data.csv",
+     "max_line_bytes": 1024
+    },
+    "metadata": {
+     "mode": "replace_file",
+     "path": "$WORK/meta.bin"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "expect_result": {
+    "report": {
+     "workflow": "direct_replacement",
+     "logical_change": "changed",
+     "input_record_count": "2",
+     "input_normalized_interval_count": "2",
+     "before_range_record_count": "0",
+     "after_range_record_count": "2",
+     "input_addresses": "7",
+     "before_addresses": "0",
+     "after_addresses": "7",
+     "unchanged_value_addresses": "0",
+     "changed_value_addresses": "0",
+     "added_addresses": "7",
+     "removed_addresses": "0",
+     "source_feed_count": "0",
+     "matched_feed_count": "0",
+     "created_feed_count": "0",
+     "source_distinct_membership_count": "0",
+     "translated_membership_count": "0"
+    },
+    "metadata_logical_change": "changed"
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.database.metadata.get",
+   "params": {
+    "source": {
+     "path": "$WORK/rf.iprange",
+     "mode": "live"
+    },
+    "delivery": {
+     "mode": "inline"
+    }
+   },
+   "expect_result": {
+    "present": true,
+    "base64": "21qIRotO3egUD5ARu/hUK7U9o3dN1H/8hgobSsXRJrcH7yXL9YNmViwrVplIYuXgoUhQ5b+zSl/tVthtISZCo+EOPCa8MoSJz1plzBJbgM51yFGHx7SLT7eS1CxPZ+r3PaMmVzHZRHnyYX79Ma5mYKEtvdeOdYNXDwBcCWBmmBl7w1YQBKBpGmf0YhnL39wKG8fRdUtaZJXy2WboUhaOu59hFBkOiHhOrj0oOEgZSPSdivon5JanNNQetlJhCgQjQpjOw7ecOy90NrqaUcUBpP6CrflMA6PjJJazmATwgt/5iFIVmrwPDPuZiu24gEi15TNW/yKWssTeiG81KH15CC1cMu9wYQng8cr5CfGTfECKomnbsHVLbDseoumrT+iJqeWVHrPt01vL172rvVy98aU6GYPOSeLkbYk9ZNyKeeOzBSkufHHnjcDtSm8l8iPtc4aPdvqijiNiROLphUQDGoPIS5DX0U1rDzBh+eZDT7NgR7JkCXeRw5W5UaBR+xr0r/eL5tJghREpj/1orgUI0pCPLCVApT7LoId93jIVFqUYJBiBEeBc3meD7jMpGk3HuZY6TLtz34OWbuVgqjaRLhdwlA9lRtyK8QW9SxrEK2lBjuGVhvYggGon8j325paMtwIwcV4oz1gMEuncrOVli30yV4Pmn4CYvUChnLTBJ6OJw6KdIR9cyUMIpbsFfp2cokNxEIg0Dsp32sopVbfvuu6SGGG42zZ0STxP1vf4Ic/J8CqYufwA7UUaGv/z++Tqm6hwJGiC73occcWn6J731haSD96gRDsYJBIM41sHUR1jPOaafNAki70oHNhI1w3kGXhhCf5tHlcdDeCCebZM6LEIiU1TKVYylB7w3x5jGRTg88aVwKVfP/MOe9lM3JoJVYvdsYB0u5UL9ys1emm5QWhQ5MEI08iY19PqEjhK9d142//4WFsOahsLX3+Wd7cxwtJ+vYTIdzma/CnmvpaWqX6hteXOJm/KYH+ZunzYm8VBxxgJdnTuFE/U36d9Qu82y5pvvy+aUeW72k85CSouS09hDmtin6gCsJZQKoscY3NZ4/uyNlMqd3sG/FVTCk+bDRfjNsHKXJha7HWInC6GWFnzFm6Z/p2WrFRTOn5R3HaOvnRZpWVQGgtIj6YJvjC5TuhFvWldPProCAz8M8lf5HjP/2mH9ewK5avfLMl2iCbQueyuT+f+187ETGp84tpIP+rcDObeQSiOk3oK+LJemkCOSEfg785Euko2g6TYRy5IFPrBGgYzJHOT8tmeotlf7iDYOr8uCwltOkglB0N3l4L9dGalecQdjPUPcUHVDPzGa/056/anxw3h8VrkxkInNzZMeabWoHc6NgumhibszA=="
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.database.metadata.get",
+   "params": {
+    "source": {
+     "path": "$WORK/rf.iprange",
+     "mode": "live"
+    },
+    "delivery": {
+     "mode": "file",
+     "path": "$WORK/meta-consumer.bin",
+     "publication_policy": "fail_if_exists",
+     "max_output_bytes": "65536",
+     "max_open_files": 3
+    }
+   },
+   "expect_result": {
+    "present": true,
+    "output": {
+     "bytes": "1024",
+     "path": {
+      "$ignore": true
+     },
+     "rows": "1",
+     "sha256": "43c29fe28eec222288619f0bc1a87da6961befb9b8fe59cd8c73548f4996d7aa"
+    }
+   },
+   "assert_files": [
+    {
+     "path": "meta-consumer.bin",
+     "sha256": "43c29fe28eec222288619f0bc1a87da6961befb9b8fe59cd8c73548f4996d7aa"
+    },
+    {
+     "path": "meta-consumer.bin",
+     "equals_fixture": "meta.bin"
+    }
+   ]
+  }
+ ],
+ "assertions": {
+  "files": [
+   {
+    "path": "meta-consumer.bin",
+    "sha256": "43c29fe28eec222288619f0bc1a87da6961befb9b8fe59cd8c73548f4996d7aa"
+   },
+   {
+    "path": "meta-consumer.bin",
+    "equals_fixture": "meta.bin"
+   }
+  ]
+ }
+}

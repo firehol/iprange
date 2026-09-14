@@ -9,22 +9,20 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// openSourceFilePlatform opens the database main without following a
-// final reparse point (Rust open_file windows arm: the full share
-// modes and FILE_FLAG_OPEN_REPARSE_POINT mirror database_file::
-// open_read_only and live_namespace::open_rw). The attribute refusal
-// carries the exact Rust WrongMode detail of the arm that opened: the
-// read-only arm refuses reparse points, the read-write namespace arm
-// refuses directories and reparse points.
-func openSourceFilePlatform(path string, flags int) (*os.File, error) {
-	writable := flags&os.O_RDWR != 0
-	access := uint32(windows.GENERIC_READ)
-	if writable {
-		access |= windows.GENERIC_WRITE
-	}
+// openSourceFilePlatform opens the immutable database main without
+// following a final reparse point (Rust database_file::open_read_only
+// windows arm: the full share modes and FILE_FLAG_OPEN_REPARSE_POINT).
+// The attribute refusal carries the exact Rust detail of that arm.
+//
+// The quiescent read-write arm is not here: it opens through the
+// retained parent directory in live.OpenRetainedReadWrite, exactly like
+// Rust live_namespace::open_rw, because the namespace classes of that
+// arm (volume locality, reparse point, directory) come from the
+// retained directory handle, not from a path-level open.
+func openSourceFilePlatform(path string) (*os.File, error) {
 	handle, err := windows.CreateFile(
 		windows.StringToUTF16Ptr(path),
-		access,
+		windows.GENERIC_READ,
 		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
 		nil,
 		windows.OPEN_EXISTING,
@@ -40,16 +38,9 @@ func openSourceFilePlatform(path string, flags int) (*os.File, error) {
 		file.Close()
 		return nil, err
 	}
-	attributes := info.FileAttributes
-	refused := attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 ||
-		(writable && attributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0)
-	if refused {
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
 		file.Close()
-		detail := "database path is a Windows reparse point"
-		if writable {
-			detail = "live file ownership changed"
-		}
-		return nil, &format.Error{Code: format.CodeWrongState, Detail: detail}
+		return nil, &format.Error{Code: format.CodeWrongState, Detail: "database path is a Windows reparse point"}
 	}
 	return file, nil
 }

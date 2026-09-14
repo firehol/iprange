@@ -8,6 +8,7 @@ use crate::error::{combine_errors, finish_with_cleanup, Error, Result};
 use crate::live_lock::{self, Mode};
 use crate::live_namespace::Identity;
 use crate::live_sidecar::{self, MAIN_LIFETIME_LOCK};
+use crate::recovery::inspection::live_coordination_error;
 use crate::recovery::RecoverySourceCleanupGuard;
 
 use super::LocalFileIdentity;
@@ -157,7 +158,18 @@ fn open_live_locked(
     };
     let sidecar = match live_sidecar::Sidecar::open(path, database_id) {
         Ok(sidecar) => sidecar,
-        Err(cause) => return Err(LiveOpenStageFailure::Unclaimed(file, cause)),
+        // The reader table is live coordination state, so its absence or
+        // shape is the canonical coordination failure — the class the
+        // recovery-inspect live arm reports for the same probe. Reporting
+        // NameNotFound here would claim a missing feed name, which is a
+        // condition the caller never exercised: a plain published v4 file
+        // simply has no reader table yet.
+        Err(cause) => {
+            return Err(LiveOpenStageFailure::Unclaimed(
+                file,
+                live_coordination_error(cause),
+            ))
+        }
     };
     if let Err(cause) = sidecar.lock_gate_cancellable(Mode::Exclusive, cancellation) {
         return Err(LiveOpenStageFailure::Unclaimed(file, cause));

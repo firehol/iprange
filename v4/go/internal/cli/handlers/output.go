@@ -11,6 +11,7 @@ import (
 	"runtime"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
+	"github.com/firehol/iprange/v4/go/internal/cli/fileio"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/pathname"
@@ -115,7 +116,7 @@ func writeAndPublishMetadata(file *os.File, temporary, destination string, bytes
 	case iprangedb.PolicyReplaceExisting, iprangedb.PolicyReplaceExistingNoRollback:
 		// rename(2) and MoveFileExW(REPLACE_EXISTING) replace the
 		// destination atomically on both supported families.
-		if err := os.Rename(temporary, destination); err != nil {
+		if err := fileio.RenameReplace(temporary, destination); err != nil {
 			return outputFileError(err, "publish metadata output")
 		}
 	}

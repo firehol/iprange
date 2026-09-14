@@ -154,6 +154,14 @@ func nsMap(err error) error {
 	}
 }
 
+// MapNamespaceError exposes the canonical namespace fold to callers
+// outside this package (Rust live_namespace::namespace_error). A public
+// facade must not pass a *NamespaceError through unfolded: the wire
+// adapter can only classify typed SDK errors, so an unfolded namespace
+// class would degrade to the generic io code. A non-namespace error is
+// returned unchanged.
+func MapNamespaceError(err error) error { return nsMap(err) }
+
 // nsMapParentIdentity maps one namespace error for the parent-identity
 // surface (Rust live_namespace::parent_identity): a missing parent is
 // the Io(NotFound) class, every other class maps through namespace_error.

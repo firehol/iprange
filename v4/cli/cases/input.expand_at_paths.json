@@ -1,0 +1,126 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "input.expand_at_paths",
+ "requires": "iprange.v1.current.publish",
+ "fixtures": [
+  {
+   "path": "scan/a.ranges",
+   "source": {
+    "text": "192.0.2.128-192.0.2.131\n"
+   }
+  },
+  {
+   "path": "scan/b.ranges",
+   "source": {
+    "text": "198.51.100.64/30\n"
+   }
+  },
+  {
+   "path": "scan/alias_target.ranges",
+   "source": {
+    "text": "203.0.113.10-203.0.113.11\n"
+   }
+  },
+  {
+   "path": "scan/c.ranges",
+   "source": {
+    "symlink_to": "scan/alias_target.ranges"
+   }
+  },
+  {
+   "path": "at/ranges.txt",
+   "source": {
+    "text": "203.0.113.9\n192.0.2.240\n"
+   }
+  },
+  {
+   "path": "at/list.txt",
+   "source": {
+    "text": "$WORK/at/ranges.txt\n\n   \n",
+    "text_expand_work": true
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "@$WORK/at/list.txt",
+      "@$WORK/scan"
+     ],
+     "family": "ipv4",
+     "fix_network": false,
+     "default_prefix": 32,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": true,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 16
+    },
+    "feed": "at",
+    "value_tag": {
+     "text": "at"
+    },
+    "metadata": {
+     "mode": "clear"
+    },
+    "destination": "$WORK/at.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "expect_result": {
+    "report": {
+     "addresses": "12",
+     "input_record_count": "6",
+     "normalized_interval_count": "4"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.reader.open",
+   "params": {
+    "source": {
+     "path": "$WORK/at.iprange",
+     "mode": "immutable"
+    }
+   },
+   "expect_result": {
+    "info": {
+     "active_feed_count": "1",
+     "address_family": "ipv4",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "meta_selection": "proven_current",
+     "page_count": "9",
+     "range_record_count": "4",
+     "structure_kind": "none",
+     "transaction_id": "1",
+     "value_kind": "membership",
+     "value_tag": {
+      "hex": "6174"
+     }
+    },
+    "reader": {
+     "$ignore": true
+    }
+   }
+  }
+ ]
+}

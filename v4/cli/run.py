@@ -44,6 +44,7 @@ from command_sanitize import (  # noqa: E402  (side-effect free)
     owned_temp_root,
     personal_path_in_report,
     recorded_checkout_root,
+    recorded_git_identity,
     same_path,
     sanitized_command,
     under_profile,
@@ -270,6 +271,14 @@ class CaseRunner:
             "consumer": consumer_binary if self.mixed else binary,
         }
         self.captures = {}          # capture name -> (owning actor, value)
+        # Asserted negative-params steps of this case (transport code,
+        # executed actor, and the exact request bytes), preserved in the
+        # PASS entry so the kind gate can require the corpus really
+        # exercised the params validator.
+        self.negative_responses = []
+        # digest group -> recorded artifact digests (see the case schema
+        # digest_group contract), preserved in the PASS entry.
+        self.digest_groups = {}
         self.services = {}          # actor -> JsonRpcService (mixed mode)
         self.actor_steps = {}       # actor -> executed step count
         self.actor_operations = {"producer": [], "consumer": []}
@@ -304,8 +313,12 @@ class CaseRunner:
             self._fixture_inputs.add(os.path.realpath(path))
             source = fixture["source"]
             if "text" in source:
-                write_text(path, source["text"])
-                intervals = parse_interval_text(source["text"])
+                text = source["text"]
+                if source.get("text_expand_work"):
+                    text = text.replace(WORK_PLACEHOLDER,
+                                        self.work_dir + os.sep)
+                write_text(path, text)
+                intervals = parse_interval_text(text)
                 if intervals is not None:
                     self.fixture_intervals[os.path.realpath(path)] = intervals
             elif "base64" in source:
@@ -339,6 +352,29 @@ class CaseRunner:
                 intervals = parse_interval_text(source["csv_db"])
                 if intervals is not None:
                     self.fixture_intervals[os.path.realpath(path)] = intervals
+            elif "symlink_to" in source:
+                # A symlink to another work-dir path.  The target is
+                # spelled absolute at creation time so the link resolves
+                # for a scan regardless of the process working
+                # directory; a dangling link would make a
+                # directory-expansion case vacuous, so the target must
+                # exist (declare it before this fixture).
+                target = safe_work_path(self.work_dir, source["symlink_to"])
+                if os.path.realpath(target) not in self._fixture_inputs:
+                    raise ValueError(
+                        f"fixture {fixture['path']!r}: symlink target "
+                        f"{source['symlink_to']!r} is not a fixture "
+                        "declared earlier in this case")
+                if not os.path.isfile(target):
+                    raise ValueError(
+                        f"fixture {fixture['path']!r}: symlink target "
+                        f"{source['symlink_to']!r} is not a regular file")
+                if os.path.lexists(path):
+                    os.unlink(path)
+                os.symlink(os.path.realpath(target), path)
+                # The link itself needs no inventory exclusion: every
+                # inventory lookup resolves a path, and the link
+                # resolves to its target, which is already registered.
             elif "generator" in source:
                 # Generated v4 files intentionally have no independent text
                 # representation here; oracle checks are skipped for them.
@@ -441,8 +477,15 @@ class CaseRunner:
         counts = bucket[side]
         counts[method] = counts.get(method, 0) + 1
 
-    def record_ledger(self, before, step):
+    def record_ledger(self, before, step, credit_opens=True):
         """Merge one executed step's inventory delta into the ledger.
+
+        ``credit_opens`` is cleared by a step the service refused in its
+        params validator: that request never reached a file, so naming
+        its declared paths as opens would fabricate lineage.  Created
+        files are still recorded, because a refusal that writes is a
+        defect the kind gate must reject (no method that can only be
+        refused is in the create-capable sets).
 
         A file that appears by the end of the step is ``created_by`` that
         step's method; a file that already existed and whose path the step
@@ -470,9 +513,10 @@ class CaseRunner:
                 "kind": kind, "created_by": [], "opened_by": []})
             entry["created_by"].append(f"{actor}.{method}")
         opened = {}
-        for path, kind in declared.items():
-            if path in before:
-                opened.setdefault(kind, set()).add(path)
+        if credit_opens:
+            for path, kind in declared.items():
+                if path in before:
+                    opened.setdefault(kind, set()).add(path)
         for kind, paths in opened.items():
             bucket = self.file_kinds.setdefault(
                 kind, {"created_by": {}, "opened_by": {}})
@@ -493,7 +537,7 @@ class CaseRunner:
         # LIVE_OPEN_METHODS (engine-verified: only a live-mode
         # reader-source open writes the sidecar; writer and immutable
         # slots never do).
-        if method in LIVE_OPEN_METHODS:
+        if credit_opens and method in LIVE_OPEN_METHODS:
             for path in self.live_reader_source_paths(step):
                 sidecar = path + LIVE_SIDECAR_SUFFIX
                 if sidecar not in before:
@@ -556,6 +600,13 @@ class CaseRunner:
     # ---- substitutions --------------------------------------------
     def substitute(self, value, actor="consumer"):
         if isinstance(value, str):
+            # An "@"-prefixed work path is an @-expansion request path
+            # (input.paths, @file-list).  The "@" is part of the CLI
+            # grammar, not part of the path, so it is preserved and the
+            # remainder resolves exactly like a plain $WORK path.
+            if value.startswith("@" + WORK_PLACEHOLDER):
+                return "@" + safe_work_path(
+                    self.work_dir, value[len("@" + WORK_PLACEHOLDER):])
             if value.startswith(WORK_PLACEHOLDER):
                 return safe_work_path(self.work_dir, value[len(WORK_PLACEHOLDER):])
             if value.startswith(CAPTURE_PLACEHOLDER):
@@ -611,11 +662,19 @@ class CaseRunner:
         before = self.inventory()
         if not methods.known(method):
             raise AssertionError(f"case {self.case['name']!r}: unknown method {method}")
-        try:
-            case_schema.validate_rpc_request(method, params)
-        except ValidationError as exc:
-            raise AssertionError(
-                f"case {self.case['name']!r}: invalid request params: {exc}") from exc
+        negative = step.get("expect_params_rejected")
+        if negative is None:
+            try:
+                case_schema.validate_rpc_request(method, params)
+            except ValidationError as exc:
+                raise AssertionError(
+                    f"case {self.case['name']!r}: invalid request params: {exc}") from exc
+        else:
+            # Negative-params mode.  Client-side validation is bypassed
+            # so the service's own params validator answers, and the
+            # bypass is only honest when that validator has something to
+            # refuse: the committed schema must reject the same request.
+            self.check_request_is_contract_invalid(method, params)
 
         service = self.service_for(actor)
         self.actor_steps[actor] = self.actor_steps.get(actor, 0) + 1
@@ -628,6 +687,16 @@ class CaseRunner:
 
         request_id = f"case-{self.case['name']}"
         response = service.call(request_id, method, params)
+        if "digest_group" in step:
+            self.record_digest(step, method, params)
+        if negative is not None:
+            self.check_expected_params_rejected(step, method, params, response)
+            # No open credit: a params refusal precedes every path
+            # access, so the declared paths were never opened.  A
+            # refusal that still creates a file is recorded and then
+            # rejected by the kind gate as a fabricated create.
+            self.record_ledger(before, step, credit_opens=False)
+            return
         if "error" in response:
             self.check_expected_error(step, method, response["error"])
             capture_root = {
@@ -666,6 +735,103 @@ class CaseRunner:
         for assertion in step.get("assert_files", []):
             self.assert_file(assertion)
         self.record_ledger(before, step)
+
+    def record_digest(self, step, method, params):
+        """Record one export artifact under its declared digest group.
+
+        The digest is taken from the file on disk after the service
+        reported it, so the recorded value is the artifact a later
+        consumer reads, not a number the service chose to advertise.
+        ``check_output_result`` has already required the reported facts
+        to equal that file.
+        """
+
+        destination = params.get("destination")
+        if not isinstance(destination, str) or not destination:
+            raise AssertionError(
+                f"case {self.case['name']!r}: {method} declares a "
+                f"digest_group but no destination path")
+        path = (destination if os.path.isabs(destination)
+                else safe_work_path(self.work_dir, destination))
+        if not os.path.isfile(path):
+            raise AssertionError(
+                f"case {self.case['name']!r}: digest group target is not "
+                f"a file: {destination}")
+        self.digest_groups.setdefault(step["digest_group"], []).append({
+            "actor": step["actor"],
+            "method": method,
+            "format": params.get("format"),
+            "path": os.path.relpath(path, self.work_dir),
+            "sha256": sha256_file(path),
+        })
+
+    def check_request_is_contract_invalid(self, method, params):
+        """Require the committed request schema to reject a negative step.
+
+        A step that marks ``expect_params_rejected`` asserts that the
+        service refuses the params object with ``-32602``.  If the
+        published schema accepted the same object, the assertion would
+        be a coin flip about schema/service agreement rather than a
+        pinned contract term, and the case would silently stop testing
+        the validator once one side drifted.
+        """
+
+        try:
+            case_schema.validate_rpc_request(method, params)
+        except ValidationError:
+            return
+        raise AssertionError(
+            f"case {self.case['name']!r}: {method} declares "
+            f"expect_params_rejected but the committed request schema "
+            f"accepts its params; the step asserts nothing about the "
+            f"service validator (resolve the schema/service disagreement "
+            f"instead of asserting the rejection)")
+
+    def check_expected_params_rejected(self, step, method, params, response):
+        """Assert the JSON-RPC params-validator answer for a negative step.
+
+        Only the transport code is a cross-engine contract term here;
+        message text is diagnostic (accepted P3) and is compared solely
+        when the case pins a substring that both engines provably share.
+        The observed envelope and the exact request bytes are included
+        in every failure so a divergence is reproducible from the
+        report alone.
+        """
+
+        expected = step["expect_params_rejected"]
+        observed = json.dumps(response, sort_keys=True,
+                              separators=(",", ":"), ensure_ascii=False)
+        request = json.dumps(
+            {"jsonrpc": "2.0", "id": f"case-{self.case['name']}",
+             "method": method, "params": params},
+            sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        error = response.get("error")
+        if not isinstance(error, dict):
+            raise AssertionError(
+                f"case {self.case['name']!r}: {method} was expected to "
+                f"answer {frame.STD_INVALID_PARAMS} invalid params; "
+                f"response={observed} request={request}")
+        if error.get("code") != frame.STD_INVALID_PARAMS:
+            data = json.dumps(error.get("data"), sort_keys=True,
+                              ensure_ascii=False)
+            raise AssertionError(
+                f"case {self.case['name']!r}: {method} was expected to "
+                f"answer {frame.STD_INVALID_PARAMS} invalid params, got "
+                f"code={error.get('code')!r} "
+                f"message={error.get('message')!r} "
+                f"data={data} request={request}")
+        needle = expected.get("message_contains")
+        if needle is not None and needle not in (error.get("message") or ""):
+            raise AssertionError(
+                f"case {self.case['name']!r}: {method} params rejection "
+                f"message {error.get('message')!r} does not contain "
+                f"{needle!r} request={request}")
+        self.negative_responses.append({
+            "actor": step["actor"],
+            "method": method,
+            "transport_code": error.get("code"),
+            "request": request,
+        })
 
     def check_expected_error(self, step, method, error):
         expected = step.get("expect_error")
@@ -2274,6 +2440,7 @@ def main():
         "schema": "iprange-cli-report-v3",
         "command": sanitized_command(),
         "checkout_root": recorded_checkout_root(),
+        "git_head": recorded_git_identity(),
         "platform": {
             "system": platform_module.system(),
             "release": platform_module.release(),
@@ -2340,6 +2507,9 @@ def main():
             entry = {
                 "name": case["name"], "matrix": matrix, "status": "PASS",
                 "oracle_checks": runner.oracle_checks,
+                "params_rejected": list(runner.negative_responses),
+                "digest_groups": {group: list(entries) for group, entries
+                                  in sorted(runner.digest_groups.items())},
                 # Per-case mechanical lineage: relative artifact path ->
                 # kind and the acting "actor.method" lists, so the kind
                 # universe can be verified case-by-case and the root

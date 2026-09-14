@@ -64,6 +64,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))  # the v4/cli harness directo
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+from command_sanitize import (  # noqa: E402  (side-effect free)
+    recorded_checkout_root,
+    recorded_git_identity,
+)
 from crash_harness import HarnessJsonRpcService  # noqa: E402
 from schema.results import validate_result  # noqa: E402
 
@@ -801,6 +805,8 @@ def main():
 
     report = {
         "schema": REPORT_SCHEMA,
+        "git_head": recorded_git_identity(),
+        "checkout_root": recorded_checkout_root(),
         "platform": "windows" if IS_WINDOWS else os.name,
         "fixture": file_evidence(args.fixture),
         "build_provenance": provenance,

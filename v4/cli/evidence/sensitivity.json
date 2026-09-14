@@ -1,0 +1,113 @@
+{
+ "checkout_root": null,
+ "command": [
+  "v4/cli/sensitivity_gate.py",
+  "--json-report",
+  "/tmp/iprange-w1923/reports/sensitivity.json"
+ ],
+ "failures": [],
+ "git_head": "cfbee7887fb71de67df35ea913d6f7ae70c5c011",
+ "mode_count": 14,
+ "modes": [
+  {
+   "expected_marker": "",
+   "got": "PASS",
+   "mode": "describe_ok",
+   "ok": true,
+   "want": "PASS"
+  },
+  {
+   "expected_marker": "",
+   "got": "PASS",
+   "mode": "rows_ok",
+   "ok": true,
+   "want": "PASS"
+  },
+  {
+   "expected_marker": "",
+   "got": "PASS",
+   "mode": "lookup_ok",
+   "ok": true,
+   "want": "PASS"
+  },
+  {
+   "expected_marker": "parse error:",
+   "got": "FAIL parse error: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)",
+   "mode": "describe_bad_json",
+   "ok": true,
+   "want": "FAIL"
+  },
+  {
+   "expected_marker": "response id",
+   "got": "FAIL response id 'wrong' != request id 'case-sensitivity:describe_bad_id'",
+   "mode": "describe_bad_id",
+   "ok": true,
+   "want": "FAIL"
+  },
+  {
+   "expected_marker": "jsonrpc must be \"2.0\"",
+   "got": "FAIL jsonrpc must be \"2.0\"",
+   "mode": "describe_no_jsonrpc",
+   "ok": true,
+   "want": "FAIL"
+  },
+  {
+   "expected_marker": "jsonrpc must be \"2.0\"",
+   "got": "FAIL jsonrpc must be \"2.0\"",
+   "mode": "describe_bad_version",
+   "ok": true,
+   "want": "FAIL"
+  },
+  {
+   "expected_marker": "not a canonical unsigned decimal",
+   "got": "FAIL case 'sensitivity:describe_bad_decimal': invalid result for iprange.v1.system.describe: result[iprange.v1.system.describe].limits.input_frame_bytes: value '1048576.5' is not a canonical unsigned decimal string",
+   "mode": "describe_bad_decimal",
+   "ok": true,
+   "want": "FAIL"
+  },
+  {
+   "expected_marker": "missing required field",
+   "got": "FAIL case 'sensitivity:describe_missing_method': invalid result for iprange.v1.system.describe: result[iprange.v1.system.describe].method: missing required field",
+   "mode": "describe_missing_method",
+   "ok": true,
+   "want": "FAIL"
+  },
+  {
+   "expected_marker": "unknown member",
+   "got": "FAIL case 'sensitivity:describe_unknown_member': invalid result for iprange.v1.system.describe: result[iprange.v1.system.describe].test_only_field: unknown member",
+   "mode": "describe_unknown_member",
+   "ok": true,
+   "want": "FAIL"
+  },
+  {
+   "expected_marker": "does not match requested method",
+   "got": "FAIL case 'sensitivity:describe_false_outcome': invalid result for iprange.v1.system.describe: result[iprange.v1.system.describe].method: echo 'iprange.v1.database.metadata.replace' does not match requested method 'iprange.v1.system.describe'",
+   "mode": "describe_false_outcome",
+   "ok": true,
+   "want": "FAIL"
+  },
+  {
+   "expected_marker": "response id",
+   "got": "FAIL response id 'cancel-reply' != request id 'case-sensitivity:cancel_replies'",
+   "mode": "cancel_replies",
+   "ok": true,
+   "want": "FAIL"
+  },
+  {
+   "expected_marker": "out of",
+   "got": "FAIL case 'sensitivity:rows_bad_order': ranges records out of ascending order: (167772161, 167772165) after (167772170, 167772180)",
+   "mode": "rows_bad_order",
+   "ok": true,
+   "want": "FAIL"
+  },
+  {
+   "expected_marker": "outside 0..4294967295",
+   "got": "FAIL case 'sensitivity:rows_wrong_value': invalid result for iprange.v1.reader.lookup: result[iprange.v1.reader.lookup].matches[0].value: integer 4294967296 outside 0..4294967295",
+   "mode": "rows_wrong_value",
+   "ok": true,
+   "want": "FAIL"
+  }
+ ],
+ "result": "PASS",
+ "schema": "iprange-cli-sensitivity-report-v1"
+}

@@ -667,9 +667,7 @@ fn expand_paths(
                 referenced.display()
             )));
         }
-        let file = File::open(referenced).map_err(|error| {
-            InputError::io(format!("open file list {}: {error}", referenced.display()))
-        })?;
+        let file = open_file_list(referenced)?;
         let mut reader = BufReader::new(file);
         let mut loaded = false;
         loop {
@@ -693,6 +691,24 @@ fn expand_paths(
         }
     }
     Ok(expanded)
+}
+
+/// Open one already-inspected `@`-list.
+///
+/// The `symlink_metadata()` check in `expand_paths` cannot close the window
+/// before the open, so only this descriptor decides what will be read: a
+/// FIFO swapped into the path after that check is refused with the same
+/// class the check uses for a non-regular path, never read.
+fn open_file_list(path: &Path) -> Result<File, InputError> {
+    let opened = crate::io::caller_open::open_regular(path)
+        .map_err(|error| InputError::io(format!("open file list {}: {error}", path.display())))?;
+    match opened {
+        Some(file) => Ok(file),
+        None => Err(InputError::invalid_path(format!(
+            "file list is not a regular file: {}",
+            path.display()
+        ))),
+    }
 }
 
 fn push_bounded(
@@ -747,13 +763,30 @@ fn open_input(path: &Path) -> Result<File, InputError> {
         }
         Ok(_) => {}
     }
-    File::open(path).map_err(|error| {
+    open_input_file(path)
+}
+
+/// Open one already-inspected input path.
+///
+/// The `metadata()` call in `open_input` cannot close the window before
+/// the open, so only this descriptor decides what will be read: a FIFO
+/// swapped into the path after that check is refused with the same class
+/// the check uses for a non-regular path, never read.
+fn open_input_file(path: &Path) -> Result<File, InputError> {
+    let opened = crate::io::caller_open::open_regular(path).map_err(|error| {
         if error.kind() == io::ErrorKind::NotFound {
             InputError::invalid_path(format!("input does not exist: {}", path.display()))
         } else {
             InputError::io(format!("open input {}: {error}", path.display()))
         }
-    })
+    })?;
+    match opened {
+        Some(file) => Ok(file),
+        None => Err(InputError::invalid_path(format!(
+            "input is not a regular file: {}",
+            path.display()
+        ))),
+    }
 }
 
 fn read_limited_line<R: BufRead>(
@@ -1714,5 +1747,55 @@ mod tests {
         let mut line = Vec::new();
         let error = read_limited_line(&mut reader, 4, &mut line).unwrap_err();
         assert_eq!(error.code(), "input_format");
+    }
+}
+
+/// Every caller path is inspected before it is opened, and an inspection
+/// cannot close the window before the open. Each pin below therefore calls
+/// one arm's own open helper with a writerless FIFO already at the path, so
+/// the open itself — never the earlier check — is what must refuse, with
+/// that arm's non-regular class. The helpers run on a bounded thread: an
+/// open that waits for a writer fails the test instead of hanging the suite.
+#[cfg(all(test, unix))]
+mod open_refusal_tests {
+    use super::{open_file_list, open_input_file};
+    use crate::io::caller_open::pin_support;
+
+    #[test]
+    fn input_open_refuses_fifo_as_invalid_path() {
+        let directory = pin_support::scratch_dir("input");
+        let path = directory.join("in.txt");
+        pin_support::mkfifo(&path);
+        let refusal = pin_support::prompt("input", move || {
+            open_input_file(&path)
+                .err()
+                .map(|error| (error.code().to_owned(), error.message().to_owned()))
+        });
+        pin_support::remove_dir(&directory);
+        let (code, message) = refusal.expect("a writerless fifo must not open as an input");
+        assert_eq!(code, "invalid_path");
+        assert!(
+            message.contains("not a regular file"),
+            "unexpected refusal: {message}"
+        );
+    }
+
+    #[test]
+    fn file_list_open_refuses_fifo_as_invalid_path() {
+        let directory = pin_support::scratch_dir("file-list");
+        let path = directory.join("list.txt");
+        pin_support::mkfifo(&path);
+        let refusal = pin_support::prompt("file-list", move || {
+            open_file_list(&path)
+                .err()
+                .map(|error| (error.code().to_owned(), error.message().to_owned()))
+        });
+        pin_support::remove_dir(&directory);
+        let (code, message) = refusal.expect("a writerless fifo must not open as a file list");
+        assert_eq!(code, "invalid_path");
+        assert!(
+            message.contains("file list is not a regular file"),
+            "unexpected refusal: {message}"
+        );
     }
 }

@@ -103,18 +103,12 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 			return nil, err
 		}
 	}
-	// Stat the final name before opening so non-regular files (FIFOs,
-	// directories) are refused without a blocking or surprising open, then
-	// reopen with O_NOFOLLOW. The fd identity, not this first stat, is the
-	// reference for every later path identity check: the initial stat may
-	// already be stale, so it must never veto the opened file.
-	before, err := os.Stat(path)
-	if err != nil {
-		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
-	}
-	if !before.Mode().IsRegular() {
-		return nil, &format.Error{Code: notRegularCode(rdwr), Detail: "not a regular file"}
-	}
+	// The open decides what the path names: no path stat precedes it,
+	// exactly like Rust open_read_only (database_file.rs), so a symlink
+	// (ELOOP) or an AF_UNIX socket (ENXIO) is the open-failure IO class
+	// and only a node the open actually returned is judged for
+	// regularity. A stat that follows symlinks here would veto those
+	// paths with the non-regular class and diverge from Rust.
 	prot := protRead
 	if rdwr {
 		prot = protRead | protWrite

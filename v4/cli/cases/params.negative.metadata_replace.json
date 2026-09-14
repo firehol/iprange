@@ -1,0 +1,123 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "params.negative.metadata_replace",
+ "requires": "iprange.v1.database.metadata.replace",
+ "fixtures": [
+  {
+   "path": "data.csv",
+   "source": {
+    "text": "from,to,value\n192.0.2.1,192.0.2.2,7\n198.51.100.4,198.51.100.4,9\n"
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "path": "$WORK/budget.iprange",
+    "family": "ipv4",
+    "value_kind": "direct",
+    "structure_kind": "none",
+    "value_tag": {
+     "text": "negtag"
+    },
+    "reader_capacity": 8
+   },
+   "expect_result": {
+    "address_family": "ipv4",
+    "value_kind": "direct",
+    "structure_kind": "none",
+    "main_basename": "budget.iprange",
+    "reader_capacity": 8,
+    "state": "created",
+    "residue_possible": false,
+    "housekeeping": {
+     "artifacts": []
+    },
+    "visible_housekeeping": [],
+    "value_tag": {
+     "hex": "6e6567746167"
+    },
+    "database_id": {
+     "$ignore": true
+    },
+    "commit_nonce": {
+     "$ignore": true
+    },
+    "sidecar_id": {
+     "$ignore": true
+    },
+    "directory_identity": {
+     "$ignore": true
+    },
+    "main_identity": {
+     "$ignore": true
+    },
+    "sidecar_identity": {
+     "$ignore": true
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.database.metadata.replace",
+   "params": {
+    "path": "$WORK/budget.iprange",
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "neg-tag"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 0
+    }
+   },
+   "expect_params_rejected": {
+    "message_contains": "writer_budget.max_open_files"
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.database.info",
+   "params": {
+    "source": {
+     "path": "$WORK/budget.iprange",
+     "mode": "live"
+    }
+   },
+   "expect_result": {
+    "info": {
+     "address_family": "ipv4",
+     "value_kind": "direct",
+     "structure_kind": "none",
+     "range_record_count": "0",
+     "active_feed_count": "0",
+     "value_tag": {
+      "$ignore": true
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "transaction_id": {
+      "$ignore": true
+     },
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "page_count": {
+      "$ignore": true
+     },
+     "meta_selection": {
+      "$ignore": true
+     }
+    }
+   }
+  }
+ ]
+}

@@ -97,6 +97,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from command_sanitize import (  # noqa: E402  (side-effect free)
     owned_temp_root,
     personal_path_in_report,
+    recorded_checkout_root,
+    recorded_git_identity,
     sanitized_command,
     under_profile,
 )
@@ -1805,6 +1807,8 @@ def main():
     report = {
         "schema": "iprange-cli-resource-report-v1",
         "command": sanitized_command(),
+        "git_head": recorded_git_identity(),
+        "checkout_root": recorded_checkout_root(),
         "platform": {
             "system": platform.system(),
             "release": platform.release(),

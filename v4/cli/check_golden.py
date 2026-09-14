@@ -8,6 +8,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from command_sanitize import (  # noqa: E402  (side-effect free)
+    recorded_checkout_root,
+    recorded_git_identity,
+    sanitized_command,
+)
 from schema import cases as case_schema  # noqa: E402
 from schema import frame, methods, results  # noqa: E402
 from schema.engine import ValidationError  # noqa: E402
@@ -234,6 +239,9 @@ def check_golden_file(path):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--tree", default=os.path.dirname(os.path.abspath(__file__)))
+    parser.add_argument("--json-report", metavar="PATH",
+                        help="write the counts, the covered method list, and "
+                             "the reviewed revision to a JSON evidence file")
     args = parser.parse_args()
 
     golden_dir = os.path.join(args.tree, "golden")
@@ -277,6 +285,25 @@ def main():
             case_names.add(case["name"])
         except ValidationError as exc:
             failures.append(f"{path}: {exc}")
+
+    if args.json_report:
+        target = args.json_report
+        if not os.path.isabs(target):
+            target = os.path.join(args.tree, target)
+        report = {
+            "schema": "iprange-cli-golden-report-v1",
+            "git_head": recorded_git_identity(),
+            "checkout_root": recorded_checkout_root(),
+            "command": sanitized_command(),
+            "golden_exchanges": checked_golden,
+            "covered_methods": sorted(set(covered_methods)),
+            "case_files": checked_cases,
+            "problems": failures,
+            "result": "PASS" if not failures else "FAIL",
+        }
+        with open(target, "w", encoding="utf-8") as stream:
+            json.dump(report, stream, indent=1, sort_keys=True)
+            stream.write("\n")
 
     print(f"golden exchanges checked: {checked_golden}")
     print(f"case files checked:       {checked_cases}")

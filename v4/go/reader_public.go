@@ -5,6 +5,7 @@ import (
 	"sync/atomic"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/reader"
 )
 
@@ -807,6 +808,13 @@ func publicError(err error) error {
 	// second public layer around itself.
 	if _, ok := err.(*Error); ok {
 		return err
+	}
+	// A retained-directory namespace error carries its class in the
+	// NamespaceError type itself; the canonical fold must run here, or
+	// the adapter cannot classify it and reports the generic io code
+	// for a name that does not exist.
+	if nerr, ok := err.(*live.NamespaceError); ok {
+		return publicError(live.MapNamespaceError(nerr))
 	}
 	var ferr *format.Error
 	if errors.As(err, &ferr) {

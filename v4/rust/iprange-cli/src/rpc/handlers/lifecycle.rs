@@ -336,16 +336,43 @@ pub(crate) fn metadata_value(value: &Value) -> Result<MetadataValue, HandlerErro
     }
 }
 
+/// Open one metadata source for `read_bounded`.
+///
+/// The `stat` in `read_file_exact` cannot close the window before the
+/// open: only the opened descriptor decides what will be read. A FIFO
+/// swapped into the path after that `stat` is therefore refused here with
+/// the same class the `stat` uses for a non-regular path, and never read.
+fn open_metadata_source(path: &str) -> Result<std::fs::File, HandlerError> {
+    match crate::io::caller_open::open_regular(Path::new(path)) {
+        Ok(Some(file)) => Ok(file),
+        Ok(None) => Err(HandlerError::new(
+            "invalid_path",
+            "not_started",
+            format!("metadata source is not a regular file: {path}"),
+        )),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Err(HandlerError::new(
+            "invalid_path",
+            "not_started",
+            format!("metadata source does not exist: {path}"),
+        )),
+        Err(error) => Err(HandlerError::new(
+            "io",
+            "not_started",
+            format!("read metadata source {path}: {error}"),
+        )),
+    }
+}
+
 /// Read a metadata source with a hard cap, so a file that grows
 /// between the size check and the read cannot drive an unbounded heap
 /// allocation in the RPC process. Files at or below the cap read
 /// exactly; longer files are refused like the pre-check would. The
 /// capacity reserves only the stat-observed length (bounded by the
 /// cap), never the full cap, so small metadata files do not reserve
-/// 20 MiB.
-fn read_bounded(path: &str, observed_len: u64) -> std::io::Result<Vec<u8>> {
+/// 20 MiB. The descriptor is already open and classified, so the loop
+/// reads to EOF and only bounds the accumulation.
+fn read_bounded(mut file: std::fs::File, observed_len: u64) -> std::io::Result<Vec<u8>> {
     use std::io::Read as _;
-    let mut file = std::fs::File::open(path)?;
     let cap = usize::try_from(iprange_livedb::MAX_METADATA_UNCOMPRESSED).unwrap_or(usize::MAX);
     let observed = usize::try_from(observed_len).unwrap_or(cap).min(cap);
     let mut bytes = Vec::with_capacity(observed);
@@ -397,8 +424,8 @@ fn read_file_exact(path: &str) -> Result<Vec<u8>, HandlerError> {
         }
         Ok(value) => value.len(),
     };
-    let read = read_bounded(path, observed_len);
-    read.map_err(|error| {
+    let file = open_metadata_source(path)?;
+    read_bounded(file, observed_len).map_err(|error| {
         if error.kind() == std::io::ErrorKind::NotFound {
             HandlerError::new(
                 "invalid_path",
@@ -1357,5 +1384,38 @@ mod local_basename_tests {
         bytes.push(0x61);
         let text = utf16le_text(&bytes);
         assert!(text.starts_with("live"));
+    }
+}
+
+/// The metadata source is inspected before it is opened, and an inspection
+/// cannot close the window before the open. This pin calls the arm's own
+/// open helper with a writerless FIFO already at the path, so the open
+/// itself is what must refuse, with the arm's non-regular class. The helper
+/// runs on a bounded thread: an open that waits for a writer fails the test
+/// instead of hanging the suite.
+#[cfg(all(test, unix))]
+mod open_refusal_tests {
+    use super::open_metadata_source;
+    use crate::io::caller_open::pin_support;
+
+    #[test]
+    fn metadata_open_refuses_fifo_as_invalid_path() {
+        let directory = pin_support::scratch_dir("metadata");
+        let path = directory.join("meta.bin");
+        pin_support::mkfifo(&path);
+        let label = path.clone();
+        let refusal = pin_support::prompt("metadata", move || {
+            open_metadata_source(&label.to_string_lossy())
+                .err()
+                .map(|error| (error.code, error.message))
+        });
+        pin_support::remove_dir(&directory);
+        let (code, message) =
+            refusal.expect("a writerless fifo must not open as a metadata source");
+        assert_eq!(code, "invalid_path");
+        assert!(
+            message.contains("metadata source is not a regular file"),
+            "unexpected refusal: {message}"
+        );
     }
 }

@@ -228,7 +228,7 @@ func (w *ExportWriter) publish() (*ExportFacts, *rpc.HandlerError) {
 	} else {
 		// rename(2) and MoveFileExW(REPLACE_EXISTING) replace the
 		// destination atomically on both supported families.
-		if err := os.Rename(w.temporary, w.destination); err != nil {
+		if err := RenameReplace(w.temporary, w.destination); err != nil {
 			return nil, fileError(err, "publish export output")
 		}
 		w.published = true

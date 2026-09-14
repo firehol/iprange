@@ -844,8 +844,16 @@ func expandPaths(paths []string, expandAtPaths bool, maxExpandedPaths, maxLineBy
 			return nil, &InputError{kind: inputErrorInvalidPath,
 				message: fmt.Sprintf("file list is not a regular file: %s", referenced)}
 		}
-		file, err := os.Open(referenced)
+		// The opened descriptor is the authority, so a FIFO swapped in
+		// after the path check is refused with this arm's non-regular
+		// class instead of being read to a phantom end-of-file (Rust
+		// io::caller_open::open_regular).
+		file, err := openInputNoBlock(referenced)
 		if err != nil {
+			if errors.Is(err, errOpenedNotRegular) {
+				return nil, &InputError{kind: inputErrorInvalidPath,
+					message: fmt.Sprintf("file list is not a regular file: %s", referenced)}
+			}
 			return nil, &InputError{kind: inputErrorIO,
 				message: fmt.Sprintf("open file list %s: %v", referenced, err)}
 		}
@@ -907,9 +915,16 @@ func openInput(path string) (*os.File, *InputError) {
 	if !info.Mode().IsRegular() {
 		return nil, &InputError{kind: inputErrorInvalidPath, message: "input is not a regular file: " + path}
 	}
+	// The open judges the descriptor it opened, not the path stat above
+	// (which may already be stale): a swapped-in FIFO is refused with
+	// this arm's non-regular class rather than consumed as an empty
+	// input (Rust io::caller_open::open_regular).
 	file, err := openInputNoBlock(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		switch {
+		case errors.Is(err, errOpenedNotRegular):
+			return nil, &InputError{kind: inputErrorInvalidPath, message: "input is not a regular file: " + path}
+		case os.IsNotExist(err):
 			return nil, &InputError{kind: inputErrorInvalidPath, message: "input does not exist: " + path}
 		}
 		return nil, &InputError{kind: inputErrorIO, message: fmt.Sprintf("open input %s: %v", path, err)}

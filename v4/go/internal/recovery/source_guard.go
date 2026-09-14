@@ -468,14 +468,27 @@ func sidecarPath(path string, immutable bool) (string, bool, error) {
 }
 
 // openSourceFile opens the main without following symlinks (Rust
-// open_file: read-only for the immutable arm, read-write for the
-// quiescent arm).
+// open_file: database_file::open_read_only for the immutable arm,
+// live_namespace::open_rw for the quiescent arm). The quiescent arm
+// opens through the retained parent directory because that is the arm
+// that owns the live-lifecycle namespace proofs: the parent bind
+// establishes the local-filesystem durability policy before the node is
+// judged, and the no-follow open classifies a symlink, a non-local
+// device, or a multi-link file with the namespace classes Rust reports,
+// instead of a path-level errno.
 func openSourceFile(path string, immutable bool) (*os.File, error) {
-	flags := os.O_RDWR
-	if immutable {
-		flags = os.O_RDONLY
+	if !immutable {
+		file, err := live.OpenRetainedReadWrite(path)
+		if err != nil {
+			var fe *format.Error
+			if errors.As(err, &fe) {
+				return nil, fe
+			}
+			return nil, &format.Error{Code: format.CodeIO, Detail: "open: " + err.Error()}
+		}
+		return file, nil
 	}
-	file, err := openSourceFilePlatform(path, flags)
+	file, err := openSourceFilePlatform(path)
 	if err != nil {
 		var fe *format.Error
 		if errors.As(err, &fe) {

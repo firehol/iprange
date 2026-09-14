@@ -486,6 +486,42 @@ def recorded_checkout_root():
     return root
 
 
+def recorded_git_identity(root=None):
+    """Full commit OID of the reviewed tree, or None when unavailable.
+
+    Every harness report records this alongside the binaries' sha256 so a
+    passing battery is bound to the exact product tree it measured:
+    re-running the same binaries against a different checkout is visible
+    in the evidence instead of being silently absorbed.  ``checkout_root``
+    cannot carry it --- that field is a directory used to resolve
+    checkout-relative command arguments --- so the identity is a separate
+    member.
+
+    The lookup shells out to ``git`` against the checkout that owns this
+    module (never the process working directory) and returns None ---
+    never an exception --- when git is absent, the tree is not a git
+    checkout, or the output is not a plausible object id, so a report
+    produced outside a repository stays honest with a null rather than a
+    fabricated revision.
+    """
+    import subprocess
+
+    root = _CHECKOUT if root is None else root
+    try:
+        completed = subprocess.run(
+            ["git", "-C", root, "rev-parse", "--verify", "HEAD"],
+            capture_output=True, text=True, timeout=10, check=False)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    oid = (completed.stdout or "").strip()
+    if len(oid) not in (40, 64) \
+            or any(c not in "0123456789abcdef" for c in oid.lower()):
+        return None
+    return oid
+
+
 def same_path(a, b):
     """True when two spellings name the same existing path.
 

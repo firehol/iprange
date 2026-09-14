@@ -84,13 +84,82 @@ product binaries do not implement). The `work-dir` must already exist.
 Other gates:
 
 ```bash
-nice python3 v4/cli/check_golden.py        # 55 golden wire exchanges
-nice python3 v4/cli/sensitivity_gate.py    # 14 broken-server modes
+nice python3 v4/cli/check_golden.py --json-report v4/cli/evidence/golden.json
+                                           # 55 golden wire exchanges
+nice python3 v4/cli/sensitivity_gate.py --json-report v4/cli/evidence/sensitivity.json
+                                           # 14 broken-server modes
 nice python3 v4/cli/check_kind_coverage.py --matrix ... --crash ...
                                            # artifact-kind universe gate
+nice python3 v4/cli/check_fifo_surface.py --go "$GO_IPRANGE" \
+  --rust "$RUST_IPRANGE" --fixture "$FIXTURE_TOOL" \
+  --work "$(mktemp -d)" --json-report v4/cli/evidence/fifo-surface.json
+                                           # 17 named-pipe arms x 2 engines
+nice python3 v4/cli/throughput_harness.py --go "$GO_IPRANGE" \
+  --rust "$RUST_IPRANGE" --work "$(mktemp -d)" \
+  --json-report v4/cli/evidence/throughput.json
+                                           # busy-reply rate + thread census
 ```
 
-- `cases/` — the declarative method-family cases (38 files). Every
+Both new gates take the same staged binaries as the matrices, and every
+work directory must be empty and outside the operator profile. Each
+reports its own path arguments are refused unless absolute, because a
+relative `--work` resolves the FIFO or fixture under the invocation
+directory and can flip the verdict without changing anything else.
+
+### The FIFO-surface gate
+
+`check_fifo_surface.py` pins the refusal class of every user-path open
+arm against a named pipe. A blocked open is invisible to the case
+corpus (there is no stable expected value to assert), so the arm table
+lives in this gate rather than in prose. Each arm records the transport
+code, the `data.code` class, the elapsed time, the child exit status,
+and the exact request frame; expected classes are what Rust answers, and
+the same class is asserted for Go because arm-exact parity is a contract
+term. The arms cover the read-only opens (`reader.open`,
+`database.info`, `database.metadata.get`), the validation and recovery
+arms in both their read-only and quiescent placements, and the writer
+inputs (metadata `replace_file` source on both `direct.replace` and
+`database.metadata.replace`, the direct CSV input, the `@file` list and
+an entry it names, the feed source, and a snapshot destination under
+`replace_existing`). Read-only opens answer `invalid_argument`, the
+quiescent offline arms answer `wrong_state`, writer inputs answer
+`invalid_path`, and a non-regular publication destination answers
+`conflict`. `--self-test` runs offline and proves the verifier rejects a
+flipped class, a dropped arm, an invented arm, a missing engine, a
+blocked arm scored as a refusal, a refusal slower than the deadline,
+stripped request bytes, a missing regular-file control, and a child that
+exited non-zero.
+
+### The busy-reply throughput attestation
+
+`throughput_harness.py` is the committed rate record. Functional cases
+cannot catch a thread-per-reply regression: every reply still arrives and
+every budget still holds, only the wall clock moves. `resource_harness`
+proofs A-D pin boundedness, not rate, so before this harness a throughput
+claim had no evidence at all. It measures `replies_per_s` for
+`system.describe` served in 30-frame bursts (10,000 requests, 3 rounds,
+fresh child per round, rounds retained so the spread is visible) and,
+under `strace`, the `clone`/`clone3` census at 3,000 and 6,000 requests.
+The gate is the structure — every reply served, clean child exit, and a
+thread-creation count that does not grow with the request count — not an
+absolute rate: a replies/s floor is not portable across host load, core
+count, or governor, and a floor that only passes on one machine becomes a
+blocker people learn to ignore. The measured rates are recorded instead
+(reference values on this workstation: Go ~37-41k, Rust ~61-65k).
+`--self-test` proves the structural check rejects thread-per-reply
+growth, growth at the doubled request count, a census that parsed no
+task ids, dropped replies scored as a rate, and a killed child scored as
+a pass.
+
+Every report the harnesses write records `git_head` — the commit OID of
+the reviewed tree, from `git rev-parse HEAD` against the checkout that
+owns the harness, or `null` when it is not a git checkout. That is what
+binds a passing battery to a revision. It is a separate member from
+`checkout_root`, which is the directory the gate resolves
+checkout-relative command arguments against; putting an object id in
+that field would break the identity binding rather than record it.
+
+- `cases/` — the declarative method-family cases (49 files). Every
   rpc step declares its service role explicitly (`actor: producer` for
   artifact creation/mutation, `actor: consumer` for observation and
   transformation), so a transformation can run on either binary in a
@@ -117,6 +186,48 @@ nice python3 v4/cli/check_kind_coverage.py --matrix ... --crash ...
   Capture specs may alias handles (`{"name", "path"}` items; `[N]`
   list steps), so two handles on one result path coexist under
   distinct names.
+  `params.negative.*` pin the JSON-RPC params validator: a step marked
+  `expect_params_rejected` is sent WITHOUT client-side schema validation,
+  so the corpus can express a request the committed schema itself
+  rejects, and the step passes only when the service answers transport
+  code `-32602`. `check_request_is_contract_invalid()` makes the mode
+  fail if the committed schema accepts such a request, so the assertion
+  cannot rot into a no-op when schema and product drift; `message_contains`
+  is optional and is only used where both engines provably share the text
+  (message wording is an accepted-P3 difference, not a contract term).
+  `writer_budget.max_open_files` has no zero value in the contract, so
+  `params.negative.{direct_replace,metadata_replace,feeds_create,reclaim}`
+  assert that refusal on both engines, and each case follows the refused
+  write with a read proving the target stayed untouched — a refused
+  request that still created or mutated an artifact must not pass.
+  `params.negative.grammar` covers the rest of the grammar from the same
+  position: a non-canonical numeric (`1e2`), a string where a number
+  belongs, and unknown members at both the top level and inside a nested
+  object, then a valid export to prove the case is not vacuous.
+  `metadata.replace_file.{direct,replace,publish}` and
+  `mixed.metadata-replace-file` pin metadata byte-exactness: a known
+  1 KiB source is published with `mode: replace_file`, read back through
+  `database.metadata.get`, and compared against the committed fixture
+  digest inline, on delivery to a file, and across the language boundary
+  (a database carrying `replace_file` metadata that one engine published
+  is read back by the other, and the digest must match).
+  `input.expand_at_paths` pins `@`-expansion: a `@file` list whose entries
+  are paths, and a `@directory` scan containing a symlinked regular file
+  among regular files, with the expansion counts asserted identically on
+  both engines and the published database then opened by the other binary
+  to confirm it read what the producer wrote. A symlink whose target does
+  not resolve inside the scanned directory is dropped by both engines, so
+  the fixture's symlink names a committed target.
+  `mixed.export-cross-language` closes the cross-language export
+  obligation: the producer publishes a database, and BOTH roles export it
+  (netset and CSV) — the consumer re-exporting over the producer's own
+  destinations with `replace_existing`, which is what records the
+  consumer's open of the producer's artifact. Each `export` step names a
+  `digest_group`; the runner hashes the artifact the service reported and
+  the kind gate requires one digest per group across the whole battery
+  (so the two engines must emit identical bytes), both product languages,
+  and both service roles.
+
 - `golden/` — complete request/response exchanges generated from the
   Rust binary and validated against the strict Python schemas.
 - `schema/` — the machine authority: framing, methods, results, case

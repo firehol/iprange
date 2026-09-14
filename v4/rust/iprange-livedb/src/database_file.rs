@@ -268,6 +268,7 @@ pub(crate) fn open_read_only(_path: &Path) -> Result<File> {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
+    use crate::test_support_tests::{open_is_prompt, writerless_fifo};
 
     /// A FIFO database path must be refused promptly, not blocked
     /// waiting for a writer (Rust handler hang reproduced at the
@@ -275,29 +276,79 @@ mod tests {
     /// database.metadata.get on a fifo never answered and the
     /// process leaked after EOF). O_NONBLOCK makes the open return
     /// immediately and the authoritative-fd regular check refuses.
+    /// The open runs off-thread with a bounded join, so a lost O_NONBLOCK
+    /// fails this pin instead of hanging the suite.
     #[test]
     fn fifo_is_refused_without_blocking() {
-        use std::os::unix::ffi::OsStrExt;
-
-        let dir = std::env::temp_dir().join(format!(
-            "iprange-fifo-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("fifo");
-        let cpath = std::ffi::CString::new(path.as_os_str().as_bytes()).unwrap();
-        let rc = unsafe { libc::mkfifo(cpath.as_ptr(), 0o600) };
-        assert_eq!(rc, 0, "mkfifo: {}", std::io::Error::last_os_error());
-        let result = open_read_only(&path);
-        std::fs::remove_dir_all(&dir).ok();
-        let err = result.expect_err("fifo must not open as a database file");
+        let (directory, path) = writerless_fifo("open-read-only");
+        let opened = open_is_prompt("open_read_only fifo", move || open_read_only(&path));
+        let _ = std::fs::remove_dir_all(&directory);
+        let error = opened.expect_err("fifo must not open as a database file");
         assert!(
-            matches!(err, crate::error::Error::InvalidArgument(_)),
-            "unexpected error: {err:?}"
+            matches!(error, crate::error::Error::InvalidArgument(_)),
+            "unexpected error: {error:?}"
         );
+    }
+
+    /// The refusal arm one opened descriptor is classified as.
+    #[cfg(target_os = "linux")]
+    #[derive(Debug, PartialEq, Eq)]
+    enum Arm {
+        InvalidArgument,
+        Io,
+    }
+
+    #[cfg(target_os = "linux")]
+    fn arm_of(error: &Error) -> Arm {
+        match error {
+            Error::InvalidArgument(_) => Arm::InvalidArgument,
+            Error::Io(_) => Arm::Io,
+            other => panic!("{other:?} is not a refusal arm of this open"),
+        }
+    }
+
+    /// The refusal classes of the read-only open arm, one case per
+    /// non-regular path kind. The Go mapping owner conforms to these
+    /// classes, so each is pinned rather than inferred from the FIFO case
+    /// alone:
+    ///
+    /// * FIFO, directory, character device: the open succeeds and the
+    ///   opened descriptor is judged, so `require_regular_file` reports
+    ///   InvalidArgument (wire invalid_argument).
+    /// * AF_UNIX socket: the open itself is refused (`ENXIO`), so the arm
+    ///   reports Io.
+    /// * symlink to a FIFO or a directory: the open is refused for the link
+    ///   (`ELOOP` from `O_NOFOLLOW`), so the arm reports Io and never reaches
+    ///   the regular check — the target kind therefore cannot move this class.
+    ///
+    /// The non-FIFO kinds are Linux-only because whether opening a directory
+    /// or a socket inode succeeds differs across the supported unixes; those
+    /// arm classes are qualified where the dual-language battery runs and are
+    /// not claimed elsewhere. Each open still runs off-thread with a bounded
+    /// join, so an open that ever waits for a FIFO writer fails the pin
+    /// instead of hanging the suite.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn open_read_only_refusal_class_is_exact_per_non_regular_path() {
+        use crate::test_support_tests::{non_regular, NonRegularPath};
+
+        let cases = [
+            (NonRegularPath::Fifo, Arm::InvalidArgument),
+            (NonRegularPath::Directory, Arm::InvalidArgument),
+            (NonRegularPath::CharacterDevice, Arm::InvalidArgument),
+            (NonRegularPath::Socket, Arm::Io),
+            (NonRegularPath::SymlinkFifo, Arm::Io),
+            (NonRegularPath::SymlinkDirectory, Arm::Io),
+        ];
+        for (kind, expected) in cases {
+            let fixture = non_regular(kind, "open-read-only-matrix");
+            let path = fixture.path.clone();
+            let opened = open_is_prompt(&format!("{kind:?} ro"), move || open_read_only(&path));
+            fixture.cleanup();
+            let error = opened
+                .err()
+                .unwrap_or_else(|| panic!("{kind:?} must not open as a database file"));
+            assert_eq!(arm_of(&error), expected, "{kind:?} read-only arm");
+        }
     }
 }

@@ -1,0 +1,1 @@
+# OK: @directory loads symlinked regular files like stat() + S_ISREG

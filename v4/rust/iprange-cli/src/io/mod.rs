@@ -10,3 +10,7 @@ pub mod input;
 
 // Atomic, durable, budget-bounded export writers shared by export handlers.
 pub(crate) mod export_writer;
+
+// Never-blocking opens of caller-supplied input paths, shared by the
+// input, CSV, and metadata arms.
+pub(crate) mod caller_open;

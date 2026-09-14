@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 # Cross-compile gate for the Go v4 product on the BSD family.
 #
-# Builds all three release binaries for GOOS in {freebsd,openbsd,
-# netbsd, dragonfly} x GOARCH in {amd64,arm64} with CGO_ENABLED=0:
-#   ./cmd/iprange            (the iprange product)
-#   ./cmd/iprange-v4-worker
-#   ./cmd/iprange-v4-bench   (cross-build gate for bench stat constants)
+# Two checks, both with CGO_ENABLED=0:
+#
+# 1. Cross-builds all three release binaries for GOOS in {freebsd,
+#    openbsd, netbsd, dragonfly} x GOARCH in {amd64,arm64}:
+#      ./cmd/iprange            (the iprange product)
+#      ./cmd/iprange-v4-worker
+#      ./cmd/iprange-v4-bench   (cross-build gate for bench stat constants)
+#
+# 2. `go vet ./...` for GOOS=windows GOARCH=amd64 over the WHOLE module.
+#    Building only ./cmd/... cannot see the platform gap in the test
+#    files, and vet type-checks them: a _test.go that reaches for a
+#    unix-only symbol (Mkfifo and friends) without a //go:build unix tag
+#    compiles on Linux and breaks the Windows build of the package. The
+#    Windows product ships, so that gap is a shipping defect that no
+#    Linux-side check can observe.
 #
 # Why this gate exists: the BSD targets are not built by CI today, and
 # this class of breakage (OS-specific syscall constants, per-OS dirent
@@ -63,8 +73,24 @@ for goos in freebsd openbsd netbsd dragonfly; do
     done
 done
 
+# Whole-module vet for Windows. `go build ./cmd/...` never type-checks
+# _test.go files, so a test file that uses a unix-only symbol without a
+# //go:build unix constraint passes the cross-build matrix and still
+# breaks `go test` on Windows.
+if ! printf '%s\n' "$dist_list" | grep -qx "windows/amd64"; then
+    printf '%b SKIP windows/amd64 vet (unsupported by the installed Go toolchain)\n' "$YELLOW"
+    skips=$((skips + 1))
+else
+    if run nice env GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go vet -C "$GO_DIR" ./...; then
+        printf '%b PASS windows/amd64 vet ./...\n' "$GREEN"
+    else
+        printf '%b FAIL windows/amd64 vet ./... (a package or test file does not build for Windows; see output above)\n' "$RED"
+        failures=$((failures + 1))
+    fi
+fi
+
 if [ "$failures" -ne 0 ]; then
-    printf '%b %d BSD cross-build(s) failed; see output above.%b\n' "$RED" "$failures" "$NC"
+    printf '%b %d cross-platform step(s) failed; see output above.%b\n' "$RED" "$failures" "$NC"
     exit 1
 fi
-printf '%b BSD cross-build matrix OK (%d skipped: unsupported by toolchain).%b\n' "$GREEN" "$skips" "$NC"
+printf '%b cross-platform matrix OK (%d skipped: unsupported by toolchain).%b\n' "$GREEN" "$skips" "$NC"

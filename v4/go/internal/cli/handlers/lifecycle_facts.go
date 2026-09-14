@@ -10,6 +10,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"unicode/utf16"
 
@@ -75,23 +76,40 @@ func base64Decode(text string) ([]byte, error) {
 	return format.DecodeCanonicalBase64(text)
 }
 
-// readMetadataFile reads a metadata source with the exact 20 MiB cap,
-// so a file that grows between the size check and the read cannot
-// drive an unbounded heap allocation. The path is statted before the
-// open (Rust lifecycle::read_file_exact): a missing or non-regular
-// source is refused with invalid_path before any open can block on a
-// FIFO, and an over-limit source is refused with invalid_argument.
+// metadataSourceNotRegular is the metadata-source refusal for a path
+// that does not name a regular file (Rust read_file_exact's
+// is_file arm). The pre-open stat arm and the authoritative post-open
+// descriptor arm share it so a pre-placed node and a node swapped in
+// at the open instant answer identically.
+func metadataSourceNotRegular(path string) *rpc.HandlerError {
+	return rpc.NewHandlerError("invalid_path", "not_started",
+		"metadata source is not a regular file: "+path)
+}
+
+// metadataSourceMissing is the metadata-source refusal for a path with
+// no node (Rust read_file_exact's NotFound arm), before or after the
+// open.
+func metadataSourceMissing(path string) *rpc.HandlerError {
+	return rpc.NewHandlerError("invalid_path", "not_started",
+		"metadata source does not exist: "+path)
+}
+
+// readMetadataFile reads one metadata source with the exact 20 MiB cap
+// (Rust lifecycle::read_file_exact). The pre-open stat only selects
+// the refusal class of a path already known to be bad; the opened
+// descriptor decides what is read. The open is O_NONBLOCK and its own
+// descriptor is checked for regularity, so a FIFO swapped in after the
+// stat is refused with the same invalid_path class a standing FIFO
+// produces instead of blocking the session waiting for a writer.
 func readMetadataFile(path string) ([]byte, *rpc.HandlerError) {
 	const maxMetadata = int(iprangedb.MaxMetadataUncompressed)
 	info, err := os.Stat(path)
 	switch {
 	case err == nil && info.Mode().IsRegular():
 	case err == nil:
-		return nil, rpc.NewHandlerError("invalid_path", "not_started",
-			"metadata source is not a regular file: "+path)
+		return nil, metadataSourceNotRegular(path)
 	case errors.Is(err, os.ErrNotExist):
-		return nil, rpc.NewHandlerError("invalid_path", "not_started",
-			"metadata source does not exist: "+path)
+		return nil, metadataSourceMissing(path)
 	default:
 		return nil, rpc.NewHandlerError("io", "not_started",
 			"inspect metadata source "+path+": "+err.Error())
@@ -100,22 +118,60 @@ func readMetadataFile(path string) ([]byte, *rpc.HandlerError) {
 		return nil, rpc.NewHandlerError("invalid_argument", "not_started",
 			fmt.Sprintf("metadata file is %d bytes, limit is %d", info.Size(), iprangedb.MaxMetadataUncompressed))
 	}
-	file, err := os.Open(path)
+	// The open judges the descriptor it opened, not the path stat above
+	// (which may already be stale): a swapped-in FIFO answers the same
+	// invalid_path refusal a standing FIFO produced.
+	file, err := openMetadataSourceNoBlock(path)
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, rpc.NewHandlerError("invalid_path", "not_started",
-				"metadata source does not exist: "+path)
+		switch {
+		case errors.Is(err, errOpenedNotRegular):
+			return nil, metadataSourceNotRegular(path)
+		case errors.Is(err, os.ErrNotExist):
+			return nil, metadataSourceMissing(path)
 		}
 		return nil, rpc.NewHandlerError("io", "not_started",
 			"cannot read metadata file: "+err.Error())
 	}
 	defer file.Close()
-	bytes := make([]byte, info.Size())
-	if _, err := file.Read(bytes); err != nil {
+	opened, err := file.Stat()
+	if err != nil {
 		return nil, rpc.NewHandlerError("io", "not_started",
 			"cannot read metadata file: "+err.Error())
 	}
-	return bytes, nil
+	return readMetadataBounded(file, opened.Size(), maxMetadata)
+}
+
+// readMetadataBounded reads the opened descriptor to EOF and returns
+// exactly the bytes read (Rust read_bounded). The length is never
+// taken from st_size: procfs and sysfs sources report a size that
+// read(2) does not honour, so a stat-sized buffer would commit
+// fabricated NUL tails or silently truncate the source. The cap is
+// enforced against the bytes actually read, so a source that grows
+// past it during the read is refused with the io class like Rust.
+func readMetadataBounded(file *os.File, observed int64, limit int) ([]byte, *rpc.HandlerError) {
+	reserve := observed
+	if reserve < 0 || reserve > int64(limit) {
+		reserve = int64(limit)
+	}
+	bytes := make([]byte, 0, int(reserve))
+	chunk := make([]byte, 64*1024)
+	for {
+		read, err := file.Read(chunk)
+		if read > 0 {
+			if len(bytes)+read > limit {
+				return nil, rpc.NewHandlerError("io", "not_started",
+					"metadata source exceeds 20 MiB")
+			}
+			bytes = append(bytes, chunk[:read]...)
+		}
+		if read == 0 || err != nil {
+			if err == nil || errors.Is(err, io.EOF) {
+				return bytes, nil
+			}
+			return nil, rpc.NewHandlerError("io", "not_started",
+				"cannot read metadata file: "+err.Error())
+		}
+	}
 }
 
 // CommitResultJSON converts one SDK commit result to its wire object.

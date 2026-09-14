@@ -855,6 +855,16 @@ func DatabaseMetadataGet(st *rpc.SessionState, params json.RawMessage) (any, *rp
 // SDK open so a missing path reports invalid_path and an unverifiable
 // path reports io (Rust reader.rs open_reader parity).
 func openReader(path, mode, label string, cancellation *iprangedb.CancellationToken) (*rpc.ReaderValue, *rpc.HandlerError) {
+	return openReaderWithFailure(path, mode, label, cancellation, readError)
+}
+
+// openReaderWithFailure is the single reader-open owner; failure maps
+// the SDK open error, so each Rust peer arm keeps its own outcome
+// (reader.rs open_reader and feeds.rs open_temporary use read_error ->
+// read_only_failure; live.rs open_source_reader uses
+// lifecycle::sdk_error(..., "not_started") because a coverage-source
+// open is pre-work that never touched the reader table).
+func openReaderWithFailure(path, mode, label string, cancellation *iprangedb.CancellationToken, failure func(error) *rpc.HandlerError) (*rpc.ReaderValue, *rpc.HandlerError) {
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, rpc.NewHandlerError("invalid_path", "not_started",
@@ -875,14 +885,14 @@ func openReader(path, mode, label string, cancellation *iprangedb.CancellationTo
 	if mode == "immutable" {
 		reader, err := iprangedb.OpenImmutable(path)
 		if err != nil {
-			return nil, readError(err)
+			return nil, failure(err)
 		}
 		return &rpc.ReaderValue{Immutable: reader, Path: path,
 			SourceID: sourceID, SidecarID: sidecarID}, nil
 	}
 	reader, err := iprangedb.OpenLiveReader(path, cancellation)
 	if err != nil {
-		return nil, readError(err)
+		return nil, failure(err)
 	}
 	return &rpc.ReaderValue{Live: reader, Path: path,
 		SourceID: sourceID, SidecarID: sidecarID}, nil

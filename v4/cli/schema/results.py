@@ -1369,7 +1369,11 @@ def _self_test():
             with open(os.path.join(root, name), encoding="utf-8") as stream:
                 data = json.load(stream)
             for exchange in data.get("exchanges", []):
-                if exchange["request"]["method"] == method and "response" in exchange:
+                # A batched exchange carries a list of requests; only a
+                # single request names one method.
+                request = exchange.get("request")
+                if (isinstance(request, dict) and request.get("method") == method
+                        and "response" in exchange):
                     return exchange["response"]["result"]
         raise AssertionError(f"no golden result for {method!r}")
 

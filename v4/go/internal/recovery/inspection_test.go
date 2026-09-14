@@ -223,9 +223,14 @@ func TestValidateOfflineCandidateMissingFile(t *testing.T) {
 	if failure == nil {
 		t.Fatal("missing file accepted")
 	}
+	// Rust live_namespace::open_rw reports an absent name as
+	// Error::NameNotFound (open_regular returns None and the caller
+	// applies ok_or(Error::NameNotFound)), so the quiescent arm refuses
+	// a vanished source with the missing-name class, not a raw open
+	// failure.
 	var fe *format.Error
-	if !errors.As(failure.Cause, &fe) || fe.Code != format.CodeIO {
-		t.Fatalf("cause %v, want CodeIO", failure.Cause)
+	if !errors.As(failure.Cause, &fe) || fe.Code != format.CodeNameNotFound {
+		t.Fatalf("cause %v, want CodeNameNotFound", failure.Cause)
 	}
 }
 

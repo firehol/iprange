@@ -235,6 +235,11 @@ from command_sanitize import (  # noqa: E402  (side-effect free)
     owned_temp_root,
 )
 
+# The JSON-RPC params-validator answer.  Imported from the same schema
+# module the runner and the products' conformance schema use, so the
+# gate cannot drift from the transport contract it asserts.
+from schema.frame import STD_INVALID_PARAMS as _STD_INVALID_PARAMS  # noqa: E402
+
 
 REQUIRED_KINDS = [
     "v4_main",
@@ -267,8 +272,28 @@ CRASH_ONLY_KINDS = (
 # opened coverage is mandatory; empty opened coverage is a FAIL, not a
 # vacuous pass.
 REQUIRED_OPENED_KINDS = (
-    "v4_main", "live_sidecar",
-    "adapter_output")
+    "v4_main", "live_sidecar", "adapter_output", "metadata_delivery")
+# Kinds a v1 method can OPEN (as opposed to only create).  A method
+# names one of these kinds in its opened_by lineage only when the v1
+# contract opens an existing artifact of that kind:
+# - v4_main / live_sidecar: the reader and writer opens;
+# - adapter_output: an export whose destination already exists is
+#   opened (and replaced) by the export writer;
+# - metadata_delivery: a database.metadata.get file delivery under
+#   replace_existing opens the previously delivered artifact.
+OPEN_CAPABLE_KINDS = (
+    "v4_main", "live_sidecar", "adapter_output", "metadata_delivery")
+# Methods that must be observed refusing their params with -32602 from
+# both product languages.  These are the writer_budget-bearing methods
+# whose limit grammar has no zero/unlimited value: the refusal must
+# happen in the params validator, before any path or budget-consuming
+# work, so a single per-language attestation per method is a contract
+# term, not a sample.
+REQUIRED_PARAMS_NEGATIVE_METHODS = (
+    "iprange.v1.direct.replace",
+    "iprange.v1.database.metadata.replace",
+    "iprange.v1.feeds.create",
+    "iprange.v1.database.reclaim")
 # Per-kind method-capability maps.  A lineage ref must name an
 # operation that can actually create (respectively open) that kind;
 # an in-range ordinal naming maintenance.list or reader.close is a
@@ -343,12 +368,19 @@ MATRIX_CREATE_METHODS = {
     "metadata_delivery": ("iprange.v1.database.metadata.get",),
 }
 
-# Matrix-side open credits observed in the committed matrix evidence.
-# adapter_output has no matrix-side opener record: the only
-# adapter-output opener is the producer export writer observed by the
-# crash battery, so any matrix opened ref on adapter_output fails.
+# Matrix-side open credits.  adapter_output is opened by a consumer
+# export that replaces an existing destination (the mixed-direction
+# export cases), and metadata_delivery by a metadata.get file delivery
+# that replaces the previously delivered file.  Without these entries a
+# genuine cross-language open of an adapter or delivery artifact would
+# be reported as a fabricated credit, so the only evidence the gate
+# could accept for those kinds came from the crash battery.
 MATRIX_OPEN_METHODS = {
+    "adapter_output": ("iprange.v1.export",),
+    "metadata_delivery": ("iprange.v1.database.metadata.get",),
     "v4_main": ("iprange.v1.algebra.publish",
+                # export reads (opens) the database it exports.
+                "iprange.v1.export",
                 "iprange.v1.commit.resolve",
                 "iprange.v1.database.create.resolve",
                 "iprange.v1.database.info",
@@ -430,6 +462,70 @@ _CASE_DEFINITIONS = None
 _CASE_DEFINITIONS_ERROR = None
 
 
+KNOWN_DEFECTS_FILE_NAME = "known-defects.json"
+KNOWN_DEFECTS_SCHEMA = "iprange-cli-known-defects-v1"
+_KNOWN_DEFECTS_CACHE = None
+
+
+def _known_defects():
+    """Declared engine defects: ``{(matrix, case_name): entry}``.
+
+    ``v4/cli/evidence/known-defects.json`` is the ledger of cases a product
+    engine is currently known to fail at the qualification binaries while
+    its fix is in flight.  It exists so the battery can carry a red arm
+    without deleting it: every FAIL row must appear here, and every entry
+    here must actually be failing.  An absent or empty ledger means the
+    battery must be entirely green, which is its normal state.
+
+    Malformed entries abort the gate rather than being skipped: an
+    anonymous or reason-less entry would let a real failure be parked
+    without an owner, which is the failure mode this file could otherwise
+    introduce."""
+    global _KNOWN_DEFECTS_CACHE
+    if _KNOWN_DEFECTS_CACHE is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                            "evidence", KNOWN_DEFECTS_FILE_NAME)
+        entries = {}
+        if os.path.isfile(path):
+            try:
+                with open(path, encoding="utf-8") as stream:
+                    document = json.load(stream)
+            except (OSError, ValueError) as exc:
+                raise SystemExit(f"{path}: unreadable: {exc}")
+            if document.get("schema") != KNOWN_DEFECTS_SCHEMA:
+                raise SystemExit(f"{path}: unexpected schema "
+                                 f"{document.get('schema')!r}")
+            for entry in document.get("defects", []):
+                label = f"{path}: defect entry"
+                if not isinstance(entry, dict):
+                    raise SystemExit(f"{label}: is not an object")
+                for member in ("matrix", "case", "owner", "finding",
+                               "observed"):
+                    value = entry.get(member)
+                    if not isinstance(value, str) or not value.strip():
+                        raise SystemExit(f"{label}: needs a nonempty "
+                                         f"{member!r}; an entry without an "
+                                         f"owner, a reviewer finding, and the "
+                                         f"observed response is a placeholder, "
+                                         f"not a declared defect")
+                if entry["matrix"] not in REQUIRED_MATRICES:
+                    raise SystemExit(f"{label}: matrix {entry['matrix']!r} "
+                                     f"is not a battery matrix")
+                entries[(entry["matrix"], entry["case"])] = entry
+        _KNOWN_DEFECTS_CACHE = entries
+    return _KNOWN_DEFECTS_CACHE
+
+
+def _known_defect_problems(matrix, cases):
+    """``(unlisted_failures, unexpected_passes)`` for one matrix report."""
+    defects = _known_defects()
+    declared = {name for (label, name) in defects if label == matrix}
+    statuses = {case.get("name"): case.get("status") for case in cases}
+    observed = {name for name, status in statuses.items()
+                if status == "FAIL"}
+    return observed - declared, declared & statuses.keys() - observed
+
+
 def _case_definitions():
     """Committed case definitions: ``{name: {"requirements": frozenset,
     "methods": {actor: frozenset(methods)}}}``.
@@ -453,10 +549,19 @@ def _case_definitions():
             definitions = {}
             for case in _run.load_cases(_run.DEFAULT_CASE_DIR):
                 methods = {}
+                negatives = {}
+                groups = {}
                 for step in case.get("steps", []):
                     if step.get("kind") == "rpc":
                         actor = _run.declared_actor(step)
                         method = step.get("method")
+                        if "expect_params_rejected" in step:
+                            key = (actor, method)
+                            negatives[key] = negatives.get(key, 0) + 1
+                        group = step.get("digest_group")
+                        if isinstance(group, str):
+                            groups.setdefault(group, set()).add(
+                                (actor, method))
                     else:
                         # Legacy CLI steps run on the consumer binary
                         # and record the literal ``legacy`` operation
@@ -469,6 +574,13 @@ def _case_definitions():
                     "requirements": frozenset(_run.actor_requirements(case)),
                     "methods": {actor: frozenset(ops)
                                 for actor, ops in methods.items()},
+                    # Declared negative-params steps and declared digest
+                    # groups, so the recorded attestation of a PASS case
+                    # can be compared with what its definition says it
+                    # executes (a dropped or invented attestation is a
+                    # doctored record, not a thinner run).
+                    "params_rejected": negatives,
+                    "digest_groups": groups,
                 }
             _CASE_DEFINITIONS = definitions
         except Exception as exc:  # noqa: BLE001 - report, never crash
@@ -897,7 +1009,30 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
         return matrix, {}, empty_stats, problems, None
     failed = report.get("failed", 0)
     if failed:
-        problems.append(f"matrix {path}: report records {failed} failed case(s)")
+        # A FAIL row in committed evidence is allowed only when it is a
+        # declared, owned defect of the engine that produced it (see
+        # ``evidence/known-defects.json``).  Unlisted failures stay hard
+        # failures, and a listed defect that did not actually fail is also
+        # reported, so neither direction can drift silently: the battery
+        # cannot be turned green by deleting its red rows, and a fixed
+        # engine cannot keep a stale entry that would hide a regression.
+        unlisted, unexpected = _known_defect_problems(
+            matrix or "", report.get("cases", []))
+        if unlisted or unexpected:
+            problems.append(
+                f"matrix {path}: report records {failed} undeclared or "
+                f"stale failed case(s)")
+        for case_name in sorted(unlisted):
+            problems.append(
+                f"matrix {path}: FAIL case {case_name!r} is not a declared "
+                f"known defect in evidence/{KNOWN_DEFECTS_FILE_NAME}; an "
+                f"undeclared failure is not acceptance evidence")
+        for case_name in sorted(unexpected):
+            problems.append(
+                f"matrix {path}: evidence/{KNOWN_DEFECTS_FILE_NAME} declares "
+                f"{case_name!r} as a failing case of matrix {matrix!r} but "
+                f"the case PASSed; remove the stale entry so a future "
+                f"regression cannot hide behind it")
     leftover = report.get("leftover_processes")
     if leftover:
         problems.append(
@@ -1036,6 +1171,8 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
     expected = ACTOR_LANGUAGES[matrix]
     evidence = {}
     pass_cases = 0
+    attested_negatives = set()
+    attested_groups = {}
     contributing = 0
     # Case-identity authority: the committed case definitions.  Only
     # loaded when a PASS case exists and either the report is a mixed
@@ -1044,8 +1181,12 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
     # battery that names synthetic cases stays cheap.
     case_definitions = None
     case_load_error = None
-    if any(case.get("status") == "PASS" for case in cases) and (
-            matrix in ("rust_to_go", "go_to_rust") or verify_cases):
+    if any(case.get("status") == "PASS" for case in cases):
+        # The definitions are the authority for what a PASS case must
+        # attest (params rejections, export digest groups, executed
+        # operations), so they are loaded for every report that claims a
+        # PASS, not only for mixed matrices.  Synthetic self-test cases
+        # are absent from the definitions and skip those comparisons.
         case_definitions, case_load_error = _case_definitions()
         if case_load_error:
             problems.append(f"matrix {path}: {case_load_error}")
@@ -1423,13 +1564,11 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                 if actor_steps.get(actor) is None or \
                         actor_steps.get(actor) < 1:
                     continue
-                # Mirror of the crash-side open contract: only kinds
-                # the v1 open contract opens (v4_main, live_sidecar,
-                # adapter_output) may carry an opened ref.  Any other
+                # Mirror of the crash-side open contract: only kinds in
+                # OPEN_CAPABLE_KINDS may carry an opened ref.  Any other
                 # kind has no cross-process open, so the ref is a
                 # fabricated open.
-                if facts["kind"] not in ("live_sidecar",
-                                         "adapter_output", "v4_main"):
+                if facts["kind"] not in OPEN_CAPABLE_KINDS:
                     problems.append(
                         f"matrix {path}: PASS case {case_name!r} kind "
                         f"{facts['kind']!r} records a cross-process open "
@@ -1446,9 +1585,216 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                         f"this kind")
                     continue
                 bucket["opened"].add(implementations.get(actor, "?"))
+        # Params-rejection and digest-group attestation (security F2,
+        # closure F2): validated against each executing actor's resolved
+        # identity, executed-step count, and executed operations.  A
+        # dropped or invented attestation is a FAIL here, and the
+        # battery-level requirements in assess() cannot be met by other
+        # evidence, so the corpus cannot stop testing the params
+        # validator or the cross-language export silently.
+        defined_negatives = None
+        declared_groups = None
+        if case_definitions is not None:
+            definition = case_definitions.get(case_name)
+            if isinstance(definition, dict):
+                defined_negatives = definition.get("params_rejected")
+                declared_groups = definition.get("digest_groups")
+        negative_pairs, group_facts = _attestation_problems(
+            path, case_name, case, implementations, actor_steps,
+            actor_operations, defined_negatives, declared_groups,
+            problems)
+        attested_negatives |= negative_pairs
+        for group, facts in group_facts.items():
+            merged = attested_groups.setdefault(group, {
+                "digests": set(), "languages": set(), "actors": set()})
+            merged["digests"] |= facts["digests"]
+            merged["languages"] |= facts["languages"]
+            merged["actors"] |= facts["actors"]
     stats = {"cases": len(cases), "fail_cases": fail_cases,
-             "pass_cases": pass_cases, "contributing": contributing}
+             "pass_cases": pass_cases, "contributing": contributing,
+             "params_negative": attested_negatives,
+             "digest_groups": attested_groups}
     return matrix, evidence, stats, problems, command_fixture
+
+
+def _attestation_problems(path, case_name, case, implementations,
+                          actor_steps, actor_operations, defined_negatives,
+                          declared_groups, problems):
+    """Validate one PASS case's params-rejection and digest-group records.
+
+    Returns ``(negative_pairs, digest_groups)`` where ``negative_pairs``
+    is the set of ``(method, product_language)`` the case attests and
+    ``digest_groups`` maps a group label to ``(digests, languages,
+    actors)``.  A malformed or missing record is appended to ``problems``
+    and contributes nothing to the battery aggregate, so a doctored
+    report cannot satisfy the battery-level requirements either.
+    """
+
+    negative_pairs = set()
+    digest_groups = {}
+    recorded_group = {}
+    rejected = case.get("params_rejected")
+    if rejected is None:
+        rejected = []
+    if not isinstance(rejected, list):
+        problems.append(
+            f"matrix {path}: PASS case {case_name!r} params_rejected is "
+            f"not an array")
+        rejected = []
+    for index, entry in enumerate(rejected):
+        label = (f"matrix {path}: PASS case {case_name!r} "
+                 f"params_rejected[{index}]")
+        if not isinstance(entry, dict) or set(entry) != {
+                "actor", "method", "transport_code", "request"}:
+            problems.append(f"{label}: members must be exactly actor, "
+                            f"method, transport_code, request")
+            continue
+        actor = entry["actor"]
+        if actor not in ALL_ACTORS:
+            problems.append(f"{label}: unknown actor {actor!r}")
+            continue
+        if entry["transport_code"] != _STD_INVALID_PARAMS:
+            problems.append(
+                f"{label}: transport_code {entry['transport_code']!r} is "
+                f"not {_STD_INVALID_PARAMS} (the params-validator answer)")
+            continue
+        method = entry["method"]
+        request = entry["request"]
+        if not isinstance(method, str) or not method:
+            problems.append(f"{label}: method is not a nonempty string")
+            continue
+        if not isinstance(request, str) or not request:
+            problems.append(
+                f"{label}: request bytes are not recorded; a params-"
+                f"rejection assertion must carry the exact frame it sent")
+            continue
+        recorded_steps = actor_steps.get(actor)
+        if recorded_steps is None:
+            # The steps field is absent or malformed; that defect is
+            # reported with the actor record itself, and an attestation
+            # that cannot be attributed to executed work contributes
+            # nothing.
+            continue
+        if recorded_steps < 1:
+            problems.append(
+                f"{label}: credits actor {actor!r} with zero executed steps")
+            continue
+        implementation = implementations.get(actor)
+        if implementation in PRODUCT_LANGUAGES:
+            negative_pairs.add((method, implementation))
+
+    if defined_negatives is not None:
+        recorded = {}
+        for entry in rejected:
+            if isinstance(entry, dict) and "actor" in entry \
+                    and "method" in entry:
+                key = (entry["actor"], entry["method"])
+                recorded[key] = recorded.get(key, 0) + 1
+        if recorded != dict(defined_negatives):
+            problems.append(
+                f"matrix {path}: PASS case {case_name!r} records "
+                f"params_rejections {sorted(recorded.items())} that differ "
+                f"from the {sorted(dict(defined_negatives).items())} its "
+                f"committed case definition declares; a dropped or "
+                f"invented params-rejection assertion is a doctored "
+                f"record")
+
+    groups = case.get("digest_groups")
+    if groups is None:
+        groups = {}
+    if not isinstance(groups, dict):
+        problems.append(
+            f"matrix {path}: PASS case {case_name!r} digest_groups is not "
+            f"an object")
+        groups = {}
+    if declared_groups is not None and set(groups) - set(declared_groups):
+        problems.append(
+            f"matrix {path}: PASS case {case_name!r} records digest groups "
+            f"{sorted(set(groups) - set(declared_groups))} that its "
+            f"committed case definition never declares")
+    for group, entries in sorted(groups.items()):
+        label = (f"matrix {path}: PASS case {case_name!r} digest_group "
+                 f"{group!r}")
+        if not isinstance(entries, list) or not entries:
+            problems.append(f"{label}: must record a nonempty array")
+            continue
+        digests = set()
+        languages = set()
+        actors = set()
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, dict) or set(entry) != {
+                    "actor", "method", "format", "path", "sha256"}:
+                problems.append(
+                    f"{label}[{index}]: members must be exactly actor, "
+                    f"method, format, path, sha256")
+                continue
+            actor = entry["actor"]
+            if actor not in ALL_ACTORS:
+                problems.append(f"{label}[{index}]: unknown actor {actor!r}")
+                continue
+            sha256 = entry["sha256"]
+            if not (isinstance(sha256, str) and len(sha256) == 64
+                    and all(c in "0123456789abcdef" for c in sha256)):
+                problems.append(
+                    f"{label}[{index}]: sha256 {sha256!r} is not 64 "
+                    f"lowercase hex digits")
+                continue
+            if entry.get("method") != "iprange.v1.export":
+                problems.append(
+                    f"{label}[{index}]: method {entry.get('method')!r} is "
+                    f"not iprange.v1.export; only export artifacts are "
+                    f"digest-grouped")
+                continue
+            if entry.get("method") not in (actor_operations.get(actor)
+                                           or []):
+                problems.append(
+                    f"{label}[{index}]: names an operation not recorded in "
+                    f"actor {actor!r} executed operations")
+                continue
+            recorded_steps = actor_steps.get(actor)
+            if recorded_steps is None:
+                continue
+            if recorded_steps < 1:
+                problems.append(f"{label}[{index}]: credits actor {actor!r} "
+                                f"with zero executed steps")
+                continue
+            implementation = implementations.get(actor)
+            if implementation in PRODUCT_LANGUAGES:
+                languages.add(implementation)
+            digests.add(sha256)
+            actors.add(actor)
+        if not digests:
+            problems.append(f"{label}: records no usable digest")
+            continue
+        if len(digests) != 1:
+            problems.append(
+                f"{label}: digests {sorted(digests)} disagree; one digest "
+                f"group is one artifact, byte for byte")
+        if not {"producer", "consumer"} <= actors:
+            problems.append(
+                f"{label}: both service roles must produce the artifact "
+                f"(roles {sorted(actors)}); a group recorded by only one "
+                f"role never compares the consumer's export against the "
+                f"producer's own")
+        recorded_group[group] = {(entry["actor"], entry["method"])
+                                 for entry in entries
+                                 if isinstance(entry, dict)
+                                 and isinstance(entry.get("actor"), str)
+                                 and isinstance(entry.get("method"), str)}
+        digest_groups[group] = {"digests": digests,
+                                "languages": languages,
+                                "actors": actors}
+    if declared_groups is not None:
+        declared = {group: {tuple(pair) for pair in pairs}
+                    for group, pairs in declared_groups.items()}
+        if recorded_group != declared:
+            problems.append(
+                f"matrix {path}: PASS case {case_name!r} records digest "
+                f"groups {sorted((g, sorted(v)) for g, v in recorded_group.items())} "
+                f"that differ from the {sorted((g, sorted(v)) for g, v in declared.items())} "
+                f"its committed case definition declares; a dropped or "
+                f"invented export attestation is a doctored record")
+    return negative_pairs, digest_groups
 
 
 def _matrix_ref(entry):
@@ -2131,16 +2477,101 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
             kind_sources.setdefault(
                 kind, {"matrix": False, "crash": False})["matrix"] = True
     # Non-vacuous per-source open requirement (F4): the matrix
-    # evidence alone must show both languages opening the kinds the
-    # matrix suite opens by contract.  Strip the matrix open records
-    # from every case and the crash evidence cannot repay the missing
-    # matrix-side coverage.
-    for kind in ("v4_main", "live_sidecar"):
+    # evidence alone must show both languages opening every kind whose
+    # contract implies a cross-process reader.  Iterating
+    # REQUIRED_OPENED_KINDS (rather than a shorter hardcoded pair) is
+    # what makes adapter_output and metadata_delivery genuinely
+    # required: hardcoding the pair let those kinds satisfy the gate
+    # from same-language or crash-only evidence alone.  Strip the
+    # matrix open records from every case and the crash evidence cannot
+    # repay the missing matrix-side coverage.
+    for kind in REQUIRED_OPENED_KINDS:
         matrix_opened = matrix_coverage.get(kind, {}).get("opened", set())
         if not {"rust", "go"} <= matrix_opened:
             problems.append(
                 f"kind {kind!r} must be opened by both languages in the "
                 f"matrix evidence: opened by {sorted(matrix_opened)}")
+    # Battery-level attestation of the two surfaces the corpus can only
+    # prove by assertion (security F2, closure F2): the params validator
+    # and the cross-language export.  Both aggregates come from the
+    # matrix reports alone, so crash evidence cannot repay a missing
+    # matrix-side attestation, and deleting the records from every
+    # report fails the gate instead of quietly shrinking what it proves.
+    attested_negatives = set()
+    attested_groups = {}
+    for stats in matrix_stats.values():
+        attested_negatives |= stats.get("params_negative", set())
+        for group, facts in stats.get("digest_groups", {}).items():
+            merged = attested_groups.setdefault(group, {
+                "digests": set(), "languages": set(), "actors": set()})
+            merged["digests"] |= facts["digests"]
+            merged["languages"] |= facts["languages"]
+            merged["actors"] |= facts["actors"]
+    # Params-validator coverage (security F2).  Two independent checks:
+    # the committed corpus must still declare a -32602 assertion for every
+    # writer_budget method whose grammar forbids zero, and every such
+    # assertion must have actually executed somewhere in the battery.
+    # Each product language must also be credited with at least one
+    # asserted rejection, so an engine cannot stop honouring the params
+    # contract without failing here.  Per-method coverage by a specific
+    # engine is deliberately not required: a method one engine answers
+    # with a product error is a defect that belongs to that engine's
+    # matrix FAIL rows, not a reason to delete the assertion.
+    declared_negatives = set()
+    definitions, definitions_error = _case_definitions()
+    if definitions_error:
+        problems.append(definitions_error)
+    else:
+        for definition in definitions.values():
+            for (_actor, method) in definition.get("params_rejected", {}):
+                declared_negatives.add(method)
+    missing_from_corpus = sorted(set(REQUIRED_PARAMS_NEGATIVE_METHODS)
+                                 - declared_negatives)
+    if missing_from_corpus:
+        problems.append(
+            f"no committed case asserts a -32602 params rejection for "
+            f"{missing_from_corpus}; these writer_budget methods have no "
+            f"zero value in the API contract and must be refused by the "
+            f"params validator")
+    attested_methods = {method for method, _language in attested_negatives}
+    for method in sorted(declared_negatives
+                         & set(REQUIRED_PARAMS_NEGATIVE_METHODS)):
+        if method not in attested_methods:
+            problems.append(
+                f"method {method!r} declares an expect_params_rejected "
+                f"step but no PASS case attests an executed -32602 "
+                f"rejection of it; the assertion never ran")
+    for language in PRODUCT_LANGUAGES:
+        if language not in {lang for _m, lang in attested_negatives}:
+            problems.append(
+                f"no asserted -32602 params rejection was executed by "
+                f"{language!r}; both engines must be held to the params "
+                f"validator contract")
+    for group, facts in sorted(attested_groups.items()):
+        digests = facts["digests"]
+        languages = facts["languages"]
+        actors = facts["actors"]
+        if len(digests) != 1:
+            problems.append(
+                f"digest group {group!r} has {len(digests)} distinct "
+                f"artifact digests across the battery: the two engines do "
+                f"not export the same bytes")
+        if not {"rust", "go"} <= languages:
+            problems.append(
+                f"digest group {group!r} is attested by "
+                f"{sorted(languages) or ['<none>']}, not both languages")
+        if not {"producer", "consumer"} <= actors:
+            problems.append(
+                f"digest group {group!r} is attested only by roles "
+                f"{sorted(actors)}; the consumer's export of the "
+                f"producer's artifact is the evidence the acceptance "
+                f"criterion names")
+    if matrix_paths and not attested_groups:
+        problems.append(
+            "no export digest group is attested in the matrix evidence: "
+            "the cross-language export obligation (consumer exports the "
+            "producer's artifact, digests compared) has no evidence")
+
     for matrix in REQUIRED_MATRICES:
         if matrix not in seen_matrices:
             problems.append(f"missing matrix report for {matrix!r}")
@@ -2545,6 +2976,8 @@ def _self_test():
                 "leftover_processes": leftover or [],
                 "failed": failed}
 
+    GREEN_EXPORT_SHA = "a" * 64
+
     BINARIES = {
         "rust": {"path": "/tmp/rust-iprange", "sha256": "1" * 64,
                  "methods": [], "available": True,
@@ -2582,11 +3015,16 @@ def _self_test():
             # (the only adapter-output opener is the producer export
             # writer the crash battery observes) and metadata_delivery
             # has no open contract, so both truthfully record none.
+            # Every required-opened kind needs a matrix-side opener:
+            # the consumer opens the producer's adapter output by
+            # exporting over the existing destination, and opens the
+            # previously delivered metadata file by re-delivering it.
             opened = {
                 "v4_main": ["consumer.iprange.v1.reader.open"],
                 "live_sidecar": ["consumer.iprange.v1.reader.open"],
-                "adapter_output": [],
-                "metadata_delivery": [],
+                "adapter_output": ["consumer.iprange.v1.export"],
+                "metadata_delivery": [
+                    "consumer.iprange.v1.database.metadata.get"],
             }[kind]
             ledger[f"k{i}.bin"] = {
                 "kind": kind,
@@ -2602,18 +3040,43 @@ def _self_test():
                     "sha256": actor_sha[expected["producer"]],
                     "implementation": expected["producer"],
                     "argv": BINARY_PATHS[expected["producer"]],
-                    "steps": 2,
+                    "steps": 6,
                     "operations": ["iprange.v1.database.create",
-                                   "iprange.v1.export"],
+                                   "iprange.v1.export",
+                                   "iprange.v1.direct.replace",
+                                   "iprange.v1.database.metadata.replace",
+                                   "iprange.v1.feeds.create",
+                                   "iprange.v1.database.reclaim"],
                 },
                 "consumer": {
                     "sha256": actor_sha[expected["consumer"]],
                     "implementation": expected["consumer"],
                     "argv": BINARY_PATHS[expected["consumer"]],
-                    "steps": 2,
+                    "steps": 3,
                     "operations": ["iprange.v1.reader.open",
-                                   "iprange.v1.database.metadata.get"],
+                                   "iprange.v1.database.metadata.get",
+                                   "iprange.v1.export"],
                 },
+            },
+            # The params-validator and cross-language export
+            # attestations the battery must carry (security F2, closure
+            # F2).  Each required writer_budget method is refused by the
+            # executing engine, and one digest group is produced by both
+            # service roles.
+            "params_rejected": [
+                {"actor": "producer", "method": method,
+                 "transport_code": _STD_INVALID_PARAMS,
+                 "request": "{\"id\":1,\"method\":\""
+                            + method + "\"}"}
+                for method in REQUIRED_PARAMS_NEGATIVE_METHODS],
+            "digest_groups": {
+                "green-export-digest": [
+                    {"actor": "producer", "method": "iprange.v1.export",
+                     "format": "netset", "path": "p.netset",
+                     "sha256": GREEN_EXPORT_SHA},
+                    {"actor": "consumer", "method": "iprange.v1.export",
+                     "format": "netset", "path": "c.netset",
+                     "sha256": GREEN_EXPORT_SHA}],
             },
             "file_kinds": ledger}], failed=0)
         report["binaries"] = BINARIES
@@ -4164,6 +4627,157 @@ def _self_test():
         genuine_mutation_fails("f11-binary-path-missing",
                                missing_binary_path,
                                verify_binaries=True)
+
+        # 55. Cross-language export attestation (closure F2).  The
+        #     acceptance criterion names export among the obligations the
+        #     battery must prove; until now zero cross-language export
+        #     evidence existed and nothing noticed.  Stripping the
+        #     consumer's export of the producer's artifact, or the digest
+        #     records themselves, must fail the battery.
+        def strip_export_digests(matrices, crash):
+            for report in matrices:
+                for case in report["cases"]:
+                    if case.get("status") != "PASS":
+                        continue
+                    case.pop("digest_groups", None)
+        genuine_mutation_fails("export-digests-dropped",
+                               strip_export_digests)
+
+        def consumer_only_export(matrices, crash):
+            for report in matrices:
+                for case in report["cases"]:
+                    groups = case.get("digest_groups")
+                    if not isinstance(groups, dict):
+                        continue
+                    for group, entries in groups.items():
+                        keep = [entry for entry in entries
+                                if entry.get("actor") == "consumer"]
+                        groups[group] = keep or entries
+        genuine_mutation_fails("export-producer-role-dropped",
+                               consumer_only_export)
+
+        # A digest group whose two records no longer name the same bytes
+        # is the report-level form of "the engines disagree", so the group
+        # must fail rather than report two passing artifacts.
+        def diverged_digest(matrices, crash):
+            for report in matrices:
+                for case in report["cases"]:
+                    for entries in (case.get("digest_groups") or {}).values():
+                        if len(entries) > 1:
+                            entries[1]["sha256"] = "0" * 64
+                            return
+        genuine_mutation_fails("export-digests-diverged", diverged_digest)
+
+        # Removing the export opens for one language in the crash evidence
+        # as well as the matrix evidence is what empties a required-opened
+        # kind; either source alone still carries the obligation.
+        def adapter_never_opened(matrices, crash):
+            for report in matrices:
+                for case in report["cases"]:
+                    for facts in case.get("file_kinds", {}).values():
+                        if facts.get("kind") == "adapter_output":
+                            facts["opened_by"] = []
+            for scenario in crash.get("scenarios", []):
+                for kind, facts in scenario.get("kinds", {}).items():
+                    if kind == "adapter_output":
+                        facts["opened_by"] = []
+        genuine_mutation_fails("adapter-output-never-opened",
+                               adapter_never_opened)
+
+        # 56. Params-validator attestation (security F2).  The corpus now
+        #     has an explicit negative-params mode; these controls prove
+        #     the records behind it are load-bearing rather than decorative.
+        def drop_one_negative(matrices, crash):
+            for report in matrices:
+                for case in report["cases"]:
+                    rejected = case.get("params_rejected")
+                    if isinstance(rejected, list) and len(rejected) > 0:
+                        rejected.pop()
+                        return
+        genuine_mutation_fails("params-negative-record-dropped",
+                               drop_one_negative)
+
+        def invent_negative(matrices, crash):
+            for report in matrices:
+                for case in report["cases"]:
+                    if case.get("status") != "PASS":
+                        continue
+                    case.setdefault("params_rejected", []).append({
+                        "actor": "producer",
+                        "method": "iprange.v1.system.describe",
+                        "transport_code": -32602,
+                        "request": "{\"jsonrpc\":\"2.0\"}"})
+                    return
+        genuine_mutation_fails("params-negative-invented", invent_negative)
+
+        def flip_negative_code(matrices, crash):
+            for report in matrices:
+                for case in report["cases"]:
+                    for entry in case.get("params_rejected") or []:
+                        entry["transport_code"] = -32010
+                        return
+        genuine_mutation_fails("params-negative-code-flipped",
+                               flip_negative_code)
+
+        def strip_negative_request(matrices, crash):
+            for report in matrices:
+                for case in report["cases"]:
+                    for entry in case.get("params_rejected") or []:
+                        entry["request"] = ""
+                        return
+        genuine_mutation_fails("params-negative-request-stripped",
+                               strip_negative_request)
+
+        # 57. The declared-defect ledger is only honest in both
+        #     directions: an undeclared failure must fail, and a declared
+        #     defect that silently PASSes must fail too.  Controls live
+        #     here because the ledger is a gate input, not a report field.
+        def undeclared_failure(matrices, crash):
+            report = matrices[0]
+            for case in report["cases"]:
+                if case.get("status") == "PASS":
+                    case["status"] = "FAIL"
+                    case["error"] = "injected"
+                    report["failed"] = report.get("failed", 0) + 1
+                    return
+        genuine_mutation_fails("undeclared-failure", undeclared_failure)
+
+        stale_case = None
+        for report in json.load(open(
+                os.path.join(evidence_dir, KNOWN_DEFECTS_FILE_NAME))
+        ).get("defects", []):
+            stale_case = report
+            break
+        if stale_case is not None:
+            def declared_defect_passes(matrices, crash, _entry=stale_case):
+                for report in matrices:
+                    if report.get("matrix") != _entry["matrix"]:
+                        continue
+                    for case in report["cases"]:
+                        if case.get("name") == _entry["case"]:
+                            case["status"] = "PASS"
+                            case.pop("error", None)
+                            report["failed"] = max(
+                                0, report.get("failed", 1) - 1)
+                            return
+            genuine_mutation_fails("stale-known-defect", declared_defect_passes)
+
+        # 58. A required-opened kind may not satisfy its obligation from
+        #     crash evidence alone: the matrix-side opens are the
+        #     non-vacuous requirement, and removing them for one language
+        #     is exactly the blind spot the hardcoded pair used to allow.
+        def matrix_side_opens_only(matrices, crash):
+            # Open records survive in the crash evidence only, which is
+            # what the hardcoded two-kind list used to allow: crash
+            # scenarios open these kinds too, so the aggregate looks
+            # complete while no matrix case ever did.
+            for report in matrices:
+                for case in report["cases"]:
+                    for facts in case.get("file_kinds", {}).values():
+                        if facts.get("kind") in REQUIRED_OPENED_KINDS:
+                            facts["opened_by"] = []
+        genuine_mutation_fails("matrix-opens-stripped-crash-only",
+                               matrix_side_opens_only)
 
         # 54. Negative control for the strengthened gate: the genuine
         #     committed evidence must still pass with BOTH CLI

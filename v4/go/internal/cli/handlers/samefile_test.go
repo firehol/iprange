@@ -10,6 +10,7 @@
 package handlers
 
 import (
+	"runtime"
 	"bufio"
 	"bytes"
 	"encoding/json"
@@ -244,7 +245,13 @@ func buildExportWorker() string {
 			exportWorkerErr = err
 			return
 		}
-		exportWorkerPath = filepath.Join(dir, "iprange-v4-worker")
+		// Windows exec launches only the image-mapped suffix; the worker
+		// must be built under the name the launcher will actually find.
+		exportWorkerName := "iprange-v4-worker"
+		if runtime.GOOS == "windows" {
+			exportWorkerName += ".exe"
+		}
+		exportWorkerPath = filepath.Join(dir, exportWorkerName)
 		root, err := goModuleRoot()
 		if err != nil {
 			exportWorkerErr = err
@@ -483,6 +490,21 @@ func TestSessionReaderMetadataHandleRefusesSource(t *testing.T) {
 	second, err := bufio.NewReader(outR).ReadString('\n')
 	if err != nil && second == "" {
 		t.Fatalf("read metadata response: %v", err)
+	}
+	// Close the reader through the contract before the session ends: its
+	// mapping pins the source on Windows until released (t.TempDir
+	// cleanup cannot remove a file with an active section view there).
+	closeFrame := `{"jsonrpc":"2.0","id":"3","method":"iprange.v1.reader.close","params":{"reader":` +
+		mustJSONString(handle) + `}}`
+	if _, err := fmt.Fprintf(pw, "%s\n", closeFrame); err != nil {
+		t.Fatalf("write reader.close frame: %v", err)
+	}
+	third, err := bufio.NewReader(outR).ReadString('\n')
+	if err != nil && third == "" {
+		t.Fatalf("read reader.close response: %v", err)
+	}
+	if strings.Contains(third, `"error"`) {
+		t.Fatalf("reader.close refused: %s", third)
 	}
 	_ = pw.Close()
 	<-done
@@ -938,6 +960,21 @@ func TestSessionReaderMetadataRenamedSourceRefused(t *testing.T) {
 	second, err := bufio.NewReader(outR).ReadString('\n')
 	if err != nil && second == "" {
 		t.Fatalf("read metadata response: %v", err)
+	}
+	// Close the reader through the contract before the session ends: its
+	// mapping pins the source on Windows until released (t.TempDir
+	// cleanup cannot remove a file with an active section view there).
+	closeFrame := `{"jsonrpc":"2.0","id":"3","method":"iprange.v1.reader.close","params":{"reader":` +
+		mustJSONString(handle) + `}}`
+	if _, err := fmt.Fprintf(pw, "%s\n", closeFrame); err != nil {
+		t.Fatalf("write reader.close frame: %v", err)
+	}
+	third, err := bufio.NewReader(outR).ReadString('\n')
+	if err != nil && third == "" {
+		t.Fatalf("read reader.close response: %v", err)
+	}
+	if strings.Contains(third, `"error"`) {
+		t.Fatalf("reader.close refused: %s", third)
 	}
 	_ = pw.Close()
 	<-done

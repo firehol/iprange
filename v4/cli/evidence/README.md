@@ -1,3 +1,144 @@
+Current evidence regenerated at the wave-19.23 final revision
+(SOW-0028 "Wave 19 round 19.23", 2026-09-14; product identities in
+the identity block below).  Wave 19.23 repairs the product defects
+the eight-role review round reported at the wave-19.22 final
+revision `cfbee788` (verdict FAIL from every role: tester,
+operations, parity, portability, security, performance, glm,
+closure):
+
+- Go metadata source read (parity P0; tester/glm/performance P1):
+  `readMetadataFile` issued a single `Read` sized by `stat`,
+  discarded the returned count, and committed fabricated bytes
+  (NUL padding or silent truncation) for procfs/sysfs sources.  It
+  now opens `O_RDONLY|O_NONBLOCK` through a dedicated metadata open
+  owner and loops to EOF, appending only bytes actually read and
+  enforcing the 20 MiB cap against bytes read
+  (`v4/go/internal/cli/handlers/lifecycle_facts.go`,
+  `metadata_open_unix.go`, `metadata_open_windows.go`).  Verified
+  byte-identical to Rust for `/proc` and `/sys` sources and for
+  metadata get/replace_file round-trips.
+- Regular-to-FIFO swap wedge class (operations/parity/portability/
+  glm/performance P1): every remaining caller-path open opens
+  `O_NONBLOCK` and judges the opened descriptor inside the open
+  owner, refusing with the arm-exact class byte-identical to that
+  arm's pre-check.  Go owners:
+  `v4/go/internal/cli/fileio/{opened_regular,input_open_unix,
+  csv_open_unix}.go` and `v4/go/internal/cli/handlers/
+  {opened_regular,metadata_open_unix}.go`; Rust: one owner
+  `v4/rust/iprange-cli/src/io/caller_open.rs` covering the text
+  input, `@file-list`, direct-CSV, and metadata arms.  Every swap
+  race now answers promptly (hangs=0 on all race arms), strace
+  confirms `O_RDONLY|O_NONBLOCK|O_CLOEXEC`, and harness self-tests
+  prove the pins fail when the flag is removed.
+- Refusal-class parity (closure F1; parity/security P1-P2): Go
+  aligned to the Rust authority on the 22 divergent (arm, path-kind)
+  combinations — symlinked mapping sources, quiescent recovery and
+  validate rw opens through the retained parent directory
+  (`v4/go/internal/live/open_retained.go`,
+  `recovery/source_open_*.go`), `publication.resolve` missing
+  ancestor, directory output destinations via raw `rename(2)`
+  (`v4/go/internal/cli/fileio/rename_unix.go`,
+  `rename_windows.go`), refresh `data.outcome` `not_started`, and
+  `-32602` refusal of `writer_budget.max_open_files = 0` on every
+  writer method (`handlers/writer_budget_zero_test.go` pins).  Rust
+  changed on one arm under recorded user ratification: the quiescent
+  validate live-sidecar open folds to
+  `live_recovery_coordination_unavailable`
+  (`v4/rust/iprange-livedb/src/validation/source.rs`).  The
+  closure class sweep reports DIVERGENCES: 0.
+- Legacy CLI `@directory` classification (parity P1):
+  `v4/go/internal/cli/legacy/parse.go` classifies entries with
+  `os.Stat` (follows symlinks) as the C reference and Rust do, so a
+  symlinked regular file inside an `@directory` is no longer dropped
+  from the merge.  Committed case `tests.d/101-directory-symlink-
+  input`; full `tests.d` 101/101 for both engines.
+- Corpus and gate gaps (tester P1/P2, security P2, closure F2/F6):
+  eleven new committed cases — `cases/params.negative.*` (five,
+  including the writer-budget refusals and grammar),
+  `cases/metadata.replace_file.{direct,replace,publish}` and
+  `cases/mixed.metadata-replace-file` (byte-exact metadata
+  persistence on all three publishers plus the mixed direction),
+  `cases/input.expand_at_paths`, and
+  `cases/mixed.export-cross-language` (consumer exports the
+  producer's artifact, digest-compared) — and two new committed
+  gates: `v4/cli/check_fifo_surface.py` (17 arms x 2 engines,
+  self-test 18 cases) and `v4/cli/throughput_harness.py` (self-test
+  10 cases).  The kind-coverage gate now iterates the full
+  `REQUIRED_OPENED_KINDS` (`adapter_output` and `metadata_delivery`
+  carry both-language open evidence), every harness report carries
+  `git_head`, and the known-defects ledger
+  (`v4/cli/evidence/known-defects.json`) is enforced in both
+  directions and is currently empty.  The `schema/results.py`
+  `_self_test()` no longer raises, restoring the README claim that
+  every `schema/` module ships a self-test.
+- Windows native re-qualification (portability F5, closure F4):
+  `windows-guard.json` and `windows-housekeeping.json` regenerated
+  natively on the authorized Windows validation host from the
+  wave-19.23 tree (go1.26.5, rustc 1.97.1-msvc, harness CPython
+  3.14.6 mingw64); `GOOS=windows go vet ./...` is a committed gate
+  in `check_goos_matrix.sh`; `samefile_test.go` was made
+  Windows-safe (worker path gains the `.exe` suffix under
+  `runtime.GOOS`, pinned readers close before temp-dir cleanup) and
+  the native Windows Go suite runs green.
+
+Fresh identities (wave-19.23, Linux, measured from one clean
+battery): go product
+`d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4`
+(rebuilt with `-trimpath -buildvcs=false`), go worker
+`6442c2598e88df5e4f3c2537cd69a5bdad36bfbcc4d2f5c0d9a9151cb3bb9f86`
+(rebuilt with `-trimpath -buildvcs=false`), rust product
+`47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753`,
+rust worker
+`e72d7d4578cc47536bc4b36b4d1640be8e118c8bc3e03abac58149ca21f3979f`,
+rust fixture
+`a37312882baf78ff18230619b61d2b7766921ab6ef8ed131fc7f3a73f858a3b2`
+(rebuilt from the fixed tree with a fresh `CARGO_TARGET_DIR`).
+Windows identities regenerated natively on the authorized host: go
+product
+`45f388b2238e91482b75d58f63a40d6b76b5cf9bb9c1d4db9272c2cadfaf4026`,
+go worker
+`ea0e974c6d81d7cb423d7c52217d117502a5b6c4c555373c86f880cab6836708`,
+rust product
+`69962ed19fa836cb6d3d8d087e79fa24dbeeea69d98e7e47c52db6e01cd71933`,
+rust worker
+`9df3efac61655ff005e368913301f90d69d78473251a02e76a2df36e5f505061`,
+fixture tool
+`99223976f3df5d0ba08a7787824e76cc70b4c0abd8142ba45caf7261ce4da37c`,
+fixture database
+`1e4a316e445a3db003ae483e1cd9f98f37819274ca3ab5999f16e3f827dc0a8f`.
+
+Battery (all steps rc 0, run under `nice`): Go module tests rc 0
+(24 packages); Rust workspace tests rc 0 (fresh
+`CARGO_TARGET_DIR`); GOOS matrix 7 PASS / 1 SKIP (dragonfly/arm64
+unsupported by the installed Go toolchain) plus
+`windows/amd64 vet ./...` PASS; matrices rust 49/49, go 49/49,
+rust_to_go 25 PASS + 24 skips, go_to_rust 25 PASS + 24 skips; crash
+16/16 scenarios in both directions with both `/bin/false` negatives
+rejected (0 passed, 16 failed each); resource proofs 8/8 with the
+harness self-test PASS; throughput PASS (busy-reply median 38,350.3
+replies/s for go with 16-17 clone calls and 11 unique child tids,
+62,524.5 for rust with 4 clone calls and 4 unique child tids;
+attestation, not a threshold); golden 55 exchanges / 49 case files;
+sensitivity gate 14/14; guard POSIX negative control PASS for both
+products; kind-coverage gate PASS on the fresh reports; FIFO
+surface gate PASS (17 arms x 2 engines) with its self-test PASS
+(18 cases); refusal-class sweep DIVERGENCES: 0; regular-to-FIFO
+swap races hangs=0 on every probed arm; legacy `tests.d` 101/101
+for both engines; forgery battery PASS on genuine evidence; Rust
+source graph complete (506 sources);
+`.local/shared/binaries/SHASUMS.txt` re-verified (11/11, including
+the native Windows builds).
+
+Identity note: the battery executed against the wave-19.23 working
+tree at `cfbee788` (the wave-19.22 final revision plus this wave's
+batch), so each report embeds `git_head=cfbee788`; the product
+source of this evidence is this wave's single integration commit,
+which the eight-role re-anchor round reviews exactly.
+
+Previous wave blocks below (wave-19.22 and earlier) remain part of
+the historical record; they are not superseded, only
+superseded-in-position by this head.
+
 Current evidence regenerated at the wave-19.22 final revision
 (SOW-0028 "Wave 19 round 19.22", 2026-09-12; product identities in
 the identity block below).  Wave 19.22 repairs the product defects
@@ -1485,17 +1626,39 @@ deadline-bounded client running in its Windows thread mode; the
 report schema is v3 with the exact 50-record removal log and
 build provenance.
 
+## Evidence identity binding
+
+Every report in this directory carries `git_head`: the commit OID of the
+reviewed product tree, from `git rev-parse HEAD` against the checkout that
+owns the harness that produced the report, or `null` when that tree is not
+a git checkout. It is what makes "this battery passed" a claim about a
+revision rather than a claim about prose in this file — re-running the same
+binaries against a different tree is visible in the evidence.
+
+`git_head` is deliberately a separate member from `checkout_root`.
+`checkout_root` is the directory the gate resolves checkout-relative command
+arguments against (so evidence produced in one clone keeps its binary-identity
+binding when assessed from another); it is `null` here because the developer
+checkout lives under the operator's profile, which the durable-artifact
+policy keeps out of committed reports. A checkout root and a commit OID are
+different kinds of thing, and putting the OID in the path field would break
+the binding that field provides.
+
 ## Files
 
 - `matrix-rust.json`, `matrix-go.json` — single-language matrices,
-  38 case files: 38 passed, 0 failed in both languages; oracle
-  checks 37.  Every PASS case entry carries the per-actor SHA-256,
+  49 case files. Rust: 49 passed, 0 failed; oracle checks 37. Go:
+  45 passed, 4 failed — the four `params.negative.*` writer-budget
+  arms, declared in `known-defects.json` and recorded with their
+  request bytes rather than removed. See `## Declared engine
+  defects`.  Every PASS case entry carries the per-actor SHA-256,
   the product-declared `implementation` (rust|go from
   `system.describe`) and the executed-step count.
 - `matrix-rust_to_go.json`, `matrix-go_to_rust.json` — two-binary
-  cross-language matrices: 14 executed (both-actor cases), 24
-  skipped (single-actor cases), 0 failed, oracle checks 22, in both
-  directions.  The same per-actor identity is recorded for every
+  cross-language matrices: 25 executed and 0 failed when the producer
+  is Rust (`rust_to_go`), 21 executed with the same four declared Go
+  failures when the producer is Go (`go_to_rust`), 24 skipped
+  (single-actor cases) in both directions, oracle checks 22.  The same per-actor identity is recorded for every
   PASS case; `check_kind_coverage.py` derives language attribution
   exclusively from those executed identities (the top-level `matrix`
   label is only cross-checked, never trusted).
@@ -1577,6 +1740,54 @@ build provenance.
   non-Windows platforms the same script records the truthful
   `os_unsupported`/`read_only_failure` negative.
 
+- `fifo-surface.json` — `iprange-cli-fifo-surface-report-v1`, produced by
+  `check_fifo_surface.py`. The named-pipe refusal class for each of the 17
+  user-path open arms on both engines, with the transport code, the
+  `data.code` class, the elapsed time, the child exit status, and the exact
+  request frame per arm, plus a regular-file control per engine. The
+  expected class per arm is what Rust answers and is asserted identical for
+  Go: `invalid_argument` for the read-only opens, `wrong_state` for the
+  quiescent offline arms, `invalid_path` for the writer inputs (metadata
+  `replace_file` source on both `direct.replace` and
+  `database.metadata.replace`, the direct CSV input, and the `@file` list)
+  and `conflict` for a snapshot destination. This is the pin that keeps the
+  never-block open class from being only a prose claim.
+- `throughput.json` — `iprange-cli-throughput-report-v1`, produced by
+  `throughput_harness.py`. Busy-reply `replies_per_s` for `system.describe`
+  in 30-frame bursts (10,000 requests x 3 rounds, fresh child per round)
+  and the `clone`/`clone3` census at 3,000 and 6,000 requests under
+  `strace`, per product. Rate is attested, not gated — an absolute floor is
+  not host portable — so what the gate enforces is that every reply is
+  served, the child exits cleanly, and the thread-creation count does not
+  grow with the request count (measured: Go 16-17 clones and Rust 4, both
+  independent of request count).
+- `golden.json`, `sensitivity.json` —
+  `iprange-cli-golden-report-v1` and
+  `iprange-cli-sensitivity-report-v1`. The golden-exchange and
+  broken-server counts with the covered-method list and per-mode
+  outcomes. They exist so these two claims are machine-readable and carry
+  the same revision binding as the rest of the battery, rather than living
+  only in the suite's console output.
+
+## Declared engine defects
+
+- `known-defects.json` — `iprange-cli-known-defects-v1`. The cases a
+  product engine is currently known to fail at the binaries above while
+  its fix is in flight. Each entry names the matrix, the case, the owning
+  component, the contract term it violates, and the response the engine
+  actually gives. `check_kind_coverage.py` enforces it in both directions:
+  a FAIL row that is not listed fails the gate, and a listed case that
+  PASSes fails the gate, so the ledger can neither be used to paint a red
+  battery green nor left behind as a hiding place once the engine is
+  fixed. An absent or empty ledger means the battery must be entirely
+  green. The four current entries are the `writer_budget.max_open_files=0`
+  refusals on `direct.replace`, `database.metadata.replace`,
+  `feeds.create`, and `database.reclaim`: the contract has no zero value
+  for that member, so the params validator must refuse it with `-32602`
+  before any work; Go accepts the value and refuses later with a product
+  error (`invalid_argument` / `insufficient_resource_budget`), which is a
+  different contract term.
+
 ## Gate invocation
 
 ```bash
@@ -1586,7 +1797,28 @@ nice python3 v4/cli/check_kind_coverage.py \
   --matrix v4/cli/evidence/matrix-rust_to_go.json \
   --matrix v4/cli/evidence/matrix-go_to_rust.json \
   --crash v4/cli/evidence/crash.json
+
+# FIFO refusal surface (17 arms x 2 engines); --work must be empty.
+nice python3 v4/cli/check_fifo_surface.py \
+  --go /tmp/qualsvc/bin/go/iprange --rust /tmp/qualsvc/bin/rust/iprange \
+  --fixture /tmp/qualsvc/bin/rust/v4-fixture \
+  --work "$(mktemp -d)" --json-report v4/cli/evidence/fifo-surface.json
+nice python3 v4/cli/check_fifo_surface.py --self-test
+
+# Busy-reply rate and thread-structure attestation.
+nice python3 v4/cli/throughput_harness.py \
+  --go /tmp/qualsvc/bin/go/iprange --rust /tmp/qualsvc/bin/rust/iprange \
+  --work "$(mktemp -d)" --json-report v4/cli/evidence/throughput.json
+nice python3 v4/cli/throughput_harness.py --self-test
+
+# Cross-compile and whole-module Windows vet for the Go product.
+nice bash v4/cli/check_goos_matrix.sh
 ```
+
+`--go`, `--rust`, `--fixture`, and `--work` are refused unless absolute,
+and `--work` must be empty: a relative spelling resolves against the
+invocation directory, which lets an arm read the wrong object and report
+the opposite verdict without any error.
 
 The gate requires all four matrix reports and a positive crash report,
 rejects failed/leftover reports and unknown kinds, enforces the
@@ -1596,3 +1828,20 @@ identities, and counts only PASS crash scenarios.  Its doctored-report
 self-test runs before the CLI and covers the clone-and-relabel attack
 (a `rust` report relabeled `go` fails), missing per-case actors, and
 implementations outside rust/go.
+
+Every kind in `REQUIRED_OPENED_KINDS` must be opened by both languages in
+the **matrix** evidence specifically, which is what makes `adapter_output`
+and `metadata_delivery` load-bearing: iterating only a hardcoded pair let
+those kinds satisfy the gate from crash-only evidence, and stripping the
+matrix opens for either kind now fails the battery even though the crash
+report still records opens.  The same applies to the two surfaces the
+corpus can only prove by assertion: every `writer_budget` method whose
+grammar forbids zero must have a committed `-32602` assertion, each such
+assertion must have actually executed in some PASS case, each product
+language must be credited with at least one asserted rejection, and the
+cross-language export digest groups must be attested by both roles on both
+languages with one digest per group.  Self-test controls strip the digest
+records, drop a role, diverge one digest, drop a params-rejection record,
+invent one, flip its transport code, remove its request bytes, add an
+undeclared failure, and mark a declared defect as passing; each is
+rejected.

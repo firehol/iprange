@@ -192,9 +192,14 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 		}
 		for _, entry := range entries {
 			// C skips entries whose stat() fails; "." and ".." are
-			// not produced by os.ReadDir.
+			// not produced by os.ReadDir. Regularity is judged on
+			// stat(), which follows symlinks exactly like C stat() and
+			// Rust fs::metadata: a symlink to a regular file is a
+			// regular file here, and only a non-regular target (fifo,
+			// socket, device, nested directory, or a broken link whose
+			// stat fails) is skipped.
 			path := list + "/" + entry.Name()
-			info, err := entry.Info()
+			info, err := os.Stat(path)
 			if err != nil {
 				continue
 			}

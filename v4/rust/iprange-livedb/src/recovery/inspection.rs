@@ -193,7 +193,8 @@ fn require_offline_available(source: &OfflineSource, classified: &ClassifiedMeta
     Ok(())
 }
 
-fn live_coordination_error(cause: Error) -> Error {
+/// The canonical class for every failure to reach the live reader table.
+pub(crate) fn live_coordination_error(cause: Error) -> Error {
     match cause {
         Error::Cancelled => Error::Cancelled,
         Error::LiveRecoveryCoordinationUnavailable(_) => cause,

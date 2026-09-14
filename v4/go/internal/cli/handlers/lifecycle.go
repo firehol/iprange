@@ -214,7 +214,10 @@ func validateWriterBudgetObject(budget rawObject) error {
 			return fmt.Errorf("writer_budget.%s must be a positive canonical unsigned decimal string", field)
 		}
 	}
-	if _, err := asUint32(budget, "max_open_files"); err != nil {
+	// A zero budget is invalid params, refused here (like Rust's
+	// positive_u32 validator) rather than reaching a live writer that
+	// cannot open its own descriptors.
+	if _, err := parsePositiveU32Member(budget, "max_open_files"); err != nil {
 		return fmt.Errorf("writer_budget.max_open_files must be a positive u32 integer")
 	}
 	return nil
@@ -235,7 +238,9 @@ func decodeWriterBudget(budget rawObject) (iprangedb.PageBudget, error) {
 	if err != nil {
 		return iprangedb.PageBudget{}, err
 	}
-	openFiles, err := asUint32(budget, "max_open_files")
+	// The converter repeats the validator's positivity rule so no caller
+	// can construct a zero-open-file budget from an unchecked object.
+	openFiles, err := parsePositiveU32Member(budget, "max_open_files")
 	if err != nil {
 		return iprangedb.PageBudget{}, err
 	}

@@ -301,6 +301,17 @@ func openDatabaseSource(path, mode, label string, token *iprangedb.CancellationT
 	return openReader(path, mode, label, token)
 }
 
+// openRefreshSource is the retention-refresh family's coverage-source
+// open (Rust live.rs open_source_reader). Its SDK open failure carries
+// the refresh outcome not_started: the source is read-only pre-work
+// that never started a durable attempt, so read_only_failure would tell
+// a client that reader state may have changed.
+func openRefreshSource(path, mode string, token *iprangedb.CancellationToken) (*rpc.ReaderValue, *rpc.HandlerError) {
+	return openReaderWithFailure(path, mode, "current coverage source", token, func(err error) *rpc.HandlerError {
+		return SDKError(err, "not_started")
+	})
+}
+
 // readerInfo returns the info facts of either reader kind.
 func readerInfoErr(reader *rpc.ReaderValue) (iprangedb.DatabaseInfo, error) {
 	if reader.Live != nil {

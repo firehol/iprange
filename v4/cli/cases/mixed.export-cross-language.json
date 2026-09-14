@@ -1,0 +1,317 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "mixed.export-cross-language",
+ "requires": "iprange.v1.export",
+ "fixtures": [
+  {
+   "path": "pub.ranges",
+   "source": {
+    "text": "192.0.2.1-192.0.2.2\n198.51.100.4\n"
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/pub.ranges"
+     ],
+     "family": "ipv4",
+     "fix_network": false,
+     "default_prefix": 32,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
+    },
+    "feed": "xp",
+    "value_tag": {
+     "text": "xp"
+    },
+    "metadata": {
+     "mode": "clear"
+    },
+    "destination": "$WORK/pub.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "expect_result": {
+    "report": {
+     "addresses": "3",
+     "input_record_count": "2",
+     "normalized_interval_count": "2"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/pub.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "feed",
+     "feed": "xp"
+    },
+    "format": "netset",
+    "destination": "$WORK/netset-producer.netset",
+    "publication_policy": "fail_if_exists",
+    "result_budget": {
+     "max_rows": "1000",
+     "max_output_bytes": "1048576",
+     "max_open_files": 8
+    }
+   },
+   "digest_group": "export-netset",
+   "expect_result": {
+    "format": "netset",
+    "rows": "3",
+    "addresses": "3",
+    "bytes": "33",
+    "sha256": "64af92cbf40273a128ba1412c017e1ca4cddb6705007a316183e4889b6d6e23d",
+    "path": {
+     "$ignore": true
+    },
+    "identity": {
+     "$ignore": true
+    }
+   },
+   "assert_files": [
+    {
+     "path": "netset-producer.netset",
+     "sha256": "64af92cbf40273a128ba1412c017e1ca4cddb6705007a316183e4889b6d6e23d"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/pub.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "feed",
+     "feed": "xp"
+    },
+    "format": "csv",
+    "destination": "$WORK/csv-producer.csv",
+    "publication_policy": "fail_if_exists",
+    "result_budget": {
+     "max_rows": "1000",
+     "max_output_bytes": "1048576",
+     "max_open_files": 8
+    }
+   },
+   "digest_group": "export-csv",
+   "expect_result": {
+    "format": "csv",
+    "rows": "2",
+    "addresses": "3",
+    "bytes": "66",
+    "sha256": "7a186833f4d94d066f473eeb29d021f45fe970583f9757b9241a59a8d0e04a03",
+    "path": {
+     "$ignore": true
+    },
+    "identity": {
+     "$ignore": true
+    }
+   },
+   "assert_files": [
+    {
+     "path": "csv-producer.csv",
+     "sha256": "7a186833f4d94d066f473eeb29d021f45fe970583f9757b9241a59a8d0e04a03"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/pub.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "feed",
+     "feed": "xp"
+    },
+    "format": "netset",
+    "destination": "$WORK/netset-consumer.netset",
+    "publication_policy": "fail_if_exists",
+    "result_budget": {
+     "max_rows": "1000",
+     "max_output_bytes": "1048576",
+     "max_open_files": 8
+    }
+   },
+   "digest_group": "export-netset",
+   "expect_result": {
+    "format": "netset",
+    "rows": "3",
+    "addresses": "3",
+    "bytes": "33",
+    "sha256": "64af92cbf40273a128ba1412c017e1ca4cddb6705007a316183e4889b6d6e23d",
+    "path": {
+     "$ignore": true
+    },
+    "identity": {
+     "$ignore": true
+    }
+   },
+   "assert_files": [
+    {
+     "path": "netset-consumer.netset",
+     "sha256": "64af92cbf40273a128ba1412c017e1ca4cddb6705007a316183e4889b6d6e23d"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/pub.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "feed",
+     "feed": "xp"
+    },
+    "format": "csv",
+    "destination": "$WORK/csv-consumer.csv",
+    "publication_policy": "fail_if_exists",
+    "result_budget": {
+     "max_rows": "1000",
+     "max_output_bytes": "1048576",
+     "max_open_files": 8
+    }
+   },
+   "digest_group": "export-csv",
+   "expect_result": {
+    "format": "csv",
+    "rows": "2",
+    "addresses": "3",
+    "bytes": "66",
+    "sha256": "7a186833f4d94d066f473eeb29d021f45fe970583f9757b9241a59a8d0e04a03",
+    "path": {
+     "$ignore": true
+    },
+    "identity": {
+     "$ignore": true
+    }
+   },
+   "assert_files": [
+    {
+     "path": "csv-consumer.csv",
+     "sha256": "7a186833f4d94d066f473eeb29d021f45fe970583f9757b9241a59a8d0e04a03"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/pub.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "feed",
+     "feed": "xp"
+    },
+    "format": "netset",
+    "destination": "$WORK/netset-producer.netset",
+    "publication_policy": "replace_existing",
+    "result_budget": {
+     "max_rows": "1000",
+     "max_output_bytes": "1048576",
+     "max_open_files": 8
+    }
+   },
+   "digest_group": "export-netset",
+   "expect_result": {
+    "format": "netset",
+    "rows": "3",
+    "addresses": "3",
+    "bytes": "33",
+    "sha256": "64af92cbf40273a128ba1412c017e1ca4cddb6705007a316183e4889b6d6e23d",
+    "path": {
+     "$ignore": true
+    },
+    "identity": {
+     "$ignore": true
+    }
+   },
+   "assert_files": [
+    {
+     "path": "netset-producer.netset",
+     "sha256": "64af92cbf40273a128ba1412c017e1ca4cddb6705007a316183e4889b6d6e23d"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/pub.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "feed",
+     "feed": "xp"
+    },
+    "format": "csv",
+    "destination": "$WORK/csv-producer.csv",
+    "publication_policy": "replace_existing",
+    "result_budget": {
+     "max_rows": "1000",
+     "max_output_bytes": "1048576",
+     "max_open_files": 8
+    }
+   },
+   "digest_group": "export-csv",
+   "expect_result": {
+    "format": "csv",
+    "rows": "2",
+    "addresses": "3",
+    "bytes": "66",
+    "sha256": "7a186833f4d94d066f473eeb29d021f45fe970583f9757b9241a59a8d0e04a03",
+    "path": {
+     "$ignore": true
+    },
+    "identity": {
+     "$ignore": true
+    }
+   },
+   "assert_files": [
+    {
+     "path": "csv-producer.csv",
+     "sha256": "7a186833f4d94d066f473eeb29d021f45fe970583f9757b9241a59a8d0e04a03"
+    }
+   ]
+  }
+ ]
+}

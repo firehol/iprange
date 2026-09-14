@@ -1,0 +1,177 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "params.negative.grammar",
+ "requires": "iprange.v1.export",
+ "fixtures": [
+  {
+   "path": "pub.ranges",
+   "source": {
+    "text": "192.0.2.1-192.0.2.2\n198.51.100.4\n"
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/pub.ranges"
+     ],
+     "family": "ipv4",
+     "fix_network": false,
+     "default_prefix": 32,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
+    },
+    "feed": "gr",
+    "value_tag": {
+     "text": "gr"
+    },
+    "metadata": {
+     "mode": "clear"
+    },
+    "destination": "$WORK/grammar.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "expect_result": {
+    "report": {
+     "addresses": "3",
+     "input_record_count": "2",
+     "normalized_interval_count": "2"
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/grammar.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "feed",
+     "feed": "gr"
+    },
+    "format": "netset",
+    "destination": "$WORK/reject.netset",
+    "publication_policy": "fail_if_exists",
+    "result_budget": {
+     "max_rows": "1e2",
+     "max_output_bytes": "65536",
+     "max_open_files": 3
+    }
+   },
+   "expect_params_rejected": {
+    "message_contains": "result_budget.max_rows"
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/grammar.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "feed",
+     "feed": "gr"
+    },
+    "format": "netset",
+    "destination": "$WORK/reject2.netset",
+    "publication_policy": "fail_if_exists",
+    "result_budget": {
+     "max_rows": "10",
+     "max_output_bytes": "65536",
+     "max_open_files": "3"
+    }
+   },
+   "expect_params_rejected": {}
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.system.describe",
+   "params": {
+    "bogus": 1
+   },
+   "expect_params_rejected": {}
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.database.info",
+   "params": {
+    "source": {
+     "path": "$WORK/grammar.iprange",
+     "mode": "immutable",
+     "extra": 1
+    }
+   },
+   "expect_params_rejected": {
+    "message_contains": "unknown member"
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/grammar.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "feed",
+     "feed": "gr"
+    },
+    "format": "netset",
+    "destination": "$WORK/grammar.netset",
+    "publication_policy": "fail_if_exists",
+    "result_budget": {
+     "max_rows": "1000",
+     "max_output_bytes": "1048576",
+     "max_open_files": 8
+    }
+   },
+   "expect_result": {
+    "format": "netset",
+    "rows": "3",
+    "addresses": "3",
+    "sha256": {
+     "$ignore": true
+    }
+   },
+   "assert_files": [
+    {
+     "path": "grammar.netset"
+    }
+   ]
+  }
+ ],
+ "assertions": {
+  "files": [
+   {
+    "path": "grammar.netset",
+    "sha256": "64af92cbf40273a128ba1412c017e1ca4cddb6705007a316183e4889b6d6e23d"
+   }
+  ]
+ }
+}
