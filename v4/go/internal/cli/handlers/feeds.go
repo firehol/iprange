@@ -730,7 +730,11 @@ func feedChangeWorkflow(st *rpc.SessionState, params json.RawMessage, method str
 		prepared, err = writer.DeleteFeed(decoded.feed, st.Token())
 	}
 	if err != nil {
-		failure := SDKError(err, "not_started")
+		// The feed-selection failure of an already-opened writer is a
+		// read-only catalog probe (Rust feeds.rs run_feed_change -> sdk()
+		// -> reader::read_error), so it carries the read_only_failure
+		// outcome; only the writer open itself is not_started.
+		failure := readError(err)
 		closeFacts, closeErr := CloseWriter(writer)
 		details := map[string]any{}
 		if closeErr != nil {

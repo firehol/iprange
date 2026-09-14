@@ -20,6 +20,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
@@ -51,7 +52,12 @@ func (d *Directory) Identity() FileIdentity { return d.id }
 // class; every other open failure stays the Io class exactly like
 // Rust, which special-cases only NotFound.
 func OpenDirectory(path string) (*Directory, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
+	// calleropen.Open, not os.OpenFile: os.OpenFile marks every handle it
+	// returns poller-attached on Linux, so the first directory open
+	// initializes the runtime netpoller (epoll fd + eventfd), whose
+	// initialization aborts the process under a low RLIMIT_NOFILE
+	// instead of answering io.
+	f, err := calleropen.Open(path, os.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nsMissingError()
@@ -119,7 +125,10 @@ func (d *Directory) Create(name string) (*os.File, error) {
 		}
 		return nil, nsIoError("create private file", err)
 	}
-	return os.NewFile(uintptr(fd), name), nil
+	// calleropen.Blocking clears O_NONBLOCK before the wrap: os.NewFile
+	// on a non-blocking descriptor attaches it to the runtime netpoller,
+	// whose initialization aborts the process under a low RLIMIT_NOFILE.
+	return calleropen.Blocking(fd, name)
 }
 
 // OpenRegular opens one name without following symlinks and proves the
@@ -146,7 +155,10 @@ func (d *Directory) openRegularWithLinks(name string, writable bool, requireSing
 		}
 		return nil, nsIoError(operation, err)
 	}
-	f := os.NewFile(uintptr(fd), name)
+	f, err := calleropen.Blocking(fd, name)
+	if err != nil {
+		return nil, nsIoError(operation, err)
+	}
 	var st unix.Stat_t
 	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
 		f.Close()

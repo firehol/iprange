@@ -1,0 +1,252 @@
+{
+ "fixtures": [
+  {
+   "path": "data.csv",
+   "source": {
+    "text": "from,to,value\n192.0.2.1,192.0.2.2,7\n198.51.100.4,198.51.100.4,9\n"
+   }
+  }
+ ],
+ "name": "params.negative.budget_validation",
+ "requires": "iprange.v1.validate",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "producer",
+   "expect_result": {
+    "address_family": "ipv4",
+    "commit_nonce": {
+     "$ignore": true
+    },
+    "database_id": {
+     "$ignore": true
+    },
+    "directory_identity": {
+     "$ignore": true
+    },
+    "housekeeping": {
+     "artifacts": []
+    },
+    "main_basename": "budget.iprange",
+    "main_identity": {
+     "$ignore": true
+    },
+    "reader_capacity": 8,
+    "residue_possible": false,
+    "sidecar_id": {
+     "$ignore": true
+    },
+    "sidecar_identity": {
+     "$ignore": true
+    },
+    "state": "created",
+    "structure_kind": "none",
+    "value_kind": "direct",
+    "value_tag": {
+     "hex": "6e6567746167"
+    },
+    "visible_housekeeping": []
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "family": "ipv4",
+    "path": "$WORK/budget.iprange",
+    "reader_capacity": 8,
+    "structure_kind": "none",
+    "value_kind": "direct",
+    "value_tag": {
+     "text": "negtag"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "max_open_files"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.validate",
+   "params": {
+    "findings_output": {
+     "format": "jsonl",
+     "path": "$WORK/findings.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    },
+    "mode": {
+     "kind": "immutable_current"
+    },
+    "path": "$WORK/budget.iprange",
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": 0,
+     "max_scratch_bytes": "0",
+     "max_scratch_files": 0
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "max_open_files"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.validate",
+   "params": {
+    "findings_output": {
+     "format": "jsonl",
+     "path": "$WORK/findings.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    },
+    "mode": {
+     "kind": "immutable_current"
+    },
+    "path": "$WORK/budget.iprange",
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": "0",
+     "max_scratch_bytes": "0",
+     "max_scratch_files": 0
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "max_open_files"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.validate",
+   "params": {
+    "findings_output": {
+     "format": "jsonl",
+     "path": "$WORK/findings.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    },
+    "mode": {
+     "kind": "immutable_current"
+    },
+    "path": "$WORK/budget.iprange",
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4294967296,
+     "max_scratch_bytes": "0",
+     "max_scratch_files": 0
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "max_scratch_files"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.validate",
+   "params": {
+    "findings_output": {
+     "format": "jsonl",
+     "path": "$WORK/findings.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    },
+    "mode": {
+     "kind": "immutable_current"
+    },
+    "path": "$WORK/budget.iprange",
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_scratch_bytes": "0",
+     "max_scratch_files": "0"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "max_scratch_files"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.validate",
+   "params": {
+    "findings_output": {
+     "format": "jsonl",
+     "path": "$WORK/findings.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    },
+    "mode": {
+     "kind": "immutable_current"
+    },
+    "path": "$WORK/budget.iprange",
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_scratch_bytes": "0",
+     "max_scratch_files": 4294967296
+    }
+   }
+  },
+  {
+   "actor": "consumer",
+   "expect_result": {
+    "info": {
+     "active_feed_count": "0",
+     "address_family": "ipv4",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "meta_selection": {
+      "$ignore": true
+     },
+     "page_count": {
+      "$ignore": true
+     },
+     "range_record_count": "0",
+     "structure_kind": "none",
+     "transaction_id": {
+      "$ignore": true
+     },
+     "value_kind": "direct",
+     "value_tag": {
+      "$ignore": true
+     }
+    }
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.database.info",
+   "params": {
+    "source": {
+     "mode": "live",
+     "path": "$WORK/budget.iprange"
+    }
+   }
+  }
+ ]
+}

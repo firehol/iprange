@@ -70,7 +70,14 @@ func OpenImmutable(path string) (*ImmutableReader, error) {
 	if err := sidecarAbsentUnderLock(path); err != nil {
 		return nil, err
 	}
-	m, err := mapping.OpenImmutable(path, sidecarAbsentUnderLock)
+	// The namespace probe is the Rust open_immutable path proof
+	// (identity_any_link + verify_path_any_link after the shared
+	// lifetime lock, before map_reader): the parent directory of the
+	// source is bound O_DIRECTORY | O_NOFOLLOW and the entry is resolved
+	// under it, so a parent the namespace cannot bind as a directory is
+	// the io class there instead of the mapping geometry refusal.
+	probe := func(f *os.File) error { return mapping.VerifyPathAgainstFile(path, f) }
+	m, err := mapping.OpenImmutableChecked(path, sidecarAbsentUnderLock, probe)
 	if err != nil {
 		var ferr *format.Error
 		if errors.As(err, &ferr) {

@@ -209,16 +209,39 @@ func inspectOffline(path string, check func() error) (*RecoveryCandidateInspecti
 // geometry refusal surfaces before classification, both established
 // Go-live deviations reviewed at the reader gate.
 func inspectLive(path string, check func() error) (*RecoveryCandidateInspection, error) {
-	m, err := mapping.OpenLiveReader(path, func(string) error { return live.Checkpoint(check) })
+	// Rust inspect_live (recovery/inspection.rs:97-115) proves the
+	// namespace through live_namespace::identity and verify_path and
+	// classifies the meta pair through read_classified before any
+	// reader mapping exists, so a multi-link file is the wrong-state
+	// class, a parent that is not a bindable directory is the io class,
+	// and a short or junk live file is the unproven-generation class.
+	// The probed open runs that same sequence on the lifetime-locked
+	// descriptor ahead of the Go reader-mapping geometry refusal.
+	var initial classifiedMetas
+	m, err := mapping.OpenLiveReaderProbed(path, func(string) error { return live.Checkpoint(check) },
+		func(f *os.File) error {
+			identity, err := live.Identity(f)
+			if err != nil {
+				return err
+			}
+			if err := live.VerifyPath(path, identity); err != nil {
+				return err
+			}
+			classified, err := readClassified(f, check)
+			if err != nil {
+				return err
+			}
+			if _, err := requireLiveCurrent(&classified); err != nil {
+				return err
+			}
+			initial = classified
+			return nil
+		})
 	if err != nil {
 		return nil, err
 	}
 	fail := func(err error) (*RecoveryCandidateInspection, error) {
 		return nil, combineErrors(err, m.Close())
-	}
-	initial, err := classifyMapping(m)
-	if err != nil {
-		return fail(err)
 	}
 	current, err := requireLiveCurrent(&initial)
 	if err != nil {

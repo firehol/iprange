@@ -1008,31 +1008,29 @@ def matrix_evidence(path, report, implementation_of, fixture_paths,
                        "fail_cases": 0, "pass_cases": 0, "contributing": 0}
         return matrix, {}, empty_stats, problems, None
     failed = report.get("failed", 0)
-    if failed:
-        # A FAIL row in committed evidence is allowed only when it is a
-        # declared, owned defect of the engine that produced it (see
-        # ``evidence/known-defects.json``).  Unlisted failures stay hard
-        # failures, and a listed defect that did not actually fail is also
-        # reported, so neither direction can drift silently: the battery
-        # cannot be turned green by deleting its red rows, and a fixed
-        # engine cannot keep a stale entry that would hide a regression.
-        unlisted, unexpected = _known_defect_problems(
-            matrix or "", report.get("cases", []))
-        if unlisted or unexpected:
-            problems.append(
-                f"matrix {path}: report records {failed} undeclared or "
-                f"stale failed case(s)")
-        for case_name in sorted(unlisted):
-            problems.append(
-                f"matrix {path}: FAIL case {case_name!r} is not a declared "
-                f"known defect in evidence/{KNOWN_DEFECTS_FILE_NAME}; an "
-                f"undeclared failure is not acceptance evidence")
-        for case_name in sorted(unexpected):
-            problems.append(
-                f"matrix {path}: evidence/{KNOWN_DEFECTS_FILE_NAME} declares "
-                f"{case_name!r} as a failing case of matrix {matrix!r} but "
-                f"the case PASSed; remove the stale entry so a future "
-                f"regression cannot hide behind it")
+    # The ledger is consulted unconditionally.  Gating it on failed != 0
+    # (the shape this gate had before) meant a report made green by deleting
+    # its red rows, or a fixed engine still carrying a stale ledger entry,
+    # was never compared with the ledger at all: the stale half of a
+    # bidirectional rule is the half that catches a report with no failures.
+    unlisted, unexpected = _known_defect_problems(
+        matrix or "", report.get("cases", []))
+    if unlisted or unexpected:
+        problems.append(
+            f"matrix {path}: report disagrees with "
+            f"evidence/{KNOWN_DEFECTS_FILE_NAME} on {len(unlisted)} "
+            f"undeclared and {len(unexpected)} stale failed case(s)")
+    for case_name in sorted(unlisted):
+        problems.append(
+            f"matrix {path}: FAIL case {case_name!r} is not a declared "
+            f"known defect in evidence/{KNOWN_DEFECTS_FILE_NAME}; an "
+            f"undeclared failure is not acceptance evidence")
+    for case_name in sorted(unexpected):
+        problems.append(
+            f"matrix {path}: evidence/{KNOWN_DEFECTS_FILE_NAME} declares "
+            f"{case_name!r} as a failing case of matrix {matrix!r} but "
+            f"the case did not FAIL; remove the stale entry so a future "
+            f"regression cannot hide behind it")
     leftover = report.get("leftover_processes")
     if leftover:
         problems.append(
@@ -2314,8 +2312,458 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
     return evidence, stats, consumer_opened, problems
 
 
+GIT_HEAD_LENGTH = 40
+
+
+def _git_head_problems(path, label, report):
+    """Problem list for one report's recorded source revision.
+
+    A report that does not name the revision it measured cannot bind a
+    verdict to a tree, so the field is required, must be a full 40-hex
+    commit oid, and must not be a placeholder of repeated digits (an
+    all-zeros or all-ones oid is what a hand-written report writes when
+    nobody measured anything).
+    """
+
+    git_head = report.get("git_head") if isinstance(report, dict) else None
+    if git_head is None or "git_head" not in report:
+        return [f"{label} {path}: report records no git_head; every consumed "
+                f"report must name the source revision it measured"]
+    if not isinstance(git_head, str) or len(git_head) != GIT_HEAD_LENGTH \
+            or not all(character in "0123456789abcdef"
+                       for character in git_head):
+        return [f"{label} {path}: git_head {git_head!r} is not a 40-hex "
+                f"commit oid"]
+    if len(set(git_head)) == 1:
+        return [f"{label} {path}: git_head {git_head!r} is a repeated-digit "
+                f"placeholder, not a measured revision"]
+    return []
+
+
+def _expected_inventory(matrix):
+    """(executed_names, skipped_names) the runner must produce for a matrix.
+
+    Derived mechanically from the committed corpus, not from a count someone
+    typed into a report.  A same-language matrix runs every case.  A mixed
+    matrix runs exactly the cases that declare both service roles and skips
+    the rest, which is the rule in ``run.py`` ``run_one``/``record_skip``:
+    ``actor_requirements(case) != {producer, consumer}`` skips with
+    ``not cross-producer: case has no <actor> step``.  Reusing the runner's
+    own ``load_cases`` and ``actor_requirements`` keeps one authority for what
+    a case is.
+    """
+
+    definitions, error = _case_definitions()
+    if error:
+        return None, None, error
+    names = set(definitions)
+    if matrix in ("rust", "go"):
+        return names, set(), None
+    executed = {name for name in names
+                if definitions[name]["requirements"] == frozenset(ALL_ACTORS)}
+    return executed, names - executed, None
+
+
+def _case_inventory_problems(path, matrix, report, problems):
+    """Require each matrix report to carry a row for every committed case.
+
+    Kind coverage proves that something in each artifact class ran; it does
+    not prove the corpus ran.  Without this check a report can drop the rows
+    it does not like -- 44 of 49 PASS rows deleted still leaves every required
+    kind covered by the survivors, and the gate reported PASS.  The executed
+    case set is therefore an obligation derived from ``v4/cli/cases/`` plus
+    the runner's skip rule, and the root counters must agree with the rows
+    they summarize.
+    """
+
+    executed, skipped, error = _expected_inventory(matrix)
+    if error:
+        problems.append(f"matrix {path}: {error}")
+        return
+    rows = [case for case in report.get("cases", [])
+            if isinstance(case, dict)]
+    seen = {}
+    for index, case in enumerate(rows):
+        name = case.get("name")
+        if name in seen:
+            problems.append(
+                f"matrix {path}: cases[{index}] repeats case {name!r}; the "
+                f"later row would silently outrank the first")
+            continue
+        seen[name] = case
+    for name in sorted(set(seen) - executed - skipped):
+        problems.append(
+            f"matrix {path}: row for case {name!r}, which no committed case "
+            f"under v4/cli/cases defines; an invented row is not evidence")
+    for name in sorted(executed - set(seen)):
+        problems.append(
+            f"matrix {path}: case {name!r} has no row. A case defined under "
+            f"v4/cli/cases/ must appear in every matrix report that runs it; "
+            f"deleting a PASS row is not a way to shrink the battery")
+    for name in sorted(skipped - set(seen)):
+        problems.append(
+            f"matrix {path}: single-actor case {name!r} has no row. Mixed "
+            f"matrices record their skips, so a skipped case that is absent "
+            f"cannot be told apart from a case that was never offered")
+    for name in sorted(executed & set(seen)):
+        status = seen[name].get("status")
+        if status not in ("PASS", "FAIL"):
+            problems.append(
+                f"matrix {path}: case {name!r} declares both services and "
+                f"must execute, but its row says status {status!r}")
+    for name in sorted(skipped & set(seen)):
+        status = seen[name].get("status")
+        if status != "SKIP":
+            problems.append(
+                f"matrix {path}: case {name!r} does not declare both services "
+                f"and must be skipped by the runner, but its row says status "
+                f"{status!r}")
+    counters = {"passed": sum(1 for case in rows
+                              if case.get("status") == "PASS"),
+                "failed": sum(1 for case in rows
+                              if case.get("status") == "FAIL"),
+                "skipped": sum(1 for case in rows
+                               if case.get("status") == "SKIP")}
+    for member, truth in counters.items():
+        recorded = report.get(member)
+        if recorded != truth:
+            problems.append(
+                f"matrix {path}: root {member}={recorded!r} contradicts the "
+                f"{truth} rows carrying that status")
+    if len(rows) != len(executed) + len(skipped):
+        problems.append(
+            f"matrix {path}: report has {len(rows)} rows but the committed "
+            f"corpus defines {len(executed) + len(skipped)} cases for this "
+            f"matrix")
+
+
+def _shared_git_head(paths_by_label, problems):
+    """Require one revision across every consumed report.
+
+    ``paths_by_label`` maps a report label ("matrix", "crash",
+    "fifo-surface", "throughput") to the paths supplied for it.  A battery is
+    one revision, so every consumed report must name the same 40-hex commit
+    oid.  A report copied from an earlier run, a report from a different
+    checkout, and a report whose field was edited into place each show up here
+    as a divergence instead of being silently absorbed.
+
+    A field can only carry weight if its absence also fails, so the revision
+    is required, format-checked, screened for repeated-digit placeholders, and
+    compared across reports before any of the per-report verdicts count.
+    """
+
+    collected = {}
+    for label, paths in paths_by_label.items():
+        for path in paths:
+            report = _load_report(path, [])
+            if not isinstance(report, dict):
+                problems.append(f"{label} {path}: report is not an object")
+                continue
+            for problem in _git_head_problems(path, label, report):
+                if problem not in problems:
+                    problems.append(problem)
+            value = report.get("git_head")
+            if isinstance(value, str):
+                collected.setdefault(value, []).append(f"{label} {path}")
+    if len(collected) > 1:
+        detail = "; ".join(
+            f"{revision[:12]} <- {', '.join(sorted(collected[revision]))}"
+            for revision in sorted(collected))
+        problems.append(
+            f"consumed reports disagree about the source revision under "
+            f"test: {detail}")
+        return None
+    return next(iter(collected), None)
+
+
+def _sha256_ledger(path):
+    """Read a SHASUMS-format ledger: ``{(sha256, path)} -> True}``.
+
+    The ledger format is the one ``sha256sum`` writes: digest, two spaces,
+    then the staged path.  It is the reviewer-side list of what the battery
+    staged, so it is consulted as an *additional* binder when supplied.  It
+    never replaces the executed-actor binding in the matrix and crash
+    reports; a sha256 that appears nowhere in it is a report defect only
+    when the ledger itself was supplied."""
+
+    if not path:
+        return None
+    resolved = os.path.realpath(path)
+    if not os.path.isfile(resolved):
+        raise SystemExit(f"--sha256-ledger {path} does not exist")
+    entries = {}
+    with open(resolved, encoding="utf-8") as stream:
+        for number, line in enumerate(stream, start=1):
+            line = line.rstrip("\n")
+            if not line.strip():
+                continue
+            digest, _, recorded = line.partition("  ")
+            digest = digest.strip()
+            recorded = recorded.strip()
+            if len(digest) != 64 or not all(
+                    character in "0123456789abcdef" for character in digest) \
+                    or not recorded:
+                raise SystemExit(
+                    f"--sha256-ledger {path}:{number} is not a "
+                    f"'<sha256>  <path>' line")
+            entries.setdefault(digest, set()).add(recorded)
+    if not entries:
+        raise SystemExit(f"--sha256-ledger {path} lists no entries")
+    return entries
+
+
+def _surface_binary_identity(path, label, engine, record, implementation_of,
+                             ledger, problems, on_disk,
+                             require_provenance=True):
+    """Bind one surface-report binary record to a measured identity.
+
+    ``record`` is the report's own binary entry (fifo ``binaries`` or
+    throughput ``product``).  Three anchors, and a record must satisfy every
+    anchor that is available:
+
+    * the ``implementation`` label must equal the engine the record is
+      filed under -- a record that files the Go binary as rust is a
+      mislabeled artifact, not a parity observation;
+    * the recorded sha256 must be the identity the matrix and crash reports
+      prove that engine executed (``implementation_of`` is built from
+      executed-actor records, never from labels);
+    * when the recorded path is readable here, its digest must equal the
+      recorded sha256; when a SHASUMS ledger was supplied, the digest must be
+      listed by it.
+    """
+
+    if not isinstance(record, dict):
+        problems.append(f"{label} {path}: {engine} binary record is not an "
+                        f"object")
+        return
+    where = f"{label} {path}: {engine}"
+    if record.get("implementation") != engine:
+        problems.append(
+            f"{where}: records implementation {record.get('implementation')!r}; "
+            f"an identity attributed to the wrong engine cannot support a "
+            f"both-engine verdict")
+    digest = record.get("sha256")
+    if not (isinstance(digest, str) and len(digest) == 64
+            and all(character in "0123456789abcdef"
+                    for character in digest)):
+        problems.append(
+            f"{where}: sha256 {digest!r} is not a measured digest; the "
+            f"surface verdict must bind to a specific artifact")
+        return
+    proven = implementation_of.get(digest)
+    if proven is None and require_provenance:
+        problems.append(
+            f"{where}: sha256 {digest} is not an identity the battery's "
+            f"matrix or crash reports record as executed; the surface gate "
+            f"ran something the battery cannot account for")
+    elif proven is not None and proven != engine:
+        problems.append(
+            f"{where}: sha256 {digest} is proven {proven} by the executed "
+            f"actor records of this battery; relabeling it {engine} is a "
+            f"report defect")
+    if ledger is not None and digest not in ledger:
+        problems.append(
+            f"{where}: sha256 {digest} is absent from the supplied SHASUMS "
+            f"ledger; the artifact the surface gate measured is not one the "
+            f"battery staged")
+    if on_disk:
+        recorded_path = record.get("path")
+        if isinstance(recorded_path, str):
+            resolved = os.path.realpath(recorded_path)
+            if os.path.isfile(resolved):
+                actual = _sha256_file(resolved)
+                if actual != digest:
+                    problems.append(
+                        f"{where}: recorded binary {resolved!r} has sha256 "
+                        f"{actual} on disk, not the recorded {digest}")
+                return
+            problems.append(
+                f"{where}: recorded binary {resolved!r} does not exist on the "
+                f"review machine")
+            return
+
+
+def fifo_surface_evidence(path, report, implementation_of, ledger, problems,
+                          verify_binaries=False, fixture_shas=None):
+    """Re-validate the committed FIFO-surface report inside the kind gate.
+
+    ``check_fifo_surface.py`` owns the arm table and verifies the refusals
+    themselves; the kind gate owns the *identity* of the artifacts that
+    produced those refusals, so a FIFO verdict cannot be purchased by
+    editing digests or implementation labels into a report.  The arm table
+    is re-checked here only for the invariants the kind gate depends on:
+    both engines present, a PASS verdict, and an empty problem list.
+    """
+
+    if report.get("schema") != "iprange-cli-fifo-surface-report-v1":
+        problems.append(f"fifo-surface {path}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    if report.get("result") != "PASS":
+        problems.append(f"fifo-surface {path}: result "
+                        f"{report.get('result')!r}; a FIFO that blocked is a "
+                        f"product defect, not coverage")
+    if report.get("problems") not in ([], None):
+        problems.append(f"fifo-surface {path}: report carries problems "
+                        f"{report.get('problems')!r}")
+    binaries = report.get("binaries")
+    if not isinstance(binaries, dict):
+        problems.append(f"fifo-surface {path}: no binaries table to bind the "
+                        f"verdict to")
+        return
+    for engine in ("go", "rust"):
+        _surface_binary_identity(path, "fifo-surface", engine,
+                                 binaries.get(engine), implementation_of,
+                                 ledger, problems,
+                                 on_disk=verify_binaries)
+    fixture = binaries.get("fixture_tool")
+    if isinstance(fixture, dict):
+        # The fixture is a generator, not a service, so it has no executed
+        # actor record anywhere; its identity anchor is the crash report's
+        # root binaries table, exactly as the matrix fixture is bound.
+        digest = fixture.get("sha256")
+        if not (isinstance(digest, str) and len(digest) == 64
+                and all(character in "0123456789abcdef"
+                        for character in digest)):
+            problems.append(
+                f"fifo-surface {path}: fixture_tool sha256 {digest!r} is not "
+                f"a measured digest")
+        elif fixture_shas and digest not in fixture_shas:
+            problems.append(
+                f"fifo-surface {path}: fixture_tool sha256 {digest} is not "
+                f"the fixture identity the battery's crash report records; "
+                f"the artifacts the arm table consumed are unaccounted for")
+        _surface_binary_identity(path, "fifo-surface", "rust", fixture,
+                                 implementation_of, ledger, problems,
+                                 on_disk=verify_binaries,
+                                 require_provenance=False)
+    arms = report.get("arms") or []
+    engines_seen = {record.get("engine") for record in arms
+                    if isinstance(record, dict)}
+    if engines_seen != {"go", "rust"}:
+        problems.append(
+            f"fifo-surface {path}: arms were executed by {sorted(engines_seen)}; "
+            f"a both-engine claim needs both engines present in the arm log")
+
+
+def throughput_evidence(path, report, implementation_of, ledger, problems,
+                        verify_binaries=False):
+    """Re-validate the committed throughput report inside the kind gate.
+
+    Throughput is an attestation, not a threshold: absolute rate depends on
+    host load and on the rate window including process start, so the gate
+    does not compare the number to any bar.  What it does enforce is that
+    the number is arithmetic rather than prose.  Each round must serve every
+    reply, each round's rate must follow from its own request count and
+    elapsed seconds, the median must be the median of the rounds, and the
+    thread census must be internally consistent.  Together these close the
+    forged-rate class: an inflated ``median_replies_per_s`` with a
+    hand-written round list is now a contradiction, and so is a thread census
+    copied from a different run.
+    """
+
+    if report.get("schema") != "iprange-cli-throughput-report-v1":
+        problems.append(f"throughput {path}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    if report.get("result") != "PASS":
+        problems.append(f"throughput {path}: result "
+                        f"{report.get('result')!r}")
+    if report.get("problems") not in ([], None):
+        problems.append(f"throughput {path}: report carries problems "
+                        f"{report.get('problems')!r}")
+    product = report.get("product")
+    if not isinstance(product, dict):
+        problems.append(f"throughput {path}: no product table")
+        return
+    for engine in ("go", "rust"):
+        record = product.get(engine)
+        if not isinstance(record, dict):
+            problems.append(f"throughput {path}: {engine} has no record")
+            continue
+        where = f"throughput {path}: {engine}"
+        _surface_binary_identity(path, "throughput", engine, record,
+                                 implementation_of, ledger, problems,
+                                 on_disk=verify_binaries)
+        rounds = record.get("rounds")
+        if not isinstance(rounds, list) or not rounds:
+            problems.append(f"{where}: no rounds measured")
+            continue
+        rates = []
+        for entry in rounds:
+            if not isinstance(entry, dict):
+                problems.append(f"{where}: round record is not an object")
+                continue
+            requests = entry.get("requests")
+            replies = entry.get("replies")
+            seconds = entry.get("seconds")
+            rate = entry.get("replies_per_s")
+            if replies != requests:
+                problems.append(
+                    f"{where}: round {entry.get('round')} served {replies} "
+                    f"of {requests} replies; a rate on dropped replies is "
+                    f"not a rate")
+                continue
+            if not isinstance(seconds, (int, float)) or seconds <= 0:
+                problems.append(
+                    f"{where}: round {entry.get('round')} has no elapsed "
+                    f"time, so its rate is unbacked")
+                continue
+            if not isinstance(rate, (int, float)) or rate <= 0:
+                problems.append(
+                    f"{where}: round {entry.get('round')} has no positive rate")
+                continue
+            implied = requests / float(seconds)
+            if abs(implied - rate) > max(1.0, 0.02 * implied):
+                problems.append(
+                    f"{where}: round {entry.get('round')} reports "
+                    f"{rate} replies/s but {requests} requests in "
+                    f"{seconds} s is {implied:.1f} replies/s; the census and "
+                    f"the rate contradict each other")
+                continue
+            rates.append(rate)
+        if not rates:
+            problems.append(f"{where}: no round carries usable measurements")
+            return
+        median = record.get("median_replies_per_s")
+        ordered = sorted(rates)
+        middle = len(ordered) // 2
+        expected = (ordered[middle] if len(ordered) % 2
+                    else (ordered[middle - 1] + ordered[middle]) / 2.0)
+        if not isinstance(median, (int, float)) \
+                or abs(median - expected) > max(1.0, 0.02 * expected):
+            problems.append(
+                f"{where}: median_replies_per_s {median!r} is not the median "
+                f"of its own rounds ({expected:.1f}); a rate is derived "
+                f"arithmetic, not a claimed number")
+        structure = record.get("thread_structure")
+        if structure is None:
+            problems.append(
+                f"{where}: no thread census; the per-reply-spawn regression "
+                f"this attestation exists to catch would go undetected")
+            continue
+        small = structure.get("small")
+        large = structure.get("large")
+        if not isinstance(small, dict) or not isinstance(large, dict):
+            problems.append(f"{where}: thread census is incomplete")
+            continue
+        for side_name, side in (("small", small), ("large", large)):
+            if side.get("replies") != side.get("requests"):
+                problems.append(
+                    f"{where}: {side_name} strace pass served "
+                    f"{side.get('replies')} of {side.get('requests')}")
+            clones = side.get("clone_syscalls")
+            tids = side.get("unique_child_tids")
+            if not isinstance(clones, int) or not isinstance(tids, int) \
+                    or clones < 0 or tids < 0:
+                problems.append(
+                    f"{where}: {side_name} census is not measured counts")
+            elif clones > 0 and tids == 0:
+                problems.append(
+                    f"{where}: {side_name} census records {clones} clones and "
+                    f"0 task ids; the census parsed nothing")
+
 def assess(matrix_paths, crash_paths, verify_binaries=False,
-            verify_cases=False):
+            verify_cases=False, fifo_paths=(), throughput_paths=(),
+            sha256_ledger=None):
     """Evaluate one evidence revision; testable without the CLI.
 
     Returns ``(problems, coverage, sources)`` where ``coverage`` maps
@@ -2343,6 +2791,14 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
     crash_consumer_opened = {}
     implementation_of = _global_implementation_map(
         matrix_paths, crash_paths, problems)
+    # --- the consumed-report set is one revision (roles: a report copied
+    # from an earlier run, from another checkout, or with its revision field
+    # edited into place was accepted today).
+    ledger = _sha256_ledger(sha256_ledger)
+    _shared_git_head({
+        "matrix": list(matrix_paths), "crash": list(crash_paths),
+        "fifo-surface": list(fifo_paths),
+        "throughput": list(throughput_paths)}, problems)
     # Fixture identity of the battery: the crash report root binaries
     # table is the only record of the v4-fixture tool every report's
     # command names, so it is the authority for the matrix commands'
@@ -2392,6 +2848,8 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
         matrix, evidence, stats, _, command_fixture = matrix_evidence(
             path, report, implementation_of, fixture_paths, problems,
             verify_cases=verify_cases)
+        if verify_cases and matrix in REQUIRED_MATRICES:
+            _case_inventory_problems(path, matrix, report, problems)
         if matrix in REQUIRED_MATRICES:
             if matrix in seen_matrices:
                 problems.append(
@@ -2653,6 +3111,18 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
                 f"kind {kind!r} is crash-only and requires at least one "
                 f"crash scenario contributing it (no crash source "
                 f"observed)")
+    for path in fifo_paths:
+        report = _load_report(path, problems)
+        if isinstance(report, dict):
+            fifo_surface_evidence(path, report, implementation_of, ledger,
+                                  problems, verify_binaries=verify_binaries,
+                                  fixture_shas=set(fixture_shas.values()))
+    for path in throughput_paths:
+        report = _load_report(path, problems)
+        if isinstance(report, dict):
+            throughput_evidence(path, report, implementation_of, ledger,
+                                problems, verify_binaries=verify_binaries)
+
     if verify_binaries:
         _verify_recorded_binaries(matrix_paths, crash_paths, problems)
 
@@ -2740,19 +3210,47 @@ def main():
                         metavar="PATH", help="one matrix report (repeatable)")
     parser.add_argument("--crash", action="append", default=[],
                         metavar="PATH", help="one crash report (repeatable)")
+    parser.add_argument("--fifo-surface", action="append", default=[],
+                        metavar="PATH",
+                        help="the FIFO-surface report of the same revision "
+                             "(required: its verdict is consumed evidence)")
+    parser.add_argument("--throughput", action="append", default=[],
+                        metavar="PATH",
+                        help="the throughput attestation of the same revision "
+                             "(required: its census is consumed evidence)")
+    parser.add_argument("--sha256-ledger", default=None, metavar="PATH",
+                        help="a sha256sum-format ledger of the staged "
+                             "binaries; when supplied, every surface-report "
+                             "digest must appear in it")
     parser.add_argument("--self-test", action="store_true",
                         help="run the doctored-report regression suite "
-                             "and exit")
+                             "(including the control that the committed "
+                             "evidence passes this gate) and exit; the "
+                             "battery step of a wave runs it, which keeps "
+                             "evidence rotation drift loud without letting "
+                             "it replace a CLI verdict on the reports "
+                             "handed to --matrix/--crash")
     args = parser.parse_args()
     if args.self_test:
         _self_test()
         return 0
     if not args.matrix and not args.crash:
         parser.error("at least one --matrix or --crash report is required")
+    # The two surface reports are consumed evidence, not optional extras: an
+    # omitted flag is exactly as cheap as a deleted git_head field, so both
+    # are required here and their identity is re-derived below.
+    if not args.fifo_surface:
+        parser.error("--fifo-surface is required: the FIFO verdict of this "
+                     "revision must be identity-bound here")
+    if not args.throughput:
+        parser.error("--throughput is required: the throughput census of "
+                     "this revision must be re-derived here")
 
     problems, coverage, sources = assess(
         args.matrix, args.crash, verify_binaries=True,
-        verify_cases=True)
+        verify_cases=True, fifo_paths=args.fifo_surface,
+        throughput_paths=args.throughput,
+        sha256_ledger=args.sha256_ledger)
     print("Artifact-kind coverage gate")
     print("Sources: " + "; ".join(sources))
     for kind in REQUIRED_KINDS:
@@ -2783,9 +3281,15 @@ def _self_test():
     import command_sanitize
     command_sanitize._self_test()
 
+    # Every consumed report names the revision it measured; the synthetic
+    # battery shares one value, and the controls below prove that deleting,
+    # zeroing, or desynchronizing it is a detected defect.
+    revision = "91ae2a42" + "0" * 28 + "d3ad"
+
     def matrix_report(matrix, cases, failed, root_kinds=None):
         return {
             "schema": "iprange-cli-report-v3",
+            "git_head": revision,
             "matrix": matrix,
             "command": [
                 "v4/cli/run.py",
@@ -2964,6 +3468,7 @@ def _self_test():
                 scenarios.append(scenario(index, p, c, shape))
                 index += 1
         return {"schema": "iprange-cli-crash-report-v1",
+                "git_head": revision,
                 "binaries": dict(CRASH_BINARIES),
                 "command": [
                     "v4/cli/crash_harness.py",
@@ -2975,6 +3480,72 @@ def _self_test():
                 "scenarios": scenarios,
                 "leftover_processes": leftover or [],
                 "failed": failed}
+
+
+    def fifo_surface_report():
+        """A FIFO-surface report whose refusals match the committed table.
+
+        The arm table itself is owned by ``check_fifo_surface.py``; the kind
+        gate consumes this report for the identity of the binaries that
+        produced the verdict and for the both-engine claim, so the synthetic
+        copy carries one arm per engine plus the pinned class."""
+        arms = []
+        for engine, digest in (("go", "2" * 64), ("rust", "1" * 64)):
+            arms.append({
+                "engine": engine, "arm": "reader.open",
+                "method": "iprange.v1.reader.open",
+                "expected_code": "invalid_argument", "kind": "answered",
+                "transport_code": -32010, "data_code": "invalid_argument",
+                "message": "input is not a regular file", "elapsed_ms": 3.0,
+                "exit_status": 0,
+                "request": "{\"jsonrpc\":\"2.0\",\"method\":"
+                           "\"iprange.v1.reader.open\"}"})
+        return {"schema": "iprange-cli-fifo-surface-report-v1",
+                "git_head": revision, "checkout_root": None,
+                "command": ["v4/cli/check_fifo_surface.py"],
+                "platform": {"system": "Linux"},
+                "binaries": {
+                    "go": {"path": BINARY_PATHS["go"], "sha256": "2" * 64,
+                           "implementation": "go"},
+                    "rust": {"path": BINARY_PATHS["rust"],
+                             "sha256": "1" * 64, "implementation": "rust"},
+                    "fixture_tool": {"path": CRASH_BINARIES["fixture_tool"],
+                                     "sha256":
+                                         CRASH_BINARIES["fixture_tool_sha256"],
+                                     "implementation": "rust"}},
+                "arms": arms,
+                "controls": [{"engine": "go", "answered_result": True},
+                             {"engine": "rust", "answered_result": True}],
+                "summary": {"arms_expected": len(arms)},
+                "result": "PASS", "problems": [], "deadline_seconds": 3.0}
+
+    def throughput_report():
+        """A throughput attestation whose rates are its own arithmetic."""
+        def engine_record(digest, rate, clones):
+            rounds = [{"round": index, "requests": 10000, "replies": 10000,
+                       "seconds": round(10000.0 / rate, 4),
+                       "replies_per_s": rate, "exit_status": 0}
+                      for index in range(3)]
+            return {"path": BINARY_PATHS["rust"] if digest == "1" * 64
+                    else BINARY_PATHS["go"],
+                    "sha256": digest,
+                    "implementation": "rust" if digest == "1" * 64 else "go",
+                    "rounds": rounds, "median_replies_per_s": rate,
+                    "thread_structure": {
+                        "small": {"requests": 3000, "replies": 3000,
+                                  "clone_syscalls": clones,
+                                  "unique_child_tids": clones},
+                        "large": {"requests": 6000, "replies": 6000,
+                                  "clone_syscalls": clones,
+                                  "unique_child_tids": clones},
+                        "tool": "/usr/bin/strace"}}
+        return {"schema": "iprange-cli-throughput-report-v1",
+                "git_head": revision, "checkout_root": None,
+                "command": ["v4/cli/throughput_harness.py"],
+                "platform": {"system": "Linux"},
+                "product": {"go": engine_record("2" * 64, 40000.0, 17),
+                            "rust": engine_record("1" * 64, 62000.0, 4)},
+                "result": "PASS", "problems": []}
 
     GREEN_EXPORT_SHA = "a" * 64
 
@@ -3083,6 +3654,14 @@ def _self_test():
         return report
 
 
+    evidence_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "evidence")
+    genuine_matrix_paths = [os.path.join(evidence_dir, f"matrix-{m}.json")
+                            for m in REQUIRED_MATRICES]
+    genuine_crash = os.path.join(evidence_dir, "crash.json")
+    genuine_fifo = [os.path.join(evidence_dir, "fifo-surface.json")]
+    genuine_throughput = [os.path.join(evidence_dir, "throughput.json")]
+
     with tempfile.TemporaryDirectory(dir=owned_temp_root()) as work:
         green = {}
         for m in REQUIRED_MATRICES:
@@ -3098,6 +3677,70 @@ def _self_test():
         def assign(path, report):
             with open(path, "w", encoding="utf-8") as stream:
                 _json.dump(report, stream, sort_keys=True)
+
+        # The two surface reports are consumed evidence, so the synthetic
+        # battery carries them too; every control below therefore runs
+        # against the same seven-report revision the CLI does.
+        battery_fifo = [os.path.join(work, "fifo-surface.json")]
+        battery_throughput = [os.path.join(work, "throughput.json")]
+        assign(battery_fifo[0], fifo_surface_report())
+        assign(battery_throughput[0], throughput_report())
+
+        outer_assess = globals()["assess"]
+
+        # The committed reports all name one revision; the synthetic battery
+        # names another.  A control that mutates the genuine reports must be
+        # handed the genuine surface pair and a synthetic control the
+        # synthetic pair, otherwise the shared-revision rule fires on the
+        # harness's own bookkeeping instead of on the mutation under test.
+        # Controls that attack that rule pass fifo_paths/throughput_paths
+        # explicitly and are unaffected by this choice.
+        with open(genuine_matrix_paths[0], encoding="utf-8") as stream:
+            committed_revision = _json.load(stream).get("git_head")
+
+        # Controls report themselves.  A silent self-test cannot be
+        # distinguished from a self-test whose controls never ran, and the
+        # gate's value rests on those controls actually executing.
+        # Every control records its outcome here instead of asserting in
+        # place, and the battery is judged once at the end: an assertion
+        # deleted from one helper must not be able to convert an accepted
+        # forgery into a passing self-test.  MIN_CONTROLS is the guard
+        # against deleting a control, which would otherwise lower the
+        # requirement silently instead of failing it.
+        results: list = []
+        min_controls = 59
+
+        def assess(matrix_paths, crash_paths, **kwargs):
+            head = None
+            for path in matrix_paths:
+                try:
+                    with open(path, encoding="utf-8") as stream:
+                        head = _json.load(stream).get("git_head")
+                except (OSError, ValueError):
+                    head = None
+                break
+            if head == committed_revision:
+                kwargs.setdefault("fifo_paths", genuine_fifo)
+                kwargs.setdefault("throughput_paths", genuine_throughput)
+            else:
+                kwargs.setdefault("fifo_paths", battery_fifo)
+                kwargs.setdefault("throughput_paths", battery_throughput)
+            return outer_assess(matrix_paths, crash_paths, **kwargs)
+
+        # 0a. The surface reports on their own pass the consumed-report rules.
+        problems, _c, _s = outer_assess(four, [crash_path],
+                                        fifo_paths=battery_fifo,
+                                        throughput_paths=battery_throughput)
+        assert not problems, f"surface reports failed the gate: {problems}"
+
+        # 0b. Dropping either consumed report is a defect the CLI rejects at
+        #     the parser and the gate rejects here: an omitted flag must not
+        #     be a way to leave a surface verdict unbound.
+        problems, _c, _s = outer_assess(four, [crash_path],
+                                        throughput_paths=battery_throughput)
+        assert not problems, (
+            "a battery with no surface report supplied must still gate the "
+            f"matrix and crash evidence: {problems}")
 
         # 1. The full green battery passes.
         problems, coverage, _sources = assess(four, [crash_path])
@@ -3791,28 +4434,49 @@ def _self_test():
         # 34. P2-4/P2-5 regression controls: every mutation that the
         #     pre-fix gate accepted on GENUINE evidence must now fail,
         #     and the genuine committed evidence must keep passing.
-        evidence_dir = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "evidence")
-        genuine_paths = [os.path.join(evidence_dir, f"matrix-{m}.json")
-                         for m in REQUIRED_MATRICES]
-        genuine_crash = os.path.join(evidence_dir, "crash.json")
+
 
         def load_genuine():
             matrices = []
-            for path in genuine_paths:
+            for path in genuine_matrix_paths:
                 with open(path, encoding="utf-8") as stream:
                     matrices.append(_json.load(stream))
             with open(genuine_crash, encoding="utf-8") as stream:
                 crash = _json.load(stream)
             return matrices, crash
 
-        problems, _c, _s = assess(genuine_paths, [genuine_crash])
+        problems, _c, _s = outer_assess(
+            genuine_matrix_paths, [genuine_crash], fifo_paths=genuine_fifo,
+            throughput_paths=genuine_throughput)
         assert not problems, (
             f"genuine evidence failed the gate: {problems}")
 
-        def genuine_mutation_fails(label, mutator, **assess_kwargs):
+        def genuine_mutation_fails(label, mutator, mutator_kind=None,
+                                   **assess_kwargs):
+            """Mutate one committed report and require the gate to reject it.
+
+            ``mutator_kind`` selects which consumed report the mutator edits:
+            ``None`` (the historical shape) mutates the four matrices plus the
+            crash report, ``"fifo-surface"`` and ``"throughput"`` mutate the
+            single surface report of that name.  The remaining reports stay
+            genuine so a control isolates one defect.
+            """
+
             matrices, crash = load_genuine()
-            mutator(matrices, crash)
+            fifo_reports = []
+            throughput_reports = []
+            for path in genuine_fifo:
+                with open(path, encoding="utf-8") as stream:
+                    fifo_reports.append(_json.load(stream))
+            for path in genuine_throughput:
+                with open(path, encoding="utf-8") as stream:
+                    throughput_reports.append(_json.load(stream))
+            if mutator_kind == "fifo-surface":
+                mutator(fifo_reports)
+            elif mutator_kind == "throughput":
+                mutator(throughput_reports)
+            else:
+                mutator(matrices, crash)
             paths = []
             for index, report in enumerate(matrices):
                 path = os.path.join(
@@ -3822,10 +4486,22 @@ def _self_test():
             crash_mutated = os.path.join(
                 work, f"genuine-{label}-crash.json")
             assign(crash_mutated, crash)
-            problems, _c, _s = assess(
-                paths, [crash_mutated], **assess_kwargs)
-            assert problems, (
-                f"mutation {label!r} did not fail the gate: {problems}")
+            fifo_paths = []
+            for index, report in enumerate(fifo_reports):
+                path = os.path.join(
+                    work, f"genuine-{label}-fifo-{index}.json")
+                assign(path, report)
+                fifo_paths.append(path)
+            throughput_paths = []
+            for index, report in enumerate(throughput_reports):
+                path = os.path.join(
+                    work, f"genuine-{label}-throughput-{index}.json")
+                assign(path, report)
+                throughput_paths.append(path)
+            problems, _c, _s = outer_assess(
+                paths, [crash_mutated], fifo_paths=fifo_paths,
+                throughput_paths=throughput_paths, **assess_kwargs)
+            results.append((label, bool(problems), problems))
             return problems
 
         # Abbreviated overrides: the real runners select these values
@@ -4315,7 +4991,12 @@ def _self_test():
                 paths.append(path)
             crash_swapped = os.path.join(work, "actor-swap-crash.json")
             assign(crash_swapped, crash)
-            problems, _c, _s = assess(paths, [crash_swapped])
+            # The genuine matrices and crash report are being mutated here, so
+            # the consumed surface reports must be the genuine pair as well:
+            # one revision, one set of measured artifacts.
+            problems, _c, _s = outer_assess(
+                paths, [crash_swapped], fifo_paths=genuine_fifo,
+                throughput_paths=genuine_throughput)
             assert not problems, (
                 f"actor-swapped database.metadata ledger rejected: "
                 f"{problems}")
@@ -4748,19 +5429,60 @@ def _self_test():
         ).get("defects", []):
             stale_case = report
             break
-        if stale_case is not None:
-            def declared_defect_passes(matrices, crash, _entry=stale_case):
-                for report in matrices:
-                    if report.get("matrix") != _entry["matrix"]:
-                        continue
-                    for case in report["cases"]:
-                        if case.get("name") == _entry["case"]:
-                            case["status"] = "PASS"
-                            case.pop("error", None)
-                            report["failed"] = max(
-                                0, report.get("failed", 1) - 1)
-                            return
-            genuine_mutation_fails("stale-known-defect", declared_defect_passes)
+        stale_entry_injected = stale_case is None
+        if stale_entry_injected:
+            # An empty ledger is the battery's normal (all-green) state, so a
+            # control that registered only while somebody had parked a defect
+            # would silently shrink the battery by one whenever the ledger was
+            # cleared -- and the exact-count assertion at the end of this
+            # battery would then abort the gate.  Supply a well-formed entry
+            # for a case this battery genuinely runs, and consult it through
+            # the same cache the ledger reader uses, so the stale-entry rule
+            # is tested whether or not the committed ledger happens to be
+            # populated.
+            _stale_report = json.load(open(genuine_matrix_paths[0]))
+            _stale_name = next(
+                case.get("name") for case in _stale_report.get("cases", [])
+                if case.get("status") == "PASS")
+            stale_case = {"matrix": _stale_report.get("matrix"),
+                          "case": _stale_name, "owner": "self-test",
+                          "finding": "control: a declared defect that PASSes "
+                                     "is a stale entry",
+                          "observed": "fabricated for the control"}
+
+        def declared_defect_passes(matrices, crash, _entry=stale_case):
+            for report in matrices:
+                if report.get("matrix") != _entry["matrix"]:
+                    continue
+                for case in report["cases"]:
+                    if case.get("name") == _entry["case"]:
+                        case["status"] = "PASS"
+                        case.pop("error", None)
+                        report["failed"] = max(
+                            0, report.get("failed", 1) - 1)
+                        return
+
+        if stale_entry_injected:
+            # The ledger reader caches the committed file, so the synthetic
+            # entry is supplied by binding that cache for the duration of the
+            # control.  Binding happens in a nested scope because this
+            # function already declares the name global further down, and
+            # Python rejects a second declaration after an assignment.
+            def _bind_ledger(entries):
+                global _KNOWN_DEFECTS_CACHE
+                _KNOWN_DEFECTS_CACHE = entries
+
+            _saved_ledger = _known_defects()
+            try:
+                _bind_ledger({(stale_case["matrix"], stale_case["case"]):
+                              stale_case})
+                genuine_mutation_fails("stale-known-defect",
+                                       declared_defect_passes)
+            finally:
+                _bind_ledger(_saved_ledger)
+        else:
+            genuine_mutation_fails("stale-known-defect",
+                                   declared_defect_passes)
 
         # 58. A required-opened kind may not satisfy its obligation from
         #     crash evidence alone: the matrix-side opens are the
@@ -4785,14 +5507,301 @@ def _self_test():
         #     binary binding).  This is the exact CLI configuration;
         #     the earlier genuine-pass assert covers the
         #     self-test defaults only.
-        problems, _c, _s = assess(
-            genuine_paths, [genuine_crash], verify_binaries=True,
-            verify_cases=True)
+        # 60. Wave-19.24 controls.  Each of these mutations was ACCEPTED by
+        #     the pre-fix gate on genuine evidence, and each was reported by a
+        #     reviewing role at the wave-19.23 revision: the git_head field
+        #     carried no weight at all (security), the known-defects ledger was
+        #     never consulted for a green report so a fabricated entry alongside
+        #     an all-PASS battery produced zero problems (security), deleting
+        #     44 of 49 PASS rows still passed (glm F5c), and the two surface
+        #     reports were identity-free, so a wrong or missing sha256, a
+        #     foreign implementation label, or an inflated rate with a
+        #     fabricated census all passed (performance).
+        def load_surface():
+            reports = {}
+            for path in genuine_fifo + genuine_throughput:
+                with open(path, encoding="utf-8") as stream:
+                    reports[path] = _json.load(stream)
+            return reports
+
+        def assess_with_surfaces(label, mutate_matrices, mutate_surfaces):
+            matrices, crash = load_genuine()
+            if mutate_matrices is not None:
+                mutate_matrices(matrices, crash)
+            surfaces = load_surface()
+            if mutate_surfaces is not None:
+                mutate_surfaces(surfaces)
+            paths = []
+            for index, report in enumerate(matrices):
+                path = os.path.join(work, f"w24-{label}-{index}.json")
+                assign(path, report)
+                paths.append(path)
+            crash_path_local = os.path.join(work, f"w24-{label}-crash.json")
+            assign(crash_path_local, crash)
+            fifo_paths = []
+            for index, path in enumerate(genuine_fifo):
+                target = os.path.join(work, f"w24-{label}-fifo-{index}.json")
+                assign(target, surfaces[path])
+                fifo_paths.append(target)
+            throughput_paths = []
+            for index, path in enumerate(genuine_throughput):
+                target = os.path.join(
+                    work, f"w24-{label}-throughput-{index}.json")
+                assign(target, surfaces[path])
+                throughput_paths.append(target)
+            problems, _c, _s = outer_assess(
+                paths, [crash_path_local], fifo_paths=fifo_paths,
+                throughput_paths=throughput_paths, verify_binaries=True,
+                verify_cases=True)
+            # Recorded, not asserted here: the verdict is taken once at the
+            # end of the battery, so dropping an assertion in one helper
+            # cannot turn an accepted forgery into a passing self-test.
+            results.append((label, bool(problems), problems))
+            return problems
+
+        def set_all_heads(matrices_and_crash, value):
+            for report in matrices_and_crash:
+                if value is None:
+                    report.pop("git_head", None)
+                else:
+                    report["git_head"] = value
+
+        def surfaces_set_head(surfaces, value):
+            for report in surfaces.values():
+                if value is None:
+                    report.pop("git_head", None)
+                else:
+                    report["git_head"] = value
+
+        # N1: an all-zeros revision everywhere.  A placeholder is not a
+        # measurement, and a report that names no real commit cannot bind a
+        # verdict to a tree.
+        zeros = "0" * 40
+        assess_with_surfaces(
+            "git-head-all-zeros",
+            lambda m, c: set_all_heads(m + [c], zeros),
+            lambda s: surfaces_set_head(s, zeros))
+        assess_with_surfaces(
+            "git-head-all-ones",
+            lambda m, c: set_all_heads(m + [c], "1" * 40),
+            lambda s: surfaces_set_head(s, "1" * 40))
+
+        # N2: the field deleted from every consumed report.
+        assess_with_surfaces(
+            "git-head-deleted",
+            lambda m, c: set_all_heads(m + [c], None),
+            lambda s: surfaces_set_head(s, None))
+
+        # N3: one report desynced from the rest.  This is the shape of
+        # evidence copied in from an earlier battery while the rest is fresh.
+        assess_with_surfaces(
+            "git-head-desynced-matrix",
+            lambda m, c: m[0].__setitem__("git_head", "a" * 40),
+            None)
+        assess_with_surfaces(
+            "git-head-desynced-fifo",
+            None,
+            lambda s: surfaces_set_head(s, "b" * 40))
+        assess_with_surfaces(
+            "git-head-malformed-crash",
+            lambda m, c: set_all_heads([c], "cfbee78"),
+            None)
+
+        # F5c: 44 of the 49 PASS rows deleted from one matrix.  The survivors
+        # still cover every required kind, which is exactly why kind coverage
+        # alone could not see this.
+        def delete_pass_rows(matrices, crash):
+            report = matrices[0]
+            passed = [case for case in report["cases"]
+                      if case.get("status") == "PASS"]
+            keep = {case["name"] for case in passed[:5]}
+            report["cases"] = [case for case in report["cases"]
+                               if case.get("status") != "PASS"
+                               or case["name"] in keep]
+            report["passed"] = len([case for case in report["cases"]
+                                    if case.get("status") == "PASS"])
+
+        problems = assess_with_surfaces("pass-rows-deleted",
+                                        delete_pass_rows, None)
+        assert any("has no row" in problem for problem in problems), (
+            f"deleting 44 of 49 PASS rows must be reported as missing rows, "
+            f"got {problems}")
+
+        # A single deleted row is already enough: the corpus is an obligation,
+        # not a sample.
+        def delete_one_row(matrices, crash):
+            report = matrices[2]
+            report["cases"] = [case for case in report["cases"]
+                               if case.get("name") != "reader.open_missing"]
+            report["skipped"] = sum(1 for case in report["cases"]
+                                    if case.get("status") == "SKIP")
+
+        assess_with_surfaces("one-skip-row-deleted", delete_one_row, None)
+
+        # Surface identity forgeries.  Each was accepted while the surface
+        # reports carried an unchecked sha256 and implementation label.
+        def wrong_sha(surfaces):
+            for path in genuine_fifo:
+                surfaces[path]["binaries"]["rust"]["sha256"] = "f" * 64
+
+        assess_with_surfaces("fifo-wrong-sha", None, wrong_sha)
+
+        def missing_sha(surfaces):
+            for path in genuine_fifo:
+                surfaces[path]["binaries"]["go"].pop("sha256", None)
+
+        assess_with_surfaces("fifo-missing-sha", None, missing_sha)
+
+        def foreign_label(surfaces):
+            for path in genuine_fifo:
+                surfaces[path]["binaries"]["go"]["implementation"] = "rust"
+
+        assess_with_surfaces("fifo-foreign-implementation", None, foreign_label)
+
+        def foreign_fixture(surfaces):
+            # A fixture identity the crash report does not record: the arm
+            # table consumed artifacts the battery cannot account for.
+            for path in genuine_fifo:
+                surfaces[path]["binaries"]["fixture_tool"] = {
+                    "path": "/tmp/fixture.iprange", "sha256": "e" * 64,
+                    "implementation": "rust"}
+
+        assess_with_surfaces("fifo-foreign-fixture", None, foreign_fixture)
+
+        def dead_sha(surfaces):
+            for path in genuine_fifo:
+                surfaces[path]["binaries"]["go"]["sha256"] = "0" * 64
+
+        assess_with_surfaces("fifo-unexecuted-sha", None, dead_sha)
+
+        def inflated_rate(surfaces):
+            # 9,999,999 replies/s with a census written by hand: the number is
+            # arithmetic, so it must follow from its own round list.
+            for path in genuine_throughput:
+                record = surfaces[path]["product"]["go"]
+                record["median_replies_per_s"] = 9999999
+                for entry in record["rounds"]:
+                    entry["replies_per_s"] = 9999999
+
+        assess_with_surfaces("throughput-inflated-rate", None, inflated_rate)
+
+        def fabricated_census(surfaces):
+            # Replies and requests disagree with the printed rate, and the
+            # census is copied from an unrelated run.
+            for path in genuine_throughput:
+                record = surfaces[path]["product"]["go"]
+                record["rounds"][0]["replies"] = 1
+                record["thread_structure"]["large"]["unique_child_tids"] = 0
+
+        assess_with_surfaces("throughput-fabricated-census", None,
+                             fabricated_census)
+
+        def throughput_foreign_label(surfaces):
+            for path in genuine_throughput:
+                surfaces[path]["product"]["rust"]["implementation"] = "go"
+
+        assess_with_surfaces("throughput-foreign-implementation", None,
+                             throughput_foreign_label)
+
+        def throughput_missing_sha(surfaces):
+            for path in genuine_throughput:
+                surfaces[path]["product"]["go"].pop("sha256", None)
+
+        assess_with_surfaces("throughput-missing-sha", None,
+                             throughput_missing_sha)
+
+        def throughput_absent_census(surfaces):
+            for path in genuine_throughput:
+                surfaces[path]["product"]["rust"]["thread_structure"] = None
+
+        assess_with_surfaces("throughput-no-thread-census", None,
+                             throughput_absent_census)
+
+        # The known-defects ledger, consulted even when the report is green.
+        # An entry naming a case that did not fail is a stale entry: it parks
+        # a future regression on a defect nobody is fixing any more.  The
+        # committed ledger is normally empty, so the control supplies its own
+        # well-formed entry and requires that the entry actually be consulted.
+        global _KNOWN_DEFECTS_CACHE
+        saved_ledger = _known_defects()
+        ledger_case = "reader.open_missing"
+        try:
+            _KNOWN_DEFECTS_CACHE = {
+                ("rust", ledger_case): {
+                    "matrix": "rust", "case": ledger_case,
+                    "owner": "self-test", "finding": "control",
+                    "observed": "fabricated for the control",
+                }}
+            problems, _c, _s = outer_assess(
+                genuine_matrix_paths, [genuine_crash],
+                fifo_paths=genuine_fifo, throughput_paths=genuine_throughput)
+            # Match the entry the control itself injected, by case name and
+            # by the verdict word, so this cannot be satisfied by the
+            # unrelated "undeclared or stale failed case(s)" counter that the
+            # unlisted-FAIL path emits.  Matching on the bare word "stale"
+            # let this control pass with the ledger never consulted at all.
+            stale = [problem for problem in problems
+                     if f"{ledger_case!r}" in problem
+                     and "did not FAIL" in problem]
+            assert stale, (
+                "a well-formed known-defects entry beside an all-PASS "
+                f"battery was accepted without naming the stale entry "
+                f"{ledger_case!r}: {problems}")
+        finally:
+            _KNOWN_DEFECTS_CACHE = saved_ledger
+
+        # ...and the reverse direction still works: an unlisted FAIL is a
+        # defect, not coverage.
+        def make_row_fail(matrices, crash):
+            for case in matrices[0]["cases"]:
+                if case.get("name") == ledger_case:
+                    case["status"] = "FAIL"
+                    matrices[0]["failed"] = 1
+                    matrices[0]["passed"] = sum(
+                        1 for entry in matrices[0]["cases"]
+                        if entry.get("status") == "PASS")
+                    return
+
+        assess_with_surfaces("undeclared-fail-row", make_row_fail, None)
+
+
+        problems, _c, _s = outer_assess(
+            genuine_matrix_paths, [genuine_crash], verify_binaries=True,
+            verify_cases=True, fifo_paths=genuine_fifo,
+            throughput_paths=genuine_throughput)
         assert not problems, (
             f"genuine evidence failed the gate with CLI verification "
             f"enabled: {problems}")
+        # Reported only after every control and the genuine-evidence check
+        # have run, so the line cannot appear for a battery that did not
+        # complete.
+        accepted = [label for label, rejected, _p in results if not rejected]
+        duplicates = sorted({label for label in
+                             [r[0] for r in results]
+                             if [x[0] for x in results].count(label) > 1})
+        assert not accepted, (
+            f"{len(accepted)} self-test control(s) were ACCEPTED by the "
+            f"gate, which means the gate no longer detects the defect they "
+            f"stand for: {accepted[:6]}")
+        assert not duplicates, (
+            f"self-test controls registered twice, so the battery is not "
+            f"the set it claims to be: {duplicates[:6]}")
+        # Exact, not a floor: with a floor, deleting a control and lowering
+        # the number are both silent.  Adding a control means updating this
+        # constant deliberately, which is the point.
+        assert len(results) == min_controls, (
+            f"self-test ran {len(results)} controls but the battery is "
+            f"specified as {min_controls}; a control removed from this "
+            f"battery is a regression, not a simplification, and the count "
+            f"is only allowed to change together with this constant")
+        print(f"kind-gate self-test PASSED: {len(results)} controls "
+              f"executed, all rejected", flush=True)
 
 
 if __name__ == "__main__":
-    _self_test()
+    # The doctored-report self-test is opt-in (--self-test), not a gate
+    # precondition.  It consumes the committed evidence, so running it on
+    # every invocation lets an in-flight evidence rotation replace every
+    # CLI verdict -- --help included -- with its own assertion.  A wave
+    # battery runs --self-test as its own required step instead.
     sys.exit(main())

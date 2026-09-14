@@ -5,6 +5,7 @@ package recovery
 import (
 	"os"
 
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"golang.org/x/sys/unix"
 )
@@ -27,7 +28,7 @@ import (
 // arm (local-filesystem durability, symlink, link count) come from the
 // dirfd, not from a path-level errno.
 func openSourceFilePlatform(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|unixO_NOFOLLOW|unix.O_NONBLOCK, 0)
+	file, err := calleropen.Open(path, os.O_RDONLY|unixO_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}

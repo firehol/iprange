@@ -16,6 +16,7 @@ package live
 
 import (
 	"errors"
+	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
@@ -98,6 +99,36 @@ type LiveSource struct {
 // before the source returns; the slot is held until FinishCurrent or
 // ReleaseOnly. check, when non-nil, runs between every bounded step.
 func OpenLiveSourceCurrent(path string, check func() error) (*LiveSource, error) {
+	return openLiveSourceCurrent(path, check, livePathProofCoordination)
+}
+
+// livePathProof selects how one live source arm reports a failed main
+// path proof. Rust folds the proofs of recovery/source_guard/live.rs
+// bind_current through live_coordination, while validation/source.rs
+// bind_live_main propagates the same proofs unchanged; the Go arms
+// share this registration owner, so the composing entry states which
+// policy it needs.
+type livePathProof uint8
+
+const (
+	// livePathProofCoordination is the source-guard arm (snapshot and
+	// recovery-current sources): a failed path proof is the coordination
+	// class.
+	livePathProofCoordination livePathProof = iota
+	// livePathProofRaw is the validation arm: a failed path proof keeps
+	// the namespace class it reported.
+	livePathProofRaw
+)
+
+// fold applies the arm policy to one path-proof failure.
+func (proof livePathProof) fold(err error) error {
+	if err == nil || proof == livePathProofRaw {
+		return err
+	}
+	return liveCoordination(err)
+}
+
+func openLiveSourceCurrent(path string, check func() error, proof livePathProof) (*LiveSource, error) {
 	if err := requireLiveSupported(); err != nil {
 		return nil, err
 	}
@@ -109,7 +140,20 @@ func OpenLiveSourceCurrent(path string, check func() error) (*LiveSource, error)
 	if err := checkpoint(check); err != nil {
 		return nil, err
 	}
-	m, err := mapping.OpenLiveReader(path, nil)
+	// The probe is Rust open_file (identity over the opened descriptor,
+	// single-link rule) followed by the first bind-time path proof, both
+	// ahead of the reader mapping: a hard-linked main is the wrong-state
+	// class from the identity capture, and a parent the namespace cannot
+	// bind as a directory is refused by the path proof under the arm
+	// policy rather than reaching the mapping geometry refusal.
+	probe := func(f *os.File) error {
+		identity, err := Identity(f)
+		if err != nil {
+			return err
+		}
+		return proof.fold(verifyPath(path, identity))
+	}
+	m, err := mapping.OpenLiveReaderChecked(path, nil, probe)
 	if err != nil {
 		return nil, err
 	}
@@ -126,11 +170,12 @@ func OpenLiveSourceCurrent(path string, check func() error) (*LiveSource, error)
 	// in live-reader mode over a freshly sampled extent, prove the
 	// main is not owned by Windows housekeeping, and verify the path
 	// again (Rust bind_current: verify_path, bootstrap_file, then
-	// live_cleanup::require_main_available, then verify_path; both
-	// path proofs map through live_coordination, the custody proof
-	// propagates its own errors).
+	// live_cleanup::require_main_available, then verify_path; the
+	// source-guard arm maps both path proofs through
+	// live_coordination, the validation arm propagates them, and the
+	// custody proof propagates its own errors in both arms).
 	if err := verifyPath(path, identity); err != nil {
-		return fail(liveCoordination(err))
+		return fail(proof.fold(err))
 	}
 	core, err := reader.OpenLiveMapped(m)
 	if err != nil {
@@ -146,7 +191,7 @@ func OpenLiveSourceCurrent(path string, check func() error) (*LiveSource, error)
 		return fail(err)
 	}
 	if err := verifyPath(path, identity); err != nil {
-		return fail(liveCoordination(err))
+		return fail(proof.fold(err))
 	}
 	// open_sidecar_locked: the sidecar open and gate lock failures are
 	// coordination classes (Rust open_sidecar_locked maps both).

@@ -5,6 +5,7 @@ package fileio
 import (
 	"os"
 
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"golang.org/x/sys/unix"
 )
 
@@ -18,7 +19,9 @@ import (
 // never trusts a path stat that may already be stale (Rust
 // io::caller_open::open_regular).
 func openInputNoBlock(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	// calleropen keeps the prompt O_NONBLOCK open without handing the
+	// descriptor to the runtime network poller (see package comment).
+	file, err := calleropen.Open(path, os.O_RDONLY|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}

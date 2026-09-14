@@ -56,7 +56,7 @@
         "iprange.v1.system.describe",
         "iprange.v1.validate"
       ],
-      "path": "/tmp/iprange-w1923/bin/go/iprange",
+      "path": "/tmp/iprange-w1924/bin/go/iprange",
       "result": {
         "api_version": "1",
         "export_formats": [
@@ -149,7 +149,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4"
+      "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02"
     },
     "rust": {
       "available": true,
@@ -207,7 +207,7 @@
         "iprange.v1.system.describe",
         "iprange.v1.validate"
       ],
-      "path": "/tmp/iprange-w1923/bin/rust/iprange",
+      "path": "/tmp/iprange-w1924/bin/rust/iprange",
       "result": {
         "api_version": "1",
         "export_formats": [
@@ -300,7 +300,7 @@
         "product": "iprange",
         "product_version": "0.0.0"
       },
-      "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753"
+      "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e"
     }
   },
   "cases": [
@@ -349,22 +349,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.database.metadata.replace"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -421,9 +421,15 @@
       "status": "SKIP"
     },
     {
+      "matrix": "rust->go",
+      "name": "feeds.missing_feed_outcomes",
+      "reason": "not cross-producer: case has no consumer step",
+      "status": "SKIP"
+    },
+    {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
@@ -431,11 +437,11 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 5
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
@@ -443,7 +449,7 @@
             "iprange.v1.direct.replace",
             "iprange.v1.history.project"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 6
         }
       },
@@ -501,21 +507,21 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 1
         }
       },
@@ -540,22 +546,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.join.direct"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -603,16 +609,16 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
@@ -622,7 +628,7 @@
             "iprange.v1.database.create.resolve",
             "iprange.v1.database.reset_live"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 6
         }
       },
@@ -673,23 +679,23 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.maintenance.remove",
             "iprange.v1.database.create",
             "iprange.v1.database.reclaim"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 3
         }
       },
@@ -728,22 +734,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 3
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -791,21 +797,21 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 1
         }
       },
@@ -830,22 +836,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 2
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.database.metadata.replace"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 3
         }
       },
@@ -883,7 +889,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
@@ -892,17 +898,17 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 7
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -937,22 +943,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.export"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 4
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish",
             "iprange.v1.export"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 3
         }
       },
@@ -1061,7 +1067,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
@@ -1070,11 +1076,11 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 5
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
@@ -1087,7 +1093,7 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 13
         }
       },
@@ -1131,7 +1137,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
@@ -1141,17 +1147,17 @@
             "iprange.v1.reader.ranges.next",
             "iprange.v1.reader.close"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 7
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.feeds.create"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -1186,22 +1192,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.metadata.get"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 2
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -1245,7 +1251,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.snapshot",
@@ -1253,17 +1259,17 @@
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 4
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -1307,22 +1313,522 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
+          "implementation": "rust",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.algebra.count"
+          ],
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
+          "steps": 4
+        }
+      },
+      "digest_groups": {},
+      "file_kinds": {
+        "budget.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        },
+        "budget.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        }
+      },
+      "matrix": "rust->go",
+      "name": "params.negative.budget_algebra",
+      "oracle_checks": 0,
+      "params_rejected": [
+        {
+          "actor": "producer",
+          "method": "iprange.v1.algebra.count",
+          "request": "{\"id\":\"case-params.negative.budget_algebra\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.count\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":0},\"selection\":{\"mode\":\"all\"},\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-algebra-f4dfb9dc/budget.iprange\"}}]}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.algebra.count",
+          "request": "{\"id\":\"case-params.negative.budget_algebra\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.count\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":\"0\"},\"selection\":{\"mode\":\"all\"},\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-algebra-f4dfb9dc/budget.iprange\"}}]}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.algebra.count",
+          "request": "{\"id\":\"case-params.negative.budget_algebra\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.count\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":4294967296},\"selection\":{\"mode\":\"all\"},\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-algebra-f4dfb9dc/budget.iprange\"}}]}}",
+          "transport_code": -32602
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
+          "implementation": "go",
+          "operations": [
+            "iprange.v1.database.info"
+          ],
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
+          "steps": 1
+        },
+        "producer": {
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
+          "implementation": "rust",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.algebra.publish"
+          ],
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
+          "steps": 4
+        }
+      },
+      "digest_groups": {},
+      "file_kinds": {
+        "budget.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        },
+        "budget.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        }
+      },
+      "matrix": "rust->go",
+      "name": "params.negative.budget_algebra_output",
+      "oracle_checks": 0,
+      "params_rejected": [
+        {
+          "actor": "producer",
+          "method": "iprange.v1.algebra.publish",
+          "request": "{\"id\":\"case-params.negative.budget_algebra_output\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.publish\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":1},\"algebra_output_budget\":{\"max_open_files\":0,\"max_output_pages\":\"20000\"},\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-algebra-output-a51f44e1/budget-algebra.iprange\",\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"algebra\"},\"operation\":{\"kind\":\"union\",\"selection\":{\"mode\":\"all\"}},\"output_mode\":{\"feed\":\"merged\",\"kind\":\"flat\"},\"publication_policy\":\"fail_if_exists\",\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-algebra-output-a51f44e1/budget.iprange\"}}],\"value_tag\":{\"text\":\"negtag\"}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.algebra.publish",
+          "request": "{\"id\":\"case-params.negative.budget_algebra_output\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.publish\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":1},\"algebra_output_budget\":{\"max_open_files\":\"0\",\"max_output_pages\":\"20000\"},\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-algebra-output-a51f44e1/budget-algebra.iprange\",\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"algebra\"},\"operation\":{\"kind\":\"union\",\"selection\":{\"mode\":\"all\"}},\"output_mode\":{\"feed\":\"merged\",\"kind\":\"flat\"},\"publication_policy\":\"fail_if_exists\",\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-algebra-output-a51f44e1/budget.iprange\"}}],\"value_tag\":{\"text\":\"negtag\"}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.algebra.publish",
+          "request": "{\"id\":\"case-params.negative.budget_algebra_output\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.algebra.publish\",\"params\":{\"algebra_budget\":{\"max_heap_bytes\":\"1048576\",\"max_sources\":1},\"algebra_output_budget\":{\"max_open_files\":4294967296,\"max_output_pages\":\"20000\"},\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-algebra-output-a51f44e1/budget-algebra.iprange\",\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"algebra\"},\"operation\":{\"kind\":\"union\",\"selection\":{\"mode\":\"all\"}},\"output_mode\":{\"feed\":\"merged\",\"kind\":\"flat\"},\"publication_policy\":\"fail_if_exists\",\"sources\":[{\"membership_query_budget\":{\"max_heap_bytes\":\"1048576\"},\"scope\":{\"mode\":\"all\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-algebra-output-a51f44e1/budget.iprange\"}}],\"value_tag\":{\"text\":\"negtag\"}}}",
+          "transport_code": -32602
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
+          "implementation": "go",
+          "operations": [
+            "iprange.v1.database.info"
+          ],
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
+          "steps": 1
+        },
+        "producer": {
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
+          "implementation": "rust",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.current.publish"
+          ],
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
+          "steps": 4
+        }
+      },
+      "digest_groups": {},
+      "file_kinds": {
+        "budget.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        },
+        "budget.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        }
+      },
+      "matrix": "rust->go",
+      "name": "params.negative.budget_immutable_feed",
+      "oracle_checks": 0,
+      "params_rejected": [
+        {
+          "actor": "producer",
+          "method": "iprange.v1.current.publish",
+          "request": "{\"id\":\"case-params.negative.budget_immutable_feed\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.current.publish\",\"params\":{\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-65bc776b/budget-published.iprange\",\"feed\":\"negfeed\",\"immutable_feed_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\"},\"input\":{\"default_prefix\":32,\"dns\":{\"silent\":true,\"threads\":1},\"expand_at_paths\":false,\"family\":\"ipv4\",\"fix_network\":true,\"max_expanded_paths\":4,\"max_line_bytes\":1024,\"paths\":[\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-65bc776b/data.csv\"]},\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"published\"},\"publication_policy\":\"fail_if_exists\",\"value_tag\":{\"text\":\"negtag\"}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.current.publish",
+          "request": "{\"id\":\"case-params.negative.budget_immutable_feed\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.current.publish\",\"params\":{\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-65bc776b/budget-published.iprange\",\"feed\":\"negfeed\",\"immutable_feed_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\"},\"input\":{\"default_prefix\":32,\"dns\":{\"silent\":true,\"threads\":1},\"expand_at_paths\":false,\"family\":\"ipv4\",\"fix_network\":true,\"max_expanded_paths\":4,\"max_line_bytes\":1024,\"paths\":[\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-65bc776b/data.csv\"]},\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"published\"},\"publication_policy\":\"fail_if_exists\",\"value_tag\":{\"text\":\"negtag\"}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.current.publish",
+          "request": "{\"id\":\"case-params.negative.budget_immutable_feed\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.current.publish\",\"params\":{\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-65bc776b/budget-published.iprange\",\"feed\":\"negfeed\",\"immutable_feed_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_output_pages\":\"20000\",\"max_workspace_pages\":\"20000\"},\"input\":{\"default_prefix\":32,\"dns\":{\"silent\":true,\"threads\":1},\"expand_at_paths\":false,\"family\":\"ipv4\",\"fix_network\":true,\"max_expanded_paths\":4,\"max_line_bytes\":1024,\"paths\":[\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-immutable-feed-65bc776b/data.csv\"]},\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"published\"},\"publication_policy\":\"fail_if_exists\",\"value_tag\":{\"text\":\"negtag\"}}}",
+          "transport_code": -32602
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
+          "implementation": "go",
+          "operations": [
+            "iprange.v1.database.info"
+          ],
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
+          "steps": 1
+        },
+        "producer": {
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
+          "implementation": "rust",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.recover"
+          ],
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
+          "steps": 6
+        }
+      },
+      "digest_groups": {},
+      "file_kinds": {
+        "budget.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        },
+        "budget.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        }
+      },
+      "matrix": "rust->go",
+      "name": "params.negative.budget_recovery",
+      "oracle_checks": 0,
+      "params_rejected": [
+        {
+          "actor": "producer",
+          "method": "iprange.v1.recover",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/budget.iprange\"}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.recover",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/budget.iprange\"}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.recover",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/budget.iprange\"}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.recover",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":\"0\"},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/budget.iprange\"}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.recover",
+          "request": "{\"id\":\"case-params.negative.budget_recovery\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.recover\",\"params\":{\"candidate\":{\"commit_nonce\":\"000102030405060708090a0b0c0d0e0f\",\"database_id\":\"000102030405060708090a0b0c0d0e0f\",\"label\":\"newest\",\"meta_page\":1,\"source_identity\":{\"file\":\"2\",\"volume\":\"1\"},\"transaction_id\":\"3\"},\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/recovered.iprange\",\"recovery_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_output_pages\":\"20000\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":4294967296},\"report_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/report.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"source_mode\":\"immutable\",\"source_path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-recovery-29dd7578/budget.iprange\"}}",
+          "transport_code": -32602
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
+          "implementation": "go",
+          "operations": [
+            "iprange.v1.database.info"
+          ],
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
+          "steps": 1
+        },
+        "producer": {
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
+          "implementation": "rust",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.export"
+          ],
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
+          "steps": 4
+        }
+      },
+      "digest_groups": {},
+      "file_kinds": {
+        "budget.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        },
+        "budget.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        }
+      },
+      "matrix": "rust->go",
+      "name": "params.negative.budget_result",
+      "oracle_checks": 0,
+      "params_rejected": [
+        {
+          "actor": "producer",
+          "method": "iprange.v1.export",
+          "request": "{\"id\":\"case-params.negative.budget_result\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-result-90d10061/budget-export.ranges\",\"format\":\"ranges\",\"publication_policy\":\"replace_existing\",\"result_budget\":{\"max_open_files\":0,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-result-90d10061/budget.iprange\"},\"view\":{\"kind\":\"direct\"}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.export",
+          "request": "{\"id\":\"case-params.negative.budget_result\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-result-90d10061/budget-export.ranges\",\"format\":\"ranges\",\"publication_policy\":\"replace_existing\",\"result_budget\":{\"max_open_files\":\"0\",\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-result-90d10061/budget.iprange\"},\"view\":{\"kind\":\"direct\"}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.export",
+          "request": "{\"id\":\"case-params.negative.budget_result\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-result-90d10061/budget-export.ranges\",\"format\":\"ranges\",\"publication_policy\":\"replace_existing\",\"result_budget\":{\"max_open_files\":4294967296,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-result-90d10061/budget.iprange\"},\"view\":{\"kind\":\"direct\"}}}",
+          "transport_code": -32602
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
+          "implementation": "go",
+          "operations": [
+            "iprange.v1.database.info"
+          ],
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
+          "steps": 1
+        },
+        "producer": {
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
+          "implementation": "rust",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.snapshot"
+          ],
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
+          "steps": 4
+        }
+      },
+      "digest_groups": {},
+      "file_kinds": {
+        "budget.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        },
+        "budget.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        }
+      },
+      "matrix": "rust->go",
+      "name": "params.negative.budget_snapshot",
+      "oracle_checks": 0,
+      "params_rejected": [
+        {
+          "actor": "producer",
+          "method": "iprange.v1.snapshot",
+          "request": "{\"id\":\"case-params.negative.budget_snapshot\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.snapshot\",\"params\":{\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-snapshot-e41f4b2b/budget-snapshot.iprange\",\"publication_policy\":\"replace_existing\",\"snapshot_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_output_pages\":\"512\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-snapshot-e41f4b2b/budget.iprange\"}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.snapshot",
+          "request": "{\"id\":\"case-params.negative.budget_snapshot\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.snapshot\",\"params\":{\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-snapshot-e41f4b2b/budget-snapshot.iprange\",\"publication_policy\":\"replace_existing\",\"snapshot_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_output_pages\":\"512\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-snapshot-e41f4b2b/budget.iprange\"}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.snapshot",
+          "request": "{\"id\":\"case-params.negative.budget_snapshot\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.snapshot\",\"params\":{\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-snapshot-e41f4b2b/budget-snapshot.iprange\",\"publication_policy\":\"replace_existing\",\"snapshot_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_output_pages\":\"512\"},\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-snapshot-e41f4b2b/budget.iprange\"}}}",
+          "transport_code": -32602
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
+          "implementation": "go",
+          "operations": [
+            "iprange.v1.database.info"
+          ],
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
+          "steps": 1
+        },
+        "producer": {
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
+          "implementation": "rust",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.validate"
+          ],
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
+          "steps": 6
+        }
+      },
+      "digest_groups": {},
+      "file_kinds": {
+        "budget.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        },
+        "budget.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": [
+            "consumer.iprange.v1.database.info"
+          ]
+        }
+      },
+      "matrix": "rust->go",
+      "name": "params.negative.budget_validation",
+      "oracle_checks": 0,
+      "params_rejected": [
+        {
+          "actor": "producer",
+          "method": "iprange.v1.validate",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-validation-2659fda4/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-validation-2659fda4/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.validate",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-validation-2659fda4/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-validation-2659fda4/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":\"0\",\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.validate",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-validation-2659fda4/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-validation-2659fda4/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4294967296,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":0}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.validate",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-validation-2659fda4/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-validation-2659fda4/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":\"0\"}}}",
+          "transport_code": -32602
+        },
+        {
+          "actor": "producer",
+          "method": "iprange.v1.validate",
+          "request": "{\"id\":\"case-params.negative.budget_validation\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.validate\",\"params\":{\"findings_output\":{\"format\":\"jsonl\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-validation-2659fda4/findings.jsonl\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"64\"}},\"mode\":{\"kind\":\"immutable_current\"},\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-budget-validation-2659fda4/budget.iprange\",\"validation_budget\":{\"max_heap_bytes\":\"16777216\",\"max_open_files\":4,\"max_scratch_bytes\":\"0\",\"max_scratch_files\":4294967296}}}",
+          "transport_code": -32602
+        }
+      ],
+      "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
+          "implementation": "go",
+          "operations": [
+            "iprange.v1.database.info"
+          ],
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
+          "steps": 1
+        },
+        "producer": {
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.direct.replace"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -1354,7 +1860,7 @@
         {
           "actor": "producer",
           "method": "iprange.v1.direct.replace",
-          "request": "{\"id\":\"case-params.negative.direct_replace\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.direct.replace\",\"params\":{\"input\":{\"max_line_bytes\":1024,\"path\":\"/tmp/iprange-w1923/W-rust_to_go/rust-go-params-negative-direct-replace-c331fbd3/data.csv\"},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/iprange-w1923/W-rust_to_go/rust-go-params-negative-direct-replace-c331fbd3/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.direct_replace\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.direct.replace\",\"params\":{\"input\":{\"max_line_bytes\":1024,\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-direct-replace-83425a0c/data.csv\"},\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-direct-replace-83425a0c/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         }
       ],
@@ -1363,22 +1869,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.feeds.create"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -1410,7 +1916,7 @@
         {
           "actor": "producer",
           "method": "iprange.v1.feeds.create",
-          "request": "{\"id\":\"case-params.negative.feeds_create\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.feeds.create\",\"params\":{\"current\":{\"feed\":\"gamma\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1923/W-rust_to_go/rust-go-params-negative-feeds-create-3452c6db/budget.iprange\"}},\"feed\":\"gamma\",\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/iprange-w1923/W-rust_to_go/rust-go-params-negative-feeds-create-3452c6db/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.feeds_create\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.feeds.create\",\"params\":{\"current\":{\"feed\":\"gamma\",\"source\":{\"mode\":\"live\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-feeds-create-38c7bb87/budget.iprange\"}},\"feed\":\"gamma\",\"metadata\":{\"mode\":\"keep\"},\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-feeds-create-38c7bb87/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         }
       ],
@@ -1419,24 +1925,24 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.system.describe",
             "iprange.v1.database.info",
             "iprange.v1.export"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 3
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish",
             "iprange.v1.export"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 3
         }
       },
@@ -1466,13 +1972,13 @@
         {
           "actor": "producer",
           "method": "iprange.v1.export",
-          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/iprange-w1923/W-rust_to_go/rust-go-params-negative-grammar-3e304629/reject.netset\",\"format\":\"netset\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"1e2\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/iprange-w1923/W-rust_to_go/rust-go-params-negative-grammar-3e304629/grammar.iprange\"},\"view\":{\"feed\":\"gr\",\"kind\":\"feed\"}}}",
+          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-grammar-df813ec0/reject.netset\",\"format\":\"netset\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":3,\"max_output_bytes\":\"65536\",\"max_rows\":\"1e2\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-grammar-df813ec0/grammar.iprange\"},\"view\":{\"feed\":\"gr\",\"kind\":\"feed\"}}}",
           "transport_code": -32602
         },
         {
           "actor": "producer",
           "method": "iprange.v1.export",
-          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/iprange-w1923/W-rust_to_go/rust-go-params-negative-grammar-3e304629/reject2.netset\",\"format\":\"netset\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":\"3\",\"max_output_bytes\":\"65536\",\"max_rows\":\"10\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/iprange-w1923/W-rust_to_go/rust-go-params-negative-grammar-3e304629/grammar.iprange\"},\"view\":{\"feed\":\"gr\",\"kind\":\"feed\"}}}",
+          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.export\",\"params\":{\"destination\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-grammar-df813ec0/reject2.netset\",\"format\":\"netset\",\"publication_policy\":\"fail_if_exists\",\"result_budget\":{\"max_open_files\":\"3\",\"max_output_bytes\":\"65536\",\"max_rows\":\"10\"},\"source\":{\"mode\":\"immutable\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-grammar-df813ec0/grammar.iprange\"},\"view\":{\"feed\":\"gr\",\"kind\":\"feed\"}}}",
           "transport_code": -32602
         },
         {
@@ -1484,7 +1990,7 @@
         {
           "actor": "consumer",
           "method": "iprange.v1.database.info",
-          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.info\",\"params\":{\"source\":{\"extra\":1,\"mode\":\"immutable\",\"path\":\"/tmp/iprange-w1923/W-rust_to_go/rust-go-params-negative-grammar-3e304629/grammar.iprange\"}}}",
+          "request": "{\"id\":\"case-params.negative.grammar\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.info\",\"params\":{\"source\":{\"extra\":1,\"mode\":\"immutable\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-grammar-df813ec0/grammar.iprange\"}}}",
           "transport_code": -32602
         }
       ],
@@ -1493,22 +1999,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.database.metadata.replace"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -1540,7 +2046,7 @@
         {
           "actor": "producer",
           "method": "iprange.v1.database.metadata.replace",
-          "request": "{\"id\":\"case-params.negative.metadata_replace\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.replace\",\"params\":{\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"neg-tag\"},\"path\":\"/tmp/iprange-w1923/W-rust_to_go/rust-go-params-negative-metadata-replace-b623d973/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.metadata_replace\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.metadata.replace\",\"params\":{\"metadata\":{\"mode\":\"replace_utf8\",\"text\":\"neg-tag\"},\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-metadata-replace-d666c8b1/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         }
       ],
@@ -1549,22 +2055,22 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.database.info"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.database.create",
             "iprange.v1.database.reclaim"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -1596,7 +2102,7 @@
         {
           "actor": "producer",
           "method": "iprange.v1.database.reclaim",
-          "request": "{\"id\":\"case-params.negative.reclaim\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.reclaim\",\"params\":{\"max_pages\":\"64\",\"max_transactions\":\"64\",\"path\":\"/tmp/iprange-w1923/W-rust_to_go/rust-go-params-negative-reclaim-e4220c39/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
+          "request": "{\"id\":\"case-params.negative.reclaim\",\"jsonrpc\":\"2.0\",\"method\":\"iprange.v1.database.reclaim\",\"params\":{\"max_pages\":\"64\",\"max_transactions\":\"64\",\"path\":\"/tmp/iprange-w1924/W-rust_to_go/rust-go-params-negative-reclaim-51886654/budget.iprange\",\"writer_budget\":{\"max_growth_pages\":\"20000\",\"max_heap_bytes\":\"16777216\",\"max_open_files\":0,\"max_private_pages\":\"20000\"}}}",
           "transport_code": -32602
         }
       ],
@@ -1605,23 +2111,23 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.publication.inspect"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 1
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish",
             "iprange.v1.publication.resolve",
             "iprange.v1.publication.residue.remove"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 3
         }
       },
@@ -1699,9 +2205,15 @@
       "status": "SKIP"
     },
     {
+      "matrix": "rust->go",
+      "name": "recover.live_junk",
+      "reason": "not cross-producer: case has no consumer step",
+      "status": "SKIP"
+    },
+    {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.validate",
@@ -1709,18 +2221,18 @@
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 5
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.recovery.inspect",
             "iprange.v1.recover",
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 3
         }
       },
@@ -1773,6 +2285,12 @@
     },
     {
       "matrix": "rust->go",
+      "name": "recovery.inspect_live_junk",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
+      "matrix": "rust->go",
       "name": "resource.limits",
       "reason": "not cross-producer: case has no producer step",
       "status": "SKIP"
@@ -1780,24 +2298,24 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
             "iprange.v1.reader.lookup",
             "iprange.v1.reader.close"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 3
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.snapshot",
             "iprange.v1.publication.resolve"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 2
         }
       },
@@ -1821,30 +2339,85 @@
       "status": "PASS"
     },
     {
+      "actors": {
+        "consumer": {
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
+          "implementation": "go",
+          "operations": [
+            "iprange.v1.database.info"
+          ],
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
+          "steps": 1
+        },
+        "producer": {
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
+          "implementation": "rust",
+          "operations": [
+            "iprange.v1.database.create",
+            "iprange.v1.snapshot"
+          ],
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
+          "steps": 2
+        }
+      },
+      "digest_groups": {},
+      "file_kinds": {
+        "src.iprange": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "v4_main",
+          "opened_by": [
+            "producer.iprange.v1.snapshot"
+          ]
+        },
+        "src.iprange.readers": {
+          "created_by": [
+            "producer.iprange.v1.database.create"
+          ],
+          "kind": "live_sidecar",
+          "opened_by": [
+            "producer.iprange.v1.snapshot"
+          ]
+        }
+      },
+      "matrix": "rust->go",
+      "name": "snapshot.zero_byte_destination",
+      "oracle_checks": 0,
+      "params_rejected": [],
+      "status": "PASS"
+    },
+    {
       "matrix": "rust->go",
       "name": "system.describe",
       "reason": "not cross-producer: case has no producer step",
       "status": "SKIP"
     },
     {
+      "matrix": "rust->go",
+      "name": "validate.live_sidecar_fold",
+      "reason": "not cross-producer: case has no producer step",
+      "status": "SKIP"
+    },
+    {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.validate",
             "iprange.v1.recovery.inspect"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 2
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.recover"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 1
         }
       },
@@ -1867,7 +2440,7 @@
     {
       "actors": {
         "consumer": {
-          "argv": "/tmp/iprange-w1923/bin/go/iprange",
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
           "implementation": "go",
           "operations": [
             "iprange.v1.reader.open",
@@ -1882,11 +2455,11 @@
             "iprange.v1.recovery.inspect",
             "iprange.v1.maintenance.list"
           ],
-          "sha256": "d791b1d2e73493fa546ae06873a7c781d5ffc5978ff9e9924f7a7cacc6f533f4",
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
           "steps": 33
         },
         "producer": {
-          "argv": "/tmp/iprange-w1923/bin/rust/iprange",
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
           "implementation": "rust",
           "operations": [
             "iprange.v1.current.publish",
@@ -1903,7 +2476,7 @@
             "iprange.v1.snapshot",
             "iprange.v1.database.reclaim"
           ],
-          "sha256": "47679f559a84960c2911cf402f9e71b90b7fe434e25a3476b96fff44857f2753",
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
           "steps": 20
         }
       },
@@ -2079,24 +2652,59 @@
       "oracle_checks": 14,
       "params_rejected": [],
       "status": "PASS"
+    },
+    {
+      "actors": {
+        "consumer": {
+          "argv": "/tmp/iprange-w1924/bin/go/iprange",
+          "implementation": "go",
+          "operations": [
+            "iprange.v1.reader.open"
+          ],
+          "sha256": "eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02",
+          "steps": 1
+        },
+        "producer": {
+          "argv": "/tmp/iprange-w1924/bin/rust/iprange",
+          "implementation": "rust",
+          "operations": [
+            "iprange.v1.direct.replace"
+          ],
+          "sha256": "b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e",
+          "steps": 1
+        }
+      },
+      "digest_groups": {},
+      "file_kinds": {},
+      "matrix": "rust->go",
+      "name": "writer.symlink_live_direct_replace",
+      "oracle_checks": 0,
+      "params_rejected": [],
+      "status": "PASS"
+    },
+    {
+      "matrix": "rust->go",
+      "name": "writer.symlink_live_feeds_create",
+      "reason": "not cross-producer: case has no consumer step",
+      "status": "SKIP"
     }
   ],
   "checkout_root": null,
   "command": [
     "v4/cli/run.py",
     "--go",
-    "/tmp/iprange-w1923/bin/go/iprange",
+    "/tmp/iprange-w1924/bin/go/iprange",
     "--rust",
-    "/tmp/iprange-w1923/bin/rust/iprange",
+    "/tmp/iprange-w1924/bin/rust/iprange",
     "--fixture-tool",
-    "/tmp/iprange-w1923/bin/rust/v4-fixture",
+    "/tmp/iprange-w1924/bin/rust/v4-fixture",
     "--matrix",
     "rust_to_go",
     "--work-dir",
-    "/tmp/iprange-w1923/W-rust_to_go",
+    "/tmp/iprange-w1924/W-rust_to_go",
     "--allow-skips",
     "--json-report",
-    "/tmp/iprange-w1923/reports/matrix-rust_to_go.json"
+    "/tmp/iprange-w1924/reports/matrix-rust_to_go.json"
   ],
   "environment_allowlist": [
     "PATH",
@@ -2113,7 +2721,8 @@
     "SYSTEMDRIVE",
     "USERPROFILE",
     "PROCESSOR_ARCHITECTURE",
-    "PROCESSOR_IDENTIFIER"
+    "PROCESSOR_IDENTIFIER",
+    "GOCOVERDIR"
   ],
   "failed": 0,
   "file_kinds": {
@@ -2134,12 +2743,12 @@
     },
     "live_sidecar": {
       "created_by": {
-        "iprange.v1.database.create": 20,
+        "iprange.v1.database.create": 28,
         "iprange.v1.database.initialize_live": 1
       },
       "opened_by": {
         "iprange.v1.algebra.publish": 1,
-        "iprange.v1.database.info": 6,
+        "iprange.v1.database.info": 13,
         "iprange.v1.database.metadata.get": 8,
         "iprange.v1.feeds.create": 1,
         "iprange.v1.history.project": 3,
@@ -2147,7 +2756,7 @@
         "iprange.v1.join.membership": 1,
         "iprange.v1.query.overlaps": 1,
         "iprange.v1.reader.open": 9,
-        "iprange.v1.snapshot": 2
+        "iprange.v1.snapshot": 3
       }
     },
     "metadata_delivery": {
@@ -2162,7 +2771,7 @@
       "created_by": {
         "iprange.v1.algebra.publish": 1,
         "iprange.v1.current.publish": 7,
-        "iprange.v1.database.create": 20,
+        "iprange.v1.database.create": 28,
         "iprange.v1.recover": 1,
         "iprange.v1.snapshot": 3
       },
@@ -2170,7 +2779,7 @@
         "iprange.v1.algebra.publish": 1,
         "iprange.v1.commit.resolve": 1,
         "iprange.v1.database.create.resolve": 1,
-        "iprange.v1.database.info": 5,
+        "iprange.v1.database.info": 12,
         "iprange.v1.database.metadata.get": 9,
         "iprange.v1.database.metadata.replace": 3,
         "iprange.v1.database.reclaim": 6,
@@ -2189,18 +2798,22 @@
         "iprange.v1.recovery.inspect": 1,
         "iprange.v1.retention.first_seen.refresh": 2,
         "iprange.v1.retention.last_seen.refresh": 2,
-        "iprange.v1.snapshot": 2,
+        "iprange.v1.snapshot": 3,
         "iprange.v1.validate": 2
       }
     }
   },
   "fixture_tool": {
-    "path": "/tmp/iprange-w1923/bin/rust/v4-fixture",
-    "sha256": "a37312882baf78ff18230619b61d2b7766921ab6ef8ed131fc7f3a73f858a3b2"
+    "path": "/tmp/iprange-w1924/bin/rust/v4-fixture",
+    "sha256": "c9e4318133e98a132525c6996f6e0d227128ac1a6edb9f31422b24c59a7df099"
   },
   "frame_sizes": {
+    "iprange.v1.algebra.count": {
+      "max_request_bytes": 427,
+      "max_response_bytes": 162
+    },
     "iprange.v1.algebra.publish": {
-      "max_request_bytes": 776,
+      "max_request_bytes": 836,
       "max_response_bytes": 1428
     },
     "iprange.v1.commit.resolve": {
@@ -2212,7 +2825,7 @@
       "max_response_bytes": 1282
     },
     "iprange.v1.database.create": {
-      "max_request_bytes": 334,
+      "max_request_bytes": 340,
       "max_response_bytes": 704
     },
     "iprange.v1.database.create.resolve": {
@@ -2220,8 +2833,8 @@
       "max_response_bytes": 192
     },
     "iprange.v1.database.info": {
-      "max_request_bytes": 241,
-      "max_response_bytes": 519
+      "max_request_bytes": 251,
+      "max_response_bytes": 524
     },
     "iprange.v1.database.initialize_live": {
       "max_request_bytes": 215,
@@ -2308,7 +2921,7 @@
       "max_response_bytes": 177
     },
     "iprange.v1.reader.open": {
-      "max_request_bytes": 235,
+      "max_request_bytes": 248,
       "max_response_bytes": 491
     },
     "iprange.v1.reader.ranges.next": {
@@ -2320,7 +2933,7 @@
       "max_response_bytes": 151
     },
     "iprange.v1.recover": {
-      "max_request_bytes": 924,
+      "max_request_bytes": 970,
       "max_response_bytes": 1801
     },
     "iprange.v1.recovery.inspect": {
@@ -2336,22 +2949,22 @@
       "max_response_bytes": 1084
     },
     "iprange.v1.snapshot": {
-      "max_request_bytes": 447,
-      "max_response_bytes": 1181
+      "max_request_bytes": 496,
+      "max_response_bytes": 1425
     },
     "iprange.v1.system.describe": {
       "max_request_bytes": 113,
       "max_response_bytes": 2271
     },
     "iprange.v1.validate": {
-      "max_request_bytes": 594,
+      "max_request_bytes": 635,
       "max_response_bytes": 810
     }
   },
-  "git_head": "cfbee7887fb71de67df35ea913d6f7ae70c5c011",
+  "git_head": "91ae2a429380483010bc5e9ce46ac2dc776ec17d",
   "matrix": "rust_to_go",
   "oracle_checks": 22,
-  "passed": 25,
+  "passed": 34,
   "platform": {
     "machine": "x86_64",
     "python": "3.14.7",
@@ -2359,5 +2972,5 @@
     "system": "Linux"
   },
   "schema": "iprange-cli-report-v3",
-  "skipped": 24
+  "skipped": 29
 }

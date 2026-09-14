@@ -492,21 +492,21 @@ func rejectLiveSelf(src source, mode SourceMode, destinationPath string, policy 
 	// (Rust Directory::open_regular, read-only). An absent name is not
 	// a rejection; the attempt creation reports it with the exact
 	// publication class.
-	dst, err := os.Lstat(bound)
+	// Rust Directory::open_regular classifies the destination by opening
+	// it, never by a path stat: the name is opened without following a
+	// final symlink and the opened descriptor decides regularity. That
+	// order is the whole difference between the classes — a socket is
+	// refused by the open itself (ENXIO, the io class), while a directory
+	// or FIFO opens and is then refused as not a regular file (the
+	// Conflict class). A path stat would report both shapes as
+	// non-regular and lose the io class of the socket. An absent name is
+	// not a rejection: the attempt creation reports it with the exact
+	// publication class, as Rust's Ok(None) arm does.
+	file, err := openDestinationNoFollow(bound)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		return &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
-	}
-	// Rust open_regular with O_NOFOLLOW folds a symlinked destination
-	// (ELOOP) into NotRegular, so both cases share the same Conflict
-	// detail; there is no separate symlink class on this probe path.
-	if !dst.Mode().IsRegular() {
-		return &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
-	}
-	file, err := openDestinationNoFollow(bound)
-	if err != nil {
 		var fe *format.Error
 		if errors.As(err, &fe) {
 			return fe

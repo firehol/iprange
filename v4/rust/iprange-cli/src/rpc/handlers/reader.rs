@@ -1698,16 +1698,7 @@ mod tests {
                 "destination must differ from the source database",
             )
         );
-        // The sidecar is still the sidecar FILE, not metadata text,
-        // and the main database still opens with its metadata.
-        let head = std::fs::read(&sidecar).unwrap();
-        assert!(!head.starts_with(b"{"), "sidecar was modified");
-        let after = super::output::file_identity(&sidecar).expect("sidecar identity");
-        assert_eq!(
-            (after.dev, after.ino),
-            (sidecar_identity.dev, sidecar_identity.ino),
-            "sidecar identity changed after refusal"
-        );
+        // The main database still opens with its metadata.
         let delivered = metadata(
             &mut state,
             serde_json::json!({
@@ -1719,6 +1710,25 @@ mod tests {
         )
         .unwrap();
         assert_eq!(delivered["present"], true);
+        // The sidecar is still the sidecar FILE, not metadata text, and still
+        // the same file object. Both sidecar checks run after the reader
+        // closed: a registered live reader holds the coordination file through
+        // exclusive byte-range locks (its gate and slot offsets), and Windows
+        // fails a read of a locked range made from another handle with
+        // ERROR_LOCK_VIOLATION, so a read taken while the handle is open would
+        // test the lock rather than the refusal. Closing releases the
+        // registration and those locks; the coordination file itself stays
+        // with the database.
+        close(&mut state, serde_json::json!({"reader": handle}))
+            .expect("the reader must close after the refusal");
+        let head = std::fs::read(&sidecar).expect("read the sidecar once unlocked");
+        assert!(!head.starts_with(b"{"), "sidecar was modified");
+        let after = super::output::file_identity(&sidecar).expect("sidecar identity");
+        assert_eq!(
+            (after.dev, after.ino),
+            (sidecar_identity.dev, sidecar_identity.ino),
+            "sidecar identity changed after refusal"
+        );
         fixture.remove();
     }
 
@@ -1762,10 +1772,7 @@ mod tests {
                 "destination must differ from the source database",
             )
         );
-        // The displaced sidecar file is untouched and the main database
-        // still opens with its metadata.
-        let head = std::fs::read(&renamed).unwrap();
-        assert!(!head.starts_with(b"{"), "renamed sidecar was modified");
+        // The main database still opens with its metadata.
         let delivered = metadata(
             &mut state,
             serde_json::json!({
@@ -1777,6 +1784,22 @@ mod tests {
         )
         .unwrap();
         assert_eq!(delivered["present"], true);
+        // The displaced sidecar file is untouched, byte for byte. That read
+        // needs the reader's handles gone: a registered live reader holds the
+        // coordination file's gate and slot records under exclusive
+        // byte-range locks, and Windows enforces those locks against every
+        // other handle to the same file, including one in the owning process
+        // (POSIX record locks never block `read(2)`, which is why this only
+        // showed up natively). The lease cannot be released through the close
+        // path here, because clearing a registration has to reach the file by
+        // its recorded path: a displaced sidecar makes that close answer
+        // `retained_reader_close_required` and keep the handle registered.
+        // Dropping the session closes the handles themselves, and the last
+        // closed handle releases the locks, so the content check stays a real
+        // read on every platform.
+        drop(state);
+        let head = std::fs::read(&renamed).expect("read the displaced sidecar once unlocked");
+        assert!(!head.starts_with(b"{"), "renamed sidecar was modified");
         let _ = std::fs::remove_file(&renamed);
         fixture.remove();
     }

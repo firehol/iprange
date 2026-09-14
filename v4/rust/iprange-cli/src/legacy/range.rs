@@ -74,10 +74,24 @@ pub struct Range<T: IpNum> {
 }
 
 impl<T: IpNum> Range<T> {
-    /// Number of addresses covered, as u128 (2^BITS - 1 max for v6
-    /// full universe; v4 maximum is 2^32 which always fits u128).
+    /// Number of addresses covered.
+    ///
+    /// The IPv6 universe holds 2^128 addresses, one more than `u128` can
+    /// carry, so the count saturates at `u128::MAX` instead of overflowing:
+    /// a plain addition panics in a debug build and wraps to zero in a
+    /// release build, and both differ from the released C tool, whose
+    /// bookkeeping saturates the same way (`ipset6_added_entry()` in
+    /// `ipset6.h`: "2^128 doesn't fit in uint128_t, saturate at max").
+    /// Every count consumer adds these sizes with `saturating_add()` for the
+    /// 128-bit family, so a set of disjoint ranges that together exceed
+    /// `u128::MAX` reports `u128::MAX` exactly as C does. Counts that are
+    /// representable — including the whole IPv4 universe at 2^32 — are
+    /// unaffected.
     pub fn size(self) -> u128 {
-        self.hi.as_u128() - self.lo.as_u128() + 1
+        self.hi
+            .as_u128()
+            .saturating_sub(self.lo.as_u128())
+            .saturating_add(1)
     }
 }
 
@@ -210,5 +224,107 @@ impl<T: IpNum> IpSet<T> {
             _ => self.unique + other.unique,
         };
         self.optimized = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{IpSet, Range};
+
+    const V6_MAX: u128 = u128::MAX;
+
+    fn set6(ranges: &[(u128, u128)]) -> IpSet<u128> {
+        let mut set = IpSet::default();
+        for &(lo, hi) in ranges {
+            set.add_range(Range { lo, hi });
+        }
+        set
+    }
+
+    /// The whole IPv6 universe holds 2^128 addresses, one more than `u128`
+    /// can carry. The count of it saturates at the family maximum, which is
+    /// what the released C tool reports for `::/0` (`ipset6_added_entry()`
+    /// in `ipset6.h`, verified against the C binary): an overflowing addition
+    /// panics in a debug build and wraps to zero in a release build, and both
+    /// answers are wrong for the same input.
+    #[test]
+    fn size_of_the_full_ipv6_universe_saturates() {
+        assert_eq!(
+            Range {
+                lo: 0u128,
+                hi: V6_MAX
+            }
+            .size(),
+            V6_MAX
+        );
+    }
+
+    /// Saturating the one unrepresentable count must not disturb the counts
+    /// that do fit: the half universe and a single address stay exact, and so
+    /// does the whole IPv4 universe at 2^32, which `u128` holds easily.
+    #[test]
+    fn representable_sizes_stay_exact() {
+        // `::/1` is the closed range `[0, 2^127 - 1]`, which holds 2^127
+        // addresses; the same top address one range lower would hold one more.
+        assert_eq!(
+            Range {
+                lo: 0u128,
+                hi: (1 << 127) - 1
+            }
+            .size(),
+            1 << 127
+        );
+        assert_eq!(
+            Range {
+                lo: V6_MAX,
+                hi: V6_MAX
+            }
+            .size(),
+            1
+        );
+        assert_eq!(
+            Range {
+                lo: 0u32,
+                hi: u32::MAX
+            }
+            .size(),
+            4_294_967_296
+        );
+    }
+
+    /// Adding the full universe books `entries` and `unique` exactly as the C
+    /// load path does, before any optimize sweep has run.
+    #[test]
+    fn adding_the_full_ipv6_universe_books_the_c_counts() {
+        let set = set6(&[(0, V6_MAX)]);
+        assert_eq!((set.entries, set.unique), (1, V6_MAX));
+    }
+
+    /// Two disjoint ranges that together cover the universe cannot be summed
+    /// in `u128`; the sweep merges them into one entry and reports the family
+    /// maximum, the count `iprange -6 -C` prints for that input.
+    #[test]
+    fn optimizing_a_split_universe_saturates_like_c() {
+        let mut set = set6(&[(0, V6_MAX - 1), (V6_MAX, V6_MAX)]);
+        set.optimize();
+        assert_eq!((set.entries, set.unique), (1, V6_MAX));
+        assert_eq!(
+            set.ranges,
+            vec![Range {
+                lo: 0u128,
+                hi: V6_MAX
+            }]
+        );
+    }
+
+    /// The per-add counter and the sweep counter must agree at the saturation
+    /// point: a consumer may report either one, depending on whether the set
+    /// was optimized before the count was taken.
+    #[test]
+    fn adding_then_optimizing_agree_at_the_saturation_point() {
+        let mut set = set6(&[(0, V6_MAX), (0, V6_MAX)]);
+        assert_eq!(set.unique, V6_MAX);
+        set.optimize();
+        assert_eq!((set.entries, set.unique), (1, V6_MAX));
     }
 }

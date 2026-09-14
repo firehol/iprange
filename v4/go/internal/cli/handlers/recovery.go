@@ -1015,9 +1015,12 @@ func decodeValidationBudget(object rawObject) (*iprangedb.ValidationBudget, *rpc
 	if err != nil {
 		return nil, rpc.InvalidParamsError("validation_budget.max_heap_bytes is invalid")
 	}
-	openFiles, err := asUint32(budget, "max_open_files")
+	// The converter repeats the validator's lower bound (Rust recovery.rs
+	// positive_u32): max_scratch_files keeps the paired-zero disabled
+	// shape the spec allows, max_open_files has no magic zero.
+	openFiles, err := asPositiveU32(budget, "max_open_files")
 	if err != nil {
-		return nil, rpc.InvalidParamsError("validation_budget.max_open_files must be a u32 integer")
+		return nil, rpc.InvalidParamsError("validation_budget.max_open_files must be a positive u32 integer")
 	}
 	scratchBytes, err := canonicalU64FromRaw(budget["max_scratch_bytes"])
 	if err != nil {
@@ -1058,9 +1061,12 @@ func decodeRecoveryBudget(object rawObject) (*iprangedb.RecoveryBudget, *rpc.Han
 	if err != nil {
 		return nil, rpc.InvalidParamsError("recovery_budget.max_output_pages is invalid")
 	}
-	openFiles, err := asUint32(budget, "max_open_files")
+	// The converter repeats the validator's lower bound (Rust recovery.rs
+	// positive_u32): max_scratch_files keeps the paired-zero disabled
+	// shape the spec allows, max_open_files has no magic zero.
+	openFiles, err := asPositiveU32(budget, "max_open_files")
 	if err != nil {
-		return nil, rpc.InvalidParamsError("recovery_budget.max_open_files must be a u32 integer")
+		return nil, rpc.InvalidParamsError("recovery_budget.max_open_files must be a positive u32 integer")
 	}
 	scratchBytes, err := canonicalU64FromRaw(budget["max_scratch_bytes"])
 	if err != nil {

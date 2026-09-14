@@ -549,12 +549,12 @@ func decodeExportBudget(raw json.RawMessage) (*fileio.ExportBudget, *rpc.Handler
 	if herr != nil {
 		return nil, herr
 	}
-	files, err := asUint64(budget, "max_open_files")
+	// The converter repeats the validator's lower bound (Rust export.rs
+	// positive_u32), so a zero-open-file result budget cannot reach the
+	// exporter from an unchecked object.
+	files, err := asPositiveU32(budget, "max_open_files")
 	if err != nil {
-		return nil, rpc.InvalidParamsError("max_open_files must be u32")
-	}
-	if files > 0xffffffff {
-		return nil, rpc.InvalidParamsError("max_open_files must be u32")
+		return nil, rpc.InvalidParamsError("max_open_files must be a positive u32")
 	}
 	return &fileio.ExportBudget{
 		MaxRows:        maxRows,

@@ -12,6 +12,8 @@ package live
 // owner, and the mapping close is the lifetime release.
 
 import (
+	"os"
+
 	"github.com/firehol/iprange/v4/go/internal/bootstrap"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
@@ -31,7 +33,25 @@ func OpenLiveSourceCandidate(path string, token bootstrap.RecoveryCandidateToken
 	if err := checkpoint(check); err != nil {
 		return nil, err
 	}
-	m, err := mapping.OpenLiveReader(path, nil)
+	// The probe is Rust open_file + the first bind_candidate path proof,
+	// both ahead of the reader mapping: the identity capture over the
+	// opened descriptor keeps the wrong-state class of the single-link
+	// rule, and a failed path proof is the candidate-changed class
+	// exactly as bind_candidate reports it. The bootstrap view is the
+	// bounded one Rust read_classified uses, so a short or junk live
+	// main is classified (and refused as candidate-changed) instead of
+	// hitting the two-page geometry refusal.
+	probe := func(f *os.File) error {
+		identity, err := Identity(f)
+		if err != nil {
+			return err
+		}
+		if err := verifyPath(path, identity); err != nil {
+			return candidateChangedError()
+		}
+		return nil
+	}
+	m, err := mapping.OpenLiveReaderProbed(path, nil, probe)
 	if err != nil {
 		return nil, err
 	}

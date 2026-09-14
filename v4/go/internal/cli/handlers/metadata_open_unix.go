@@ -5,6 +5,7 @@ package handlers
 import (
 	"os"
 
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"golang.org/x/sys/unix"
 )
 
@@ -19,7 +20,9 @@ import (
 // pre-placed node is (Rust lifecycle::read_bounded over the opened
 // file).
 func openMetadataSourceNoBlock(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NONBLOCK, 0)
+	// calleropen keeps the prompt O_NONBLOCK open without handing the
+	// descriptor to the runtime network poller (see package comment).
+	file, err := calleropen.Open(path, os.O_RDONLY|unix.O_NONBLOCK, 0)
 	if err != nil {
 		return nil, err
 	}

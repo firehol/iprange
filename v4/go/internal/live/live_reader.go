@@ -1,12 +1,16 @@
 // Registered-reader ownership for one selected live generation (Rust
 // reader_core/live.rs LiveReaderCore): the main mapping under the shared
 // lifetime lock, one claimed sidecar reader slot, and the exact close
-// state machine. The public OpenLiveReader facade composes this owner;
-// it never touches namespace internals.
+// state machine. The public OpenLiveReader facade composes this owner.
+// The open owns the namespace proofs of the Rust open (identity over
+// the opened descriptor, verify_path over the bound parent); the close
+// machine below touches no namespace internals.
 
 package live
 
 import (
+	"os"
+
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/mapping"
 	"github.com/firehol/iprange/v4/go/internal/reader"
@@ -73,7 +77,21 @@ func OpenLiveReader(path string, check func() error) (*LiveReader, error) {
 	// requireLiveCoordination refuses before path access on platforms
 	// without proven live coordination (Rust require_live_supported;
 	// the read-only open does not take the rdwr gate in openMapping).
-	m, err := mapping.OpenLiveReader(path, nil)
+	// The probe is Rust LiveReaderCore::open ahead of the reader
+	// mapping: live_namespace::identity over the opened descriptor
+	// (single-link rule, so a hard-linked main is the wrong-state class)
+	// then verify_path over the bound parent (so a parent the namespace
+	// cannot bind as a directory is the io class). Both keep their own
+	// classes: the reader arm does not fold path proofs through
+	// live_coordination.
+	probe := func(f *os.File) error {
+		identity, err := Identity(f)
+		if err != nil {
+			return err
+		}
+		return verifyPath(path, identity)
+	}
+	m, err := mapping.OpenLiveReaderChecked(path, nil, probe)
 	if err != nil {
 		return nil, err
 	}

@@ -1,0 +1,53 @@
+{
+ "fixtures": [
+  {
+   "path": "fold.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 0
+   }
+  },
+  {
+   "path": "fold.iprange.readers",
+   "source": {
+    "text": "not-a-coordinator-record\u00de\u00ad"
+   }
+  }
+ ],
+ "name": "validate.live_sidecar_fold",
+ "requires": "iprange.v1.validate",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "consumer",
+   "expect_error": {
+    "code": "live_recovery_coordination_unavailable",
+    "outcome": "read_only_failure"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.validate",
+   "params": {
+    "findings_output": {
+     "format": "jsonl",
+     "path": "$WORK/fold-findings.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    },
+    "mode": {
+     "kind": "live_current"
+    },
+    "path": "$WORK/fold.iprange",
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_scratch_bytes": "0",
+     "max_scratch_files": 0
+    }
+   }
+  }
+ ]
+}

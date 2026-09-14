@@ -45,7 +45,10 @@ func (e *LiveValidationOpenFailure) Unwrap() error { return e.Cause }
 // the raw meta pair binds the sidecar's database identity. Every other
 // failure is the plain open failure.
 func OpenLiveValidationSource(path string, check func() error) (*LiveValidationOpened, *LiveValidationOpenFailure) {
-	opened, err := OpenLiveSourceCurrent(path, check)
+	// The validation arm propagates the bind-time path proofs (Rust
+	// validation/source.rs bind_live_main), unlike the source-guard arm
+	// the exported OpenLiveSourceCurrent entry selects.
+	opened, err := openLiveSourceCurrent(path, check, livePathProofRaw)
 	if err == nil {
 		return &LiveValidationOpened{Selected: opened}, nil
 	}

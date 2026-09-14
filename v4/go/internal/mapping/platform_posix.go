@@ -7,6 +7,8 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
+
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
@@ -25,8 +27,8 @@ const (
 // openNoFollow opens the final path component without following a
 // symlink, mapping the POSIX O_NOFOLLOW refusal of the Rust
 // open path (open_read_only for the read-only arm, open_rw for the
-// live read-write arm). The caller maps every failure to the IO
-// class with the "open" label.
+// live read-write arm). An open failure other than the no-follow
+// symlink class maps to the IO class with the "open" label.
 //
 // O_NONBLOCK makes a FIFO swapped in between the caller's first stat
 // and this open return immediately instead of blocking until a writer
@@ -42,8 +44,22 @@ func openNoFollow(clean string, rdwr bool) (*os.File, error) {
 	if rdwr {
 		flags = os.O_RDWR
 	}
-	f, err := os.OpenFile(clean, flags|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	// The open runs through internal/calleropen rather than
+	// os.OpenFile: an O_NONBLOCK flag passed to os.OpenFile marks the
+	// handle poller-attached, and initializing the netpoller under a low
+	// RLIMIT_NOFILE aborts the process instead of answering io.
+	f, err := calleropen.Open(clean, flags|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
+		// A final symlink is refused by the open itself (ELOOP). Rust
+		// Directory::open_regular_with_links classifies that errno as
+		// NamespaceError::NotRegular, and live_namespace::namespace_error
+		// folds NotRegular into WrongMode for the read-write arm while the
+		// read-only arm (database_file::open_read_only) propagates the
+		// io::Error as Error::Io. Any other open failure keeps the IO class
+		// on both arms.
+		if rdwr && isNofollowSymlink(err) {
+			return nil, &format.Error{Code: notRegularCode(true), Detail: "not a regular file"}
+		}
 		return nil, &format.Error{Code: format.CodeIO, Detail: "open: " + err.Error()}
 	}
 	st, err := f.Stat()
@@ -62,7 +78,7 @@ func openNoFollow(clean string, rdwr bool) (*os.File, error) {
 // existing destination and any symlink final component (Rust
 // live_namespace::create_private POSIX arm + require_absent).
 func createNoFollow(clean string) (*os.File, error) {
-	f, err := os.OpenFile(clean, os.O_RDWR|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
+	f, err := calleropen.Open(clean, os.O_RDWR|os.O_CREATE|os.O_EXCL|unix.O_NOFOLLOW, 0o600)
 	if err != nil {
 		if os.IsExist(err) {
 			return nil, &format.Error{Code: format.CodeNameExists, Detail: "destination exists"}

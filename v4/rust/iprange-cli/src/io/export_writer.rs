@@ -287,7 +287,9 @@ impl ExportWriter {
     }
 }
 
-fn policy_name(policy: PublicationPolicy) -> &'static str {
+/// Wire name of one publication policy. Shared by every adapter-owned
+/// publication so a failure report and a success report never disagree.
+pub(crate) fn policy_name(policy: PublicationPolicy) -> &'static str {
     match policy {
         PublicationPolicy::FailIfExists => "fail_if_exists",
         PublicationPolicy::ReplaceExisting => "replace_existing",
@@ -952,5 +954,165 @@ mod tests {
         );
         drop(writer);
         fs::remove_dir_all(&directory).unwrap();
+    }
+}
+
+/// Post-visibility durability semantics of the adapter-owned publication.
+///
+/// Once the destination name exists with its complete content, a failure of the
+/// remaining work (private-name cleanup, directory synchronization) cannot mean
+/// "nothing was delivered": the bytes are published and only their crash
+/// durability is unproven. The pins below use a parent directory that is
+/// writable and searchable but not readable (mode 0311), which is the
+/// deterministic way to make `open(2)` of the directory fail after every
+/// publication step has already succeeded.
+#[cfg(all(test, unix))]
+mod post_commit_sync_tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt as _;
+
+    const ROW: &str = "192.0.2.10\n";
+
+    fn directory(label: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after the unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-export-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).expect("create the export directory");
+        path
+    }
+
+    fn set_mode(path: &std::path::Path, mode: u32) {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+            .expect("set the directory mode");
+    }
+
+    fn budget() -> ExportBudget {
+        ExportBudget {
+            max_rows: 10,
+            max_output_bytes: 1024,
+            max_open_files: 1,
+        }
+    }
+
+    fn writer_for(destination: &std::path::Path, policy: PublicationPolicy) -> ExportWriter {
+        let mut writer =
+            ExportWriter::create(destination, policy, &budget()).expect("create the writer");
+        writer
+            .write_line(ROW.trim_end(), Cardinality129::from_u64(1))
+            .expect("write the row");
+        writer
+    }
+
+    /// The directory synchronization after a published destination is an
+    /// unknown outcome, it carries the publication facts, and it never removes
+    /// the published file.
+    #[test]
+    fn unresolved_directory_sync_after_publication_is_outcome_unknown() {
+        let directory = directory("sync");
+        let destination = directory.join("out.ipset");
+        set_mode(&directory, 0o311);
+        let error = writer_for(&destination, PublicationPolicy::FailIfExists)
+            .finish()
+            .expect_err("synchronizing an unreadable directory must fail");
+        set_mode(&directory, 0o700);
+        assert_eq!(
+            (error.code, error.outcome),
+            ("io", "outcome_unknown"),
+            "post-publication durability failure must not claim a definite outcome"
+        );
+        let facts = error
+            .details
+            .as_ref()
+            .expect("the failure must carry publication facts")
+            .get("publication")
+            .expect("publication facts")
+            .clone();
+        assert_eq!(facts["stage"], "sync export output directory");
+        assert_eq!(facts["outcome"], "outcome_unknown");
+        assert_eq!(facts["publication_policy"], "fail_if_exists");
+        assert_eq!(facts["destination_visible"], true);
+        assert_eq!(facts["temporary_removed"], true);
+        assert_eq!(facts["path"], destination.to_string_lossy().as_ref());
+        assert_eq!(facts["rows"], "1");
+        assert_eq!(facts["bytes"], ROW.len().to_string().as_str());
+        assert_eq!(facts["sha256"], hex_digest(&Sha256::digest(ROW)).as_str());
+        // The published bytes stay: an unresolved synchronization proves
+        // nothing about durability, and removing the file would destroy the
+        // publication that actually happened.
+        assert_eq!(
+            fs::read(&destination).expect("the published destination must survive"),
+            ROW.as_bytes()
+        );
+        let leftovers: Vec<String> = fs::read_dir(&directory)
+            .expect("read the directory")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(leftovers, vec!["out.ipset".to_owned()], "no residue");
+        fs::remove_dir_all(&directory).expect("clean the export directory");
+    }
+
+    /// A failure before the destination exists keeps the definite
+    /// `not_started` outcome: nothing was published and nothing needs
+    /// resolving.
+    #[test]
+    fn failure_before_the_destination_exists_stays_not_started() {
+        let directory = directory("pre");
+        let destination = directory.join("out.ipset");
+        set_mode(&directory, 0o500);
+        let error =
+            match ExportWriter::create(&destination, PublicationPolicy::FailIfExists, &budget()) {
+                Ok(_) => panic!("an unwritable parent must refuse the writer"),
+                Err(error) => error,
+            };
+        set_mode(&directory, 0o700);
+        assert_eq!((error.code, error.outcome), ("io", "not_started"));
+        assert!(!destination.exists());
+        fs::remove_dir_all(&directory).expect("clean the export directory");
+    }
+
+    /// `fail_if_exists` against a present destination is a definite refusal
+    /// before publication, and the previous file is untouched.
+    #[test]
+    fn fail_if_exists_collision_stays_name_exists_and_keeps_the_previous_file() {
+        let directory = directory("collision");
+        let destination = directory.join("out.ipset");
+        fs::write(&destination, b"previous\n").expect("write the previous destination");
+        let error = writer_for(&destination, PublicationPolicy::FailIfExists)
+            .finish()
+            .expect_err("fail_if_exists must refuse an existing destination");
+        assert_eq!((error.code, error.outcome), ("name_exists", "not_started"));
+        assert_eq!(fs::read(&destination).unwrap(), b"previous\n");
+        fs::remove_dir_all(&directory).expect("clean the export directory");
+    }
+
+    /// The facts of the cleanup stage — the private name is still present when
+    /// its removal fails after the destination became visible.
+    #[test]
+    fn cleanup_stage_failure_reports_the_private_name_still_present() {
+        let directory = directory("cleanup");
+        let destination = directory.join("out.ipset");
+        let writer = writer_for(&destination, PublicationPolicy::FailIfExists);
+        let error = writer.publication_failure(
+            std::io::Error::from_raw_os_error(libc::EACCES),
+            "remove export temporary",
+            false,
+        );
+        assert_eq!((error.code, error.outcome), ("io", "outcome_unknown"));
+        let facts = error.details.expect("facts")["publication"].clone();
+        assert_eq!(facts["stage"], "remove export temporary");
+        assert_eq!(facts["destination_visible"], true);
+        assert_eq!(facts["temporary_removed"], false);
+        assert_eq!(facts["sha256"], hex_digest(&Sha256::digest(ROW)).as_str());
+        assert!(
+            !destination.exists(),
+            "reporting must not touch the destination"
+        );
+        fs::remove_dir_all(&directory).expect("clean the export directory");
     }
 }

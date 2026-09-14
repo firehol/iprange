@@ -1419,3 +1419,368 @@ mod open_refusal_tests {
         );
     }
 }
+
+/// Pins for the capped read of one metadata source.
+///
+/// The cap exists because the length observed before the open is not the
+/// length the descriptor yields: a source that grows after that observation
+/// (or reports a size it does not honour, which procfs and sysfs sources
+/// routinely do) must be refused instead of driving an unbounded heap
+/// allocation in the RPC process. Each pin below calls the capped read with a
+/// descriptor whose yielded bytes disagree with the observed length, which is
+/// the only state the cap can be tested in.
+#[cfg(test)]
+mod read_bounded_tests {
+    use super::read_bounded;
+    use std::io;
+    use std::path::{Path, PathBuf};
+
+    /// The cap the read enforces, and the width of one of its reads.
+    const CAP: u64 = iprange_livedb::MAX_METADATA_UNCOMPRESSED;
+
+    /// Slack allowed between the cap and the bytes a refused read may still
+    /// have pulled from its descriptor: the read buffer plus the kernel's own
+    /// buffering, and nothing like the excess that was offered. Only the
+    /// pipe-backed reads measure consumption, so this is a unix bound.
+    #[cfg(unix)]
+    const CONSUMED_SLACK: u64 = 1024 * 1024;
+
+    fn scratch_dir(label: &str) -> PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after the unix epoch")
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "iprange-metadata-read-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create the read scratch directory");
+        dir
+    }
+
+    /// Open one regular fixture of `content` bytes; the caller removes the
+    /// returned directory.
+    fn regular_descriptor(
+        directory: &Path,
+        label: &str,
+        filler: u8,
+        bytes_len: u64,
+    ) -> (std::fs::File, u64) {
+        let path = directory.join(label);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+            .expect("create the metadata fixture");
+        let chunk = [filler; 64 * 1024];
+        let mut left = bytes_len;
+        while left > 0 {
+            let width = std::cmp::min(left, chunk.len() as u64) as usize;
+            std::io::Write::write_all(&mut file, &chunk[..width]).expect("fill the fixture");
+            left -= width as u64;
+        }
+        let observed = file.metadata().expect("stat the fixture").len();
+        drop(file);
+        let opened = std::fs::File::open(&path).expect("open the metadata fixture");
+        (opened, observed)
+    }
+
+    fn opened_descriptor(path: &Path) -> std::fs::File {
+        std::fs::File::open(path).expect("open the metadata source")
+    }
+
+    /// The message and kind the capped read reports for a source over the
+    /// limit. Go's `readMetadataBounded` refuses with the `io` class and this
+    /// same sentence, and `read_file_exact` maps the kind into that class.
+    fn assert_cap_refusal(error: &io::Error) {
+        assert_eq!(
+            error.kind(),
+            io::ErrorKind::InvalidData,
+            "the over-cap read must report its own error kind"
+        );
+        assert!(
+            error.to_string().contains("metadata source exceeds 20 MiB"),
+            "unexpected cap refusal: {error}"
+        );
+    }
+
+    /// A descriptor that yields more than the cap is refused even though the
+    /// length observed before the open was inside it. The error arm returns no
+    /// buffer at all, and the read stops consuming the descriptor at once: the
+    /// writer of an over-cap source cannot fill the RPC heap by being fast.
+    #[cfg(unix)]
+    #[test]
+    fn source_that_outruns_the_cap_is_refused_without_a_buffer() {
+        let offered = CAP + 4 * 1024 * 1024;
+        let (reader, writer) = super_pipe(offered);
+        // A pipe reports no size at all, so this is the grow-after-open shape:
+        // the observed length is inside the cap and the yielded bytes are not.
+        let answer = read_bounded(reader, 0);
+        let bytes_written = writer
+            .join()
+            .expect("the capped read must release or finish its writer");
+        let error = match answer {
+            Ok(bytes) => panic!(
+                "a descriptor that yielded {} bytes was accepted",
+                bytes.len()
+            ),
+            Err(error) => error,
+        };
+        assert_cap_refusal(&error);
+        assert!(
+            u64::try_from(bytes_written).expect("count fits u64") >= CAP,
+            "the cap must be judged on the bytes actually read, not the observed length"
+        );
+        assert!(
+            u64::try_from(bytes_written).expect("count fits u64") <= CAP + CONSUMED_SLACK,
+            "the read kept consuming after the refusal: {} of {} bytes",
+            bytes_written,
+            offered
+        );
+    }
+
+    /// Exactly the cap is inside the cap: the boundary comparison is strict,
+    /// so a source of `MAX_METADATA_UNCOMPRESSED` bytes must commit every byte
+    /// rather than refuse or truncate.
+    #[cfg(unix)]
+    #[test]
+    fn source_of_exactly_the_cap_commits_every_byte() {
+        let (reader, writer) = super_pipe(CAP);
+        let bytes = match read_bounded(reader, 0) {
+            Ok(bytes) => bytes,
+            Err(error) => panic!("a source of exactly the cap must be read: {error}"),
+        };
+        let written = writer.join().expect("join the exactly-cap writer");
+        assert_eq!(written, usize::try_from(CAP).expect("cap fits in usize"));
+        assert_eq!(u64::try_from(bytes.len()).expect("length fits u64"), CAP);
+        assert!(
+            bytes.iter().all(|byte| *byte == b'x'),
+            "the committed bytes must be the source bytes"
+        );
+    }
+
+    /// The pathological width: the cap is a multiple of the read buffer, so a
+    /// source of one byte more than the cap crosses it with a final one-byte
+    /// read. A comparison that only looked at whole buffers would accept that
+    /// byte and commit an over-cap source.
+    #[test]
+    fn one_byte_over_the_cap_is_refused() {
+        let directory = scratch_dir("one-over");
+        let (descriptor, observed) = regular_descriptor(&directory, "source", b'x', CAP + 1);
+        assert_eq!(observed, CAP + 1);
+        let answer = read_bounded(descriptor, CAP);
+        let _ = std::fs::remove_dir_all(&directory);
+        let error = match answer {
+            Ok(bytes) => panic!("{} bytes over the cap were accepted", bytes.len()),
+            Err(error) => error,
+        };
+        assert_cap_refusal(&error);
+    }
+
+    /// The other one-byte shape: a source of a single byte commits that byte,
+    /// neither empty nor padded.
+    #[test]
+    fn one_byte_source_commits_that_byte() {
+        let directory = scratch_dir("one-byte");
+        let (descriptor, observed) = regular_descriptor(&directory, "source", b'q', 1);
+        let answer = read_bounded(descriptor, observed);
+        let _ = std::fs::remove_dir_all(&directory);
+        let bytes = answer.expect("a one-byte source must be read");
+        assert_eq!(bytes, vec![b'q']);
+    }
+
+    /// The observed length only seeds the reservation: what is committed is
+    /// what the descriptor yielded. Procfs and sysfs sources report sizes that
+    /// `read(2)` does not honour, so trusting the observed length would
+    /// publish an empty blob or a fabricated NUL tail as metadata.
+    #[test]
+    fn observed_length_never_decides_the_committed_bytes() {
+        const CONTENT: &[u8] = b"65536\n";
+        let directory = scratch_dir("ignore-observed");
+        let path = directory.join("source");
+        std::fs::write(&path, CONTENT).expect("write the metadata fixture");
+        for observed in [0_u64, 4096, u64::MAX] {
+            let bytes = read_bounded(opened_descriptor(&path), observed)
+                .unwrap_or_else(|error| panic!("observed {observed}: {error}"));
+            assert_eq!(
+                bytes, CONTENT,
+                "observed length {observed} changed what was committed"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    /// A real procfs source reports a zero size while `read(2)` yields its
+    /// content: committing the observed length would commit nothing.
+    #[cfg(unix)]
+    #[test]
+    fn zero_sized_procfs_source_commits_its_content() {
+        const PATH: &str = "/proc/self/cmdline";
+        let Ok(info) = std::fs::metadata(PATH) else {
+            return; // No procfs on this platform.
+        };
+        if info.len() != 0 {
+            return; // This pin needs the zero-size shape.
+        }
+        let Ok(written) = std::fs::read(PATH) else {
+            return; // Unreadable in this container.
+        };
+        if written.is_empty() {
+            return;
+        }
+        let bytes = read_bounded(opened_descriptor(Path::new(PATH)), 0).expect("read procfs");
+        assert_eq!(
+            bytes, written,
+            "a zero-size procfs source must commit the bytes read"
+        );
+    }
+
+    /// A real sysfs source reports a whole page while `read(2)` yields a few
+    /// bytes: sizing the commit from the observed length would publish the
+    /// unwritten tail as metadata.
+    #[cfg(unix)]
+    #[test]
+    fn oversized_stat_yields_no_invented_tail() {
+        const PATH: &str = "/sys/class/net/lo/mtu";
+        let Ok(written) = std::fs::read(PATH) else {
+            return; // No sysfs in this container.
+        };
+        let Ok(info) = std::fs::metadata(PATH) else {
+            return;
+        };
+        if info.len() <= u64::try_from(written.len()).expect("content fits u64") {
+            return; // This pin needs the oversized-stat shape.
+        }
+        let bytes =
+            read_bounded(opened_descriptor(Path::new(PATH)), info.len()).expect("read sysfs");
+        assert_eq!(
+            bytes, written,
+            "an oversized stat must not add bytes the descriptor did not yield"
+        );
+    }
+
+    /// One pipe whose writer offers `total` bytes, reporting how many bytes it
+    /// actually handed over. A capped read that stops early makes the writer
+    /// observe a closed read end, which is how the test measures the read's
+    /// own consumption.
+    #[cfg(unix)]
+    fn super_pipe(total: u64) -> (std::fs::File, std::thread::JoinHandle<usize>) {
+        use std::io::Write as _;
+        use std::os::fd::FromRawFd;
+
+        let mut fds = [0 as libc::c_int; 2];
+        assert_eq!(
+            unsafe { libc::pipe(fds.as_mut_ptr()) },
+            0,
+            "pipe: {}",
+            io::Error::last_os_error()
+        );
+        // Both ends become File owners, so no path can leak a descriptor.
+        let reader = unsafe { std::fs::File::from_raw_fd(fds[0]) };
+        let mut writer = unsafe { std::fs::File::from_raw_fd(fds[1]) };
+        let joined = std::thread::Builder::new()
+            .name("iprange-metadata-cap-writer".to_owned())
+            .spawn(move || {
+                let filler = [b'x'; 64 * 1024];
+                let mut left = total;
+                let mut written = 0usize;
+                while left > 0 {
+                    let width = std::cmp::min(left, filler.len() as u64) as usize;
+                    match writer.write(&filler[..width]) {
+                        Ok(0) => break,
+                        Ok(done) => {
+                            written += done;
+                            left -= done as u64;
+                        }
+                        // The reader stopped consuming: the cap did its work.
+                        Err(_) => break,
+                    }
+                }
+                drop(writer);
+                written
+            })
+            .expect("spawn the capped-read pipe writer");
+        (reader, joined)
+    }
+}
+
+/// Arm-level pin for the metadata source open.
+///
+/// The helper-level pin above proves the open itself refuses a FIFO; it cannot
+/// prove that the metadata arm *uses* that open, because replacing
+/// `open_metadata_source`'s call with a plain `File::open` keeps that pin green
+/// while reintroducing the wedge: a FIFO swapped in after `read_file_exact`'s
+/// `metadata()` call would block the request thread inside `open(2)` forever.
+/// This pin therefore drives the registered handler behind
+/// `iprange.v1.current.publish` — the function the JSON-RPC dispatcher calls —
+/// while its metadata source path is flipped between a regular file and a
+/// writerless FIFO. The input argument names a missing `@`-list, so an arm that
+/// reads its metadata normally stops at the path expansion instead of paying
+/// for a publication it is not testing.
+#[cfg(all(test, unix))]
+mod metadata_open_caller_tests {
+    use crate::io::caller_open::pin_support::{self, RaceRule};
+    use crate::rpc::handlers::publish;
+    use crate::rpc::session::SessionState;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    /// Attempts per pin. The pre-check and the open are back-to-back syscalls,
+    /// so one attempt is a coin whose hit rate is recorded in the wave report;
+    /// this many attempts makes every attempt losing its coin negligibly
+    /// unlikely without leaving the suite's time budget.
+    const ATTEMPTS: usize = 400;
+    const CONCURRENCY: usize = 4;
+
+    #[test]
+    fn swapped_fifo_is_refused_by_the_publish_metadata_arm() {
+        let rule = RaceRule {
+            code: "invalid_path",
+            message: "metadata source is not a regular file",
+            other_accepted: &["file-list or directory does not exist"],
+        };
+        let content: &'static [u8] = b"{\"tenant\":\"a\"}";
+        let arm = std::sync::Arc::new(|source: PathBuf| {
+            let directory = source.parent().expect("scratch directory of the source");
+            let params = json!({
+                "input": {
+                    "paths": ["@missing-list"],
+                    "family": "ipv4",
+                    "fix_network": true,
+                    "default_prefix": 32,
+                    "dns": {"threads": 1, "silent": true},
+                    "expand_at_paths": true,
+                    "max_line_bytes": 1048576,
+                    "max_expanded_paths": 100000
+                },
+                "feed": "feed-a",
+                "value_tag": {"hex": "aa"},
+                "metadata": {
+                    "mode": "replace_file",
+                    "path": source.display().to_string()
+                },
+                "destination": directory.join("out.iprange").display().to_string(),
+                "publication_policy": "fail_if_exists",
+                "immutable_feed_budget": {
+                    "max_heap_bytes": "2097152",
+                    "max_output_pages": "10000",
+                    "max_workspace_pages": "10000",
+                    "max_open_files": 3
+                }
+            });
+            publish::validate_current_publish(&params)
+                .expect("the fixture params must satisfy the method schema");
+            let mut state = SessionState::default();
+            publish::current_publish(&mut state, params)
+                .err()
+                .map(|error| (error.code.to_owned(), error.message))
+        });
+        pin_support::assert_control(
+            "metadata source",
+            &pin_support::control("metadata-arm-control", content, &arm),
+        );
+        let report =
+            pin_support::swap_race("metadata-arm", content, &rule, ATTEMPTS, CONCURRENCY, arm);
+        pin_support::assert_race("metadata source", &report, ATTEMPTS);
+    }
+}

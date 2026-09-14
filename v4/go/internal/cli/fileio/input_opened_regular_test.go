@@ -4,42 +4,38 @@ package fileio
 
 import (
 	"errors"
+	"os"
 	"strings"
 	"testing"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
 
-// Every caller-path input open must decide regularity on the
-// descriptor it opened, not on the caller's earlier path stat: the
-// open is O_NONBLOCK and returns errOpenedNotRegular for a node that is
-// not a regular file. Calling the helper directly reproduces the
-// swap-race state (the path check already passed) without racing, so
-// this pins both halves: dropping O_NONBLOCK wedges the open on the
-// fifo and trips the watchdog, dropping the descriptor check hands the
-// caller a readable FIFO that the feed walk then consumes as empty
-// input.
+// POSIX FIFO arms of the caller-path input opens. Every caller-path
+// input open must decide regularity on the descriptor it opened, not on
+// the caller's earlier path stat: the open is O_NONBLOCK and returns
+// errOpenedNotRegular for a node that is not a regular file. Calling the
+// helper directly reproduces the swap-race state (the path check already
+// passed) without racing, so these pins cover both halves: dropping
+// O_NONBLOCK wedges the open on the fifo and trips the watchdog,
+// dropping the descriptor check hands the caller a readable FIFO that
+// the feed walk then consumes as empty input. The platform-neutral
+// refusal-class pins are in opened_guard_test.go.
 func TestOpenInputNoBlockRefusesOpenedFifo(t *testing.T) {
 	path := t.TempDir() + "/input.fifo"
 	if err := unix.Mkfifo(path, 0o600); err != nil {
 		t.Fatalf("mkfifo: %v", err)
 	}
-	done := make(chan error, 1)
-	go func() {
-		file, err := openInputNoBlock(path)
+	var err error
+	runOpenedCall(t, "openInputNoBlock(fifo)", func() {
+		var file *os.File
+		file, err = openInputNoBlock(path)
 		if file != nil {
 			_ = file.Close()
 		}
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if !errors.Is(err, errOpenedNotRegular) {
-			t.Fatalf("openInputNoBlock(fifo) = %v, want %v", err, errOpenedNotRegular)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("openInputNoBlock blocked on the fifo")
+	})
+	if !errors.Is(err, errOpenedNotRegular) {
+		t.Fatalf("openInputNoBlock(fifo) = %v, want %v", err, errOpenedNotRegular)
 	}
 }
 
@@ -51,7 +47,11 @@ func TestOpenInputNonRegularArmClassMatchesOpenedCheck(t *testing.T) {
 	if err := unix.Mkfifo(path, 0o600); err != nil {
 		t.Fatalf("mkfifo: %v", err)
 	}
-	fromPathCheck, ierr := openInput(path)
+	var fromPathCheck *os.File
+	var ierr *InputError
+	runOpenedCall(t, "openInput(standing fifo)", func() {
+		fromPathCheck, ierr = openInput(path)
+	})
 	if fromPathCheck != nil {
 		_ = fromPathCheck.Close()
 	}
@@ -60,7 +60,14 @@ func TestOpenInputNonRegularArmClassMatchesOpenedCheck(t *testing.T) {
 	}
 	// Same descriptor, judged after the open: the arm refusal is the
 	// one the caller maps errOpenedNotRegular to.
-	_, err := openInputNoBlock(path)
+	var err error
+	runOpenedCall(t, "openInputNoBlock(fifo)", func() {
+		var file *os.File
+		file, err = openInputNoBlock(path)
+		if file != nil {
+			_ = file.Close()
+		}
+	})
 	if !errors.Is(err, errOpenedNotRegular) {
 		t.Fatalf("openInputNoBlock(fifo) = %v, want %v", err, errOpenedNotRegular)
 	}
@@ -78,7 +85,10 @@ func TestExpandPathsAtListNonRegularArmClass(t *testing.T) {
 	if err := unix.Mkfifo(list, 0o600); err != nil {
 		t.Fatalf("mkfifo: %v", err)
 	}
-	_, err := expandPaths([]string{"@" + list}, true, 100, 1<<20)
+	var err error
+	runOpenedCall(t, "expandPaths(@fifo)", func() {
+		_, err = expandPaths([]string{"@" + list}, true, 100, 1<<20)
+	})
 	if err == nil {
 		t.Fatal("expandPaths accepted a fifo file list")
 	}

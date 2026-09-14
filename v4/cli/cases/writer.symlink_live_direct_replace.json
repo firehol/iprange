@@ -1,0 +1,89 @@
+{
+ "fixtures": [
+  {
+   "path": "data.csv",
+   "source": {
+    "text": "from,to,value\n192.0.2.1,192.0.2.2,7\n"
+   }
+  },
+  {
+   "path": "target.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 0
+   }
+  },
+  {
+   "path": "linked.iprange",
+   "source": {
+    "symlink_to": "target.iprange"
+   }
+  }
+ ],
+ "name": "writer.symlink_live_direct_replace",
+ "requires": "iprange.v1.direct.replace",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "wrong_state",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.direct.replace",
+   "params": {
+    "input": {
+     "max_line_bytes": 1024,
+     "path": "$WORK/data.csv"
+    },
+    "metadata": {
+     "mode": "keep"
+    },
+    "path": "$WORK/linked.iprange",
+    "writer_budget": {
+     "max_growth_pages": "20000",
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_private_pages": "20000"
+    }
+   }
+  },
+  {
+   "actor": "consumer",
+   "expect_result": {
+    "info": {
+     "active_feed_count": "0",
+     "address_family": "ipv4",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "meta_selection": "proven_current",
+     "page_count": "4",
+     "range_record_count": "3",
+     "structure_kind": "none",
+     "transaction_id": "2",
+     "value_kind": "direct",
+     "value_tag": {
+      "hex": "646972656374"
+     }
+    },
+    "method": "iprange.v1.reader.open",
+    "reader": {
+     "$ignore": true
+    }
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.reader.open",
+   "params": {
+    "source": {
+     "mode": "immutable",
+     "path": "$WORK/target.iprange"
+    }
+   }
+  }
+ ]
+}

@@ -63,10 +63,10 @@ func RegularIdentity(f *os.File, directoryIdentity FileIdentity) (FileIdentity, 
 	return identity, nil
 }
 
-// regularIdentityAnyLink captures the retained identity of one regular
-// file without a directory-volume proof (Rust
-// retained_regular_identity with require_single_link=false).
-func regularIdentityAnyLink(f *os.File) (FileIdentity, error) {
+// retainedRegularIdentity captures the retained identity of one regular
+// file without a directory-volume proof, optionally requiring the
+// single-link rule (Rust publication::namespace::retained_regular_identity).
+func retainedRegularIdentity(f *os.File, requireSingleLink bool) (FileIdentity, error) {
 	info, err := handleInfo(f)
 	if err != nil {
 		return FileIdentity{}, err
@@ -74,7 +74,17 @@ func regularIdentityAnyLink(f *os.File) (FileIdentity, error) {
 	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
 		return FileIdentity{}, nsNotRegularError()
 	}
+	if requireSingleLink && info.NumberOfLinks != 1 {
+		return FileIdentity{}, nsLinkCountError(uint64(info.NumberOfLinks))
+	}
 	return fileIdentity(f)
+}
+
+// regularIdentityAnyLink captures the retained identity of one regular
+// file without a directory-volume proof (Rust
+// retained_regular_identity with require_single_link=false).
+func regularIdentityAnyLink(f *os.File) (FileIdentity, error) {
+	return retainedRegularIdentity(f, false)
 }
 
 // RegularLinkCount returns the hard-link count of one retained file

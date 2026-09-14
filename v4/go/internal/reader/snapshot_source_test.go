@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/mapping"
 )
 
 func TestMetadataJSONLen(t *testing.T) {
@@ -49,14 +48,12 @@ func TestFileIdentity(t *testing.T) {
 	}
 	// The mapping owner is the single identity authority on every
 	// platform (Windows included); comparing against its probe keeps the
-	// test portable without syscall.Stat_t.
-	device2, inode2, err := mapping.StatIdentity(fixture(t, "direct-ipv4.iprdb"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if device != device2 || inode != inode2 {
-		t.Fatalf("identity (%d,%d) want (%d,%d)", device, inode, device2, inode2)
-	}
+	// test portable without syscall.Stat_t. The probe itself is per
+	// platform, so the comparison is a subtest that reports the platforms
+	// internal/mapping does not build it for.
+	t.Run("matches_mapping_probe", func(t *testing.T) {
+		crossCheckFileIdentityProbe(t, fixture(t, "direct-ipv4.iprdb"), device, inode)
+	})
 
 	// After Close the descriptor is gone: an IO-class error, never a
 	// panic (mapping.FileIdentity fstats the closed descriptor).

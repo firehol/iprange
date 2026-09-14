@@ -126,6 +126,15 @@ func RequireSidecarAbsent(path string) error {
 	return requireSidecarAbsent(path)
 }
 
+// VerifyPath re-checks that path still names the retained identity as
+// one regular single-link file (Rust live_namespace::verify_path). The
+// recovery candidate inspection runs it over the opened descriptor
+// before any reader mapping exists, so a replaced or re-linked path is
+// the wrong-state class there rather than a mapping geometry refusal.
+func VerifyPath(path string, expected FileIdentity) error {
+	return verifyPath(path, expected)
+}
+
 // VerifyPathAnyLink re-checks that path still names the retained
 // identity as one regular file, accepting any link count (Rust
 // live_namespace::verify_path_any_link; the validation immutable
@@ -150,6 +159,19 @@ func CoordinationCause(cause error) error { return liveCoordination(cause) }
 // namespace_error like every live identity capture).
 func IdentityAnyLink(f *os.File) (FileIdentity, error) {
 	identity, err := regularIdentityAnyLink(f)
+	if err != nil {
+		return FileIdentity{}, nsMap(err)
+	}
+	return identity, nil
+}
+
+// Identity captures the retained identity of one open regular file with
+// the single-link rule (Rust live_namespace::identity over
+// retained_regular_identity(require_single_link = true)). A multi-link
+// file is the wrong-mode class, folded through namespace_error like
+// every live identity capture.
+func Identity(f *os.File) (FileIdentity, error) {
+	identity, err := retainedRegularIdentity(f, true)
 	if err != nil {
 		return FileIdentity{}, nsMap(err)
 	}

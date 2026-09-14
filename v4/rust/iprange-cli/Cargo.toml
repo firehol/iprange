@@ -18,6 +18,19 @@ sha2 = "=0.10.9"
 # Signals for the JSON-RPC transport (SIGINT/SIGTERM fatal path).
 libc = "0.2.186"
 
+[target.'cfg(windows)'.dependencies]
+# Handle classification for caller-supplied input paths: the zero-access
+# metadata probe (CreateFileW, GetFileAttributesW) and the judgment of an
+# opened handle (GetFileType, GetFileInformationByHandle, reparse tag).
+# Win32_Security is required because CreateFileW's signature names
+# SECURITY_ATTRIBUTES, even where the probe passes no security descriptor.
+windows-sys = { version = "=0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemServices",
+] }
+
 [[bin]]
 name = "iprange"
 path = "src/main.rs"

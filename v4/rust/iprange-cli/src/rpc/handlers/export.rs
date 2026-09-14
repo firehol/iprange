@@ -1565,6 +1565,46 @@ mod tests {
 
 #[cfg(test)]
 mod live_source_tests {
+    //! Native host runs need the SDK worker beside this test binary.
+    //!
+    //! Every pin here that reaches an export result takes the source file
+    //! identity through the public SDK recovery-candidate inspection
+    //! (`source_identity` above, calling
+    //! `iprange_livedb::recovery::inspect_recovery_candidates`), and that
+    //! inspection runs in the isolated SDK worker. The worker is found by
+    //! exact name (`iprange-v4-worker` plus the platform executable suffix)
+    //! next to the running executable, then -- only when that directory is
+    //! literally named `deps` -- in that directory's parent. There is no
+    //! `PATH` search and no environment override (`worker_candidates` in
+    //! `iprange-livedb/src/worker/client.rs`). Cargo places the `iprange-cli`
+    //! test executable under `<target>\debug\deps` and does not build the
+    //! `iprange-livedb` bin target for `-p iprange-cli` alone, so on a tree
+    //! that has not built the worker these six pins answer `os_unsupported`
+    //! with "unsupported operation: SDK validation/recovery worker is
+    //! unavailable". That is an environment defect, not a product answer.
+    //!
+    //! Place a worker built from the same source state beside the test
+    //! executable before the package run on a Windows host:
+    //!
+    //! ```text
+    //! cargo build --release -p iprange-livedb --bin iprange-v4-worker
+    //! copy target\release\iprange-v4-worker.exe target\debug\deps\iprange-v4-worker.exe
+    //! cargo test -p iprange-cli
+    //! ```
+    //!
+    //! Two equivalents need no copy: `cargo build -p iprange-livedb --bin
+    //! iprange-v4-worker` puts the worker in the `deps` parent that the second
+    //! candidate names, and a workspace-wide `cargo test` builds the bin
+    //! target of that same tree.
+    //!
+    //! The build profile does not matter. The version handshake compares
+    //! `IPRANGE_V4_BUILD_ID`, which `iprange-livedb/build.rs` computes from
+    //! that package's `Cargo.toml` and every file under its `src`, so it is
+    //! source-derived and profile-independent. The same handshake is why a
+    //! copied worker must be refreshed after any change to `iprange-livedb`:
+    //! the spawn loop returns the first candidate that starts and the build ID
+    //! is checked afterwards, so a stale executable in `deps` is rejected
+    //! rather than skipped in favour of a matching one in the parent.
     use super::*;
     use iprange_livedb::snapshot::{SnapshotBudget, SnapshotPublicationPolicy, SnapshotSourceMode};
     use iprange_livedb::snapshot_to;

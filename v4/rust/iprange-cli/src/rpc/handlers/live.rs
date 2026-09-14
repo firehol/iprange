@@ -753,9 +753,29 @@ pub fn first_seen_refresh(state: &mut SessionState, params: Value) -> Result<Val
                     result["removals"] = removals;
                 }
                 Err(error) => {
+                    // The database transaction committed and the auxiliary
+                    // removal output is unresolved: both facts are reported. The
+                    // transaction outcome owns the reply, and the publication
+                    // facts (stage, digest, counts, visibility) travel with the
+                    // failure that produced them.
+                    let mut failure = json!({
+                        "code": error.code,
+                        "outcome": error.outcome,
+                        "message": error.message,
+                    });
+                    let facts = error
+                        .details
+                        .as_ref()
+                        .and_then(Value::as_object)
+                        .cloned()
+                        .unwrap_or_default();
+                    if let Some(failure_object) = failure.as_object_mut() {
+                        for (key, value) in facts {
+                            failure_object.insert(key, value);
+                        }
+                    }
                     let mut details = json!({"result": result});
-                    details["removals_publication_failure"] =
-                        json!({"code": error.code, "message": error.message});
+                    details["removals_publication_failure"] = failure;
                     return Err(HandlerError {
                         code: error.code,
                         outcome: "committed",
@@ -1787,8 +1807,19 @@ impl RemovalCollector {
             PublicationPolicy::FailIfExists => {
                 fs::hard_link(&self.temporary, &self.destination)
                     .map_err(|error| file_error(error, "publish removal output"))?;
-                fs::remove_file(&self.temporary)
-                    .map_err(|error| file_error(error, "remove removal temporary"))?;
+                // The removal rows are published from here on: removing the
+                // private name is cleanup, and its failure can only mean that
+                // the durability of the published entry is unproven. Retry once
+                // so the reported fact matches what the namespace holds.
+                if let Err(error) = fs::remove_file(&self.temporary) {
+                    let temporary_removed = fs::remove_file(&self.temporary).is_ok();
+                    return Err(self.publication_failure(
+                        error,
+                        "remove removal temporary",
+                        destination_content,
+                        temporary_removed,
+                    ));
+                }
             }
             PublicationPolicy::ReplaceExisting | PublicationPolicy::ReplaceExistingNoRollback => {
                 fs::rename(&self.temporary, &self.destination)
@@ -1800,9 +1831,22 @@ impl RemovalCollector {
             .parent()
             .filter(|value| !value.as_os_str().is_empty())
             .unwrap_or_else(|| Path::new("."));
-        sync_directory(parent)?;
+        // The destination holds the complete output; a directory-sync failure
+        // leaves that namespace entry's durability unproven. That is an unknown
+        // outcome about the auxiliary output, never a reason to touch it.
+        sync_directory(parent).map_err(|error| {
+            self.publication_failure(
+                error,
+                "sync removal output directory",
+                destination_content,
+                true,
+            )
+        })?;
         let digest = self.digest.clone().finalize();
-        let sha256 = digest.iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+        let sha256 = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         Ok(json!({
             "publication": removal_publication_facts("published", destination_content),
             "output": {
@@ -1812,6 +1856,47 @@ impl RemovalCollector {
                 "rows": self.rows.to_string(),
             },
         }))
+    }
+
+    /// Failure of the removal-output publication once the destination name is
+    /// visible. The refresh's database commit is unaffected — the caller reports
+    /// it — but the durability of this auxiliary output is unproven, so the
+    /// outcome is `outcome_unknown` and the error carries the facts that let the
+    /// caller judge the file. Same model as the export writer's
+    /// `publication_failure`.
+    fn publication_failure(
+        &self,
+        error: std::io::Error,
+        stage: &str,
+        destination_content: &str,
+        temporary_removed: bool,
+    ) -> HandlerError {
+        let sha256 = self
+            .digest
+            .clone()
+            .finalize()
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        HandlerError {
+            code: "io",
+            outcome: "outcome_unknown",
+            message: format!("{stage}: {error}"),
+            details: Some(json!({
+                "publication": {
+                    "outcome": "outcome_unknown",
+                    "publication_policy": crate::io::export_writer::policy_name(self.policy),
+                    "path": self.destination.to_string_lossy(),
+                    "stage": stage,
+                    "destination_visible": true,
+                    "destination_content": destination_content,
+                    "temporary_removed": temporary_removed,
+                    "rows": self.rows.to_string(),
+                    "bytes": self.bytes.to_string(),
+                    "sha256": sha256,
+                }
+            })),
+        }
     }
 }
 
@@ -1945,12 +2030,10 @@ fn u32_value(value: &Value) -> Result<u32, String> {
         .ok_or_else(|| "value must be a u32 integer".to_owned())
 }
 
-fn sync_directory(parent: &Path) -> Result<(), HandlerError> {
+fn sync_directory(parent: &Path) -> io::Result<()> {
     #[cfg(unix)]
     {
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| file_error(error, "sync removal output directory"))?;
+        File::open(parent)?.sync_all()?;
     }
     #[cfg(not(unix))]
     let _ = parent;
@@ -2215,7 +2298,9 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code, "output_limit");
         assert_eq!(error.outcome, "not_started");
-        let details = error.details.expect("close facts must be merged into details");
+        let details = error
+            .details
+            .expect("close facts must be merged into details");
         assert_eq!(details["writer_close"]["outcome"], "closed");
         assert_eq!(details["source_close"]["outcome"], "closed");
         let _ = std::fs::remove_file(&removals_path);
@@ -2253,10 +2338,219 @@ mod tests {
         );
         let error = outcome.unwrap_err();
         assert_eq!(error.code, "invalid_argument");
-        let details = error.details.expect("close facts must be merged into details");
+        let details = error
+            .details
+            .expect("close facts must be merged into details");
         assert_eq!(details["writer_close"]["outcome"], "closed");
         assert_eq!(details["source_close"]["outcome"], "closed");
         remove_live(&target);
+    }
+
+    /// Post-visibility durability semantics of the removals output.
+    ///
+    /// The refresh's database commit and the durability of this auxiliary
+    /// output are two separate facts, and neither may be reported as the
+    /// other: a transaction that committed stays reported, while the output
+    /// whose directory synchronization failed is `outcome_unknown` with its
+    /// publication facts. The trigger is a destination parent that is writable
+    /// and searchable but not readable (mode 0311), so every publication step
+    /// succeeds and only `open(2)` of the directory fails.
+    #[cfg(unix)]
+    mod removals_publication_tests {
+        use super::*;
+        use std::os::unix::fs::PermissionsExt as _;
+
+        fn directory(label: &str) -> PathBuf {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("clock after the unix epoch")
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "iprange-removals-{label}-{}-{unique}",
+                std::process::id()
+            ));
+            std::fs::create_dir(&path).expect("create the removals directory");
+            path
+        }
+
+        fn set_mode(path: &Path, mode: u32) {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+                .expect("set the directory mode");
+        }
+
+        fn refresh_with_removals_output(
+            target: &Path,
+            narrow: &Path,
+            removals: &Path,
+            policy: &str,
+        ) -> Result<Value, HandlerError> {
+            let mut state = SessionState::default();
+            first_seen_refresh(
+                &mut state,
+                serde_json::json!({
+                    "path": target.display().to_string(),
+                    "current": {
+                        "feed": "coverage",
+                        "source": {"path": narrow.display().to_string(), "mode": "live"},
+                    },
+                    "refresh_value": 84,
+                    "metadata": {"mode": "keep"},
+                    "writer_budget": {
+                        "max_heap_bytes": "2097152",
+                        "max_private_pages": "10000",
+                        "max_growth_pages": "10000",
+                        "max_open_files": 2,
+                    },
+                    "removals_output": {
+                        "path": removals.display().to_string(),
+                        "publication_policy": policy,
+                        "result_budget": {
+                            "max_rows": "10",
+                            "max_output_bytes": "4096",
+                            "max_open_files": 1,
+                        },
+                    },
+                }),
+            )
+        }
+
+        /// Prime a `first_seen` target, then refresh it over narrowed coverage
+        /// so exactly one removal must be written.
+        fn primed_target(label: &str) -> (PathBuf, PathBuf, PathBuf) {
+            let source = live_membership_with_feed(&format!("{label}-src"));
+            let target = live_first_seen_target(&format!("{label}-dst"));
+            let mut state = SessionState::default();
+            first_seen_refresh(&mut state, refresh_params(&target, &source, "live")).unwrap();
+            let narrow = live_membership_with_single_range(&format!("{label}-narrow"));
+            (source, target, narrow)
+        }
+
+        #[test]
+        fn unresolved_directory_sync_keeps_both_the_commit_and_the_unknown_output() {
+            let (source, target, narrow) = primed_target("sync");
+            let output = directory("sync");
+            let removals = output.join("removals.jsonl");
+            set_mode(&output, 0o311);
+            let error = refresh_with_removals_output(&target, &narrow, &removals, "fail_if_exists")
+                .expect_err("synchronizing an unreadable directory must fail");
+            set_mode(&output, 0o700);
+            assert_eq!(
+                (error.code, error.outcome),
+                ("io", "committed"),
+                "the committed transaction owns the reply"
+            );
+            let details = error.details.expect("the failure carries the facts");
+            assert_eq!(
+                details["result"]["commit"]["durability"], "committed",
+                "the commit fact must survive the auxiliary failure"
+            );
+            let failure = &details["removals_publication_failure"];
+            assert_eq!(failure["outcome"], "outcome_unknown");
+            assert_eq!(failure["code"], "io");
+            let facts = &failure["publication"];
+            assert_eq!(facts["stage"], "sync removal output directory");
+            assert_eq!(facts["outcome"], "outcome_unknown");
+            assert_eq!(facts["publication_policy"], "fail_if_exists");
+            assert_eq!(facts["destination_visible"], true);
+            assert_eq!(facts["destination_content"], "created");
+            assert_eq!(facts["temporary_removed"], true);
+            assert_eq!(facts["path"], removals.to_string_lossy().as_ref());
+            assert_eq!(facts["rows"], "1");
+            assert_eq!(facts["sha256"].as_str().map(str::len), Some(64));
+            let written = std::fs::read(&removals).expect("the removals file must survive");
+            assert!(written.starts_with(b"{") && written.ends_with(b"}\n"));
+            let leftovers: Vec<String> = std::fs::read_dir(&output)
+                .expect("read the directory")
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(leftovers, vec!["removals.jsonl".to_owned()], "no residue");
+            std::fs::remove_dir_all(&output).ok();
+            remove_live(&narrow);
+            remove_live(&target);
+            remove_live(&source);
+        }
+
+        #[test]
+        fn failure_before_visibility_is_a_definite_refusal_and_keeps_the_commit() {
+            let (source, target, narrow) = primed_target("pre");
+            let output = directory("pre");
+            let removals = output.join("removals.jsonl");
+            std::fs::write(&removals, b"previous\n").expect("write the previous output");
+            let error = refresh_with_removals_output(&target, &narrow, &removals, "fail_if_exists")
+                .expect_err("fail_if_exists must refuse an existing destination");
+            assert_eq!(
+                (error.code, error.outcome),
+                ("name_exists", "committed"),
+                "a refusal before visibility is definite, and the commit stands"
+            );
+            let details = error.details.expect("the failure carries the facts");
+            assert_eq!(details["result"]["commit"]["durability"], "committed");
+            let failure = &details["removals_publication_failure"];
+            assert_eq!(failure["code"], "name_exists");
+            assert_eq!(
+                failure["outcome"], "not_started",
+                "a failure before the destination appeared is not an unknown outcome"
+            );
+            assert!(
+                failure.get("publication").is_none(),
+                "publication facts belong to an unknown outcome only: {failure}"
+            );
+            // The refusal happened before publication, so the previous file is
+            // intact, no private temporary remains, and the reply still reports
+            // the committed transaction.
+            assert_eq!(std::fs::read(&removals).unwrap(), b"previous\n");
+            let leftovers: Vec<String> = std::fs::read_dir(&output)
+                .expect("read the directory")
+                .flatten()
+                .map(|entry| entry.file_name().to_string_lossy().into_owned())
+                .collect();
+            assert_eq!(leftovers, vec!["removals.jsonl".to_owned()], "no residue");
+            std::fs::remove_dir_all(&output).ok();
+            remove_live(&narrow);
+            remove_live(&target);
+            remove_live(&source);
+        }
+
+        #[test]
+        fn cleanup_stage_failure_reports_the_private_name_still_present() {
+            let output = directory("cleanup");
+            let removals = output.join("removals.jsonl");
+            let settings = removals_settings(&serde_json::json!({
+                "path": removals.display().to_string(),
+                "publication_policy": "replace_existing",
+                "result_budget": {
+                    "max_rows": "10",
+                    "max_output_bytes": "4096",
+                    "max_open_files": 1,
+                },
+            }))
+            .expect("valid removals settings");
+            let mut collector = RemovalCollector::new(settings, 84).expect("create the collector");
+            collector
+                .write_line("{\"feed\":\"coverage\"}")
+                .expect("write one removal row");
+            let error = collector.publication_failure(
+                std::io::Error::from_raw_os_error(libc::EACCES),
+                "remove removal temporary",
+                "created",
+                false,
+            );
+            assert_eq!((error.code, error.outcome), ("io", "outcome_unknown"));
+            let facts = error.details.expect("facts")["publication"].clone();
+            assert_eq!(facts["stage"], "remove removal temporary");
+            assert_eq!(facts["destination_visible"], true);
+            assert_eq!(facts["destination_content"], "created");
+            assert_eq!(facts["temporary_removed"], false);
+            assert_eq!(facts["publication_policy"], "replace_existing");
+            assert_eq!(facts["rows"], "1");
+            assert_eq!(facts["sha256"].as_str().map(str::len), Some(64));
+            assert!(
+                !removals.exists(),
+                "reporting must not create or touch the destination"
+            );
+            std::fs::remove_dir_all(&output).ok();
+        }
     }
 }
 
@@ -2288,5 +2582,120 @@ mod open_refusal_tests {
             message.contains("direct CSV input is not a regular file"),
             "unexpected refusal: {message}"
         );
+    }
+}
+
+/// Arm-level pin for the direct CSV input open.
+///
+/// The helper-level pin above proves that `open_direct_csv_file` refuses a
+/// standing FIFO; it cannot prove that `direct.replace` calls it, because
+/// replacing that call with a plain `File::open` keeps the pin green while
+/// reintroducing the wedge: a FIFO swapped into the path after
+/// `DirectCsvSource::open`'s own `fs::metadata()` check would block the request
+/// thread inside `open(2)` forever. This pin therefore drives the registered
+/// handler behind `iprange.v1.direct.replace` — the function the JSON-RPC
+/// dispatcher calls — while the CSV path is flipped between a regular file and a
+/// writerless FIFO. The fixture's first line is not the CSV header, so an arm
+/// that opened its input normally fails on the header instead of replacing the
+/// database it was pointed at.
+#[cfg(all(test, unix))]
+mod csv_open_caller_tests {
+    use crate::io::caller_open::pin_support::{self, RaceRule};
+    use crate::rpc::session::SessionState;
+    use iprange_livedb::{create_live, StructureKind, ValueKind, ValueTag};
+    use serde_json::json;
+    use std::path::{Path, PathBuf};
+
+    /// Attempts per pin; see the input-arm pin for how this count is sized
+    /// against the measured per-attempt hit rate.
+    const ATTEMPTS: usize = 200;
+    const CONCURRENCY: usize = 4;
+
+    /// One empty live IPv4 direct database to point `direct.replace` at. The
+    /// fixture never commits, so one database serves every attempt.
+    fn live_direct_target(label: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after the unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-csv-arm-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        create_live(
+            &path,
+            iprange_livedb::AddressFamily::Ipv4,
+            ValueKind::Direct,
+            StructureKind::None,
+            ValueTag::new(b"direct").unwrap(),
+            1,
+            &iprange_livedb::CancellationToken::new(),
+        )
+        .expect("create the live direct database for the CSV arm pin");
+        path
+    }
+
+    fn remove_live(path: &Path) {
+        let _ = std::fs::remove_file(path);
+        let mut sidecar = path.as_os_str().to_os_string();
+        sidecar.push(".readers");
+        let _ = std::fs::remove_file(PathBuf::from(sidecar));
+    }
+
+    #[test]
+    fn swapped_fifo_is_refused_by_the_direct_csv_arm() {
+        let target = live_direct_target("target");
+        let rule = RaceRule {
+            code: "invalid_path",
+            message: "direct CSV input is not a regular file",
+            other_accepted: &["direct CSV header must be exactly"],
+        };
+        let database = target.clone();
+        // One database serves every attempt, and a live database admits one
+        // writer at a time, so the attempts take turns on it. They never
+        // interfere otherwise: no attempt of this fixture gets far enough to
+        // change the database, because the raced file is not a CSV the
+        // workflow accepts.
+        let writer_turn = std::sync::Arc::new(std::sync::Mutex::new(()));
+        let content: &'static [u8] = b"bogus,not,a,header\n";
+        let arm = std::sync::Arc::new(move |input: PathBuf| {
+                let params = json!({
+                    "path": database.display().to_string(),
+                    "input": {
+                        "path": input.display().to_string(),
+                        "max_line_bytes": 1048576
+                    },
+                    "metadata": {"mode": "keep"},
+                    "writer_budget": {
+                        "max_heap_bytes": "2097152",
+                        "max_private_pages": "10000",
+                        "max_growth_pages": "10000",
+                        "max_open_files": 2
+                    }
+                });
+                super::validate_direct_replace(&params)
+                    .expect("the fixture params must satisfy the method schema");
+                let _turn = writer_turn.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let mut state = SessionState::default();
+                let answer = super::direct_replace(&mut state, params)
+                    .err()
+                    .map(|error| (error.code.to_owned(), error.message));
+                drop(_turn);
+                answer
+            });
+        pin_support::assert_control(
+            "direct CSV input",
+            &pin_support::control("csv-arm-control", content, &arm),
+        );
+        let report = pin_support::swap_race(
+            "csv-arm",
+            content,
+            &rule,
+            ATTEMPTS,
+            CONCURRENCY,
+            arm,
+        );
+        remove_live(&target);
+        pin_support::assert_race("direct CSV input", &report, ATTEMPTS);
     }
 }

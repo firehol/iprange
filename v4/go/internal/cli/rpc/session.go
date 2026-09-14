@@ -65,6 +65,7 @@ import (
 	"time"
 
 	iprangedb "github.com/firehol/iprange/v4/go"
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 )
 
 // sessionControl is the cancellation/shutdown control plane, locked
@@ -263,6 +264,13 @@ func (s *Session) Run(reader io.Reader, writer io.Writer) error {
 	// The graceful path runs concurrently; cooperative shutdown
 	// finishes in milliseconds, so the deadline only fires for
 	// uncooperative states.
+	// Installing the os/signal watcher is unconditional: on Linux the
+	// runtime wakes os/signal through a futex note rather than a
+	// self-pipe, so the watcher claims no descriptor and never reaches
+	// the network poller. Skipping it under a low RLIMIT_NOFILE would
+	// leave SIGTERM to the default disposition while the main loop was
+	// still waiting, which is the difference between terminating and
+	// ignoring the signal.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -956,6 +964,17 @@ func encodeRawResponseObject(raw json.RawMessage) (string, *SchemaError) {
 	return string(raw), nil
 }
 
+// requestDescriptorReserve is the number of free descriptors a request
+// needs before its handler runs. The session itself holds only the three
+// standard streams, so a table of six or more descriptors always leaves
+// this much headroom, and the probe changes no answer that the released
+// binaries produce at or above that limit. Below it, the handler would
+// run out of descriptors part-way through its work — and an open that
+// asks the runtime for the network poller aborts the process instead of
+// reporting an error — so the adapter answers the io class up front, the
+// same class Rust returns when the handler's first open yields EMFILE.
+const requestDescriptorReserve = 3
+
 // execute resolves, validates, and runs one request's handler.
 func execute(s *Session, request *Request) json.RawMessage {
 	validator, handler, ok := resolve(request.Method)
@@ -964,6 +983,17 @@ func execute(s *Session, request *Request) json.RawMessage {
 	}
 	if err := validator(request.Params); err != nil {
 		return ErrorResponse(request.ID, StdInvalidParams, err.Error(), nil)
+	}
+	// Refuse work the process cannot resource before the handler touches
+	// a descriptor: an exhausted descriptor table then answers the io
+	// class promptly, as Rust does by propagating the EMFILE of the
+	// handler's first open. Without the probe the same request can die
+	// inside the runtime, which has no failure path for a network poller
+	// it cannot create, and the caller never receives an answer.
+	if !calleropen.HasDescriptorReserve(requestDescriptorReserve) {
+		return ErrorResponse(request.ID, ProductError,
+			"too many open files: the process cannot claim a descriptor",
+			map[string]any{"code": "io", "outcome": "not_started"})
 	}
 	var result any
 	var herr *HandlerError

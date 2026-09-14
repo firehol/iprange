@@ -46,11 +46,13 @@ func RegularIdentity(f *os.File, directoryIdentity FileIdentity) (FileIdentity, 
 	return FileIdentity{device: uint64(st.Dev), inode: uint64(st.Ino)}, nil
 }
 
-// regularIdentityAnyLink captures the retained identity of one open
-// regular file without the single-link rule (Rust
-// retained_regular_identity(require_single_link = false); used by
-// identity_any_link).
-func regularIdentityAnyLink(f *os.File) (FileIdentity, error) {
+// retainedRegularIdentity captures the retained identity of one open
+// regular file, optionally requiring the single-link rule (Rust
+// publication::namespace::retained_regular_identity). Unlike
+// RegularIdentity it proves nothing about a parent directory handle, so
+// there is no cross-filesystem arm; the caller that holds a bound
+// directory uses RegularIdentity instead.
+func retainedRegularIdentity(f *os.File, requireSingleLink bool) (FileIdentity, error) {
 	var st unix.Stat_t
 	if err := unix.Fstat(int(f.Fd()), &st); err != nil {
 		return FileIdentity{}, nsPlainIoError("inspect retained file", err)
@@ -58,7 +60,18 @@ func regularIdentityAnyLink(f *os.File) (FileIdentity, error) {
 	if st.Mode&unix.S_IFMT != unix.S_IFREG {
 		return FileIdentity{}, nsNotRegularError()
 	}
+	if requireSingleLink && st.Nlink != 1 {
+		return FileIdentity{}, nsLinkCountError(uint64(st.Nlink))
+	}
 	return FileIdentity{device: uint64(st.Dev), inode: uint64(st.Ino)}, nil
+}
+
+// regularIdentityAnyLink captures the retained identity of one open
+// regular file without the single-link rule (Rust
+// retained_regular_identity(require_single_link = false); used by
+// identity_any_link).
+func regularIdentityAnyLink(f *os.File) (FileIdentity, error) {
+	return retainedRegularIdentity(f, false)
 }
 
 // RegularLinkCount reports the current link count of one open file

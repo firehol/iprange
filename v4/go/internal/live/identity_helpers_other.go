@@ -27,3 +27,7 @@ func RegularLinkCount(_ *os.File) (uint64, error) {
 func regularIdentityAnyLink(_ *os.File) (FileIdentity, error) {
 	return FileIdentity{}, nsUnsupportedError()
 }
+
+func retainedRegularIdentity(_ *os.File, _ bool) (FileIdentity, error) {
+	return FileIdentity{}, nsUnsupportedError()
+}

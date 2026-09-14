@@ -110,9 +110,13 @@ func decodeSnapshotBudget(object rawObject) (*iprangedb.SnapshotBudget, *rpc.Han
 	if err != nil {
 		return nil, rpc.InvalidParamsError("snapshot_budget.max_output_pages is invalid")
 	}
-	openFiles, err := asUint32(budget, "max_open_files")
+	// The converter repeats the validator's lower bound (Rust
+	// snapshot.rs positive_u32): API v1 budgets have no magic zero, so no
+	// caller can build a zero-open-file snapshot budget from an object
+	// that never passed the validator.
+	openFiles, err := asPositiveU32(budget, "max_open_files")
 	if err != nil {
-		return nil, rpc.InvalidParamsError("snapshot_budget.max_open_files must be a u32 integer")
+		return nil, rpc.InvalidParamsError("snapshot_budget.max_open_files must be a positive u32 integer")
 	}
 	return &iprangedb.SnapshotBudget{
 		MaxHeapBytes:   heap,

@@ -24,10 +24,8 @@ import (
 // The file must already extend at least size bytes: every Rust mapping
 // constructor proves the extent before mmap (require_file_extent), so
 // mapping past EOF returns a typed error instead of a later SIGBUS.
+// size 0 is a valid empty mapping, not a refusal (Rust map_nonempty).
 func MapFile(f *os.File, size uint64, rdwr bool) (*Mapping, error) {
-	if size == 0 {
-		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "mapping size is zero"}
-	}
 	if size > uint64(^uint(0)>>1) {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file larger than host address space"}
 	}
@@ -47,6 +45,14 @@ func MapFile(f *os.File, size uint64, rdwr bool) (*Mapping, error) {
 	prot := protRead
 	if rdwr {
 		prot |= protWrite
+	}
+	// A zero-length extent has no mapping at all (Rust mapping.rs
+	// map_nonempty returns Ok(None) for len 0 after require_file_extent
+	// has proved the extent). The Mapping keeps size 0, so every View or
+	// Page reports the unavailable state and a digest over it is the
+	// digest of no bytes.
+	if size == 0 {
+		return &Mapping{file: dup, prot: prot}, nil
 	}
 	data, err := mmapShared(dup, int(size), prot)
 	if err != nil {

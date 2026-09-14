@@ -11,7 +11,9 @@ package snapshot
 import (
 	"os"
 
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/live"
 	"golang.org/x/sys/unix"
 )
 
@@ -24,8 +26,18 @@ import (
 // deterministic non-regular destination (regular files ignore
 // O_NONBLOCK, so publication behavior is unchanged).
 func openDestinationNoFollow(path string) (*os.File, error) {
-	file, err := os.OpenFile(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	file, err := calleropen.Open(path, os.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
 	if err != nil {
+		// Rust open_regular_with_links classifies the open failure by
+		// its errno: the no-follow refusal of a final symlink is
+		// NotRegular (the same Conflict detail the opened-descriptor
+		// check gives), while any other failure — the ENXIO of an
+		// AF_UNIX socket, the ENOENT of a vanished name — propagates as
+		// the io class and the caller folds the absent case to "not a
+		// rejection".
+		if live.IsNofollowSymlink(err) {
+			return nil, &format.Error{Code: format.CodeConflict, Detail: "publication name is not a regular file"}
+		}
 		return nil, err
 	}
 	info, err := file.Stat()

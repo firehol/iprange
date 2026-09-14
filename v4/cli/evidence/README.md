@@ -1,3 +1,265 @@
+Current evidence regenerated at the wave-19.24 revision
+`91ae2a429380483010bc5e9ce46ac2dc776ec17d` (SOW-0028 "Wave 19 round
+19.24", 2026-09-14).  This head block is the present-state record of the
+CLI qualification surface: gates, corpus, evidence identity, toolchain
+and binary provenance.  Every product repair demanded by the eight-role
+review round at `91ae2a42` is contained in the same tree the battery
+built from; the battery then regenerated every report committed here
+against those integrated binaries.
+
+Battery outcome.  Every step of the Linux qualification battery
+(`/tmp/qualsvc/battery-w1924.sh`, run under `nice`) passed on its first
+attempt with rc 0 — builds, both unit suites, the GOOS cross-compilation
+matrix (15 steps ran, 1 skipped as unsupported by the toolchain), the
+four matrices, the crash battery and its two `/usr/bin/false` negatives,
+the resource and throughput proofs with their self-tests, golden,
+sensitivity, the refusal-class parity gate, the POSIX guard, the FIFO
+surface gate, the swap-race replays, `tests.d` for both engines, the
+ledger reconciliation, the kind gate on fresh and on committed reports,
+the forgery battery, and the coverage harness.  Unlike the wave-19.23
+round, no step needed a recheck; the `recheck-*` logs present in the
+battery reports directory are the kind gate's deliberate second pass
+against the rotated files, not repairs.  The race probes execute from
+their own scratch directories, so the battery creates no repository-root
+scratch (the wave-19.23 disclosure about `sc-iprange-*` directories at
+the checkout root is closed by that hygiene change).
+
+Matrices and corpus.  `v4/cli/cases/` holds 63 case files (was 49).
+Fourteen were added this wave, and their expectations are written from
+the staged Rust binary answers because Rust is the recorded authority
+for v4 semantics: seven budget objects from the JSON-RPC specification
+each take the seven `params.negative.budget_*` cases (`snapshot_budget`,
+`validation_budget`, `recovery_budget`, `algebra_budget`,
+`algebra_output_budget`, `result_budget`, `immutable_feed_budget`); each
+case sends the budgets of a real call with one `u32` member set to an
+out-of-range or wrong-typed value and asserts `expect_params_rejected`
+(transport `-32602`), pinning the refusal at the params boundary;
+twenty-five refused requests are asserted in total and each was verified
+refused by both engines.  `validation_budget` and `recovery_budget` omit
+zero for `max_scratch_files` because the specification gives zero a
+meaning there — disabled — so asserting a refusal would assert something
+the contract does not say
+(`.agents/sow/specs/iprange-jsonrpc-v1.md:241-246`).  The other seven
+cases pin refusal classes plus one success path:
+`writer.symlink_live_direct_replace` and `writer.symlink_live_feeds_create`
+(`wrong_state` for a writer aimed through a symlink at a live database),
+`snapshot.zero_byte_destination` (a zero-length destination under
+`replace_existing` succeeds with published bytes and no previous
+destination), `recovery.inspect_live_junk`
+(`live_recovery_current_generation_unprovable`), `recover.live_junk`
+(`recovery_candidate_changed`), `feeds.missing_feed_outcomes`
+(`name_not_found` with `read_only_failure`), and
+`validate.live_sidecar_fold` (`live_recovery_coordination_unavailable`).
+Committed results against the integrated binaries: `matrix-rust` 63 PASS
+/ 0 FAIL / 0 skipped (37 oracle checks); `matrix-go` 63 PASS / 0 FAIL /
+0 skipped (37 oracle checks); `matrix-rust_to_go` 34 PASS + 29 skipped
+(22 oracle checks); `matrix-go_to_rust` 34 PASS + 29 skipped (22 oracle
+checks).  The six Go failures that the mid-wave report declared in
+`known-defects.json` (8 entries) are fixed in this same tree; the ledger
+is committed empty, and the kind gate enforces it in both directions —
+an unlisted FAIL fails the gate, and a listed defect that passes fails
+it.  `check_golden.py` reports 55 golden exchanges PASS over the 63
+case files; `sensitivity_gate.py` reports 14 modes PASS.
+
+Refusal-class parity gate (committed).
+`v4/cli/check_refusal_class_parity.py` drives both binaries over a
+mechanically derived grid of 22 arms x 19 path kinds = 418 cells, each
+cell compared Go-vs-Rust on `(kind, transport code, data.code,
+outcome)`; message text is not compared because it is a human diagnostic
+and the machine contract is the code and outcome.  Every attempt runs
+under its own bounded deadline (4 s) and a differing repeat is retried
+(2 retries), so a flake is counted apart from a divergence and a hang
+apart from both.  Budget: 55 s per run; measured 29.2 s for the full
+grid on both engines.  `evidence/refusal-class-parity.json` carries each
+binary's SHA-256 and `system.describe` implementation label plus
+`git_head`.  The verdict is two-layer on purpose: the report must first
+describe its own execution honestly (cell count against the derived
+grid, every disagreeing cell named in the divergences list, no cell
+claiming agreement with differing answers), and the contract term is
+applied on top — zero divergences, no unanswered cell, no flaky cell,
+every pinned refusal satisfied.  Committed result at this revision:
+418/418 cells executed, 0 divergences, 0 hangs, 0 flaky, 29/29 pinned
+refusals satisfied, verdict PASS.  `--self-test` (26 cases, offline)
+includes the three anchors this gate exists to provide: an injected
+synthetic divergence must FAIL, a report with zero executed cells must
+FAIL, and deleting the fixture that pins the `validate.live`
+sidecar-fold shape (`live_recovery_coordination_unavailable`) must FAIL.
+The mid-wave 42-divergence state those product workers were created for
+is closed: the writer-symlink, recovery-order, feeds-outcome, zero-length,
+procfs/sysfs, and unix-socket classes all agree cell-for-cell now.
+
+Kind-coverage gate (hardened).  Its `--self-test` runs 59 controls
+offline; each records its outcome and the battery judges the run once at
+the end, so an assertion removed from a single helper cannot turn an
+accepted forgery into a passing self-test, and the control count is
+compared against an exact constant rather than a floor, so deleting a
+control fails instead of lowering the requirement.  The self-test is a
+deliberate opt-in invocation (a ruling this wave), and the battery runs
+it every time.  The known-defects ledger is consulted on every run, not
+only when a matrix reports failures, and its staleness control cannot be
+satisfied by the unrelated `undeclared or stale failed case(s)` counter.
+`git_head` is load-bearing: each of the seven consumed reports — four
+matrices, crash, FIFO-surface, throughput — must carry it as a 40-hex
+object id, placeholder shapes (`0`*40, `1`*40) and any disagreement
+between the seven are rejected, and omission of a required input is a
+CLI error.  PASS-row deletion is defended: the gate derives the expected
+executed-case inventory from `v4/cli/cases/*.json` plus the matrix skip
+rules and compares it against each report's rows, so a report that drops
+PASS rows, omits a case, invents one, or moves a row between status
+classes fails instead of passing on a smaller claim.  Committed kind-gate
+verdict on both the fresh battery reports and the rotated files in this
+directory: rc 0, every required artifact kind carries both-language
+created-by evidence (reader-sidecar kinds carry created-by only, which is
+their contract shape), no unknown kind.
+
+Evidence identity binding.  `throughput.json` and `fifo-surface.json`
+are validated the way the matrix and crash reports are: each executed
+actor's binary is identified by SHA-256 and by its `system.describe`
+implementation label bound to the executed-actor provenance (not to a
+free-text label), must appear in the staged SHASUMS ledger when one is
+supplied (`--sha256-ledger`), and its on-disk digest is re-hashed when
+binary verification is enabled.  Throughput additionally re-derives its
+own arithmetic: replies must equal requests in every round, the recorded
+rate must equal `requests/seconds` within 2%, the median must equal the
+median of the round rates, and the thread census must be internally
+consistent.  The crash battery reports 16 scenarios PASS in each mixed
+direction, and its two `/usr/bin/false` negative controls each record 0
+of 16 scenarios passing, proving a substituted non-product binary is
+detected.  The resource harness records 8/8 proofs PASS under bounded
+read and write deadlines, and the throughput attestation records go
+median 36,774.4 replies/s (rounds 36,774.4 / 37,636.9 / 33,999.3; thread
+census 13/10) and rust median 59,014.0 replies/s (rounds 59,014.0 /
+57,937.9 / 62,531.5; census 4/4) with its 12-case self-test.
+
+Coverage (measured, not asserted).  `evidence/coverage-go.json`, produced
+by `v4/cli/coverage_harness.py`, records unit and corpus-driven
+integration coverage of the Go module.  At this revision (instrumented
+build of the `91ae2a42` working tree, `go version go1.27.0
+linux/amd64`, covermode `atomic`): unit 27,271/57,160 statements =
+47.71%, 3,832/5,917 functions = 64.76%, 18,567/41,876 blocks = 44.34%;
+corpus-driven integration 21,698/53,741 = 40.38%, 3,378/5,705 = 59.21%,
+14,418/39,546 = 36.46%; merged 34,040/57,172 = 59.54%, 4,747/5,918 =
+80.21%, 22,980/41,883 = 54.87%.  The closure policy this serves is:
+committed detecting tests, a mutation/forgery battery that proves the
+gates reject bad evidence, and measured unit AND integration coverage —
+with no arbitrary numeric floor, because a percentage is an input to
+judgement and not the judgement.  Two separations are load-bearing and
+recorded in the artifact: the instrumented binaries are built in their
+own staging directory and are never the binaries used for the throughput
+or performance attestation, and killed runs (the crash battery kills its
+children, and a killed Go coverage binary writes no counter block) are
+never merged into the coverage evidence — only complete matrix runs
+contribute (each recorded matrix run shows `rc 0` or the contract's
+`rc 1` with all 34/0/29 tallies intact).  `run.py` forwards
+`GOCOVERDIR` to the child only because the harness sets it; the
+allowlist entry adds no child state to an ordinary qualification run.
+The harness self-test (14 cases) includes a source pin requiring every
+recorded `command` field to pass through the shared sanitizer, and the
+committed artifact records `v4/cli/run.py` checkout-relatively — no
+report in this directory records an operator home path.
+
+Unit suites.  `go test ./... -count=1` over `v4/go`: 24 packages ok, 8
+with no test files, 0 failures.  `cargo test` over the Rust workspace:
+961 tests passed across 52 suites, 0 failed, from a fresh
+`CARGO_TARGET_DIR`.  `tests.d` (the legacy-compatible suite, run against
+each staged engine): 102 of 102 tests pass for both engines, including
+the wave's new `102-legacy-fifo-input` case, which proves each of
+C, Rust and Go waits for a delayed FIFO producer, consumes its
+addresses, and finishes under a bounded `timeout` — the legacy stream
+input contract is preserved, and the regular-file requirements are
+scoped to the JSON-RPC surface (`.agents/sow/specs/iprange-jsonrpc-v1.md`
+"Legacy coexistence").  The never-block caller-path class was re-raced
+this wave on every arm (operations 30 attempts x 8 arms, parity
+120-trial input race, glm and performance swap probes): hangs=0,
+wedged=0 on both engines.
+
+Toolchain, staging, and binary identities.  Linux:
+`go version go1.27.0 linux/amd64`; `rustc 1.91.1 (ed61e7d7e 2025-11-07)`,
+host `x86_64-unknown-linux-gnu`, LLVM 21.1.2; harness interpreter
+CPython 3.14.7 on Linux 7.1.9-1-MANJARO x86_64.  The Go products were
+built `CGO_ENABLED=0 -trimpath -buildvcs=false` from a clean staging
+copy at `/tmp/iprange-w1924/go-stage`, so they embed neither local
+paths nor a VCS revision and their digests are layout-independent.  The
+Rust products were built `--release --all-features --bins --examples`
+from the fixed staging path `/tmp/iprange-w1924/rust-stage` with
+`CARGO_TARGET_DIR=/tmp/iprange-w1924/rust-target` and a repository-local
+`CARGO_HOME`, then copied to the qualification paths recorded in each
+report; the two non-worker Rust binaries embed those staging and
+registry source paths, so their digests are environment-bound artifacts
+that are reproducible only with that staging layout, while the Rust
+worker binary carries no such paths.  Linux identities (SHA-256):
+go `iprange` `eb0a373448bd2019d10da01af375d6170635f866ea37485af7041a1450076a02`,
+go worker `2754b144b2e485cadc92208aabb1a8df7a8fb0220ffea67922ec1f552ea18a1b`,
+rust `iprange` `b627a654a566874d0297ec6715983a2c8415bdddab6cf62a3a104c03e836916e`,
+rust worker `e72d7d4578cc47536bc4b36b4d1640be8e118c8bc3e03abac58149ca21f3979f`,
+v4-fixture `c9e4318133e98a132525c6996f6e0d227128ac1a6edb9f31422b24c59a7df099`.
+The staged ledger `.local/shared/binaries/SHASUMS.txt` lists 11 members
+(5 Linux, 6 Windows: `win/go/*.{2 exes}`, `win/rust/*.{2 exes}`,
+`win/v4-fixture.exe`, `win/fixture-w1924b.iprange`) and verified 11/11
+OK, including after the Windows artifacts below were rotated in.
+
+Windows status.  Native Windows re-qualification ran on the authorized
+Windows validation host from a bundle of HEAD
+`91ae2a429380483010bc5e9ce46ac2dc776ec17d` plus this wave's batch —
+bundle SHA-256 `51574a78cc2d435375a3c29b3139a6bbf31358415dd6daac7f00665ed6e062f7`
+(33,180,940 bytes, 2,453 entries) — which is the same merged source the
+Linux battery built, so the Linux and Windows evidence describe one
+revision.  Host toolchains: `go version go1.26.5 windows/amd64`;
+`rustc 1.97.1 (8bab26f4f 2026-07-14)` host `x86_64-pc-windows-msvc`,
+LLVM 22.1.6; CPython 3.14.6 (mingw64, `os.name=nt`).  Native
+`go test ./... -count=1`: 32 packages — 23 ok, 9 with no test files,
+0 failures — including `internal/cli/handlers`, the package that failed
+in the previous wave's `samefile_test.go` before the `.exe` worker-name
+and reader-close fixes.  Native `cargo test -p iprange-cli`: 334 unit
+tests and 1 integration test (`termination_signals`) passed, 0 failed,
+with the recorded worker-colocation step (copy the release
+`iprange-v4-worker.exe` into `target/debug/deps` after
+`cargo test --no-run`, which must create that directory first — without
+the colocation the six worker-dependent `live_source_tests` answer
+`os_unsupported` again, so any Windows gate command must carry the
+copy step).  The six `windows_judgment_tests` pass individually,
+including `directory_is_refused_as_not_regular` and
+`character_device_is_refused_as_not_regular` — the rewritten zero-access
+`CreateFileW` + `GetFileAttributesW` classifier is proven natively — and
+the two reordered reader-sidecar pins pass.  `windows-guard.json`: PASS
+for both products, 50 case keys each (44 refusals, 3 allowed controls,
+3 facts), `all_ok=true`, fixture digest matching the staged database.
+`windows-housekeeping.json`: 2 passed / 0 failed, `windows_qualified=true`,
+50 removal-output rows and 50 removal-log rows per product with a
+shared log digest `96c8ab39679692f3a70afe878681c5217adf75125164d36e9035cd989cb6d328`,
+cross-listing row equality, shared volume identity, zero temp residue.
+Each report embeds the four Windows product digests verified against the
+host builds — go `iprange.exe`
+`3a5769080efd3ac0ed92f08020bb556676c62697013af09ba0201037c3c91b1e`,
+go worker `434cba370c878c40cc320046058df91e0565efb4916591d10420763d055abe1b`,
+rust `iprange.exe` `3ac01741e4df325d86b65aaddcee78c093079414620c14afff46b1abd0dec929`,
+rust worker `03d102d46032738e3b1adbaea02dc3f99e884b8e4bbd7437f5516443204169f9`,
+fixture tool `4256977345d0eaef4b80f87003498dca16d703be518497e6acf92c95535a6789`,
+fixture database `67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40`
+— plus `build_provenance` with the host toolchain lines, the native
+test tallies, and the build commands.  Both reports are sanitized: no
+host login name, no personal home path (every drive path begins under
+the host's `C:/msys64/tmp/` scratch), and `checkout_root` is `null`.
+
+Which reports name which revision.  Sixteen measurement reports in this
+directory carry `git_head=91ae2a429380483010bc5e9ce46ac2dc776ec17d`:
+the four matrices, `crash.json`, `crash-negative.json`,
+`fifo-surface.json`, `throughput.json`, `refusal-class-parity.json`,
+`coverage-go.json`, `golden.json`, `sensitivity.json`, `resource.json`,
+`guard-posix.json`, `windows-guard.json`, and `windows-housekeeping.json`.
+The `absolute_upper` sidecar assertion that stopped the guard harness
+mid-wave is a product defect that was fixed in this tree; the POSIX guard
+now regenerates clean (`RESULT: PASS`, both products).
+`known-defects.json` is a ledger rather than a measurement and carries
+no revision field.  One disclosure about what `git_head` means in these
+reports: the harnesses stamp the HEAD commit the build ran from, and the
+battery ran at `91ae2a42` with this wave's integrated changes present as
+the working tree; the wave lands as a single commit, so the committed
+tree is exactly the tree the binaries were built from, and the stamp is
+one commit behind the file's own commit — the same limitation recorded
+by earlier waves and the reason the binaries are identified by SHA-256
+in the staged ledger, not by an embedded revision.
+
 Current evidence regenerated at the wave-19.23 final revision
 (SOW-0028 "Wave 19 round 19.23", 2026-09-14; product identities in
 the identity block below).  Wave 19.23 repairs the product defects
@@ -22,9 +284,9 @@ closure):
   `O_NONBLOCK` and judges the opened descriptor inside the open
   owner, refusing with the arm-exact class byte-identical to that
   arm's pre-check.  Go owners:
-  `v4/go/internal/cli/fileio/{opened_regular,input_open_unix,
-  csv_open_unix}.go` and `v4/go/internal/cli/handlers/
-  {opened_regular,metadata_open_unix}.go`; Rust: one owner
+  `v4/go/internal/cli/fileio/{opened_regular,input_open_unix}.go`,
+  `v4/go/internal/cli/handlers/{opened_regular,metadata_open_unix,csv_open_unix}.go`
+  (`csv_open_unix.go` is under `handlers/`, not `fileio/`); Rust: one owner
   `v4/rust/iprange-cli/src/io/caller_open.rs` covering the text
   input, `@file-list`, direct-CSV, and metadata arms.  Every swap
   race now answers promptly (hangs=0 on all race arms), strace
@@ -68,7 +330,9 @@ closure):
   carry both-language open evidence), every harness report carries
   `git_head`, and the known-defects ledger
   (`v4/cli/evidence/known-defects.json`) is enforced in both
-  directions and is currently empty.  The `schema/results.py`
+  directions.  It was reported empty here; at the wave-19.23 binaries the
+  Go matrix had 4 undeclared FAIL rows, so the empty-ledger claim did not
+  match the evidence.  See `## Declared engine defects`.  The `schema/results.py`
   `_self_test()` no longer raises, restoring the README claim that
   every `schema/` module ships a self-test.
 - Windows native re-qualification (portability F5, closure F4):
@@ -78,8 +342,12 @@ closure):
   3.14.6 mingw64); `GOOS=windows go vet ./...` is a committed gate
   in `check_goos_matrix.sh`; `samefile_test.go` was made
   Windows-safe (worker path gains the `.exe` suffix under
-  `runtime.GOOS`, pinned readers close before temp-dir cleanup) and
-  the native Windows Go suite runs green.
+  `runtime.GOOS`, pinned readers close before temp-dir cleanup).  The
+  claim made here that the native Windows Go suite ran green was wrong:
+  `windows-guard.json` in this directory records 3 `samefile_test.go`
+  failures in its `build_provenance.native_go_test`, and the battery built
+  from a `go-stage` copy that predated the committed fix.  See the
+  Windows status paragraph in this file's head block.
 
 Fresh identities (wave-19.23, Linux, measured from one clean
 battery): go product
@@ -1632,8 +1900,29 @@ Every report in this directory carries `git_head`: the commit OID of the
 reviewed product tree, from `git rev-parse HEAD` against the checkout that
 owns the harness that produced the report, or `null` when that tree is not
 a git checkout. It is what makes "this battery passed" a claim about a
-revision rather than a claim about prose in this file — re-running the same
-binaries against a different tree is visible in the evidence.
+revision rather than a claim about prose in this file.
+
+What the field is worth is set by what `check_kind_coverage.py` enforces
+over it, and that is now explicit rather than implied.  Each of the seven
+consumed reports — `matrix-rust`, `matrix-go`, `matrix-rust_to_go`,
+`matrix-go_to_rust`, `crash`, `fifo-surface`, `throughput` — must carry
+`git_head`; it must be a 40-character hexadecimal object id; the
+placeholder shapes `0`*40 and `1`*40 are rejected; and the seven values
+must name one and the same commit.  `--fifo-surface` and `--throughput`
+are required gate inputs, so a report set that quietly leaves them out is
+a CLI error rather than a narrower claim.  A reviewer demonstrated at the
+previous revision that all three of those attacks were accepted — an
+all-zeros object id, the field deleted, and the field desynced between
+reports — and each now has a committed `--self-test` control that FAILs
+the gate.
+
+The binding is against *mixing revisions*, not against a falsified field:
+`git_head` is written by the harness that produced the report, so an
+editor who rewrites it by hand can still write a well-shaped value.  What
+the enforcement buys is that a report copied forward from an older
+battery, or substituted from a different tree, cannot pass alongside
+reports from the current one, and that an empty or omitted report set
+cannot be presented as a passing battery.
 
 `git_head` is deliberately a separate member from `checkout_root`.
 `checkout_root` is the directory the gate resolves checkout-relative command
@@ -1646,19 +1935,23 @@ the binding that field provides.
 
 ## Files
 
-- `matrix-rust.json`, `matrix-go.json` — single-language matrices,
-  49 case files. Rust: 49 passed, 0 failed; oracle checks 37. Go:
-  45 passed, 4 failed — the four `params.negative.*` writer-budget
-  arms, declared in `known-defects.json` and recorded with their
-  request bytes rather than removed. See `## Declared engine
-  defects`.  Every PASS case entry carries the per-actor SHA-256,
-  the product-declared `implementation` (rust|go from
-  `system.describe`) and the executed-step count.
+- `matrix-rust.json`, `matrix-go.json` — single-language matrices over
+  the 63 committed case files. Rust: 63 passed, 0 failed. Go: 57 passed,
+  6 failed — the six cases whose expectations come from the Rust authority
+  while the corresponding Go fix is in flight, each declared in
+  `known-defects.json` with its observed reply rather than removed or
+  softened. See `## Declared engine defects`.  Every PASS case entry
+  carries the per-actor SHA-256, the product-declared `implementation`
+  (rust|go from `system.describe`) and the executed-step count, and the
+  gate re-derives the executed case set from `v4/cli/cases/*.json` plus
+  the matrix skip rules: rows cannot be deleted, invented, or moved
+  between status classes without failing the gate.
 - `matrix-rust_to_go.json`, `matrix-go_to_rust.json` — two-binary
-  cross-language matrices: 25 executed and 0 failed when the producer
-  is Rust (`rust_to_go`), 21 executed with the same four declared Go
-  failures when the producer is Go (`go_to_rust`), 24 skipped
-  (single-actor cases) in both directions, oracle checks 22.  The same per-actor identity is recorded for every
+  cross-language matrices over the same 63 cases: 34 executed and 0 failed
+  when the producer is Rust (`rust_to_go`), 32 executed with 2 declared
+  failures when the producer is Go (`go_to_rust`), 29 skipped in both
+  directions (cases that do not exercise both a producer and a consumer
+  role), oracle checks 22.  The same per-actor identity is recorded for every
   PASS case; `check_kind_coverage.py` derives language attribution
   exclusively from those executed identities (the top-level `matrix`
   label is only cross-checked, never trusted).
@@ -1751,7 +2044,18 @@ the binding that field provides.
   `replace_file` source on both `direct.replace` and
   `database.metadata.replace`, the direct CSV input, and the `@file` list)
   and `conflict` for a snapshot destination. This is the pin that keeps the
-  never-block open class from being only a prose claim.
+  never-block open class from being only a prose claim, over the JSON-RPC
+  session surface; the one-shot legacy argv surface deliberately keeps the
+  blocking behavior of the C reference (`../README.md`, "The never-block
+  contract is the session surface").  The report's executed actors are now
+  identity-bound like the matrix and crash reports: each binary is
+  identified by SHA-256 and by its `system.describe` implementation label
+  taken from the executed-actor provenance, the pair must be consistent with
+  the engine it claims to be, the digest must appear in the staged SHASUMS
+  ledger when `--sha256-ledger` is supplied, and the on-disk file is
+  re-hashed when binary verification is enabled.  A wrong digest, a missing
+  digest, a foreign implementation label, and a digest no actor in the run
+  actually executed are each rejected by a committed control.
 - `throughput.json` — `iprange-cli-throughput-report-v1`, produced by
   `throughput_harness.py`. Busy-reply `replies_per_s` for `system.describe`
   in 30-frame bursts (10,000 requests x 3 rounds, fresh child per round)
@@ -1760,7 +2064,50 @@ the binding that field provides.
   not host portable — so what the gate enforces is that every reply is
   served, the child exits cleanly, and the thread-creation count does not
   grow with the request count (measured: Go 16-17 clones and Rust 4, both
-  independent of request count).
+  independent of request count).  Committed medians at this revision: Go
+  35,464.7 and Rust 50,535.9 replies/s.  Those are host-load observations,
+  and the rate window starts at child spawn so it includes process start;
+  the same binaries produced Go 38,350.3 and Rust 62,524.5 under a quieter
+  host.  No Go/Rust ratio from these figures is evidence for the 1.3x
+  relative-rate contract planned for milestone 5, which needs a load-isolated
+  measurement protocol this harness does not implement.  The report is
+  identity-bound (binary SHA-256 plus the `system.describe` implementation
+  label of each executed actor, checked against the staged SHASUMS ledger when
+  supplied), and its arithmetic is re-derived by the gate: replies must equal
+  requests in every round, `replies_per_s` must equal `requests/seconds`, the
+  median must be the median of the recorded rounds, and the census must be
+  internally consistent.  A rate inflated to 9,999,999 over a fabricated
+  census, a median edited alone, a missing or wrong digest, and a foreign
+  implementation label are each rejected by a committed control.
+- `refusal-class-parity.json` —
+  `iprange-cli-refusal-class-parity-report-v1`, produced by
+  `check_refusal_class_parity.py`.  The Go-versus-Rust refusal comparison
+  over 19 arms x 17 path kinds = 323 cells, per cell on
+  `(kind, transport code, data.code, outcome)`, each attempt under its own
+  bounded deadline with retries so a flake or a hang is reported apart from
+  a divergence.  It records the grid it actually executed (the gate re-derives
+  it and fails on a missing or invented cell), the `MANDATORY_PATH_KINDS`
+  that a row deletion would otherwise remove silently, the
+  `PINNED_REFUSALS` table whose expectations come from the Rust authority,
+  the binary digests and `system.describe` implementation labels it drove,
+  and `git_head`.  Committed at this revision: 323 cells executed, 42
+  divergences, 0 hangs, 0 flaky, 15 of 23 pins satisfied, verdict FAIL — the
+  expected state while the product repairs land.  See the head block and
+  `../README.md`.
+- `coverage-go.json` — `iprange-cli-coverage-go-report-v1`, produced by
+  `coverage_harness.py`.  Measured Go coverage in three separable figures:
+  `unit` from the module's own `go test -cover`, `integration` from the
+  committed corpus executed against `go build -cover` binaries, and `merged`
+  from the two counter sets combined by `go tool covdata`.  Statements,
+  functions and blocks are recorded as raw counters plus percentages, per
+  package, and each figure is cross-checked against `go tool covdata percent`
+  — a package whose computed percentage disagrees with the tool is refused
+  rather than published.  The instrumented binaries and their own staging
+  directory are recorded so a reader can confirm they are not the
+  qualification or throughput binaries; killed runs are never merged.
+  Committed at this revision: unit 46.22% / 63.30% / 42.92%, integration
+  40.16% / 59.07% / 36.22%, merged 59.35% / 80.08% / 54.63% (statements /
+  functions / blocks) over 28 packages.
 - `golden.json`, `sensitivity.json` —
   `iprange-cli-golden-report-v1` and
   `iprange-cli-sensitivity-report-v1`. The golden-exchange and
@@ -1780,13 +2127,29 @@ the binding that field provides.
   PASSes fails the gate, so the ledger can neither be used to paint a red
   battery green nor left behind as a hiding place once the engine is
   fixed. An absent or empty ledger means the battery must be entirely
-  green. The four current entries are the `writer_budget.max_open_files=0`
-  refusals on `direct.replace`, `database.metadata.replace`,
-  `feeds.create`, and `database.reclaim`: the contract has no zero value
-  for that member, so the params validator must refuse it with `-32602`
-  before any work; Go accepts the value and refuses later with a product
-  error (`invalid_argument` / `insufficient_resource_budget`), which is a
-  different contract term.
+  green, and the check now runs on every gate invocation rather than only
+  when some matrix reports a failure — the earlier placement inside the
+  failure branch let a fabricated entry sit beside an all-PASS report
+  unnoticed.
+
+  The eight current entries are all owned by `go-engine`: six in `matrix-go`
+  (`writer.symlink_live_direct_replace`, `writer.symlink_live_feeds_create`,
+  `recovery.inspect_live_junk`, `recover.live_junk`,
+  `feeds.missing_feed_outcomes`, `snapshot.zero_byte_destination`) and the
+  two of those that also run in the `go_to_rust` direction
+  (`snapshot.zero_byte_destination`, `writer.symlink_live_direct_replace`).
+  Each records the reply the Go engine actually gives against the class the
+  Rust authority gives — `io` instead of `wrong_state` for a writer pointed
+  at a symlink to a live database, `format_invalid` instead of
+  `live_recovery_current_generation_unprovable` and
+  `recovery_candidate_changed` for the live recovery classify order,
+  `not_started` instead of `read_only_failure` for a missing feed, and a
+  refused rather than successful zero-length snapshot destination — together
+  with the resolution and the removal criterion.  Every one of them is
+  expected to disappear when the wave-19.24 product repairs land: a listed
+  case that PASSes fails the gate, so the ledger must be emptied in the same
+  integration that fixes the engine, and the gate names any entry left
+  behind.
 
 ## Gate invocation
 
@@ -1796,7 +2159,32 @@ nice python3 v4/cli/check_kind_coverage.py \
   --matrix v4/cli/evidence/matrix-go.json \
   --matrix v4/cli/evidence/matrix-rust_to_go.json \
   --matrix v4/cli/evidence/matrix-go_to_rust.json \
-  --crash v4/cli/evidence/crash.json
+  --crash v4/cli/evidence/crash.json \
+  --fifo-surface v4/cli/evidence/fifo-surface.json \
+  --throughput v4/cli/evidence/throughput.json \
+  --sha256-ledger /tmp/qualsvc/SHASUMS.txt
+
+# The two report arguments above are required: the gate errors out without
+# them, so a report set that omits either is not a passing battery.
+# --sha256-ledger is optional and, when given, binds every recorded binary
+# digest to the staged ledger.
+
+# Refusal-class parity (19 arms x 17 path kinds = 323 cells x 2 engines).
+nice python3 v4/cli/check_refusal_class_parity.py \
+  --go /tmp/qualsvc/bin/go/iprange --rust /tmp/qualsvc/bin/rust/iprange \
+  --fixture /tmp/qualsvc/bin/rust/v4-fixture \
+  --work "$(mktemp -d)" --json-report /tmp/refusal-class-parity.json
+nice python3 v4/cli/check_refusal_class_parity.py --self-test
+
+# Go unit + corpus-driven integration coverage.  --revision stages the
+# measured tree from a commit, which is what makes the measurement
+# reproducible while other workers edit the checkout; the instrumented
+# binaries it builds are never the qualification or throughput binaries.
+nice python3 v4/cli/coverage_harness.py --go-module v4/go \
+  --revision 91ae2a42 --rust /tmp/qualsvc/bin/rust/iprange \
+  --fixture-tool /tmp/qualsvc/bin/rust/v4-fixture \
+  --work "$(mktemp -d)" --json-report /tmp/coverage-go.json
+nice python3 v4/cli/coverage_harness.py --self-test
 
 # FIFO refusal surface (17 arms x 2 engines); --work must be empty.
 nice python3 v4/cli/check_fifo_surface.py \
@@ -1825,9 +2213,11 @@ rejects failed/leftover reports and unknown kinds, enforces the
 both-language creation (and, where any service opens the kind,
 both-language consumption) contract per kind from the executed-actor
 identities, and counts only PASS crash scenarios.  Its doctored-report
-self-test runs before the CLI and covers the clone-and-relabel attack
-(a `rust` report relabeled `go` fails), missing per-case actors, and
-implementations outside rust/go.
+self-test is opt-in (`--self-test`, run as its own step of the wave
+battery) so an in-flight evidence rotation cannot replace a CLI verdict
+with the self-test's own assertion.  That control battery covers the
+clone-and-relabel attack (a `rust` report relabeled `go` fails),
+missing per-case actors, and implementations outside rust/go.
 
 Every kind in `REQUIRED_OPENED_KINDS` must be opened by both languages in
 the **matrix** evidence specifically, which is what makes `adapter_output`

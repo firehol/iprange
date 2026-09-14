@@ -604,12 +604,12 @@ func immutableBudget(raw json.RawMessage) (iprangedb.ImmutableFeedBudget, *rpc.H
 	if herr != nil {
 		return iprangedb.ImmutableFeedBudget{}, herr
 	}
-	files, err := asUint64(budget, "max_open_files")
+	// The converter repeats the validator's lower bound (Rust publish.rs
+	// positive_u32), so a zero-open-file immutable-feed budget cannot
+	// reach the publisher from an unchecked object.
+	files, err := asPositiveU32(budget, "max_open_files")
 	if err != nil {
-		return iprangedb.ImmutableFeedBudget{}, rpc.InvalidParamsError("max_open_files must be u32")
-	}
-	if files > 0xffffffff {
-		return iprangedb.ImmutableFeedBudget{}, rpc.InvalidParamsError("max_open_files must be u32")
+		return iprangedb.ImmutableFeedBudget{}, rpc.InvalidParamsError("max_open_files must be a positive u32")
 	}
 	return iprangedb.ImmutableFeedBudget{
 		MaxHeapBytes:      maxHeap,

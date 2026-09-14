@@ -1223,6 +1223,32 @@ mod tests {
         assert_eq!(execute(&opts, &mut loaded), 0);
     }
 
+    /// The `-C` count of the whole IPv6 universe: 2^128 addresses do not fit
+    /// `u128`, and the released tool reports the saturated family maximum
+    /// (`echo '::/0' | iprange -6 -C` prints
+    /// `1,340282366920938463463374607431768211455`). Taking that count must
+    /// neither panic nor wrap.
+    #[test]
+    fn count_unique_of_the_full_ipv6_universe_reports_the_saturated_count() {
+        let mut opts = plain(&Options::default());
+        opts.family = Family::V6;
+        opts.mode = Mode::CountUnique;
+        let mut set = IpSet::<u128>::default();
+        set.add_range(Range {
+            lo: 0u128,
+            hi: u128::MAX,
+        });
+        let mut loaded = parse::LoadedAll {
+            sets: vec![Loaded {
+                name: "all".to_owned(),
+                set,
+            }],
+            group_b: 1,
+        };
+        assert_eq!(loaded.sets[0].set.unique, u128::MAX);
+        assert_eq!(execute(&opts, &mut loaded), 0);
+    }
+
     #[test]
     fn reduce_disables_prefixes_without_entries() {
         let opts = Options::default();

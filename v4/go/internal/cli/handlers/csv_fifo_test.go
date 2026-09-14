@@ -4,8 +4,8 @@ package handlers
 
 import (
 	"errors"
+	"os"
 	"testing"
-	"time"
 
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"golang.org/x/sys/unix"
@@ -20,18 +20,12 @@ func TestOpenDirectCsvFifoIsRefusedWithoutBlocking(t *testing.T) {
 	if err := unix.Mkfifo(path, 0o600); err != nil {
 		t.Fatalf("mkfifo: %v", err)
 	}
-	done := make(chan *rpc.HandlerError, 1)
-	go func() {
-		_, herr := openDirectCsv(path, 1<<20, false)
-		done <- herr
-	}()
-	select {
-	case herr := <-done:
-		if herr == nil || herr.Code != "invalid_path" {
-			t.Fatalf("openDirectCsv(fifo) = %+v, want invalid_path", herr)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("openDirectCsv blocked on the fifo")
+	var herr *rpc.HandlerError
+	runOpenedCall(t, "openDirectCsv(standing fifo)", func() {
+		_, herr = openDirectCsv(path, 1<<20, false)
+	})
+	if herr == nil || herr.Code != "invalid_path" {
+		t.Fatalf("openDirectCsv(fifo) = %+v, want invalid_path", herr)
 	}
 }
 
@@ -46,21 +40,16 @@ func TestOpenDirectCsvNoBlockRefusesOpenedFifo(t *testing.T) {
 	if err := unix.Mkfifo(path, 0o600); err != nil {
 		t.Fatalf("mkfifo: %v", err)
 	}
-	done := make(chan error, 1)
-	go func() {
-		file, err := openDirectCsvNoBlock(path)
+	var err error
+	runOpenedCall(t, "openDirectCsvNoBlock(fifo)", func() {
+		var file *os.File
+		file, err = openDirectCsvNoBlock(path)
 		if file != nil {
 			_ = file.Close()
 		}
-		done <- err
-	}()
-	select {
-	case err := <-done:
-		if !errors.Is(err, errOpenedNotRegular) {
-			t.Fatalf("openDirectCsvNoBlock(fifo) = %v, want %v", err, errOpenedNotRegular)
-		}
-	case <-time.After(5 * time.Second):
-		t.Fatal("openDirectCsvNoBlock blocked on the fifo")
+	})
+	if !errors.Is(err, errOpenedNotRegular) {
+		t.Fatalf("openDirectCsvNoBlock(fifo) = %v, want %v", err, errOpenedNotRegular)
 	}
 }
 
@@ -72,14 +61,26 @@ func TestOpenDirectCsvSwapClassMatchesStandingNode(t *testing.T) {
 	if err := unix.Mkfifo(path, 0o600); err != nil {
 		t.Fatalf("mkfifo: %v", err)
 	}
-	standing, herr := openDirectCsv(path, 1<<20, false)
+	var standing *directCsvSource
+	var herr *rpc.HandlerError
+	runOpenedCall(t, "openDirectCsv(standing fifo)", func() {
+		standing, herr = openDirectCsv(path, 1<<20, false)
+	})
 	if standing != nil {
 		t.Fatal("openDirectCsv returned a source with a refusal")
 	}
 	if herr == nil || herr.Code != "invalid_path" {
 		t.Fatalf("openDirectCsv(standing fifo) = %+v, want invalid_path", herr)
 	}
-	if _, err := openDirectCsvNoBlock(path); !errors.Is(err, errOpenedNotRegular) {
+	var err error
+	runOpenedCall(t, "openDirectCsvNoBlock(fifo)", func() {
+		var file *os.File
+		file, err = openDirectCsvNoBlock(path)
+		if file != nil {
+			_ = file.Close()
+		}
+	})
+	if !errors.Is(err, errOpenedNotRegular) {
 		t.Fatalf("openDirectCsvNoBlock(fifo) = %v, want %v", err, errOpenedNotRegular)
 	}
 	want := csvFailure("invalid_path", "direct CSV input is not a regular file: "+path)

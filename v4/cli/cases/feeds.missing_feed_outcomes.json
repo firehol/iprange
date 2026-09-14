@@ -1,0 +1,110 @@
+{
+ "fixtures": [
+  {
+   "path": "src.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 1
+   }
+  }
+ ],
+ "name": "feeds.missing_feed_outcomes",
+ "requires": "iprange.v1.feeds.delete",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "producer",
+   "expect_result": {
+    "address_family": "ipv4",
+    "commit_nonce": {
+     "$ignore": true
+    },
+    "database_id": {
+     "$ignore": true
+    },
+    "directory_identity": {
+     "$ignore": true
+    },
+    "housekeeping": {
+     "artifacts": []
+    },
+    "main_basename": "feeddb.iprange",
+    "main_identity": {
+     "$ignore": true
+    },
+    "reader_capacity": 8,
+    "residue_possible": false,
+    "sidecar_id": {
+     "$ignore": true
+    },
+    "sidecar_identity": {
+     "$ignore": true
+    },
+    "state": "created",
+    "structure_kind": "none",
+    "value_kind": "membership",
+    "value_tag": {
+     "hex": "6e6567746167"
+    },
+    "visible_housekeeping": []
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "family": "ipv4",
+    "path": "$WORK/feeddb.iprange",
+    "reader_capacity": 8,
+    "structure_kind": "none",
+    "value_kind": "membership",
+    "value_tag": {
+     "text": "negtag"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "name_not_found",
+    "outcome": "read_only_failure"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.feeds.delete",
+   "params": {
+    "feed": "nosuch",
+    "metadata": {
+     "mode": "keep"
+    },
+    "path": "$WORK/feeddb.iprange",
+    "writer_budget": {
+     "max_growth_pages": "20000",
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_private_pages": "20000"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "name_not_found",
+    "outcome": "read_only_failure"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.feeds.rename",
+   "params": {
+    "metadata": {
+     "mode": "keep"
+    },
+    "new_feed": "other",
+    "old_feed": "nosuch",
+    "path": "$WORK/feeddb.iprange",
+    "writer_budget": {
+     "max_growth_pages": "20000",
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_private_pages": "20000"
+    }
+   }
+  }
+ ]
+}

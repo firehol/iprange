@@ -1,0 +1,255 @@
+{
+ "fixtures": [
+  {
+   "path": "data.csv",
+   "source": {
+    "text": "from,to,value\n192.0.2.1,192.0.2.2,7\n198.51.100.4,198.51.100.4,9\n"
+   }
+  }
+ ],
+ "name": "params.negative.budget_algebra_output",
+ "requires": "iprange.v1.algebra.publish",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "producer",
+   "expect_result": {
+    "address_family": "ipv4",
+    "commit_nonce": {
+     "$ignore": true
+    },
+    "database_id": {
+     "$ignore": true
+    },
+    "directory_identity": {
+     "$ignore": true
+    },
+    "housekeeping": {
+     "artifacts": []
+    },
+    "main_basename": "budget.iprange",
+    "main_identity": {
+     "$ignore": true
+    },
+    "reader_capacity": 8,
+    "residue_possible": false,
+    "sidecar_id": {
+     "$ignore": true
+    },
+    "sidecar_identity": {
+     "$ignore": true
+    },
+    "state": "created",
+    "structure_kind": "none",
+    "value_kind": "direct",
+    "value_tag": {
+     "hex": "6e6567746167"
+    },
+    "visible_housekeeping": []
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "family": "ipv4",
+    "path": "$WORK/budget.iprange",
+    "reader_capacity": 8,
+    "structure_kind": "none",
+    "value_kind": "direct",
+    "value_tag": {
+     "text": "negtag"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "algebra_output_budget.max_open_files"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.algebra.publish",
+   "params": {
+    "algebra_budget": {
+     "max_heap_bytes": "1048576",
+     "max_sources": 1
+    },
+    "algebra_output_budget": {
+     "max_open_files": 0,
+     "max_output_pages": "20000"
+    },
+    "destination": "$WORK/budget-algebra.iprange",
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "algebra"
+    },
+    "operation": {
+     "kind": "union",
+     "selection": {
+      "mode": "all"
+     }
+    },
+    "output_mode": {
+     "feed": "merged",
+     "kind": "flat"
+    },
+    "publication_policy": "fail_if_exists",
+    "sources": [
+     {
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "source": {
+       "mode": "live",
+       "path": "$WORK/budget.iprange"
+      }
+     }
+    ],
+    "value_tag": {
+     "text": "negtag"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "algebra_output_budget.max_open_files"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.algebra.publish",
+   "params": {
+    "algebra_budget": {
+     "max_heap_bytes": "1048576",
+     "max_sources": 1
+    },
+    "algebra_output_budget": {
+     "max_open_files": "0",
+     "max_output_pages": "20000"
+    },
+    "destination": "$WORK/budget-algebra.iprange",
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "algebra"
+    },
+    "operation": {
+     "kind": "union",
+     "selection": {
+      "mode": "all"
+     }
+    },
+    "output_mode": {
+     "feed": "merged",
+     "kind": "flat"
+    },
+    "publication_policy": "fail_if_exists",
+    "sources": [
+     {
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "source": {
+       "mode": "live",
+       "path": "$WORK/budget.iprange"
+      }
+     }
+    ],
+    "value_tag": {
+     "text": "negtag"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "algebra_output_budget.max_open_files"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.algebra.publish",
+   "params": {
+    "algebra_budget": {
+     "max_heap_bytes": "1048576",
+     "max_sources": 1
+    },
+    "algebra_output_budget": {
+     "max_open_files": 4294967296,
+     "max_output_pages": "20000"
+    },
+    "destination": "$WORK/budget-algebra.iprange",
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "algebra"
+    },
+    "operation": {
+     "kind": "union",
+     "selection": {
+      "mode": "all"
+     }
+    },
+    "output_mode": {
+     "feed": "merged",
+     "kind": "flat"
+    },
+    "publication_policy": "fail_if_exists",
+    "sources": [
+     {
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "source": {
+       "mode": "live",
+       "path": "$WORK/budget.iprange"
+      }
+     }
+    ],
+    "value_tag": {
+     "text": "negtag"
+    }
+   }
+  },
+  {
+   "actor": "consumer",
+   "expect_result": {
+    "info": {
+     "active_feed_count": "0",
+     "address_family": "ipv4",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "meta_selection": {
+      "$ignore": true
+     },
+     "page_count": {
+      "$ignore": true
+     },
+     "range_record_count": "0",
+     "structure_kind": "none",
+     "transaction_id": {
+      "$ignore": true
+     },
+     "value_kind": "direct",
+     "value_tag": {
+      "$ignore": true
+     }
+    }
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.database.info",
+   "params": {
+    "source": {
+     "mode": "live",
+     "path": "$WORK/budget.iprange"
+    }
+   }
+  }
+ ]
+}

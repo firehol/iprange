@@ -275,6 +275,11 @@ def structural_problems(product, engines):
                                 f"{entry['exit_status']!r}")
         if not record.get("rounds"):
             problems.append(f"{label}: no rounds measured")
+        if record.get("implementation") != label:
+            problems.append(
+                f"{label}: records implementation {record.get('implementation')!r}; "
+                f"a census attributed to the wrong engine cannot attest to "
+                f"either")
         if record.get("median_replies_per_s", 0) <= 0:
             problems.append(f"{label}: median replies/s is not positive")
         structure = record.get("thread_structure")
@@ -358,6 +363,10 @@ def attestation(args):
         product[label] = {
             "path": sanitized_path_value(binary),
             "sha256": sha256_file(binary),
+            # The engine a census belongs to is part of its identity: a
+            # consumer that re-labels the Go run as rust must be contradicted
+            # by a measured artifact, not by this label alone.
+            "implementation": label,
             "rounds": rounds_result,
             "median_replies_per_s": median,
             "thread_structure": {
@@ -430,11 +439,16 @@ def _self_test():
                     "exit_status": 0}
 
         return {
-            "go": {"rounds": rounds(10000, 37500), "median_replies_per_s": 37500,
+            # The product-declared identity is part of the structural
+            # contract: a census attributed to the wrong engine attests to
+            # neither engine, so the genuine fixture must carry it.
+            "go": {"implementation": "go",
+                   "rounds": rounds(10000, 37500), "median_replies_per_s": 37500,
                    "thread_structure": {"tool": STRACE,
                                         "small": probe(3000, 4),
                                         "large": probe(6000, 4)}},
-            "rust": {"rounds": rounds(10000, 61000),
+            "rust": {"implementation": "rust",
+                     "rounds": rounds(10000, 61000),
                      "median_replies_per_s": 61000,
                      "thread_structure": {"tool": STRACE,
                                           "small": probe(3000, 4),
@@ -443,6 +457,20 @@ def _self_test():
 
     import copy
     cases = [("genuine attestation passes", good(), False)]
+
+    def drop_implementation(product):
+        del product["go"]["implementation"]
+        del product["rust"]["implementation"]
+        return product
+
+    def foreign_implementation(product):
+        product["go"]["implementation"] = "rust"
+        return product
+
+    cases.append(("implementation label deleted from both engines rejected",
+                  _mutate(good(), drop_implementation), True))
+    cases.append(("implementation label that contradicts the engine rejected",
+                  _mutate(good(), foreign_implementation), True))
 
     def per_reply(product):
         for key in ("unique_child_tids", "clone_syscalls"):

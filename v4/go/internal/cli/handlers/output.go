@@ -62,7 +62,7 @@ func MetadataOutput(path string, bytes []byte, policy iprangedb.PublicationPolic
 	}
 	sum := sha256.Sum256(bytes)
 	sha := HexBytes(sum[:])
-	if herr := publishMetadata(path, bytes, policy); herr != nil {
+	if herr := publishMetadata(path, bytes, policy, sha); herr != nil {
 		return nil, herr
 	}
 	return map[string]any{
@@ -73,7 +73,11 @@ func MetadataOutput(path string, bytes []byte, policy iprangedb.PublicationPolic
 	}, nil
 }
 
-func publishMetadata(path string, bytes []byte, policy iprangedb.PublicationPolicy) *rpc.HandlerError {
+// publishMetadata delivers one metadata blob through a private
+// temporary and an atomic publication step. Failures before the
+// destination name is visible are definite refusals; failures after it
+// are unknown durability of a delivered file.
+func publishMetadata(path string, bytes []byte, policy iprangedb.PublicationPolicy, sha string) *rpc.HandlerError {
 	parent := live.FileParent(path)
 	handle, herr := rpc.NewHandle()
 	if herr != nil {
@@ -84,23 +88,38 @@ func publishMetadata(path string, bytes []byte, policy iprangedb.PublicationPoli
 	if err != nil {
 		return outputFileError(err, "create metadata output")
 	}
-	if herr := writeAndPublishMetadata(file, temporary, path, bytes, policy); herr != nil {
-		_ = os.Remove(temporary)
+	if herr := writeAndPublishMetadata(file, temporary, path, bytes, policy, sha); herr != nil {
 		return herr
 	}
-	return syncOutputDirectory(parent)
+	// The destination name is visible with its complete content. Failing to
+	// synchronize the directory now leaves the durability of that namespace
+	// entry unproven, which is an unknown outcome and not a failure to have
+	// delivered: the destination must never be removed on this path.
+	if err := syncDirectoryRaw(parent); err != nil {
+		return metadataPublicationFailure(err, "sync metadata output directory",
+			path, bytes, policy, sha, true)
+	}
+	return nil
 }
 
-func writeAndPublishMetadata(file *os.File, temporary, destination string, bytes []byte, policy iprangedb.PublicationPolicy) *rpc.HandlerError {
+// writeAndPublishMetadata writes the private temporary, synchronizes it,
+// and moves it onto the destination. Every failure before the destination
+// name appears removes the private temporary and keeps the definite
+// read-only refusal class; every failure after it can only be the unknown
+// durability of a delivered file.
+func writeAndPublishMetadata(file *os.File, temporary, destination string, bytes []byte, policy iprangedb.PublicationPolicy, sha string) *rpc.HandlerError {
 	if _, err := file.Write(bytes); err != nil {
 		_ = file.Close()
+		_ = os.Remove(temporary)
 		return outputFileError(err, "write metadata output")
 	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
+		_ = os.Remove(temporary)
 		return outputFileError(err, "write metadata output")
 	}
 	if err := file.Close(); err != nil {
+		_ = os.Remove(temporary)
 		return outputFileError(err, "write metadata output")
 	}
 	switch policy {
@@ -108,34 +127,69 @@ func writeAndPublishMetadata(file *os.File, temporary, destination string, bytes
 		// A hard-link publication is the portable no-replacement atom:
 		// destination creation succeeds only while the name is absent.
 		if err := os.Link(temporary, destination); err != nil {
+			_ = os.Remove(temporary)
 			return outputFileError(err, "publish metadata output")
 		}
+		// The destination is published. Removing the private name is
+		// cleanup now, so its failure cannot be reported as a delivery
+		// failure; retry once and report what the namespace holds.
 		if err := os.Remove(temporary); err != nil {
-			return outputFileError(err, "remove metadata temporary")
+			temporaryRemoved := os.Remove(temporary) == nil
+			return metadataPublicationFailure(err, "remove metadata temporary",
+				destination, bytes, policy, sha, temporaryRemoved)
 		}
 	case iprangedb.PolicyReplaceExisting, iprangedb.PolicyReplaceExistingNoRollback:
 		// rename(2) and MoveFileExW(REPLACE_EXISTING) replace the
 		// destination atomically on both supported families.
 		if err := fileio.RenameReplace(temporary, destination); err != nil {
+			_ = os.Remove(temporary)
 			return outputFileError(err, "publish metadata output")
 		}
 	}
 	return nil
 }
 
-func syncOutputDirectory(parent string) *rpc.HandlerError {
+// metadataPublicationFailure is the adapter-owned publication failure
+// once the destination name is visible: the bytes are delivered and the
+// durability of the namespace entry is unproven, so the outcome is
+// `outcome_unknown` and the error carries the publication facts the
+// caller needs to judge the destination (the same factual model as the
+// export writer's publicationFailure).
+func metadataPublicationFailure(err error, stage, destination string, bytes []byte, policy iprangedb.PublicationPolicy, sha string, temporaryRemoved bool) *rpc.HandlerError {
+	return &rpc.HandlerError{
+		Code:    "io",
+		Outcome: "outcome_unknown",
+		Message: fmt.Sprintf("%s: %v", stage, err),
+		Details: map[string]any{
+			"publication": map[string]any{
+				"outcome":             "outcome_unknown",
+				"publication_policy":  fileio.PolicyName(policy),
+				"path":                destination,
+				"stage":               stage,
+				"destination_visible": true,
+				"temporary_removed":   temporaryRemoved,
+				"bytes":               fmt.Sprintf("%d", len(bytes)),
+				"rows":                "1",
+				"sha256":              sha,
+			},
+		},
+	}
+}
+
+// syncDirectoryRaw synchronizes one output directory. The no-op on
+// Windows is the platform's own durability rule for namespace entries;
+// callers decide the error class, because a failure once the destination
+// is visible is an unknown durability and not a definite refusal.
+func syncDirectoryRaw(parent string) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
 	dir, err := os.Open(parent)
 	if err != nil {
-		return outputFileError(err, "sync metadata output directory")
+		return err
 	}
 	defer dir.Close()
-	if err := dir.Sync(); err != nil {
-		return outputFileError(err, "sync metadata output directory")
-	}
-	return nil
+	return dir.Sync()
 }
 
 func outputFileError(err error, operation string) *rpc.HandlerError {

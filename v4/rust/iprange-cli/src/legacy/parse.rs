@@ -1207,6 +1207,99 @@ mod tests {
         }
     }
 
+    /// The released legacy surface reads its argv paths with a plain blocking
+    /// open, exactly as the C oracle's `fopen` does, so a FIFO whose writer
+    /// shows up later is a supported source. Routing this path through the
+    /// never-blocking open that the JSON-RPC arms use (`io::caller_open`) would
+    /// turn a valid delayed-producer invocation into a refusal, so this pin
+    /// fails if the legacy path ever stops waiting for the writer.
+    #[cfg(unix)]
+    #[test]
+    fn fifo_with_a_delayed_producer_loads_like_a_regular_file() {
+        use std::io::Write as _;
+        use std::os::unix::ffi::OsStrExt as _;
+        use std::sync::mpsc;
+        use std::thread;
+        use std::time::{Duration, Instant};
+
+        const PAYLOAD: &str = "1.2.3.4\n5.6.7.8\n";
+        const EXPECTED: [Range<F4>; 2] = [
+            Range {
+                lo: F4(0x01020304),
+                hi: F4(0x01020304),
+            },
+            Range {
+                lo: F4(0x05060708),
+                hi: F4(0x05060708),
+            },
+        ];
+
+        let temp = TempDir::new("fifo-delayed");
+        let fifo = temp.path.join("in.fifo");
+        let name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        assert_eq!(
+            unsafe { libc::mkfifo(name.as_ptr(), 0o600) },
+            0,
+            "mkfifo: {}",
+            std::io::Error::last_os_error()
+        );
+
+        // The writer opens the FIFO long after the loader started, which is
+        // what makes this a blocking-open test rather than an ordering test.
+        let writer_path = fifo.clone();
+        thread::Builder::new()
+            .name("iprange-legacy-fifo-writer".to_owned())
+            .spawn(move || {
+                thread::sleep(Duration::from_millis(150));
+                let mut file = std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&writer_path)
+                    .expect("open the fifo for writing");
+                file.write_all(PAYLOAD.as_bytes()).expect("write the fifo");
+                file.flush().expect("flush the fifo");
+                drop(file);
+            })
+            .expect("spawn the delayed fifo writer");
+
+        // The load runs off-thread with a bounded join so a regression that
+        // refuses the FIFO (or loses the writer and waits forever) fails this
+        // test instead of hanging the suite.
+        let (sender, receiver) = mpsc::channel();
+        let load_path = fifo.to_string_lossy().into_owned();
+        thread::Builder::new()
+            .name("iprange-legacy-fifo-loader".to_owned())
+            .spawn(move || {
+                let mut options = opts();
+                options.sources.push(path_spec(&load_path));
+                let answer = load_all_impl::<F4>(&options, &mut std::io::Cursor::new(Vec::new()))
+                    .map(|loaded| {
+                        loaded
+                            .sets
+                            .into_iter()
+                            .map(|entry| (entry.name, entry.set.ranges))
+                            .collect::<Vec<_>>()
+                    });
+                let _ = sender.send(answer);
+            })
+            .expect("spawn the fifo loader");
+        let started = Instant::now();
+        let loaded = receiver
+            .recv_timeout(Duration::from_secs(30))
+            .expect("the legacy loader must finish waiting for the delayed writer")
+            .expect("a fifo argv input with a delayed producer must load, not be refused");
+        assert!(
+            started.elapsed() >= Duration::from_millis(100),
+            "the loader returned before the producer wrote the fifo"
+        );
+        assert_eq!(loaded.len(), 1, "one fifo source loads one set");
+        assert_eq!(
+            loaded[0].0,
+            fifo.to_string_lossy(),
+            "named by the argv path"
+        );
+        assert_eq!(loaded[0].1, EXPECTED.to_vec(), "the fifo payload loaded");
+    }
+
     struct TempDir {
         path: std::path::PathBuf,
     }

@@ -1,0 +1,51 @@
+{
+ "fixtures": [
+  {
+   "path": "target.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 1
+   }
+  },
+  {
+   "path": "linked.iprange",
+   "source": {
+    "symlink_to": "target.iprange"
+   }
+  }
+ ],
+ "name": "writer.symlink_live_feeds_create",
+ "requires": "iprange.v1.feeds.create",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "wrong_state",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.feeds.create",
+   "params": {
+    "current": {
+     "feed": "alpha",
+     "source": {
+      "mode": "immutable",
+      "path": "$WORK/target.iprange"
+     }
+    },
+    "feed": "gamma",
+    "metadata": {
+     "mode": "keep"
+    },
+    "path": "$WORK/linked.iprange",
+    "writer_budget": {
+     "max_growth_pages": "20000",
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_private_pages": "20000"
+    }
+   }
+  }
+ ]
+}

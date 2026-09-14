@@ -1586,9 +1586,13 @@ func decodeOutputDescriptor(output rawObject) (string, iprangedb.PublicationPoli
 	if err != nil {
 		return "", 0, fileio.ExportBudget{}, rpc.InvalidParamsError("result_budget.max_output_bytes is invalid")
 	}
-	openFiles, err := asUint32(budgetObj, "max_open_files")
+	// The converter repeats the validator's lower bound (Rust
+	// maintenance.rs positive_u32 in validate_result_budget), so a
+	// zero-open-file result budget cannot reach the maintenance export
+	// from an unchecked object.
+	openFiles, err := asPositiveU32(budgetObj, "max_open_files")
 	if err != nil {
-		return "", 0, fileio.ExportBudget{}, rpc.InvalidParamsError("result_budget.max_open_files must be a u32 integer")
+		return "", 0, fileio.ExportBudget{}, rpc.InvalidParamsError("result_budget.max_open_files must be a positive u32 integer")
 	}
 	return path, policyByName(policyName), fileio.ExportBudget{MaxRows: maxRows, MaxOutputBytes: maxBytes, MaxOpenFiles: openFiles}, nil
 }

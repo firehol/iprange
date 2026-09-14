@@ -1799,3 +1799,135 @@ mod open_refusal_tests {
         );
     }
 }
+
+/// Arm-level pins for the two caller-path opens of this module.
+///
+/// The helper-level pins above prove that `open_input_file` and
+/// `open_file_list` refuse a standing FIFO; they cannot prove that the input
+/// arms call them, because replacing either call with a plain `File::open`
+/// keeps those pins green while reintroducing the wedge: a FIFO swapped into the
+/// path after the arm's own `metadata()`/`symlink_metadata()` check would block
+/// the request thread inside `open(2)` forever. Each pin below therefore drives
+/// the registered handler behind `iprange.v1.current.publish` — the function the
+/// JSON-RPC dispatcher calls — while the path is flipped between a regular file
+/// and a writerless FIFO.
+///
+/// The input pin repeats the caller path inside one request so a single attempt
+/// gets one pre-check/open coin per repetition; the file-list pin reads a list
+/// that yields no paths, so an arm that opened its list normally stops before
+/// any publication work.
+#[cfg(all(test, unix))]
+mod open_caller_tests {
+    use crate::io::caller_open::pin_support::{self, RaceRule};
+    use crate::rpc::handlers::publish;
+    use crate::rpc::session::SessionState;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    /// Coin-flips per attempt and the attempts each pin runs. One flip landing
+    /// between the arm's pre-check and its open is what a bare open cannot
+    /// survive; the measured per-visit hit rate on this host is recorded in the
+    /// wave report, and these counts leave a margin of many orders of magnitude
+    /// over the chance that every attempt misses.
+    const PATH_REPEATS: usize = 24;
+    const INPUT_ATTEMPTS: usize = 40;
+    const LIST_ATTEMPTS: usize = 200;
+    const CONCURRENCY: usize = 4;
+
+    fn publish_params(paths: Vec<String>, destination: &str) -> serde_json::Value {
+        json!({
+            "input": {
+                "paths": paths,
+                "family": "ipv4",
+                "fix_network": true,
+                "default_prefix": 32,
+                "dns": {"threads": 1, "silent": true},
+                "expand_at_paths": true,
+                "max_line_bytes": 1048576,
+                "max_expanded_paths": 100000
+            },
+            "feed": "feed-a",
+            "value_tag": {"hex": "aa"},
+            "metadata": {"mode": "clear"},
+            "destination": destination,
+            "publication_policy": "fail_if_exists",
+            "immutable_feed_budget": {
+                "max_heap_bytes": "2097152",
+                "max_output_pages": "10000",
+                "max_workspace_pages": "10000",
+                "max_open_files": 3
+            }
+        })
+    }
+
+    /// Drive one publish request whose input path is the raced file.
+    fn run(params: serde_json::Value) -> Option<(String, String)> {
+        publish::validate_current_publish(&params)
+            .expect("the fixture params must satisfy the method schema");
+        let mut state = SessionState::default();
+        publish::current_publish(&mut state, params)
+            .err()
+            .map(|error| (error.code.to_owned(), error.message))
+    }
+
+    #[test]
+    fn swapped_fifo_is_refused_by_the_input_arm() {
+        let rule = RaceRule {
+            code: "invalid_path",
+            message: "input is not a regular file",
+            other_accepted: &[],
+        };
+        let content: &'static [u8] = b"10.0.0.1\n";
+        let arm = std::sync::Arc::new(|input: PathBuf| {
+            let directory = input.parent().expect("scratch directory of the input");
+            let paths = vec![input.display().to_string(); PATH_REPEATS];
+            run(publish_params(
+                paths,
+                &directory.join("out.iprange").display().to_string(),
+            ))
+        });
+        pin_support::assert_control(
+            "text input",
+            &pin_support::control("input-arm-control", content, &arm),
+        );
+        let report = pin_support::swap_race(
+            "input-arm",
+            content,
+            &rule,
+            INPUT_ATTEMPTS,
+            CONCURRENCY,
+            arm,
+        );
+        pin_support::assert_race("text input", &report, INPUT_ATTEMPTS);
+    }
+
+    #[test]
+    fn swapped_fifo_is_refused_by_the_file_list_arm() {
+        let rule = RaceRule {
+            code: "invalid_path",
+            message: "file list is not a regular file",
+            other_accepted: &["file list contains no paths"],
+        };
+        let content: &'static [u8] = b"# a list with no paths\n";
+        let arm = std::sync::Arc::new(|list: PathBuf| {
+            let directory = list.parent().expect("scratch directory of the list");
+            run(publish_params(
+                vec![format!("@{}", list.display())],
+                &directory.join("out.iprange").display().to_string(),
+            ))
+        });
+        pin_support::assert_control(
+            "@-file-list",
+            &pin_support::control("file-list-arm-control", content, &arm),
+        );
+        let report = pin_support::swap_race(
+            "file-list-arm",
+            content,
+            &rule,
+            LIST_ATTEMPTS,
+            CONCURRENCY,
+            arm,
+        );
+        pin_support::assert_race("@-file-list", &report, LIST_ATTEMPTS);
+    }
+}

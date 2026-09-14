@@ -1226,9 +1226,24 @@ func runRefresh(st *rpc.SessionState, params json.RawMessage, lastSeen bool) (an
 		if durability == "committed" {
 			removals, perr := collector.publish()
 			if perr != nil {
+				// The database transaction committed and the auxiliary removal
+				// output is unresolved: both facts are reported. The transaction
+				// outcome owns the reply, and the publication facts (stage,
+				// digest, counts, visibility) travel with the failure that
+				// produced them.
+				failure := map[string]any{
+					"code":    perr.Code,
+					"outcome": perr.Outcome,
+					"message": perr.Message,
+				}
+				if facts, ok := perr.Details.(map[string]any); ok {
+					for name, fact := range facts {
+						failure[name] = fact
+					}
+				}
 				details := map[string]any{
 					"result":                       result,
-					"removals_publication_failure": map[string]any{"code": perr.Code, "message": perr.Message},
+					"removals_publication_failure": failure,
 				}
 				return nil, &rpc.HandlerError{Code: perr.Code, Outcome: "committed",
 					Message: "first-seen removals publication failed", Details: details}
@@ -1587,6 +1602,35 @@ func (c *removalCollector) discard() *rpc.HandlerError {
 	}
 }
 
+// publicationFailure maps a failure of the adapter-owned publication
+// of the removal output once the destination name is visible. The
+// refresh's database commit is unaffected (the caller reports it), but
+// the durability of this auxiliary output is unproven, so the outcome
+// is `outcome_unknown` and the error carries the publication facts the
+// caller needs to judge the file (the same model as the export
+// writer's publicationFailure).
+func (c *removalCollector) publicationFailure(err error, stage, destinationContent string, temporaryRemoved bool) *rpc.HandlerError {
+	return &rpc.HandlerError{
+		Code:    "io",
+		Outcome: "outcome_unknown",
+		Message: fmt.Sprintf("%s: %v", stage, err),
+		Details: map[string]any{
+			"publication": map[string]any{
+				"outcome":             "outcome_unknown",
+				"publication_policy":  fileio.PolicyName(c.policy),
+				"path":                c.destination,
+				"stage":               stage,
+				"destination_visible": true,
+				"destination_content": destinationContent,
+				"temporary_removed":   temporaryRemoved,
+				"rows":                fmt.Sprintf("%d", c.rows),
+				"bytes":               fmt.Sprintf("%d", c.bytes),
+				"sha256":              HexBytes(c.digest.Sum(nil)),
+			},
+		},
+	}
+}
+
 // publish flushes, syncs, atomically publishes, and syncs the
 // directory; the caller invokes it only after the commit is factually
 // known to have committed (Rust RemovalCollector::publish).
@@ -1600,10 +1644,10 @@ func (c *removalCollector) publish() (map[string]any, *rpc.HandlerError) {
 		// handle is still open.
 		_ = c.file.Close()
 		if derr := os.Remove(c.temporary); derr != nil && !errors.Is(derr, os.ErrNotExist) {
-			details := map[string]any{
-				"cleanup_failure": map[string]any{"error": derr.Error(), "path": c.temporary},
-			}
-			herr.Details = details
+			// The cleanup failure travels with the publication failure that
+			// produced it, never in place of its facts.
+			herr = mergeDetailsMember(herr, "cleanup_failure",
+				map[string]any{"error": derr.Error(), "path": c.temporary})
 		}
 		return nil, herr
 	}
@@ -1632,7 +1676,13 @@ func (c *removalCollector) publishInner() (map[string]any, *rpc.HandlerError) {
 			return nil, fileError(err, "publish removal output")
 		}
 		if err := os.Remove(c.temporary); err != nil {
-			return nil, fileError(err, "remove removal temporary")
+			// The removal rows are published from here on: removing the
+			// private name is cleanup, and its failure can only mean that
+			// the durability of the published entry is unproven. Retry once
+			// so the reported fact matches what the namespace holds.
+			temporaryRemoved := os.Remove(c.temporary) == nil
+			return nil, c.publicationFailure(err, "remove removal temporary",
+				destinationContent, temporaryRemoved)
 		}
 	case iprangedb.PolicyReplaceExisting, iprangedb.PolicyReplaceExistingNoRollback:
 		if err := fileio.RenameReplace(c.temporary, c.destination); err != nil {
@@ -1640,8 +1690,13 @@ func (c *removalCollector) publishInner() (map[string]any, *rpc.HandlerError) {
 		}
 	}
 	parent := live.FileParent(c.destination)
-	if herr := syncOutputDirectory(parent); herr != nil {
-		return nil, herr
+	// The destination holds the complete output; a directory-sync failure
+	// leaves that namespace entry's durability unproven. That is an
+	// unknown outcome about this auxiliary output, never a reason to
+	// touch it.
+	if err := syncDirectoryRaw(parent); err != nil {
+		return nil, c.publicationFailure(err, "sync removal output directory",
+			destinationContent, true)
 	}
 	return map[string]any{
 		"publication": removalPublicationFacts("published", destinationContent),

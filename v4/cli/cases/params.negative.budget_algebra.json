@@ -1,0 +1,195 @@
+{
+ "fixtures": [
+  {
+   "path": "data.csv",
+   "source": {
+    "text": "from,to,value\n192.0.2.1,192.0.2.2,7\n198.51.100.4,198.51.100.4,9\n"
+   }
+  }
+ ],
+ "name": "params.negative.budget_algebra",
+ "requires": "iprange.v1.algebra.count",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "producer",
+   "expect_result": {
+    "address_family": "ipv4",
+    "commit_nonce": {
+     "$ignore": true
+    },
+    "database_id": {
+     "$ignore": true
+    },
+    "directory_identity": {
+     "$ignore": true
+    },
+    "housekeeping": {
+     "artifacts": []
+    },
+    "main_basename": "budget.iprange",
+    "main_identity": {
+     "$ignore": true
+    },
+    "reader_capacity": 8,
+    "residue_possible": false,
+    "sidecar_id": {
+     "$ignore": true
+    },
+    "sidecar_identity": {
+     "$ignore": true
+    },
+    "state": "created",
+    "structure_kind": "none",
+    "value_kind": "direct",
+    "value_tag": {
+     "hex": "6e6567746167"
+    },
+    "visible_housekeeping": []
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "family": "ipv4",
+    "path": "$WORK/budget.iprange",
+    "reader_capacity": 8,
+    "structure_kind": "none",
+    "value_kind": "direct",
+    "value_tag": {
+     "text": "negtag"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "algebra_budget.max_sources"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.algebra.count",
+   "params": {
+    "algebra_budget": {
+     "max_heap_bytes": "1048576",
+     "max_sources": 0
+    },
+    "selection": {
+     "mode": "all"
+    },
+    "sources": [
+     {
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "source": {
+       "mode": "live",
+       "path": "$WORK/budget.iprange"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "algebra_budget.max_sources"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.algebra.count",
+   "params": {
+    "algebra_budget": {
+     "max_heap_bytes": "1048576",
+     "max_sources": "0"
+    },
+    "selection": {
+     "mode": "all"
+    },
+    "sources": [
+     {
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "source": {
+       "mode": "live",
+       "path": "$WORK/budget.iprange"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "algebra_budget.max_sources"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.algebra.count",
+   "params": {
+    "algebra_budget": {
+     "max_heap_bytes": "1048576",
+     "max_sources": 4294967296
+    },
+    "selection": {
+     "mode": "all"
+    },
+    "sources": [
+     {
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "source": {
+       "mode": "live",
+       "path": "$WORK/budget.iprange"
+      }
+     }
+    ]
+   }
+  },
+  {
+   "actor": "consumer",
+   "expect_result": {
+    "info": {
+     "active_feed_count": "0",
+     "address_family": "ipv4",
+     "commit_nonce": {
+      "$ignore": true
+     },
+     "database_id": {
+      "$ignore": true
+     },
+     "meta_selection": {
+      "$ignore": true
+     },
+     "page_count": {
+      "$ignore": true
+     },
+     "range_record_count": "0",
+     "structure_kind": "none",
+     "transaction_id": {
+      "$ignore": true
+     },
+     "value_kind": "direct",
+     "value_tag": {
+      "$ignore": true
+     }
+    }
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.database.info",
+   "params": {
+    "source": {
+     "mode": "live",
+     "path": "$WORK/budget.iprange"
+    }
+   }
+  }
+ ]
+}

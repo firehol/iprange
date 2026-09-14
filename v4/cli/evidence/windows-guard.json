@@ -2,46 +2,56 @@
   "all_ok": true,
   "build_provenance": {
     "build_commands": [
-      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1923/bin/go/iprange.exe ./cmd/iprange",
-      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1923/bin/go/iprange-v4-worker.exe ./cmd/iprange-v4-worker",
+      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1924b/bin/go/iprange.exe ./cmd/iprange",
+      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1924b/bin/go/iprange-v4-worker.exe ./cmd/iprange-v4-worker",
       "nice cargo build --manifest-path v4/rust/Cargo.toml --release --all-features --bins --examples",
-      "nice C:/msys64/tmp/qualsvc-w1923/bin/v4-fixture.exe direct-v4 C:/msys64/tmp/qualsvc-w1923/fixture-w1923.iprange"
+      "nice cargo build --manifest-path v4/rust/Cargo.toml --release -p iprange-livedb --bin iprange-v4-worker",
+      "cp v4/rust/target/release/iprange.exe v4/rust/target/release/iprange-v4-worker.exe C:/msys64/tmp/qualsvc-w1924b/bin/rust/",
+      "cp v4/rust/target/release/examples/v4-fixture.exe C:/msys64/tmp/qualsvc-w1924b/bin/v4-fixture.exe",
+      "nice C:/msys64/tmp/qualsvc-w1924b/bin/v4-fixture.exe direct-v4 C:/msys64/tmp/qualsvc-w1924b/fixture-w1924b.iprange",
+      "nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-run",
+      "cp v4/rust/target/release/iprange-v4-worker.exe v4/rust/target/debug/deps/iprange-v4-worker.exe",
+      "nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli"
     ],
-    "native_go_test": "go test ./... -count=1 compiles on Windows in this wave; 24 packages ok, 0 build failures; internal/cli/handlers has 3 samefile_test.go failures (worker built without .exe; TempDir cleanup Access-denied) that are test-harness Windows portability, not product regressions (samefile_test.go unchanged by the batch)",
-    "revision": "HEAD cfbee7887fb71de67df35ea913d6f7ae70c5c011 + wave-19.23 uncommitted working-tree batch (tree not clean)",
+    "native_cargo_test": "GREEN with the recorded worker-colocation step. 'nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli' returned rc=0 after 'cargo test --no-run' and copying target/release/iprange-v4-worker.exe beside the debug test executable in target/debug/deps (the step documented in iprange-cli/src/rpc/handlers/export.rs live_source_tests module docs; without it six live_source_tests answer os_unsupported 'SDK validation/recovery worker is unavailable', which that module states is an environment defect and not a product answer). Tally: 334 unit tests passed / 0 failed, plus 1 integration test (termination_signals) passed / 0 failed. All six io::caller_open::windows_judgment_tests pins passed natively: regular_handle_is_accepted, directory_is_refused_as_not_regular (the direct CreateFileW zero-access open with the GetFileAttributesW tie-break), character_device_is_refused_as_not_regular, symlinked_regular_input_is_accepted, missing_path_is_an_error_not_a_refusal, open_regular_returns_the_handle_of_a_regular_file. Both reordered reader pins passed: metadata_file_delivery_refuses_the_reader_sidecar and metadata_file_delivery_refuses_the_reader_renamed_sidecar (they release the reader before the post-check sidecar read, so Windows ERROR_LOCK_VIOLATION on the held coordination file no longer tests the lock instead of the refusal).",
+    "native_go_test": "GREEN. 'nice go test ./... -count=1' in v4/go on the native Windows host returned rc=0: 32 packages, 23 ok, 9 with no test files, 0 failing packages. The two wave-19.23/wave-19.24a Windows portability failures are resolved by moving the POSIX permission-mode triggers to //go:build unix siblings (publication_durability_parent_unwritable_unix_test.go, writer_symlink_class_unix_test.go); the platform-neutral survivors (the symlinked-live wrong_state arm, the loop-to-EOF/cap pins, the split samefile worker seam) run natively on Windows, and internal/cli/handlers passes.",
+    "revision": "HEAD 91ae2a429380483010bc5e9ce46ac2dc776ec17d + wave-19.24 (final) uncommitted working-tree batch (tree not clean)",
     "source_bundle": {
-      "bundle_sha256": "f219e5fb3d9b6e2db7d436268228e20c35ef2e57bdde6f84317751478454089e",
-      "provenance": "working-tree snapshot of HEAD cfbee788 plus the wave-19.23 uncommitted batch; transferred as a tar.gz (rsync unavailable on the host)"
+      "bundle_sha256": "51574a78cc2d435375a3c29b3139a6bbf31358415dd6daac7f00665ed6e062f7",
+      "provenance": "working-tree snapshot of HEAD 91ae2a42 plus the wave-19.24 (final) uncommitted batch, packed with tar --no-recursion over 'git ls-files -co --exclude-standard' plus .git and transferred as a tar.gz (rsync and scp/sftp are unavailable on the host); the extracted checkout reports the same OID from git rev-parse --verify HEAD"
     },
     "toolchain": {
       "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
       "date": "2026-09-14",
-      "go": "go1.26.5 windows/amd64",
-      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) host x86_64-pc-windows-msvc"
+      "go": "go version go1.26.5 windows/amd64",
+      "host_triple": "x86_64-pc-windows-msvc",
+      "python": "CPython 3.14.6 mingw64 (os.name=nt, sys.platform=win32, platform Windows 11 AMD64); the cygwin /usr/bin/python3 was not used",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) host x86_64-pc-windows-msvc, LLVM version 22.1.6"
     },
-    "tree_clean": false
+    "tree_clean": false,
+    "wave": "19.24"
   },
   "checkout_root": null,
   "fixture": {
-    "mtime": 1789371367.2370424,
-    "path": "C:/msys64/tmp/qualsvc-w1923/fixture-w1923.iprange",
-    "sha256": "1e4a316e445a3db003ae483e1cd9f98f37819274ca3ab5999f16e3f827dc0a8f",
+    "mtime": 1789388690.3713317,
+    "path": "C:/msys64/tmp/qualsvc-w1924b/fixture-w1924b.iprange",
+    "sha256": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
     "size": 16384
   },
-  "git_head": "cfbee7887fb71de67df35ea913d6f7ae70c5c011",
+  "git_head": "91ae2a429380483010bc5e9ce46ac2dc776ec17d",
   "platform": "windows",
   "products": {
     "go": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789371169.4876287,
-        "path": "C:/msys64/tmp/qualsvc-w1923/bin/go/iprange.exe",
-        "sha256": "45f388b2238e91482b75d58f63a40d6b76b5cf9bb9c1d4db9272c2cadfaf4026",
-        "size": 14042624
+        "mtime": 1789388617.3482583,
+        "path": "C:/msys64/tmp/qualsvc-w1924b/bin/go/iprange.exe",
+        "sha256": "3a5769080efd3ac0ed92f08020bb556676c62697013af09ba0201037c3c91b1e",
+        "size": 14060544
       },
       "cases": {
         "absolute_trailing_dot": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -50,7 +60,7 @@
           "refused": true
         },
         "absolute_trailing_space": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -59,7 +69,7 @@
           "refused": true
         },
         "absolute_upper": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\DB.IPRANGE.READERS",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\DB.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -68,7 +78,7 @@
           "refused": true
         },
         "control_allowed": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\meta.txt",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\meta.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -104,7 +114,7 @@
           "refused": false
         },
         "globalroot_device_sidecar": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -113,7 +123,7 @@
           "refused": true
         },
         "globalroot_dos_lower_trailing_dot": {
-          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -122,7 +132,7 @@
           "refused": true
         },
         "globalroot_dos_lower_trailing_space": {
-          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -131,7 +141,7 @@
           "refused": true
         },
         "globalroot_dos_trailing_dot": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -140,7 +150,7 @@
           "refused": true
         },
         "globalroot_dos_trailing_space": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -149,7 +159,7 @@
           "refused": true
         },
         "globalroot_lower_trailing_dot": {
-          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -158,7 +168,7 @@
           "refused": true
         },
         "globalroot_lower_trailing_space": {
-          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -167,7 +177,7 @@
           "refused": true
         },
         "globalroot_objectmgr_lower_trailing_dot": {
-          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -176,7 +186,7 @@
           "refused": true
         },
         "globalroot_objectmgr_lower_trailing_space": {
-          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -185,7 +195,7 @@
           "refused": true
         },
         "globalroot_objectmgr_trailing_dot": {
-          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -194,7 +204,7 @@
           "refused": true
         },
         "globalroot_objectmgr_trailing_space": {
-          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -203,7 +213,7 @@
           "refused": true
         },
         "globalroot_sidecar": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -212,7 +222,7 @@
           "refused": true
         },
         "globalroot_trailing_dot": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -221,7 +231,7 @@
           "refused": true
         },
         "globalroot_trailing_space": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -230,7 +240,7 @@
           "refused": true
         },
         "non_ascii": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\DB_\u00c4.IPRANGE.READERS",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\DB_\u00c4.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -239,7 +249,7 @@
           "refused": true
         },
         "nt_namespace_sidecar": {
-          "destination": "\\??\\C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\??\\C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -248,7 +258,7 @@
           "refused": true
         },
         "nt_unc_loopback_sidecar": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -257,7 +267,7 @@
           "refused": true
         },
         "nt_unc_lower_trailing_dot": {
-          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -266,7 +276,7 @@
           "refused": true
         },
         "nt_unc_lower_trailing_space": {
-          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -275,7 +285,7 @@
           "refused": true
         },
         "nt_unc_trailing_dot": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -284,7 +294,7 @@
           "refused": true
         },
         "nt_unc_trailing_space": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -293,7 +303,7 @@
           "refused": true
         },
         "ntfs_final_sigma": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\A\u03c21.iprange.readers",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\A\u03c21.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -302,7 +312,7 @@
           "refused": true
         },
         "ntfs_sigma": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\A\u03c31.iprange.readers",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\A\u03c31.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -311,7 +321,7 @@
           "refused": true
         },
         "relative_source_control_allowed": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\meta-rel.txt",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\meta-rel.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -320,7 +330,7 @@
           "refused": false
         },
         "relative_source_unc_loopback_sidecar": {
-          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -330,7 +340,7 @@
         },
         "reopen_allowed": true,
         "rooted_sidecar": {
-          "destination": "\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -341,7 +351,7 @@
         "sidecar_absent_after": true,
         "source_unchanged": true,
         "unc_loopback_ip_sidecar": {
-          "destination": "\\\\127.0.0.1\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\127.0.0.1\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -350,7 +360,7 @@
           "refused": true
         },
         "unc_loopback_sidecar": {
-          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -359,7 +369,7 @@
           "refused": true
         },
         "verbatim_fwd_sidecar": {
-          "destination": "\\\\?\\C:/msys64/tmp/qualsvc-w1923/guardwork/go/db.iprange.readers",
+          "destination": "\\\\?\\C:/msys64/tmp/qualsvc-w1924b/guardwork/go/db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -368,7 +378,7 @@
           "refused": true
         },
         "verbatim_sidecar": {
-          "destination": "\\\\?\\C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\?\\C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -377,7 +387,7 @@
           "refused": true
         },
         "verbatim_unc_loopback_sidecar": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -386,7 +396,7 @@
           "refused": true
         },
         "verbatim_unc_lower_trailing_dot": {
-          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -395,7 +405,7 @@
           "refused": true
         },
         "verbatim_unc_lower_trailing_space": {
-          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -404,7 +414,7 @@
           "refused": true
         },
         "verbatim_unc_trailing_dot": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -413,7 +423,7 @@
           "refused": true
         },
         "verbatim_unc_trailing_space": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -422,7 +432,7 @@
           "refused": true
         },
         "volume_guid_lower_trailing_dot": {
-          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -431,7 +441,7 @@
           "refused": true
         },
         "volume_guid_lower_trailing_space": {
-          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -440,7 +450,7 @@
           "refused": true
         },
         "volume_guid_sidecar": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -449,7 +459,7 @@
           "refused": true
         },
         "volume_guid_trailing_dot": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -458,7 +468,7 @@
           "refused": true
         },
         "volume_guid_trailing_space": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -469,16 +479,16 @@
       },
       "implementation": "go",
       "sources_before": {
-        "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\A\u03a31.iprange": {
-          "sha256_before": "1e4a316e445a3db003ae483e1cd9f98f37819274ca3ab5999f16e3f827dc0a8f",
+        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\A\u03a31.iprange": {
+          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
           "sidecar_absent_before": true
         },
-        "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db.iprange": {
-          "sha256_before": "1e4a316e445a3db003ae483e1cd9f98f37819274ca3ab5999f16e3f827dc0a8f",
+        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange": {
+          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
           "sidecar_absent_before": true
         },
-        "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\go\\db_\u00e4.iprange": {
-          "sha256_before": "1e4a316e445a3db003ae483e1cd9f98f37819274ca3ab5999f16e3f827dc0a8f",
+        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db_\u00e4.iprange": {
+          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
           "sidecar_absent_before": true
         }
       }
@@ -486,14 +496,14 @@
     "rust": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789371366.8098128,
-        "path": "C:/msys64/tmp/qualsvc-w1923/bin/rust/iprange.exe",
-        "sha256": "69962ed19fa836cb6d3d8d087e79fa24dbeeea69d98e7e47c52db6e01cd71933",
-        "size": 6242304
+        "mtime": 1789388689.9940367,
+        "path": "C:/msys64/tmp/qualsvc-w1924b/bin/rust/iprange.exe",
+        "sha256": "3ac01741e4df325d86b65aaddcee78c093079414620c14afff46b1abd0dec929",
+        "size": 6266368
       },
       "cases": {
         "absolute_trailing_dot": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -502,7 +512,7 @@
           "refused": true
         },
         "absolute_trailing_space": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -511,7 +521,7 @@
           "refused": true
         },
         "absolute_upper": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\DB.IPRANGE.READERS",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\DB.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -520,7 +530,7 @@
           "refused": true
         },
         "control_allowed": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\meta.txt",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\meta.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -556,7 +566,7 @@
           "refused": false
         },
         "globalroot_device_sidecar": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -565,7 +575,7 @@
           "refused": true
         },
         "globalroot_dos_lower_trailing_dot": {
-          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -574,7 +584,7 @@
           "refused": true
         },
         "globalroot_dos_lower_trailing_space": {
-          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -583,7 +593,7 @@
           "refused": true
         },
         "globalroot_dos_trailing_dot": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -592,7 +602,7 @@
           "refused": true
         },
         "globalroot_dos_trailing_space": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -601,7 +611,7 @@
           "refused": true
         },
         "globalroot_lower_trailing_dot": {
-          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -610,7 +620,7 @@
           "refused": true
         },
         "globalroot_lower_trailing_space": {
-          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -619,7 +629,7 @@
           "refused": true
         },
         "globalroot_objectmgr_lower_trailing_dot": {
-          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -628,7 +638,7 @@
           "refused": true
         },
         "globalroot_objectmgr_lower_trailing_space": {
-          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -637,7 +647,7 @@
           "refused": true
         },
         "globalroot_objectmgr_trailing_dot": {
-          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -646,7 +656,7 @@
           "refused": true
         },
         "globalroot_objectmgr_trailing_space": {
-          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -655,7 +665,7 @@
           "refused": true
         },
         "globalroot_sidecar": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -664,7 +674,7 @@
           "refused": true
         },
         "globalroot_trailing_dot": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -673,7 +683,7 @@
           "refused": true
         },
         "globalroot_trailing_space": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -682,7 +692,7 @@
           "refused": true
         },
         "non_ascii": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\DB_\u00c4.IPRANGE.READERS",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\DB_\u00c4.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -691,7 +701,7 @@
           "refused": true
         },
         "nt_namespace_sidecar": {
-          "destination": "\\??\\C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\??\\C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -700,7 +710,7 @@
           "refused": true
         },
         "nt_unc_loopback_sidecar": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -709,7 +719,7 @@
           "refused": true
         },
         "nt_unc_lower_trailing_dot": {
-          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -718,7 +728,7 @@
           "refused": true
         },
         "nt_unc_lower_trailing_space": {
-          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -727,7 +737,7 @@
           "refused": true
         },
         "nt_unc_trailing_dot": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -736,7 +746,7 @@
           "refused": true
         },
         "nt_unc_trailing_space": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -745,7 +755,7 @@
           "refused": true
         },
         "ntfs_final_sigma": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\A\u03c21.iprange.readers",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\A\u03c21.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -754,7 +764,7 @@
           "refused": true
         },
         "ntfs_sigma": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\A\u03c31.iprange.readers",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\A\u03c31.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -763,7 +773,7 @@
           "refused": true
         },
         "relative_source_control_allowed": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\meta-rel.txt",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\meta-rel.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -772,7 +782,7 @@
           "refused": false
         },
         "relative_source_unc_loopback_sidecar": {
-          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -782,7 +792,7 @@
         },
         "reopen_allowed": true,
         "rooted_sidecar": {
-          "destination": "\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -793,7 +803,7 @@
         "sidecar_absent_after": true,
         "source_unchanged": true,
         "unc_loopback_ip_sidecar": {
-          "destination": "\\\\127.0.0.1\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\127.0.0.1\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -802,7 +812,7 @@
           "refused": true
         },
         "unc_loopback_sidecar": {
-          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -811,7 +821,7 @@
           "refused": true
         },
         "verbatim_fwd_sidecar": {
-          "destination": "\\\\?\\C:/msys64/tmp/qualsvc-w1923/guardwork/rust/db.iprange.readers",
+          "destination": "\\\\?\\C:/msys64/tmp/qualsvc-w1924b/guardwork/rust/db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -820,7 +830,7 @@
           "refused": true
         },
         "verbatim_sidecar": {
-          "destination": "\\\\?\\C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\?\\C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -829,7 +839,7 @@
           "refused": true
         },
         "verbatim_unc_loopback_sidecar": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -838,7 +848,7 @@
           "refused": true
         },
         "verbatim_unc_lower_trailing_dot": {
-          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -847,7 +857,7 @@
           "refused": true
         },
         "verbatim_unc_lower_trailing_space": {
-          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -856,7 +866,7 @@
           "refused": true
         },
         "verbatim_unc_trailing_dot": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -865,7 +875,7 @@
           "refused": true
         },
         "verbatim_unc_trailing_space": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -874,7 +884,7 @@
           "refused": true
         },
         "volume_guid_lower_trailing_dot": {
-          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -883,7 +893,7 @@
           "refused": true
         },
         "volume_guid_lower_trailing_space": {
-          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -892,7 +902,7 @@
           "refused": true
         },
         "volume_guid_sidecar": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -901,7 +911,7 @@
           "refused": true
         },
         "volume_guid_trailing_dot": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -910,7 +920,7 @@
           "refused": true
         },
         "volume_guid_trailing_space": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -921,16 +931,16 @@
       },
       "implementation": "rust",
       "sources_before": {
-        "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\A\u03a31.iprange": {
-          "sha256_before": "1e4a316e445a3db003ae483e1cd9f98f37819274ca3ab5999f16e3f827dc0a8f",
+        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\A\u03a31.iprange": {
+          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
           "sidecar_absent_before": true
         },
-        "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db.iprange": {
-          "sha256_before": "1e4a316e445a3db003ae483e1cd9f98f37819274ca3ab5999f16e3f827dc0a8f",
+        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange": {
+          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
           "sidecar_absent_before": true
         },
-        "C:\\msys64\\tmp\\qualsvc-w1923\\guardwork\\rust\\db_\u00e4.iprange": {
-          "sha256_before": "1e4a316e445a3db003ae483e1cd9f98f37819274ca3ab5999f16e3f827dc0a8f",
+        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db_\u00e4.iprange": {
+          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
           "sidecar_absent_before": true
         }
       }
@@ -938,24 +948,34 @@
   },
   "provenance": {
     "build_commands": [
-      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1923/bin/go/iprange.exe ./cmd/iprange",
-      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1923/bin/go/iprange-v4-worker.exe ./cmd/iprange-v4-worker",
+      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1924b/bin/go/iprange.exe ./cmd/iprange",
+      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1924b/bin/go/iprange-v4-worker.exe ./cmd/iprange-v4-worker",
       "nice cargo build --manifest-path v4/rust/Cargo.toml --release --all-features --bins --examples",
-      "nice C:/msys64/tmp/qualsvc-w1923/bin/v4-fixture.exe direct-v4 C:/msys64/tmp/qualsvc-w1923/fixture-w1923.iprange"
+      "nice cargo build --manifest-path v4/rust/Cargo.toml --release -p iprange-livedb --bin iprange-v4-worker",
+      "cp v4/rust/target/release/iprange.exe v4/rust/target/release/iprange-v4-worker.exe C:/msys64/tmp/qualsvc-w1924b/bin/rust/",
+      "cp v4/rust/target/release/examples/v4-fixture.exe C:/msys64/tmp/qualsvc-w1924b/bin/v4-fixture.exe",
+      "nice C:/msys64/tmp/qualsvc-w1924b/bin/v4-fixture.exe direct-v4 C:/msys64/tmp/qualsvc-w1924b/fixture-w1924b.iprange",
+      "nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-run",
+      "cp v4/rust/target/release/iprange-v4-worker.exe v4/rust/target/debug/deps/iprange-v4-worker.exe",
+      "nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli"
     ],
-    "native_go_test": "go test ./... -count=1 compiles on Windows in this wave; 24 packages ok, 0 build failures; internal/cli/handlers has 3 samefile_test.go failures (worker built without .exe; TempDir cleanup Access-denied) that are test-harness Windows portability, not product regressions (samefile_test.go unchanged by the batch)",
-    "revision": "HEAD cfbee7887fb71de67df35ea913d6f7ae70c5c011 + wave-19.23 uncommitted working-tree batch (tree not clean)",
+    "native_cargo_test": "GREEN with the recorded worker-colocation step. 'nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli' returned rc=0 after 'cargo test --no-run' and copying target/release/iprange-v4-worker.exe beside the debug test executable in target/debug/deps (the step documented in iprange-cli/src/rpc/handlers/export.rs live_source_tests module docs; without it six live_source_tests answer os_unsupported 'SDK validation/recovery worker is unavailable', which that module states is an environment defect and not a product answer). Tally: 334 unit tests passed / 0 failed, plus 1 integration test (termination_signals) passed / 0 failed. All six io::caller_open::windows_judgment_tests pins passed natively: regular_handle_is_accepted, directory_is_refused_as_not_regular (the direct CreateFileW zero-access open with the GetFileAttributesW tie-break), character_device_is_refused_as_not_regular, symlinked_regular_input_is_accepted, missing_path_is_an_error_not_a_refusal, open_regular_returns_the_handle_of_a_regular_file. Both reordered reader pins passed: metadata_file_delivery_refuses_the_reader_sidecar and metadata_file_delivery_refuses_the_reader_renamed_sidecar (they release the reader before the post-check sidecar read, so Windows ERROR_LOCK_VIOLATION on the held coordination file no longer tests the lock instead of the refusal).",
+    "native_go_test": "GREEN. 'nice go test ./... -count=1' in v4/go on the native Windows host returned rc=0: 32 packages, 23 ok, 9 with no test files, 0 failing packages. The two wave-19.23/wave-19.24a Windows portability failures are resolved by moving the POSIX permission-mode triggers to //go:build unix siblings (publication_durability_parent_unwritable_unix_test.go, writer_symlink_class_unix_test.go); the platform-neutral survivors (the symlinked-live wrong_state arm, the loop-to-EOF/cap pins, the split samefile worker seam) run natively on Windows, and internal/cli/handlers passes.",
+    "revision": "HEAD 91ae2a429380483010bc5e9ce46ac2dc776ec17d + wave-19.24 (final) uncommitted working-tree batch (tree not clean)",
     "source_bundle": {
-      "bundle_sha256": "f219e5fb3d9b6e2db7d436268228e20c35ef2e57bdde6f84317751478454089e",
-      "provenance": "working-tree snapshot of HEAD cfbee788 plus the wave-19.23 uncommitted batch; transferred as a tar.gz (rsync unavailable on the host)"
+      "bundle_sha256": "51574a78cc2d435375a3c29b3139a6bbf31358415dd6daac7f00665ed6e062f7",
+      "provenance": "working-tree snapshot of HEAD 91ae2a42 plus the wave-19.24 (final) uncommitted batch, packed with tar --no-recursion over 'git ls-files -co --exclude-standard' plus .git and transferred as a tar.gz (rsync and scp/sftp are unavailable on the host); the extracted checkout reports the same OID from git rev-parse --verify HEAD"
     },
     "toolchain": {
       "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
       "date": "2026-09-14",
-      "go": "go1.26.5 windows/amd64",
-      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) host x86_64-pc-windows-msvc"
+      "go": "go version go1.26.5 windows/amd64",
+      "host_triple": "x86_64-pc-windows-msvc",
+      "python": "CPython 3.14.6 mingw64 (os.name=nt, sys.platform=win32, platform Windows 11 AMD64); the cygwin /usr/bin/python3 was not used",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) host x86_64-pc-windows-msvc, LLVM version 22.1.6"
     },
-    "tree_clean": false
+    "tree_clean": false,
+    "wave": "19.24"
   },
   "schema": "iprange-cli-windows-guard-report-v1"
 }

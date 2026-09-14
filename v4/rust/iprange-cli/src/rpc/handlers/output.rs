@@ -623,7 +623,7 @@ pub fn metadata_output(
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect::<String>();
-    publish(path, bytes, policy)?;
+    publish(path, bytes, policy, &sha256)?;
     // OUTPUT_FACTS is one generic schema for every file result. A metadata
     // delivery publishes exactly one opaque blob, so its row count is "1";
     // `bytes` remains the exact byte count, not an encoded length.
@@ -635,7 +635,12 @@ pub fn metadata_output(
     }))
 }
 
-fn publish(path: &Path, bytes: &[u8], policy: PublicationPolicy) -> Result<(), HandlerError> {
+fn publish(
+    path: &Path,
+    bytes: &[u8],
+    policy: PublicationPolicy,
+    sha256: &str,
+) -> Result<(), HandlerError> {
     let parent = path
         .parent()
         .filter(|value| !value.as_os_str().is_empty())
@@ -647,48 +652,119 @@ fn publish(path: &Path, bytes: &[u8], policy: PublicationPolicy) -> Result<(), H
         .create_new(true)
         .open(&temporary)
         .map_err(|error| file_error(error, "create metadata output"))?;
-    if let Err(error) = write_and_publish(file, &temporary, path, bytes, policy) {
-        let _ = fs::remove_file(&temporary);
-        return Err(error);
-    }
-    sync_directory(parent)
+    write_and_publish(file, &temporary, path, bytes, policy, sha256)?;
+    // The destination name is visible with its complete content. Failing to
+    // synchronize the directory now leaves the durability of that namespace
+    // entry unproven, which is an unknown outcome and not a failure to have
+    // delivered: the destination must never be removed on this path.
+    sync_directory(parent).map_err(|error| {
+        publication_failure(
+            error,
+            "sync metadata output directory",
+            path,
+            bytes,
+            policy,
+            sha256,
+            true,
+        )
+    })
 }
 
+/// Write the private temporary, synchronize it, and move it onto the
+/// destination. Every failure before the destination name appears removes the
+/// private temporary and keeps the read-only `not_started`-class answer; every
+/// failure after it can only be an unknown durability of a delivered file.
 fn write_and_publish(
     mut file: File,
     temporary: &Path,
     destination: &Path,
     bytes: &[u8],
     policy: PublicationPolicy,
+    sha256: &str,
 ) -> Result<(), HandlerError> {
     file.write_all(bytes)
         .and_then(|()| file.sync_all())
-        .map_err(|error| file_error(error, "write metadata output"))?;
+        .map_err(|error| {
+            let failure = file_error(error, "write metadata output");
+            let _ = fs::remove_file(temporary);
+            failure
+        })?;
     match policy {
         PublicationPolicy::FailIfExists => {
             // A hard-link publication is the portable no-replacement atom:
             // destination creation succeeds only while the name is absent.
-            fs::hard_link(temporary, destination)
-                .map_err(|error| file_error(error, "publish metadata output"))?;
-            fs::remove_file(temporary)
-                .map_err(|error| file_error(error, "remove metadata temporary"))?;
+            if let Err(error) = fs::hard_link(temporary, destination) {
+                let failure = file_error(error, "publish metadata output");
+                let _ = fs::remove_file(temporary);
+                return Err(failure);
+            }
+            // The destination is published. Removing the private name is
+            // cleanup now, so its failure cannot be reported as a delivery
+            // failure; retry once and report what the namespace holds.
+            if let Err(error) = fs::remove_file(temporary) {
+                let temporary_removed = fs::remove_file(temporary).is_ok();
+                return Err(publication_failure(
+                    error,
+                    "remove metadata temporary",
+                    destination,
+                    bytes,
+                    policy,
+                    sha256,
+                    temporary_removed,
+                ));
+            }
         }
         PublicationPolicy::ReplaceExisting | PublicationPolicy::ReplaceExistingNoRollback => {
             // Rust's rename maps to rename(2) and MoveFileExW(REPLACE_EXISTING),
             // so both supported platforms replace the destination atomically.
-            fs::rename(temporary, destination)
-                .map_err(|error| file_error(error, "publish metadata output"))?;
+            if let Err(error) = fs::rename(temporary, destination) {
+                let failure = file_error(error, "publish metadata output");
+                let _ = fs::remove_file(temporary);
+                return Err(failure);
+            }
         }
     }
     Ok(())
 }
 
-fn sync_directory(parent: &Path) -> Result<(), HandlerError> {
+/// Failure of the adapter-owned publication of metadata output after the
+/// destination name is visible: the bytes are delivered, the durability of the
+/// namespace entry is unproven, so the outcome is `outcome_unknown` and the
+/// error carries the publication facts the caller needs to judge the
+/// destination. Same model as the export writer's `publication_failure`.
+fn publication_failure(
+    error: std::io::Error,
+    stage: &str,
+    destination: &Path,
+    bytes: &[u8],
+    policy: PublicationPolicy,
+    sha256: &str,
+    temporary_removed: bool,
+) -> HandlerError {
+    HandlerError {
+        code: "io",
+        outcome: "outcome_unknown",
+        message: format!("{stage}: {error}"),
+        details: Some(json!({
+            "publication": {
+                "outcome": "outcome_unknown",
+                "publication_policy": crate::io::export_writer::policy_name(policy),
+                "path": destination.to_string_lossy(),
+                "stage": stage,
+                "destination_visible": true,
+                "temporary_removed": temporary_removed,
+                "bytes": bytes.len().to_string(),
+                "rows": "1",
+                "sha256": sha256,
+            }
+        })),
+    }
+}
+
+fn sync_directory(parent: &Path) -> std::io::Result<()> {
     #[cfg(unix)]
     {
-        File::open(parent)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|error| file_error(error, "sync metadata output directory"))?;
+        File::open(parent)?.sync_all()?;
     }
     #[cfg(not(unix))]
     let _ = parent;
@@ -1678,3 +1754,148 @@ mod tests {
         assert_eq!((error.code, error.outcome), ("invalid_argument", "not_started"));
         let _ = fs::remove_dir_all(&dir);
     }
+
+/// Post-visibility durability semantics of metadata delivery.
+///
+/// The pins mirror the export writer's `post_commit_sync_tests`: once the
+/// destination name exists with the complete metadata, only crash durability of
+/// the namespace entry is unproven, so the answer is `io` + `outcome_unknown`
+/// with the publication facts, and the delivered file is never removed. The
+/// trigger is a parent directory that is writable and searchable but not
+/// readable (mode 0311), which lets every publication step succeed and makes
+/// `open(2)` of the directory fail.
+#[cfg(all(test, unix))]
+mod metadata_publication_tests {
+    use super::{metadata_output, PublicationPolicy};
+    use sha2::{Digest as _, Sha256};
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt as _;
+    use std::path::{Path, PathBuf};
+
+    const CONTENT: &[u8] = b"tenant-a\n";
+
+    fn directory(label: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after the unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-metadata-output-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        fs::create_dir(&path).expect("create the delivery directory");
+        path
+    }
+
+    fn set_mode(path: &Path, mode: u32) {
+        fs::set_permissions(path, fs::Permissions::from_mode(mode))
+            .expect("set the directory mode");
+    }
+
+    fn deliver(destination: &Path, policy: PublicationPolicy) -> Result<(), super::HandlerError> {
+        metadata_output(destination, CONTENT, policy, 1024, 1).map(|_| ())
+    }
+
+    fn expected_digest() -> String {
+        Sha256::digest(CONTENT)
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect()
+    }
+
+    #[test]
+    fn unresolved_directory_sync_after_delivery_is_outcome_unknown() {
+        let directory = directory("sync");
+        let destination = directory.join("metadata.json");
+        set_mode(&directory, 0o311);
+        let error = deliver(&destination, PublicationPolicy::FailIfExists)
+            .expect_err("synchronizing an unreadable directory must fail");
+        set_mode(&directory, 0o700);
+        assert_eq!(
+            (error.code, error.outcome),
+            ("io", "outcome_unknown"),
+            "a post-delivery durability failure must not claim a definite outcome"
+        );
+        let facts = error
+            .details
+            .as_ref()
+            .expect("the failure must carry publication facts")
+            .get("publication")
+            .expect("publication facts")
+            .clone();
+        assert_eq!(facts["stage"], "sync metadata output directory");
+        assert_eq!(facts["outcome"], "outcome_unknown");
+        assert_eq!(facts["publication_policy"], "fail_if_exists");
+        assert_eq!(facts["destination_visible"], true);
+        assert_eq!(facts["temporary_removed"], true);
+        assert_eq!(facts["path"], destination.to_string_lossy().as_ref());
+        assert_eq!(facts["bytes"], CONTENT.len().to_string().as_str());
+        assert_eq!(facts["rows"], "1");
+        assert_eq!(facts["sha256"], expected_digest().as_str());
+        assert_eq!(
+            fs::read(&destination).expect("the delivered metadata must survive"),
+            CONTENT
+        );
+        let leftovers: Vec<String> = fs::read_dir(&directory)
+            .expect("read the directory")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(leftovers, vec!["metadata.json".to_owned()], "no residue");
+        fs::remove_dir_all(&directory).expect("clean the delivery directory");
+    }
+
+    #[test]
+    fn failure_before_the_destination_exists_is_a_definite_refusal() {
+        let directory = directory("pre");
+        let destination = directory.join("metadata.json");
+        set_mode(&directory, 0o500);
+        let error = deliver(&destination, PublicationPolicy::FailIfExists)
+            .expect_err("an unwritable parent must refuse the delivery");
+        set_mode(&directory, 0o700);
+        assert_eq!((error.code, error.outcome), ("io", "read_only_failure"));
+        assert!(!destination.exists());
+        fs::remove_dir_all(&directory).expect("clean the delivery directory");
+    }
+
+    #[test]
+    fn fail_if_exists_collision_keeps_the_previous_file() {
+        let directory = directory("collision");
+        let destination = directory.join("metadata.json");
+        fs::write(&destination, b"previous\n").expect("write the previous destination");
+        let error = deliver(&destination, PublicationPolicy::FailIfExists)
+            .expect_err("fail_if_exists must refuse an existing destination");
+        assert_eq!(
+            (error.code, error.outcome),
+            ("name_exists", "read_only_failure")
+        );
+        assert_eq!(fs::read(&destination).unwrap(), b"previous\n");
+        fs::remove_dir_all(&directory).expect("clean the delivery directory");
+    }
+
+    #[test]
+    fn cleanup_stage_failure_reports_the_private_name_still_present() {
+        let directory = directory("cleanup");
+        let destination = directory.join("metadata.json");
+        let error = super::publication_failure(
+            std::io::Error::from_raw_os_error(libc::EACCES),
+            "remove metadata temporary",
+            &destination,
+            CONTENT,
+            PublicationPolicy::FailIfExists,
+            &expected_digest(),
+            false,
+        );
+        assert_eq!((error.code, error.outcome), ("io", "outcome_unknown"));
+        let facts = error.details.expect("facts")["publication"].clone();
+        assert_eq!(facts["stage"], "remove metadata temporary");
+        assert_eq!(facts["destination_visible"], true);
+        assert_eq!(facts["temporary_removed"], false);
+        assert_eq!(facts["sha256"], expected_digest().as_str());
+        assert!(
+            !destination.exists(),
+            "reporting must not touch the destination"
+        );
+        fs::remove_dir_all(&directory).expect("clean the delivery directory");
+    }
+}

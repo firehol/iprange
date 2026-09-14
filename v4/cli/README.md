@@ -130,6 +130,183 @@ blocked arm scored as a refusal, a refusal slower than the deadline,
 stripped request bytes, a missing regular-file control, and a child that
 exited non-zero.
 
+### The refusal-class parity gate
+
+`check_refusal_class_parity.py` drives both product binaries over an
+arms-by-path-kind grid and compares the refusal each engine reports. The
+FIFO-surface gate above pins one path kind against one expected class per
+arm; this gate generalises the comparison to the whole
+(arm, path-kind) surface, which is where Go and Rust were found to
+disagree: the same refused request classified as `io` by one engine and
+`wrong_state` by the other is invisible to a per-arm pin that only checks
+one spelling.
+
+Neither table is hand-maintained, so the gate cannot be satisfied by
+deleting a row:
+
+- the arm list and the path-kind list are crossed mechanically, the
+  report's own cell count must equal `len(arms) x len(path_kinds)`, and a
+  missing or invented cell fails;
+- `MANDATORY_PATH_KINDS` names the path kinds a deletion would otherwise
+  remove from the grid, and a table lacking any of them fails;
+- `PINNED_REFUSALS` records the Rust-authority class for specific
+  (arm, path-kind) cells, so a both-engine drift into a new shared class
+  fails as well as a divergence.
+
+The verdict has two halves, and they catch different things. The first
+checks that a report describes its own execution honestly: the cell count
+must match the derived grid, every cell whose records differ must appear in
+the divergences list, and no cell may claim agreement while its two
+recorded answers differ. The second is the contract term: the divergence
+count must be zero, a cell that reached its deadline is a failure and not
+an absence of evidence, a cell that changed its answer across retries is
+not parity evidence for either engine, and every pinned refusal must be
+satisfied. A report can therefore be internally honest and still fail,
+which is the point — an earlier revision of this gate verified only the
+first half and scored PASS on a divergent grid. The controls named
+`honest single divergence`, `honest hang` and `honest flake` each build a
+report whose only defect is the one under test, so those three verdict
+terms cannot be dropped without a control failing.
+
+Per cell the comparison is `(kind, transport code, data.code, outcome,
+publication-evidence shape)` between the two engines. Message text is
+deliberately not compared: it is a human diagnostic, and the machine contract
+is the error `code`, the `outcome` member, and which publication facts the
+reply carries.
+
+Three arms put the probed path in the *destination* slot
+(`metadata.file_delivery` on `database.metadata.get`, `export.destination`
+on `export`, and `removals_output` on `retention.first_seen.refresh`), and
+two path kinds give them their durability boundary:
+
+- `dest-parent-unreadable` — the destination's parent directory carries
+  owner mode `0311`. Write and search stay available, so the output owner
+  creates its private temporary and publishes onto the destination; read is
+  denied, so opening that parent to synchronize it fails with `EACCES`. That
+  makes `sync_directory()` fail deterministically on both engines without a
+  device, a filesystem, or an injected fault, which is the condition the
+  outcome-ambiguity boundary of the publication path is defined on. Both
+  engines must answer `-32010` with `data.code` `io` and `data.outcome`
+  `outcome_unknown`, and the reply must carry the publication evidence
+  (`stage`, a canonical 64-hex `sha256`, `destination_visible` true,
+  `temporary_removed`, `publication_policy`, and the `outcome_unknown` of
+  the auxiliary file itself). For a committed first-seen refresh the reply
+  outcome is `committed`, because the transaction and the auxiliary removal
+  output are separate facts; the file's own `outcome_unknown` travels inside
+  `details.removals_publication_failure.publication`.
+- `dest-collision` — the pre-visibility control: same destination shape and
+  the same `fail_if_exists` policy, but a normal parent and a destination
+  that already exists. The refusal is definite (`name_exists`, with
+  `not_started` for the export writer and `read_only_failure` for the
+  metadata delivery, which had already read its source) and the reply must
+  carry **no** publication facts, because no destination name ever appeared.
+
+The third cell of that triple is already in the grid: the `missing` path
+kind gives these arms a normal parent with no collision, and they publish
+and answer `RESULT`. Together the three cells separate "refused before
+publishing" from "unresolved after publishing" from "published", per output
+owner and per engine.
+
+Deleting either durability kind, or answering the pinned class while
+withholding the evidence, fails the gate: the kinds are in
+`MANDATORY_PATH_KINDS`, their expectations are entries in
+`PINNED_REFUSALS` with a `facts` obligation, the evidence shape participates
+in the parity comparison, and `--self-test` carries controls for
+`read_only_failure` after visibility, facts stripped from both engines,
+facts present on one engine only, facts claimed before visibility, and a
+pin whose evidence obligation was loosened against the table. Each attempt runs under its own bounded deadline
+so no cell can hang the battery, and a differing repeat is retried so a
+flake is reported separately from a divergence: `flaky` and `hangs` are
+counted apart from `divergences` so a scheduler artefact is never mistaken
+for a contract term, and each of the three is a verdict term of its own.
+
+```bash
+nice python3 v4/cli/check_refusal_class_parity.py \
+  --go /tmp/qualsvc/bin/go/iprange --rust /tmp/qualsvc/bin/rust/iprange \
+  --fixture /tmp/qualsvc/bin/rust/v4-fixture \
+  --work "$(mktemp -d)" \
+  --json-report /tmp/refusal-class-parity.json
+nice python3 v4/cli/check_refusal_class_parity.py --self-test
+```
+
+`--self-test` runs offline. It injects a synthetic divergence into a
+matching pair and requires the gate to FAIL; it removes every executed
+cell and requires a report of zero executed cells to FAIL; it deletes
+the fixture that pins the `validate.live` sidecar-fold shape
+(`live_recovery_coordination_unavailable`) and requires the fold check to
+FAIL, at both the report level and the table level; and it attacks the
+publication-durability terms listed above. 26 controls, all rejected.
+The full battery runs in well under a minute (measured 29.3 s for 418 cells
+on both engines: 22 arms x 19 path kinds).
+
+The committed artifact is `evidence/refusal-class-parity.json`. It records
+the SHA-256 and `system.describe` implementation label of each binary it
+drove, the `git_head` of the tree, and a provenance note naming whoever
+generated it: this is a measurement of specific executables, and a reader
+must be able to tell which.
+
+### The Go coverage measurement
+
+`coverage_harness.py` measures Go coverage in two separable halves and
+keeps them separate in the report:
+
+- `unit` — the module's own `go test -cover` over every package.
+- `integration` — the committed corpus executed against binaries built
+  with `go build -cover`, which reaches the shipped wire surface that an
+  in-process test cannot: a test calls the SDK, a case speaks JSON-RPC to
+  a child service.
+- `merged` — the two counter sets combined by `go tool covdata`.
+
+```bash
+nice python3 v4/cli/coverage_harness.py --go-module v4/go \
+  --revision <commit> \
+  --rust /tmp/qualsvc/bin/rust/iprange \
+  --fixture-tool /tmp/qualsvc/bin/rust/v4-fixture \
+  --work EMPTY_DIR --json-report /tmp/coverage-go.json
+nice python3 v4/cli/coverage_harness.py --self-test
+```
+
+Three properties make the number worth reading:
+
+- **The binaries are not the qualification binaries.** The instrumented
+  build lives in its own staging directory under `--work`, and its
+  digests are recorded separately from the qualification and throughput
+  binaries. Coverage instrumentation adds a counter block per basic block;
+  a rate measured on instrumented code would attest to nothing, so
+  throughput and coverage never share an executable.
+- **Killed runs are never merged.** A Go coverage binary that is killed
+  does not write its counter block, so a crash-battery child contributes
+  no data rather than a zero. The harness merges only complete runs and
+  refuses a coverage directory that is empty instead of scoring it as 0%.
+- **A merge cannot lose work.** Combining counter sets is a union, so the
+  merged figure must be at least each input's figure; a merged percentage
+  below one of its own inputs means that input never took part, and the
+  harness refuses rather than publishing the number. This check is
+  mutation-tested: reintroducing the repeated `-i=` spelling of
+  `go tool covdata`, which silently keeps only the last directory, is
+  caught.
+
+`--revision` stages the measured tree from a commit with `git archive`
+instead of from the working tree. Other workers edit the checkout
+concurrently, and one in-flight file makes the instrumented build fail for
+reasons unrelated to the revision under attestation; staging by commit
+pins the measurement and records the commit it measured. The staged tree
+must include the `conformance` corpus beside the module — the Go tests open
+`../conformance/...` as a sibling of the module — and a staging that omits
+it is refused rather than scored.
+
+`run.py` forwards `GOCOVERDIR` to the product child, and only that one
+coverage variable, so the harness can direct counter output without adding
+an undocumented source of child state: a normal qualification run has no
+`GOCOVERDIR` in its environment and forwards nothing.
+
+The closure policy this serves is stated as policy, not as a number:
+committed tests that demonstrably detect the defect classes they claim, a
+mutation/forgery battery that proves the gates reject bad evidence, and
+measured unit **and** integration coverage recorded as facts. There is no
+arbitrary numeric floor, because a percentage is an input to judgement
+and not the judgement.
+
 ### The busy-reply throughput attestation
 
 `throughput_harness.py` is the committed rate record. Functional cases
@@ -144,8 +321,20 @@ The gate is the structure — every reply served, clean child exit, and a
 thread-creation count that does not grow with the request count — not an
 absolute rate: a replies/s floor is not portable across host load, core
 count, or governor, and a floor that only passes on one machine becomes a
-blocker people learn to ignore. The measured rates are recorded instead
-(reference values on this workstation: Go ~37-41k, Rust ~61-65k).
+blocker people learn to ignore. The measured rates are recorded instead.
+
+They are recorded as host-load-dependent observations, not as a reference
+band: the rate window starts when the child is spawned and so includes
+process start, interpreter/runtime init, and the first frame, and the
+figures move with system load, core count, and governor. Two waves on the
+same machine under different load produced Go medians 38,350.3 and
+35,464.7 replies/s and Rust medians 62,524.5 and 50,535.9 replies/s for
+identical binaries. No ratio between the two engines is therefore implied
+by these numbers, and they are explicitly **not** usable as evidence for
+the 1.3x relative-rate contract planned for milestone 5 — that contract
+needs a load-isolated measurement protocol of its own (pinned cores, idle
+host, repeated trials, a stated statistic), which this harness does not
+implement and does not claim.
 `--self-test` proves the structural check rejects thread-per-reply
 growth, growth at the doubled request count, a census that parsed no
 task ids, dropped replies scored as a rate, and a killed child scored as
@@ -153,13 +342,25 @@ a pass.
 
 Every report the harnesses write records `git_head` — the commit OID of
 the reviewed tree, from `git rev-parse HEAD` against the checkout that
-owns the harness, or `null` when it is not a git checkout. That is what
-binds a passing battery to a revision. It is a separate member from
-`checkout_root`, which is the directory the gate resolves
-checkout-relative command arguments against; putting an object id in
-that field would break the identity binding rather than record it.
+owns the harness, or `null` when it is not a git checkout. What makes it
+a binding rather than a comment is what `check_kind_coverage.py` now
+enforces about it: each of the seven consumed reports — the four matrices
+plus the crash, FIFO-surface, and throughput reports — must carry
+`git_head` as a 40-hexadecimal object id; placeholder shapes such as
+forty `0` or forty `1` characters are rejected; and all seven must name
+the same commit, so a report copied forward from an older battery, or
+swapped in from a different tree, fails the gate instead of silently
+passing. Omitting the FIFO-surface or throughput report is a CLI error,
+not a smaller claim. `git_head` is written by the harness, so forgery of
+the field itself is not what this defends against; it defends against
+mixing revisions and against a vacuous report set.
 
-- `cases/` — the declarative method-family cases (49 files). Every
+It is a separate member from `checkout_root`, which is the directory the
+gate resolves checkout-relative command arguments against; putting an
+object id in that field would break the identity binding rather than
+record it.
+
+- `cases/` — the declarative method-family cases (63 files). Every
   rpc step declares its service role explicitly (`actor: producer` for
   artifact creation/mutation, `actor: consumer` for observation and
   transformation), so a transformation can run on either binary in a
@@ -239,8 +440,18 @@ that field would break the identity binding rather than record it.
   normal import, e.g. `nice python3 -c "from schema import cases as
   c; c._self_test()"`), and `run.py` runs its own, the oracle's, and
   the case-schema self-tests before any matrix. The kind-coverage
-  gate ships its own doctored-report self-test that runs before its
-  CLI (`nice python3 check_kind_coverage.py --help`).
+  gate ships its own doctored-report self-test, and it is opt-in:
+  the gate CLI is always usable (`--help`, and a verdict on the
+  reports handed to `--matrix`/`--crash`/`--fifo-surface`/
+  `--throughput`), and `nice python3 check_kind_coverage.py
+  --self-test` runs the full control battery -- including the
+  committed-evidence control that the real `evidence/` set passes the
+  gate, which is what makes evidence rotation drift loud. Running that
+  self-test on every CLI invocation instead would let an in-flight
+  rotation replace every verdict, `--help` included, with its own
+  assertion. `--self-test` is therefore a required step of the wave
+  battery, invoked on its own with its own exit code, not a side
+  effect of the gate command.
 - `benchmarks/` — reserved for the consolidated workload manifests
   and `bench.py` harness of SOW-0028 delivery step 6 (currently
   empty; also update the `cases/` bullet above and the matrix counts
@@ -395,6 +606,79 @@ nice python3 v4/cli/crash_harness.py --producer "$GO_IPRANGE" --consumer "$RUST_
   The first command runs the harness in both directions
   (producer=rust then producer=go) in one invocation; the report
   schema is `iprange-cli-crash-report-v1`.
+
+## Adapter outputs, outcomes, and the two input surfaces
+
+### Adapter-owned outputs when durability cannot be established
+
+An adapter-owned output (an `export.destination`, and the same rule for the
+other declared output arms: `output`, `findings_output`, `report_output`,
+`removals_output`) reports error code `io` with `data.outcome`
+`outcome_unknown` once the destination name has become visible in the
+namespace and durability could not be established. Before the destination
+name appears, the same failure keeps its pre-work outcome
+(`not_started`, or the pre-existing `name_exists`). This is the
+outcome-ambiguity boundary the format specification defines for the
+publication path: from the durable transition that makes publication
+possible until the destination content and identity have been re-checked,
+an unresolved failure is `outcome_unknown`, and the implementation must
+not remove a possibly published destination
+(`.agents/sow/specs/binary-format-v4.md:3915-3930`). Both engines
+implement the same mapping in their export writers —
+`v4/go/internal/cli/fileio/export_writer.go:249-262` and
+`v4/rust/iprange-cli/src/io/export_writer.rs:252-270` — and the
+publication evidence (destination, stage, policy, digest of what was
+written, and whether the private temporary was removed) travels with it,
+so the reply states what is known instead of guessing at what is not.
+
+Two consequences for callers, both of them contract terms rather than
+advice:
+
+- A committed database transaction and an unresolved auxiliary
+  removal-output are **separate facts**. A method whose main state
+  transition committed and whose optional removal output could not be
+  resolved reports each on its own terms; the auxiliary ambiguity does
+  not retract the commit, and the commit does not resolve the auxiliary.
+  Reading one field as if it described the other loses information the
+  product took care to preserve.
+- A caller must inspect the reported state rather than act on the error
+  class. Retrying blindly is wrong in both directions: a
+  `fail_if_exists` retry after an `outcome_unknown` legitimately reports
+  `name_exists`, because the first attempt did publish, and treating that
+  second reply as "nothing happened" inverts the truth. Deleting the
+  destination is worse — it destroys bytes that may be the published
+  artifact. Where the choice matters, ask for `replace_existing` (which
+  proves the destination content) or resolve through the documented
+  resolvers; the specification keeps removal of a possibly-published
+  destination out of the failure path on purpose.
+
+### The never-block contract is the session surface, not the one-shot argv surface
+
+The bare-open audit covers the JSON-RPC session surface, and that scope
+must be stated rather than inferred. Every user-path open on that surface
+opens `O_NONBLOCK` and judges the opened descriptor inside the open owner,
+which is what the FIFO-surface and refusal-class-parity gates pin: a
+swapped-in named pipe is refused promptly with the arm-exact class, and
+`hangs=0` is a measured result, not an expectation.
+
+The one-shot legacy argv surface is deliberately outside that contract.
+`v4/go/internal/cli/legacy/parse.go` reads its inputs with a bare
+`os.ReadFile`, and the Rust twin `v4/rust/iprange-cli/src/legacy/parse.rs`
+uses `std::fs::read`; both therefore block on a FIFO exactly as the C
+reference tool does — `src/iprange.h:57-71` opens the one-shot input with
+plain `fopen(3)` and performs no type check before the read. That parity
+with the released C CLI is inherited behavior, not a gap the audit missed:
+the argv surface takes operator-typed arguments in a foreground process,
+where a blocking read is the C tool's long-standing behavior and the
+caller can see and interrupt it. Adding the never-block policy there would
+change the released CLI's observable behavior for no threat-model gain,
+since the surfaces that must never block are the ones that serve a
+long-lived session a caller cannot watch.
+
+The distinction is recorded here so that "the bare-open audit is complete"
+is read as "complete over the session surface", and so that a future
+reader does not mistake the argv surface's blocking read for an open
+finding.
 
 ## Known limitations
 

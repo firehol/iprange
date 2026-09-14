@@ -9,34 +9,25 @@
 package live
 
 import (
+	"errors"
 	"os"
 
 	"golang.org/x/sys/unix"
-)
 
-// localFilesystemWhitelist is the Linux f_type whitelist (Rust
-// require_local_filesystem EXT/XFS/BTRFS/F2FS/ZFS/BCACHEFS).
-const (
-	fsExt    = 0x0000_ef53
-	fsXFS    = 0x5846_5342
-	fsBtrfs  = 0x9123_683e
-	fsF2fs   = 0xf2f5_2010
-	fsZFS    = 0x2fc1_2fc1
-	fsBcache = 0xca45_1a4e
+	"github.com/firehol/iprange/v4/go/internal/fslocal"
 )
 
 // requireLocalFilesystem refuses filesystems outside the durability
-// whitelist (Rust require_local_filesystem Unsupported).
+// whitelist (Rust require_local_filesystem Unsupported). The whitelist
+// itself is owned by internal/fslocal so every directory bind asks the
+// same question.
 func requireLocalFilesystem(f *os.File) error {
-	var st unix.Statfs_t
-	if err := unix.Fstatfs(int(f.Fd()), &st); err != nil {
+	if err := fslocal.RequireLocal(f); errors.Is(err, fslocal.ErrNotLocal) {
+		return nsUnsupportedError()
+	} else if err != nil {
 		return nsIoError("inspect publication filesystem", err)
 	}
-	switch uint32(st.Type) {
-	case fsExt, fsXFS, fsBtrfs, fsF2fs, fsZFS, fsBcache:
-		return nil
-	}
-	return nsUnsupportedError()
+	return nil
 }
 
 // directoryNameMax reports the directory name_max (Rust fpathconf

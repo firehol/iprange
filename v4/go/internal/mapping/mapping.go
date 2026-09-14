@@ -91,6 +91,18 @@ func notRegularCode(rdwr bool) format.ErrorCode {
 }
 
 func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func(checked string) error) (*Mapping, error) {
+	return openMappingProbed(path, rdwr, takeLock, check, nil, false)
+}
+
+// openMappingProbed is the single mapping open owner. probe runs over
+// the opened, lifetime-locked descriptor before any geometry decision
+// (Rust recovery/inspection.rs read_classified runs before the reader
+// mapping is established, so a short or unclassified file is refused by
+// the probe and never reaches the two-page geometry refusal). bounded
+// maps min(physical, 2*PAGE_SIZE) instead of exactly two pages and
+// skips the geometry refusals, mirroring Mapping::read_only_view over
+// the Rust read_classified extent.
+func openMappingProbed(path string, rdwr bool, takeLock func(fd int) error, check func(checked string) error, probe func(*os.File) error, bounded bool) (*Mapping, error) {
 	// Refuse read-write live opens on platforms without proven live
 	// coordination before any path access, mirroring Rust
 	// require_live_supported (binary-format-v4.md platform table). The
@@ -100,6 +112,14 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 	// openMapping, matching Rust LiveReaderCore::open -> require_live_supported.
 	if rdwr {
 		if err := requireLiveCoordination(); err != nil {
+			return nil, err
+		}
+		// live_namespace::open_rw binds the parent directory (which
+		// proves the local-filesystem durability contract) before it
+		// opens the name, so a node under a filesystem that cannot carry
+		// the live contract answers the durability class instead of the
+		// errno of the name open.
+		if err := proveLocalNamespace(path); err != nil {
 			return nil, err
 		}
 	}
@@ -164,6 +184,13 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 			return nil, err
 		}
 	}
+	// The probe owns everything that Rust runs over the locked
+	// descriptor before the reader mapping is established.
+	if probe != nil {
+		if err := probe(f); err != nil {
+			return nil, err
+		}
+	}
 	// Stat the locked file for geometry validation: the size is sampled
 	// under the lifetime lock, so a concurrent writer cannot change the
 	// extent between stat and mmap.
@@ -172,18 +199,35 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 		return nil, &format.Error{Code: format.CodeIO, Detail: "stat: " + err.Error()}
 	}
 	size := uint64(st.Size())
-	if size < 2*format.PageSize {
-		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file smaller than two pages"}
-	}
-	if size%format.PageSize != 0 {
-		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file size not page-aligned"}
+	if !bounded {
+		if size < 2*format.PageSize {
+			return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file smaller than two pages"}
+		}
+		if size%format.PageSize != 0 {
+			return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file size not page-aligned"}
+		}
 	}
 	if size > uint64(^uint(0)>>1) {
 		return nil, &format.Error{Code: format.CodeFormatInvalid, Detail: "file larger than host address space"}
 	}
-	data, err := mmapShared(f, 2*format.PageSize, prot)
-	if err != nil {
-		return nil, err
+	mapBytes := 2 * format.PageSize
+	if bounded && size < uint64(mapBytes) {
+		mapBytes = int(size)
+	}
+	// A zero-length extent has no mapping at all (Rust mapping.rs
+	// map_nonempty returns Ok(None) once require_file_extent has proved
+	// the extent). The empty view is what lets the bounded bootstrap
+	// classification of an empty live file report its own class
+	// (recovery answers candidate-changed) instead of the EINVAL of a
+	// zero-length mmap; the same rule MapFile applies for the
+	// coordination artifacts.
+	var data []byte
+	if mapBytes > 0 {
+		var err error
+		data, err = mmapShared(f, mapBytes, prot)
+		if err != nil {
+			return nil, err
+		}
 	}
 	// The path may have been replaced while the lock was taken or the
 	// mapping was created; recheck identity and the namespace contract on
@@ -198,7 +242,7 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 			return nil, err
 		}
 	}
-	m := &Mapping{file: f, data: data, size: 2 * format.PageSize, physical: size, prot: prot, locked: true}
+	m := &Mapping{file: f, data: data, size: uint64(mapBytes), physical: size, prot: prot, locked: true}
 	cleanup = false
 	return m, nil
 }
@@ -209,6 +253,30 @@ func openMapping(path string, rdwr bool, takeLock func(fd int) error, check func
 // CodeIO. See openMapping for the full identity and namespace contract.
 func OpenImmutable(path string, check func(checked string) error) (*Mapping, error) {
 	return openMapping(path, false, lockLifetimeShared, check)
+}
+
+// VerifyPathAgainstFile re-proves that path still names the file behind
+// f as one regular file, resolving the name under a bound parent
+// directory (Rust live_namespace::verify_path_any_link over bind_path +
+// Directory::entry). It is the read-side path proof of the immutable
+// reader arms, available below internal/live so the reader facade can
+// run it at the Rust positions; a parent that cannot be bound as a
+// directory (for example the /proc/self magic symlink) is the io class,
+// a vanished entry is name-not-found, and a re-linked or replaced
+// entry is the wrong-state class.
+func VerifyPathAgainstFile(path string, f *os.File) error {
+	return verifyPathAgainstFile(path, f)
+}
+
+// OpenImmutableChecked is the OpenImmutable contract plus a namespace
+// probe over the lifetime-locked descriptor (Rust
+// ReaderCore::open_immutable, which proves the retained identity and
+// verifies the bound path before map_reader and again after it). probe
+// runs after the lifetime lock and the identity checks and before any
+// geometry decision, so a path the namespace refuses is reported by
+// the probe rather than by the two-page geometry refusal.
+func OpenImmutableChecked(path string, check func(checked string) error, probe func(f *os.File) error) (*Mapping, error) {
+	return openMappingProbed(path, false, lockLifetimeShared, check, probe, false)
 }
 
 // OpenMutable opens path for the single live writer: O_RDWR under the
@@ -251,6 +319,35 @@ func OpenLiveReader(path string, check func(clean string) error) (*Mapping, erro
 		return nil, err
 	}
 	return openMapping(path, false, lockLifetimeShared, check)
+}
+
+// OpenLiveReaderProbed opens one live database for the arms that
+// classify the meta pair straight off the descriptor (Rust
+// recovery/inspection.rs inspect_live and
+// recovery/source_guard/live.rs bind_candidate): probe runs over the
+// lifetime-locked descriptor before any geometry decision, exactly
+// where Rust runs read_classified, and the bootstrap view covers
+// min(physical, 2*PAGE_SIZE) with no geometry refusal (Rust
+// Mapping::read_only_view over the same bounded extent). Every other
+// arm keeps the OpenLiveReader contract.
+func OpenLiveReaderProbed(path string, check func(clean string) error, probe func(f *os.File) error) (*Mapping, error) {
+	if err := requireLiveCoordination(); err != nil {
+		return nil, err
+	}
+	return openMappingProbed(path, false, lockLifetimeShared, check, probe, true)
+}
+
+// OpenLiveReaderChecked is the OpenLiveReader contract plus a namespace
+// probe over the lifetime-locked descriptor (Rust reader_core/live.rs
+// open and recovery/source_guard/live.rs open_file, which capture the
+// retained identity and verify the bound path before the reader
+// mapping exists). The two-page geometry refusals stay in force, so
+// only the namespace classes reported ahead of the mapping change.
+func OpenLiveReaderChecked(path string, check func(clean string) error, probe func(f *os.File) error) (*Mapping, error) {
+	if err := requireLiveCoordination(); err != nil {
+		return nil, err
+	}
+	return openMappingProbed(path, false, lockLifetimeShared, check, probe, false)
 }
 
 // Size returns the currently mapped byte length (2 pages during bootstrap,

@@ -218,6 +218,14 @@ ENV_ALLOWLIST = (
     "USERPROFILE",
     "PROCESSOR_ARCHITECTURE",
     "PROCESSOR_IDENTIFIER",
+    # Go source-level coverage is opt-in from the harness: a
+    # ``go build -cover`` binary writes its counter block to the directory
+    # this names at exit, and only ``coverage_harness.py`` sets it.  A normal
+    # qualification run has no GOCOVERDIR in its environment, so the entry
+    # forwards nothing and the child environment stays as documented; it is
+    # listed here rather than injected because an injected variable would be
+    # a second, undocumented source of child state.
+    "GOCOVERDIR",
 )
 
 
