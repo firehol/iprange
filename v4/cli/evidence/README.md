@@ -2314,9 +2314,9 @@ the derived `privacy` block, screens the inputs the caller declares, and
 refuses the write when any screened input or any finished string value
 names an operator profile path.  Splitting the write from the provenance
 would let a harness keep the artifact and drop the audit, so the registry
-is audited as a set: `command_sanitize.py --self-test` executes 47
+is audited as a set: `command_sanitize.py --self-test` executes 51
 controls over the whole registry, and every harness self-test must report
-`shared command_sanitize controls executed=47 expected=47` before its own
+`shared command_sanitize controls executed=51 expected=51` before its own
 result counts.  `check_producer_privacy.py` attacks the three
 lead-owned writers from the outside with 32 committed controls, so
 neither a writer that screens nothing, nor one that serializes its own
@@ -2338,7 +2338,7 @@ nice python3 v4/cli/throughput_harness.py --self-test   # 12 cases + 4 structura
 nice python3 v4/cli/resource_harness.py --self-test      # 25 control groups
 nice python3 v4/cli/crash_harness.py --self-test         # 26 controls, eight groups
 nice python3 v4/cli/windows_guard_harness.py --self-test # 38 controls + 1 native-only
-nice python3 v4/cli/command_sanitize.py --self-test      # 47 registry controls
+nice python3 v4/cli/command_sanitize.py --self-test      # 51 registry controls
 nice python3 v4/cli/check_producer_privacy.py --self-test # 32 producer controls
 nice python3 v4/cli/windows_housekeeping_harness.py --self-test  # incl. 9 report-verification controls
 nice python3 v4/cli/races/runner.py --self-test          # 22 mutation (15 arm, 7 detector) + 6 committed-report writer controls

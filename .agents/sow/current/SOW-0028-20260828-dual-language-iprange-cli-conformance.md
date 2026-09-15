@@ -15850,3 +15850,53 @@ unstarted.
   duplicate key on aix) — same bug class as repair 1; a whole-module
   all-GOOS vet leg needs its own SOW because it would fail today; not a
   regression of this wave and not silently deferred: tracked here.
+
+### Native Windows leg and matcher-fold completion (same day)
+
+The native Windows leg re-qualified the committed revision: host checkout
+detached and clean, `go vet`/`go test -count=1` 24 ok + 8 no-test files / 0
+failures (one documented MSYS `0xc0000142` DLL-init attempt retried under a
+bounded retry; only a green attempt is scored), `cargo test -p iprange-cli`
+342 passed / 0 failed across three targets with the recorded worker-colocation
+step (mirroring the wave-19.24 invocation — the live-db crate's Windows leg
+remains the pre-registered invocation, decision recorded), 6/6
+`windows_judgment_tests`, the pin tally file present with zero UNSCORED
+lines, both housekeeping and guard harnesses green natively, and the
+host-invariant build digest `a72ae911a0ab…` (357 sources) found verbatim in
+both built Rust products. The two committed Windows reports were installed
+with `git_head` equal to the qualified revision, `tree_clean: true`,
+`checkout_root` null, and — correcting a disclosure regression the first
+pass introduced — the host nodename redacted from the toolchain strings, so
+no durable artifact names the validation machine. The six `win/*` staging
+digests were restaged and cross-checked against both reports.
+
+The native run then exposed one real defect in the shared privacy module:
+on mingw64 CPython, `os.name == 'nt'` while `os.sep == '/'` and
+`ntpath.normcase` folds case only, so a profile fixture that folded through
+`normcase` and candidates folded through the backslash rule were two
+spellings of one directory, and the profile matcher called a profile-rooted
+checkout unrelated — recorded as a public directory. Fixed long-term-best:
+`_matches_profile` folds **both** sides through one shape-selected
+normalizer (`_comparison_fold`), and every profile fixture authorizes
+through `_profile_spelling()`; the fold is monotone, so it can only ever add
+a refusal. Four new cross-spelling equivalence controls replay the whole
+comparison under the emulated nt fold on any host (shared control count
+47 -> 51; group-11's checkout-record controls stay host-shaped and are
+covered by the emulated-fold replay). Reverted-fix mutations reproduce
+exactly the single failing control natively under emulation, and the new
+pins turn the same mutation red on Linux. The product gate itself was sound
+throughout (`under_profile` refused both spellings) and the committed reports
+were unaffected because the writer records `checkout_root` null
+unconditionally.
+
+Remaining sequence after this commit: re-author the two Windows reports at
+the committed revision (the Go binaries embed the VCS revision, so the win
+leg rebuilds at that revision), run the full Linux battery at it via the
+self-identifying launcher, rotate every consumed report and the manifest to
+that one revision with the kind gate and its self-test at rc 0, run the
+`--pressure full` axis at the milestone gate, then re-anchor the eight-role
+round and the glm whole-milestone round at the exact final revision, and
+finally the external control review; the closure decision stays with the
+user. The <=1.3x performance gate remains FAILED, not waived (pending
+SOW-0030 owns engine residuals); SOW-0017 stays paused; milestone 5 is
+unstarted.

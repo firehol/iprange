@@ -265,16 +265,66 @@ def _fold_windows(path):
     return path.replace("/", _WIN_SEP).lower()
 
 
+def _is_windows_spelling(path):
+    """True when one path spelling can only be read with Windows
+    semantics: a drive prefix (``C:``) or a leading double backslash
+    (the UNC and device/verbatim roots).
+
+    The privacy comparisons pick their fold from the shape of the
+    strings, not from ``os.name``, the way ``_profile_comparisons``
+    already derives the drive-relative profile form from the shape of
+    the profile.  A Windows comparison then stays checkable from any
+    host, so a control -- or any caller -- can pin both separator
+    spellings without waiting for a Windows runner."""
+    if path.startswith(_WIN_SEP + _WIN_SEP):
+        return True
+    return (len(path) >= 2 and path[1] == ":"
+            and "a" <= path[0].lower() <= "z")
+
+
+def _comparison_fold(path):
+    """The canonical spelling of one path for every privacy comparison.
+
+    Candidates arrive from ``_privacy_spellings`` and the profile from
+    ``profile_path()``, each already folded by the platform branch, but
+    a caller that supplies either side itself -- a control fixture, or
+    an adapter reading the profile out of the environment -- can hand
+    the matcher the other separator style.  On an interpreter whose
+    ``os.path.normcase`` folds case only (msys2-mingw64 reports
+    ``os.name == "nt"`` with ``os.sep == "/"``) that makes one directory
+    exist as two spellings, and a verdict may not depend on which one
+    the caller chose.
+
+    ``str.replace`` and ``str.lower`` act character by character, so the
+    fold is monotone: equal spellings stay equal and a prefix stays a
+    prefix.  Folding both sides can therefore only ever add a refusal,
+    never remove one."""
+    if _IS_WINDOWS or _is_windows_spelling(path):
+        return _fold_windows(path)
+    return _normcase(path)
+
+
+def _profile_spelling(path):
+    """Fold one operator-profile root into the spelling the privacy
+    comparisons read.
+
+    ``profile_path()`` and every fixture that emulates a profile root
+    must authorize it through this one function.  The matcher compares
+    candidates from ``_privacy_spellings`` against the profile, so a
+    fixture that picks its own fold can disagree with the candidate on
+    separator style alone -- on an interpreter whose ``os.path.normcase``
+    folds case only, that turns the profile into one nothing matches."""
+    norm = os.path.normpath(path)
+    return _fold_windows(norm) if _IS_WINDOWS else _normcase(norm)
+
+
 def profile_path():
     """Normcased operator profile root, or an empty string when the
     platform cannot determine it (never match in that case)."""
     home = os.path.expanduser("~")
     if not home:
         return ""
-    if _IS_WINDOWS:
-        norm = _fold_windows(os.path.normpath(home))
-    else:
-        norm = _normcase(os.path.normpath(home))
+    norm = _profile_spelling(home)
     return norm if len(norm) >= 3 else ""
 
 
@@ -507,17 +557,21 @@ def _profile_comparisons(profile):
 
 
 def _matches_profile(spelling, profile):
-    """True when one normcased spelling is at or under any of the profile's
+    """True when one path spelling is at or under any of the profile's
     comparison forms.
 
-    Either separator counts as a segment boundary.  The candidates a scan
-    compares come from ``_privacy_spellings``, which folds Windows spellings
-    to backslashes and POSIX spellings to ``os.sep``; accepting both keeps a
-    drive-relative candidate such as ``C:Users\\alice\\x`` comparable to the
-    profile's drive-relative form on every interpreter, and can only ever add
-    a refusal, never remove one.
+    Both sides go through ``_comparison_fold``, so the verdict is decided by
+    the directory the two spellings name and not by the separator style the
+    caller happened to write.  Either separator also counts as a segment
+    boundary: the candidates a scan compares come from
+    ``_privacy_spellings``, which folds Windows spellings to backslashes and
+    POSIX spellings to ``os.sep``; accepting both keeps a drive-relative
+    candidate such as ``C:Users\\alice\\x`` comparable to the profile's
+    drive-relative form on every interpreter.  Every widening here is a
+    refusal, so it can only ever add one, never remove one.
     """
-    for form in _profile_comparisons(profile):
+    spelling = _comparison_fold(spelling)
+    for form in _profile_comparisons(_comparison_fold(profile)):
         if spelling == form:
             return True
         for sep in {_WIN_SEP, os.sep}:
@@ -1921,7 +1975,7 @@ def _provenance_self_test():
     """
     # The outside-profile controls below emulate where this checkout sits, so
     # they assert the same thing on a workstation, a scratch clone, and CI.
-    global _CHECKOUT, profile_path
+    global _CHECKOUT, _IS_WINDOWS, profile_path
     import shutil
     import tempfile
 
@@ -2298,7 +2352,12 @@ def _provenance_self_test():
         saved_checkout = _CHECKOUT
         saved_profile_path = profile_path
         try:
-            profile_path = lambda: _normcase(os.path.normpath(fake_home))
+            # The emulated profile is a profile root, so it is authored
+            # through the same fold ``profile_path()`` applies to the real
+            # one: a fixture that folded its own way would disagree with
+            # the candidates ``_privacy_spellings`` produces on an
+            # interpreter whose normcase folds case only.
+            profile_path = lambda: _profile_spelling(fake_home)
             # The helper keeps its resolution role for the non-committed
             # consumers named in its docstring; only the record is fixed.
             _CHECKOUT = os.path.join(fake_home, "src", "iprange")
@@ -2355,6 +2414,88 @@ def _provenance_self_test():
             profile_path = saved_profile_path
             shutil.rmtree(foreign_checkout, ignore_errors=True)
             shutil.rmtree(os.path.dirname(fake_home), ignore_errors=True)
+
+        # 12: the profile comparison is decided by the directory a path
+        # names, not by the separator or case spelling its caller wrote.
+        # ``os.path.normcase`` is not one function across the platforms this
+        # module runs on: msys2-mingw64 reports ``os.name == "nt"`` with
+        # ``os.sep == "/"`` and folds case only, so its candidates arrive
+        # backslash-folded while a profile normalized through normcase keeps
+        # forward slashes.  One directory then exists as two spellings, and a
+        # matcher that trusted the caller's fold called them unrelated --
+        # which is how a profile-rooted checkout was recorded as a public
+        # directory.  The fold is chosen from the shape of the strings (the
+        # way ``_profile_comparisons`` chooses the drive-relative form), so
+        # both spellings are pinned on any host, and the whole comparison is
+        # replayed under the emulated nt fold to pin the Windows decision
+        # without a Windows runner.
+        WIN_PROFILE = "C:/Users/operator"
+        WIN_CHILD = WIN_PROFILE + "/leaked.iprange"
+        WIN_SIBLING = WIN_PROFILE + "-notes/leaked.iprange"
+        WIN_OTHER_DRIVE = "D:/db/iprange.readers"
+
+        def all_spellings(value):
+            """Every separator and case spelling of one Windows spelling."""
+            return (value, value.replace("/", _WIN_SEP), value.upper(),
+                    value.replace("/", _WIN_SEP).upper())
+
+        # Each list collects one (entry point, fold, path, profile) case that
+        # decided wrongly, so a failure names the spelling that escaped the
+        # fold instead of only the verdict that differs.
+        matcher_misses, matcher_leaks = [], []
+        screening_misses, screening_leaks = [], []
+        restore_is_windows = _IS_WINDOWS
+        restore_profile_path = profile_path
+        try:
+            for fold_nt in (restore_is_windows, True):
+                _IS_WINDOWS = fold_nt
+                for child in all_spellings(WIN_CHILD):
+                    for root in all_spellings(WIN_PROFILE):
+                        if not _matches_profile(child, root):
+                            matcher_misses.append(("matcher", fold_nt, child,
+                                                   root))
+                for child in (all_spellings(WIN_SIBLING)
+                              + all_spellings(WIN_OTHER_DRIVE)):
+                    for root in all_spellings(WIN_PROFILE):
+                        if _matches_profile(child, root):
+                            matcher_leaks.append(("matcher", fold_nt, child,
+                                                  root))
+                # ``under_profile`` is the input-side entry point and takes
+                # the profile from ``profile_path()``, so every authorization
+                # spelling the product can produce -- normcase only, the
+                # backslash fold, and the sanctioned profile fold -- has to
+                # give one verdict for one directory.
+                for authoring in (_normcase(os.path.normpath(WIN_PROFILE)),
+                                  _fold_windows(os.path.normpath(WIN_PROFILE)),
+                                  _profile_spelling(WIN_PROFILE)):
+                    def profile_authorization(root=authoring):
+                        return root
+                    profile_path = profile_authorization
+                    for child in all_spellings(WIN_CHILD):
+                        if not under_profile(child):
+                            screening_misses.append(("under_profile", fold_nt,
+                                                     child, authoring))
+                    for child in (all_spellings(WIN_SIBLING)
+                                  + all_spellings(WIN_OTHER_DRIVE)):
+                        if under_profile(child):
+                            screening_leaks.append(("under_profile", fold_nt,
+                                                    child, authoring))
+        finally:
+            _IS_WINDOWS = restore_is_windows
+            profile_path = restore_profile_path
+        expect("the profile matcher matches a profile-rooted path in every "
+               "separator and case spelling the caller can write",
+               not matcher_misses, str(matcher_misses[:4]))
+        expect("the profile matcher leaves a sibling or other-drive path "
+               "unmatched in every separator and case spelling the caller "
+               "can write",
+               not matcher_leaks, str(matcher_leaks[:4]))
+        expect("input screening refuses a personal path whichever separator "
+               "spelling profile and path were authored with",
+               not screening_misses, str(screening_misses[:4]))
+        expect("input screening accepts a non-personal path whichever "
+               "separator spelling profile and path were authored with",
+               not screening_leaks, str(screening_leaks[:4]))
     finally:
         shutil.rmtree(root, ignore_errors=True)
     return checks
@@ -2363,11 +2504,15 @@ def _provenance_self_test():
 # Executed-control count of ``_provenance_self_test``.  A harness self-test
 # that only prints "0 failures" cannot tell a passed run from a run in which
 # nothing executed, so the count is asserted here and by every harness that
-# calls into this module.  47 = the 40 controls of wave-19.25 plus the seven
-# controls of group 11, which pin that a committed report never carries a
-# checkout directory and that the resolution helper keeps its non-committed
-# consumers.
-PROVENANCE_SELF_TEST_CHECKS = 47
+# calls into this module.  51 = the 40 controls that pin the sanctioned commit
+# path, the provenance and privacy block, the source audit, and the pinned
+# drive-relative anchor; the seven controls of numbered group 11, which pin
+# that a committed report never carries a checkout directory and that the
+# resolution helper keeps its non-committed consumers; and the four controls
+# of numbered group 12, which pin that the profile comparison is decided by
+# the directory a path names and not by the separator or case spelling its
+# caller wrote.
+PROVENANCE_SELF_TEST_CHECKS = 51
 
 
 def _self_test():
