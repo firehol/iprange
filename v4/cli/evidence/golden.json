@@ -1,10 +1,11 @@
 {
- "case_files": 63,
+ "case_files": 71,
+ "case_files_seen": 71,
  "checkout_root": null,
  "command": [
   "v4/cli/check_golden.py",
   "--json-report",
-  "/tmp/iprange-w1924/reports/golden.json"
+  "/tmp/iprange-w1925/reports/golden.json"
  ],
  "covered_methods": [
   "iprange.v1.algebra.compare",
@@ -61,8 +62,17 @@
   "iprange.v1.system.describe",
   "iprange.v1.validate"
  ],
- "git_head": "91ae2a429380483010bc5e9ce46ac2dc776ec17d",
+ "git_head": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
  "golden_exchanges": 55,
+ "golden_files": 10,
+ "privacy": {
+  "checked_inputs": [
+   "--json-report",
+   "--tree"
+  ],
+  "personal_path_in_report": null,
+  "sanitizer": "command_sanitize.write_committed_report"
+ },
  "problems": [],
  "result": "PASS",
  "schema": "iprange-cli-golden-report-v1"

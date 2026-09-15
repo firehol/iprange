@@ -172,6 +172,26 @@ user.  The <=1.3x performance gate remains FAILED, not waived (pending
 SOW-0030 owns engine residuals); SOW-0017 stays paused; milestone 5 is
 unstarted.
 
+Wave-19.25c state (2026-09-15): all four open qualification legs closed
+at the final revision `2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1`.  The
+native Windows leg re-qualified a clean detached checkout of that
+revision (22 scored steps, zero retries, 342 cargo tests, 6/6 judgment
+tests, zero UNSCORED pins, all three shared self-tests at 51/51, both
+reports installed with `checkout_root` null and the host nodename
+redacted).  The full Linux battery ran once through the self-identifying
+launcher: 75 checked steps, 0 mismatches, 1 designed deferral, and every
+consumed report plus the manifest rotated to this one revision with the
+kind gate and its self-test at rc 0.  The `--pressure full` axis ran at
+the milestone gate: 378/378 cells over 9 arms x 42 profiles x 2 engines
+x >=2 runs, all mandatory profiles present, the 378-class pinned table
+matched by digest, 0 divergences, 0 blocked, 0 missing, 0 vacuous, 0
+hangs.  Open validation items 1-4 are therefore closed (details in the
+"Wave 19 round 19.25c" section).  Remaining before the closure decision:
+the eight-role re-anchor round and the glm whole-milestone round at this
+exact revision, then the persistent external control review.  The
+<=1.3x performance gate remains FAILED, not waived (pending SOW-0030
+owns engine residuals); SOW-0017 stays paused; milestone 5 is unstarted.
+
 Wave-19.23 state (2026-09-14): the eight-role adversarial round
 reviewed the wave-19.22 final revision `cfbee7887fb71de67df35ea913d6f7ae70c5c011`
 and every role returned FAIL — 38 numbered findings total
@@ -15900,3 +15920,114 @@ finally the external control review; the closure decision stays with the
 user. The <=1.3x performance gate remains FAILED, not waived (pending
 SOW-0030 owns engine residuals); SOW-0017 stays paused; milestone 5 is
 unstarted.
+
+## Wave 19 round 19.25c — Windows re-stamp, full battery rotation, and milestone-gate pressure run (2026-09-15)
+
+Revision under test: `2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1`
+(`v4/cli: decide privacy profile matching by path identity, not
+spelling`), which closes the mingw64 profile-fold defect the previous
+native leg found: `_matches_profile` now folds both sides through one
+shape-selected normalizer, profile fixtures authorize through the same
+fold, and four emulated-nt cross-spelling controls pin the decision on
+any host (shared command_sanitize controls 47 -> 51, mutation-proven in
+both directions).  Relative to the previously qualified revision this
+commit changes only `v4/cli/command_sanitize.py`,
+`v4/cli/evidence/README.md`, and this SOW: no `v4/rust` or `v4/go`
+source file differs, so the host-invariant engine build identity
+`a72ae911a0ab...` (357 sources) carries over unchanged, as measured.
+
+Native Windows leg (authorized Windows validation host; bundle
+transfer, detached clean checkout, the three differing files verified
+byte-identical to this workstation's copy of the same commit).  Scored
+driver run: 22 recorded steps, every one green on its first attempt,
+zero retries; the leg's two superseded unscored invocations are
+disclosed inside the report's own `flake_history` (one driver bug — a
+Go package path missing its `./` prefix — and one wording-only re-run),
+and their files are isolated outside the scored log set.  Toolchain
+unchanged from the prior wave (go1.26.5 windows/amd64; rustc 1.97.1
+msvc host, LLVM 22.1.6; CPython 3.14.6 mingw64).  Results: native
+`go test ./... -count=1` 32 packages — 24 ok, 8 no test files, 0
+failures — plus the maintenance removal round-trip 4/4 PASS rows and
+the five wave-19.25 touched packages re-run verbosely rc 0;
+`cargo test -p iprange-cli --no-fail-fast` 342 passed / 0 failed / 0
+ignored across the three targets with the recorded worker-colocation
+step; `windows_judgment_tests` 6/6; pin tally present with 0 lines and
+0 UNSCORED; guard harness PASS for both products (50 case keys each:
+44 refusals, 3 allowed controls, 3 facts); housekeeping harness 2
+passed / 0 failed with 50 removal rows per product and the shared
+removal-log digest `96c8ab39...`; all three shared self-tests print
+`executed=51 expected=51` natively — the previously-red profile
+control is green.  Both reports were re-authored at the revision under
+test with `tree_clean: true`, `checkout_root: null`, and the host
+nodename redacted from the toolchain strings, installed into
+`v4/cli/evidence/`, accepted by `--verify-report` rc 0 and by
+`command_sanitize.py --audit-committed-reports` (0 problems), and their
+six embedded Windows artifact digests cross-checked against the
+restaged `win/*` binaries (11-entry ledger verified 11/11).  The two Go
+Windows digests repeat the prior staged pair exactly —
+`-trimpath -buildvcs=false` plus zero Go source changes make that the
+expected reproducible result, not a stale file.  The single carried
+release-build warning (`abandon_spawn` never used; unix-only callers)
+is recorded verbatim in both reports and was neither introduced nor
+silenced here.
+
+Linux battery (single scored run through the self-identifying launcher;
+script SHA-256 `38830d8633a4fc3f...` matches the identity recorded in
+"Battery and identities"; the launcher's console log opens with that
+digest, satisfying open validation item 4).  Mechanics of that
+satisfaction, stated exactly: the launcher prints the digest as its first
+console-log action and that console capture is retained at
+`/tmp/qualsvc/battery-w1925c-console.log`; the battery's own console is
+owned by its internal `tee`, whose log
+(`/tmp/qualsvc/battery-w1925.log`, first line the first STEPRESULT)
+begins after the launcher's block; a sanitized copy of the battery log
+and the raw log are retained together under
+`/tmp/iprange-w1925/evidence-stage/`.  The recorded digest matches the
+digest the run printed, so the run is attributable to those exact bytes
+regardless of which of the three files a reader consults).  Console: 75 checked steps,
+0 mismatches, 1 deferral — the Windows report rotation the Linux leg
+does not own, recorded as DEFERRED rather than silently green.  The
+stale-build-id step that was red in the sliced pre-run clears because
+the battery rebuilds from clean staging: `[0f] build id is
+host-invariant and measured in both products` rc 0, `build-ids.json`
+`cli_contains_expected` and `worker_contains_expected` both true.
+Every consumed report rotated to the revision under test, the
+`battery-manifest.json` (13 entries, including both crash directions
+and both `/bin/false` negatives) was promoted through the shared
+committed-report writer, and the kind gate on fresh reports, on
+committed reports, and its `--self-test` (110 rejection + 4 acceptance
+controls) all recorded rc 0 — closing open validation item 1.  The
+native Windows re-qualification closes open validation item 2.
+
+Milestone-gate pressure axis (open validation item 3), run at this
+revision against the staged ledger binaries: 9 arms x 42 profiles x 2
+engines x >=2 runs = 378/378 cells, `mandatory_profiles` complete at
+42, the 378-class pinned table satisfied with SHA-256
+`314d8be5618e9775...`, 0 divergences, 0 hangs, 0 flaky, 0 vacuous, 0
+blocked, 0 missing cells, and the main grid 483/483 cells in 34.2 s;
+verdict PASS (`--pressure full`, report at
+`/tmp/iprange-w1925/reports/refusal-class-parity-full.json`, log
+`/tmp/iprange-w1925/reports/log-parity-full.txt`).  The two
+band-gap-class cell groups the pressure sweep names are the recorded
+recovery-inspect worker band gaps, not divergences: the gate's own
+verdict treats them as agreements-by-policy and they are listed in the
+report.
+
+Records maintained with the rotation: this wave's Status paragraph; the
+evidence `README.md` head block, battery-outcome, matrices, parity,
+coverage, identity, Windows-status, and revision-attribution paragraphs
+rewritten as the present-state record of the rotated set (20 measurement reports + manifest, one revision); control-count pins 47 ->
+51.  Sensitive-data gate re-run on the installed Windows reports: no
+login name, no personal home path, nodename redacted, `checkout_root`
+null, audit 0 problems.  Named-cost disclosure per project rule: the
+milestone-gate pressure sweep is the ~30-minute-class step (measured
+wall including engine starts; battery ~65 min total), everything else
+this section ran inside the pre-registered battery and Windows-leg cost
+budget already recorded above.
+
+Remaining sequence: eight-role re-anchor round at this exact final
+revision; `glm-5.3-responses` whole-milestone round; the persistent
+external astra control review; then the milestone-4 closure decision,
+which stays with the user.  No further commits may follow the review
+target without re-anchoring the rounds (record-only commits invalidate
+verdicts per the standing rule).

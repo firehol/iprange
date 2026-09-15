@@ -3,10 +3,10 @@
  "command": [
   "v4/cli/sensitivity_gate.py",
   "--json-report",
-  "/tmp/iprange-w1924/reports/sensitivity.json"
+  "/tmp/iprange-w1925/reports/sensitivity.json"
  ],
  "failures": [],
- "git_head": "91ae2a429380483010bc5e9ce46ac2dc776ec17d",
+ "git_head": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
  "mode_count": 14,
  "modes": [
   {
@@ -108,6 +108,13 @@
    "want": "FAIL"
   }
  ],
+ "privacy": {
+  "checked_inputs": [
+   "--json-report"
+  ],
+  "personal_path_in_report": null,
+  "sanitizer": "command_sanitize.write_committed_report"
+ },
  "result": "PASS",
  "schema": "iprange-cli-sensitivity-report-v1"
 }

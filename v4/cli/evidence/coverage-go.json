@@ -3,56 +3,56 @@
  "command": [
   "v4/cli/coverage_harness.py",
   "--work",
-  "/tmp/iprange-w1924/W-cov2",
+  "/tmp/iprange-w1925/W-cov",
   "--rust",
-  "/tmp/iprange-w1924/bin/rust/iprange",
+  "/tmp/iprange-w1925/bin/rust/iprange",
   "--fixture-tool",
-  "/tmp/iprange-w1924/bin/rust/v4-fixture",
+  "/tmp/iprange-w1925/bin/rust/v4-fixture",
   "--json-report",
-  "/tmp/iprange-w1924/reports/coverage-go.json"
+  "/tmp/iprange-w1925/reports/coverage-go.json"
  ],
  "coverage_dirs": [
-  "/tmp/iprange-w1924/W-cov2/cov-unit",
-  "/tmp/iprange-w1924/W-cov2/cov-integration"
+  "/tmp/iprange-w1925/W-cov/cov-unit",
+  "/tmp/iprange-w1925/W-cov/cov-integration"
  ],
- "elapsed_seconds": 54.96,
- "git_head": "91ae2a429380483010bc5e9ce46ac2dc776ec17d",
+ "elapsed_seconds": 57.16,
+ "git_head": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
  "instrumented_binaries": {
   "iprange": {
    "covermode": "atomic",
    "instrumented": true,
-   "path": "/tmp/iprange-w1924/W-cov2/bin/iprange",
-   "sha256": "245bec50c7b84725fc04f45ed93ee834be190d42be32893f821ed131cdc86862"
+   "path": "/tmp/iprange-w1925/W-cov/bin/iprange",
+   "sha256": "1d916d8a831a7d97435e6f1847807625283e1aaf7d1ff7c3069de3dd1d1a4f42"
   },
   "iprange-v4-worker": {
    "covermode": "atomic",
    "instrumented": true,
-   "path": "/tmp/iprange-w1924/W-cov2/bin/iprange-v4-worker",
-   "sha256": "c792cc68a6e244a0e61122d5e19be04f89836ae7f4070a77edc78e2540d43213"
+   "path": "/tmp/iprange-w1925/W-cov/bin/iprange-v4-worker",
+   "sha256": "c4b813a6e981ecb1501416afb6f04998a315aaf87cd8c0b95841d9b0dc94a733"
   }
  },
  "integration": {
-  "cover_files": 172,
+  "cover_files": 192,
   "measured": {
-   "blocks": 39546,
-   "blocks_covered": 14418,
-   "covered_functions": 3378,
-   "covered_statements": 21698,
-   "functions": 5705,
-   "statements": 53741
+   "blocks": 39695,
+   "blocks_covered": 14829,
+   "covered_functions": 3453,
+   "covered_statements": 22287,
+   "functions": 5731,
+   "statements": 53982
   },
   "percent": {
-   "blocks": 36.46,
-   "functions": 59.21,
+   "blocks": 37.36,
+   "functions": 60.25,
    "measured": {
-    "blocks": 39546,
-    "blocks_covered": 14418,
-    "covered_functions": 3378,
-    "covered_statements": 21698,
-    "functions": 5705,
-    "statements": 53741
+    "blocks": 39695,
+    "blocks_covered": 14829,
+    "covered_functions": 3453,
+    "covered_statements": 22287,
+    "functions": 5731,
+    "statements": 53982
    },
-   "statements": 40.38
+   "statements": 41.29
   },
   "runs": [
    {
@@ -60,21 +60,21 @@
      "/usr/bin/python3.14",
      "v4/cli/run.py",
      "--go",
-     "/tmp/iprange-w1924/W-cov2/bin/iprange",
+     "/tmp/iprange-w1925/W-cov/bin/iprange",
      "--rust",
-     "/tmp/iprange-w1924/bin/rust/iprange",
+     "/tmp/iprange-w1925/bin/rust/iprange",
      "--fixture-tool",
-     "/tmp/iprange-w1924/bin/rust/v4-fixture",
+     "/tmp/iprange-w1925/bin/rust/v4-fixture",
      "--matrix",
      "go",
      "--work-dir",
-     "/tmp/iprange-w1924/W-cov2/matrix-go",
+     "/tmp/iprange-w1925/W-cov/matrix-go",
      "--json-report",
-     "/tmp/iprange-w1924/W-cov2/coverage-matrix-go.json"
+     "/tmp/iprange-w1925/W-cov/coverage-matrix-go.json"
     ],
     "failed": 0,
     "matrix": "go",
-    "passed": 63,
+    "passed": 71,
     "rc": 0,
     "skipped": 0
    },
@@ -83,83 +83,84 @@
      "/usr/bin/python3.14",
      "v4/cli/run.py",
      "--go",
-     "/tmp/iprange-w1924/W-cov2/bin/iprange",
+     "/tmp/iprange-w1925/W-cov/bin/iprange",
      "--rust",
-     "/tmp/iprange-w1924/bin/rust/iprange",
+     "/tmp/iprange-w1925/bin/rust/iprange",
      "--fixture-tool",
-     "/tmp/iprange-w1924/bin/rust/v4-fixture",
+     "/tmp/iprange-w1925/bin/rust/v4-fixture",
      "--matrix",
      "rust_to_go",
      "--work-dir",
-     "/tmp/iprange-w1924/W-cov2/matrix-rust_to_go",
+     "/tmp/iprange-w1925/W-cov/matrix-rust_to_go",
      "--json-report",
-     "/tmp/iprange-w1924/W-cov2/coverage-matrix-rust_to_go.json"
+     "/tmp/iprange-w1925/W-cov/coverage-matrix-rust_to_go.json"
     ],
     "failed": 0,
     "matrix": "rust_to_go",
-    "passed": 34,
+    "passed": 40,
     "rc": 1,
-    "skipped": 29
+    "skipped": 31
    },
    {
     "command": [
      "/usr/bin/python3.14",
      "v4/cli/run.py",
      "--go",
-     "/tmp/iprange-w1924/W-cov2/bin/iprange",
+     "/tmp/iprange-w1925/W-cov/bin/iprange",
      "--rust",
-     "/tmp/iprange-w1924/bin/rust/iprange",
+     "/tmp/iprange-w1925/bin/rust/iprange",
      "--fixture-tool",
-     "/tmp/iprange-w1924/bin/rust/v4-fixture",
+     "/tmp/iprange-w1925/bin/rust/v4-fixture",
      "--matrix",
      "go_to_rust",
      "--work-dir",
-     "/tmp/iprange-w1924/W-cov2/matrix-go_to_rust",
+     "/tmp/iprange-w1925/W-cov/matrix-go_to_rust",
      "--json-report",
-     "/tmp/iprange-w1924/W-cov2/coverage-matrix-go_to_rust.json"
+     "/tmp/iprange-w1925/W-cov/coverage-matrix-go_to_rust.json"
     ],
     "failed": 0,
     "matrix": "go_to_rust",
-    "passed": 34,
+    "passed": 40,
     "rc": 1,
-    "skipped": 29
+    "skipped": 31
    }
   ]
  },
+ "measured_git_head": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
  "merged": {
   "measured": {
-   "blocks": 41883,
-   "blocks_covered": 22980,
-   "covered_functions": 4747,
-   "covered_statements": 34040,
-   "functions": 5918,
-   "statements": 57172
+   "blocks": 42032,
+   "blocks_covered": 23286,
+   "covered_functions": 4797,
+   "covered_statements": 34482,
+   "functions": 5944,
+   "statements": 57413
   },
   "percent": {
-   "blocks": 54.87,
-   "functions": 80.21,
+   "blocks": 55.4,
+   "functions": 80.7,
    "measured": {
-    "blocks": 41883,
-    "blocks_covered": 22980,
-    "covered_functions": 4747,
-    "covered_statements": 34040,
-    "functions": 5918,
-    "statements": 57172
+    "blocks": 42032,
+    "blocks_covered": 23286,
+    "covered_functions": 4797,
+    "covered_statements": 34482,
+    "functions": 5944,
+    "statements": 57413
    },
-   "statements": 59.54
+   "statements": 60.06
   }
  },
  "module": "github.com/firehol/iprange/v4/go",
  "per_package": {
   "github.com/firehol/iprange/v4/go": {
-   "block_percent": 68.78,
+   "block_percent": 69.01,
    "blocks": 2636,
-   "blocks_covered": 1813,
-   "covered_functions": 419,
-   "covered_statements": 2310,
-   "function_percent": 91.89,
+   "blocks_covered": 1819,
+   "covered_functions": 421,
+   "covered_statements": 2318,
+   "function_percent": 92.32,
    "functions": 456,
-   "statement_percent": 72.26,
+   "statement_percent": 72.51,
    "statements": 3197,
    "statements_total": 3197
   },
@@ -224,64 +225,64 @@
    "statements_total": 160
   },
   "github.com/firehol/iprange/v4/go/internal/calleropen": {
-   "block_percent": 71.43,
-   "blocks": 35,
-   "blocks_covered": 25,
-   "covered_functions": 6,
-   "covered_statements": 33,
-   "function_percent": 100.0,
-   "functions": 6,
-   "statement_percent": 67.35,
-   "statements": 49,
-   "statements_total": 49
+   "block_percent": 42.34,
+   "blocks": 111,
+   "blocks_covered": 47,
+   "covered_functions": 11,
+   "covered_statements": 69,
+   "function_percent": 52.38,
+   "functions": 21,
+   "statement_percent": 40.35,
+   "statements": 171,
+   "statements_total": 171
   },
   "github.com/firehol/iprange/v4/go/internal/cli/fileio": {
-   "block_percent": 62.48,
-   "blocks": 765,
-   "blocks_covered": 478,
+   "block_percent": 62.37,
+   "blocks": 768,
+   "blocks_covered": 479,
    "covered_functions": 90,
-   "covered_statements": 683,
+   "covered_statements": 686,
    "function_percent": 84.11,
    "functions": 107,
-   "statement_percent": 66.44,
-   "statements": 1028,
-   "statements_total": 1028
+   "statement_percent": 66.41,
+   "statements": 1033,
+   "statements_total": 1033
   },
   "github.com/firehol/iprange/v4/go/internal/cli/handlers": {
-   "block_percent": 52.3,
-   "blocks": 6513,
-   "blocks_covered": 3406,
-   "covered_functions": 602,
-   "covered_statements": 5264,
-   "function_percent": 85.27,
+   "block_percent": 54.65,
+   "blocks": 6518,
+   "blocks_covered": 3562,
+   "covered_functions": 622,
+   "covered_statements": 5476,
+   "function_percent": 88.1,
    "functions": 706,
-   "statement_percent": 58.92,
-   "statements": 8934,
-   "statements_total": 8934
+   "statement_percent": 61.22,
+   "statements": 8945,
+   "statements_total": 8945
   },
   "github.com/firehol/iprange/v4/go/internal/cli/legacy": {
-   "block_percent": 56.25,
-   "blocks": 1648,
-   "blocks_covered": 927,
-   "covered_functions": 137,
-   "covered_statements": 1488,
-   "function_percent": 79.19,
-   "functions": 173,
-   "statement_percent": 60.49,
-   "statements": 2460,
-   "statements_total": 2460
+   "block_percent": 56.73,
+   "blocks": 1657,
+   "blocks_covered": 940,
+   "covered_functions": 138,
+   "covered_statements": 1510,
+   "function_percent": 79.31,
+   "functions": 174,
+   "statement_percent": 61.03,
+   "statements": 2474,
+   "statements_total": 2474
   },
   "github.com/firehol/iprange/v4/go/internal/cli/rpc": {
-   "block_percent": 76.51,
-   "blocks": 545,
-   "blocks_covered": 417,
-   "covered_functions": 78,
-   "covered_statements": 642,
-   "function_percent": 98.73,
-   "functions": 79,
-   "statement_percent": 79.06,
-   "statements": 812,
-   "statements_total": 812
+   "block_percent": 76.55,
+   "blocks": 550,
+   "blocks_covered": 421,
+   "covered_functions": 79,
+   "covered_statements": 650,
+   "function_percent": 98.75,
+   "functions": 80,
+   "statement_percent": 79.17,
+   "statements": 821,
+   "statements_total": 821
   },
   "github.com/firehol/iprange/v4/go/internal/fault": {
    "block_percent": 100.0,
@@ -296,14 +297,14 @@
    "statements_total": 1
   },
   "github.com/firehol/iprange/v4/go/internal/format": {
-   "block_percent": 65.47,
+   "block_percent": 65.57,
    "blocks": 999,
-   "blocks_covered": 654,
+   "blocks_covered": 655,
    "covered_functions": 134,
-   "covered_statements": 1078,
+   "covered_statements": 1079,
    "function_percent": 81.71,
    "functions": 164,
-   "statement_percent": 73.33,
+   "statement_percent": 73.4,
    "statements": 1470,
    "statements_total": 1470
   },
@@ -356,28 +357,28 @@
    "statements_total": 314
   },
   "github.com/firehol/iprange/v4/go/internal/publication": {
-   "block_percent": 45.96,
-   "blocks": 3105,
-   "blocks_covered": 1427,
-   "covered_functions": 360,
-   "covered_statements": 2002,
-   "function_percent": 68.83,
-   "functions": 523,
-   "statement_percent": 46.97,
-   "statements": 4262,
-   "statements_total": 4262
+   "block_percent": 48.23,
+   "blocks": 3110,
+   "blocks_covered": 1500,
+   "covered_functions": 375,
+   "covered_statements": 2104,
+   "function_percent": 71.43,
+   "functions": 525,
+   "statement_percent": 49.24,
+   "statements": 4273,
+   "statements_total": 4273
   },
   "github.com/firehol/iprange/v4/go/internal/random": {
-   "block_percent": 60.0,
-   "blocks": 5,
-   "blocks_covered": 3,
-   "covered_functions": 1,
-   "covered_statements": 4,
+   "block_percent": 57.14,
+   "blocks": 14,
+   "blocks_covered": 8,
+   "covered_functions": 3,
+   "covered_statements": 11,
    "function_percent": 100.0,
-   "functions": 1,
-   "statement_percent": 66.67,
-   "statements": 6,
-   "statements_total": 6
+   "functions": 3,
+   "statement_percent": 64.71,
+   "statements": 17,
+   "statements_total": 17
   },
   "github.com/firehol/iprange/v4/go/internal/reader": {
    "block_percent": 54.71,
@@ -440,16 +441,16 @@
    "statements_total": 293
   },
   "github.com/firehol/iprange/v4/go/internal/snapshot": {
-   "block_percent": 45.88,
-   "blocks": 279,
-   "blocks_covered": 128,
+   "block_percent": 46.83,
+   "blocks": 284,
+   "blocks_covered": 133,
    "covered_functions": 25,
-   "covered_statements": 192,
+   "covered_statements": 201,
    "function_percent": 75.76,
    "functions": 33,
-   "statement_percent": 50.26,
-   "statements": 382,
-   "statements_total": 382
+   "statement_percent": 51.41,
+   "statements": 391,
+   "statements_total": 391
   },
   "github.com/firehol/iprange/v4/go/internal/tree": {
    "block_percent": 41.94,
@@ -488,16 +489,16 @@
    "statements_total": 0
   },
   "github.com/firehol/iprange/v4/go/internal/worker": {
-   "block_percent": 66.15,
-   "blocks": 2538,
-   "blocks_covered": 1679,
-   "covered_functions": 313,
-   "covered_statements": 2302,
-   "function_percent": 96.01,
-   "functions": 326,
-   "statement_percent": 71.36,
-   "statements": 3226,
-   "statements_total": 3226
+   "block_percent": 66.11,
+   "blocks": 2570,
+   "blocks_covered": 1699,
+   "covered_functions": 317,
+   "covered_statements": 2336,
+   "function_percent": 95.77,
+   "functions": 331,
+   "statement_percent": 71.33,
+   "statements": 3275,
+   "statements_total": 3275
   },
   "github.com/firehol/iprange/v4/go/internal/writer": {
    "block_percent": 61.65,
@@ -523,18 +524,32 @@
   "note": "crash-battery children are killed and a killed Go coverage binary writes no counter block, so killed runs are excluded rather than merged; percentages here are measured from complete runs only",
   "performance_use": "instrumented binaries are never used for the throughput or performance attestation"
  },
+ "privacy": {
+  "checked_inputs": [
+   "--fixture-tool",
+   "--go-module",
+   "--json-report",
+   "--revision",
+   "--rust",
+   "--v4-tree",
+   "--work"
+  ],
+  "personal_path_in_report": null,
+  "sanitizer": "command_sanitize.write_committed_report"
+ },
  "schema": "iprange-cli-coverage-go-report-v1",
  "staged_from": {
   "checkout_root": null,
   "members": [
    "go",
-   "conformance"
+   "conformance",
+   "cli"
   ],
   "mode": "working-tree",
   "v4_tree": "v4"
  },
- "staged_tree": "/tmp/iprange-w1924/W-cov2/v4",
- "staging": "/tmp/iprange-w1924/W-cov2/bin",
+ "staged_tree": "/tmp/iprange-w1925/W-cov/v4",
+ "staging": "/tmp/iprange-w1925/W-cov/bin",
  "toolchain": {
   "covdata": "go tool covdata",
   "go_version": "go version go1.27.0 linux/amd64"
@@ -548,31 +563,31 @@
    "-covermode=atomic",
    "...",
    "-args",
-   "-test.gocoverdir=/tmp/iprange-w1924/W-cov2/cov-unit"
+   "-test.gocoverdir=/tmp/iprange-w1925/W-cov/cov-unit"
   ],
-  "cover_files": 48,
-  "coverdir": "/tmp/iprange-w1924/W-cov2/cov-unit",
+  "cover_files": 50,
+  "coverdir": "/tmp/iprange-w1925/W-cov/cov-unit",
   "covermode": "atomic",
   "measured": {
-   "blocks": 41876,
-   "blocks_covered": 18567,
-   "covered_functions": 3832,
-   "covered_statements": 27271,
-   "functions": 5917,
-   "statements": 57160
+   "blocks": 42025,
+   "blocks_covered": 18960,
+   "covered_functions": 3886,
+   "covered_statements": 27875,
+   "functions": 5943,
+   "statements": 57401
   },
   "percent": {
-   "blocks": 44.34,
-   "functions": 64.76,
+   "blocks": 45.12,
+   "functions": 65.39,
    "measured": {
-    "blocks": 41876,
-    "blocks_covered": 18567,
-    "covered_functions": 3832,
-    "covered_statements": 27271,
-    "functions": 5917,
-    "statements": 57160
+    "blocks": 42025,
+    "blocks_covered": 18960,
+    "covered_functions": 3886,
+    "covered_statements": 27875,
+    "functions": 5943,
+    "statements": 57401
    },
-   "statements": 47.71
+   "statements": 48.56
   },
   "rc": 0
  }
