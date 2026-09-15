@@ -1,0 +1,906 @@
+{
+  "binaries": {
+    "consumer": "/tmp/iprange-w1925/bin/go/iprange",
+    "consumer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+    "fixture_tool": "/tmp/iprange-w1925/bin/rust/v4-fixture",
+    "fixture_tool_sha256": "50f7465ca5f71fcebce85ff6b9ed32957bcb6a259489830c2b86ff93991b94bf",
+    "producer": "/usr/bin/false",
+    "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed"
+  },
+  "checkout_root": null,
+  "command": [
+    "v4/cli/crash_harness.py",
+    "--producer",
+    "/usr/bin/false",
+    "--consumer",
+    "/tmp/iprange-w1925/bin/go/iprange",
+    "--fixture-tool",
+    "/tmp/iprange-w1925/bin/rust/v4-fixture",
+    "--work-dir",
+    "/tmp/iprange-w1925/W-crashneg-false",
+    "--json-report",
+    "/tmp/iprange-w1925/reports/crash-negative-producer-false.json"
+  ],
+  "failed": 16,
+  "git_head": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
+  "leftover_processes": [],
+  "platform": {
+    "machine": "x86_64",
+    "python": "3.14.7",
+    "release": "7.1.9-1-MANJARO",
+    "system": "Linux"
+  },
+  "privacy": {
+    "checked_inputs": [
+      "--consumer",
+      "--fixture-tool",
+      "--json-report",
+      "--producer",
+      "--work-dir"
+    ],
+    "personal_path_in_report": null,
+    "sanitizer": "command_sanitize.write_committed_report"
+  },
+  "scenarios": [
+    {
+      "adapter_output_opens": {},
+      "assertions": [],
+      "consumer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "consumer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "destination_state": null,
+      "failures": [
+        "reservation marker was not observed; worker outcome={'error': 'service closed stdout; stderr='}"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": null,
+      "operations": {
+        "consumer": [],
+        "producer": [
+          "iprange.v1.current.publish"
+        ]
+      },
+      "pass": false,
+      "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "reopen_outcome": null,
+      "residue_bounded": null,
+      "resolve_outcome": null,
+      "scenario": "A1.producer->go"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [],
+      "consumer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "consumer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "destination_state": null,
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": null,
+      "operations": {
+        "consumer": [],
+        "producer": [
+          "iprange.v1.current.publish"
+        ]
+      },
+      "pass": false,
+      "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "reopen_outcome": null,
+      "residue_bounded": null,
+      "resolve_outcome": null,
+      "scenario": "A2.producer->go"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [],
+      "consumer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "consumer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "destination_state": null,
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": null,
+      "operations": {
+        "consumer": [],
+        "producer": [
+          "iprange.v1.current.publish"
+        ]
+      },
+      "pass": false,
+      "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "reopen_outcome": null,
+      "residue_bounded": null,
+      "resolve_outcome": null,
+      "scenario": "A3.producer->go"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [],
+      "consumer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "consumer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "destination_state": null,
+      "failures": [
+        "creating-state sidecar marker was not observed; worker outcome={'error': 'service closed stdout; stderr='}"
+      ],
+      "fixture_created_main": true,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": null,
+      "operations": {
+        "consumer": [],
+        "producer": [
+          "iprange.v1.database.initialize_live"
+        ]
+      },
+      "pass": false,
+      "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "reopen_outcome": null,
+      "residue_bounded": null,
+      "resolve_outcome": null,
+      "scenario": "B.producer->go"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [],
+      "consumer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "consumer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "destination_state": null,
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": null,
+      "operations": {
+        "consumer": [],
+        "producer": [
+          "iprange.v1.current.publish"
+        ]
+      },
+      "pass": false,
+      "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "reopen_outcome": null,
+      "residue_bounded": null,
+      "resolve_outcome": null,
+      "scenario": "C.producer->go"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [],
+      "consumer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "consumer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "destination_state": null,
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": true,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": null,
+      "operations": {
+        "consumer": [],
+        "producer": [
+          "iprange.v1.database.initialize_live"
+        ]
+      },
+      "pass": false,
+      "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "reopen_outcome": null,
+      "residue_bounded": null,
+      "resolve_outcome": null,
+      "scenario": "D.producer->go"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [],
+      "consumer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "consumer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "destination_state": null,
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": null,
+      "operations": {
+        "consumer": [],
+        "producer": [
+          "iprange.v1.current.publish"
+        ]
+      },
+      "pass": false,
+      "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "reopen_outcome": null,
+      "residue_bounded": null,
+      "resolve_outcome": null,
+      "scenario": "E.producer->go"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [],
+      "consumer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "consumer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "destination_state": null,
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": null,
+      "operations": {
+        "consumer": [],
+        "producer": [
+          "iprange.v1.current.publish"
+        ]
+      },
+      "pass": false,
+      "producer": "producer:/usr/bin/false",
+      "producer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "reopen_outcome": null,
+      "residue_bounded": null,
+      "resolve_outcome": null,
+      "scenario": "F.producer->go"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [
+        "exactly one reservation must remain, got ['.iprange-reservation-593decfbfd358d05d833154c6f3c8f37.tmp']",
+        "at most one private publication output may remain, got ['.iprange-publish-593decfbfd358d05d833154c6f3c8f37.tmp']",
+        "the retained reservation must carry the output digest",
+        "destination must be absent or the exact complete attempt output (atomic namespace publication), got absent_after_crash"
+      ],
+      "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "created_ordinals": {
+        "publication_reservation": 0,
+        "publication_temp": 0,
+        "v4_main": 0
+      },
+      "destination_state": {
+        "class": "absent_after_crash",
+        "exists": false,
+        "publish_temp_basenames": [
+          ".iprange-publish-593decfbfd358d05d833154c6f3c8f37.tmp"
+        ],
+        "recorded_output_sha512": "53e54e7eb45607c77ba85f7cefa4b7f0b6f1eb64a91330c074d56cfc07bd9d8ad13951f529f090dac5bd1ca587246c3eda4b38b31cc4aa23d20121bac374307e",
+        "reservation_basename": [
+          ".iprange-reservation-593decfbfd358d05d833154c6f3c8f37.tmp"
+        ]
+      },
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": 846.8,
+      "operations": {
+        "consumer": [
+          "iprange.v1.reader.open"
+        ],
+        "producer": [
+          "iprange.v1.current.publish"
+        ]
+      },
+      "pass": false,
+      "producer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "producer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "reopen_outcome": null,
+      "residue_bounded": null,
+      "resolve_outcome": null,
+      "scenario": "A1.go->producer"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [
+        "prior publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '64123b5f3e136d9130a27e60f5476aca', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': 'e541d1df6cbbf9ed31296f3469bfa750', 'destination_basename': 'cHVibGlzaGVkLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '230593854', 'volume': '66307'}, 'output_byte_length': '2875392', 'output_identity': {'file': '230593856', 'volume': '66307'}, 'output_sha512': 'a82fd674285d439a18d8b64629f943f999b8b627bbf28c8723046b40b2097e37bd022965b1102194b309dd46a6f2275f8a9de148dddeeb704ad00e8823f93193', 'publication_attempt_id': '48ac9c9cd367563d299e542812f50a4e', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '230593857', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '51200000', 'input_record_count': '200000', 'normalized_interval_count': '200000'}}}",
+        "exactly one reservation must remain, got ['.iprange-reservation-c76c444b3aa9ca24f462d191fb979273.tmp']",
+        "the retained reservation must carry the output digest",
+        "destination must be absent, prior, or match the reservation-recorded output digest, got 'prior_complete'"
+      ],
+      "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "created_ordinals": {
+        "publication_reservation": 1,
+        "publication_temp": 1,
+        "v4_main": 1
+      },
+      "destination_state": {
+        "class": "prior_complete",
+        "exists": true,
+        "prior_sha256": "73ed941d6d57cc9df75b3a0de62d7dece8a38d64aca8d1928d0c8227c3a9d3e7",
+        "prior_sha512": "a82fd674285d439a18d8b64629f943f999b8b627bbf28c8723046b40b2097e37bd022965b1102194b309dd46a6f2275f8a9de148dddeeb704ad00e8823f93193",
+        "publish_temp_basenames": [
+          ".iprange-publish-c76c444b3aa9ca24f462d191fb979273.tmp"
+        ],
+        "reservation_basename": [
+          ".iprange-reservation-c76c444b3aa9ca24f462d191fb979273.tmp"
+        ]
+      },
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": 813.3,
+      "operations": {
+        "consumer": [
+          "iprange.v1.reader.open"
+        ],
+        "producer": [
+          "iprange.v1.current.publish",
+          "iprange.v1.current.publish"
+        ]
+      },
+      "pass": false,
+      "producer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "producer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "reopen_outcome": null,
+      "residue_bounded": null,
+      "resolve_outcome": null,
+      "scenario": "A2.go->producer"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [
+        "prior publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '665b0311fc4807c3704d93a97fc58be4', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': '23b48c576911186617aee95010559264', 'destination_basename': 'cHVibGlzaGVkLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '230593860', 'volume': '66307'}, 'output_byte_length': '2875392', 'output_identity': {'file': '230593862', 'volume': '66307'}, 'output_sha512': '998e9bf26ec60754ce77fd34d221e81c81d75e9c1aab33c6b598aef729c6d4e41618b0606e1f41caf4d4ebcf75e53b59cb45bdbae839264f29b292333abbe05c', 'publication_attempt_id': '475d4e61f811bbaf456c6467ed993a31', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '230593863', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '51200000', 'input_record_count': '200000', 'normalized_interval_count': '200000'}}}",
+        "exactly one reservation must remain, got ['.iprange-reservation-6e110f20386f1307536751ccf5d5e9a7.tmp']",
+        "a destination that is neither prior nor the reservation output must classify foreign, got 'foreign'"
+      ],
+      "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "created_ordinals": {
+        "publication_reservation": 1,
+        "publication_temp": 1,
+        "v4_main": 1
+      },
+      "destination_state": {
+        "class": "foreign",
+        "exists": true,
+        "publish_temp_basenames": [
+          ".iprange-publish-6e110f20386f1307536751ccf5d5e9a7.tmp"
+        ],
+        "reservation_basename": [
+          ".iprange-reservation-6e110f20386f1307536751ccf5d5e9a7.tmp"
+        ]
+      },
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": 827.4,
+      "operations": {
+        "consumer": [
+          "iprange.v1.reader.open"
+        ],
+        "producer": [
+          "iprange.v1.current.publish",
+          "iprange.v1.current.publish"
+        ]
+      },
+      "pass": false,
+      "producer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "producer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "reopen_outcome": null,
+      "residue_bounded": null,
+      "resolve_outcome": null,
+      "scenario": "A3.go->producer"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [
+        "the v4 main must be byte-identical after the kill",
+        "the canonical sidecar must remain as the documented residue",
+        "database.info live must truthfully refuse an interrupted transition, got {'error': {'code': -32010, 'data': {'code': 'wrong_state', 'outcome': 'read_only_failure'}, 'message': 'iprange v4 error 11: reader table is not ready'}, 'id': 'ilive', 'jsonrpc': '2.0'}",
+        "database.info immutable must truthfully refuse an interrupted transition, got {'error': {'code': -32010, 'data': {'code': 'wrong_state', 'outcome': 'read_only_failure'}, 'message': 'iprange v4 error 11: external sidecar present; immutable open of a live database is refused'}, 'id': 'iimmutable', 'jsonrpc': '2.0'}",
+        "no maintenance residue may exist beside the sidecar, got reports=[{'entries': '0', 'kind': 'scratch'}, {'entries': '0', 'kind': 'reservation'}, {'entries': '0', 'kind': 'publication_temp'}] error=None",
+        "residue resolution must report the truthful completed transition, got {'database_id': 'f9e0162199803c7636ac239932f5410e', 'housekeeping': {'artifacts': []}, 'kind': 'canonical', 'main_identity': {'file': '230593870', 'volume': '66307'}, 'method': 'iprange.v1.database.live_residue.resolve', 'reader_capacity': 8, 'residue_possible': False, 'sidecar_id': 'e2ef94091a046c3c41735c179f2e4978', 'sidecar_identity': {'file': '230593867', 'volume': '66307'}, 'status': 'completed', 'visible_housekeeping': []}",
+        "database.info live must succeed after resolution, got {'id': '5', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': 'fefef5c1c0da61da72080e8fc01cdc37', 'database_id': 'f9e0162199803c7636ac239932f5410e', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}"
+      ],
+      "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "created_ordinals": {
+        "live_sidecar": 0
+      },
+      "destination_state": {
+        "class": "main_unchanged_sidecar_present",
+        "main_sha256": "578a660fef0db849332685c2a877503c698ac60aa64d7a149ec0765f51e57d8b",
+        "sidecar_basename": "direct.iprange.readers",
+        "sidecar_present": true
+      },
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": true,
+      "inspect_outcome": {
+        "database_info_immutable": {
+          "code": "wrong_state",
+          "outcome": "read_only_failure"
+        },
+        "database_info_live": {
+          "code": "wrong_state",
+          "outcome": "read_only_failure"
+        }
+      },
+      "kill_method": "SIGKILL process group at observable process-crash marker",
+      "kinds": {},
+      "live_reader_opens": {
+        "producer": 5
+      },
+      "marker_seen_ms": 2.7,
+      "operations": {
+        "consumer": [
+          "iprange.v1.reader.open"
+        ],
+        "producer": [
+          "iprange.v1.database.initialize_live",
+          "iprange.v1.database.info",
+          "iprange.v1.database.info",
+          "iprange.v1.maintenance.list",
+          "iprange.v1.database.live_residue.resolve",
+          "iprange.v1.database.info"
+        ]
+      },
+      "pass": false,
+      "producer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "producer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "reopen_outcome": null,
+      "residue_bounded": {
+        "maintenance_list_pre": [
+          {
+            "entries": "0",
+            "kind": "scratch"
+          },
+          {
+            "entries": "0",
+            "kind": "reservation"
+          },
+          {
+            "entries": "0",
+            "kind": "publication_temp"
+          }
+        ],
+        "sidecar_only": true
+      },
+      "resolve_outcome": {
+        "kind": "canonical",
+        "residue_possible": false,
+        "status": "completed"
+      },
+      "scenario": "B.go->producer"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [
+        "big publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '4676786569f0408c5074fd5c5e57b36a', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': 'a343f4b1779f3a67d24944ac87080f53', 'destination_basename': 'YmlnLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '230593871', 'volume': '66307'}, 'output_byte_length': '21282816', 'output_identity': {'file': '230593874', 'volume': '66307'}, 'output_sha512': 'c4ea193c09fb38cd9177c8ff87f85babe879c0666a6e00fe6ee3457d6bd40b174676148e50d7e7c79b1783fb7c017ddd4f849ece1fe8c73370ddc2da81ec0a16', 'publication_attempt_id': '1958018049ef61ca5a4abbb54f608cf2', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '230593875', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '384000000', 'input_record_count': '1500000', 'normalized_interval_count': '1500000'}}}",
+        "recovery.inspect must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'candidates': [{'commit_nonce': '4676786569f0408c5074fd5c5e57b36a', 'database_id': 'a343f4b1779f3a67d24944ac87080f53', 'label': 'newest', 'meta_page': 1, 'source_identity': {'file': '230593874', 'volume': '66307'}, 'transaction_id': '1'}], 'method': 'iprange.v1.recovery.inspect', 'progress': {'bounded_possible_span_addresses': '0', 'checked_unique_pages': '0', 'finding_count': '0', 'has_unbounded_unknown': False, 'untraversable_subgraphs': '0'}, 'source_identity': {'file': '230593874', 'volume': '66307'}}}",
+        "exactly one recovery candidate expected, got 1",
+        "abandoned scratch must be bounded by max_scratch_files, got 1 files: ['.iprange-scratch-938522b3e28d7228454daac35331ec87-00000000.tmp']",
+        "the recovery destination must never appear before the kill",
+        "maintenance.list scratch must succeed, got None",
+        "maintenance.list must report exactly the on-disk abandoned scratch: reports=[{'entries': '1', 'kind': 'scratch'}] rows=[{'artifact_identity': {'file': '230593877', 'volume': '66307'}, 'attempt_id': '938522b3e28d7228454daac35331ec87', 'authentication': {'kind': 'authenticated', 'owner': 'recovery'}, 'directory': '/tmp/iprange-w1925/W-crashneg-false/go-producer/c-go->producer-fa68ce3e/scratch', 'directory_identity': {'file': '230593872', 'volume': '66307'}, 'kind': 'scratch', 'ordinal': 0}] disk=['.iprange-scratch-938522b3e28d7228454daac35331ec87-00000000.tmp']",
+        "maintenance.remove must succeed, got {'id': '4', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.maintenance.remove', 'removal': {'cleanup_state': 'clean', 'housekeeping': {'artifacts': []}, 'source_present': True, 'visible_housekeeping': []}}}",
+        "removal must delete every abandoned scratch file",
+        "maintenance.list residue must succeed, got None",
+        "maintenance residue counts must match the on-disk residue: reports=[{'entries': '1', 'kind': 'publication_temp'}, {'entries': '0', 'kind': 'reservation'}] disk={'reservation': [], 'publish_temp': ['.iprange-publish-6550bf1bdda887f6ba1e0cf2bdeb7543.tmp']}"
+      ],
+      "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "created_ordinals": {
+        "authorized_scratch": 2,
+        "publication_reservation": 2,
+        "publication_temp": 2,
+        "v4_main": 0
+      },
+      "destination_state": {
+        "class": "scratch_residue",
+        "publish_temp_basenames": [
+          ".iprange-publish-6550bf1bdda887f6ba1e0cf2bdeb7543.tmp"
+        ],
+        "reservation_basenames": [],
+        "scratch_basenames": [
+          ".iprange-scratch-938522b3e28d7228454daac35331ec87-00000000.tmp"
+        ]
+      },
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at authorized-scratch marker",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": 13.4,
+      "operations": {
+        "consumer": [
+          "iprange.v1.reader.open"
+        ],
+        "producer": [
+          "iprange.v1.current.publish",
+          "iprange.v1.recovery.inspect",
+          "iprange.v1.recover",
+          "iprange.v1.maintenance.list",
+          "iprange.v1.maintenance.remove",
+          "iprange.v1.maintenance.list"
+        ]
+      },
+      "pass": false,
+      "producer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "producer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "reopen_outcome": null,
+      "residue_bounded": {
+        "attempt_ids": [
+          "938522b3e28d7228454daac35331ec87"
+        ],
+        "publication_temp": 1,
+        "reports": [
+          {
+            "entries": "1",
+            "kind": "scratch"
+          }
+        ],
+        "reservation": 0,
+        "scratch_listed": 1
+      },
+      "resolve_outcome": null,
+      "scenario": "C.go->producer"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [
+        "initialize_live must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'commit_nonce': '32b4ccb08a3d0dbbf893c27f3a89a88c', 'database_id': 'ad0843c77afb61127eec4917d4e4064e', 'directory_identity': {'file': '230593878', 'volume': '66307'}, 'housekeeping': {'artifacts': []}, 'main_basename': 'db.iprange', 'main_identity': {'file': '230593884', 'volume': '66307'}, 'method': 'iprange.v1.database.initialize_live', 'new_sidecar_identity': {'file': '230593882', 'volume': '66307'}, 'new_sidecar_location': 'canonical', 'operation': 'initialize', 'reader_capacity': 8, 'residue_possible': False, 'sidecar_id': 'cd37743da685c84acb5a05d314f18ef4', 'status': 'initialized', 'transaction_id': '2', 'visible_housekeeping': []}}",
+        "database.info live must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': '32b4ccb08a3d0dbbf893c27f3a89a88c', 'database_id': 'ad0843c77afb61127eec4917d4e4064e', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
+        "the control replace must complete, got {'id': '3', 'jsonrpc': '2.0', 'result': {'commit': {'attempted_commit_nonce': '36c2e1c41a461923879ff1ae0f50a6bf', 'attempted_database_id': 'ad0843c77afb61127eec4917d4e4064e', 'attempted_transaction_id': '3', 'cleanup': {}, 'coordination_cleanup': {}, 'directory_identity': {'file': '230593878', 'volume': '66307'}, 'durability': 'committed', 'main_identity': {'file': '230593884', 'volume': '66307'}}, 'metadata_logical_change': 'unchanged', 'method': 'iprange.v1.direct.replace', 'report': {'added_addresses': '12800000', 'after_addresses': '12800000', 'after_range_record_count': '200000', 'before_addresses': '26', 'before_range_record_count': '3', 'changed_value_addresses': '0', 'created_feed_count': '0', 'input_addresses': '12800000', 'input_normalized_interval_count': '200000', 'input_record_count': '200000', 'logical_change': 'changed', 'matched_feed_count': '0', 'removed_addresses': '26', 'source_distinct_membership_count': '0', 'source_feed_count': '0', 'translated_membership_count': '0', 'unchanged_value_addresses': '0', 'workflow': 'direct_replacement'}, 'writer_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
+        "database.info live must succeed, got {'id': '4', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': '36c2e1c41a461923879ff1ae0f50a6bf', 'database_id': 'ad0843c77afb61127eec4917d4e4064e', 'meta_selection': 'proven_current', 'page_count': '1395', 'range_record_count': '200000', 'structure_kind': 'none', 'transaction_id': '3', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
+        "the control replace must advance the transaction by one and land exactly the repaired feed line count (200000), got 3/200000",
+        "the control spot-check must show the repaired feed ranges with their per-line values, got [('10.0.0.0', True, 1), ('10.0.0.63', True, 1), ('10.0.0.64', True, 2), ('10.195.79.192', True, 200000), ('10.195.79.255', True, 200000), ('192.0.2.10', False, None)]",
+        "initialize_live must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'commit_nonce': 'e81b09f68ec946d3a98fb5c7db5d5782', 'database_id': 'd59bcb8784766d6c9e3f96a2e4d18c0f', 'directory_identity': {'file': '230593880', 'volume': '66307'}, 'housekeeping': {'artifacts': []}, 'main_basename': 'db.iprange', 'main_identity': {'file': '230593885', 'volume': '66307'}, 'method': 'iprange.v1.database.initialize_live', 'new_sidecar_identity': {'file': '230593883', 'volume': '66307'}, 'new_sidecar_location': 'canonical', 'operation': 'initialize', 'reader_capacity': 8, 'residue_possible': False, 'sidecar_id': 'db8c02af2ae8ae1711fa81fc5439b92c', 'status': 'initialized', 'transaction_id': '2', 'visible_housekeeping': []}}",
+        "database.info live must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': 'e81b09f68ec946d3a98fb5c7db5d5782', 'database_id': 'd59bcb8784766d6c9e3f96a2e4d18c0f', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
+        "database.info must report T0 and range count, got {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': 'e81b09f68ec946d3a98fb5c7db5d5782', 'database_id': 'd59bcb8784766d6c9e3f96a2e4d18c0f', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}",
+        "the pre-transition fixture content probe must be intact, got [('192.0.2.10', True, 10), ('192.0.2.20', True, 15), ('198.51.100.35', True, 30), ('10.0.0.0', False, None)]",
+        "database.info live must succeed on a fresh producer, got {'id': '5', 'jsonrpc': '2.0', 'result': {'info': {'active_feed_count': '0', 'address_family': 'ipv4', 'commit_nonce': 'e81b09f68ec946d3a98fb5c7db5d5782', 'database_id': 'd59bcb8784766d6c9e3f96a2e4d18c0f', 'meta_selection': 'proven_current', 'page_count': '4', 'range_record_count': '3', 'structure_kind': 'none', 'transaction_id': '2', 'value_kind': 'direct', 'value_tag': {'hex': '646972656374'}}, 'method': 'iprange.v1.database.info', 'source_close': {'cleanup': {}, 'coordination_cleanup': {}, 'outcome': 'closed'}}}",
+        "an interrupted draft must never become the generation: expected pre-transition T0=2 R0=3, got 2/3",
+        "the control run's post-transition facts must be absent after the interrupted draft: got 2/3, control post 3/200000",
+        "the committed database must keep the pre-transition content probe after the interrupted draft, got [('192.0.2.10', True, 10), ('192.0.2.20', True, 15), ('198.51.100.35', True, 30), ('10.0.0.0', False, None)]",
+        "the control run's repaired-feed content must be absent after the interrupted draft, got [('10.0.0.0', False, None), ('10.0.0.64', False, None), ('10.195.79.192', False, None)]",
+        "immutable database.info must truthfully refuse a live database, got {'error': {'code': -32010, 'data': {'code': 'wrong_state', 'outcome': 'read_only_failure'}, 'message': 'iprange v4 error 11: external sidecar present; immutable open of a live database is refused'}, 'id': '8', 'jsonrpc': '2.0'}",
+        "an interrupted draft must leave no managed maintenance residue, got reports=[{'entries': '0', 'kind': 'scratch'}, {'entries': '0', 'kind': 'reservation'}, {'entries': '0', 'kind': 'publication_temp'}] error=None"
+      ],
+      "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "control_run": {
+        "post_transition_info": {
+          "range_record_count": "200000",
+          "transaction_id": "3"
+        },
+        "pre_transition_info": {
+          "range_record_count": "3",
+          "transaction_id": "2"
+        },
+        "spot_check_normalized": [
+          [
+            "10.0.0.0",
+            true,
+            1
+          ],
+          [
+            "10.0.0.63",
+            true,
+            1
+          ],
+          [
+            "10.0.0.64",
+            true,
+            2
+          ],
+          [
+            "10.195.79.192",
+            true,
+            200000
+          ],
+          [
+            "10.195.79.255",
+            true,
+            200000
+          ],
+          [
+            "192.0.2.10",
+            false,
+            null
+          ]
+        ]
+      },
+      "created_ordinals": {
+        "live_sidecar": 7
+      },
+      "destination_state": {
+        "class": "live_dataset_with_uncommitted_write",
+        "main_size_after": 81936384,
+        "main_size_before": 16384
+      },
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": true,
+      "inspect_outcome": {
+        "control_post_transition_absent": true,
+        "database_info_immutable": {
+          "code": "wrong_state",
+          "outcome": "read_only_failure"
+        },
+        "database_info_live_pre_transition": {
+          "range_record_count": "3",
+          "transaction_id": "2"
+        },
+        "pre_transition_probe_after_recovery": [
+          [
+            "192.0.2.10",
+            true,
+            10
+          ],
+          [
+            "192.0.2.20",
+            true,
+            15
+          ],
+          [
+            "198.51.100.35",
+            true,
+            30
+          ],
+          [
+            "10.0.0.0",
+            false,
+            null
+          ]
+        ]
+      },
+      "kill_method": "SIGKILL process group at observable process-crash marker during uncommitted live-draft construction (main-file growth while the draft is being built; explicitly not a storage-sync durability claim).  The uncommitted draft must never become the committed generation: the committed database must reflect the pre-transition state.  The approved durable sidecar marker is impossible because neither engine writes the .readers sidecar during a live commit (evidence: Go internal/writer/publication.go Publish; Rust live_writer/commit.rs); exact commit/finish interruption is covered by the SDK fault gates (Go lifecycle_crash_test.go TestLiveWriterCommitCrashPointsSelectOnlyACompleteGeneration and TestLiveWriterOutcomeUnknownFailClosed; live_writer_test.go TestLiveWriterCommitCancellationAbortsDraft; Rust live_crash_tests::commit_crashes_select_only_a_complete_generation)",
+      "kinds": {},
+      "live_reader_opens": {
+        "producer": 17
+      },
+      "marker_seen_ms": 0.8,
+      "operations": {
+        "consumer": [
+          "iprange.v1.reader.open"
+        ],
+        "producer": [
+          "iprange.v1.database.initialize_live",
+          "iprange.v1.database.info",
+          "iprange.v1.direct.replace",
+          "iprange.v1.database.info",
+          "iprange.v1.reader.open",
+          "iprange.v1.reader.lookup",
+          "iprange.v1.reader.close",
+          "iprange.v1.database.initialize_live",
+          "iprange.v1.database.info",
+          "iprange.v1.reader.open",
+          "iprange.v1.reader.lookup",
+          "iprange.v1.reader.close",
+          "iprange.v1.direct.replace",
+          "iprange.v1.database.info",
+          "iprange.v1.reader.open",
+          "iprange.v1.reader.lookup",
+          "iprange.v1.reader.close",
+          "iprange.v1.reader.open",
+          "iprange.v1.reader.lookup",
+          "iprange.v1.reader.close",
+          "iprange.v1.database.info",
+          "iprange.v1.maintenance.list"
+        ]
+      },
+      "pass": false,
+      "producer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "producer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "reopen_outcome": null,
+      "residue_bounded": {
+        "maintenance_list_pre": [
+          {
+            "entries": "0",
+            "kind": "scratch"
+          },
+          {
+            "entries": "0",
+            "kind": "reservation"
+          },
+          {
+            "entries": "0",
+            "kind": "publication_temp"
+          }
+        ]
+      },
+      "resolve_outcome": null,
+      "scenario": "D.go->producer"
+    },
+    {
+      "adapter_output_opens": {
+        "producer": 2
+      },
+      "assertions": [
+        "big publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '6acd580cedba219186f5ec1992dfe439', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': '5fe114ebbe19818c52e0128a82cedfa9', 'destination_basename': 'YmlnLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '230593887', 'volume': '66307'}, 'output_byte_length': '7127040', 'output_identity': {'file': '230593889', 'volume': '66307'}, 'output_sha512': 'f8b2c4005ff11785c61c3ec80387584dd3cbed313a2993df5c365237761211eeb9ed8e4dc33ca8ea57d0f02da85531e17a004a04632900c67da8f726c36a07df', 'publication_attempt_id': 'ce516bf48725fe5882fbfbaa4bd06228', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '230593890', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '128000000', 'input_record_count': '500000', 'normalized_interval_count': '500000'}}}",
+        "reference export must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'addresses': '128000000', 'bytes': '12472986', 'format': 'ranges', 'identity': {'file': '230593889', 'volume': '66307'}, 'method': 'iprange.v1.export', 'path': '/tmp/iprange-w1925/W-crashneg-false/go-producer/e-go->producer-410c717a/ref.txt', 'rows': '500000', 'sha256': '4d5094acbc4cb0b9f24a34665f366aa73e4772132fba75ffb626de397e48a505'}}",
+        "export destination must be absent after the kill",
+        "exactly one export temp must remain as the bounded residue (the interrupted attempt's private .<handle>.export.tmp), got ['.76e790a93a3ff24fa0b6759aa549f21f.export.tmp']",
+        "the orphan must be a private .<handle>.export.tmp basename (leading dot, non-empty handle, '.export.tmp' suffix), got '.76e790a93a3ff24fa0b6759aa549f21f.export.tmp'",
+        "the immutable source must be unchanged by the interrupted export",
+        "export retry must complete, got {'id': '4', 'jsonrpc': '2.0', 'result': {'addresses': '128000000', 'bytes': '12472986', 'format': 'ranges', 'identity': {'file': '230593889', 'volume': '66307'}, 'method': 'iprange.v1.export', 'path': '/tmp/iprange-w1925/W-crashneg-false/go-producer/e-go->producer-410c717a/out.txt', 'rows': '500000', 'sha256': '4d5094acbc4cb0b9f24a34665f366aa73e4772132fba75ffb626de397e48a505'}}",
+        "retried export must land byte-identical to the reference",
+        "the completed retry must remove its own private temp and leave exactly the pre-retry orphan set (no new residue): pre-retry ['.76e790a93a3ff24fa0b6759aa549f21f.export.tmp'], post-retry ['.76e790a93a3ff24fa0b6759aa549f21f.export.tmp']"
+      ],
+      "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "created_ordinals": {
+        "adapter_output": 2,
+        "v4_main": 0
+      },
+      "destination_state": {
+        "class": "export_partial_output",
+        "dest_absent_after_crash": true,
+        "export_temp_basenames": [
+          ".76e790a93a3ff24fa0b6759aa549f21f.export.tmp"
+        ]
+      },
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": null,
+      "kill_method": "SIGKILL process group at export partial-output marker (real flushed output: the 64 KiB-buffered temp is 0 bytes until the first flush; the kill waits for size > 0)",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": 13.0,
+      "operations": {
+        "consumer": [
+          "iprange.v1.reader.open"
+        ],
+        "producer": [
+          "iprange.v1.current.publish",
+          "iprange.v1.export",
+          "iprange.v1.export",
+          "iprange.v1.export"
+        ]
+      },
+      "pass": false,
+      "producer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "producer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "reopen_outcome": null,
+      "residue_bounded": {
+        "export_temp_orphans": [
+          ".76e790a93a3ff24fa0b6759aa549f21f.export.tmp"
+        ],
+        "orphans_after_retry": [
+          ".76e790a93a3ff24fa0b6759aa549f21f.export.tmp"
+        ]
+      },
+      "resolve_outcome": {
+        "retry_export_completed": true,
+        "sha256_match": true
+      },
+      "scenario": "E.go->producer"
+    },
+    {
+      "adapter_output_opens": {},
+      "assertions": [
+        "big publish must succeed, got {'id': '1', 'jsonrpc': '2.0', 'result': {'method': 'iprange.v1.current.publish', 'publication': {'attempt': {'commit_nonce': '6b23dd322cb1ea514b70fdcbc819ca44', 'creation_security': {'commitment': 'c4ab6ab01d42f2365926d090e4da94d68b661cc187949111ea887de8a7e842c8', 'kind': 1}, 'database_id': '8fb83cd20bf09147df1ce1536bf65a92', 'destination_basename': 'YmlnLmlwcmFuZ2U=', 'destination_basename_encoding': 1, 'directory_identity': {'file': '230593893', 'volume': '66307'}, 'output_byte_length': '21282816', 'output_identity': {'file': '230593895', 'volume': '66307'}, 'output_sha512': '30d08f82d33729e6be32f376b0ceeb5a586e7e98f98f8cb5fbbe66710917a9e6b867a81265072d5e111a1a97ed51ab787d3255d265c10ad931219ab2c2b76e77', 'publication_attempt_id': '5af982fc8ae42ad4ae98ac1099fabe2d', 'publication_policy': 'fail_if_exists', 'reservation_identity': {'file': '230593896', 'volume': '66307'}, 'transaction_id': '1'}, 'cleanup': {}, 'coordination_access_policy': 'absent', 'coordination_cleanup': {}, 'destination_content': 'desired', 'housekeeping': {'artifacts': []}, 'later_canonical': 'none', 'main_access_policy': 'creator_only', 'main_namespace_may_have_been_attempted': True, 'publication': 'published', 'visible_housekeeping': []}, 'report': {'addresses': '384000000', 'input_record_count': '1500000', 'normalized_interval_count': '1500000'}}}",
+        "the 1 500 000-range main must hold >= 1400 leaf pages, got 1400",
+        "reference validate must succeed, got {'id': '2', 'jsonrpc': '2.0', 'result': {'findings': {'bytes': '125057', 'path': '/tmp/iprange-w1925/W-crashneg-false/go-producer/f-go->producer-1b5427c3/ref-findings.jsonl', 'rows': '1402', 'sha256': 'ee6696b5082b73881bec2eb273d1b0b845af982efaf70b12d4027fb8c633fb1c'}, 'method': 'iprange.v1.validate', 'result': {'file_identity': {'file': '230593895', 'volume': '66307'}, 'generation': {'address_family': 'ipv4', 'commit_nonce': '6b23dd322cb1ea514b70fdcbc819ca44', 'database_id': '8fb83cd20bf09147df1ce1536bf65a92', 'page_count': '5196', 'structure_kind': 'none', 'transaction_id': '1', 'value_kind': 'membership', 'value_tag': {'hex': '707562746167'}}, 'progress': {'bounded_possible_span_addresses': '0', 'checked_unique_pages': '5194', 'finding_count': '1402', 'has_unbounded_unknown': True, 'untraversable_subgraphs': '1400'}, 'valid': False}}}",
+        "reference validate on the deterministic leaf damage must find >= 1000 findings (got 1402) with reference bytes strictly between one and two 64 KiB writer blocks (got 125057); the lead recalibrates the exact finding count during the full battery",
+        "findings destination must be absent after the kill",
+        "exactly one findings-output temp must remain as the bounded residue, got ['.767359bf216705597687fd1066fe8aa6.export.tmp']",
+        "the interrupted findings temp must carry real flushed bytes, got 65536",
+        "interrupted findings bytes must be strictly fewer than the reference findings bytes (65536 < 125057)",
+        "interrupted findings temp must be a strict prefix of the reference findings",
+        "the damaged main must be byte-identical after the kill",
+        "fresh validate must succeed, got {'id': '4', 'jsonrpc': '2.0', 'result': {'findings': {'bytes': '125057', 'path': '/tmp/iprange-w1925/W-crashneg-false/go-producer/f-go->producer-1b5427c3/fresh-findings.jsonl', 'rows': '1402', 'sha256': 'ee6696b5082b73881bec2eb273d1b0b845af982efaf70b12d4027fb8c633fb1c'}, 'method': 'iprange.v1.validate', 'result': {'file_identity': {'file': '230593895', 'volume': '66307'}, 'generation': {'address_family': 'ipv4', 'commit_nonce': '6b23dd322cb1ea514b70fdcbc819ca44', 'database_id': '8fb83cd20bf09147df1ce1536bf65a92', 'page_count': '5196', 'structure_kind': 'none', 'transaction_id': '1', 'value_kind': 'membership', 'value_tag': {'hex': '707562746167'}}, 'progress': {'bounded_possible_span_addresses': '0', 'checked_unique_pages': '5194', 'finding_count': '1402', 'has_unbounded_unknown': True, 'untraversable_subgraphs': '1400'}, 'valid': False}}}",
+        "fresh validate must report the same truthful findings as the reference (valid=False count=1402 rows=1402), got valid=False count=1402 rows=1402",
+        "fresh validate findings must be byte-identical to the reference findings (same deterministic damage)"
+      ],
+      "consumer": "producer:/usr/bin/false",
+      "consumer_sha256": "193f3dd1f3e79ccc77ce0d8a316431d04ae5c37ac36c1fc3a0f8baef38ebdaed",
+      "created_ordinals": {
+        "v4_main": 0
+      },
+      "destination_state": {
+        "class": "validate_findings_aborted",
+        "findings_temp_basenames": [
+          ".767359bf216705597687fd1066fe8aa6.export.tmp"
+        ],
+        "findings_temp_bytes": 65536,
+        "main_sha256_unchanged": true,
+        "reference_bytes": 125057
+      },
+      "failures": [
+        "service exited with status 1 after a successful session (expected 0)"
+      ],
+      "fixture_created_main": false,
+      "inspect_outcome": {
+        "reference_validate": {
+          "bytes": 125057,
+          "damaged_leaf_pages": 1400,
+          "finding_count": "1402",
+          "rows": "1402",
+          "valid": false
+        }
+      },
+      "kill_method": "SIGKILL process group at findings-output flush marker during validation/findings delivery (the private export temp carries real flushed bytes; interruption lands during delivery, not at an exact internal walk point).  The worker-scratch marker is impossible because neither engine's validate spills to authorized scratch (scratch is API-parity only in v4/go/internal/validation and v4/rust/iprange-livedb/src/validation; a heap below the claim-bitmap requirement is a truthful insufficient_resource_budget refusal, never a spill)",
+      "kinds": {},
+      "live_reader_opens": {},
+      "marker_seen_ms": 5608.5,
+      "operations": {
+        "consumer": [
+          "iprange.v1.reader.open"
+        ],
+        "producer": [
+          "iprange.v1.current.publish",
+          "iprange.v1.validate",
+          "iprange.v1.validate",
+          "iprange.v1.validate"
+        ]
+      },
+      "pass": false,
+      "producer": "go:/tmp/iprange-w1925/bin/go/iprange",
+      "producer_sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
+      "reopen_outcome": null,
+      "residue_bounded": {
+        "export_temp_orphans": [
+          ".767359bf216705597687fd1066fe8aa6.export.tmp"
+        ],
+        "findings_dest_absent": true,
+        "findings_temp_bytes": 65536,
+        "main_sha256_unchanged": true
+      },
+      "resolve_outcome": {
+        "findings_content_sha256_identical": true,
+        "fresh_finding_count": "1402",
+        "fresh_rows": "1402",
+        "fresh_validate_reported_same": true,
+        "reference_finding_count": "1402"
+      },
+      "scenario": "F.go->producer"
+    }
+  ],
+  "schema": "iprange-cli-crash-report-v1"
+}

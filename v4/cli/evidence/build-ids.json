@@ -1,0 +1,60 @@
+{
+ "algorithm": {
+  "hash": "sha-256 over one record per input",
+  "host_invariance": "the logical name is why one source state has one identity: hashing the build host's own path string instead makes the value differ between a POSIX and a Windows checkout",
+  "input_order": "Cargo.toml first, then every .rs file under src, sorted by logical name",
+  "logical_name": "the file path split on both the POSIX and the Windows separator, empty and '.' components dropped, remaining components joined by '/'",
+  "record": "u64le(name-bytes-length) name-bytes u64le(content-length) content"
+ },
+ "checkout_root": null,
+ "command": [
+  "v4/cli/command_sanitize.py",
+  "--emit-build-ids",
+  "/tmp/iprange-w1925/reports/build-ids.json",
+  "--built-cli",
+  "/tmp/iprange-w1925/rust-target/release/iprange",
+  "--built-worker",
+  "/tmp/iprange-w1925/rust-target/release/iprange-v4-worker"
+ ],
+ "expected_build_id": {
+  "darwin": "a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94",
+  "freebsd": "a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94",
+  "linux": "a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94",
+  "windows": "a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94"
+ },
+ "git_head": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
+ "inputs": {
+  "manifest": "Cargo.toml",
+  "source_files": 357
+ },
+ "measured_without_the_normalizer": {
+  "note": "the two digests below are what the pre-normalizer build.rs produces from this same source state: equal on a POSIX host and different for a Windows host, which is the defect this record guards against",
+  "posix_host": "a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94",
+  "windows_host": "d44ef9f6433e077256254417ec36f3319e548b0547a39fb63625c9d18c3d443b"
+ },
+ "package": "iprange-livedb",
+ "privacy": {
+  "checked_inputs": [
+   "--built-cli",
+   "--built-worker",
+   "--commit-report",
+   "--commit-report-to",
+   "--emit-build-ids",
+   "--rust-tree"
+  ],
+  "personal_path_in_report": null,
+  "sanitizer": "command_sanitize.write_committed_report"
+ },
+ "purpose": "Expected IPRANGE_V4_BUILD_ID for one source state, per build host. The Rust CLI and the iprange-v4-worker compare this identity during the worker handshake, so a host-dependent value cannot attest that two binaries came from one tree. Each native run checks its own platform entry against the binary it built.",
+ "regenerate_with": "python3 v4/cli/command_sanitize.py --emit-build-ids v4/cli/evidence/build-ids.json --built-cli <release iprange> --built-worker <release iprange-v4-worker>; the digest is recomputed from v4/rust/iprange-livedb/Cargo.toml and every .rs file under v4/rust/iprange-livedb/src",
+ "schema": "iprange-cli-build-ids-v1",
+ "source_state": {
+  "note": "the value is a pure function of iprange-livedb's Cargo.toml and src/**.rs content; any change under that package regenerates it. Regenerate this file whenever the package changes and never hand-edit a digest.",
+  "revision": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1"
+ },
+ "verified_against_built_products": {
+  "cli_contains_expected": true,
+  "method": "the recomputed digest is searched for verbatim in the bytes of the named built executables",
+  "worker_contains_expected": true
+ }
+}

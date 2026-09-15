@@ -2,56 +2,275 @@
   "all_ok": true,
   "build_provenance": {
     "build_commands": [
-      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1924b/bin/go/iprange.exe ./cmd/iprange",
-      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1924b/bin/go/iprange-v4-worker.exe ./cmd/iprange-v4-worker",
-      "nice cargo build --manifest-path v4/rust/Cargo.toml --release --all-features --bins --examples",
-      "nice cargo build --manifest-path v4/rust/Cargo.toml --release -p iprange-livedb --bin iprange-v4-worker",
-      "cp v4/rust/target/release/iprange.exe v4/rust/target/release/iprange-v4-worker.exe C:/msys64/tmp/qualsvc-w1924b/bin/rust/",
-      "cp v4/rust/target/release/examples/v4-fixture.exe C:/msys64/tmp/qualsvc-w1924b/bin/v4-fixture.exe",
-      "nice C:/msys64/tmp/qualsvc-w1924b/bin/v4-fixture.exe direct-v4 C:/msys64/tmp/qualsvc-w1924b/fixture-w1924b.iprange",
-      "nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-run",
-      "cp v4/rust/target/release/iprange-v4-worker.exe v4/rust/target/debug/deps/iprange-v4-worker.exe",
-      "nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli"
+      "go-vet [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go vet ./...)",
+      "go-build-cli [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -o C:/msys64/tmp/qualsvc-w1925c-W/bin/go/iprange.exe ./cmd/iprange)",
+      "go-build-worker [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -o C:/msys64/tmp/qualsvc-w1925c-W/bin/go/iprange-v4-worker.exe ./cmd/iprange-v4-worker)",
+      "cargo-build-bins [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice cargo build --manifest-path v4/rust/Cargo.toml --release --all-features --bins --examples)",
+      "cargo-build-worker [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice cargo build --manifest-path v4/rust/Cargo.toml --release -p iprange-livedb --bin iprange-v4-worker)",
+      "fixture-create [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice C:/msys64/tmp/qualsvc-w1925c-W/bin/v4-fixture.exe direct-v4 C:/msys64/tmp/qualsvc-w1925c-W/fixturebuild/fixture-w1924b.iprange)",
+      "stage-win [scored attempt 1, rc=0]: stage win/ layout: copy bin/ to win/{go,rust}/ and certify with sha256sum -c SHASUMS-win.txt",
+      "cargo-norun [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-run)",
+      "worker-colocation [scored attempt 1, rc=0]: worker-colocation: cp v4/rust/target/release/iprange-v4-worker.exe v4/rust/target/debug/deps/iprange-v4-worker.exe",
+      "cargo-test-iprange-cli [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice env IPRANGE_V4_WIN_PIN_TALLY=C:/msys64/tmp/qualsvc-w1925c-W/win-pin-tally.txt cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-fail-fast)",
+      "windows-judgment [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-fail-fast windows_judgment_tests)",
+      "go-test-final [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test ./... -count=1)",
+      "go-test-maintenance-roundtrip [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 -run TestMaintenanceListRowsRoundTripIntoRemoveForEveryRemovableKind ./internal/...)",
+      "go-test-internal_publication [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 ./internal/publication)",
+      "go-test-internal_live [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 ./internal/live)",
+      "go-test-internal_cli_handlers [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 ./internal/cli/handlers)",
+      "go-test-internal_calleropen [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 ./internal/calleropen)",
+      "go-test-internal_worker [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 ./internal/worker)",
+      "build-ids [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice /mingw64/bin/python.exe v4/cli/command_sanitize.py --emit-build-ids C:/msys64/tmp/qualsvc-w1925c-W/build-ids-windows-at-head.json --built-cli C:/msys64/tmp/qualsvc-w1925c-W/win/rust/iprange.exe --built-worker C:/msys64/tmp/qualsvc-w1925c-W/win/rust/iprange-v4-worker.exe)",
+      "selftest-command-sanitize [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice /mingw64/bin/python.exe v4/cli/command_sanitize.py --self-test)",
+      "selftest-guard [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice /mingw64/bin/python.exe v4/cli/windows_guard_harness.py --self-test)",
+      "selftest-housekeeping [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice /mingw64/bin/python.exe v4/cli/windows_housekeeping_harness.py --self-test)"
     ],
-    "native_cargo_test": "GREEN with the recorded worker-colocation step. 'nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli' returned rc=0 after 'cargo test --no-run' and copying target/release/iprange-v4-worker.exe beside the debug test executable in target/debug/deps (the step documented in iprange-cli/src/rpc/handlers/export.rs live_source_tests module docs; without it six live_source_tests answer os_unsupported 'SDK validation/recovery worker is unavailable', which that module states is an environment defect and not a product answer). Tally: 334 unit tests passed / 0 failed, plus 1 integration test (termination_signals) passed / 0 failed. All six io::caller_open::windows_judgment_tests pins passed natively: regular_handle_is_accepted, directory_is_refused_as_not_regular (the direct CreateFileW zero-access open with the GetFileAttributesW tie-break), character_device_is_refused_as_not_regular, symlinked_regular_input_is_accepted, missing_path_is_an_error_not_a_refusal, open_regular_returns_the_handle_of_a_regular_file. Both reordered reader pins passed: metadata_file_delivery_refuses_the_reader_sidecar and metadata_file_delivery_refuses_the_reader_renamed_sidecar (they release the reader before the post-check sidecar read, so Windows ERROR_LOCK_VIOLATION on the held coordination file no longer tests the lock instead of the refusal).",
-    "native_go_test": "GREEN. 'nice go test ./... -count=1' in v4/go on the native Windows host returned rc=0: 32 packages, 23 ok, 9 with no test files, 0 failing packages. The two wave-19.23/wave-19.24a Windows portability failures are resolved by moving the POSIX permission-mode triggers to //go:build unix siblings (publication_durability_parent_unwritable_unix_test.go, writer_symlink_class_unix_test.go); the platform-neutral survivors (the symlinked-live wrong_state arm, the loop-to-EOF/cap pins, the split samefile worker seam) run natively on Windows, and internal/cli/handlers passes.",
-    "revision": "HEAD 91ae2a429380483010bc5e9ce46ac2dc776ec17d + wave-19.24 (final) uncommitted working-tree batch (tree not clean)",
-    "source_bundle": {
-      "bundle_sha256": "51574a78cc2d435375a3c29b3139a6bbf31358415dd6daac7f00665ed6e062f7",
-      "provenance": "working-tree snapshot of HEAD 91ae2a42 plus the wave-19.24 (final) uncommitted batch, packed with tar --no-recursion over 'git ls-files -co --exclude-standard' plus .git and transferred as a tar.gz (rsync and scp/sftp are unavailable on the host); the extracted checkout reports the same OID from git rev-parse --verify HEAD"
+    "build_identity": "IPRANGE_V4_BUILD_ID a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94 recomputed from this clean checkout by command_sanitize --emit-build-ids over the manifest and 357 sources and found verbatim in both built Rust products (cli_contains_expected=True, worker_contains_expected=True); the windows entry equals the darwin, freebsd and linux entries, which is the host-invariant logical-name algorithm of v4/rust/iprange-livedb/build.rs. This revision touches no v4/rust or v4/go source file, so the identity is expected to equal the previously qualified revision's.",
+    "carried_observation": "The release build graph (35 units compiled, target tree moved out of the checkout before the build so nothing was reused) reports 1 warning line(s) and the summary line(s) 'warning: `iprange-livedb` (lib) generated 1 warning'. The recorded warning is: 'warning: function `abandon_spawn` is never used' at v4/rust/iprange-livedb/src/worker/client.rs:202, whose only callers are cfg(unix). The same single warning with the same wording appears in the previously qualified native run's build log; this recipe does not deny warnings, and this leg neither introduced nor silenced it.",
+    "changed_files": [],
+    "changed_files_note": "Empty by measurement: git status --porcelain returned no lines at the qualified revision, so the tree carried no local edit. The revision under test changes only v4/cli/command_sanitize.py, v4/cli/evidence/README.md and the SOW relative to the previously qualified revision; no v4/rust or v4/go source file differs, which is why the engine build identity is expected to carry over unchanged.",
+    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit 2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1 with no local edit. It was advanced from the previously qualified revision by a git bundle transfer (rsync and scp/sftp are unavailable on this host) plus git checkout --detach, and the three files that differ between the two revisions were verified byte-identical to the qualification workstation's copy of the same commit.",
+    "flake_history": "Scored invocation: 0 of 22 recorded steps retried on the documented MSYS 0xc0000142 STATUS_DLL_INIT_FAILED signature (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. No step needed more than its first attempt, so no scored attempt is a retry (steps whose recorded attempt index exceeds 1: none). This leg ran its driver more than once and every earlier invocation is superseded by the scored one: one of them was stopped by this leg's own driver error -- a go test package path written without its ./ prefix -- not by a product outcome, and the others were replaced only to correct this leg's own record or wording. The surviving files of that first invocation are isolated in logs.superseded-first-invocation/ (cargo-build-bins.a2.log, native.log); no file of a superseded invocation remains inside logs/, and no cited evidence comes from one. Only the highest-attempt rc=0 record of each step is scored.",
+    "host": "Windows 11 10.0.26200, MSYS_NT-10.0-26200 [nodename redacted] 3.6.10-9a6cbe55.x86_64 2026-07-16 20:47 UTC x86_64 Msys, authorized Windows validation host",
+    "native_cargo_test": "GREEN with the recorded worker-colocation step. nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-fail-fast returned rc=0 after cargo test --no-run and copying v4/rust/target/release/iprange-v4-worker.exe beside the debug test executable in v4/rust/target/debug/deps/iprange-v4-worker.exe (the step documented in iprange-cli/src/rpc/handlers/export.rs live_source_tests module docs; without it the six worker-dependent live_source_tests answer os_unsupported, which that module records as an environment defect). Tally: 342 passed, 0 failed, 0 ignored across the 3 test targets (src\\main.rs, tests\\termination_signals.rs, tests\\thread_creation_discipline.rs), including rpc::handlers::maintenance::tests::list_rows_round_trip_into_remove_for_every_removable_kind and one_list_covers_every_kind_and_every_row_stays_removable, and the six io::caller_open::windows_judgment_tests pins answered ok. The scored attempt is cargo-test-iprange-cli.a1.log.",
+    "native_cargo_test_attempts": {
+      "green_log": "cargo-test-iprange-cli.a1.log",
+      "logs_present": [
+        "cargo-test-iprange-cli.a1.log"
+      ],
+      "note": "Scored invocation: 0 of 22 recorded steps retried on the documented MSYS 0xc0000142 STATUS_DLL_INIT_FAILED signature (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. No step needed more than its first attempt, so no scored attempt is a retry (steps whose recorded attempt index exceeds 1: none). This leg ran its driver more than once and every earlier invocation is superseded by the scored one: one of them was stopped by this leg's own driver error -- a go test package path written without its ./ prefix -- not by a product outcome, and the others were replaced only to correct this leg's own record or wording. The surviving files of that first invocation are isolated in logs.superseded-first-invocation/ (cargo-build-bins.a2.log, native.log); no file of a superseded invocation remains inside logs/, and no cited evidence comes from one. Only the highest-attempt rc=0 record of each step is scored."
+    },
+    "native_go_test": "GREEN. nice go test ./... -count=1 in v4/go on the native Windows host returned rc=0: 32 packages -- 24 ok, 8 with no test files, 0 failures (go-test-final.a1.log), scored with no concurrent compile running. The maintenance removal round-trip TestMaintenanceListRowsRoundTripIntoRemoveForEveryRemovableKind was run separately with -v and passed 4 of 4 PASS rows (the test plus its scratch, reservation and publication_temp subtests) with 0 failing rows (go-test-maintenance-roundtrip.a1.log). The five packages whose Windows arms the wave-19.25 maintenance work touched were each run separately with -v -count=1 and returned rc=0: go-test-internal_publication.a1.log, go-test-internal_live.a1.log, go-test-internal_cli_handlers.a1.log, go-test-internal_calleropen.a1.log, go-test-internal_worker.a1.log. The attempt history is in native_go_test_attempts.",
+    "native_go_test_attempts": {
+      "green_log": "go-test-final.a1.log",
+      "logs_present": [
+        "go-test-final.GREEN.log",
+        "go-test-final.a1.log",
+        "go-test-internal_calleropen.GREEN.log",
+        "go-test-internal_calleropen.a1.log",
+        "go-test-internal_cli_handlers.GREEN.log",
+        "go-test-internal_cli_handlers.a1.log",
+        "go-test-internal_live.GREEN.log",
+        "go-test-internal_live.a1.log",
+        "go-test-internal_publication.GREEN.log",
+        "go-test-internal_publication.a1.log",
+        "go-test-internal_worker.GREEN.log",
+        "go-test-internal_worker.a1.log",
+        "go-test-maintenance-roundtrip.GREEN.log",
+        "go-test-maintenance-roundtrip.a1.log"
+      ],
+      "note": "Scored invocation: 0 of 22 recorded steps retried on the documented MSYS 0xc0000142 STATUS_DLL_INIT_FAILED signature (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. No step needed more than its first attempt, so no scored attempt is a retry (steps whose recorded attempt index exceeds 1: none). This leg ran its driver more than once and every earlier invocation is superseded by the scored one: one of them was stopped by this leg's own driver error -- a go test package path written without its ./ prefix -- not by a product outcome, and the others were replaced only to correct this leg's own record or wording. The surviving files of that first invocation are isolated in logs.superseded-first-invocation/ (cargo-build-bins.a2.log, native.log); no file of a superseded invocation remains inside logs/, and no cited evidence comes from one. Only the highest-attempt rc=0 record of each step is scored."
+    },
+    "native_steps": {
+      "build-ids": {
+        "log": "logs/build-ids.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "cargo-build-bins": {
+        "log": "logs/cargo-build-bins.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "cargo-build-worker": {
+        "log": "logs/cargo-build-worker.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "cargo-norun": {
+        "log": "logs/cargo-norun.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "cargo-test-iprange-cli": {
+        "log": "logs/cargo-test-iprange-cli.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "fixture-create": {
+        "log": "logs/fixture-create.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-build-cli": {
+        "log": "logs/go-build-cli.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-build-worker": {
+        "log": "logs/go-build-worker.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-final": {
+        "log": "logs/go-test-final.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-internal_calleropen": {
+        "log": "logs/go-test-internal_calleropen.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-internal_cli_handlers": {
+        "log": "logs/go-test-internal_cli_handlers.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-internal_live": {
+        "log": "logs/go-test-internal_live.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-internal_publication": {
+        "log": "logs/go-test-internal_publication.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-internal_worker": {
+        "log": "logs/go-test-internal_worker.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-maintenance-roundtrip": {
+        "log": "logs/go-test-maintenance-roundtrip.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-vet": {
+        "log": "logs/go-vet.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "selftest-command-sanitize": {
+        "log": "logs/selftest-command-sanitize.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "selftest-guard": {
+        "log": "logs/selftest-guard.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "selftest-housekeeping": {
+        "log": "logs/selftest-housekeeping.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "stage-win": {
+        "log": "logs/stage-win.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "windows-judgment": {
+        "log": "logs/windows-judgment.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "worker-colocation": {
+        "log": "logs/worker-colocation.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      }
+    },
+    "revision": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
+    "rust_build_recipe_note": "The Rust products were built by the recorded canonical invocation (--release --all-features --bins --examples) from the checkout itself into the checkout's own v4/rust/target, which was moved out of the tree to the work root before this run so nothing from an earlier build could be reused; the worker was also built explicitly with --release -p iprange-livedb --bin iprange-v4-worker, and the release worker was copied beside the debug test executable so the live_source_tests pins could answer. The Go products were built CGO_ENABLED=0 GOOS=windows GOARCH=amd64 -trimpath -buildvcs=false, which is why their digests do not depend on the build tree location.",
+    "shared_self_tests": {
+      "selftest-command-sanitize": {
+        "own_verdict": [
+          "PASS command_sanitize self-test: 51 controls (kernel-resolution pins + committed-report provenance)"
+        ],
+        "rc": 0,
+        "scored_attempt": 1,
+        "shared_controls_executed": 51,
+        "shared_controls_expected": 51,
+        "tool": "command_sanitize.py"
+      },
+      "selftest-guard": {
+        "own_verdict": [
+          "guard self-test PASSED: 39 controls executed (native-only controls unreachable on this host: 0)"
+        ],
+        "rc": 0,
+        "scored_attempt": 1,
+        "shared_controls_executed": 51,
+        "shared_controls_expected": 51,
+        "tool": "windows_guard_harness.py"
+      },
+      "selftest-housekeeping": {
+        "own_verdict": [
+          "[P2-7] sanitized_command(['--self-test']) passed",
+          "PASS: P2-5 pair-row, P2-6 removal-log, P2-7 sanitizer/privacy, and P3 report-verification self-tests (9 verification controls)"
+        ],
+        "rc": 0,
+        "scored_attempt": 1,
+        "shared_controls_executed": 51,
+        "shared_controls_expected": 51,
+        "tool": "windows_housekeeping_harness.py"
+      }
     },
     "toolchain": {
       "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
-      "date": "2026-09-14",
+      "cargo_vv": "cargo 1.97.1 (c980f4866 2026-06-30)\nrelease: 1.97.1\ncommit-hash: c980f4866141969fab6254a680546a277789d6f0\ncommit-date: 2026-06-30\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.20.0-DEV (sys:0.4.88+curl-8.20.0 vendored ssl:Schannel)\nos: Windows 10.0.26200 (Windows 11 Professional) [64-bit]",
+      "date": "2026-09-15",
       "go": "go version go1.26.5 windows/amd64",
       "host_triple": "x86_64-pc-windows-msvc",
-      "python": "CPython 3.14.6 mingw64 (os.name=nt, sys.platform=win32, platform Windows 11 AMD64); the cygwin /usr/bin/python3 was not used",
-      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) host x86_64-pc-windows-msvc, LLVM version 22.1.6"
+      "python": "CPython 3.14.6 (os.name=nt, sys.platform=win32, Windows 11 AMD64, exe C:/msys64/mingw64/bin/python.exe); the harness interpreter is the mingw64 CPython, the cygwin /usr/bin/python3 was not used",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.97.1\nLLVM version: 22.1.6"
     },
-    "tree_clean": false,
-    "wave": "19.24"
+    "tree_clean": true,
+    "wave": "SOW-0028 wave-19.25c (Windows native re-stamp at the committed revision under test)",
+    "windows_judgment_tests": "6 of 6 ok, individually and as the filtered group: character_device_is_refused_as_not_regular, missing_path_is_an_error_not_a_refusal, directory_is_refused_as_not_regular, open_regular_returns_the_handle_of_a_regular_file, regular_handle_is_accepted, symlinked_regular_input_is_accepted (windows-judgment.a1.log: 6 passed, 0 failed, 0 ignored).",
+    "windows_pin_tally": "IPRANGE_V4_WIN_PIN_TALLY=C:/msys64/tmp/qualsvc-w1925c-W/win-pin-tally.txt exported for the recorded cargo leg. The file was created empty before that leg and exists after it with 0 lines and 0 UNSCORED entries, so every Windows pin was scored rather than skipped. record_unsupported panics when the variable is unset, so a pin whose fixture could not be built would have stopped the suite instead of passing silently.",
+    "windows_pin_tally_path": "C:/msys64/tmp/qualsvc-w1925c-W/win-pin-tally.txt"
   },
   "checkout_root": null,
+  "command": [
+    "v4/cli/windows_guard_harness.py",
+    "--rust",
+    "C:/msys64/tmp/qualsvc-w1925c-W/win/rust/iprange.exe",
+    "--go",
+    "C:/msys64/tmp/qualsvc-w1925c-W/win/go/iprange.exe",
+    "--fixture",
+    "C:/msys64/tmp/qualsvc-w1925c-W/win/fixture-w1924b.iprange",
+    "--work",
+    "C:/msys64/tmp/qualsvc-w1925c-W/guardwork",
+    "--out",
+    "C:/msys64/tmp/qualsvc-w1925c-W/reports/windows-guard.json",
+    "--provenance",
+    "C:/msys64/tmp/qualsvc-w1925c-W/prov-guard.json"
+  ],
   "fixture": {
-    "mtime": 1789388690.3713317,
-    "path": "C:/msys64/tmp/qualsvc-w1924b/fixture-w1924b.iprange",
-    "sha256": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
+    "mtime": 1789468365.6139152,
+    "path": "C:/msys64/tmp/qualsvc-w1925c-W/win/fixture-w1924b.iprange",
+    "sha256": "22204107eb753c6ae190d37d3927f5306414fdf79cb3047ebb4dc1e48f022d80",
     "size": 16384
   },
-  "git_head": "91ae2a429380483010bc5e9ce46ac2dc776ec17d",
+  "git_head": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
   "platform": "windows",
+  "privacy": {
+    "checked_inputs": [
+      "--fixture",
+      "--go",
+      "--out",
+      "--provenance",
+      "--rust",
+      "--work"
+    ],
+    "personal_path_in_report": null,
+    "sanitizer": "command_sanitize.write_committed_report"
+  },
   "products": {
     "go": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789388617.3482583,
-        "path": "C:/msys64/tmp/qualsvc-w1924b/bin/go/iprange.exe",
-        "sha256": "3a5769080efd3ac0ed92f08020bb556676c62697013af09ba0201037c3c91b1e",
-        "size": 14060544
+        "mtime": 1789468364.9386325,
+        "path": "C:/msys64/tmp/qualsvc-w1925c-W/win/go/iprange.exe",
+        "sha256": "bbd37c6341ac30530640d445434e1efb1db6c3cc851808344bc81a034d93d871",
+        "size": 14071808
       },
       "cases": {
         "absolute_trailing_dot": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -60,7 +279,7 @@
           "refused": true
         },
         "absolute_trailing_space": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -69,7 +288,7 @@
           "refused": true
         },
         "absolute_upper": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\DB.IPRANGE.READERS",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\DB.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -78,7 +297,7 @@
           "refused": true
         },
         "control_allowed": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\meta.txt",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\meta.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -114,7 +333,7 @@
           "refused": false
         },
         "globalroot_device_sidecar": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -123,7 +342,7 @@
           "refused": true
         },
         "globalroot_dos_lower_trailing_dot": {
-          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -132,7 +351,7 @@
           "refused": true
         },
         "globalroot_dos_lower_trailing_space": {
-          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -141,7 +360,7 @@
           "refused": true
         },
         "globalroot_dos_trailing_dot": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -150,7 +369,7 @@
           "refused": true
         },
         "globalroot_dos_trailing_space": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -159,7 +378,7 @@
           "refused": true
         },
         "globalroot_lower_trailing_dot": {
-          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -168,7 +387,7 @@
           "refused": true
         },
         "globalroot_lower_trailing_space": {
-          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -177,7 +396,7 @@
           "refused": true
         },
         "globalroot_objectmgr_lower_trailing_dot": {
-          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -186,7 +405,7 @@
           "refused": true
         },
         "globalroot_objectmgr_lower_trailing_space": {
-          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -195,7 +414,7 @@
           "refused": true
         },
         "globalroot_objectmgr_trailing_dot": {
-          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -204,7 +423,7 @@
           "refused": true
         },
         "globalroot_objectmgr_trailing_space": {
-          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -213,7 +432,7 @@
           "refused": true
         },
         "globalroot_sidecar": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -222,7 +441,7 @@
           "refused": true
         },
         "globalroot_trailing_dot": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -231,7 +450,7 @@
           "refused": true
         },
         "globalroot_trailing_space": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -240,7 +459,7 @@
           "refused": true
         },
         "non_ascii": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\DB_\u00c4.IPRANGE.READERS",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\DB_\u00c4.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -249,7 +468,7 @@
           "refused": true
         },
         "nt_namespace_sidecar": {
-          "destination": "\\??\\C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\??\\C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -258,7 +477,7 @@
           "refused": true
         },
         "nt_unc_loopback_sidecar": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -267,7 +486,7 @@
           "refused": true
         },
         "nt_unc_lower_trailing_dot": {
-          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -276,7 +495,7 @@
           "refused": true
         },
         "nt_unc_lower_trailing_space": {
-          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -285,7 +504,7 @@
           "refused": true
         },
         "nt_unc_trailing_dot": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -294,7 +513,7 @@
           "refused": true
         },
         "nt_unc_trailing_space": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -303,7 +522,7 @@
           "refused": true
         },
         "ntfs_final_sigma": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\A\u03c21.iprange.readers",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\A\u03c21.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -312,7 +531,7 @@
           "refused": true
         },
         "ntfs_sigma": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\A\u03c31.iprange.readers",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\A\u03c31.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -321,7 +540,7 @@
           "refused": true
         },
         "relative_source_control_allowed": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\meta-rel.txt",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\meta-rel.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -330,7 +549,7 @@
           "refused": false
         },
         "relative_source_unc_loopback_sidecar": {
-          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -340,7 +559,7 @@
         },
         "reopen_allowed": true,
         "rooted_sidecar": {
-          "destination": "\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -351,7 +570,7 @@
         "sidecar_absent_after": true,
         "source_unchanged": true,
         "unc_loopback_ip_sidecar": {
-          "destination": "\\\\127.0.0.1\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\127.0.0.1\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -360,7 +579,7 @@
           "refused": true
         },
         "unc_loopback_sidecar": {
-          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -369,7 +588,7 @@
           "refused": true
         },
         "verbatim_fwd_sidecar": {
-          "destination": "\\\\?\\C:/msys64/tmp/qualsvc-w1924b/guardwork/go/db.iprange.readers",
+          "destination": "\\\\?\\C:/msys64/tmp/qualsvc-w1925c-W/guardwork/go/db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -378,7 +597,7 @@
           "refused": true
         },
         "verbatim_sidecar": {
-          "destination": "\\\\?\\C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\?\\C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -387,7 +606,7 @@
           "refused": true
         },
         "verbatim_unc_loopback_sidecar": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -396,7 +615,7 @@
           "refused": true
         },
         "verbatim_unc_lower_trailing_dot": {
-          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -405,7 +624,7 @@
           "refused": true
         },
         "verbatim_unc_lower_trailing_space": {
-          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -414,7 +633,7 @@
           "refused": true
         },
         "verbatim_unc_trailing_dot": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -423,7 +642,7 @@
           "refused": true
         },
         "verbatim_unc_trailing_space": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -432,7 +651,7 @@
           "refused": true
         },
         "volume_guid_lower_trailing_dot": {
-          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -441,7 +660,7 @@
           "refused": true
         },
         "volume_guid_lower_trailing_space": {
-          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -450,7 +669,7 @@
           "refused": true
         },
         "volume_guid_sidecar": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -459,7 +678,7 @@
           "refused": true
         },
         "volume_guid_trailing_dot": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers.",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -468,7 +687,7 @@
           "refused": true
         },
         "volume_guid_trailing_space": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange.readers ",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -479,16 +698,16 @@
       },
       "implementation": "go",
       "sources_before": {
-        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\A\u03a31.iprange": {
-          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
+        "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\A\u03a31.iprange": {
+          "sha256_before": "22204107eb753c6ae190d37d3927f5306414fdf79cb3047ebb4dc1e48f022d80",
           "sidecar_absent_before": true
         },
-        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db.iprange": {
-          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
+        "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db.iprange": {
+          "sha256_before": "22204107eb753c6ae190d37d3927f5306414fdf79cb3047ebb4dc1e48f022d80",
           "sidecar_absent_before": true
         },
-        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\go\\db_\u00e4.iprange": {
-          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
+        "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\go\\db_\u00e4.iprange": {
+          "sha256_before": "22204107eb753c6ae190d37d3927f5306414fdf79cb3047ebb4dc1e48f022d80",
           "sidecar_absent_before": true
         }
       }
@@ -496,14 +715,14 @@
     "rust": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789388689.9940367,
-        "path": "C:/msys64/tmp/qualsvc-w1924b/bin/rust/iprange.exe",
-        "sha256": "3ac01741e4df325d86b65aaddcee78c093079414620c14afff46b1abd0dec929",
-        "size": 6266368
+        "mtime": 1789468365.3029158,
+        "path": "C:/msys64/tmp/qualsvc-w1925c-W/win/rust/iprange.exe",
+        "sha256": "535f8e79a64411bd8eac33a6dbce16c5b143fab11639379c2d8a9c5ab2d9eb98",
+        "size": 6257152
       },
       "cases": {
         "absolute_trailing_dot": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -512,7 +731,7 @@
           "refused": true
         },
         "absolute_trailing_space": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -521,7 +740,7 @@
           "refused": true
         },
         "absolute_upper": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\DB.IPRANGE.READERS",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\DB.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -530,7 +749,7 @@
           "refused": true
         },
         "control_allowed": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\meta.txt",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\meta.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -566,7 +785,7 @@
           "refused": false
         },
         "globalroot_device_sidecar": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -575,7 +794,7 @@
           "refused": true
         },
         "globalroot_dos_lower_trailing_dot": {
-          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -584,7 +803,7 @@
           "refused": true
         },
         "globalroot_dos_lower_trailing_space": {
-          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\.\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -593,7 +812,7 @@
           "refused": true
         },
         "globalroot_dos_trailing_dot": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -602,7 +821,7 @@
           "refused": true
         },
         "globalroot_dos_trailing_space": {
-          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\.\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -611,7 +830,7 @@
           "refused": true
         },
         "globalroot_lower_trailing_dot": {
-          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -620,7 +839,7 @@
           "refused": true
         },
         "globalroot_lower_trailing_space": {
-          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -629,7 +848,7 @@
           "refused": true
         },
         "globalroot_objectmgr_lower_trailing_dot": {
-          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -638,7 +857,7 @@
           "refused": true
         },
         "globalroot_objectmgr_lower_trailing_space": {
-          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\??\\globalroot\\device\\harddiskvolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -647,7 +866,7 @@
           "refused": true
         },
         "globalroot_objectmgr_trailing_dot": {
-          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -656,7 +875,7 @@
           "refused": true
         },
         "globalroot_objectmgr_trailing_space": {
-          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\??\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -665,7 +884,7 @@
           "refused": true
         },
         "globalroot_sidecar": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -674,7 +893,7 @@
           "refused": true
         },
         "globalroot_trailing_dot": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -683,7 +902,7 @@
           "refused": true
         },
         "globalroot_trailing_space": {
-          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\GLOBALROOT\\Device\\HarddiskVolume3\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -692,7 +911,7 @@
           "refused": true
         },
         "non_ascii": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\DB_\u00c4.IPRANGE.READERS",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\DB_\u00c4.IPRANGE.READERS",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -701,7 +920,7 @@
           "refused": true
         },
         "nt_namespace_sidecar": {
-          "destination": "\\??\\C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\??\\C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -710,7 +929,7 @@
           "refused": true
         },
         "nt_unc_loopback_sidecar": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -719,7 +938,7 @@
           "refused": true
         },
         "nt_unc_lower_trailing_dot": {
-          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -728,7 +947,7 @@
           "refused": true
         },
         "nt_unc_lower_trailing_space": {
-          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\??\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -737,7 +956,7 @@
           "refused": true
         },
         "nt_unc_trailing_dot": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -746,7 +965,7 @@
           "refused": true
         },
         "nt_unc_trailing_space": {
-          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\??\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -755,7 +974,7 @@
           "refused": true
         },
         "ntfs_final_sigma": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\A\u03c21.iprange.readers",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\A\u03c21.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -764,7 +983,7 @@
           "refused": true
         },
         "ntfs_sigma": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\A\u03c31.iprange.readers",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\A\u03c31.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -773,7 +992,7 @@
           "refused": true
         },
         "relative_source_control_allowed": {
-          "destination": "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\meta-rel.txt",
+          "destination": "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\meta-rel.txt",
           "error_code": null,
           "error_message": "",
           "error_outcome": null,
@@ -782,7 +1001,7 @@
           "refused": false
         },
         "relative_source_unc_loopback_sidecar": {
-          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -792,7 +1011,7 @@
         },
         "reopen_allowed": true,
         "rooted_sidecar": {
-          "destination": "\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -803,7 +1022,7 @@
         "sidecar_absent_after": true,
         "source_unchanged": true,
         "unc_loopback_ip_sidecar": {
-          "destination": "\\\\127.0.0.1\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\127.0.0.1\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -812,7 +1031,7 @@
           "refused": true
         },
         "unc_loopback_sidecar": {
-          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -821,7 +1040,7 @@
           "refused": true
         },
         "verbatim_fwd_sidecar": {
-          "destination": "\\\\?\\C:/msys64/tmp/qualsvc-w1924b/guardwork/rust/db.iprange.readers",
+          "destination": "\\\\?\\C:/msys64/tmp/qualsvc-w1925c-W/guardwork/rust/db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -830,7 +1049,7 @@
           "refused": true
         },
         "verbatim_sidecar": {
-          "destination": "\\\\?\\C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\?\\C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -839,7 +1058,7 @@
           "refused": true
         },
         "verbatim_unc_loopback_sidecar": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -848,7 +1067,7 @@
           "refused": true
         },
         "verbatim_unc_lower_trailing_dot": {
-          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -857,7 +1076,7 @@
           "refused": true
         },
         "verbatim_unc_lower_trailing_space": {
-          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\unc\\localhost\\c$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -866,7 +1085,7 @@
           "refused": true
         },
         "verbatim_unc_trailing_dot": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -875,7 +1094,7 @@
           "refused": true
         },
         "verbatim_unc_trailing_space": {
-          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\UNC\\localhost\\C$\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -884,7 +1103,7 @@
           "refused": true
         },
         "volume_guid_lower_trailing_dot": {
-          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -893,7 +1112,7 @@
           "refused": true
         },
         "volume_guid_lower_trailing_space": {
-          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -902,7 +1121,7 @@
           "refused": true
         },
         "volume_guid_sidecar": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -911,7 +1130,7 @@
           "refused": true
         },
         "volume_guid_trailing_dot": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers.",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers.",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -920,7 +1139,7 @@
           "refused": true
         },
         "volume_guid_trailing_space": {
-          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange.readers ",
+          "destination": "\\\\?\\Volume{6df78126-8d52-4afa-ac58-1b1925131887}\\\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange.readers ",
           "error_code": "invalid_argument",
           "error_message": "destination must differ from the source database",
           "error_outcome": "not_started",
@@ -931,16 +1150,16 @@
       },
       "implementation": "rust",
       "sources_before": {
-        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\A\u03a31.iprange": {
-          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
+        "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\A\u03a31.iprange": {
+          "sha256_before": "22204107eb753c6ae190d37d3927f5306414fdf79cb3047ebb4dc1e48f022d80",
           "sidecar_absent_before": true
         },
-        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db.iprange": {
-          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
+        "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db.iprange": {
+          "sha256_before": "22204107eb753c6ae190d37d3927f5306414fdf79cb3047ebb4dc1e48f022d80",
           "sidecar_absent_before": true
         },
-        "C:\\msys64\\tmp\\qualsvc-w1924b\\guardwork\\rust\\db_\u00e4.iprange": {
-          "sha256_before": "67efd851205c3062311c47a05784e688d18855da0fca143a820eb7d6e41fde40",
+        "C:\\msys64\\tmp\\qualsvc-w1925c-W\\guardwork\\rust\\db_\u00e4.iprange": {
+          "sha256_before": "22204107eb753c6ae190d37d3927f5306414fdf79cb3047ebb4dc1e48f022d80",
           "sidecar_absent_before": true
         }
       }
@@ -948,34 +1167,226 @@
   },
   "provenance": {
     "build_commands": [
-      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1924b/bin/go/iprange.exe ./cmd/iprange",
-      "cd v4/go && nice go build -trimpath -o C:/msys64/tmp/qualsvc-w1924b/bin/go/iprange-v4-worker.exe ./cmd/iprange-v4-worker",
-      "nice cargo build --manifest-path v4/rust/Cargo.toml --release --all-features --bins --examples",
-      "nice cargo build --manifest-path v4/rust/Cargo.toml --release -p iprange-livedb --bin iprange-v4-worker",
-      "cp v4/rust/target/release/iprange.exe v4/rust/target/release/iprange-v4-worker.exe C:/msys64/tmp/qualsvc-w1924b/bin/rust/",
-      "cp v4/rust/target/release/examples/v4-fixture.exe C:/msys64/tmp/qualsvc-w1924b/bin/v4-fixture.exe",
-      "nice C:/msys64/tmp/qualsvc-w1924b/bin/v4-fixture.exe direct-v4 C:/msys64/tmp/qualsvc-w1924b/fixture-w1924b.iprange",
-      "nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-run",
-      "cp v4/rust/target/release/iprange-v4-worker.exe v4/rust/target/debug/deps/iprange-v4-worker.exe",
-      "nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli"
+      "go-vet [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go vet ./...)",
+      "go-build-cli [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -o C:/msys64/tmp/qualsvc-w1925c-W/bin/go/iprange.exe ./cmd/iprange)",
+      "go-build-worker [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -o C:/msys64/tmp/qualsvc-w1925c-W/bin/go/iprange-v4-worker.exe ./cmd/iprange-v4-worker)",
+      "cargo-build-bins [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice cargo build --manifest-path v4/rust/Cargo.toml --release --all-features --bins --examples)",
+      "cargo-build-worker [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice cargo build --manifest-path v4/rust/Cargo.toml --release -p iprange-livedb --bin iprange-v4-worker)",
+      "fixture-create [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice C:/msys64/tmp/qualsvc-w1925c-W/bin/v4-fixture.exe direct-v4 C:/msys64/tmp/qualsvc-w1925c-W/fixturebuild/fixture-w1924b.iprange)",
+      "stage-win [scored attempt 1, rc=0]: stage win/ layout: copy bin/ to win/{go,rust}/ and certify with sha256sum -c SHASUMS-win.txt",
+      "cargo-norun [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-run)",
+      "worker-colocation [scored attempt 1, rc=0]: worker-colocation: cp v4/rust/target/release/iprange-v4-worker.exe v4/rust/target/debug/deps/iprange-v4-worker.exe",
+      "cargo-test-iprange-cli [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice env IPRANGE_V4_WIN_PIN_TALLY=C:/msys64/tmp/qualsvc-w1925c-W/win-pin-tally.txt cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-fail-fast)",
+      "windows-judgment [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-fail-fast windows_judgment_tests)",
+      "go-test-final [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test ./... -count=1)",
+      "go-test-maintenance-roundtrip [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 -run TestMaintenanceListRowsRoundTripIntoRemoveForEveryRemovableKind ./internal/...)",
+      "go-test-internal_publication [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 ./internal/publication)",
+      "go-test-internal_live [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 ./internal/live)",
+      "go-test-internal_cli_handlers [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 ./internal/cli/handlers)",
+      "go-test-internal_calleropen [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 ./internal/calleropen)",
+      "go-test-internal_worker [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W/v4/go && nice go test -v -count=1 ./internal/worker)",
+      "build-ids [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice /mingw64/bin/python.exe v4/cli/command_sanitize.py --emit-build-ids C:/msys64/tmp/qualsvc-w1925c-W/build-ids-windows-at-head.json --built-cli C:/msys64/tmp/qualsvc-w1925c-W/win/rust/iprange.exe --built-worker C:/msys64/tmp/qualsvc-w1925c-W/win/rust/iprange-v4-worker.exe)",
+      "selftest-command-sanitize [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice /mingw64/bin/python.exe v4/cli/command_sanitize.py --self-test)",
+      "selftest-guard [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice /mingw64/bin/python.exe v4/cli/windows_guard_harness.py --self-test)",
+      "selftest-housekeeping [scored attempt 1, rc=0]: (cd /c/Users/costa/src/iprange-w1925-W && nice /mingw64/bin/python.exe v4/cli/windows_housekeeping_harness.py --self-test)"
     ],
-    "native_cargo_test": "GREEN with the recorded worker-colocation step. 'nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli' returned rc=0 after 'cargo test --no-run' and copying target/release/iprange-v4-worker.exe beside the debug test executable in target/debug/deps (the step documented in iprange-cli/src/rpc/handlers/export.rs live_source_tests module docs; without it six live_source_tests answer os_unsupported 'SDK validation/recovery worker is unavailable', which that module states is an environment defect and not a product answer). Tally: 334 unit tests passed / 0 failed, plus 1 integration test (termination_signals) passed / 0 failed. All six io::caller_open::windows_judgment_tests pins passed natively: regular_handle_is_accepted, directory_is_refused_as_not_regular (the direct CreateFileW zero-access open with the GetFileAttributesW tie-break), character_device_is_refused_as_not_regular, symlinked_regular_input_is_accepted, missing_path_is_an_error_not_a_refusal, open_regular_returns_the_handle_of_a_regular_file. Both reordered reader pins passed: metadata_file_delivery_refuses_the_reader_sidecar and metadata_file_delivery_refuses_the_reader_renamed_sidecar (they release the reader before the post-check sidecar read, so Windows ERROR_LOCK_VIOLATION on the held coordination file no longer tests the lock instead of the refusal).",
-    "native_go_test": "GREEN. 'nice go test ./... -count=1' in v4/go on the native Windows host returned rc=0: 32 packages, 23 ok, 9 with no test files, 0 failing packages. The two wave-19.23/wave-19.24a Windows portability failures are resolved by moving the POSIX permission-mode triggers to //go:build unix siblings (publication_durability_parent_unwritable_unix_test.go, writer_symlink_class_unix_test.go); the platform-neutral survivors (the symlinked-live wrong_state arm, the loop-to-EOF/cap pins, the split samefile worker seam) run natively on Windows, and internal/cli/handlers passes.",
-    "revision": "HEAD 91ae2a429380483010bc5e9ce46ac2dc776ec17d + wave-19.24 (final) uncommitted working-tree batch (tree not clean)",
-    "source_bundle": {
-      "bundle_sha256": "51574a78cc2d435375a3c29b3139a6bbf31358415dd6daac7f00665ed6e062f7",
-      "provenance": "working-tree snapshot of HEAD 91ae2a42 plus the wave-19.24 (final) uncommitted batch, packed with tar --no-recursion over 'git ls-files -co --exclude-standard' plus .git and transferred as a tar.gz (rsync and scp/sftp are unavailable on the host); the extracted checkout reports the same OID from git rev-parse --verify HEAD"
+    "build_identity": "IPRANGE_V4_BUILD_ID a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94 recomputed from this clean checkout by command_sanitize --emit-build-ids over the manifest and 357 sources and found verbatim in both built Rust products (cli_contains_expected=True, worker_contains_expected=True); the windows entry equals the darwin, freebsd and linux entries, which is the host-invariant logical-name algorithm of v4/rust/iprange-livedb/build.rs. This revision touches no v4/rust or v4/go source file, so the identity is expected to equal the previously qualified revision's.",
+    "carried_observation": "The release build graph (35 units compiled, target tree moved out of the checkout before the build so nothing was reused) reports 1 warning line(s) and the summary line(s) 'warning: `iprange-livedb` (lib) generated 1 warning'. The recorded warning is: 'warning: function `abandon_spawn` is never used' at v4/rust/iprange-livedb/src/worker/client.rs:202, whose only callers are cfg(unix). The same single warning with the same wording appears in the previously qualified native run's build log; this recipe does not deny warnings, and this leg neither introduced nor silenced it.",
+    "changed_files": [],
+    "changed_files_note": "Empty by measurement: git status --porcelain returned no lines at the qualified revision, so the tree carried no local edit. The revision under test changes only v4/cli/command_sanitize.py, v4/cli/evidence/README.md and the SOW relative to the previously qualified revision; no v4/rust or v4/go source file differs, which is why the engine build identity is expected to carry over unchanged.",
+    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit 2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1 with no local edit. It was advanced from the previously qualified revision by a git bundle transfer (rsync and scp/sftp are unavailable on this host) plus git checkout --detach, and the three files that differ between the two revisions were verified byte-identical to the qualification workstation's copy of the same commit.",
+    "flake_history": "Scored invocation: 0 of 22 recorded steps retried on the documented MSYS 0xc0000142 STATUS_DLL_INIT_FAILED signature (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. No step needed more than its first attempt, so no scored attempt is a retry (steps whose recorded attempt index exceeds 1: none). This leg ran its driver more than once and every earlier invocation is superseded by the scored one: one of them was stopped by this leg's own driver error -- a go test package path written without its ./ prefix -- not by a product outcome, and the others were replaced only to correct this leg's own record or wording. The surviving files of that first invocation are isolated in logs.superseded-first-invocation/ (cargo-build-bins.a2.log, native.log); no file of a superseded invocation remains inside logs/, and no cited evidence comes from one. Only the highest-attempt rc=0 record of each step is scored.",
+    "host": "Windows 11 10.0.26200, MSYS_NT-10.0-26200 [nodename redacted] 3.6.10-9a6cbe55.x86_64 2026-07-16 20:47 UTC x86_64 Msys, authorized Windows validation host",
+    "native_cargo_test": "GREEN with the recorded worker-colocation step. nice cargo test --manifest-path v4/rust/Cargo.toml -p iprange-cli --no-fail-fast returned rc=0 after cargo test --no-run and copying v4/rust/target/release/iprange-v4-worker.exe beside the debug test executable in v4/rust/target/debug/deps/iprange-v4-worker.exe (the step documented in iprange-cli/src/rpc/handlers/export.rs live_source_tests module docs; without it the six worker-dependent live_source_tests answer os_unsupported, which that module records as an environment defect). Tally: 342 passed, 0 failed, 0 ignored across the 3 test targets (src\\main.rs, tests\\termination_signals.rs, tests\\thread_creation_discipline.rs), including rpc::handlers::maintenance::tests::list_rows_round_trip_into_remove_for_every_removable_kind and one_list_covers_every_kind_and_every_row_stays_removable, and the six io::caller_open::windows_judgment_tests pins answered ok. The scored attempt is cargo-test-iprange-cli.a1.log.",
+    "native_cargo_test_attempts": {
+      "green_log": "cargo-test-iprange-cli.a1.log",
+      "logs_present": [
+        "cargo-test-iprange-cli.a1.log"
+      ],
+      "note": "Scored invocation: 0 of 22 recorded steps retried on the documented MSYS 0xc0000142 STATUS_DLL_INIT_FAILED signature (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. No step needed more than its first attempt, so no scored attempt is a retry (steps whose recorded attempt index exceeds 1: none). This leg ran its driver more than once and every earlier invocation is superseded by the scored one: one of them was stopped by this leg's own driver error -- a go test package path written without its ./ prefix -- not by a product outcome, and the others were replaced only to correct this leg's own record or wording. The surviving files of that first invocation are isolated in logs.superseded-first-invocation/ (cargo-build-bins.a2.log, native.log); no file of a superseded invocation remains inside logs/, and no cited evidence comes from one. Only the highest-attempt rc=0 record of each step is scored."
+    },
+    "native_go_test": "GREEN. nice go test ./... -count=1 in v4/go on the native Windows host returned rc=0: 32 packages -- 24 ok, 8 with no test files, 0 failures (go-test-final.a1.log), scored with no concurrent compile running. The maintenance removal round-trip TestMaintenanceListRowsRoundTripIntoRemoveForEveryRemovableKind was run separately with -v and passed 4 of 4 PASS rows (the test plus its scratch, reservation and publication_temp subtests) with 0 failing rows (go-test-maintenance-roundtrip.a1.log). The five packages whose Windows arms the wave-19.25 maintenance work touched were each run separately with -v -count=1 and returned rc=0: go-test-internal_publication.a1.log, go-test-internal_live.a1.log, go-test-internal_cli_handlers.a1.log, go-test-internal_calleropen.a1.log, go-test-internal_worker.a1.log. The attempt history is in native_go_test_attempts.",
+    "native_go_test_attempts": {
+      "green_log": "go-test-final.a1.log",
+      "logs_present": [
+        "go-test-final.GREEN.log",
+        "go-test-final.a1.log",
+        "go-test-internal_calleropen.GREEN.log",
+        "go-test-internal_calleropen.a1.log",
+        "go-test-internal_cli_handlers.GREEN.log",
+        "go-test-internal_cli_handlers.a1.log",
+        "go-test-internal_live.GREEN.log",
+        "go-test-internal_live.a1.log",
+        "go-test-internal_publication.GREEN.log",
+        "go-test-internal_publication.a1.log",
+        "go-test-internal_worker.GREEN.log",
+        "go-test-internal_worker.a1.log",
+        "go-test-maintenance-roundtrip.GREEN.log",
+        "go-test-maintenance-roundtrip.a1.log"
+      ],
+      "note": "Scored invocation: 0 of 22 recorded steps retried on the documented MSYS 0xc0000142 STATUS_DLL_INIT_FAILED signature (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. No step needed more than its first attempt, so no scored attempt is a retry (steps whose recorded attempt index exceeds 1: none). This leg ran its driver more than once and every earlier invocation is superseded by the scored one: one of them was stopped by this leg's own driver error -- a go test package path written without its ./ prefix -- not by a product outcome, and the others were replaced only to correct this leg's own record or wording. The surviving files of that first invocation are isolated in logs.superseded-first-invocation/ (cargo-build-bins.a2.log, native.log); no file of a superseded invocation remains inside logs/, and no cited evidence comes from one. Only the highest-attempt rc=0 record of each step is scored."
+    },
+    "native_steps": {
+      "build-ids": {
+        "log": "logs/build-ids.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "cargo-build-bins": {
+        "log": "logs/cargo-build-bins.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "cargo-build-worker": {
+        "log": "logs/cargo-build-worker.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "cargo-norun": {
+        "log": "logs/cargo-norun.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "cargo-test-iprange-cli": {
+        "log": "logs/cargo-test-iprange-cli.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "fixture-create": {
+        "log": "logs/fixture-create.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-build-cli": {
+        "log": "logs/go-build-cli.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-build-worker": {
+        "log": "logs/go-build-worker.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-final": {
+        "log": "logs/go-test-final.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-internal_calleropen": {
+        "log": "logs/go-test-internal_calleropen.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-internal_cli_handlers": {
+        "log": "logs/go-test-internal_cli_handlers.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-internal_live": {
+        "log": "logs/go-test-internal_live.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-internal_publication": {
+        "log": "logs/go-test-internal_publication.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-internal_worker": {
+        "log": "logs/go-test-internal_worker.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-test-maintenance-roundtrip": {
+        "log": "logs/go-test-maintenance-roundtrip.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "go-vet": {
+        "log": "logs/go-vet.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "selftest-command-sanitize": {
+        "log": "logs/selftest-command-sanitize.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "selftest-guard": {
+        "log": "logs/selftest-guard.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "selftest-housekeeping": {
+        "log": "logs/selftest-housekeeping.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "stage-win": {
+        "log": "logs/stage-win.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "windows-judgment": {
+        "log": "logs/windows-judgment.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      },
+      "worker-colocation": {
+        "log": "logs/worker-colocation.a1.log",
+        "rc": 0,
+        "scored_attempt": 1
+      }
+    },
+    "revision": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
+    "rust_build_recipe_note": "The Rust products were built by the recorded canonical invocation (--release --all-features --bins --examples) from the checkout itself into the checkout's own v4/rust/target, which was moved out of the tree to the work root before this run so nothing from an earlier build could be reused; the worker was also built explicitly with --release -p iprange-livedb --bin iprange-v4-worker, and the release worker was copied beside the debug test executable so the live_source_tests pins could answer. The Go products were built CGO_ENABLED=0 GOOS=windows GOARCH=amd64 -trimpath -buildvcs=false, which is why their digests do not depend on the build tree location.",
+    "shared_self_tests": {
+      "selftest-command-sanitize": {
+        "own_verdict": [
+          "PASS command_sanitize self-test: 51 controls (kernel-resolution pins + committed-report provenance)"
+        ],
+        "rc": 0,
+        "scored_attempt": 1,
+        "shared_controls_executed": 51,
+        "shared_controls_expected": 51,
+        "tool": "command_sanitize.py"
+      },
+      "selftest-guard": {
+        "own_verdict": [
+          "guard self-test PASSED: 39 controls executed (native-only controls unreachable on this host: 0)"
+        ],
+        "rc": 0,
+        "scored_attempt": 1,
+        "shared_controls_executed": 51,
+        "shared_controls_expected": 51,
+        "tool": "windows_guard_harness.py"
+      },
+      "selftest-housekeeping": {
+        "own_verdict": [
+          "[P2-7] sanitized_command(['--self-test']) passed",
+          "PASS: P2-5 pair-row, P2-6 removal-log, P2-7 sanitizer/privacy, and P3 report-verification self-tests (9 verification controls)"
+        ],
+        "rc": 0,
+        "scored_attempt": 1,
+        "shared_controls_executed": 51,
+        "shared_controls_expected": 51,
+        "tool": "windows_housekeeping_harness.py"
+      }
     },
     "toolchain": {
       "cargo": "cargo 1.97.1 (c980f4866 2026-06-30)",
-      "date": "2026-09-14",
+      "cargo_vv": "cargo 1.97.1 (c980f4866 2026-06-30)\nrelease: 1.97.1\ncommit-hash: c980f4866141969fab6254a680546a277789d6f0\ncommit-date: 2026-06-30\nhost: x86_64-pc-windows-msvc\nlibgit2: 1.9.2 (sys:0.20.4 vendored)\nlibcurl: 8.20.0-DEV (sys:0.4.88+curl-8.20.0 vendored ssl:Schannel)\nos: Windows 10.0.26200 (Windows 11 Professional) [64-bit]",
+      "date": "2026-09-15",
       "go": "go version go1.26.5 windows/amd64",
       "host_triple": "x86_64-pc-windows-msvc",
-      "python": "CPython 3.14.6 mingw64 (os.name=nt, sys.platform=win32, platform Windows 11 AMD64); the cygwin /usr/bin/python3 was not used",
-      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14) host x86_64-pc-windows-msvc, LLVM version 22.1.6"
+      "python": "CPython 3.14.6 (os.name=nt, sys.platform=win32, Windows 11 AMD64, exe C:/msys64/mingw64/bin/python.exe); the harness interpreter is the mingw64 CPython, the cygwin /usr/bin/python3 was not used",
+      "rustc": "rustc 1.97.1 (8bab26f4f 2026-07-14)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: x86_64-pc-windows-msvc\nrelease: 1.97.1\nLLVM version: 22.1.6"
     },
-    "tree_clean": false,
-    "wave": "19.24"
+    "tree_clean": true,
+    "wave": "SOW-0028 wave-19.25c (Windows native re-stamp at the committed revision under test)",
+    "windows_judgment_tests": "6 of 6 ok, individually and as the filtered group: character_device_is_refused_as_not_regular, missing_path_is_an_error_not_a_refusal, directory_is_refused_as_not_regular, open_regular_returns_the_handle_of_a_regular_file, regular_handle_is_accepted, symlinked_regular_input_is_accepted (windows-judgment.a1.log: 6 passed, 0 failed, 0 ignored).",
+    "windows_pin_tally": "IPRANGE_V4_WIN_PIN_TALLY=C:/msys64/tmp/qualsvc-w1925c-W/win-pin-tally.txt exported for the recorded cargo leg. The file was created empty before that leg and exists after it with 0 lines and 0 UNSCORED entries, so every Windows pin was scored rather than skipped. record_unsupported panics when the variable is unset, so a pin whose fixture could not be built would have stopped the suite instead of passing silently.",
+    "windows_pin_tally_path": "C:/msys64/tmp/qualsvc-w1925c-W/win-pin-tally.txt"
   },
   "schema": "iprange-cli-windows-guard-report-v1"
 }
