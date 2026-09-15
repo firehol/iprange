@@ -15,6 +15,8 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/pathname"
+
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 )
 
 // Base64Padded is the standard padded base64 alphabet (wire encoding
@@ -84,7 +86,10 @@ func publishMetadata(path string, bytes []byte, policy iprangedb.PublicationPoli
 		return herr
 	}
 	temporary := pathname.Push(parent, "."+handle+".metadata.tmp")
-	file, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	// The owner-side open keeps this create out of the runtime network
+	// poller, whose initialization has no failure path under a low
+	// RLIMIT_NOFILE (wave-19.25 design section 5).
+	file, err := calleropen.Open(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, 0o666)
 	if err != nil {
 		return outputFileError(err, "create metadata output")
 	}
@@ -184,7 +189,11 @@ func syncDirectoryRaw(parent string) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
-	dir, err := os.Open(parent)
+	// A directory handle goes through the same owner as every persistent
+	// node: on Linux os.Open registers the descriptor with the runtime
+	// network poller regardless of the node type, and that initialization
+	// has no failure path under a low RLIMIT_NOFILE.
+	dir, err := calleropen.Open(parent, os.O_RDONLY|calleropen.NonBlocking, 0)
 	if err != nil {
 		return err
 	}

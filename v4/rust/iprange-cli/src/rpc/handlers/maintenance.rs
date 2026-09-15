@@ -929,10 +929,46 @@ fn validate_scratch_authentication(value: &Value) -> Result<(), String> {
     }
 }
 
+/// Enforces the round-trip member set of one `maintenance.remove` entry.
+///
+/// Every member must belong to the row form `maintenance.list` publishes
+/// for the kind, and every member the emitter writes for every row of the
+/// kind must be present. A member named in `optional` is one the emitter
+/// omits when the scan could not read it, so its absence is a valid row
+/// and its presence is validated as strictly as a required member. Absent
+/// is the only absent form: a present null is a different value and is
+/// refused by the member decoder.
+///
+/// The three identification members of a `windows_housekeeping` row stay
+/// required although the emitter can omit them: they are the opaque
+/// authenticated removal identity (attempt id, ordinal, and envelope
+/// identity) that `maintenance.remove` hands to the SDK, and a row without
+/// them is not a removable entry (spec `maintenance.list`: "Every removable
+/// entry contains its opaque authenticated removal identity"). Accepting
+/// such a row would force the removal to invent an identity from the
+/// basename, which spec `maintenance.remove` forbids.
+fn maintenance_entry_members(
+    entry: &Map<String, Value>,
+    required: &[&str],
+    optional: &[&str],
+) -> Result<(), String> {
+    for key in entry.keys() {
+        if !required.contains(&key.as_str()) && !optional.contains(&key.as_str()) {
+            return Err(format!("unknown member {key:?}"));
+        }
+    }
+    for field in required {
+        if !entry.contains_key(*field) {
+            return Err(format!("missing member {field:?}"));
+        }
+    }
+    Ok(())
+}
+
 fn reservation_remove_fields(
     entry: &Map<String, Value>,
 ) -> Result<(String, LocalFileIdentity, LocalFileIdentity, [u8; 16]), String> {
-    exact_fields(
+    maintenance_entry_members(
         entry,
         &[
             "kind",
@@ -940,17 +976,23 @@ fn reservation_remove_fields(
             "directory_identity",
             "artifact_identity",
             "publication_attempt_id",
-            "evidence",
         ],
+        &["evidence"],
     )?;
     let directory = remove_directory(entry)?;
     let directory_identity = identity_from_value(&entry["directory_identity"])?;
     let artifact_identity = identity_from_value(&entry["artifact_identity"])?;
     let attempt_id = hex16_from_value(&entry["publication_attempt_id"])?;
-    if entry["evidence"].is_null() {
+    // The reservation removal is authorized by the directory, artifact, and
+    // attempt identity alone; evidence never reaches the SDK, so a row the
+    // scan could not authenticate is still removable.
+    let Some(evidence_value) = entry.get("evidence") else {
+        return Ok((directory, directory_identity, artifact_identity, attempt_id));
+    };
+    if evidence_value.is_null() {
         return Err("entry.evidence must not be null; absent is the only absent form".into());
     }
-    let evidence = entry["evidence"]
+    let evidence = evidence_value
         .as_object()
         .ok_or("entry.evidence must be an object")?;
     // policy, phase, output are required; previous is the only
@@ -996,6 +1038,9 @@ fn reservation_remove_fields(
     Ok((directory, directory_identity, artifact_identity, attempt_id))
 }
 
+/// Validates and extracts the publication-temp entry fields. The tuple and
+/// digest content evidence is optional exactly as `maintenance.list` emits
+/// it, and validated to the same depth when the row carries it.
 fn publication_temp_remove_fields(
     entry: &Map<String, Value>,
 ) -> Result<
@@ -1009,7 +1054,7 @@ fn publication_temp_remove_fields(
     ),
     String,
 > {
-    exact_fields(
+    maintenance_entry_members(
         entry,
         &[
             "kind",
@@ -1017,16 +1062,30 @@ fn publication_temp_remove_fields(
             "directory_identity",
             "artifact_identity",
             "publication_attempt_id",
-            "tuple",
-            "digest",
         ],
+        &["tuple", "digest"],
     )?;
     let directory = remove_directory(entry)?;
     let directory_identity = identity_from_value(&entry["directory_identity"])?;
     let artifact_identity = identity_from_value(&entry["artifact_identity"])?;
     let attempt_id = hex16_from_value(&entry["publication_attempt_id"])?;
-    let tuple = tuple_from_value(&entry["tuple"])?;
-    let digest = digest_from_value(&entry["digest"])?;
+    // A private output whose content is not a readable v4 main carries no
+    // evidence, and the SDK removes such partial content only with both
+    // members absent; a present member is validated as strictly as a
+    // required one, and the pair is never half present.
+    let has_tuple = entry.contains_key("tuple");
+    let has_digest = entry.contains_key("digest");
+    if has_tuple != has_digest {
+        return Err("entry.tuple and entry.digest must both be present or both absent".into());
+    }
+    let tuple = match entry.get("tuple") {
+        Some(value) => tuple_from_value(value)?,
+        None => None,
+    };
+    let digest = match entry.get("digest") {
+        Some(value) => digest_from_value(value)?,
+        None => None,
+    };
     Ok((
         directory,
         directory_identity,
@@ -1040,44 +1099,25 @@ fn publication_temp_remove_fields(
 fn housekeeping_remove_fields(
     entry: &Map<String, Value>,
 ) -> Result<(String, LocalFileIdentity, [u8; 16], u32, LocalFileIdentity), String> {
-    // artifact and problem are optional members: maintenance.list
-    // omits them when they do not apply, and the contract requires an
-    // unchanged list row to round-trip into remove.  The allowed set
-    // therefore covers all eleven list members; only the nine
-    // identification members are required.
-    for key in entry.keys() {
-        if !matches!(
-            key.as_str(),
-            "kind"
-                | "directory"
-                | "directory_identity"
-                | "candidate_kind"
-                | "basename_encoding"
-                | "basename"
-                | "identity"
-                | "attempt_id"
-                | "ordinal"
-                | "artifact"
-                | "problem"
-        ) {
-            return Err(format!("unknown member {key:?}"));
-        }
-    }
-    for field in [
-        "kind",
-        "directory",
-        "directory_identity",
-        "candidate_kind",
-        "basename_encoding",
-        "basename",
-        "identity",
-        "attempt_id",
-        "ordinal",
-    ] {
-        if !entry.contains_key(field) {
-            return Err(format!("missing member {field:?}"));
-        }
-    }
+    // identity, attempt_id, and ordinal carry the authenticated removal
+    // identity of this kind, so they stay required; artifact and problem
+    // are optional members the emitter omits when they do not apply
+    // (maintenance_entry_members states the general rule).
+    maintenance_entry_members(
+        entry,
+        &[
+            "kind",
+            "directory",
+            "directory_identity",
+            "candidate_kind",
+            "basename_encoding",
+            "basename",
+            "identity",
+            "attempt_id",
+            "ordinal",
+        ],
+        &["artifact", "problem"],
+    )?;
     let directory = remove_directory(entry)?;
     let directory_identity = identity_from_value(&entry["directory_identity"])?;
     match entry["candidate_kind"].as_str() {
@@ -1622,5 +1662,678 @@ mod tests {
                 error.message
             ),
         }
+    }
+
+    // ------------------------------------------------------------------
+    // maintenance.list -> maintenance.remove row round-trip
+    // ------------------------------------------------------------------
+
+    /// The platform creator-only security kind recorded in a scratch
+    /// ownership header (Rust namespace CREATION_SECURITY_KIND arm).
+    #[cfg(not(windows))]
+    const SCRATCH_CREATION_SECURITY_KIND: u16 = 1;
+    #[cfg(windows)]
+    const SCRATCH_CREATION_SECURITY_KIND: u16 = 2;
+
+    /// One unique scratch directory per probe; the caller removes it.
+    fn probe_directory(label: &str) -> std::path::PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock after the unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-maintenance-{label}-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&path).expect("create the maintenance probe directory");
+        path
+    }
+
+    /// The lowercase hex wire form of one attempt identity.
+    fn attempt_hex(attempt: [u8; 16]) -> String {
+        attempt.iter().map(|byte| format!("{byte:02x}")).collect()
+    }
+
+    /// One fixed attempt identity per kind, so each kind owns an exact
+    /// private name that no other probe shares.
+    fn maintenance_attempt(mark: u8) -> [u8; 16] {
+        let mut attempt = [0u8; 16];
+        for (index, byte) in attempt.iter_mut().enumerate() {
+            *byte = ((index * 16) as u8) | mark;
+        }
+        attempt[15] = mark;
+        attempt
+    }
+
+    /// One portable local identity of the current platform, the pair the
+    /// wire encodes as {"volume","file"}.
+    fn local_identity(volume: u64, file: u64) -> LocalFileIdentity {
+        let mut bytes = [0u8; 32];
+        bytes[0..8].copy_from_slice(&volume.to_le_bytes());
+        bytes[8..16].copy_from_slice(&file.to_le_bytes());
+        LocalFileIdentity {
+            kind: if cfg!(windows) { 2 } else { 1 },
+            bytes,
+        }
+    }
+
+    /// CRC-32C (Castagnoli, reflected) of one buffer with one fixed range
+    /// treated as zero: the scratch header checksum rule of
+    /// binary-format-v4.md.
+    fn scratch_checksum(bytes: &[u8], zero_at: usize, zero_len: usize) -> u32 {
+        let mut mirror = bytes.to_vec();
+        mirror[zero_at..zero_at + zero_len].fill(0);
+        let mut crc = 0xffff_ffff_u32;
+        for byte in mirror {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0x82f6_3b78
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    /// The exact 62-byte basename of one recovery-scratch artifact.
+    fn scratch_basename(attempt: [u8; 16], ordinal: u32) -> String {
+        format!(
+            ".iprange-scratch-{}-{:08x}.tmp",
+            attempt_hex(attempt),
+            ordinal
+        )
+    }
+
+    /// Writes one recovery-scratch artifact whose 128-byte ownership header
+    /// authenticates: magic, fixed fields, meta facts, attempt, ordinal, the
+    /// platform creator-only security kind, a non-zero creator commitment,
+    /// and the header checksum. The POSIX removal arm does not compare the
+    /// commitment against the live profile, so the artifact is a true
+    /// abandoned-scratch entry; the Windows arm does, so this fixture — and
+    /// the round-trip that uses it — is unix-only.
+    #[cfg(unix)]
+    fn authenticated_scratch_artifact(
+        directory: &std::path::Path,
+        attempt: [u8; 16],
+        ordinal: u32,
+    ) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mut header = [0u8; 128];
+        header[0..8].copy_from_slice(b"IPR4SCR1");
+        header[8..10].copy_from_slice(&1u16.to_le_bytes()); // version
+        header[10..12].copy_from_slice(&128u16.to_le_bytes()); // header size
+        header[12..14].copy_from_slice(&2u16.to_le_bytes()); // owner kind: recovery
+        header[16] = 1; // database id
+        header[32..40].copy_from_slice(&7u64.to_le_bytes()); // transaction id
+        header[40] = 2; // commit nonce
+        header[56..72].copy_from_slice(&attempt);
+        header[72..76].copy_from_slice(&ordinal.to_le_bytes());
+        header[76..78].copy_from_slice(&SCRATCH_CREATION_SECURITY_KIND.to_le_bytes());
+        header[80..112].copy_from_slice(&[0x5a; 32]); // non-zero commitment
+        let checksum = scratch_checksum(&header, 124, 4);
+        header[124..128].copy_from_slice(&checksum.to_le_bytes());
+        let path = directory.join(scratch_basename(attempt, ordinal));
+        std::fs::write(&path, header).expect("write the scratch artifact");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("make the scratch artifact creator-only");
+        path
+    }
+
+    /// Writes one exact-pattern private artifact of `prefix` whose content
+    /// is neither a readable reservation record nor readable v4 geometry,
+    /// which is what a killed publisher leaves behind. maintenance.list
+    /// reports such an artifact without its optional evidence members.
+    fn partial_private_artifact(
+        directory: &std::path::Path,
+        prefix: &str,
+        attempt: [u8; 16],
+    ) -> std::path::PathBuf {
+        let path = directory.join(format!("{prefix}{}.tmp", attempt_hex(attempt)));
+        std::fs::write(&path, b"partial").expect("write the private residue");
+        path
+    }
+
+    /// Runs iprange.v1.maintenance.list for the given kinds and returns the
+    /// exact JSONL row bytes it published, in list order.
+    fn listed_rows(directory: &std::path::Path, kinds: &[&str]) -> Vec<String> {
+        let rows_dir = probe_directory("rows");
+        let rows_path = rows_dir.join("rows.jsonl");
+        let mut state = SessionState::default();
+        maintenance_list(
+            &mut state,
+            json!({
+                "directory": directory.display().to_string(),
+                "kinds": kinds,
+                "max_entries": 64,
+                "output": {
+                    "path": rows_path.display().to_string(),
+                    "format": "jsonl",
+                    "publication_policy": "fail_if_exists",
+                    "result_budget": {
+                        "max_rows": "64",
+                        "max_output_bytes": "65536",
+                        "max_open_files": 3,
+                    },
+                },
+            }),
+        )
+        .expect("maintenance.list serves the requested kinds");
+        let published = std::fs::read_to_string(&rows_path).expect("read the published rows");
+        std::fs::remove_dir_all(&rows_dir).ok();
+        published.lines().map(str::to_owned).collect()
+    }
+
+    /// Submits one exact maintenance.list row as the entry of
+    /// iprange.v1.maintenance.remove. The row is parsed from the published
+    /// bytes and proven to re-serialize identically before the call, so the
+    /// handler received what the list published and the test reconstructed
+    /// no field.
+    fn remove_row(row: &str) -> Result<Value, HandlerError> {
+        let entry: Value = serde_json::from_str(row).expect("a published row is JSON");
+        assert_eq!(
+            entry.to_string(),
+            row,
+            "the removal entry must be the exact published row bytes"
+        );
+        let params = json!({ "entry": entry });
+        validate_maintenance_remove(&params).expect("one unchanged entry object is valid params");
+        maintenance_remove(&mut SessionState::default(), params)
+    }
+
+    /// Parses one published row.
+    fn published_row(row: &str) -> Value {
+        serde_json::from_str(row).expect("a published row is JSON")
+    }
+
+    /// Checks one successful removal terminal against the source-presence
+    /// fact the caller expects: the first removal of a listed row reports
+    /// the artifact it retired, a replay of the same row reports the durable
+    /// absence.
+    fn require_removal_facts(result: &Value, source_present: bool) {
+        assert_eq!(result["method"], "iprange.v1.maintenance.remove");
+        assert_eq!(
+            result["removal"]["source_present"], source_present,
+            "unexpected removal facts: {result}"
+        );
+        assert_eq!(result["removal"]["cleanup_state"], "clean");
+    }
+
+    /// Plants residue of one kind, lists it, and removes the exact bytes the
+    /// list published; the artifact must be gone, and the same row must then
+    /// report the durable absence.
+    fn require_row_roundtrip(kind: &str, plant: &dyn Fn(&std::path::Path) -> std::path::PathBuf) {
+        let directory = probe_directory(kind);
+        let residue = plant(&directory);
+        let rows = listed_rows(&directory, &[kind]);
+        assert_eq!(
+            rows.len(),
+            1,
+            "{kind}: list published {rows:?}, want the one planted artifact"
+        );
+        assert_eq!(published_row(&rows[0])["kind"], kind);
+        let result = remove_row(&rows[0]).unwrap_or_else(|error| {
+            panic!(
+                "{kind}: the unchanged list row {} must be accepted by maintenance.remove: [{}] {}",
+                rows[0], error.code, error.message
+            )
+        });
+        require_removal_facts(&result, true);
+        assert!(
+            !residue.exists(),
+            "{kind}: residue {} survived the removal",
+            residue.display()
+        );
+        let result = remove_row(&rows[0]).unwrap_or_else(|error| {
+            panic!(
+                "{kind}: replaying the row must report the durable absence: [{}] {}",
+                error.code, error.message
+            )
+        });
+        require_removal_facts(&result, false);
+        assert!(
+            listed_rows(&directory, &[kind]).is_empty(),
+            "{kind}: the list still reports the removed artifact"
+        );
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    /// One row the list emitters produce, with the removal outcome its shape
+    /// must produce. `authorized` marks a row that carries the opaque
+    /// authenticated removal identity of its kind; only such a row is a
+    /// removable entry (iprange-jsonrpc-v1.md, maintenance.list), so only
+    /// such a row may reach the SDK.
+    struct RowProbe {
+        name: &'static str,
+        row: Value,
+        authorized: bool,
+    }
+
+    /// One row per (kind, scan outcome) pair maintenance.list can publish,
+    /// produced by the list emitters themselves so a row shape cannot drift
+    /// from what the method serves.
+    fn emitted_rows(directory: &str) -> Vec<RowProbe> {
+        let identity = local_identity(1, 2);
+        let artifact = local_identity(3, 4);
+        let attempt = maintenance_attempt(0x01);
+        let ordinal = 3u32;
+        let tuple = PublicationTuple {
+            database_id: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16],
+            transaction_id: 7,
+            commit_nonce: [16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1],
+        };
+        let digest = PublicationDigest {
+            byte_length: 8192,
+            sha512: [0xab; 64],
+        };
+        let scratch = |authenticated: bool| AbandonedScratchEntry {
+            directory_identity: identity,
+            artifact_identity: artifact,
+            attempt_id: attempt,
+            ordinal,
+            authentication: if authenticated {
+                AbandonedScratchAuthentication::Authenticated(ScratchOwnerKind::Recovery)
+            } else {
+                AbandonedScratchAuthentication::Unauthenticated
+            },
+        };
+        let evidence = iprange_livedb::publication::AbandonedReservationEvidence {
+            policy: iprange_livedb::publication::AbandonedReservationPolicy::ReplaceExisting,
+            phase: iprange_livedb::publication::AbandonedReservationPhase::Prepared,
+            output: iprange_livedb::publication::PublicationOutputEvidence {
+                identity,
+                tuple,
+                digest: digest.clone(),
+            },
+            previous: None,
+        };
+        let reservation =
+            |evidence: Option<iprange_livedb::publication::AbandonedReservationEvidence>| {
+                AbandonedReservationEntry {
+                    directory_identity: identity,
+                    artifact_identity: artifact,
+                    publication_attempt_id: attempt,
+                    evidence,
+                }
+            };
+        let publication_temp = |with_evidence: bool| AbandonedPublicationTempEntry {
+            directory_identity: identity,
+            artifact_identity: artifact,
+            publication_attempt_id: attempt,
+            tuple: with_evidence.then_some(tuple),
+            digest: with_evidence.then_some(digest.clone()),
+        };
+        let housekeeping = |authorized: bool| WindowsHousekeepingEntry {
+            directory_identity: identity,
+            candidate_kind: WindowsHousekeepingCandidateKind::Envelope,
+            basename_encoding: 2,
+            basename: vec![0x2e, 0x00, 0x74, 0x00].into_boxed_slice(),
+            identity: authorized.then_some(artifact),
+            attempt_id: authorized.then_some(attempt),
+            ordinal: authorized.then_some(ordinal),
+            artifact: None,
+            problem: None,
+        };
+        let emit =
+            |name: &'static str, value: Result<Value, HandlerError>, authorized: bool| RowProbe {
+                name,
+                row: value.expect("the list emitter converts its own entry"),
+                authorized,
+            };
+        let mut rows = vec![
+            emit(
+                "scratch authenticated",
+                scratch_entry_value(directory, &scratch(true)),
+                true,
+            ),
+            emit(
+                "scratch unauthenticated",
+                scratch_entry_value(directory, &scratch(false)),
+                true,
+            ),
+            emit(
+                "reservation without evidence",
+                reservation_entry_value(directory, &reservation(None)),
+                true,
+            ),
+            emit(
+                "reservation with evidence",
+                reservation_entry_value(directory, &reservation(Some(evidence.clone()))),
+                true,
+            ),
+            emit(
+                "publication_temp without evidence",
+                publication_temp_entry_value(directory, &publication_temp(false)),
+                true,
+            ),
+            emit(
+                "publication_temp with evidence",
+                publication_temp_entry_value(directory, &publication_temp(true)),
+                true,
+            ),
+            emit(
+                "windows_housekeeping without the optional members",
+                housekeeping_entry_value(directory, &housekeeping(true)),
+                true,
+            ),
+            emit(
+                "windows_housekeeping without a removal identity",
+                housekeeping_entry_value(directory, &housekeeping(false)),
+                false,
+            ),
+        ];
+        // A classified candidate additionally carries the artifact and
+        // problem members the emitter names; the removal checks only that
+        // each of them is an object.
+        let mut classified = housekeeping_entry_value(directory, &housekeeping(true))
+            .expect("the list emitter converts its own entry");
+        classified["artifact"] = json!({"kind": "private_output"});
+        classified["problem"] = json!({"code": "cleanup_conflict"});
+        rows.push(emit(
+            "windows_housekeeping with every member",
+            Ok(classified),
+            true,
+        ));
+        rows
+    }
+
+    /// Overwrites one (possibly nested) member of an emitted row.
+    fn set_member(row: &mut Value, path: &[&str], value: Value) {
+        let (last, parents) = path.split_last().expect("a member path is not empty");
+        let mut current = row.as_object_mut().expect("an emitted row is an object");
+        for key in parents {
+            current = current
+                .get_mut(*key)
+                .and_then(Value::as_object_mut)
+                .unwrap_or_else(|| panic!("member {key:?} of the emitted row is not an object"));
+        }
+        current.insert((*last).to_owned(), value);
+    }
+
+    /// Removes one (possibly nested) member of an emitted row.
+    fn drop_member(row: &mut Value, path: &[&str]) {
+        let (last, parents) = path.split_last().expect("a member path is not empty");
+        let mut current = row.as_object_mut().expect("an emitted row is an object");
+        for key in parents {
+            current = current
+                .get_mut(*key)
+                .and_then(Value::as_object_mut)
+                .unwrap_or_else(|| panic!("member {key:?} of the emitted row is not an object"));
+        }
+        assert!(
+            current.remove(*last).is_some(),
+            "member {last:?} is not part of the emitted row"
+        );
+    }
+
+    #[test]
+    fn list_rows_round_trip_into_remove_for_every_removable_kind() {
+        #[cfg(unix)]
+        require_row_roundtrip("scratch", &|directory| {
+            authenticated_scratch_artifact(directory, maintenance_attempt(0xa1), 7)
+        });
+        require_row_roundtrip("reservation", &|directory| {
+            partial_private_artifact(
+                directory,
+                ".iprange-reservation-",
+                maintenance_attempt(0xb2),
+            )
+        });
+        require_row_roundtrip("publication_temp", &|directory| {
+            partial_private_artifact(directory, ".iprange-publish-", maintenance_attempt(0xc3))
+        });
+    }
+
+    #[test]
+    fn one_list_covers_every_kind_and_every_row_stays_removable() {
+        let directory = probe_directory("all-kinds");
+        let mut planted: Vec<(&str, std::path::PathBuf)> = Vec::new();
+        #[cfg(unix)]
+        planted.push((
+            "scratch",
+            authenticated_scratch_artifact(&directory, maintenance_attempt(0xd1), 3),
+        ));
+        planted.push((
+            "reservation",
+            partial_private_artifact(
+                &directory,
+                ".iprange-reservation-",
+                maintenance_attempt(0xe2),
+            ),
+        ));
+        planted.push((
+            "publication_temp",
+            partial_private_artifact(&directory, ".iprange-publish-", maintenance_attempt(0xf3)),
+        ));
+        let kinds: Vec<&str> = planted.iter().map(|(kind, _)| *kind).collect();
+        let rows = listed_rows(&directory, &kinds);
+        assert_eq!(
+            rows.len(),
+            planted.len(),
+            "list published {rows:?}, want one row per kind"
+        );
+        for (index, (kind, _)) in planted.iter().enumerate() {
+            assert_eq!(published_row(&rows[index])["kind"], *kind);
+        }
+        // The unreadable reservation and the partial publication output are
+        // reported without their optional evidence members.
+        let index = planted
+            .iter()
+            .position(|(kind, _)| *kind == "reservation")
+            .expect("the reservation kind is planted");
+        assert!(
+            published_row(&rows[index]).get("evidence").is_none(),
+            "the reservation row of an unreadable record must omit evidence: {}",
+            rows[index]
+        );
+        let index = planted
+            .iter()
+            .position(|(kind, _)| *kind == "publication_temp")
+            .expect("the publication_temp kind is planted");
+        let partial = published_row(&rows[index]);
+        assert!(
+            partial.get("tuple").is_none() && partial.get("digest").is_none(),
+            "the publication_temp row of partial content must omit tuple and digest: {}",
+            rows[index]
+        );
+        for (index, (kind, path)) in planted.iter().enumerate() {
+            let result = remove_row(&rows[index]).unwrap_or_else(|error| {
+                panic!(
+                    "{kind}: the unchanged list row {} must be accepted by maintenance.remove: [{}] {}",
+                    rows[index], error.code, error.message
+                )
+            });
+            require_removal_facts(&result, true);
+            assert!(
+                !path.exists(),
+                "{kind}: residue {} survived the removal",
+                path.display()
+            );
+        }
+        assert!(listed_rows(&directory, &kinds).is_empty());
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn remove_accepts_every_removable_row_the_list_can_publish() {
+        let directory = probe_directory("emitted-rows");
+        let directory_name = directory.display().to_string();
+        for probe in emitted_rows(&directory_name) {
+            let row = probe.row.to_string();
+            let error = match remove_row(&row) {
+                Ok(result) => {
+                    assert!(
+                        probe.authorized,
+                        "{}: a row without its authenticated removal identity must be refused before any destructive step",
+                        probe.name
+                    );
+                    require_removal_facts(&result, false);
+                    continue;
+                }
+                Err(error) => error,
+            };
+            if !probe.authorized {
+                assert_eq!(
+                    error.code, "invalid_argument",
+                    "{}: a row without its authenticated removal identity must be refused before any destructive step",
+                    probe.name
+                );
+                continue;
+            }
+            assert_ne!(
+                error.code, "invalid_argument",
+                "{}: maintenance.remove refused a removable row maintenance.list emits: {row}: [{}] {}",
+                probe.name, error.code, error.message
+            );
+            if row.contains("windows_housekeeping") {
+                if cfg!(windows) {
+                    continue;
+                }
+                assert_eq!(
+                    error.code, "os_unsupported",
+                    "{}: the housekeeping removal must reach the platform refusal",
+                    probe.name
+                );
+                continue;
+            }
+            assert_eq!(
+                error.code, "directory_identity_mismatch",
+                "{}: the removal must reach the SDK identity proof",
+                probe.name
+            );
+        }
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn remove_still_validates_every_present_member() {
+        let directory = probe_directory("present-members");
+        let directory_name = directory.display().to_string();
+        let emitted: std::collections::HashMap<&str, Value> = emitted_rows(&directory_name)
+            .into_iter()
+            .map(|probe| (probe.name, probe.row))
+            .collect();
+        let template = |name: &str| emitted[name].clone();
+        // One emitted row with members overwritten (`set`) and removed
+        // (`drop`), so each probe differs from a published row in exactly
+        // the one way the case names.
+        let mutate = |name: &str, set: &[(&[&str], Value)], drop: &[&[&str]]| {
+            let mut row = template(name);
+            for item in set {
+                set_member(&mut row, item.0, item.1.clone());
+            }
+            for path in drop {
+                drop_member(&mut row, path);
+            }
+            row
+        };
+        let cases: Vec<(&str, Value)> = vec![
+            (
+                "publication_temp tuple without digest",
+                mutate("publication_temp with evidence", &[], &[&["digest"]]),
+            ),
+            (
+                "publication_temp digest without tuple",
+                mutate("publication_temp with evidence", &[], &[&["tuple"]]),
+            ),
+            (
+                "publication_temp null tuple",
+                mutate(
+                    "publication_temp without evidence",
+                    &[(&["tuple"], Value::Null)],
+                    &[],
+                ),
+            ),
+            (
+                "publication_temp malformed digest",
+                mutate(
+                    "publication_temp with evidence",
+                    &[(&["digest", "sha512"], json!("not-a-digest"))],
+                    &[],
+                ),
+            ),
+            (
+                "publication_temp unknown member",
+                mutate(
+                    "publication_temp without evidence",
+                    &[(&["basename"], json!("synthesized"))],
+                    &[],
+                ),
+            ),
+            (
+                "publication_temp without artifact identity",
+                mutate(
+                    "publication_temp without evidence",
+                    &[],
+                    &[&["artifact_identity"]],
+                ),
+            ),
+            (
+                "reservation null evidence",
+                mutate(
+                    "reservation without evidence",
+                    &[(&["evidence"], Value::Null)],
+                    &[],
+                ),
+            ),
+            (
+                "reservation evidence with unknown member",
+                mutate(
+                    "reservation with evidence",
+                    &[(&["evidence", "forged"], json!(true))],
+                    &[],
+                ),
+            ),
+            (
+                "reservation evidence without output",
+                mutate("reservation with evidence", &[], &[&["evidence", "output"]]),
+            ),
+            (
+                "reservation evidence with non-canonical byte_length",
+                mutate(
+                    "reservation with evidence",
+                    &[(
+                        &["evidence", "output", "digest", "byte_length"],
+                        json!("08192"),
+                    )],
+                    &[],
+                ),
+            ),
+            (
+                "scratch without authentication",
+                mutate("scratch authenticated", &[], &[&["authentication"]]),
+            ),
+            (
+                "scratch with a forged owner",
+                mutate(
+                    "scratch authenticated",
+                    &[(&["authentication", "owner"], json!("attacker"))],
+                    &[],
+                ),
+            ),
+        ];
+        for (name, row) in cases {
+            let row = row.to_string();
+            match remove_row(&row) {
+                Err(error) if error.code == "invalid_argument" => {}
+                Err(error) => panic!(
+                    "{name}: must be refused with invalid_argument, got [{}] {}",
+                    error.code, error.message
+                ),
+                Ok(result) => {
+                    panic!("{name}: must be refused before any destructive step, got {result}")
+                }
+            }
+        }
+        std::fs::remove_dir_all(&directory).ok();
+    }
+
+    #[test]
+    fn scratch_header_checksum_matches_the_recorded_crc32c_vector() {
+        // The residue fixture is only trustworthy if its checksum is the
+        // recorded CRC-32C: the canonical check value of "123456789" is
+        // 0xE3069283.
+        assert_eq!(scratch_checksum(b"123456789", 9, 0), 0xe306_9283);
     }
 }

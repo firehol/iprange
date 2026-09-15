@@ -1,0 +1,255 @@
+{
+ "fixtures": [
+  {
+   "path": "res/marker.txt",
+   "source": {
+    "text": "maintenance directory\n"
+   }
+  }
+ ],
+ "name": "maintenance.roundtrip.windows_housekeeping",
+ "requires": "iprange.v1.maintenance.remove",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "basename": "LgB0AA==",
+     "basename_encoding": 2,
+     "candidate_kind": "envelope",
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "windows_housekeeping",
+     "ordinal": 3
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "basename": "LgB0AA==",
+     "basename_encoding": 2,
+     "candidate_kind": "envelope",
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "identity": {
+      "file": "10",
+      "volume": "9"
+     },
+     "kind": "windows_housekeeping",
+     "ordinal": 3
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "basename": "LgB0AA==",
+     "basename_encoding": 2,
+     "candidate_kind": "envelope",
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "identity": {
+      "file": "10",
+      "volume": "9"
+     },
+     "kind": "windows_housekeeping"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "basename": "LgB0AA==",
+     "basename_encoding": 2,
+     "candidate_kind": "envelope",
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "identity": null,
+     "kind": "windows_housekeeping",
+     "ordinal": 3
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "basename": "LgB0AA==",
+     "basename_encoding": 2,
+     "candidate_kind": "envelope",
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "identity": {
+      "file": "10",
+      "volume": "9"
+     },
+     "kind": "windows_housekeeping",
+     "ordinal": 3,
+     "unknown_member": "x"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "basename": "not base64!",
+     "basename_encoding": 2,
+     "candidate_kind": "envelope",
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "identity": {
+      "file": "10",
+      "volume": "9"
+     },
+     "kind": "windows_housekeeping",
+     "ordinal": 3
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "basename": "LgB0AA==",
+     "basename_encoding": 2,
+     "candidate_kind": "foreign",
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "identity": {
+      "file": "10",
+      "volume": "9"
+     },
+     "kind": "windows_housekeeping",
+     "ordinal": 3
+    }
+   }
+  },
+  {
+   "actor": "consumer",
+   "expect_result": {
+    "output": {
+     "bytes": {
+      "$ignore": true
+     },
+     "path": {
+      "$ignore": true
+     },
+     "rows": "0",
+     "sha256": {
+      "$ignore": true
+     }
+    },
+    "reports": [
+     {
+      "entries": "0",
+      "kind": "scratch"
+     },
+     {
+      "entries": "0",
+      "kind": "reservation"
+     },
+     {
+      "entries": "0",
+      "kind": "publication_temp"
+     }
+    ]
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.list",
+   "params": {
+    "directory": "$WORK/res",
+    "kinds": [
+     "scratch",
+     "reservation",
+     "publication_temp"
+    ],
+    "max_entries": 64,
+    "output": {
+     "format": "jsonl",
+     "path": "$WORK/rows-housekeeping.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    }
+   }
+  }
+ ]
+}

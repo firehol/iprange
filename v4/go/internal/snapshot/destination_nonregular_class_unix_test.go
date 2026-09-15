@@ -28,3 +28,12 @@ func bindUnixSocket(t *testing.T, path string) {
 	unix.Close(fd)
 	t.Cleanup(func() { _ = osRemove(path) })
 }
+
+// syscallMknodChardev creates one character-device node at path. The
+// device numbers are those of the null device, which is the shape an
+// external publisher could leave in a destination slot; on a host where
+// the test user has no CAP_MKNOD the call reports EPERM and the caller
+// skips that one shape.
+func syscallMknodChardev(path string) error {
+	return unix.Mknod(path, 0o600|unix.S_IFCHR, int(unix.Mkdev(1, 3)))
+}

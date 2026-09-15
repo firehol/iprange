@@ -1190,11 +1190,46 @@ func hex16Member(entry rawObject, field string) ([16]byte, *rpc.HandlerError) {
 	return value, nil
 }
 
-// reservationRemoveFields validates and extracts the exact
-// reservation entry fields including its authenticated evidence
-// (Rust reservation_remove_fields).
+// maintenanceEntryMembers enforces the round-trip member set of one
+// maintenance.remove entry: every member must belong to the row form
+// maintenance.list publishes for the kind, and every member the emitter
+// writes for every row of the kind must be present. A member in optional
+// is one the emitter omits when the scan could not read it, so its
+// absence is a valid row and its presence is validated as strictly as a
+// required member. Absent is the only absent form: a present null is a
+// different value and is refused by the member decoder.
+//
+// The three identification members of a windows_housekeeping row are
+// required although the emitter can omit them: they are the opaque
+// authenticated removal identity (attempt id, ordinal, and envelope
+// identity) that iprange.v1.maintenance.remove passes to the SDK, and a
+// row without them is not a removable entry (spec maintenance.list:
+// "Every removable entry contains its opaque authenticated removal
+// identity"). Accepting such a row would force the removal to invent an
+// identity from the basename, which spec maintenance.remove forbids.
+// (Rust maintenance_entry_members.)
+func maintenanceEntryMembers(entry rawObject, required, optional []string) error {
+	for key := range entry {
+		if !containsString(required, key) && !containsString(optional, key) {
+			return fmt.Errorf("unknown member %q", key)
+		}
+	}
+	for _, field := range required {
+		if _, ok := entry[field]; !ok {
+			return fmt.Errorf("missing member %q", field)
+		}
+	}
+	return nil
+}
+
+// reservationRemoveFields validates and extracts the reservation entry
+// fields; the authenticated evidence is optional exactly as
+// maintenance.list emits it, and is validated to the same depth when the
+// row carries it (Rust reservation_remove_fields).
 func reservationRemoveFields(entry rawObject) (string, iprangedb.FileIdentity, iprangedb.FileIdentity, [16]byte, *rpc.HandlerError) {
-	if err := exactObjectRaw(entry, "kind", "directory", "directory_identity", "artifact_identity", "publication_attempt_id", "evidence"); err != nil {
+	if err := maintenanceEntryMembers(entry,
+		[]string{"kind", "directory", "directory_identity", "artifact_identity", "publication_attempt_id"},
+		[]string{"evidence"}); err != nil {
 		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, rpc.InvalidParamsError(err.Error())
 	}
 	directory, herr := removeDirectoryField(entry)
@@ -1213,12 +1248,17 @@ func reservationRemoveFields(entry rawObject) (string, iprangedb.FileIdentity, i
 	if herr != nil {
 		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, herr
 	}
-	evidence, err := memberObject(entry, "evidence")
-	if err != nil {
-		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, rpc.InvalidParamsError("entry.evidence must be an object")
-	}
-	if herr := validateReservationEvidence(evidence); herr != nil {
-		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, herr
+	// The reservation removal is authorized by the directory, artifact,
+	// and attempt identity alone; evidence never reaches the SDK, so a
+	// row the scan could not authenticate is still removable.
+	if _, present := entry["evidence"]; present {
+		evidence, err := memberObject(entry, "evidence")
+		if err != nil {
+			return "", zeroIdentity(), zeroIdentity(), [16]byte{}, rpc.InvalidParamsError("entry.evidence must be an object")
+		}
+		if herr := validateReservationEvidence(evidence); herr != nil {
+			return "", zeroIdentity(), zeroIdentity(), [16]byte{}, herr
+		}
 	}
 	return directory, directoryIdentity, artifactIdentity, attemptID, nil
 }
@@ -1344,17 +1384,25 @@ func validateDigestObject(digest rawObject) error {
 	return nil
 }
 
-// publicationTempRemoveFields validates and extracts the exact
-// publication-temp entry fields; the tuple and digest evidence are
-// required objects exactly like the Rust remove fields.
+// publicationTempRemoveFields validates and extracts the publication-temp
+// entry fields. The tuple and digest content evidence is optional exactly
+// as maintenance.list emits it: a private output whose content is not a
+// readable v4 main carries no evidence, and the SDK removes such partial
+// content only with both members absent. A present member is validated as
+// strictly as a required one, and the pair is never half present (Rust
+// publication_temp_remove_fields).
 func publicationTempRemoveFields(entry rawObject) (string, iprangedb.FileIdentity, iprangedb.FileIdentity, [16]byte, *iprangedb.PublicationTuple, *iprangedb.PublicationDigest, *rpc.HandlerError) {
-	if err := exactObjectRaw(entry, "kind", "directory", "directory_identity", "artifact_identity", "publication_attempt_id", "tuple", "digest"); err != nil {
+	if err := maintenanceEntryMembers(entry,
+		[]string{"kind", "directory", "directory_identity", "artifact_identity", "publication_attempt_id"},
+		[]string{"tuple", "digest"}); err != nil {
 		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, rpc.InvalidParamsError(err.Error())
 	}
 	directory, herr := removeDirectoryField(entry)
 	if herr != nil {
 		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, herr
 	}
+	var tuple *iprangedb.PublicationTuple
+	var digest *iprangedb.PublicationDigest
 	directoryIdentity, herr := identityFromWire(entry, "directory_identity")
 	if herr != nil {
 		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, herr
@@ -1367,21 +1415,27 @@ func publicationTempRemoveFields(entry rawObject) (string, iprangedb.FileIdentit
 	if herr != nil {
 		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, herr
 	}
-	tupleRaw, err := memberObject(entry, "tuple")
-	if err != nil {
-		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, rpc.InvalidParamsError("entry.tuple must be an object")
+	_, hasTuple := entry["tuple"]
+	_, hasDigest := entry["digest"]
+	if hasTuple != hasDigest {
+		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil,
+			rpc.InvalidParamsError("entry.tuple and entry.digest must both be present or both absent")
 	}
-	tuple, herr := decodeTupleObject(tupleRaw)
-	if herr != nil {
-		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, herr
-	}
-	digestRaw, err := memberObject(entry, "digest")
-	if err != nil {
-		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, rpc.InvalidParamsError("entry.digest must be an object")
-	}
-	digest, herr := decodeDigestObject(digestRaw)
-	if herr != nil {
-		return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, herr
+	if hasTuple {
+		tupleRaw, err := memberObject(entry, "tuple")
+		if err != nil {
+			return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, rpc.InvalidParamsError("entry.tuple must be an object")
+		}
+		if tuple, herr = decodeTupleObject(tupleRaw); herr != nil {
+			return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, herr
+		}
+		digestRaw, err := memberObject(entry, "digest")
+		if err != nil {
+			return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, rpc.InvalidParamsError("entry.digest must be an object")
+		}
+		if digest, herr = decodeDigestObject(digestRaw); herr != nil {
+			return "", zeroIdentity(), zeroIdentity(), [16]byte{}, nil, nil, herr
+		}
 	}
 	return directory, directoryIdentity, artifactIdentity, attemptID, tuple, digest, nil
 }
@@ -1422,35 +1476,20 @@ func decodeDigestObject(digest rawObject) (*iprangedb.PublicationDigest, *rpc.Ha
 	return &iprangedb.PublicationDigest{ByteLength: byteLength, SHA512: digestBytes}, nil
 }
 
-// housekeepingRemoveFields validates and extracts the exact GC
-// housekeeping entry fields; the payload evidence is never supplied
-// by this method (Rust housekeeping_remove_fields with no payload
-// identity).
+// housekeepingRemoveFields validates and extracts the GC housekeeping
+// entry fields; the payload evidence is never supplied by this method
+// (Rust housekeeping_remove_fields with no payload identity).
 func housekeepingRemoveFields(entry rawObject) (string, iprangedb.FileIdentity, [16]byte, uint32, iprangedb.FileIdentity, *rpc.HandlerError) {
-	// artifact and problem are optional members: maintenance.list
-	// omits them when they do not apply, and the contract requires an
-	// unchanged list row to round-trip into remove.  The allowed set
-	// therefore covers all eleven list members; only the nine
-	// identification members are required (Rust
-	// housekeeping_remove_fields).
-	for key := range entry {
-		switch key {
-		case "kind", "directory", "directory_identity", "candidate_kind",
-			"basename_encoding", "basename", "identity", "attempt_id",
-			"ordinal", "artifact", "problem":
-		default:
-			return "", zeroIdentity(), [16]byte{}, 0, zeroIdentity(),
-				rpc.InvalidParamsError(fmt.Sprintf("unknown member %q", key))
-		}
-	}
-	for _, field := range []string{
-		"kind", "directory", "directory_identity", "candidate_kind",
-		"basename_encoding", "basename", "identity", "attempt_id",
-		"ordinal"} {
-		if _, ok := entry[field]; !ok {
-			return "", zeroIdentity(), [16]byte{}, 0, zeroIdentity(),
-				rpc.InvalidParamsError(fmt.Sprintf("missing member %q", field))
-		}
+	// identity, attempt_id, and ordinal carry the authenticated removal
+	// identity of this kind, so they stay required; artifact and problem
+	// are optional members the emitter omits when they do not apply
+	// (maintenanceEntryMembers states the general rule).
+	if err := maintenanceEntryMembers(entry,
+		[]string{"kind", "directory", "directory_identity", "candidate_kind",
+			"basename_encoding", "basename", "identity", "attempt_id", "ordinal"},
+		[]string{"artifact", "problem"}); err != nil {
+		return "", zeroIdentity(), [16]byte{}, 0, zeroIdentity(),
+			rpc.InvalidParamsError(err.Error())
 	}
 	directory, herr := removeDirectoryField(entry)
 	if herr != nil {

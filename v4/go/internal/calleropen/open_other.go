@@ -18,3 +18,8 @@ func blockingFile(fd int, name string) (*os.File, error) {
 	}
 	return file, nil
 }
+
+// NonBlocking is the platform's O_NONBLOCK open flag. The platforms
+// without the POSIX poller hazard have no such flag to pass, and
+// os.OpenFile is already the correct path there.
+const NonBlocking = 0

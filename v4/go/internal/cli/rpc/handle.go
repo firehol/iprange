@@ -8,15 +8,16 @@
 package rpc
 
 import (
-	"crypto/rand"
 	"encoding/hex"
+
+	"github.com/firehol/iprange/v4/go/internal/random"
 )
 
 // NewHandle returns a fresh 32-hex-char handle or a product error with
 // the documented adapter code `io` (an OS-level resource failure).
 func NewHandle() (string, *HandlerError) {
 	var bytes [16]byte
-	if _, err := rand.Read(bytes[:]); err != nil {
+	if err := random.Entropy(bytes[:]); err != nil {
 		return "", NewHandlerError("io", "not_started",
 			"secure handle generation failed: "+err.Error())
 	}

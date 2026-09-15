@@ -53,12 +53,15 @@ sys.dont_write_bytecode = True
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
+_SELF_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from command_sanitize import (  # noqa: E402
-    recorded_checkout_root,
-    recorded_git_identity,
-    sanitized_command,
+    audit_report_writers,
+    report_provenance,
+    require_paths_outside_profile,
+    run_shared_self_test,
     sanitized_path_value,
+    write_committed_report,
 )
 
 REPORT_SCHEMA = "iprange-cli-fifo-surface-report-v1"
@@ -552,11 +555,32 @@ def _fabricated_report():
             "result": "PASS"}
 
 
+# Executed-control counts for ``--self-test``, as literals.  The case list is
+# built by appends, so a control that stopped being appended -- a rename, a
+# mutator whose target row vanished from the fabricated baseline -- would leave
+# a shorter list and still print "self-test PASSED: 0 failures".  The pins make
+# the drop visible: adding a rejection class to ``assess_report`` or to
+# ``ARMS`` means adding its control here and raising these numbers.
+FIFO_SELF_TEST_CASES = 18
+# Of the 18 cases, 16 doctored reports must be refused and 2 must be accepted
+# (the genuine baseline and the refusal that is just inside the deadline).  A
+# drift in either direction means a control stopped asserting what it claimed.
+FIFO_SELF_TEST_REJECTED = 16
+FIFO_SELF_TEST_ARMS = 34
+FIFO_SELF_TEST_STRUCTURAL = 5
+
+
 def _self_test():
-    """Prove the verifier rejects doctored FIFO reports."""
+    """Prove the verifier rejects doctored FIFO reports.
+
+    Runs offline against the frozen arm table (``_fabricated_report``), so no
+    product binary is needed: the subject is ``assess_report``, the same
+    verifier the live run applies to its own artifact.
+    """
     import copy
 
     cases = []
+    mutated = {}
 
     baseline = _fabricated_report()
     cases.append(("genuine report passes", baseline, False))
@@ -564,6 +588,11 @@ def _self_test():
     def one(mutate, description, expect_problem):
         report = copy.deepcopy(baseline)
         mutate(report)
+        # A mutator whose target row is absent would assert nothing at all:
+        # the verifier would reject the report for some other reason, or
+        # accept an untouched baseline.  Comparing against the baseline turns
+        # "the control never fired" into a counted failure below.
+        mutated[description] = report != baseline
         cases.append((description, report, expect_problem))
 
     def flip_class(report):
@@ -715,11 +744,46 @@ def _self_test():
             failures += 1
             for problem in problems[:3]:
                 print(f"       {problem}")
+
+    # Count and non-vacuity pins.  Each is a case in its own right, so a
+    # dropped control cannot hide behind "everything that ran passed".
+    structural = [
+        ("the pinned number of cases ran",
+         len(cases) == FIFO_SELF_TEST_CASES,
+         f"{len(cases)} cases, expected {FIFO_SELF_TEST_CASES}"),
+        ("the pinned number of doctored reports were refused",
+         sum(1 for _, _, expect in cases if expect) == FIFO_SELF_TEST_REJECTED,
+         f"{sum(1 for _, _, expect in cases if expect)} rejected, expected "
+         f"{FIFO_SELF_TEST_REJECTED}"),
+        ("every mutator actually changed its baseline",
+         len(mutated) == FIFO_SELF_TEST_CASES - 1
+         and all(mutated.values()),
+         f"{[name for name, fired in mutated.items() if not fired]}"),
+        ("the fabricated report covers the whole arm table on both engines",
+         len(baseline["arms"]) == FIFO_SELF_TEST_ARMS
+         and len({record["engine"] for record in baseline["arms"]}) == 2,
+         f"{len(baseline['arms'])} arm records, expected "
+         f"{FIFO_SELF_TEST_ARMS}"),
+        ("this writer commits through the shared provenance owner",
+         not audit_report_writers(cli_dir=_SELF_DIR, writers=["check_fifo_surface.py"],
+                                  artifacts=False),
+         "see command_sanitize.audit_report_writers"),
+    ]
+    for description, condition, detail in structural:
+        print(f"{'ok  ' if condition else 'BAD '} {description:52} {detail}")
+        if not condition:
+            failures += 1
+    if len(structural) != FIFO_SELF_TEST_STRUCTURAL:
+        print(f"BAD  the pinned number of structural controls ran: "
+              f"{len(structural)} != {FIFO_SELF_TEST_STRUCTURAL}")
+        failures += 1
+    run_shared_self_test("check_fifo_surface")
     print()
     if failures:
         print(f"FIFO surface self-test FAILED: {failures} case(s)")
         return 1
-    print(f"FIFO surface self-test PASSED: {len(cases)} cases, "
+    print(f"FIFO surface self-test PASSED: {len(cases)} cases + "
+          f"{len(structural)} structural, "
           f"{len(ARM_NAMES)} arms x 2 engines")
     return 0
 
@@ -734,6 +798,15 @@ def assess_report_for_self_test(report):
 
 def live_run(args):
     """Run every arm on both engines and write the evidence report."""
+    # Durable-artifact policy, applied before anything runs: the report
+    # records the measured binary paths and the fixture digest, so a
+    # profile-rooted input is how an operator-home path reaches a committed
+    # file.  The shared writer repeats the check at commit time; doing it here
+    # means the arms never execute on a run whose artifact is refused anyway.
+    require_paths_outside_profile((("--go", args.go), ("--rust", args.rust),
+                                   ("--fixture", args.fixture),
+                                   ("--work", args.work),
+                                   ("--json-report", args.json_report)))
     work = _require_absolute("--work", args.work)
     if os.listdir(work):
         raise SystemExit(f"--work must be an empty directory: {work}")
@@ -777,9 +850,6 @@ def live_run(args):
                     if not arm_is_correct(r, args.deadline))
     report = {
         "schema": REPORT_SCHEMA,
-        "git_head": recorded_git_identity(),
-        "checkout_root": recorded_checkout_root(),
-        "command": sanitized_command(),
         "platform": {
             "system": platform.system(), "release": platform.release(),
             "machine": platform.machine(),
@@ -801,14 +871,22 @@ def live_run(args):
     }
     # Verify our own report with the same rules a reviewer would apply, so
     # the harness cannot emit a report its own gate rejects.
-    problems = assess_report(report, deadline=args.deadline)
+    # Verified against the report as it will be committed: the shared writer
+    # owns command/git_head/checkout_root, and this gate's own rules require
+    # all three, so the copy is seeded with exactly what the writer will add.
+    problems = assess_report(dict(report, **report_provenance()),
+                             deadline=args.deadline)
     if problems and not failed:
         report["result"] = "FAIL"
         report["verification_problems"] = problems
-    text = json.dumps(report, indent=1, sort_keys=True) + "\n"
     if args.json_report:
-        with open(args.json_report, "w", encoding="utf-8") as stream:
-            stream.write(text)
+        write_committed_report(
+            args.json_report, report,
+            caller_paths=(("--go", args.go), ("--rust", args.rust),
+                          ("--fixture", args.fixture),
+                          ("--work", args.work),
+                          ("--json-report", args.json_report)),
+            indent=1)
     if report["result"] != "PASS":
         for problem in report.get("verification_problems", []):
             print(f"VERIFY {problem}")

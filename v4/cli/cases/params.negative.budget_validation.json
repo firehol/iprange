@@ -211,6 +211,97 @@
    }
   },
   {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "fully disabled or fully enabled"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.validate",
+   "params": {
+    "findings_output": {
+     "format": "jsonl",
+     "path": "$WORK/findings.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    },
+    "mode": {
+     "kind": "immutable_current"
+    },
+    "path": "$WORK/budget.iprange",
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_scratch_bytes": "4096",
+     "max_scratch_files": 0
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "fully disabled or fully enabled"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.validate",
+   "params": {
+    "findings_output": {
+     "format": "jsonl",
+     "path": "$WORK/findings.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    },
+    "mode": {
+     "kind": "immutable_current"
+    },
+    "path": "$WORK/budget.iprange",
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_scratch_bytes": "0",
+     "max_scratch_files": 1
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_params_rejected": {
+    "message_contains": "fully disabled or fully enabled"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.validate",
+   "params": {
+    "findings_output": {
+     "format": "jsonl",
+     "path": "$WORK/findings.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    },
+    "mode": {
+     "kind": "immutable_current"
+    },
+    "path": "$WORK/budget.iprange",
+    "validation_budget": {
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_scratch_bytes": "0",
+     "max_scratch_files": 0,
+     "scratch_directory": "$WORK/scratch"
+    }
+   }
+  },
+  {
    "actor": "consumer",
    "expect_result": {
     "info": {

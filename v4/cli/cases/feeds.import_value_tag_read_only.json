@@ -1,0 +1,115 @@
+{
+ "fixtures": [
+  {
+   "path": "membership.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 1
+   }
+  }
+ ],
+ "name": "feeds.import_value_tag_read_only",
+ "requires": "iprange.v1.feeds.import",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "producer",
+   "expect_result": {
+    "address_family": "ipv4",
+    "commit_nonce": {
+     "$ignore": true
+    },
+    "database_id": {
+     "$ignore": true
+    },
+    "directory_identity": {
+     "$ignore": true
+    },
+    "housekeeping": {
+     "artifacts": []
+    },
+    "main_basename": "member.iprange",
+    "main_identity": {
+     "$ignore": true
+    },
+    "reader_capacity": 8,
+    "residue_possible": false,
+    "sidecar_id": {
+     "$ignore": true
+    },
+    "sidecar_identity": {
+     "$ignore": true
+    },
+    "state": "created",
+    "structure_kind": "none",
+    "value_kind": "membership",
+    "value_tag": {
+     "hex": "706172697479"
+    },
+    "visible_housekeeping": []
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "family": "ipv4",
+    "path": "$WORK/member.iprange",
+    "reader_capacity": 8,
+    "structure_kind": "none",
+    "value_kind": "membership",
+    "value_tag": {
+     "text": "parity"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "wrong_value_tag",
+    "outcome": "read_only_failure"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.feeds.import",
+   "params": {
+    "metadata": {
+     "mode": "keep"
+    },
+    "path": "$WORK/member.iprange",
+    "source": {
+     "mode": "immutable",
+     "path": "$WORK/membership.iprange"
+    },
+    "writer_budget": {
+     "max_growth_pages": "20000",
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_private_pages": "20000"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_path",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.feeds.import",
+   "params": {
+    "metadata": {
+     "mode": "keep"
+    },
+    "path": "$WORK/member.iprange",
+    "source": {
+     "mode": "immutable",
+     "path": "$WORK/direct-absent.iprange"
+    },
+    "writer_budget": {
+     "max_growth_pages": "20000",
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_private_pages": "20000"
+    }
+   }
+  }
+ ]
+}

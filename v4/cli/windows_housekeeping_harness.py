@@ -138,8 +138,15 @@ from command_sanitize import (  # noqa: E402  (side-effect free)
     _privacy_spellings,
     checkout_root,
     neutral_temp_root,
+    COMMITTED_REPORT_WRITERS,
+    audit_report_writers,
+    committed_report_problems,
     owned_temp_dir,
     personal_path_in_report,
+    report_provenance,
+    require_paths_outside_profile,
+    run_shared_self_test,
+    write_committed_report,
     sanitized_command,
     sanitized_path_value,
     under_profile,
@@ -2423,13 +2430,376 @@ def _self_test():
     finally:
         tempfile.tempdir = saved_tempdir
 
+    own_audit = audit_report_writers(
+        cli_dir=os.path.dirname(os.path.abspath(__file__)),
+        writers=["windows_housekeeping_harness.py"], artifacts=False)
+    if own_audit:
+        # Judged on this file's own source, so a tampered copy of the harness
+        # cannot pass by pointing the audit at the pristine file beside it.
+        problems.append("commit-discipline audit: " + "; ".join(own_audit))
+    run_shared_self_test("windows_housekeeping_harness")
+
+    verify_problems, verify_executed = _verification_self_test()
+    problems.extend(verify_problems)
+    if verify_executed != VERIFY_SELF_TEST_CONTROLS:
+        problems.append(
+            f"P3 verify-report control counts {verify_executed}, expected "
+            f"{VERIFY_SELF_TEST_CONTROLS}")
+
     for problem in problems:
         print(f"FAIL: {problem}")
     if problems:
         print(f"{len(problems)} self-test failure(s)")
         return 1
-    print("PASS: P2-5 pair-row, P2-6 removal-log, and P2-7 "
-          "sanitizer/privacy self-tests")
+    print("PASS: P2-5 pair-row, P2-6 removal-log, P2-7 sanitizer/privacy, "
+          f"and P3 report-verification self-tests "
+          f"({sum(VERIFY_SELF_TEST_CONTROLS.values())} verification controls)")
+    return 0
+
+
+WORKER_COLOCATION_MARKERS = (
+    "worker-colocation",
+    "iprange-v4-worker.exe v4/rust/target/debug/deps/iprange-v4-worker.exe",
+)
+
+
+def _tail(path, parts=2):
+    """The last ``parts`` path components, separator- and case-folded.
+
+    The report records the staging path on the validation host
+    (``C:/msys64/tmp/<run>/bin/go/iprange.exe``) while the build ledger
+    records its own layout (``win/go/iprange.exe``).  The trailing
+    ``go/iprange.exe`` is the identity both sides agree on; the leading
+    staging directory is whatever the operator chose for that run.
+    """
+    pieces = [part for part in str(path or "").replace("\\\\", "/").split("/")
+              if part]
+    return "/".join(pieces[-parts:]).lower()
+
+
+def _read_sha256_ledger(path):
+    """Parse a ``sha256sum``-format ledger into {tail: digest}.
+
+    Lines are ``<64 hex>  <path>``; anything else is a ledger defect and is
+    reported as a problem rather than skipped, because a ledger that parses
+    loosely is a ledger that silently stops attesting.
+    """
+    entries, problems = {}, []
+    try:
+        with open(path, encoding="utf-8") as stream:
+            lines = stream.read().splitlines()
+    except OSError as exc:
+        return {}, [f"sha256 ledger {path}: unreadable ({exc})"]
+    for number, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        digest, _, name = line.strip().partition("  ")
+        if not name:
+            digest, _, name = line.strip().partition(" ")
+        if len(digest) != 64 or any(c not in "0123456789abcdefABCDEF"
+                                    for c in digest) or not name:
+            problems.append(f"sha256 ledger {path}:{number}: not a "
+                            f"digest/path line: {line[:70]!r}")
+            continue
+        entries[_tail(name)] = digest.lower()
+    return entries, problems
+
+
+def verify_report(report, ledger_path=None, where="windows-housekeeping.json"):
+    """Re-validate one committed windows-housekeeping report.
+
+    The harness produces this artifact on the authorized Windows host and the
+    battery installs it with a plain copy, so nothing between the producer and
+    a reader ever looks at it again.  ``--verify-report`` closes that gap: it
+    re-applies the producer's own schema rules, the shared provenance and
+    privacy rules, and the cross-field identities the report must satisfy.
+    Every rule is a problem string; an empty list is a pass.
+
+    The digests are checked against the build ledger (``sha256sum`` format,
+    the same file the binaries were staged with), so a report that names a
+    binary whose measured digest no longer matches the build it claims to
+    certify is refused even though the report is internally consistent.
+    """
+    entry = COMMITTED_REPORT_WRITERS.get("windows_housekeeping_harness.py", {})
+    problems = committed_report_problems(
+        report, where=where, require_privacy=True,
+        screened=entry.get("screened"))
+    try:
+        _check_report_schema(report)
+    except AssertionError as exc:
+        problems.append(f"{where}: {exc}")
+
+    binaries = report.get("binaries") or {}
+    for label in ("go", "rust"):
+        record = binaries.get(label)
+        if not isinstance(record, dict):
+            problems.append(f"{where}: binaries.{label} is missing")
+            continue
+        digest = record.get("sha256")
+        if not (isinstance(digest, str) and len(digest) == 64
+                and all(c in "0123456789abcdef" for c in digest.lower())):
+            problems.append(f"{where}: binaries.{label}.sha256 {digest!r} "
+                            "is not a sha256 digest")
+        if not record.get("path"):
+            problems.append(f"{where}: binaries.{label}.path is missing")
+
+    if ledger_path:
+        ledger, ledger_problems = _read_sha256_ledger(ledger_path)
+        problems.extend(ledger_problems)
+        for label in ("go", "rust"):
+            record = binaries.get(label) or {}
+            tail = _tail(record.get("path", ""))
+            if not tail:
+                continue
+            if tail not in ledger:
+                problems.append(
+                    f"{where}: binaries.{label} ({record.get('path')!r}) is "
+                    f"not attested by the sha256 ledger")
+            elif record.get("sha256", "").lower() != ledger[tail]:
+                problems.append(
+                    f"{where}: binaries.{label}.sha256 does not match the "
+                    f"ledger entry for {tail} (report "
+                    f"{record.get('sha256')!r}, ledger {ledger[tail]!r})")
+
+    # The native cargo test that qualifies the Windows product must have run
+    # with the worker colocated: without that step six live_source_tests
+    # answer os_unsupported "SDK validation/recovery worker is unavailable",
+    # which the Rust module docs record as an environment defect.  A report
+    # that claims windows_qualified while omitting the step is not a green
+    # native run, so the claim and the record must agree.
+    # A POSIX run records itself skipped and never performs the native suite,
+    # so its report legitimately carries no build_provenance: requiring the
+    # step there would reject a truthful artifact. The step is required of any
+    # run that claims to have executed the native exercise.
+    ran = not bool(report.get("skipped"))
+    provenance = report.get("build_provenance") or {}
+    haystack = json.dumps(provenance).lower()
+    if ran:
+        for marker in WORKER_COLOCATION_MARKERS:
+            if marker.lower() not in haystack:
+                problems.append(
+                    f"{where}: build_provenance does not record the required "
+                    f"worker-colocation step ({marker!r}); a native "
+                    "qualification claim without it is unverifiable")
+
+    outcomes = report.get("outcomes") or []
+    if len(outcomes) != 2:
+        problems.append(f"{where}: {len(outcomes)} outcomes, expected one per "
+                        "product binary")
+    for outcome in outcomes:
+        label = outcome.get("binary")
+        record = binaries.get(label) or {}
+        identity = outcome.get("identity") or {}
+        if identity.get("sha256") != record.get("sha256"):
+            problems.append(
+                f"{where}: outcome {label} identity digest "
+                f"{identity.get('sha256')!r} contradicts binaries.{label} "
+                f"{record.get('sha256')!r}")
+        if outcome.get("path") != record.get("path"):
+            problems.append(
+                f"{where}: outcome {label} path {outcome.get('path')!r} "
+                f"contradicts binaries.{label}.path {record.get('path')!r}")
+        if outcome.get("pass") and outcome.get("failures"):
+            problems.append(
+                f"{where}: outcome {label} reports pass with recorded "
+                f"failures {outcome['failures'][:2]}")
+        if ran:
+            native = outcome.get("refresh_native") or {}
+            rows = native.get("removals_log_rows")
+            advertised = native.get("removals_advertised") or {}
+            if not isinstance(rows, list):
+                problems.append(f"{where}: outcome {label} records no "
+                                "removals_log_rows list")
+            elif str(advertised.get("rows")) != str(len(rows)):
+                problems.append(
+                    f"{where}: outcome {label} advertises "
+                    f"{advertised.get('rows')} removal rows but records "
+                    f"{len(rows)}")
+            if advertised.get("sha256") != native.get("removals_log_sha256"):
+                problems.append(
+                    f"{where}: outcome {label} removal-log digest "
+                    f"{native.get('removals_log_sha256')!r} is not the digest "
+                    f"the product advertised ({advertised.get('sha256')!r})")
+    advertised = [
+        (outcome.get("refresh_native") or {}).get("removals_advertised") or {}
+        for outcome in outcomes]
+    if len(advertised) == 2 and advertised[0] and advertised[1]:
+        if advertised[0].get("sha256") != advertised[1].get("sha256"):
+            problems.append(
+                f"{where}: the two products advertise different removal "
+                "outputs; the same input must produce the same bytes")
+
+    counted = sum(1 for outcome in outcomes if not outcome.get("pass"))
+    if report.get("skipped"):
+        if not report.get("skipped_reason"):
+            problems.append(f"{where}: skipped without a skipped_reason")
+    elif report.get("failed") != counted:
+        problems.append(f"{where}: failed={report.get('failed')} but "
+                        f"{counted} outcomes did not pass")
+    if report.get("skipped") and report.get("windows_qualified"):
+        problems.append(
+            f"{where}: windows_qualified is true while the run records itself "
+            "skipped; the claim and the record contradict each other")
+    if report.get("windows_qualified") and (
+            report.get("platform") or {}).get("system") != "Windows":
+        problems.append(
+            f"{where}: windows_qualified is true on "
+            f"{(report.get('platform') or {}).get('system')!r}; the claim is "
+            "only made by a native run")
+    return problems
+
+
+# The committed artifact is the only evidence a Windows qualification ever
+# happened, and nothing re-reads it after the battery copies it in, so
+# ``--verify-report`` needs its own controls: one accepted baseline and the
+# mutations that must each be refused.  Pinned as a count because a control
+# that stops running is the failure mode this whole repair round is about.
+VERIFY_SELF_TEST_CONTROLS = {"accept": 1, "reject": 8}
+
+
+def _verification_self_test():
+    """Drive ``verify_report`` over an accepted report and eight mutations.
+
+    Offline: the baseline and the build ledger are synthesized in owned
+    scratch, the report is produced through the shared committed-report writer
+    so its provenance and privacy block are the real thing, and every control
+    names the defect it must catch.
+    """
+    problems = []
+    executed = {"accept": 0, "reject": 0}
+    room = owned_temp_dir("wh-verify-")
+    try:
+        go_path = "C:/stage/bin/go/iprange.exe"
+        rust_path = "C:/stage/bin/rust/iprange.exe"
+        go_sha = "1" * 63 + "a"
+        rust_sha = "2" * 63 + "b"
+        removal_sha = "3" * 63 + "c"
+        ledger = os.path.join(room, "SHASUMS.txt")
+        with open(ledger, "w", encoding="utf-8") as stream:
+            stream.write(f"{go_sha}  win/go/iprange.exe\n")
+            stream.write(f"{rust_sha}  win/rust/iprange.exe\n")
+
+        def outcome(label, path, sha):
+            return {"binary": label, "pass": True, "failures": [],
+                    "path": path, "identity": {"sha256": sha},
+                    "refresh_native": {
+                        "removals_log_rows": ["{}", "{}"],
+                        "removals_log_sha256": removal_sha,
+                        "removals_advertised": {"rows": "2",
+                                                "sha256": removal_sha}}}
+
+        def baseline():
+            return {"schema": REPORT_SCHEMA, "platform": {"system": "Windows"},
+                    "binaries": {"go": {"sha256": go_sha, "path": go_path},
+                                 "rust": {"sha256": rust_sha,
+                                          "path": rust_path}},
+                    "work_dir": "C:/stage/work",
+                    "windows_qualified": True, "skipped": False,
+                    "skipped_reason": None, "refresh_flow": {}, "failed": 0,
+                    "outcomes": [outcome("go", go_path, go_sha),
+                                 outcome("rust", rust_path, rust_sha)],
+                    "build_provenance": {
+                        "revision": "verification control baseline",
+                        "native_cargo_test": (
+                            "GREEN with the recorded worker-colocation step "
+                            "iprange-v4-worker.exe "
+                            "v4/rust/target/debug/deps/"
+                            "iprange-v4-worker.exe")}}
+
+        def written(extra=None):
+            report = baseline()
+            if extra:
+                extra(report)
+            dest = os.path.join(room, "report.json")
+            write_committed_report(
+                dest, report,
+                argv=[os.path.basename(__file__), "--verify-report-control"],
+                caller_paths=[("--binaries", go_path),
+                              ("--binaries", rust_path),
+                              ("--work-dir", report["work_dir"]),
+                              ("--json-report", dest),
+                              ("--provenance", os.path.join(room, "p.json"))])
+            with open(dest, encoding="utf-8") as stream:
+                return json.load(stream)
+
+        def expect(label, report, must_name):
+            executed["reject" if must_name else "accept"] += 1
+            found = verify_report(report, ledger_path=ledger, where=label)
+            if must_name:
+                if not any(must_name in problem for problem in found):
+                    problems.append(f"P3 {label}: not refused "
+                                    f"({found[:2]})")
+                else:
+                    print(f"[P3] {label} refused")
+            elif found:
+                problems.append(f"P3 {label}: accepted baseline refused "
+                                f"{found[:2]}")
+            else:
+                print(f"[P3] {label} accepted")
+
+        expect("baseline report", written(), None)
+
+        def poison_go_digest(report):
+            report["binaries"]["go"]["sha256"] = "9" * 64
+
+        expect("go digest contradicts the build ledger",
+               written(poison_go_digest), "does not match the ledger entry")
+        expect("binary the build ledger never names",
+               written(lambda r: r["binaries"]["go"].__setitem__(
+                   "path", "C:/stage/bin/go/other.exe")),
+               "not attested by the sha256 ledger")
+
+        expect("worker-colocation step removed",
+               written(lambda r: r["build_provenance"].__setitem__(
+                   "native_cargo_test", "GREEN.")),
+               "worker-colocation")
+        expect("removal rows dropped under the advertised count",
+               written(lambda r: r["outcomes"][0]["refresh_native"]
+                       ["removals_log_rows"].pop()),
+               "removal rows but records")
+        expect("removal-log digest is not the advertised one",
+               written(lambda r: r["outcomes"][0]["refresh_native"]
+                       ["removals_log_sha256"].__setitem__ if False else
+                       r["outcomes"][0]["refresh_native"].__setitem__(
+                           "removals_log_sha256", "9" * 64)),
+               "is not the digest the product advertised")
+        expect("outcome identity digest contradicts its binary",
+               written(lambda r: r["outcomes"][1]["identity"].__setitem__(
+                   "sha256", "9" * 64)),
+               "contradicts binaries")
+        expect("failed counter disagrees with the outcomes",
+               written(lambda r: r.__setitem__("failed", 1)),
+               "outcomes did not pass")
+        expect("skipped run still claims qualification",
+               written(lambda r: (r.__setitem__("skipped", True),
+                                  r.__setitem__("skipped_reason",
+                                                "verification control"),
+                                  r.__setitem__("windows_qualified", True))),
+               "contradict each other")
+    finally:
+        shutil.rmtree(room, ignore_errors=True)
+    return problems, executed
+
+
+def _verify_main(path, ledger_path):
+    """``--verify-report`` entry point: re-check one committed report."""
+    try:
+        with open(path, encoding="utf-8") as stream:
+            report = json.load(stream)
+    except (OSError, ValueError) as exc:
+        print(f"VERIFY {path}: unreadable ({exc})")
+        return 1
+    problems = verify_report(report, ledger_path=ledger_path,
+                             where=os.path.basename(path))
+    for problem in problems:
+        print(f"VERIFY {problem}")
+    if problems:
+        print(f"windows-housekeeping report REJECTED: {len(problems)} "
+              f"problem(s) in {path}")
+        return 1
+    print(f"windows-housekeeping report VERIFIED: {path}"
+          + ("" if ledger_path else " (no --sha256-ledger supplied; "
+                                    "digests were not certified)"))
     return 0
 
 
@@ -2457,6 +2827,15 @@ def main():
                         help="run the doctored-record regression tests "
                              "for the pair-row and exact removal-log "
                              "validation on this platform and exit")
+    parser.add_argument("--verify-report", metavar="PATH",
+                        help="re-validate a committed windows-housekeeping "
+                             "report (schema, provenance and privacy, binary "
+                             "digests against --sha256-ledger, the required "
+                             "worker-colocation step, and the cross-field "
+                             "identities) and exit")
+    parser.add_argument("--sha256-ledger", metavar="PATH",
+                        help="sha256sum-format ledger the staged binaries "
+                             "were certified with, used by --verify-report")
     parser.add_argument("--json-report", metavar="PATH",
                         help="write the JSON report to this file")
     parser.add_argument("--provenance", metavar="PATH",
@@ -2473,6 +2852,8 @@ def main():
 
     if args.self_test:
         return _self_test()
+    if args.verify_report:
+        return _verify_main(args.verify_report, args.sha256_ledger)
     if not args.binaries:
         parser.error("--binaries is required (unless --self-test)")
     if not args.work_dir:
@@ -2481,18 +2862,21 @@ def main():
     # operator's home directory.  Every path-valued input must live
     # outside the profile (the documented authorized scratch area),
     # so the whole serialized report is inherently personal-path-free.
+    # Every binary is handed over under its own "--binaries" label, so the
+    # privacy block's checked_inputs records the option the operator actually
+    # typed while each individual path is still screened on its own.
+    args.caller_paths = tuple(
+        [("--binaries", path) for path in parse_binaries(args.binaries).values()]
+        + [("--work-dir", args.work_dir),
+           ("--json-report", args.json_report),
+           ("--provenance", args.provenance)])
+    require_paths_outside_profile(args.caller_paths)
     for label, path in parse_binaries(args.binaries).items():
         if under_profile(path):
             parser.error(
                 f"{label} binary {path} lives under the operator's "
                 "profile; stage binaries under the authorized scratch "
                 "area so committed evidence cannot carry personal paths")
-    for path in (args.work_dir, args.json_report, args.provenance):
-        if path and under_profile(path):
-            parser.error(
-                f"path {path} lives under the operator's profile; use "
-                "the authorized scratch area so committed evidence "
-                "cannot carry personal paths")
     if not os.path.isdir(args.work_dir) or not os.path.isabs(args.work_dir):
         parser.error("--work-dir must be an absolute existing directory")
     binaries = {}
@@ -2507,9 +2891,8 @@ def main():
 
     report = {
         "schema": REPORT_SCHEMA,
-        "git_head": recorded_git_identity(),
-        "checkout_root": recorded_checkout_root(),
-        "command": sanitized_command(),
+        # command, git_head and checkout_root are written by the shared
+        # provenance owner at commit time, not by this harness.
         "platform": {
             "system": platform.system(),
             "release": platform.release(),
@@ -2899,24 +3282,21 @@ def main():
         failed = 0
     report["failed"] = failed
 
-    _check_report_schema(report)
-
-    # Durable-artifact policy net: after every field (including the
-    # outcomes) is filled, refuse to serialize a report that still
-    # carries the operator's profile path in any string value.
-    personal = personal_path_in_report(report)
-    if personal is not None:
-        raise SystemExit(
-            f"refusing to write evidence containing the operator's "
-            f"profile path: {personal!r}; stage all inputs outside "
-            "the profile")
+    # The schema check names the members a committed report must hold,
+    # including the three the shared writer owns, so it runs against the
+    # report as it will be serialized -- not against the caller's partial
+    # dict, which would pass only if this harness kept writing its own identity.
+    _check_report_schema(dict(report, **report_provenance()))
 
     if args.json_report:
-        # newline="" keeps the committed report LF-only on every
-        # platform (Windows text mode would otherwise write CRLF).
-        with open(args.json_report, "w", encoding="utf-8", newline="") as stream:
-            json.dump(report, stream, indent=2, sort_keys=True)
-            stream.write("\n")
+        # The shared writer owns command/git_head/checkout_root and applies
+        # the durable-artifact policy net (the personal-path scan over every
+        # string value, run after the outcomes are filled).  It writes LF-only
+        # on every platform: this harness runs under the Windows interpreter
+        # too, where text mode would have turned the committed report CRLF.
+        write_committed_report(args.json_report, report,
+                               caller_paths=args.caller_paths, indent=2,
+                               newline=True)
 
     for outcome in report["outcomes"]:
         if outcome["pass"]:

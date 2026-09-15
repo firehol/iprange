@@ -36,18 +36,20 @@ import sys
 import tempfile
 import threading
 import time
+import traceback
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from command_sanitize import (  # noqa: E402  (side-effect free)
+    audit_report_writers,
     owned_temp_root,
-    personal_path_in_report,
     recorded_checkout_root,
-    recorded_git_identity,
+    require_paths_outside_profile,
+    run_shared_self_test,
     same_path,
-    sanitized_command,
     under_profile,
+    write_committed_report,
 )
 
 from schema.engine import ValidationError  # noqa: E402
@@ -288,6 +290,12 @@ class CaseRunner:
         # digest_group contract), preserved in the PASS entry.
         self.digest_groups = {}
         self.services = {}          # actor -> JsonRpcService (mixed mode)
+        # Services this runner spawned itself, as opposed to a service a
+        # harness injected (the sensitivity controls install a fake server) or
+        # one its own subclass deliberately kills (the crash battery).  Only
+        # owned services carry the alive-at-teardown obligation, so a harness
+        # that intends a peer to die keeps its documented behavior.
+        self.owned_services = []
         self.actor_steps = {}       # actor -> executed step count
         self.actor_operations = {"producer": [], "consumer": []}
         # actor -> ordered unique executed method names ("legacy" for
@@ -1380,29 +1388,91 @@ class CaseRunner:
 
         if not self.mixed:
             if self.service is None:
-                self.service = JsonRpcService(
-                    [self.binary, "--jsonrpc"], self.implementation,
-                    cwd=self.work_dir,
-                    read_deadline=RUNNER_IO_DEADLINE_SECONDS,
-                    write_deadline=RUNNER_IO_DEADLINE_SECONDS)
+                self.service = self._spawn(
+                    [self.binary, "--jsonrpc"], self.implementation)
             return self.service
         service = self.services.get(actor)
         if service is None:
-            service = JsonRpcService(
+            service = self._spawn(
                 [self.actor_binaries[actor], "--jsonrpc"],
-                f"{self.implementation}:{actor}", cwd=self.work_dir,
-                read_deadline=RUNNER_IO_DEADLINE_SECONDS,
-                write_deadline=RUNNER_IO_DEADLINE_SECONDS)
+                f"{self.implementation}:{actor}")
             self.services[actor] = service
         return service
 
+    def _spawn(self, argv, implementation):
+        service = JsonRpcService(argv, implementation, cwd=self.work_dir,
+                                 read_deadline=RUNNER_IO_DEADLINE_SECONDS,
+                                 write_deadline=RUNNER_IO_DEADLINE_SECONDS)
+        self.owned_services.append(service)
+        return service
+
+    # A peer that ends its own session does so asynchronously: the last answer
+    # is already in our pipe while the peer is still on its way out, so a
+    # zero-delay poll can report it alive.  One bounded settle per case makes
+    # the liveness judgment repeatable instead of scheduler-dependent.
+    DEATH_SETTLE_SECONDS = 0.02
+
+    def owned_service_deaths(self):
+        """Owned services that terminated before this runner tore them down.
+
+        A product service lives from its first request until the runner closes
+        its stdin, so a service already exited at that point did not end its
+        own session: it crashed, was killed, or left its request loop.  The
+        check cannot live in ``JsonRpcService.close()`` because the crash
+        battery legitimately kills its own peers and then closes them, and the
+        already-dead exemption is what lets those scenarios report a crash as
+        evidence; the matrix runner never kills a peer, so the rule belongs
+        here.
+        """
+
+        if self.owned_services and any(
+                service.proc.poll() is None
+                for service in self.owned_services):
+            time.sleep(self.DEATH_SETTLE_SECONDS)
+        deaths = []
+        for service in self.owned_services:
+            status = service.proc.poll()
+            if status is None:
+                continue
+            deaths.append({
+                "argv": list(service.argv),
+                "implementation": service.implementation,
+                "exit_status": status,
+                "signal": -status if status < 0 else None,
+                "stderr_tail": list(service.stderr_tail[-5:]),
+            })
+        return deaths
+
     def close_services(self):
-        if self.service is not None:
-            self.service.close()
-            self.service = None
-        for service in self.services.values():
-            service.close()
+        """Tear down every owned service and report teardown faults.
+
+        A clean session ends with the peer exiting 0 after stdin EOF; anything
+        else is a qualification failure.  Failures are returned instead of
+        raised because raising from teardown used to escape ``run_one`` mid
+        loop: the remaining cases, the summary, and the report write were all
+        abandoned, so the run's behaviour depended on how fast a peer died
+        rather than on what was measured.  Every service is still closed even
+        when an earlier one faulted, so no child outlives the case.
+        """
+
+        problems = []
+        owned = [("single", self.service)] if self.service is not None else []
+        owned += sorted(self.services.items())
+        for actor, service in owned:
+            try:
+                service.close()
+            except AssertionError as exc:
+                problems.append({
+                    "actor": actor,
+                    "argv": list(service.argv),
+                    "implementation": service.implementation,
+                    "error": str(exc),
+                    "exit_status": service.proc.returncode,
+                    "stderr_tail": list(service.stderr_tail[-5:]),
+                })
+        self.service = None
         self.services = {}
+        return problems
 
     # ---- full case -------------------------------------------------
     def run(self):
@@ -2234,6 +2304,20 @@ def _self_test():
                 clean.proc.kill()
                 clean.proc.wait(timeout=2)
 
+    # Committed-report provenance.  These run here instead of behind a
+    # ``--self-test`` flag the battery could omit, because the runner's helper
+    # pins already run on every invocation: a matrix run that could not commit
+    # its own report honestly would then be visible at once rather than at the
+    # next audit.
+    run_shared_self_test("run")
+    audit = audit_report_writers(
+        cli_dir=os.path.dirname(os.path.abspath(__file__)),
+        writers=["run.py"], artifacts=False)
+    if audit:
+        raise AssertionError(
+            "run.py does not commit through the shared report writer: "
+            + "; ".join(audit))
+
 
 CAPABILITIES_CACHE = {}
 
@@ -2245,34 +2329,56 @@ def describe_capabilities(binary):
     cache_key = (identity, sha256_file(identity))
     if cache_key in CAPABILITIES_CACHE:
         return CAPABILITIES_CACHE[cache_key]
-    record = {"path": binary, "sha256": cache_key[1], "methods": [], "available": False}
+    # ``probe`` records how the handshake ended, because two different facts
+    # arrive as "no capability": a released legacy CLI executable that exits
+    # normally without speaking JSON-RPC, and an engine that died while being
+    # asked.  Only the first one may skip cases; the second is a dead product
+    # and has to fail the run.  ``crashed`` is true when the service was killed
+    # by a signal, which no argument-error path ever produces.
+    record = {"path": binary, "sha256": cache_key[1], "methods": [],
+              "available": False,
+              "probe": {"returncode": None, "crashed": False, "reason": None}}
+    service = None
     try:
-        service = JsonRpcService(
-            [binary, "--jsonrpc"], "probe",
-            read_deadline=PROBE_IO_DEADLINE_SECONDS,
-            write_deadline=PROBE_IO_DEADLINE_SECONDS)
         try:
-            response = service.call(
-                "capability-probe", "iprange.v1.system.describe", {})
+            service = JsonRpcService(
+                [binary, "--jsonrpc"], "probe",
+                read_deadline=PROBE_IO_DEADLINE_SECONDS,
+                write_deadline=PROBE_IO_DEADLINE_SECONDS)
+            try:
+                response = service.call(
+                    "capability-probe", "iprange.v1.system.describe", {})
+            finally:
+                service.close()
             if "result" in response:
                 results.validate_result(
                     "iprange.v1.system.describe", response["result"])
                 record["methods"] = list(response["result"]["methods"])
                 record["available"] = True
                 record["result"] = response["result"]
-        finally:
-            service.close()
-    except (AssertionError, OSError) as exc:
-        if "force-terminated" in str(exc):
-            # A probe service that ran and then had to be
-            # force-terminated by close() is not a legacy-only signal:
-            # it is a stalled JSON-RPC service and must fail loudly
-            # instead of being misclassified (role-round finding).
-            raise
+        except (AssertionError, OSError) as exc:
+            if "force-terminated" in str(exc):
+                # A probe service that ran and then had to be
+                # force-terminated by close() is not a legacy-only signal:
+                # it is a stalled JSON-RPC service and must fail loudly
+                # instead of being misclassified (role-round finding).
+                raise
+            record["methods"] = []
+            record["available"] = False
+            status = service.proc.returncode if service is not None else None
+            record["probe"] = {
+                "returncode": status,
+                "crashed": status is not None and status < 0,
+                "reason": str(exc)[:300]}
         # Legacy-only executables do not expose --jsonrpc.  A returned describe
         # result that fails the strict schema propagates ValidationError.
-        record["methods"] = []
-        record["available"] = False
+    finally:
+        if service is not None and record["available"]:
+            status = service.proc.returncode
+            record["probe"] = {
+                "returncode": status,
+                "crashed": status is not None and status < 0,
+                "reason": None}
     CAPABILITIES_CACHE[cache_key] = record
     return record
 
@@ -2294,6 +2400,49 @@ def load_cases(case_dir):
         names.add(case["name"])
         cases.append(case)
     return cases
+
+
+def runner_caller_paths(args):
+    """The runner's path-valued options, in the shape the shared defences take.
+
+    One tuple decides the input-side refusal, the ``privacy.checked_inputs``
+    record, and what the committed-report audit requires this writer to keep
+    screening; a label that dropped out of it is a gate failure rather than a
+    silently unchecked input.  ``--c`` is included although the committed
+    report's own registry entry names the other six: it is a path the report
+    records, so it is screened like every other one.
+    """
+    return (("--c", args.c_binary),
+            ("--go", args.go_binary),
+            ("--rust", args.rust_binary),
+            ("--fixture-tool", args.fixture_tool),
+            ("--work-dir", args.work_dir),
+            ("--cases", args.cases),
+            ("--json-report", args.json_report))
+
+
+def refuse_checkout_path(label, path):
+    """Refuse an output location that could overwrite accepted evidence.
+
+    Reports and work trees are staged, never committed: the qualification
+    battery generates them into a scratch directory and rotates them into
+    ``v4/cli/evidence/`` as a separate, deliberate step.  Accepting a path
+    inside the checkout would let a routine run rewrite accepted evidence, and
+    an omitted ``--json-report`` writes nothing at all, so there is no default
+    that needs to be guarded -- only an explicit wrong choice.
+    """
+
+    root = recorded_checkout_root()
+    if not root:
+        return
+    real = os.path.realpath(path)
+    real_root = os.path.realpath(root)
+    if real == real_root or real.startswith(real_root + os.sep):
+        raise ValueError(
+            f"{label} {path} is inside the repository checkout ({root}); "
+            "write runner output to an explicit directory outside the tree "
+            "(committed evidence is rotated in by the battery, never written "
+            "by the runner)")
 
 
 def validate_explicit_work_dir(path):
@@ -2373,13 +2522,19 @@ def main():
     try:
         if args.work_dir is not None:
             args.work_dir = validate_explicit_work_dir(args.work_dir)
+        for label, path in (("work-dir", args.work_dir),
+                           ("--json-report", args.json_report)):
+            if path:
+                refuse_checkout_path(label, path)
     except ValueError as exc:
         parser.error(str(exc))
     # Durable-artifact policy: committed evidence must never carry the
-    # operator's home directory.  Every path-valued input that the
-    # report records must live outside the profile (the documented
-    # authorized scratch area); the write-time structural scan below
-    # is the second net.
+    # operator's home directory.  The shared check refuses the inputs first
+    # (so nothing downstream can copy them into a report), and the
+    # per-option messages below name the option the operator actually
+    # passed, which is what a parser error is for.
+    caller_paths = runner_caller_paths(args)
+    require_paths_outside_profile(caller_paths)
     for label, path in (("c", args.c_binary),
                         ("rust", args.rust_binary),
                         ("go", args.go_binary)):
@@ -2444,11 +2599,11 @@ def main():
         capabilities = {key: describe_capabilities(path) for key, path in binaries.items()}
     except ValidationError as exc:
         parser.error(f"invalid capability advertisement: {exc}")
+    # ``command``, ``checkout_root``, ``git_head`` and the ``privacy`` block
+    # are written by ``write_committed_report``: a report cannot record the
+    # identity its producer prefers.
     report = {
         "schema": "iprange-cli-report-v3",
-        "command": sanitized_command(),
-        "checkout_root": recorded_checkout_root(),
-        "git_head": recorded_git_identity(),
         "platform": {
             "system": platform_module.system(),
             "release": platform_module.release(),
@@ -2464,6 +2619,21 @@ def main():
         "failed": 0,
         "skipped": 0,
         "oracle_checks": 0,
+        # Additive evidence field: every product process that died outside the
+        # runner's own teardown, plus every service that refused to end its
+        # session cleanly.  A non-empty list fails the whole matrix run even
+        # if the case that noticed it was later retried into a PASS, because
+        # "the binary answered, then walked out" is not a qualification.
+        "engine_deaths": [],
+        # Additive evidence field: verdicts that belong to a whole matrix
+        # direction rather than to a case.  They are deliberately NOT rows in
+        # ``cases``: the kind-coverage gate requires every case row to name a
+        # committed case under ``v4/cli/cases/`` ("an invented row is not
+        # evidence") and requires the row count to equal the corpus size, so a
+        # synthetic row would make the gate reject an honest report.  Keeping
+        # them here also means the known-defects ledger, which is generated
+        # from FAIL rows, can never park a dead engine as a known defect.
+        "matrix_verdicts": [],
         # Additive evidence fields: mechanical file-kind ledger and
         # per-method peak wire-frame sizes (see README).
         "file_kinds": {},
@@ -2476,6 +2646,37 @@ def main():
             "name": name, "matrix": matrix, "status": "SKIP", "reason": reason,
         })
         print(f"SKIP {name} [{matrix}]: {reason}")
+
+    def record_case_failure(case, matrix, label, reasons):
+        """Record one failed case and count it.
+
+        Every failure this runner can observe funnels through here, so the
+        aggregate that decides the exit status can never drift away from the
+        rows a reviewer reads: one FAIL row per failed case, one increment of
+        ``failed`` per FAIL row.
+        """
+
+        report["failed"] += 1
+        report["cases"].append({
+            "name": case["name"], "matrix": matrix, "status": "FAIL",
+            "error": "; ".join(reason for reason in reasons if reason),
+        })
+        print(f"FAIL {label}: " + "; ".join(reasons))
+
+    def record_matrix_verdict(direction, kind, message):
+        """Record a verdict against a whole matrix direction.
+
+        A direction-level failure (a dead engine, a direction that executed
+        nothing) has no case to attach to, so it is recorded apart from the
+        case rows and fails the run on its own.  ``report["failed"]`` stays
+        the count of failed cases so it keeps agreeing with the rows a
+        reviewer reads.
+        """
+
+        report["matrix_verdicts"].append({
+            "matrix": direction, "kind": kind, "error": message,
+        })
+        print(f"FAIL {direction}: {message}")
 
     def run_one(case, producer, consumer):
         """Run one case through real product services and record its result.
@@ -2511,7 +2712,49 @@ def main():
                 consume_bin, case, work, matrix, fixture_tool,
                 producer_binary=binaries[producer] if mixed else None,
                 consumer_binary=binaries[consumer] if mixed else None)
-            runner.run()
+            try:
+                runner.run()
+            except (AssertionError, ValueError, ValidationError,
+                    OSError) as exc:
+                record_case_failure(case, matrix, label, [str(exc)])
+                return "fail"
+            except Exception as exc:  # noqa: BLE001 - recorded, never dropped
+                # An unexpected runner-side exception is still one failed case:
+                # it is recorded so the matrix keeps executing and the report
+                # the gates read is still written, and the traceback is printed
+                # so a runner bug cannot hide behind a red row.
+                traceback.print_exc()
+                record_case_failure(
+                    case, matrix, label,
+                    [f"runner raised {type(exc).__name__}: {exc}"])
+                return "fail"
+            # Liveness is judged while every peer this case started should
+            # still be alive: after the last step and before teardown, when an
+            # exit can only be the product's own.
+            deaths = runner.owned_service_deaths()
+            for death in deaths:
+                report["engine_deaths"].append(
+                    dict(death, case=case["name"], matrix=matrix,
+                         phase="mid-case"))
+            reasons = []
+            if deaths:
+                reasons.extend(
+                    f"engine died mid-case: {death['argv']} "
+                    f"(implementation {death['implementation']}, exit "
+                    f"{death['exit_status']}, signal {death['signal']}, "
+                    f"stderr tail {death['stderr_tail'][-1:]})"
+                    for death in deaths)
+            for problem in runner.close_services():
+                reasons.append(
+                    f"service teardown ({problem['actor']}): "
+                    f"{problem['error']}")
+                if problem["exit_status"] not in (None, 0):
+                    report["engine_deaths"].append(
+                        dict(problem, case=case["name"], matrix=matrix,
+                             phase="teardown"))
+            if reasons:
+                record_case_failure(case, matrix, label, reasons)
+                return "fail"
             entry = {
                 "name": case["name"], "matrix": matrix, "status": "PASS",
                 "oracle_checks": runner.oracle_checks,
@@ -2569,17 +2812,8 @@ def main():
             report["cases"].append(entry)
             print(f"PASS {label} (oracle={runner.oracle_checks})")
             return "pass"
-        except (AssertionError, ValueError, ValidationError, OSError) as exc:
-            report["failed"] += 1
-            report["cases"].append({
-                "name": case["name"], "matrix": matrix, "status": "FAIL",
-                "error": str(exc),
-            })
-            print(f"FAIL {label}: {exc}")
-            return "fail"
         finally:
             if runner is not None:
-                runner.close_services()
                 merge_kind_ledger(report["file_kinds"], runner.file_kinds)
             if owns_work:
                 shutil.rmtree(work, ignore_errors=True)
@@ -2605,6 +2839,41 @@ def main():
             record_skip("matrix", direction, "mixed producer requires --fixture-tool")
             continue
         capability_key = consumer if consumer is not None else producer
+        # A binary in a rust or go slot that cannot answer the capability
+        # handshake is a dead engine, not a legacy-only executable: only the
+        # released C ``iprange`` ever lacks a ``--jsonrpc`` surface.  Skipped
+        # away, that condition used to end the direction with every case in
+        # SKIP and (under ``--allow-skips``) an exit status of 0.
+        dead = [key for key in (producer, consumer)
+                if key is not None and not capabilities[key]["available"]
+                and (key != "c"
+                     or capabilities[key].get("probe", {}).get("crashed"))]
+        if dead:
+            detail = "; ".join(
+                f"{key} binary {binaries[key]} is not a live engine "
+                f"(probe exit "
+                f"{capabilities[key].get('probe', {}).get('returncode')}, "
+                f"crashed="
+                f"{capabilities[key].get('probe', {}).get('crashed')}, reason="
+                f"{capabilities[key].get('probe', {}).get('reason')!r})"
+                for key in dead)
+            for key in dead:
+                probe = capabilities[key].get("probe", {})
+                report["engine_deaths"].append({
+                    "argv": [binaries[key], "--jsonrpc"],
+                    "implementation": key,
+                    "exit_status": probe.get("returncode"),
+                    "signal": (-probe["returncode"]
+                               if isinstance(probe.get("returncode"), int)
+                               and probe["returncode"] < 0 else None),
+                    "stderr_tail": [],
+                    "case": None, "matrix": direction,
+                    "phase": "capability-probe",
+                })
+            record_matrix_verdict(
+                direction, "dead-engine",
+                "matrix direction has a dead engine: " + detail)
+            continue
         executed = 0
         for case in use_cases:
             if not mixed and not capabilities[capability_key]["available"]:
@@ -2637,37 +2906,35 @@ def main():
                                 f"requires unadvertised method {required}")
                     continue
             executed += (run_one(case, producer, consumer) != "skip")
+        if executed == 0 and not mixed and \
+                capabilities[capability_key]["available"]:
+            record_matrix_verdict(
+                direction, "no-cases-executed",
+                "matrix executed no case (every selected case skipped "
+                "by a capability or requires rule)")
         if mixed and executed == 0:
-            message = ("matrix executed no cross-producer case "
-                       "(every case is single-actor or fixture-tool-produced)")
-            report["failed"] += 1
-            report["cases"].append({
-                "name": "matrix", "matrix": direction, "status": "FAIL",
-                "error": message,
-            })
-            print(f"FAIL {direction}: {message}")
+            record_matrix_verdict(
+                direction, "no-cases-executed",
+                "matrix executed no cross-producer case "
+                "(every case is single-actor or fixture-tool-produced)")
 
     report["frame_sizes"] = dict(FRAME_SIZES)
 
     print(
         f"\n{report['passed']} passed, {report['failed']} failed, "
         f"{report['skipped']} skipped; oracle checks={report['oracle_checks']}")
-    # Durable-artifact policy net: after every field is filled
-    # (including per-case artifacts), refuse to serialize a report
-    # that still carries the operator's profile path in any string
-    # value.
-    personal = personal_path_in_report(report)
-    if personal is not None:
-        raise SystemExit(
-            f"refusing to write evidence containing the operator's "
-            f"profile path: {personal!r}; stage all inputs outside "
-            "the profile")
-
     if args.json_report:
-        with open(args.json_report, "w", encoding="utf-8") as stream:
-            json.dump(report, stream, indent=2, sort_keys=True)
-            stream.write("\n")
-    if report["failed"]:
+        # The shared writer owns the provenance fields and applies the
+        # durable-artifact policy net -- the personal-path scan over every
+        # string value, run after the per-case fields are filled -- so a case
+        # that recorded a profile-rooted path is refused rather than committed.
+        write_committed_report(args.json_report, report,
+                              caller_paths=caller_paths, indent=2)
+    # Fail-closed: any recorded failure, and any product process that died or
+    # refused to end its session outside the runner's teardown, fails the whole
+    # matrix run.  The death check is deliberately independent of the failure
+    # count so that a run whose rows were later rewritten still cannot exit 0.
+    if report["failed"] or report["engine_deaths"] or report["matrix_verdicts"]:
         return 1
     if report["skipped"] and not args.allow_skips:
         return 1

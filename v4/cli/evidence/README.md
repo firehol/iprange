@@ -1,13 +1,39 @@
-Current evidence regenerated at the wave-19.24 revision
-`91ae2a429380483010bc5e9ce46ac2dc776ec17d` (SOW-0028 "Wave 19 round
-19.24", 2026-09-14).  This head block is the present-state record of the
-CLI qualification surface: gates, corpus, evidence identity, toolchain
-and binary provenance.  Every product repair demanded by the eight-role
-review round at `91ae2a42` is contained in the same tree the battery
-built from; the battery then regenerated every report committed here
-against those integrated binaries.
+Every measurement report in this directory records its own provenance,
+and reading that provenance is the only way to know what a committed
+artifact measures.  As of this writing each report's `git_head` member
+carries `91ae2a429380483010bc5e9ce46ac2dc776ec17d` — the commit that
+preceded the wave-19.24 integration commit
+`22da3778444a9b8cb469fbf8a62ac9f076bb1189` — and the two Windows
+reports add a `revision` note saying they were built from that commit
+plus an uncommitted working-tree batch.  They therefore describe the
+products of an earlier tree than the one the gates in `v4/cli/` are
+written against, and they are stale relative to the current source:
+`v4/cli/cases/` holds 71 case files where the committed matrices
+inventory 63, and `refusal-class-parity.json` records a 418-cell grid
+with 29 pinned refusals where the committed gate derives 483 cells and
+36 pins.  That mismatch is what the kind gate reports, and it is the
+expected condition between a product wave and its evidence rotation.
 
-Battery outcome.  Every step of the Linux qualification battery
+Rotation contract.  No report here is authored by hand and none is
+expected to be edited in place.  The qualification battery builds the
+products from one tree, runs every gate against those binaries, writes
+each report into a scratch directory, and rotates the complete set into
+this directory as one unit; `check_kind_coverage.py --emit-manifest`
+then produces `battery-manifest.json`, which records for every report
+its role, its byte length, the SHA-256 of its content, and its
+`git_head`, together with the staged binary ledger as digest-to-name
+entries.  The gate refuses a report set whose members disagree about
+the revision they describe, and the manifest is what makes a uniform
+rewrite of every `git_head` — relabelling old evidence as new — detect
+without access to the machine that produced it.  The manifest binds
+ledger entries, not workstation paths: no committed artifact carries a
+path into an operator profile, and the shared writer refuses such a
+write.  This head block stays the present-state record of the CLI
+qualification surface: gates, corpus, evidence identity, toolchain and
+binary provenance.
+
+Battery outcome at the revision the committed reports describe.  Every
+step of the Linux qualification battery
 (`/tmp/qualsvc/battery-w1924.sh`, run under `nice`) passed on its first
 attempt with rc 0 — builds, both unit suites, the GOOS cross-compilation
 matrix (15 steps ran, 1 skipped as unsupported by the toolchain), the
@@ -24,10 +50,13 @@ their own scratch directories, so the battery creates no repository-root
 scratch (the wave-19.23 disclosure about `sc-iprange-*` directories at
 the checkout root is closed by that hygiene change).
 
-Matrices and corpus.  `v4/cli/cases/` holds 63 case files (was 49).
-Fourteen were added this wave, and their expectations are written from
-the staged Rust binary answers because Rust is the recorded authority
-for v4 semantics: seven budget objects from the JSON-RPC specification
+Matrices and corpus.  `v4/cli/cases/` holds 71 case files; the
+committed matrix reports were generated over the 63 that existed at
+their recorded revision, and the eight later additions are the two feed
+outcome cases, the four `maintenance.roundtrip.*` cases, and the two
+`params.negative.budget_*` cases named below.  Expectations are written
+from the staged Rust binary answers because Rust is the recorded
+authority for v4 semantics: seven budget objects from the JSON-RPC specification
 each take the seven `params.negative.budget_*` cases (`snapshot_budget`,
 `validation_budget`, `recovery_budget`, `algebra_budget`,
 `algebra_output_budget`, `result_budget`, `immutable_feed_budget`); each
@@ -63,10 +92,15 @@ case files; `sensitivity_gate.py` reports 14 modes PASS.
 
 Refusal-class parity gate (committed).
 `v4/cli/check_refusal_class_parity.py` drives both binaries over a
-mechanically derived grid of 22 arms x 19 path kinds = 418 cells, each
+mechanically derived grid of 23 arms x 21 path kinds = 483 cells, each
 cell compared Go-vs-Rust on `(kind, transport code, data.code,
-outcome)`; message text is not compared because it is a human diagnostic
-and the machine contract is the code and outcome.  Every attempt runs
+outcome)` plus the publication-evidence shape; a third axis sweeps 9
+arms over 42 descriptor-pressure profiles (12 in `--pressure routine`)
+against a committed table of 378 pinned pressure classes under
+`PINNED_PRESSURE_CLASSES_SHA256`
+`314d8be5618e9775d9dd386ad6d7e521ff27ee9ba63d7c9501746de941ad1456`.
+Message text is not compared because it is a human diagnostic and the
+machine contract is the code and outcome.  Every attempt runs
 under its own bounded deadline (4 s) and a differing repeat is retried
 (2 retries), so a flake is counted apart from a divergence and a hang
 apart from both.  Budget: 55 s per run; measured 29.2 s for the full
@@ -77,9 +111,15 @@ describe its own execution honestly (cell count against the derived
 grid, every disagreeing cell named in the divergences list, no cell
 claiming agreement with differing answers), and the contract term is
 applied on top — zero divergences, no unanswered cell, no flaky cell,
-every pinned refusal satisfied.  Committed result at this revision:
-418/418 cells executed, 0 divergences, 0 hangs, 0 flaky, 29/29 pinned
-refusals satisfied, verdict PASS.  `--self-test` (26 cases, offline)
+every pinned refusal satisfied.  Committed result in
+`refusal-class-parity.json` at its recorded `git_head`: 418/418 cells
+executed, 0 divergences, 0 hangs, 0 flaky, 29/29 pinned refusals
+satisfied, verdict PASS.  Against the current gate that artifact is a
+stale grid (418 cells versus the derived 483) and a stale pin table
+(29 versus 36), which the kind gate reports; the live gate run over the
+current tree gives 483/483 cells with 0 divergences, 0 hangs, 0 flaky
+and 36/36 pins, plus 108/108 routine pressure cells.  `--self-test`
+(56 controls, pinned by `SELF_TEST_CASES_TOTAL`, offline)
 includes the three anchors this gate exists to provide: an injected
 synthetic divergence must FAIL, a report with zero executed cells must
 FAIL, and deleting the fixture that pins the `validate.live`
@@ -1947,12 +1987,11 @@ the binding that field provides.
   the matrix skip rules: rows cannot be deleted, invented, or moved
   between status classes without failing the gate.
 - `matrix-rust_to_go.json`, `matrix-go_to_rust.json` — two-binary
-  cross-language matrices over the same 63 cases: 34 executed and 0 failed
-  when the producer is Rust (`rust_to_go`), 32 executed with 2 declared
-  failures when the producer is Go (`go_to_rust`), 29 skipped in both
-  directions (cases that do not exercise both a producer and a consumer
-  role), oracle checks 22.  The same per-actor identity is recorded for every
-  PASS case; `check_kind_coverage.py` derives language attribution
+  cross-language matrices over the same case set: both directions
+  record 34 executed with 0 failures and 29 skipped (cases that do not
+  exercise both a producer and a consumer role), and oracle checks 22,
+  over the 63 cases that existed at the reports' recorded revision.
+  The same per-actor identity is recorded for every PASS case; `check_kind_coverage.py` derives language attribution
   exclusively from those executed identities (the top-level `matrix`
   label is only cross-checked, never trusted).
 - `crash.json` — `iprange-cli-crash-report-v1` in both directions
@@ -2082,18 +2121,21 @@ the binding that field provides.
 - `refusal-class-parity.json` —
   `iprange-cli-refusal-class-parity-report-v1`, produced by
   `check_refusal_class_parity.py`.  The Go-versus-Rust refusal comparison
-  over 19 arms x 17 path kinds = 323 cells, per cell on
-  `(kind, transport code, data.code, outcome)`, each attempt under its own
+  over 23 arms x 21 path kinds = 483 cells, per cell on
+  `(kind, transport code, data.code, outcome)` plus the
+  publication-evidence shape, each attempt under its own
   bounded deadline with retries so a flake or a hang is reported apart from
   a divergence.  It records the grid it actually executed (the gate re-derives
   it and fails on a missing or invented cell), the `MANDATORY_PATH_KINDS`
   that a row deletion would otherwise remove silently, the
   `PINNED_REFUSALS` table whose expectations come from the Rust authority,
   the binary digests and `system.describe` implementation labels it drove,
-  and `git_head`.  Committed at this revision: 323 cells executed, 42
-  divergences, 0 hangs, 0 flaky, 15 of 23 pins satisfied, verdict FAIL — the
-  expected state while the product repairs land.  See the head block and
-  `../README.md`.
+  and `git_head`.  Committed at the artifact's own revision: 418 cells
+  executed, 0 divergences, 0 hangs, 0 flaky, 29 of 29 pins satisfied,
+  verdict PASS.  That grid and pin table are stale against the current
+  gate (483 cells, 36 pins), which is the pre-rotation condition the kind
+  gate reports; the wave battery rotates this artifact together with the
+  manifest.  See the head block and `../README.md`.
 - `coverage-go.json` — `iprange-cli-coverage-go-report-v1`, produced by
   `coverage_harness.py`.  Measured Go coverage in three separable figures:
   `unit` from the module's own `go test -cover`, `integration` from the
@@ -2164,12 +2206,24 @@ nice python3 v4/cli/check_kind_coverage.py \
   --throughput v4/cli/evidence/throughput.json \
   --sha256-ledger /tmp/qualsvc/SHASUMS.txt
 
-# The two report arguments above are required: the gate errors out without
-# them, so a report set that omits either is not a passing battery.
-# --sha256-ledger is optional and, when given, binds every recorded binary
-# digest to the staged ledger.
+# Which arguments are required: at least one --matrix or --crash report,
+# and both --fifo-surface and --throughput (an omitted flag is as cheap as a
+# deleted git_head field, so the gate refuses to run without them).
+# --refusal-class-parity, --coverage-go, --crash-negative and
+# --windows-housekeeping are repeatable and, when omitted, are discovered
+# beside the reports already named; a report that cannot be found is a gate
+# problem, not a skipped check.  --sha256-ledger takes a sha256sum-format
+# ledger produced by the battery's own build step over the staged binaries,
+# and when supplied every binary digest recorded in a consumed report must
+# appear in it.  The committed `battery-manifest.json` is the durable form
+# of the same binding: it records the ledger as digest-to-name entries, so
+# provenance travels with the evidence and no committed artifact carries a
+# workstation path.  --emit-manifest writes that manifest for the reports
+# named on the command line, which is the battery step; --battery-manifest
+# consumes it, which is why producer and consumer share one implementation.
 
-# Refusal-class parity (19 arms x 17 path kinds = 323 cells x 2 engines).
+# Refusal-class parity (23 arms x 21 path kinds = 483 cells x 2 engines;
+# --pressure routine adds 12 descriptor-pressure profiles, --pressure full 42).
 nice python3 v4/cli/check_refusal_class_parity.py \
   --go /tmp/qualsvc/bin/go/iprange --rust /tmp/qualsvc/bin/rust/iprange \
   --fixture /tmp/qualsvc/bin/rust/v4-fixture \
@@ -2235,3 +2289,110 @@ records, drop a role, diverge one digest, drop a params-rejection record,
 invent one, flip its transport code, remove its request bytes, add an
 undeclared failure, and mark a declared defect as passing; each is
 rejected.
+
+## Committed-report discipline
+
+Every artifact in this directory is produced by a harness, and the
+harnesses do not write here directly.  All twelve of them —
+`run.py`, `crash_harness.py`, `resource_harness.py`,
+`throughput_harness.py`, `coverage_harness.py`, `check_golden.py`,
+`check_fifo_surface.py`, `check_refusal_class_parity.py`,
+`sensitivity_gate.py`, `windows_guard_harness.py`,
+`windows_housekeeping_harness.py` and `command_sanitize.py` — register in
+`command_sanitize.COMMITTED_REPORT_WRITERS` and reach a committed path
+only through `command_sanitize.write_committed_report`.  That one owner
+adds the provenance members (`command`, `checkout_root`, `git_head`) and
+the derived `privacy` block, screens the inputs the caller declares, and
+refuses the write when any screened input or any finished string value
+names an operator profile path.  Splitting the write from the provenance
+would let a harness keep the artifact and drop the audit, so the registry
+is audited as a set: `command_sanitize.py --self-test` executes 31
+controls over the whole registry, and every harness self-test must report
+`shared command_sanitize controls executed=31 expected=31` before its own
+result counts.  `check_producer_privacy.py` attacks the three
+lead-owned writers from the outside with 32 committed controls, so
+neither a writer that screens nothing, nor one that serializes its own
+JSON, nor an artifact with no `privacy` block, survives.
+
+Verification modes, each with its own pinned control count so a deleted
+control is a failure and not a smaller run:
+
+```bash
+# Gate and harness self-tests (offline, no products needed).
+nice python3 v4/cli/check_refusal_class_parity.py --self-test   # 56 controls
+nice python3 v4/cli/check_kind_coverage.py --self-test          # 106 controls
+nice python3 v4/cli/forgery_battery.py                           # 18 classes
+nice python3 v4/cli/check_fifo_surface.py --self-test   # 18 + 5 structural, 17 arms x 2 engines
+nice python3 v4/cli/check_golden.py --self-test          # 7 walk + 17 reject + 1 structural
+nice python3 v4/cli/coverage_harness.py --self-test      # 17 controls
+nice python3 v4/cli/sensitivity_gate.py --self-test      # 14 modes + 2 inversions + 6 structural
+nice python3 v4/cli/throughput_harness.py --self-test   # 12 cases + 4 structural
+nice python3 v4/cli/resource_harness.py --self-test      # 25 control groups
+nice python3 v4/cli/crash_harness.py --self-test         # 26 controls, eight groups
+nice python3 v4/cli/windows_guard_harness.py --self-test # 35 controls + 1 native-only
+nice python3 v4/cli/command_sanitize.py --self-test      # 31 registry controls
+nice python3 v4/cli/check_producer_privacy.py --self-test # 32 producer controls
+nice python3 v4/cli/windows_housekeeping_harness.py --self-test  # incl. 9 report-verification controls
+nice python3 v4/cli/races/runner.py --self-test          # 13 mutation + clean-arm/clean-detector/report-location
+
+# Re-check one committed Windows report without re-running the harness:
+# the same verifier the battery uses, applied to the artifact on disk.
+nice python3 v4/cli/windows_housekeeping_harness.py \
+  --verify-report v4/cli/evidence/windows-housekeeping.json
+```
+
+`--verify-report` exists because a reader, not only a producer, must be
+able to re-grade an accepted artifact: it recomputes the identity
+bindings, the ledger digests and the privacy block from the stored bytes.
+The parity gate additionally re-derives its grid, pin table, pressure
+table and rollups from the captured per-cell records, so a report whose
+summary disagrees with its own cells fails even when every number in it
+is plausible.
+
+### Identity records: what they are and how they get here
+
+`build-ids.json` (`iprange-cli-build-ids-v1`) and
+`battery-manifest.json` are the two committed files that record identity
+instead of a measurement, and both are owned by the
+`command_sanitize.py` entry of `COMMITTED_REPORT_WRITERS`
+(`owner: lead`, tier `shared-writer`).  They are listed there — and
+`--audit-committed-reports` enumerates this directory against that
+table — because an identity record from an unregistered producer is
+exactly as untrustworthy as a measurement that bypassed the writer.
+
+- `build-ids.json` is produced by `command_sanitize.py --emit-build-ids
+  <dest>`.  It holds the expected `IPRANGE_V4_BUILD_ID` of one source
+  state for the `iprange-livedb` package: the SHA-256 that
+  `v4/rust/iprange-livedb/build.rs` computes over the package's
+  `Cargo.toml` and every `.rs` file under its `src/`, one record per
+  input (`u64le(name-length) name u64le(content-length) content`) with
+  the name framed as the `/`-joined logical path.  The four host entries
+  carry one digest, which is the claim under test: the value the built
+  binaries embed is the one the CLI and the co-located
+  `iprange-v4-worker` compare during the worker handshake, and hashing
+  the build host's own path spelling instead would split it between a
+  POSIX and a Windows checkout.  The artifact therefore also quotes the
+  two pre-normalizer digests (equal on a POSIX host, apart on a Windows
+  host), names its input count, and records whether the expected digest
+  was found verbatim in a `--built-cli` and a `--built-worker`
+  executable — `"not measured"` for a role nobody supplied, so a digest
+  that was never compared against a binary attests to a source tree and
+  not to a delivered product.  Nothing here is hand-edited: the record
+  regenerates from the package, and it is stale the moment that package
+  changes.
+- `battery-manifest.json` is authored by
+  `check_kind_coverage.py --emit-manifest` and reaches this directory by
+  `command_sanitize.py --commit-report <src> --commit-report-to <dest>`,
+  because the gate that owns the manifest's shape cannot import the
+  writer.  Promotion adds the provenance and privacy members and nothing
+  else: the report bytes stay the gate's, and the recorded `command`
+  names the promoting invocation, which is what distinguishes a promoted
+  artifact from a writer that committed its own measurement.  That verb
+  refuses a destination registered to another writer and refuses source
+  and destination that name the same file, so a promotion cannot
+  launder a file an existing producer owns.
+
+Reading either record is a check, not a trust exercise: the build
+identity is re-derivable from the package by re-running `--emit-build-ids`
+to a scratch path and comparing, and both files carry the same
+`git_head`/`privacy` binding as the reports they describe.

@@ -28,6 +28,8 @@ import (
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/pathname"
+
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 )
 
 // ExportBudget carries the caller-supplied export limits
@@ -102,7 +104,10 @@ func NewExportWriter(destination string, policy iprangedb.PublicationPolicy, bud
 		return nil, herr
 	}
 	temporary := pathname.Push(parent, "."+handle+".export.tmp")
-	raw, err := os.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o666)
+	// The owner-side open keeps this create out of the runtime network
+	// poller, whose initialization has no failure path under a low
+	// RLIMIT_NOFILE (wave-19.25 design section 5).
+	raw, err := calleropen.Open(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, 0o666)
 	if err != nil {
 		return nil, fileError(err, "create export output")
 	}
@@ -307,7 +312,11 @@ func syncDirectory(parent string) error {
 	if runtime.GOOS == "windows" {
 		return nil
 	}
-	dir, err := os.Open(parent)
+	// A directory handle goes through the same owner as every persistent
+	// node: on Linux os.Open registers the descriptor with the runtime
+	// network poller regardless of the node type, and that initialization
+	// has no failure path under a low RLIMIT_NOFILE.
+	dir, err := calleropen.Open(parent, os.O_RDONLY|calleropen.NonBlocking, 0)
 	if err != nil {
 		return err
 	}

@@ -65,8 +65,10 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from command_sanitize import (  # noqa: E402  (side-effect free)
-    recorded_checkout_root,
-    recorded_git_identity,
+    require_paths_outside_profile,
+    write_committed_report,    audit_report_writers,
+    run_shared_self_test,
+
 )
 from crash_harness import HarnessJsonRpcService  # noqa: E402
 from schema.results import validate_result  # noqa: E402
@@ -210,6 +212,18 @@ def product_all_ok(product):
     )
 
 
+# Executed-control count of the pure-function battery.  The battery is a flat
+# list of expect() calls plus a few inside one fixture loop, so a dropped or
+# unreachable control lowers the count while still printing nothing but PASS
+# for the survivors.  "0 failures" is only evidence when the number that ran
+# is pinned.
+GUARD_SELF_TEST_CONTROLS = 36
+# The destination-comparison control compares backslash-spelled Windows
+# paths, so it is unreachable on a POSIX run; the pin covers both shapes
+# rather than being loosened to whatever the current host happens to reach.
+GUARD_SELF_TEST_NATIVE_ONLY = 1
+
+
 def selftest():
     """Pure-function regression battery for the strict validators
     (wave 19 round 19.14 astra P2): every counterexample that the old
@@ -217,9 +231,11 @@ def selftest():
     successful delivery must still pass."""
     import tempfile
     ok = True
+    executed = [0]
 
     def expect(label, cond):
         nonlocal ok
+        executed[0] += 1
         if not cond:
             print("SELFTEST FAIL: %s" % label)
             ok = False
@@ -382,7 +398,16 @@ def selftest():
            (all(name in names_win for name in volume_guid_trail)) == IS_WINDOWS)
     expect("posix skips the volume-GUID head x trailing leaf class",
            not any(name in names_posix for name in volume_guid_trail))
-    return ok
+    wanted = (GUARD_SELF_TEST_CONTROLS
+              - (0 if IS_WINDOWS else GUARD_SELF_TEST_NATIVE_ONLY))
+    if executed[0] != wanted:
+        print("SELFTEST FAIL: %d controls executed, expected %d"
+              % (executed[0], wanted))
+        ok = False
+
+    # The count travels with the verdict so --self-test can report exactly how
+    # many controls ran, not merely that nothing failed.
+    return ok, executed[0]
 
 
 def windows_c_volume_guid():
@@ -782,9 +807,41 @@ def run_product(binary, label, work, fixture, provenance):
     return product
 
 
+def _self_test_entry():
+    """``--self-test``: the validators, the shared provenance controls, and this
+    writer's own commit discipline judged from this file's source.
+
+    The audit runs against this module's directory so a tampered copy fails on
+    what it actually contains rather than on the pristine file next to it.
+    """
+    ok, executed = selftest()
+    executed_report = [0]
+
+    def _count():  # keeps the printed count the one the battery pinned
+        return None
+
+    problems = audit_report_writers(
+        cli_dir=os.path.dirname(os.path.abspath(__file__)),
+        writers=["windows_guard_harness.py"], artifacts=False)
+    for problem in problems:
+        print("SELFTEST FAIL: %s" % problem)
+    if problems:
+        ok = False
+    try:
+        run_shared_self_test("windows_guard_harness")
+    except SystemExit as exc:
+        print("SELFTEST FAIL: shared provenance controls: %s" % exc)
+        ok = False
+    print("guard self-test %s: %d controls executed (native-only controls "
+          "unreachable on this host: %d)"
+          % ("PASSED" if ok else "FAILED", executed,
+             0 if IS_WINDOWS else GUARD_SELF_TEST_NATIVE_ONLY))
+    return 0 if ok else 1
+
+
 def main():
-    if "--selftest" in sys.argv:
-        return 0 if selftest() else 1
+    if "--self-test" in sys.argv or "--selftest" in sys.argv:
+        return _self_test_entry()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust", required=True, help="Rust iprange binary")
     parser.add_argument("--go", required=True, help="Go iprange binary")
@@ -798,6 +855,15 @@ def main():
                         help="build provenance JSON recorded verbatim")
     args = parser.parse_args()
 
+    # Durable-artifact policy, applied before any product starts: the report
+    # records the measured fixture/binary paths and the work directory, so a
+    # profile-rooted input is how an operator-home path reaches a committed
+    # file.  The shared writer repeats the check at commit time.
+    caller_paths = (("--rust", args.rust), ("--go", args.go),
+                    ("--fixture", args.fixture), ("--work", args.work),
+                    ("--out", args.out), ("--provenance", args.provenance))
+    require_paths_outside_profile(caller_paths)
+
     provenance = None
     if args.provenance:
         with open(args.provenance) as fh:
@@ -805,8 +871,6 @@ def main():
 
     report = {
         "schema": REPORT_SCHEMA,
-        "git_head": recorded_git_identity(),
-        "checkout_root": recorded_checkout_root(),
         "platform": "windows" if IS_WINDOWS else os.name,
         "fixture": file_evidence(args.fixture),
         "build_provenance": provenance,
@@ -837,8 +901,12 @@ def main():
     if provenance:
         report["provenance"] = provenance
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
-    with open(args.out, "w") as fh:
-        json.dump(report, fh, indent=2, sort_keys=True)
+    # The shared writer owns command/git_head/checkout_root and the derived
+    # privacy block, and refuses the write outright when a recorded path
+    # lives under the operator's profile.  This harness runs on both the
+    # authorized Windows host and POSIX (guard-posix.json), so both spellings
+    # go through the same rules.
+    write_committed_report(args.out, report, caller_paths=caller_paths)
 
     print("report: %s" % args.out)
     print("RESULT: %s" % ("PASS" if all_ok else "FAIL"))

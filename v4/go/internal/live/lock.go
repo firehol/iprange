@@ -26,6 +26,8 @@ package live
 import (
 	"os"
 	"time"
+
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 )
 
 // LockMode is the advisory lock kind (Rust live_lock Mode).
@@ -77,7 +79,7 @@ func lockCancellable(f *os.File, offset uint64, mode LockMode, check func() erro
 		if acquired {
 			return nil
 		}
-		time.Sleep(time.Millisecond)
+		calleropen.Sleep(time.Millisecond)
 	}
 }
 
@@ -115,7 +117,7 @@ func LockFileCancellable(f *os.File, offset uint64, mode LockMode, check func() 
 		if acquired {
 			return nil
 		}
-		time.Sleep(time.Millisecond)
+		calleropen.Sleep(time.Millisecond)
 	}
 }
 

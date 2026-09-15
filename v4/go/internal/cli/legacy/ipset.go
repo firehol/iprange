@@ -16,12 +16,24 @@ type Range struct {
 }
 
 // Size returns the number of addresses covered as a u128 pair
-// (Hi - Lo + 1, unsigned 128-bit arithmetic).
+// (Hi - Lo + 1) saturating at the family maximum.
+//
+// The closed range of the whole IPv6 universe holds 2^128 addresses,
+// one more than a u128 pair can carry, and the released C tool
+// saturates that count instead of wrapping it (src/ipset6.h
+// ipset6_added_entry: "2^128 doesn't fit in uint128_t, saturate at
+// max"); the Rust reference matches C with a saturating_add. Hi - Lo
+// itself cannot underflow, because the Range invariant is Lo <= Hi, so
+// the +1 is the only step that can overflow and it can do so from
+// exactly one value: the u128 maximum already in hand.
 func (r Range) Size() (hi, lo uint64) {
 	lo = r.Hi.Lo - r.Lo.Lo
 	hi = r.Hi.Hi - r.Lo.Hi
 	if r.Hi.Lo < r.Lo.Lo {
 		hi--
+	}
+	if hi == ipMax6.Hi && lo == ipMax6.Lo {
+		return ipMax6.Hi, ipMax6.Lo
 	}
 	lo++
 	if lo == 0 {
@@ -31,14 +43,31 @@ func (r Range) Size() (hi, lo uint64) {
 }
 
 // addSat adds two u128 values, saturating at the full-universe
-// maximum (the v6 unique-counter representation limit).
+// maximum (the v6 unique-counter representation limit, the C
+// ipset6_added_entry rule the Rust reference mirrors with
+// u128::saturating_add).
+//
+// The carry into the high limb must be part of the overflow test: a
+// low-limb carry added after the test can lift a wrapped high limb back
+// to the maximum, which reads as "no overflow" and reports the wrong
+// count for two addends whose true sum exceeds u128 (adding the whole
+// universe twice, or a full universe to one address).
 func addSat(a, b IP128) IP128 {
 	lo := a.Lo + b.Lo
-	hi := a.Hi + b.Hi
+	carry := uint64(0)
 	if lo < a.Lo {
-		hi++
+		carry = 1
 	}
-	if hi < a.Hi {
+	hi := a.Hi + b.Hi
+	overflow := hi < a.Hi
+	if carry != 0 {
+		next := hi + 1
+		if next < hi {
+			overflow = true
+		}
+		hi = next
+	}
+	if overflow {
 		return ipMax6
 	}
 	return IP128{Hi: hi, Lo: lo}

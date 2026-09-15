@@ -86,8 +86,11 @@ eight roles returned FAIL — 17 P1 and 21 P2 numbered findings
 4P1+2P2; security 1P1+3P2; performance 1P1+2P2; glm 2P1+4P2;
 closure 2P1+3P2).  This wave's single integration commit closes them:
 the committed refusal-class parity gate
-(`v4/cli/check_refusal_class_parity.py`) executes 22 arms x 19 path
-kinds = 418 cells and records DIVERGENCES: 0 with 29/29 pins; the
+(`v4/cli/check_refusal_class_parity.py`) executed, at that revision,
+22 arms x 19 path kinds = 418 cells and recorded DIVERGENCES: 0 with
+29/29 pins (the committed gate today executes 23 arms x 21 path kinds =
+483 cells with 36 pinned refusals and a 42-profile pressure axis; see
+the wave-19.25 section); the
 remaining Go/Rust class divergences (symlinked-live writers,
 recovery classify order, missing-feed outcomes, zero-length and
 procfs/hardlink classes, unix-socket publication) are fixed Go-side
@@ -107,7 +110,7 @@ integration with the recorded worker-colocation step; 6/6
 the seven consumed reports, PASS-row deletion inventory, 59-control
 self-test), Go coverage is measured rather than asserted (unit
 47.71%, corpus-driven integration 40.38%, merged 59.54% statements;
-user ruling D3), the corpus grew 49 -> 63 case files, and
+user ruling D3), the corpus grew 49 -> 63 case files (71 today), and
 `tests.d/102-legacy-fifo-input` preserves legacy FIFO stream input
 on all three implementations (user ruling D2).  The final battery
 passed every step with rc 0 on its first attempt and regenerated
@@ -117,6 +120,32 @@ identities.  The <=1.3x performance gate remains FAILED, not waived
 milestone 5 is unstarted.  The eight-role round must now re-anchor
 against this wave's final commit; a green round is the precondition
 for the external control review and the closure decision.
+
+Wave-19.25 state (2026-09-15): the eight-role round at
+`22da3778444a9b8cb469fbf8a62ac9f076bb1189` returned FAIL from all
+eight roles — 16 P1 and 32 P2 numbered findings.  Under user rulings
+1B and 2A this wave rebuilt the descriptor handling (one
+poller-readiness decision per process, owned clock waits, `getrandom(2)`
+entropy, caller-owned spawn stdio behind a measured pre-fork headroom of
+4 free descriptors for Go and 3 for Rust), committed the stat-to-open
+swap-race battery with its runner and positive controls, ported the
+caller-open witness to Go, and fixed the legacy `::/0` cardinality
+saturation, the snapshot destination bind order, the named-feed read
+outcome class, and the `maintenance.list` -> `maintenance.remove`
+round-trip.  The corpus runner now fails closed on a dead engine, the
+Rust build identity is host-neutral, and the kind gate consumes and
+re-derives the parity, coverage, crash-negative and Windows reports
+under a committed battery manifest.  The gate surface today is 23 arms
+x 21 path kinds = 483 refusal-class cells x 2 engines plus a 42-profile
+pressure axis (378 pinned classes), a 56-control parity self-test, a
+106-control kind-gate self-test, and a corpus of 71 case files.  The
+committed evidence artifacts still record committed `git_head` of
+91ae2a429380483010bc5e9ce46ac2dc776ec17d, so the kind gate is red
+against them until the wave battery rotates the set; the battery run and
+the native Windows re-qualification are open validation items with their
+completion conditions in the wave-19.25 section.  The <=1.3x performance
+gate remains FAILED, not waived (pending SOW-0030 owns engine
+residuals); SOW-0017 stays paused; milestone 5 is unstarted.
 
 Wave-19.23 state (2026-09-14): the eight-role adversarial round
 reviewed the wave-19.22 final revision `cfbee7887fb71de67df35ea913d6f7ae70c5c011`
@@ -13611,13 +13640,22 @@ controls demonstrated).
 
 G. Windows portability and re-qualification (portability F5;
 closure F4; glm 4).  Native Windows `go test ./...` builds after
-`//go:build unix` tags were placed on the POSIX-only test files
-importing `golang.org/x/sys/unix`; the count stated here originally
-("the three `x/sys/unix` test files") was wrong and is corrected:
-twenty-six `v4/go` test files import that package and seventeen
-carry the `//go:build unix` tag at the wave-19.24 revision — the
-load-bearing gate is the tag set `check_goos_matrix.sh` keeps
-compilable, not a file count.  The sentence here also claimed the
+`//go:build` constraints that exclude Windows were placed on the
+POSIX-only test files importing `golang.org/x/sys/unix`.  A file count
+is not the rule and was never checkable: the rule is
+`grep -rl golang.org/x/sys/unix v4/go --include='*_test.go'` must return
+only files whose first `//go:build` line excludes `windows`.  Measured
+at this revision that query returns 30 files (29 real importers and one
+that names the package in a comment,
+`internal/cli/handlers/fd_pressure_limit_other_unix_test.go:11`); every
+one of them carries a constraint that excludes Windows — 10 with the
+literal `//go:build unix`, 3 more whose leading term is `unix`
+(`unix && (linux || darwin)`, `unix && freebsd`,
+`unix && !(linux || darwin || freebsd)`), and the rest with `linux`,
+`!windows`, or a conjunction that implies either.  The machine check is
+`GOOS=windows go vet ./...` over `v4/go` (rc 0 at this revision), which
+is what `check_goos_matrix.sh` keeps compilable; a tag that admits
+Windows fails that build, not a tally.  The same passage also claimed the
 native suite "runs green ... both verified" at this revision; four
 review roles contradicted that from the committed provenance (the
 staged copy predated the fix and showed three `samefile_test.go`
@@ -13826,12 +13864,15 @@ live databases and hardlinks of a live database match the Rust class,
 procfs/sysfs metadata sources keep the bounded loop-to-EOF read, and
 a unix-socket publication destination answers `io`.  Verification:
 the committed gate `v4/cli/check_refusal_class_parity.py` executes
-all 418 cells against both staged binaries and reports 0 divergences,
-0 hangs, 0 flaky and 29/29 pinned refusals; its 26-case offline
+all 418 cells against both staged binaries and reported 0 divergences,
+0 hangs, 0 flaky and 29/29 pinned refusals at that revision (the
+committed gate now executes 483 cells with 36 pins, and its offline
+self-test carries 56 controls; see the wave-19.25 section); the 26-case
 self-test includes the three anchors (injected divergence must FAIL,
 zero executed cells must FAIL, deleting the sidecar-fold pin fixture
 must FAIL).  Seven new corpus cases keep the Rust-authored
-expectations and `matrix-go` passes 63/63; `known-defects.json` is
+expectations and `matrix-go` passed 63/63 at that revision (the corpus
+is 71 case files today); `known-defects.json` is
 committed empty and the ledger is enforced in both directions.
 
 B. Go fd-exhaustion bounded refusal (operations 1).  Where the Go
@@ -13915,7 +13956,8 @@ new files as detailed above and in the evidence README).  `tests.d`
 both mixed directions with both `/usr/bin/false` negatives rejecting
 0/16; resource proofs 8/8; golden 55 exchanges; sensitivity 14 modes;
 FIFO gate 17 arms x 2 engines.  The evidence README head block was
-rewritten to this battery's final state (grid 323 -> 418 cells,
+rewritten to this battery's final state (grid 323 -> 418 cells at
+that revision; 483 cells plus the pressure axis today),
 divergences 42 -> 0, coverage numbers, the sixteen-report
 `git_head` table, the Windows green status, and the mid-wave
 known-defects disclosure replaced by the empty committed ledger).
@@ -14000,3 +14042,1580 @@ the external cross-model control session remains the last check).
 Each role's report is retained in its sandbox and its verdict is
 delivered out-of-band; no repository commit follows the accepted
 round, so the reviewed revision remains HEAD at closure.
+
+## Wave-19.25 descriptor-budget design (recorded before implementation)
+
+Status of this section: design record. It changes no product code. It is the
+contract the wave-19.25 implementation is accepted against, and the record of
+the measurements that fixed that contract. Direction: rebuild the descriptor
+handling rather than retune the existing per-request probe (user decision
+1B), subject to eight binding conditions — identify the remaining
+runtime-initialization path empirically and test whether owning it removes the
+need for any reservation; document owner, lifetime, sizing, release, ordering
+and platform for any reservation that survives; no blanket startup refusal;
+keep resource-releasing operations usable under pressure; test low limits and
+already-occupied tables, before and after runtime initialization, with valid
+operations; keep each operation's real error class; make descriptor pressure a
+parity-gate arm with a consumable result table; return measured evidence
+instead of a silent minimum limit or a declared parity.
+
+### 1. Mechanism: what initializes the network poller, and what a shortage costs
+
+Conditions: Go 1.27.0 (`go version go1.27.0 linux/amd64`), Linux,
+`CGO_ENABLED=0` static binaries built with the qualification recipe
+(`go build -trimpath -buildvcs=false`), one JSON-RPC session per process,
+`RLIMIT_NOFILE` soft and hard set by the launcher before `execve`, every run
+under `nice`.
+
+Result:
+
+* The runtime network poller costs exactly two descriptors, allocated once,
+  never released, idempotently (`runtime/netpoll_epoll.go:21-31`:
+  `epoll_create1` then `eventfd`; guarded by `netpollInited` in
+  `runtime/netpollGenericInit`, `runtime/netpoll.go:217-229`).
+* Both allocations are fatal on failure: `throw("runtime: netpollinit
+  failed")` at `runtime/netpoll_epoll.go:26` and `throw("runtime: eventfd
+  failed")` at `runtime/netpoll_epoll.go:31`. A throw is not an error path.
+  The process prints `runtime: epollcreate failed with 24` or
+  `runtime: eventfd failed with 24`, exits 2, and has written no response
+  frame. Product code cannot observe or recover from a poller it cannot
+  create.
+* Two independent trigger families reach that allocation, both measured.
+  1. **A pollable descriptor registration.** `os.newFile` computes
+     `pollable := kind == kindOpenFile || kind == kindPipe || kind == kindSock
+     || nonBlocking` (`os/file_unix.go:155`) and calls
+     `f.pfd.Init("file", pollable)` (`os/file_unix.go:219`), whose poll path
+     runs `serverInit.Do(runtime_pollServerInit)`
+     (`internal/poll/fd_poll_runtime.go:39`, from `(*FD).Init` at
+     `internal/poll/fd_unix.go:55`). The regular-file and directory carve-outs
+     that can clear `pollable` sit inside `if kind == kindOpenFile { switch
+     runtime.GOOS { case "darwin", … } }` (`os/file_unix.go:165-192`), so on
+     Linux **every** `os.Open`, `os.OpenFile` and `os.Create` initializes the
+     poller regardless of `O_NONBLOCK`, and `os.NewFile` on a descriptor
+     already in non-blocking mode does the same. Opening with a bare
+     `openat(2)` and wrapping with `os.NewFile` after clearing `O_NONBLOCK`
+     registers nothing, which is the promise of
+     `v4/go/internal/calleropen`.
+  2. **Any runtime timer arm.** `runtime.(*timers).addHeap` calls
+     `netpollGenericInit()` when `netpollInited == 0`
+     (`runtime/time.go:455-461`). `time.Sleep`, `time.After`, `time.AfterFunc`,
+     `NewTimer` and `NewTicker` therefore all initialize the poller; a
+     `time.Sleep(2ms)` in an otherwise idle process was measured to add both
+     poller descriptors.
+
+Consequence for the CLI: the fatal abort is not a property of a handler's own
+file count. It fires the first time the process opens a file through
+`os.OpenFile`/`os.Open`/`os.Create`, wraps a non-blocking descriptor with
+`os.NewFile`, or arms a timer — and any of those can happen after the response
+has been written, so a request that answered correctly can still die before
+exit.
+
+### 2. Pollable-fd registrations in the Go CLI process, and where each happens
+
+Measured with a syscall-level descriptor observer (one operation per fresh
+process, table diffed before and after) and a per-request lifecycle probe that
+samples `/proc/<pid>/fd` during startup, while the request is in flight, after
+the answer, and after stdin closes. The poller descriptors are
+`anon_inode:[eventpoll]` and `anon_inode:[eventfd]`.
+
+| registration source | initializes the poller | first registers in the lifecycle |
+|---|---|---|
+| process start, session start, `system.describe` request path | no | — (answered with descriptors 0,1,2 only) |
+| `os/signal` watcher (`signal.Notify`) | no | — (Linux wakes os/signal on a futex note, no self-pipe) |
+| stdin/stdout/stderr when pipes, blocking | no | — |
+| `os.Open`, `os.OpenFile`, `os.Create` — any node type, any flags | yes | inside the handler that opens |
+| `os.ReadFile` (legacy one-shot input) | yes | inside the legacy parse |
+| `os.Pipe` | yes | at the call |
+| `os/exec` with nil stdio (worker spawn) | yes — three `os.Open(os.DevNull)` inside `os/exec` | at `SpawnWorker` |
+| `os/exec` with caller-supplied `*os.File` stdio | no | — |
+| first `crypto/rand.Read` in the process | yes | first handle or nonce draw |
+| any product timer (`time.Sleep`, `time.After`) | yes | on the path that arms it, including the session force-exit path after the answer |
+| host-name resolution from the publish adapter | yes | while resolving, inside the handler |
+
+Lifecycle measurement on HEAD `22da3778` (poller state: startup / in flight /
+after answer / after stdin close):
+
+| arm | startup | in flight | after answer | after shutdown |
+|---|---|---|---|---|
+| system.describe | no | no | no | **yes** (force-exit waits: session.go:298, 311, 497, 533) |
+| reader.open+close | no | no | **yes** | yes |
+| reader.open+close (live) | no | no | **yes** — 8 descriptors: 3 stdio + main + 2 sidecar + 2 poller | yes |
+| direct.replace | no | no | **yes** | yes |
+| current.publish | no | no | **yes** | yes |
+| maintenance.remove (rejected entry) | no | no | no | yes |
+| validate (worker) | no | **yes** | yes | yes |
+| recovery.inspect (worker) | no | **yes** | yes | yes |
+
+The two product call sites of the entropy family that every working arm passes
+through are `v4/go/internal/cli/rpc/handle.go:19` (`rpc.NewHandle`, reached
+from `internal/cli/handlers/reader.go:300`, `cursors.go:850`, `output.go:82`,
+`live.go:1459`, `maintenance.go:224`) and `v4/go/internal/random/random.go:21`
+(writer nonce, from `internal/writer/reclaim.go:74` ←
+`internal/writer/publication.go:88` `BeginTransaction`). The first is why even
+a read-only `reader.open` initializes the poller.
+
+That is the exact remaining call path the ruling asked for:
+`crypto/rand.Read` → `crypto/internal/fips140/drbg.Read` →
+`crypto/internal/sysrand.Read` → the one-shot
+`time.AfterFunc(time.Minute, warnBlocked)` at
+`crypto/internal/sysrand/rand.go:38-41` → `timer.modify` →
+`(*timers).addHeap` → `netpollGenericInit` → `netpollinit` → `throw`. It was
+captured with `GOTRACEBACK=all` on a `direct.replace` run at
+`RLIMIT_NOFILE=7`: the process printed `runtime: eventfd failed with 24` and
+`fatal error: runtime: eventfd failed`, exited 2, delivered zero response
+frames, and the throwing stack ran `randomNonce` → `BeginTransaction` →
+`BeginRangeWorkflow` → `beginExactDirectState` → `DirectReplace` → `execute`
+(`internal/cli/rpc/session.go:1000`).
+
+### 3. The wave-19.24 per-request preflight, measured
+
+Object: `requestDescriptorReserve = 3` and the probe call in `execute`
+(`v4/go/internal/cli/rpc/session.go:967-976`, `:993-997`) over
+`calleropen.HasDescriptorReserve`
+(`v4/go/internal/calleropen/calleropen.go:61-84`, three
+`Open(os.DevNull, os.O_RDONLY, 0)` calls).
+
+* **Documented effect.** The probe opens the platform null device three times
+  per request without `O_NONBLOCK`: `openat("/dev/null")` ×3,
+  `fcntl(F_GETFL)` ×3, `close()` ×3 — nine syscalls per request, counted in
+  the syscall trace and confirmed by an in-process counter that reached
+  `opens = 3 × requests` exactly over 6 000 requests in one session.
+* **CPU cost.** Same binary, probe enabled by an environment switch, no
+  tracer, child rusage, medians of 4-5 alternating runs of 3 000-6 000
+  serialized requests: `system.describe` +14.57 µs/request (+16.1 % of that
+  arm's session CPU); `direct.replace` +25.2 µs/request (+3.6 %);
+  `reader.open` +18.0 µs/request (+24 %). The wave finding of "≈5.5 extra
+  syscalls and ≈4.4 % CPU per request" understates the syscall count (nine)
+  and the relative cost of cheap arms; the direction is confirmed and the
+  numbers above are the ones to keep.
+* **Filesystem dependency.** The probe is a path-resolution open of
+  `/dev/null`, so it inherits whatever that name holds. With a FIFO planted at
+  `/dev/null` (tmpfs over `/dev` in a private mount namespace, released
+  binaries), HEAD Go produced **no answer at all** in 100 s — for
+  `system.describe`, `direct.replace`, `reader.open+close` and
+  `validate(worker)`; Rust answered success on the three file arms. With
+  `/dev/null` absent, HEAD Go answered `-32010 io/not_started` for all four,
+  including the zero-descriptor `system.describe` where Rust answers success.
+* **Invented refusals.** In the reproduced cold grid (8 arms × bands 3..12 ×
+  fresh and pre-occupied tables × both engines, executed twice independently
+  with zero disagreements), HEAD Go returned `-32010 io/not_started` in 154 of
+  its 320 cells and produced no answer in 68. The refusals do not track the
+  runtime's need: after a successful `reader.open` + `reader.close` had
+  already initialized the poller, every arm was still refused `io/not_started`
+  through band 8, and at bands 5-8 — where the poller fits — the probe refused
+  work the process could have done.
+* **It does not prevent the abort.** With the poller already up,
+  `direct.replace` and `current.publish` still died at bands 3 and 4 with the
+  eventfd throw and zero frames, and `reader.open+close` on a live database
+  still died at band 7.
+* **It refuses the releasing operation.** `reader.close`, whose purpose is to
+  hand descriptors back, is answered `-32010 io/not_started` after a
+  successful open (bands 6..8 immutable, 8..10 live) so the reader leaks; Rust
+  answers that close `success`.
+
+Disposition: the probe is deleted, not retuned. Any replacement must be a
+decision about one specific resource, taken by the owner of that resource, and
+must not answer on behalf of operations it does not own.
+
+### 4. Does owning the paths remove the need for a reservation? (condition 1)
+
+A ladder of builds from one HEAD source, each adding one ownership step, each
+swept over the same grid (arms × bands 3..12 × fresh and occupied tables ×
+before and after initialization):
+
+| build | ownership added | measured effect |
+|---|---|---|
+| m1 | probe deleted (`session.go:993-997`) | the blanket refusals at bands 3..5 disappear; the eventfd throw stays |
+| m2 | m1 + the worker spawn hands `calleropen` descriptors to the child instead of nil stdio | the spawn stops opening `/dev/null`; no other change |
+| m3 | m2 + the six bare `os.OpenFile`/`os.Open` sites routed through `calleropen` with `O_NONBLOCK` | no change in the abort set: on these arms the trigger is not the opens |
+| m4 | m3 + every product `time.Sleep`/`time.After` replaced by a timer-free wait | `system.describe` survives bands 4..9 (Rust parity); `direct.replace` still dies at band 7; the live reader still registers the poller |
+| m5 | m4 + the entropy draws use `getrandom(2)` instead of `crypto/rand` | **every cell answers with exit 0 and no poller descriptor ever appears** in the child's table: 80 cells of the fresh-table grid (8 arms × bands 3..12, cold) and 80 more after an initializing warm-up, zero throws, zero wedges; across the full 320-cell grid the only unanswered cells are the 48 where the launcher itself could not claim its held descriptors (exit 92, §13) |
+| m7 | m5 + the worker binary's own `time.Sleep` sites made timer-free too | worker arms unchanged in the band where they start succeeding: the residual gap is not timers |
+
+Answer to condition 1: **owning the paths removes the need for any per-request
+or per-session descriptor reservation for every file, writer, adapter and
+worker arm measured** — including the zero-descriptor `system.describe`, which
+the probe refused, and `reader.close`, which the probe refused while a reader
+was open. What ownership cannot reach is one arm, and one hazard that is not a
+reservation question:
+
+* **Residual trigger, measured:** a `current.publish` whose input list contains
+  a host name resolves through `internal/cli/fileio/input.go`
+  (`resolveHostnames`, `resolveOne`, and the `net.LookupIP` call inside it),
+  and that registration appears even in the fully owned m5 build. The resolver
+  is the only remaining way this process reaches `netpollinit`, therefore the
+  only remaining way it can reach the eventfd throw. The same function also
+  retries with a one-second pause (`input.go:1645`), so it is both a pollable
+  and a timer trigger and must be owned once, at the gate in §6.
+* **The worker spawn is a different defect class:** at bands 8..12 with a
+  generous table HEAD Go answers `io/read_only_failure` for both worker arms
+  where Rust succeeds (`v4/go/internal/worker/client.go:289-330`), and both
+  engines wedge without bound when the null device is hostile. No reservation
+  fixes either; §9 owns this.
+
+### 5. What the implementation establishes, per owner
+
+1. **Delete** `requestDescriptorReserve`, the probe call in `execute`, and
+   `calleropen.HasDescriptorReserve`. No blanket startup refusal replaces
+   them: a process whose table is tight at `exec` must still answer
+   `system.describe` and must still run any operation whose own opens fit.
+2. **Keep the request path free of pollable registrations.** Every open of a
+   persistent or adapter-owned node goes through `calleropen` (`Open` with
+   `O_NONBLOCK`, `Blocking` for descriptors opened by hand):
+   `internal/cli/handlers/live.go:1464`, `internal/cli/handlers/output.go:87`
+   and `:187`, `internal/cli/fileio/export_writer.go:105` and `:310`,
+   `internal/worker/control_create_unix.go:19`,
+   `internal/worker/control_open_unix.go:12`, and the four `os.ReadFile` sites
+   `internal/cli/legacy/parse.go:107`, `:231`, `:250`, `:270`.
+3. **Own the waits.** One timer-free wait owner (nanosleep(2) based, same
+   durations, same wake-up semantics) replaces the runtime timers on every path
+   that can run in a session: `internal/cli/rpc/session.go:298, 311, 481, 497,
+   526, 533, 582, 639`, `internal/cli/rpc/rpc.go:28`,
+   `internal/worker/client.go:169, 371, 606`,
+   `internal/worker/control_wire.go:298, 425`, `internal/live/lock.go:80, 118`,
+   `cmd/iprange-v4-worker/modes.go:238, 273`, and
+   `internal/cli/fileio/input.go:1645`.
+4. **Own the entropy draws.** `internal/random/random.go:21` and
+   `internal/cli/rpc/handle.go:19` fill from `getrandom(2)` (already a
+   dependency through `golang.org/x/sys`), keeping the current classes: an OS
+   failure stays `io`/`not_started` from `NewHandle` and `format.CodeIO` from
+   `Nonzero128`, and an all-zero draw stays `format.CodeFormatInvalid`. The
+   one-shot entropy-warning timer that `crypto/internal/sysrand.Read` arms on
+   first use is then never armed by product code; the readiness decision in §6
+   covers the condition that warning existed to make visible.
+5. **Never open the null device to spawn the worker.** `SpawnWorker` hands the
+   child descriptors it owns — an `O_RDWR|O_NONBLOCK` `calleropen` open of the
+   null device, wrapped blocking, closed by the parent after `Start()` — so
+   `os/exec` has no reason to open a path. The Rust spawn needs the same change
+   for the same reason (§9).
+6. **Gate the resolver on the poller-readiness decision** (§6) instead of
+   leaving the creation to chance inside the runtime.
+7. **Never let a request answer for a resource it does not need.** Each
+   operation keeps its own owner's class, and the operations that free
+   resources — `reader.close`, cursor close, worker teardown, maintenance
+   removal — run regardless of pressure.
+
+### 6. Reservation, in the only form the design keeps: a poller-readiness decision
+
+No descriptor reservation is required for the file, writer, adapter or worker
+surfaces (§4). One decision is required, and it is not a budget held for
+handlers: the process must know, before it can reach the resolver, whether the
+runtime poller can be created, because that creation has no failure path.
+
+* **Owner:** the JSON-RPC transport session — the process — not the dispatcher
+  and not any handler. One decision per process.
+* **Initialization ordering:** taken in `main`, before the session starts its
+  goroutines and before the first frame is read, therefore before the first
+  handler open, before the first worker spawn, and before the signal
+  force-exit path can arm a wait. The decision window is single-goroutine,
+  which is what makes the probe and the deliberate initialization atomic with
+  respect to the process's own activity.
+* **Mechanism:** read the soft `RLIMIT_NOFILE`, count the descriptors actually
+  in the table (Linux: the `/proc/self/fd` directory; portable fallback: an
+  `fcntl(F_GETFD)` scan to the soft limit), compute `free = soft - in_use`, and
+  when `free >= 4` initialize the poller deliberately inside that window and
+  record `ready`; otherwise record `unavailable`. Four free slots is the
+  measured demand: two for the poller (`epoll_create1` and `eventfd`,
+  `runtime/netpoll_epoll.go:21-31`) plus the two held by the registration
+  handle that provokes it. The probe reads a descriptor table, not a
+  filesystem path: it cannot block, cannot be poisoned by a planted node, and
+  opens nothing the caller owns.
+* **Sizing (measured, Linux):** the poller takes 2 descriptors once; the
+  largest simultaneously-live set seen for a successful request in the owned
+  build is 7 (worker arms, parent side) and in HEAD it reaches 12; the Rust
+  reference reaches 5-7 for the same arms (§7). Nothing is reserved on behalf
+  of a handler's own opens: those failures belong to the handler and keep the
+  handler's class.
+* **Lifetime and release:** the decision is immutable for the process
+  lifetime. The poller's two descriptors are permanent — no Go API releases
+  them — and the two descriptors of the registration handle are closed
+  immediately after the deliberate initialization. Nothing is held for future
+  requests, so no request can be refused because of this decision.
+* **Behaviour when `unavailable`:** the only effect is that host-name
+  resolution is not attempted. An input line that is not an address literal
+  answers the class the Rust reference answers for a lookup that could not be
+  performed (measured `input_format` with outcome `not_started` for the
+  host-name publish, §7) — decided before entering `net`, so no timer and no
+  socket is created and the process cannot reach the eventfd throw. Every
+  other arm is unaffected by the decision, in either state.
+* **Platform assumptions:** measured on Linux/amd64 with `CGO_ENABLED=0`
+  (epoll plus eventfd, 2 descriptors). On the kqueue platforms the poller's
+  allocation and the regular-file carve-out differ
+  (`os/file_unix.go:165-192`), and on Windows the I/O completion port has
+  neither descriptor nor `eventfd`. The readiness decision reads its demand
+  from the platform's own measured number, and §10's matrix must run on the
+  macOS, FreeBSD and Windows validation hosts before the behaviour is claimed
+  there; only the Linux numbers are measured here.
+
+### 7. Error-class map: the class each arm must answer
+
+Rust remains the authority for refusal classes the specification does not pin
+(recorded ruling 5 of the wave-19.24 repair section,
+`.agents/sow/specs/iprange-jsonrpc-v1.md` for the wire contract), so the
+required Go class is the Rust class in the same situation. Measured columns are
+the cold grid (`RLIMIT_NOFILE` = band, fresh table, no prior request);
+`go(owned)` is the m5 build, which is the floor the implementation must at
+least match. `-32010` is the product error code and is omitted from the class
+text. A cell with no answer is written as such: it is not a class, and it is
+never acceptable.
+
+| arm | band | Rust (measured) | Go HEAD (measured) | required Go class |
+|---|---|---|---|---|
+| system.describe | 3 | not launchable, exit 127 (§13) | io/not_started, exit 2 | success |
+| system.describe | 4, 5 | success | io/not_started, exit 2 at 4 | success |
+| system.describe | 6..12 | success | success | success |
+| reader.open (immutable) | 4 | io/read_only_failure | io/not_started, exit 2 | io/read_only_failure |
+| reader.open (immutable) | 5..12 | success from 5 | io/not_started at 5, and the close below | success from 5 (owned build: 5 ✓) |
+| reader.close after a successful open | 6, 7, 8 (immutable); 8, 9, 10 (live) | success | io/not_started | success — a releasing operation is never refused |
+| reader.open (live, sidecar in use) | 4, 5 | io/read_only_failure | io/not_started | io/read_only_failure |
+| reader.open (live) | 6 | success | io/read_only_failure | success from 6 — owned build reaches 7 (§11) |
+| reader.open (live) | 7..12 | success | no answer at 7; close refused 8..10 | success from 6, close always answered |
+| direct.replace | 4, 5 | io/not_started | io/not_started | io/not_started — the real EMFILE of the writer's own open |
+| direct.replace | 6, 7 | success | io/not_started at 6, no answer at 7 with the eventfd throw | success from 6 (§11 residual: owned build reaches 8) |
+| direct.replace | 8..12 | success | io/not_started at 8, 9; success from 10 | success |
+| current.publish | 4 | io/not_started | io/not_started | io/not_started |
+| current.publish | 5, 6 | io/not_published (5), io/not_started (6) | io/not_started | the handler's own class: io/not_started only when an open failed, io/not_published when the publication policy refused. The reference is not monotone across 5 and 6, so the pin is the justification of the class, not the band ordering |
+| current.publish | 7..12 | success | io/not_published at 7, 8; io/not_started at 9; success from 10 | success from 7 (owned build: 8, §11) |
+| maintenance.remove of a listed entry, live reader held | every band | the SDK removal class, unchanged by pressure | io/not_started at 3..5, invalid_argument/not_started from 6 | identical to the reference; never io/not_started from a probe. A cell whose list is empty fails the gate as vacuous (§10) |
+| validate (worker) | 4..7 | io/read_only_failure | io/not_started at 3..5, conflict/read_only_failure at 6 | io/read_only_failure — conflict is not the class of an exhausted table, and the owned build still shows the conflict fold at band 4 |
+| validate (worker) | 8..12 | success | io/read_only_failure at every band | success from 8 (§9, §11: owned build reaches 10) |
+| recovery.inspect (worker) | 4..6 | io/read_only_failure | io/not_started at 3..5 | io/read_only_failure |
+| recovery.inspect (worker) | 7..12 | success | io/read_only_failure at every band | success from 7 (§9, §11: owned build reaches 9) |
+
+Minimum band at which each arm completes (fresh table, cold): 
+
+| arm | Go HEAD | Rust | Go owned (m5) |
+|---|---|---|---|
+| system.describe | 6 | 4 | 3 |
+| reader.open+close (immutable) | 6 | 5 | 5 |
+| reader.open+close (live) | 11 | 6 | 7 |
+| direct.replace | 10 | 6 | 8 |
+| current.publish | 10 | 7 | 8 |
+| validate (worker) | never ≤ 12 | 8 | 10 |
+| recovery.inspect (worker) | never ≤ 12 | 7 | 9 |
+
+Same measurement with three descriptors already held by the launcher
+(occupied table, cold): Rust 7 / 8 / 9 / 9 / 10 / 11 / 10 for the same arm
+order; Go HEAD 9 / 9 / 11 / never / never / never / never; Go owned 6 / 8 / 10
+/ 11 / 11 / never / 12. Bands whose limit cannot supply the launcher's own
+held count (limit ≤ 5 with hold = 3) exit 92 in the launcher and are host
+state, not product behavior. The requirement the implementation is graded on is
+that the Go minima track the held count as the reference's do, and that no arm
+is refused for a descriptor it did not ask for.
+
+### 8. Durability of the outcome under pressure
+
+The class is half of the answer; the durable outcome must be what the
+operation actually achieved. Each item below is a cell in the §10 matrix:
+
+* A refused writer never publishes: no committed generation, no renamed
+  destination, and the private temporary it created is removed.
+* A `reader.close` answered `success` releases the reader's entries and its
+  descriptors — the sampled descriptor table returns to its pre-open state.
+* A worker arm that could not start leaves no control file behind
+  (`internal/worker/client.go:289-330`, `Handshake` at `:347`), so an identical
+  request afterwards starts cleanly; the matrix runs each worker arm twice in
+  the same session.
+* A maintenance removal reports what it removed, and a removal that did not
+  happen is not reported as done.
+
+### 9. Worker-spawn bound and the hostile null device (both engines)
+
+Measured with a generous table (`RLIMIT_NOFILE` 64), the null device replaced
+by a FIFO inside a private mount namespace, one request per process, 100 s
+budget:
+
+| engine | arm | outcome |
+|---|---|---|
+| Go HEAD | validate (worker) | no answer in 100 s |
+| Go HEAD | recovery.inspect (worker) | no answer in 100 s |
+| Rust | validate (worker) | no answer in 100 s |
+| Rust | recovery.inspect (worker) | no answer in 100 s |
+| Go owned (m5) | both arms | success |
+
+The same arms with `/dev/null` **absent** rather than a FIFO:
+
+| engine | arm | outcome |
+|---|---|---|
+| Go HEAD | system.describe, direct.replace, reader.open+close, validate, recovery.inspect | io/not_started for all of them, including the zero-descriptor system.describe |
+| Rust | the same five | success on the three file arms, io/read_only_failure on both worker arms |
+| Go owned (m5) | the same five | success on the three file arms, io/read_only_failure on both worker arms — the reference's classes, reproduced |
+
+`startLimit` (`internal/worker/client.go:31-35`, 30 s, applied by `Handshake`
+at `:348` and by `client.go:571`) cannot bound this: the block is inside the
+spawn's own blocking `open("/dev/null")`, before the handshake clock starts, so
+the specification's 30 s start bound is exceeded by both engines on both arms.
+Required design:
+
+1. The spawn asks for the descriptors the child and the parent need **before**
+   forking, through the descriptor-table read of §6 — never through an open of a
+   caller-reachable path.
+2. Both engines hand the child descriptors they own instead of asking the
+   standard library to open the null device (`os/exec`'s nil-stdio path on the
+   Go side, `Stdio::null()` on the Rust side): an `O_NONBLOCK` open followed by
+   the descriptor-identity check, so a planted FIFO answers immediately instead
+   of waiting for a writer that never comes.
+3. The wait for descriptors is explicitly bounded, shorter than `startLimit`,
+   and the bound is a named constant owned by the spawn rather than an ambient
+   deadline, so the whole start path stays inside the 30 s the specification
+   allows.
+4. When descriptors are not available within that bound, the arm answers the
+   class the reference answers for a worker that cannot be resourced
+   (`io` with outcome `read_only_failure`), removes its control file, and never
+   invents `io/not_started` for a request that was never attempted.
+
+### 10. Test matrix the implementation must ship
+
+Executor: one fresh process per cell; `RLIMIT_NOFILE` soft **and** hard set by
+the launcher before `execve`, so the process cannot raise its own limit; the
+table pre-occupied by a launcher holding N descriptors on a file outside the
+work directory; every run under `nice`; per-cell timeout 8 s, so a cell that
+needs the whole budget fails as a wedge; the child's descriptor table sampled
+throughout; stderr captured and scanned for `runtime:` and `fatal error:` in
+addition to the answer.
+
+* **Engines:** Go and Rust, same fixtures, same materialized targets.
+* **Bands:** 3, 4, 5, 6, 7, 8, 9, 10, 11, 12.
+* **Table state:** fresh (hold = 0) and occupied (hold = 3). Cells below the
+  launcher's own requirement are recorded as host-unsupported by exit-status
+  class, never as product refusals.
+* **Runtime state:** before initialization (no prior request) and after
+  initialization, where "after" means a valid `reader.open` plus `reader.close`
+  completed first. Two harness properties are required for this axis to mean
+  anything: the warm-up frames must use response ids distinct from the measured
+  arm's, because answers are keyed by id and a shared id makes the cell report
+  the warm-up's class instead of the arm's (this defect was found in this
+  design's own first sweep and invalidated its warm rows); and the warm-up must
+  not change the state the measured arm depends on, which rules out a writer
+  warm-up in the same directory.
+* **Arms — valid operations only:** `system.describe`; `reader.open` +
+  `reader.close` on an immutable database; the same on a live database with the
+  reader sidecar in use; `direct.replace` with a valid CSV; `current.publish`
+  with a valid list and `fail_if_exists`, plus one variant whose list contains a
+  host name (the resolver arm); `maintenance.remove` of an entry that
+  `maintenance.list` reported in the same session while a live reader is held;
+  `validate` and `recovery.inspect` with the colocated worker. A cell whose
+  removal list is empty, or whose "valid" request is refused by validation
+  before opening anything, is **vacuous and fails** the gate.
+* **Hostile null device:** FIFO at `/dev/null`, and `/dev/null` absent, each ×
+  {`system.describe`, `direct.replace`, `reader.open+close`, `validate(worker)`}
+  at a generous band. Expected: an answer within the timeout for every arm, no
+  wedge, and the classes of §7.
+* **Runtime-state pin:** for every arm except the resolver arm, the child's
+  descriptor table at the answer contains neither `anon_inode:[eventpoll]` nor
+  `anon_inode:[eventfd]`. This is what turns the poller-free promise of
+  `v4/go/internal/calleropen` from a property of one package into a checked
+  property of the process.
+* **Determinism:** every cell runs at least twice and any disagreement fails
+  the gate. The reproduced grid ran 320 Go cells twice with zero disagreements,
+  so determinism is achievable and is not a reason to widen a tolerance.
+* **Home:** `v4/go/internal/cli/handlers/fd_pressure_unix_test.go` keeps the
+  process mechanics (`//go:build unix`, skipped under `-short`, binaries from
+  the existing `productBinaries`) and is rewritten to this matrix, with the
+  expectations taken from §7 so the Go side is never graded against itself.
+
+### 11. Residual gaps, with a named owner
+
+* The writer family needs two more descriptors than the reference for the same
+  work: measured peak live sets 7 (Go owned) against 5 (Rust) for
+  `direct.replace`. The extra pair is visible in the sampled table — the Go
+  live path holds the reader-coordination sidecar on **two** descriptor numbers
+  while the reference holds it on one. The sidecar name is derived in
+  `v4/go/internal/format/name.go:16` (`CoordinationSuffix`) and the reader-side
+  open is in `v4/go/internal/reader/reader.go`; the owner must establish which
+  of the two simultaneous opens is redundant. Closing it moves the Go minimum
+  from 8 to the reference's 6.
+* Worker arms reach success at band 10 (`validate`) and 9 (`recovery.inspect`)
+  in the owned build against the reference's 8 and 7. The remainder is the
+  worker child's own startup demand: the child inherits the parent's limit, so
+  the before-the-fork check of §9 plus the child's own minimum is the owner, and
+  the two arms stay separate pinned cells.
+
+### 12. Corrections to recorded claims
+
+* `v4/go/internal/cli/handlers/fd_pressure_unix_test.go:364-368` states that the
+  boundary sub-tests show the probe "cannot invent a refusal for a merely tight
+  process", justified by a request that "refuses before any descriptor-heavy
+  work". The claim does not hold. That boundary drives `missingRequest` — a
+  `direct.replace` whose database path does not exist (`:346`) — so no
+  descriptor is ever claimed and the probe cannot fail it; the comparison is
+  Go-against-itself rather than against the reference; and the same test asserts
+  `-32010 io/not_started` as the **expected** answer at limits 4 and 5
+  (`:349-357`), which pins the fabricated class. The measured truth is §7: with
+  the poller already initialized, HEAD Go still refuses every arm with
+  `io/not_started` through band 8, refuses `system.describe` which needs no
+  descriptor at all, and refuses the `reader.close` that gives descriptors
+  back. The test is rewritten to §10.
+* `v4/go/internal/calleropen/calleropen.go:10-14` explains the package by saying
+  `os.OpenFile` "derives the descriptor's pollability from the flags it was
+  given", which reads as if only an `O_NONBLOCK` open registers. On Linux the
+  kind alone decides (`os/file_unix.go:155`, the regular-file and directory
+  carve-outs being restricted to the Apple and BSD platforms at
+  `os/file_unix.go:165-192`, registration at `os/file_unix.go:219`), so **every**
+  `os.Open`, `os.OpenFile` and `os.Create` registers, and a non-blocking
+  `os.NewFile` also registers. The invariant to keep, and to state with the
+  correct reason, is `calleropen.go:19`: a file-only SDK must not depend on the
+  network poller at all. It is pinned process-wide by §10's descriptor-table
+  check, not only by the per-open witnesses in
+  `v4/go/internal/calleropen/netpoll_unix_test.go`.
+* `v4/go/internal/cli/rpc/session.go:967-976` justifies the probe with "the
+  session itself holds only the three standard streams, so a table of six or
+  more descriptors always leaves this much headroom". After the first handler
+  open or the first entropy draw the process holds five descriptors plus the
+  request's own, so the arithmetic is wrong; and the promised equivalence with
+  "the same class Rust returns when the handler's first open yields EMFILE" is
+  not what the probe returns, because the reference's class comes from the
+  operation that actually needed the descriptor.
+* `v4/go/internal/cli/rpc/session.go:266-270` is correct that the `os/signal`
+  watcher claims no descriptor and never reaches the network poller — measured
+  — but it reads as a general safety statement about the signal path, while that
+  same path arms runtime timers at `session.go:298` and `:311`, which do
+  initialize the poller. That is why `system.describe` registers the poller
+  during shutdown although its answer needed nothing. The comment must scope the
+  claim to the watcher and record the force-exit timers.
+
+### 13. Configurations that cannot meet the required behavior (measured)
+
+1. **Band 3 is not launchable for the delivered Rust artifact.** The qualified
+   Rust build is dynamically linked (`rust/iprange`: `ELF 64-bit LSB pie
+   executable, x86-64, … dynamically linked, interpreter
+   /lib64/ld-linux-x86-64.so.2`), and at `RLIMIT_NOFILE` 3 the loader cannot
+   open the libraries it needs: exit 127 with `error while loading shared
+   libraries`, no frame. The static Go build (`CGO_ENABLED=0`) starts and
+   answers at band 3, and even at band 2. Any parity claim at band 3 is
+   therefore unavailable for the shipped Rust artifact: the gate records those
+   cells as host-unsupported and the comparison starts at band 4 for Rust. A
+   statically linked Rust build is not the delivered configuration, and none was
+   available for these measurements: the `x86_64-unknown-linux-musl` standard
+   library is not installed in any local toolchain, and the `-C
+   target-feature=+crt-static` variant of the GNU target fails on this workspace
+   with `cannot produce proc-macro for serde_derive … as the target
+   x86_64-unknown-linux-gnu does not support these crate types`. The band-3
+   behaviour of the reference is therefore an untested question, not a claim.
+2. **Pre-occupied tables below the launcher's own need are unreachable.** With
+   hold = 3 the launcher cannot claim its descriptors at bands 3, 4 and 5: it
+   exits 92 before the engine runs, for every arm, engine and runtime state in
+   that region (240 such cells across the recorded runs — 96 for each of the
+   HEAD builds and 48 for the owned build). Those cells are host state, not
+   product behavior, and the gate must report them as unsupported rather than
+   count them as refusals or as coverage.
+3. **The Go writer and worker arms remain two bands behind the reference** after
+   the ownership work (§11): 8 against 6, 10 against 8, 9 against 7. The classes
+   are equal, the success bands are not, and parity must not be declared there.
+4. **`maintenance.remove` of a genuinely listed entry is not producible through
+   public methods alone today.** Killing a writer mid-`direct.replace` and
+   mid-`validate` (SIGKILL during a 120 000-row import, both engines, several
+   trials) left `maintenance.list` reporting zero scratch, reservation and
+   publication-temp entries in the scanned directory every time, so a removal
+   arm would have to assert against a synthetic entry — the shape the committed
+   corpus already uses for its refusal case
+   (`v4/cli/cases/maintenance.json`) — which is not a valid operation. The wave
+   must add a producer that leaves a listable artifact or report the cell as
+   blocked, and a vacuous cell must fail the gate rather than pass.
+5. **Non-Linux platforms are unmeasured here.** The poller's descriptor count,
+   the `kindOpenFile` carve-outs and the I/O completion port differ
+   (`os/file_unix.go:165-192`). §6's platform clause and §10's matrix must run on
+   the macOS, FreeBSD and Windows validation hosts before the behavior is
+   claimed there.
+
+### 14. Parity-gate arm: `v4/cli/check_refusal_class_parity.py` (specification)
+
+The gate sweeps `ARMS × PATH_KINDS` with `MANDATORY_ARMS`,
+`MANDATORY_PATH_KINDS`, `PINNED_REFUSALS` and the count-plus-digest anchors
+(`check_refusal_class_parity.py:227`, `:388`, `:436`, `:450`). Descriptor
+pressure is a third axis, not another path kind: the target stays valid and the
+environment changes. Specification (the file itself is owned elsewhere):
+
+* New table `PRESSURE_PROFILES` of named profiles
+  `(limit, held, runtime_state, null_device_state, expected_minimum_band)` with
+  `runtime_state ∈ {before, after}` and
+  `null_device_state ∈ {normal, fifo, absent}`, plus
+  `MANDATORY_PRESSURE_PROFILES` naming every profile literally and checked
+  against the table in both directions by `verify_report`, so deleting a row
+  fails the gate instead of shrinking it — the same anti-shrink rule the other
+  two axes use.
+* Cells: `ARMS × PRESSURE_PROFILES`, each arm against its own valid target (the
+  `regular-valid` or `live-direct` materialization), executed by the existing
+  executor with the launcher of §10: soft and hard `RLIMIT_NOFILE` pre-set,
+  table pre-occupied, one fresh process per cell, `nice`, 8 s per-cell timeout,
+  child stderr scanned for `runtime:` and `fatal error:`.
+* Compared per cell, in the order the report already uses: answered within the
+  timeout (a wedge is its own verdict, not a class), transport code,
+  `data.code`, `data.outcome`, exit-status class, and the descriptor-set
+  assertion of §10 for the poller-free arms.
+* `PINNED_PRESSURE_CLASSES[(arm, profile)] = (code, outcome)` fixed from the
+  Rust reference, anchored by count and digest exactly as `PINNED_REFUSALS` and
+  `PINNED_REFUSALS_SHA256` are, so loosening a pin from a mapping to a bare
+  class fails. The consumable table is §7 plus these pinned minima on a fresh
+  table: `system.describe` success from 3 (Rust from 4, §13.1); `reader.open`
+  success from 5 with `io`/`read_only_failure` below and `reader.close` always
+  answered; live reader from 6; `direct.replace` from 6 with `io`/`not_started`
+  below; `current.publish` from 7; `validate` from 8 and `recovery.inspect` from
+  7 with `io`/`read_only_failure` below; `maintenance.remove` the SDK class at
+  every band and never `io`/`not_started` from a probe.
+* The report keeps distinguishing divergence, hang, flaky and pinned-cell
+  failure, and adds **vacuous** as a failure: an arm that never reached a real
+  open — a request refused by validation, an empty maintenance list — is not
+  coverage.
+* Cost budget: the routine gate run uses the pressure subset (bands 3..12, the
+  arms listed in `MANDATORY_ARMS` that the matrix defines), and the full
+  `ARMS × PRESSURE_PROFILES` product runs at a milestone, keeping the routine
+  check inside the resource budget in `AGENTS.md`.
+
+### 15. Evidence and reproduction
+
+* Binaries: Go and Rust rebuilt from `22da3778` with the qualification recipe
+  (`CGO_ENABLED=0 go build -trimpath -buildvcs=false` for Go, the release
+  workspace build for Rust). The identities used by these measurements are that
+  rebuilt pair — `go/iprange` sha256 `13f145469866…`, `rust/iprange` sha256
+  `286c9cfe98e6…`, each with `iprange-v4-worker` colocated beside it, fixtures
+  `deec1b822188…` — which is the same source the wave attests in
+  `.local/shared/binaries` (`go/iprange` `eb0a373448bd…`, `rust/iprange`
+  `b627a654a566…`) built by a different invocation. The ladder builds
+  `m1`,`m2`,`m3`,`m4`,`m5`,`m7` are copies of that source with exactly the
+  ownership edits of §4 applied, in the order that section lists.
+* Recorded per cell: class (transport code plus `data.code` plus
+  `data.outcome`), exit status, stderr head and tail, the child's descriptor
+  table, and elapsed time against the timeout. Runs are `nice`d; only the
+  processes a run started are stopped, by recorded pid.
+* The hostile-null-device cells run the delivered binaries in a private mount
+  namespace (`unshare -rm`) with tmpfs mounted over `/dev`, so no system file is
+  modified. The `iprange: fatal shutdown: worker blocked on undeliverable stdout
+  for 1s; forcing exit` lines some of those cells end with are the session's own
+  watchdog, recorded as the process's last words without an answer.
+* The raw registration inventory, the lifecycle timeline, the descriptor
+  working sets, the syscall census and the preflight A/B (one binary, probe
+  enabled by an environment switch, child rusage) are the measurements quoted in
+  §1-§4, §7, §9 and §11. Every number in this section comes from an executed
+  measurement, not from reading a source.
+
+### Implementation record (wave-19.25 descriptor preflight)
+
+Status: **implemented and measured** against the design above. Built from
+`22da3778`, Go with `CGO_ENABLED=0 go build -trimpath -buildvcs=false`, Rust
+with the release workspace build; the identities used are recorded in
+`/tmp/w1925-D/BINARIES.sha256`.
+
+#### What each design obligation became
+
+| Design item | Implementation | Evidence |
+| --- | --- | --- |
+| §5.1 one-shot whole-file reads | `readWholeFile` over `calleropen.Open`; the four legacy `os.ReadFile` sites now call it | `v4/go/internal/cli/legacy/parse.go:36,37` and sites `:126`, `:250`, `:269`, `:289` |
+| §5.2 bare opens | the six design-named opens route through `calleropen` with `O_NONBLOCK` promptness and the pollable flag cleared before wrapping | `internal/cli/handlers/live.go:1469`, `handlers/output.go:92,196`, `fileio/export_writer.go:110,319`, `worker/control_create_unix.go:24`, `worker/control_open_unix.go:19` |
+| §5.3 waits | `calleropen.Sleep` (clock_nanosleep, no runtime timer) and `calleropen.WaitUntil`; no product `time.Sleep`/`time.After`/`time.NewTimer` remains outside `wait_other.go` (non-unix) and the deliberate poller probe | `internal/calleropen/wait_unix_common.go`, `wait_nanosleep.go`, 11 sites in `cli/rpc/session.go`, `cli/rpc/rpc.go:33`, `worker/client.go`, `worker/control_wire.go`, `live/lock.go:82,120`, `cmd/iprange-v4-worker/modes.go`, `cli/fileio/input.go` |
+| §5.4 entropy | `getrandom(2)` directly, so no descriptor-backed CSPRNG reader and no one-shot warning timer | `internal/random/entropy_getrandom.go`, `random.Entropy`, `cli/rpc/handle.go:20` |
+| §5.5 worker-spawn stdio | caller-owned descriptors handed to the child, closed by the parent after `Start` | `internal/worker/spawn_unix.go:43`, `internal/worker/client.go:343` |
+| §6 poller-readiness decision | one decision per process at the transport entry, read from the descriptor table (`/proc/self/fd` walk, `fcntl(F_GETFD)` fallback, never a filesystem open); the resolver alone consults it and, when it declines, answers `input_format`/`not_started` before anything enters `net` | `internal/calleropen/poller_readiness.go:69,84,102`, `poller_table_linux.go:31`, call site `cli/rpc/rpc.go:24`, consumer `cli/fileio/input.go:1586` |
+| §9 spawn bound, Go | pre-fork headroom read, bounded wait named below `startLimit`, owned stdio, exhaustion → io class with the control file removed | `worker/spawn_unix.go:23` (`spawnDescriptorDemand = 4`), `client.go:310,313,318,343,355` |
+| §9 spawn bound, Rust | same shape with three independent owned null opens and `abandon_spawn` removing the control file | `v4/rust/iprange-livedb/src/worker/client.rs:73,82,128,168,202,261` |
+| §7 error-class map | worker-creation policy failures map to the io class rather than a conflict fold, so the worker arms answer the Rust-measured class | `worker/control.go:81,93`, `worker/exhaustion_unix.go`, `worker/exhaustion_other.go` |
+| §14 pressure axis | third axis of the committed gate: 9 arms × 42 profiles, `MANDATORY_PRESSURE_PROFILES` checked both directions, `PINNED_PRESSURE_CLASSES` anchored by committed count `378` and SHA256 `314d8be5…`, vacuous = fail, `--pressure {off,routine,full}` | `v4/cli/check_refusal_class_parity.py:613,792,813,950,1108,1424` |
+| §10 harness | one process per cell, launched by a separate process that clears the close-on-exec bits on the held descriptors, applies the band as `RLIMIT_NOFILE` soft and hard, ≥2 runs per cell, 8 s per-cell bound (a timeout is a wedge failure), stderr scanned for `runtime:`/`fatal error:`, hostile `/dev/null` arms in a private mount namespace, control-file leftover check, and a process-level poller-descriptor pin | `v4/cli/fd_pressure_harness.py` |
+
+#### Measured descriptor-pressure grid
+
+736 cells (9 arms × 10 bands 3..12 × table states hold 0 and hold 3 × runtime
+before and after runtime init × both engines) plus 16 hostile-null-device cells,
+≥2 runs per cell, one process per cell: **480 pass, 198 host-unsupported,
+58 blocked, 0 wrong-class, 0 wedge, 0 cross-engine disagreement, 0
+poller-pin failures, 0 launcher errors.** Source:
+`/tmp/w1925-D/grid-final-auth.json` with `grid-final-auth.log`.
+
+Lowest band at which the arm reaches success, before runtime init
+(occupied-table columns add the three held descriptors, matching the
+minimum-plus-held law):
+
+| arm | Go, fresh | Go, hold 3 | Rust, fresh | Rust, hold 3 | class equality |
+| --- | --- | --- | --- | --- | --- |
+| `system.describe` | 3 | 6 | 4 | 7 | equal in every jointly-successful cell |
+| `reader-open-close-immutable` | 5 | 8 | 5 | 8 | equal |
+| `reader-open-close-live` | 7 | 10 | 6 | 9 | equal; 4 band-gap cells |
+| `direct.replace` | 8 | 11 | 6 | 9 | equal; 8 band-gap cells |
+| `current.publish` | 8 | 11 | 7 | 10 | equal; 8 band-gap cells |
+| `current.publish.hostname` | refused band (§6) | refused | refused | refused | equal (`input_format`/`not_started`) |
+| `maintenance.remove` | blocked | blocked | blocked | blocked | §13.4, no public-method producer |
+| `validate(worker)` | 10 | never ≤ 12 | 8 | 11 | equal; band-gap cells |
+| `recovery.inspect(worker)` | 9 | 12 | 7 | 10 | equal; band-gap cells |
+
+Across the 116 cells where both engines answered a success, the answered class
+is identical in all 116. The only cross-engine differences are 32 cells where
+one engine succeeded while the other answered one of its own below-minimum
+classes, and in every one of them Rust is the engine that succeeded — the Go
+writer and worker arms remain behind the Rust bands, which §13.3 records as
+expected; the obligation is class equality, not band parity.
+
+Hostile `/dev/null` (a FIFO planted at the name, and the name removed, inside
+`unshare -rm` with tmpfs over `/dev`, so no system file is touched): all four
+file arms succeed and both worker arms answer `io`/`read_only_failure` in both
+engines and both hostile states, with no control file left behind.
+
+Cost of the grid, for the resource budget: 1472 pressured processes at
+`--jobs 5`, about 4 minutes wall, all `nice`d.
+
+#### No-poller-descriptor evidence for the owned Go build
+
+Every Go cell except the host-name arm recorded
+`poller_ever = (0, 0)`, i.e. neither `anon_inode:[eventpoll]` nor
+`anon_inode:[eventfd]` ever appeared in the process's descriptor table —
+320 normal cells plus the hostile cells. The host-name arm alone shows
+`(0, 0)` when the readiness decision declined it and `(1, 1)` when the owner
+created the poller deliberately. This is the §4/§10 promise, measured on the
+delivered binary rather than asserted from source.
+
+#### Mutation proofs
+
+Each defense below was neutralized in the source, shown to turn a committed
+test or gate red, then restored and verified against its recorded SHA256.
+
+| Neutralization | Red proof | Exit |
+| --- | --- | --- |
+| `readWholeFile` → `os.ReadFile` | `TestLegacyOneShotReadsRegisterNoPoller` and the owner-routing pin; child died with `runtime: eventfd failed with 24` | 1 |
+| `worker/control_open_unix.go` → `os.Open` | `TestDesignOwnedOpensRouteThroughCallerOpen` | 1 |
+| `calleropen.Sleep` → `time.Sleep` | `TestTimerFreeWaitsRegisterNoPoller` | 1 |
+| poller decision forced ready | `TestPollerReadinessDecision` (decision boundary) | 1 |
+| resolver gate's table re-read removed | `TestPollerReadinessDecision/late-exhaustion` | 1 |
+| recorded decision ignored at the resolver | `TestPollerReadinessDecision/decision-sticky` | 1 |
+| deliberate poller creation removed | `TestPollerReadinessDecision/resolver-allowed` | 1 |
+| poller demand drifted 4 → 1 | `TestPollerReadinessDecision` literal-boundary guard | 1 |
+| `getrandom(2)` → `crypto/rand` | `TestEntropyDrawRegistersNoDescriptors` (delta −2) and `TestEntropyDrawSurvivesPollerShortTable` (fatal abort) | 1 |
+| child stdio returned to `os/exec` nil-stdio | worker-arm cells: `poller-pin-fail (1 eventpoll, 1 eventfd)` plus a wedge | grid non-zero |
+| null-descriptor identity check removed | hostile FIFO cell answered success instead of `io`/`read_only_failure` | grid non-zero |
+| Go pre-fork headroom check removed (demand 0) | `TestSpawnRefusesWhenTableCannotResourceIt` demand pin | 1 |
+| Go pre-fork headroom check over-refusing (demand 100) | same pin | 1 |
+| Go spawn failure left the control file | `TestSpawnRefusesWhenTableCannotResourceIt/start-failure` | 1 |
+| Rust child stdio returned to `Stdio::null()` | hostile FIFO cell lost `io`/`read_only_failure` | grid non-zero |
+| pressure pinned-class count 378 → 377 | `--self-test` | 1 |
+| pressure pinned-class SHA256 forged | `--self-test` | 1 |
+| a profile un-named from `MANDATORY_PRESSURE_PROFILES` | `--self-test` | 1 |
+| `SELF_TEST_CASES_TOTAL` 50 → 49 | `--self-test` (control-count obligation) | 1 |
+| `pressure_table_integrity_problems` forced empty | `--self-test`, five pressure controls reported `BAD` | 1 |
+| `verify_pressure_report` unwired from `assess_report` | `--self-test`, four pressure controls reported `BAD` | 1 |
+| the Go table read's `free < demand` re-read removed | `TestPollerReadinessDecision/late-exhaustion` | 1 |
+
+Two neutralizations are reported as **not independently observable** rather
+than passed: the Rust pre-fork headroom check (`SPAWN_DESCRIPTOR_DEMAND` 3 → 0)
+and the Rust descriptor-identity check on its own. In the first case the three
+owned null opens fail with `EMFILE` one step later and answer the same io class
+with the control file removed; in the second the character-device type check
+rejects a FIFO before the major/minor comparison is reached. Both terms are
+retained because §9 states them, and neither is claimed as a defense with
+independent evidence.
+
+#### Deviations from the design as written
+
+1. **§6 creation site.** The design places the readiness decision and the
+   poller's creation together in `main` before the first goroutine. The decision
+   is taken exactly there (`cli/rpc/rpc.go:24`); the *creation* is deferred to
+   `initPoller`, which only the host-name arm reaches, inside a window whose
+   headroom was just re-read. Creating the poller in `main` charges every arm two
+   permanent descriptors it never asked for, and §10's poller-free pin then fails
+   for eight of nine arms (measured). The decision, its single-per-process
+   scope, its non-per-request nature, its non-refusal character and the
+   `input_format`/`not_started` answer are all as designed; the creation moved.
+2. **Files named by the design but outside the assigned write set** were edited
+   because §5.2 and §7 name those exact sites: `cli/handlers/live.go`,
+   `cli/handlers/output.go`, `cli/fileio/export_writer.go`,
+   `worker/control_create_unix.go`, `worker/control_open_unix.go`,
+   `worker/control.go`, plus new `worker/exhaustion_{unix,other}.go`. The
+   worker-creation policy failures previously folded into the `conflict` class
+   now map to the io class, which is what removed the §7-banned fold.
+3. **Go spawn demand is 4, not 3.** §9.1 states the composition (the parent's
+   own stdio descriptor plus what the spawn must still claim) rather than a
+   number. Measured with the parent's table clamped to an exact window: at 3 free
+   the spawn is admitted and then fails inside `os/exec`'s `Start()` with
+   `EMFILE`; at 4 it completes, because Go's `forkExec` takes a socketpair and a
+   duplicate. The Rust peer needs nothing beyond its three owned nulls — its
+   `posix_spawn` path allocates the error pipe in the child — so Rust stays at 3.
+   Neither number moves any measured band, because the worker arms are refused
+   for other reasons long before three free descriptors.
+4. **A spawn that fails after the control page exists now removes it.** Found by
+   the committed headroom test, not by the grid: `client.go` returned the io class
+   from the `Start()` failure path without `RemovePath()`. §9.4 requires removal;
+   it is now done on that path too.
+5. **§13.1's loader floor refined by measurement.** The dynamically linked Rust
+   build needs one free descriptor for the loader (exit 127 with `error while
+   loading shared libraries` at zero free, success at one free, with and without
+   holds), not three; the statically linked Go build starts with no free
+   descriptor at all. The harness precludes those cells as `host-unsupported`
+   rather than scoring them, because the environment is unbuildable there.
+6. **Host-state classes not enumerated in §13.** Cells below the warm-up floor
+   (five free plus holds) in the `after` runtime state are `host-unsupported`: the
+   warm-up read itself cannot complete there, so no behaviour is observable.
+7. **Resolver-arm law.** §6's `input_format`/`not_started` is required where the
+   publish reaches the resolver. Below the publish family's own minimum the
+   publish classes (`io`/`not_started`, `io`/`not_published`) are pinned instead,
+   and the host-name arm is exempt from the poller pair, since entering `net` is
+   the point of that arm.
+8. **`direct.replace` one band under the Go floor** answers
+   `transaction_aborted`/`not_committed` with its cleanup facts. No reference
+   measurement exists at that band, so it is pinned as an allowed extra Go class
+   rather than presented as parity.
+9. **Worker arms below the Rust launch floor** may answer the handler's own
+   `io`/`not_started`, because §13.1 states there is no reference class to copy
+   once the process cannot start at all.
+10. **`maintenance.remove` stays blocked** (58 cells): it has no
+    public-method producer of a listable artifact, per §13.4. Blocked cells are
+    reported as blocked and never as coverage. Closing them needs a producer and
+    belongs to that follow-up's owner.
+11. **`SELF_TEST_CASES_TOTAL` moved 33 → 54**: the 21 added controls are the §14
+    anchors (count, digest, both-directional profile obligation, arm obligation,
+    vacuous-as-coverage, blocked-as-coverage, poller leak, wedge-as-answer,
+    missing cell, band-parity claim, hidden divergence, lying rollup, forged
+    digest, hostile-cell success, hostile single-engine success, hostile poller
+    leak, blocked-arm coverage claim). The peer's anchors are unchanged: `MANDATORY_ARMS` 23,
+    `MANDATORY_PATH_KINDS` 21, 36 pinned refusals with SHA256
+    `f1734d17…`, and `--sha256-ledger`.
+12. **The `--pressure` entry point had never been executed.** Its first run
+    raised `NameError` in `run_pressure_sweep` (a class body binding the same
+    name it read from the enclosing scope), which means the axis had been
+    exercised only through `--self-test` and the harness CLI, never through the
+    gate that publishes it. Four verifier terms were missing and are now
+    committed with controls: the hostile-null-device class equality (the law now
+    lives once, in `PRESSURE_HOSTILE_CLASSES`, and the harness grades the same
+    object), the poller assertion for hostile cells, the blocked-arm coverage
+    term, and the host-state classification — a launcher that could not build the
+    environment was being read as an engine wedge because a cell with no answer
+    was tested for host state only after the no-answer branch. The cross-engine
+    divergence term also rejected cells standing below *both* engines' minima,
+    where the committed table pins each engine's own exhaustion class and no
+    equality is owed. The sweep's own duplicate of the launcher's host-state
+    preclusion was removed once measurement showed `run_cell` already owns it.
+13. **No design item was left unimplemented.** The two neutralizations reported
+    above as not independently observable (the Rust pre-fork headroom check and
+    the Rust character-device check in isolation) are retained because §9 states
+    them, and are labelled as unevidenced rather than as defenses.
+
+#### Committed-gate evidence
+
+* `python3 v4/cli/check_refusal_class_parity.py --self-test` → PASSED, 54 of 54
+  controls.
+* Full live gate, both engines, ledger-bound, with the routine pressure axis:
+  483 of 483 cells in ~34 s, 0 divergences, 0 hangs, 0 flaky, 36/36 pinned
+  refusals, and 108 of 108 pressure cells with 0 hangs and the 9 unbuildable
+  Rust cells reported as host state. Verdict PASS with
+  `--sha256-ledger /tmp/w1925-D/BINARIES.sha256`.
+* `go test -count=1 ./...` → exit 0 (25 packages). `cargo test --all-features`
+  → exit 0 (54 suites, 966 tests).
+* Pressure grid: 736 cells, exit 0, `failed = 0`.
+
+#### Residual risks
+
+- `--pressure full` (9 arms × 42 profiles) has not been run as a gate; only the
+  routine subset is in this record's evidence, and the full axis belongs to the
+  milestone gate.
+- The §11 sidecar double-descriptor owner and the worker child's own startup
+  demand are outside this record: the headroom numbers here are for the parent's
+  side of the spawn.
+- The readiness number `pollerDemandFree = 4` is measured on Linux. The kqueue
+  platforms need one descriptor and the Windows completion port none, so the
+  constant is conservative there but unmeasured; the open item is
+  section 13.5 of the descriptor budget design above.
+- The Go spawn demand of 4 assumes `os/exec`'s current `forkExec` handshake; the
+  committed headroom test pins the number so a change is a test failure rather
+  than a silent regression.
+- `host-unsupported` and `blocked` verdicts are reported, not scored; a future
+  reader must not aggregate them as coverage, and the gate rejects a report that
+  does.
+
+## Wave-19.25 repair and qualification (2026-09-15)
+
+### Review round anchor
+
+The eight-role adversarial round reviewed exactly
+`22da3778444a9b8cb469fbf8a62ac9f076bb1189` — the wave-19.24 integration
+commit, equal to `origin/master`, with a clean working tree verified by
+every role at review start.  All eight roles returned FAIL: 16 P1 and
+32 P2 numbered findings.  By role: tester 1 P1 + 5 P2 (plus 2 numbered
+P3); operations 3 P1 + 4 P2; parity 3 P1 + 2 P2; portability 2 P1 +
+3 P2; security 3 P1 + 3 P2; performance 1 P1 + 5 P2; glm 2 P1 + 4 P2;
+closure 1 P1 + 6 P2.  P3 items are numbered only by the tester role;
+every other role records its non-blocking observations in an unnumbered
+notes section.  Each report carries the reviewed-revision identity in
+its header, and the roles label this round their wave-19.24 re-anchor
+round; the preceding rounds reviewed
+`91ae2a429380483010bc5e9ce46ac2dc776ec17d` and
+`cfbee7887fb71de67df35ea913d6f7ae70c5c011`.  Per-role reports live in
+the review sandboxes (`.local/<role>/report.md`, gitignored).
+
+### Rulings recorded for this wave (user decisions)
+
+1. Ruling 1B — rebuild the descriptor handling instead of retuning the
+   per-request headroom probe introduced by the previous wave.  A
+   blanket startup refusal is rejected: the process must not refuse to
+   start because descriptors are scarce, and operations that release
+   resources must stay usable under pressure.  A reservation is
+   permitted only where it is proven necessary, with its owner,
+   lifetime, sizing, release point, initialization ordering and platform
+   documented.  Every operation keeps its real error class — no generic
+   `io` or `not_started` fold is accepted as a shortcut.  Testing must
+   cover both low limits and already-occupied descriptor tables, before
+   and after runtime initialization, with valid operations included so a
+   refusal of work is visible and not just a refusal of garbage.
+   Descriptor pressure becomes an arm of the refusal-class parity gate,
+   with a consumable result table.  Any configuration that cannot meet
+   the contract returns measured evidence — never a silent minimum and
+   never a declared parity.  The design that fixes this contract is
+   recorded above ("Wave-19.25 descriptor-budget design") before the
+   implementation, and the implementation record follows it.
+2. Ruling 2A — commit the stat→open swap-race tests together with their
+   complete reproducible runner.  Positive controls are required and the
+   helper's execution must be verified, so that "replacement occurred"
+   is reported separately from "the timing window was exercised".
+   Reports are written only into an explicitly supplied temporary
+   directory; no harness may default-write committed evidence.
+3. Unchanged from the previous round: no requirement waiver and no
+   closure approval were given.  The <=1.3x performance gate remains
+   FAILED, not waived (pending SOW-0030 owns the engine residuals);
+   SOW-0017 stays paused; milestone 5 is unstarted.
+
+### Repairs, per finding cluster, with verification
+
+A. Go caller-path witness port (operations 2; portability 1 and 2;
+tester 1).  The Rust caller-open owner already judged its own callers
+from the opened descriptor; the Go peer had no such instrument, so a Go
+caller could bypass the owner and every committed suite stayed green.
+The port is committed: the witness
+(`v4/go/internal/calleropen/witness.go`, `WatchOpensForTest`, armed only
+by a test and costing one nil-pointer check in production), the poller
+invariant suite (`v4/go/internal/calleropen/netpoll_unix_test.go`), and
+the two caller-wiring pins
+(`v4/go/internal/cli/fileio/input_caller_open_witness_test.go::TestTextInputSourceOpensEveryPathThroughCallerOpen`
+and
+`v4/go/internal/cli/handlers/caller_open_witness_test.go::TestProductionCallerPathsOpenThroughCallerOpen`),
+which mirror the Rust `judge_witness` in
+`v4/rust/iprange-cli/src/io/caller_open.rs`.  The four caller sites now
+route through the owner's platform wrappers —
+`v4/go/internal/cli/fileio/input.go:853` and `:924` (`openInputNoBlock`),
+`v4/go/internal/cli/handlers/live.go:817` (`openDirectCsvNoBlock`),
+`v4/go/internal/cli/handlers/lifecycle_facts.go:124`
+(`openMetadataSourceNoBlock`) — each of which is a `calleropen.Open`
+with `O_NONBLOCK` plus a post-open regular-file judgment on the
+descriptor it just opened (`input_open_unix.go:21`,
+`csv_open_unix.go:21`, `metadata_open_unix.go:22`).  Reverting any of
+the four to a plain `os.Open` turns the committed witness tests red;
+that is the detecting instrument the round demanded.
+
+B. Legacy `::/0` cardinality saturation (parity 1).  Go reported zero
+unique addresses for the whole IPv6 universe where the C oracle and Rust
+report the saturated maximum.  The owner is
+`v4/go/internal/cli/legacy/ipset.go`: `Range.Size` computes the family
+size with a saturating subtract and add (`:19-43`) and `addSat`
+(`:45-74`) accumulates into the 128-bit total with saturation at
+`{Hi: ^0, Lo: ^0}`, used by the accumulate, optimize and merge paths
+(`:100`, `:155`, `:198`).  The correct cardinality is 2^128-1 =
+`340282366920938463463374607431768211455`, printed by `-C` as
+`1,340282366920938463463374607431768211455` where the first column is
+the entry count.  The IPv4 family keeps a wider counter and must stay
+exact: `0.0.0.0/0` prints `1,4294967296` (2^32) because it counts into a
+`uint64_t` (`src/ipset.h:90`), while the IPv6 family saturates in
+`src/ipset6.h:67-82` and Rust matches it in
+`v4/rust/iprange-cli/src/legacy/range.rs:90-95`.  Verification: the
+committed `tests.d/103-ipv6-fullrange-cardinality`, whose 13 pinned
+cases are the full universe through four input shapes (`::/0`, a
+duplicated `::/0`, the explicit 128-bit range, and that range with
+`::/0` again), the two halves in both orders plus a duplicated pass,
+two exact-count cases that a smaller cap would fail, one IPv6 case
+beside an IPv4-mapped address, the IPv4 exactness pair, and the
+IPv6-entry-dropped-in-IPv4-mode guard.  Each case is compared against
+its pinned value and against the C reference's stdout, stderr and exit
+code, and against `v4/go/internal/cli/legacy/ipset_size_test.go` on the
+Go side.
+
+C. Snapshot destination ordering across filesystems (glm 1).  A
+snapshot destination whose parent directory sits on a filesystem that
+cannot carry the live durability contract answered the namespace-conflict
+class when a directory, FIFO or symlink already stood at the destination
+name, because the node was classified before the parent was bound.  The
+destination parent is now bound through the engine's one authoritative
+directory open (`live.OpenDirectory`, mirroring the Rust
+`Directory::open`: `O_DIRECTORY|O_NOFOLLOW`, the directory check, the
+local-filesystem requirement, `name_max`) before the destination node is
+classified — `v4/go/internal/snapshot/snapshot_unix.go:64-95`
+(the bind call at `:82`, the unsupported kind folded to
+`format.CodeDurabilityUnsupported` at `:90-91`); every
+other bind failure keeps the plain `io` class.  Ordering is a contract
+term, not a preference: `.agents/sow/specs/binary-format-v4.md:3836-3838`
+requires a platform or filesystem without exchange to return
+`DurabilityUnsupported` before output construction and never downgrade.
+Verification: the committed destination-class pins
+(`v4/go/internal/snapshot/destination_nonregular_class_test.go`, with
+the unix sibling carrying the mode-dependent cases) and the parity gate's
+post-visibility durability cells.
+
+D. Named-feed read-side outcome parity (parity 3).  For a refusal that
+never started a durable attempt, Go answered `not_started` where Rust
+answered `read_only_failure`; for a value-kind or value-tag refusal that
+does follow a read, the fold went the other way.  Both directions now
+take the class from the read that actually happened —
+`v4/go/internal/cli/handlers/feeds.go:450` drains through the shared
+read error mapping so a read-side refusal carries `read_only_failure`,
+with the pre-attempt cases documented at `:307` and `:581` as the
+`not_started` family.  Verification: the two corpus cases
+`v4/cli/cases/feeds.direct_value_kind_read_only.json` and
+`v4/cli/cases/feeds.import_value_tag_read_only.json`, authored from the
+Rust answers.
+
+E. `maintenance.list` → `maintenance.remove` round-trip (operations 3).
+A crash-orphaned publication temporary or an evidence-less reservation
+was listed but not removable: the emitter wrote `tuple`/`digest` and
+`evidence` only when present, while the removal decoder required them
+exactly, so an unchanged list row was refused with a missing-member
+error and the residue stayed.  The rule is now stated once and applied
+to every kind, in both engines
+(`v4/go/internal/cli/handlers/maintenance.go:1193-1223`
+`maintenanceEntryMembers`, Rust `maintenance_entry_members` in
+`v4/rust/iprange-cli/src/rpc/handlers/maintenance.rs`): a required
+member is one the emitter writes for every row of that kind; an
+optional member is one the emitter may omit and is then validated
+strictly when present; `tuple` and `digest` are both-or-neither; and the
+three identification members of a `windows_housekeeping` row
+(identity, attempt id, ordinal) are required because a row without them
+is not a removable entry — `.agents/sow/specs/iprange-jsonrpc-v1.md:1016-1019`
+("Every removable entry contains its opaque authenticated removal
+identity") and `:1024-1025` (no arbitrary path-delete form, no entry
+synthesized from only a basename).  Verification: the four committed
+round-trip cases
+`v4/cli/cases/maintenance.roundtrip.scratch.json`,
+`.reservation.json`, `.publication_temp.json`,
+`.windows_housekeeping.json`, plus the both-engines unit pins in
+`maintenance_test.go` and the Rust `maintenance.rs` tests.
+
+F. Budget coverage for the two uncovered owners (security 1, 2 and 4).
+`params.negative.budget_removals` now exercises the removals-output
+owner through `iprange.v1.retention.first_seen.refresh`, because
+`iprange.v1.current.publish` has no `removals_output` member at schema
+level (`v4/cli/schema/methods.py:229-243` registers its seven required
+members and rejects anything else), so no publish request can ever reach
+that validator.  `params.negative.budget_delivery` covers the
+`reader.open`/`reader.metadata` delivery owner whose positive-`u32`
+enforcement previously had no detecting test in either engine or the
+corpus.  `params.negative.budget_recovery` and
+`params.negative.budget_validation` close the scratch-pairing
+asymmetry: each now asserts the "fully disabled or fully enabled"
+params refusal, raising its rejections from 5 to 8 per case.  That is
+why the kind gate's committed expectations for those two cases move to 8
+and its run against the pre-rotation evidence is red until the battery
+regenerates (see Validation).  Verification: the four cases'
+`expect_params_rejected` steps, `positive_budget_test.go`, and the
+corpus matrices below.
+
+G. Host-neutral Rust build identity (portability 4).  The
+`IPRANGE_V4_BUILD_ID` digest hashed the build host's own path strings,
+so one source state produced two identities and the documented worker
+handshake attestation was host-dependent.  `v4/rust/iprange-livedb/build.rs`
+now hashes a logical name — the path split on both separators, empty and
+`.` components dropped, joined with `/` (`logical_name`, `:33`) — and a
+startup self-check (`assert_separator_invariance`, `:43`) proves the
+POSIX and Windows spellings of one path hash identically before any
+build proceeds.  The committed record
+`v4/cli/evidence/build-ids.json` (schema `iprange-cli-build-ids-v1`)
+holds one expected digest `66142ede63fe68a6efde0ccb60a3448bf50c196f85a33a372e3681ac35ceb105`
+for the four build hosts `darwin`, `freebsd`, `linux` and `windows`, over
+`Cargo.toml` plus 357 source files, and records that the value is present
+verbatim in both built executables
+(`verified_against_built_products`), together with what the pre-normalizer
+algorithm produced from the same state (equal on POSIX, divergent for
+Windows) so the defect remains demonstrable.  Regenerated by
+`command_sanitize.py --emit-build-ids`; no artifact is hand-edited.
+
+H. Windows pinned-refusal accounting fails closed (portability 5).  A
+native Windows pin whose environment cannot be built previously could be
+skipped silently while the tally still reported full coverage.  The
+owner now requires an explicit unsupported record:
+`v4/rust/iprange-cli/src/io/caller_open.rs:1163-1184`
+(`record_unsupported`), demands the `IPRANGE_V4_WIN_PIN_TALLY=<file>`
+environment and writes an `UNSCORED <pin>: <reason>` line, and a pin
+that cannot run with no tally is an error rather than a pass.  The
+source-shape guard at `:1311-1411` re-reads the file to fail any attempt
+to mute the requirement, and each sanctioned exit is attacked by a
+mutation control.  On Linux the tally is not reachable, so the
+guard's own self-test reports 35 executed controls with exactly 1
+native-only control unreachable on this host.
+
+I. Committed swap-race battery (closure 1; operations 6; ruling 2A).
+`v4/cli/races/` replaces the reviewer scratch probe that reported
+`attempts=30 hangs=0` while its swapper had never started and its
+positive control answered an error.  It is five arms
+(`arms.py:39` `ARM_NAMES = ("meta","csv","feed","atlist","reader")`)
+against two engines — ten records — with the two claims kept separate:
+`activity_observed` (the replacement actually happened) and
+`window_exercised` (it happened inside the stat→open window), reported
+by `runner.py` as `RACECHECK verdict=… arms=N activity_observed=N
+window_exercised=N detector_wedges=N failures=N`.  The runner refuses to
+score a product arm unless its own detector control wedges
+(`runner.py:88-92`, `DETECTOR_MIN_WEDGES = 1` with at least two observed
+hangs), so "zero hangs" can never again be a green verdict by itself,
+and a missing helper is decided before any attempt (`runner.py:576`).
+The helper is not
+trusted to have run: `swapper.py` samples a phase marker on both sides
+of every rename (`swapper.py:121` `in_flight`, `:178-190`) so an attempt
+where no replacement landed is distinguishable from one where it did,
+and the runner's preflight refuses to attempt anything when a helper is
+absent (`runner.py:576-586`).  `--json-report` is required and reports
+go only to an explicitly supplied path; nothing defaults into the
+repository.  Verification: `runner.py --self-test` → rc 0, "13
+mutation controls plus the clean-arm, clean-detector and report-location
+controls all behaved"; a committed run at this tree gave 10 arms, 0
+failures, detector `hangs=2` with 1 confirmed wedge.
+
+J. Corpus runner fails closed (operations 7).  `v4/cli/run.py` can no
+longer report success over a dead engine or a lost matrix.  An engine
+that dies is recorded in `engine_deaths` (`:2627`, appended at `:2736`,
+`:2752`, `:2862`) and a matrix that cannot be driven records a
+`matrix_verdicts` entry (`:2636`, `record_matrix_verdict` at `:2666`);
+either forces rc 1 even when every surviving case row passed
+(`:2937-2940`).  A case row that no engine actually executed is an
+invented row and fails, a report or work path inside the checkout is
+refused at argument parsing (`refuse_checkout_path`, `:2424`, through
+`parser.error` → rc 2), and every binary path must be an absolute
+executable file.  Verification: the negative invocations in Validation
+(a `/usr/bin/false` producer and a `/usr/bin/false` consumer each yield
+rc 1 with all 16 probes recorded as failed) and the four-matrix runs below.
+
+K. Kind gate consumes the whole report set (tester 2, 3, 4 and 5;
+performance 4 and 5; glm 4).  `v4/cli/check_kind_coverage.py` now reads
+the four matrices, the crash report, the crash-negative report, the
+FIFO-surface report, the throughput attestation, the Go coverage report,
+the refusal-class parity report and the Windows housekeeping report —
+exposed as `--matrix`, `--crash`, `--crash-negative`, `--fifo-surface`,
+`--throughput`, `--coverage-go`, `--refusal-class-parity` and
+`--windows-housekeeping`, each repeatable (`:4814-4860`).  Every
+consumed field is re-derived from the captured bytes rather than
+trusted: the parity report's grid, pins and derived rollups; the
+throughput median and thread census; the FIFO arm inventory and
+per-arm expectations; the crash report's contract fields; the coverage
+report's three separable figures and its separation claim; the native
+Windows suite tallies.  A report whose `git_head` is a placeholder, or
+that disagrees with the binary digests in the staged ledger, is
+rejected.  `--self-test` carries `min_controls = 106` (`:5828`) as an
+exact-count pin so a deleted control is a failure, and
+`v4/cli/forgery_battery.py` runs `EXPECTED_CLASSES = 18` (`:206`)
+distinct forgery classes, each credited separately.  The uniform-
+`git_head` rewrite that five roles demonstrated is defeated by the
+committed `battery-manifest.json`: `build_battery_manifest` binds each
+report's content digest, its role, its own `git_head`, and the binary
+ledger as digest → recorded-name entries (`:2951-2966`), so relabelling
+every report to one revision without regenerating its content fails the
+gate.
+
+L. Shared report-writer discipline (security 5; closure 5).  All
+twelve committed-evidence writers register in one set-wide registry
+(`v4/cli/command_sanitize.py:1012` `COMMITTED_REPORT_WRITERS`) and reach
+the evidence directory only through `write_committed_report` (`:1297`),
+which owns the provenance members (`command`, `checkout_root`,
+`git_head`) and the derived `privacy` block and refuses the write when
+any screened input or any finished string value names an operator
+profile path.  Nine writers are owned by this gate
+(`crash_harness.py`, `resource_harness.py`, `throughput_harness.py`,
+`coverage_harness.py`, `check_golden.py`, `check_fifo_surface.py`,
+`sensitivity_gate.py`, `windows_guard_harness.py`,
+`windows_housekeeping_harness.py`) and three by the lead (`run.py`,
+`check_refusal_class_parity.py`, `command_sanitize.py`).  The audit is
+not bypassable per harness: every harness self-test executes the shared
+31-control set and refuses to pass on a different count
+("`shared command_sanitize controls executed=31 expected=31`"), and each
+harness additionally pins its own control count — FIFO surface
+18 cases + 5 structural over 17 arms × 2 engines; golden 7 walk + 17
+reject + 1 structural; coverage 17; sensitivity 14 modes + 2 inversions
++ 6 structural; throughput 12 cases + 4 structural; resource 25 control
+groups; crash 26 controls across eight families; Windows guard 35 with 1
+native-only control; `command_sanitize` 31.  Two further verifiers close
+the loop from the outside: `v4/cli/check_producer_privacy.py` attacks the
+three lead-owned writers with 32 committed controls (a writer that
+screens nothing, a writer that serializes its own JSON, and an artifact
+with no privacy block are each named), and
+`windows_housekeeping_harness.py --verify-report` (`:2508`, entry point
+`:2785`) re-checks one committed report instead of requiring a re-run,
+with 9 controls of its own.
+
+### Descriptor-budget implementation, in summary
+
+The contract is the design section above and its implementation record;
+this is the qualification summary a reader of this wave needs.  The
+runtime network poller's two descriptors (`epoll_create1` + `eventfd`)
+are allocated once, by one owner, only on the arm that needs the
+resolver, after a readiness decision taken once per process from a
+descriptor-table read — not a per-request probe of a filesystem node the
+process does not control, and not a startup refusal.  Waits use
+`clock_nanosleep`, entropy uses `getrandom(2)`, worker spawns hand the
+child caller-owned descriptors, and the spawn admission decision reads
+the table before `forkExec`: measured Go demand is 4 free descriptors
+(`v4/go/internal/worker/spawn_unix.go:25`), Rust 3 plus its three owned
+null opens
+(`v4/rust/iprange-livedb/src/worker/client.rs:73`).  Error classes are
+the operation's own; the worker-creation policy failures that previously
+folded into `conflict` answer the `io` class, which is the Rust-measured
+class.
+
+Measured grid (9 arms × 10 bands × 2 table states × 2 runtime states ×
+both engines = 736 cells, ≥2 runs per cell, one process per cell, plus
+16 hostile-null-device cells): **exit 0, 480 pass, 198 host-unsupported,
+58 blocked, 0 wrong-class, 0 wedges, 0 cross-engine class
+disagreements, 0 poller-pin failures**; source
+`/tmp/w1925-D/grid-final-auth.json` with `grid-final-auth.log`, cost
+1,472 pressured processes, about 4 minutes wall at `--jobs 5`, all
+`nice`d.  Every Go arm except the resolver arm recorded
+`poller_ever = (0, 0)` — no `anon_inode:[eventpoll]` and no
+`anon_inode:[eventfd]` in the process's own descriptor table — which is
+the promise measured on the delivered binary.  Twenty-two neutralizations
+were mutation-proven red and restored, recorded item by item in the
+implementation record.  The parity gate carries the axis: 23 arms × 21
+path kinds = 483 cells plus 42 mandatory pressure profiles
+(`PRESSURE_ARMS` 9, `ROUTINE_PRESSURE_PROFILES` 12) and a committed
+pinned pressure-class table of `PINNED_PRESSURE_CLASS_COUNT = 378` with
+SHA-256 `314d8be5618e9775d9dd386ad6d7e521ff27ee9ba63d7c9501746de941ad1456`.
+
+### Configurations that cannot meet the contract (measured register)
+
+No entry below is reported as a silent minimum or as a parity claim.
+
+- Rust band 3 is unmeasurable on this host: the dynamically linked build
+  exits 127 (`error while loading shared libraries`) before `main`, so
+  the parity comparison begins at band 4 and the harness precludes band
+  3 as host state rather than scoring it.
+- `hold = 3` below band 6 cannot build the required environment in the
+  after-init runtime state: the launcher exits 92 and the cells are
+  reported `host-unsupported`, not passed.
+- The Go writer and worker arms sit behind the Rust bands (reader-open
+  live 7 vs 6, direct.replace 8 vs 6, current.publish 8 vs 7, validate
+  10 vs 8, recovery.inspect 9 vs 7 on a fresh table).  The answered
+  class is identical in all 116 jointly-successful cells; the bands are
+  not equal and no band parity is claimed.  Cause of the gap is
+  identified in the design record (section 11 of the descriptor
+  budget design above) rather than guessed: the Go live path holds the
+  reader-coordination sidecar on two descriptor numbers where the
+  reference holds one (sidecar name from
+  `v4/go/internal/format/name.go:16`, the reader-side opens in
+  `v4/go/internal/reader/reader.go:127-149`), and the worker arms' rest
+  is the child's own startup demand on top of the parent's pre-fork
+  check.  Closing the redundant sidecar hold is carried as open
+  contract finding 3 below, with its completion condition.
+- The 58 `maintenance.remove` pressure cells are blocked, not covered:
+  no public method produces a listable artifact, so the arm cannot be
+  constructed through the supported surface.  Blocked cells are
+  reported as blocked and the gate rejects any report that aggregates
+  them as coverage.
+- Non-Linux poller behaviour is unmeasured: the readiness number
+  `pollerDemandFree = 4` (`v4/go/internal/calleropen/poller_readiness.go:37`)
+  is a Linux measurement; kqueue platforms need one descriptor and a
+  Windows completion port none, so the constant is conservative there
+  and unverified.  No macOS, FreeBSD or Windows host was used in this
+  wave, so the kqueue and IOCP paths are research-only here.
+- Two Rust defenses are labelled as not independently observable rather
+  than passed: the pre-fork headroom check (`SPAWN_DESCRIPTOR_DEMAND`)
+  and the descriptor-identity check in isolation, because in each case
+  a later check answers the same class.  Both terms are retained and
+  their joint removal is mutation-proven.
+
+### Open contract findings, carried to named owners
+
+These are contract questions the round surfaced and this wave did not
+resolve; each has an owner and none is parked as a narrative note.
+
+1. A `windows_housekeeping` row that `maintenance.list` emits without
+   its identity, attempt id and ordinal is listed but not removable
+   through the public API: `maintenance.remove` cannot synthesize an
+   identity and the entry decoder refuses such a row.  Resolution needs
+   either a specification amendment making the emitter always write the
+   triple (which makes the row removable and validates to the same
+   depth) or an SDK-side authorized removal addressed by file identity
+   rather than basename.  Decision needed from the user; the owner is
+   SOW-0028 (this SOW) and the item is listed in Followup mapping.
+2. Windows housekeeping `inert_payload` entry identity versus envelope
+   identity: the two are compared at different layers
+   (`v4/cli/windows_guard_harness.py` builds the pair,
+   `windows_housekeeping_harness.py:1099-1160` validates it) and the
+   specification does not say which one a removal entry must carry when
+   they differ.  Needs the same spec decision as item 1; carried here.
+3. The Go reader-coordination sidecar holds two descriptors where the
+   Rust reference holds one, which is why the Go writer and worker arms
+   reach success one or two bands above Rust.  Which of the two holds is
+   redundant is unestablished; section 11 of the descriptor budget
+   design above records the sampled table and names the reader-side
+   opens (`v4/go/internal/reader/reader.go:127-149`) as where the
+   decision belongs.  Completion condition: a re-measured grid in which
+   the Go `direct.replace` minimum moves from band 8 to the reference's
+   6, or a documented owner, lifetime, sizing, release point, ordering
+   and platform for the second hold as ruling 1B requires.
+4. Diagnostic-text divergence between engines for three cases where the
+   machine contract agrees: the `result_budget` wording, a
+   `validation_budget.*` prefix emitted for a `recovery_budget` failure
+   (`validateScratchBudget`,
+   `v4/go/internal/cli/handlers/recovery.go:157-191`, whose recovery
+   branch keeps the validation prefix on every member except
+   `max_output_pages`), and the refusal wording for a delivery budget
+   member supplied as the JSON number `0` (the Go messages at
+   `v4/go/internal/cli/handlers/reader.go:172` and `:478`).  The corpus
+   pins a shared substring for each (for example
+   `params.negative.budget_delivery.json` asserts
+   `message_contains: delivery.max_open_files` only), so engine wording
+   may differ without breaking conformance and a text change cannot
+   silently break a case; aligning the texts is an engine task owned by
+   pending SOW-0030.
+
+### Battery and identities
+
+The Linux battery for this wave is `/tmp/qualsvc/battery-w1925.sh`,
+derived from `battery-w1924.sh`: it builds both engines from the merged
+tree with the recorded canonical recipes, restages the qualification
+binaries, regenerates every evidence artifact, grades each step against
+the exit status it must produce, and emits the battery manifest from the
+fresh reports (`--emit-manifest`) before consuming it
+(`--battery-manifest`, `--sha256-ledger`).  Its console output is teed
+to `/tmp/qualsvc/battery-w1925.log`.
+
+Its identity is the content a run executes, and that digest is measured
+at run time rather than asserted here.  The battery is
+`/tmp/qualsvc/battery-w1925.sh`, SHA-256
+`bdd7db84288e6f05027bdf818c4e472d4f9f4447f5f1894e27fbef5e58a592c6`
+(47,125 bytes, measured on disk on 2026-09-15 as this section was
+written).  The identity-at-run-time contract is that the launcher of a
+battery run, not the script, opens it: its first action writes
+`sha256sum /tmp/qualsvc/battery-w1925.sh` into the console log the run
+tees to `/tmp/qualsvc/battery-w1925.log`, so the digest a run attests is
+the digest of the bytes that were actually executed and the value above
+is only the expected one it must equal.  The battery file is not edited
+to self-report, because the attestation belongs to whoever starts the
+run.  Three other digests were recorded for this path on 2026-09-15
+while the script was being revised
+(`91b18e1a069d3a2b51cb8660ea3fbda37a686de2e256ed3904b97c8127d0df9d`,
+`d746d23602834b0860373f403569a05c13cf901aebbb0a56f1a82be46ef18af3` and
+`9f1ded085c7b8b0b33d6c96c5885faa9ddf68ada88f54724f46df7f59762bf2d`);
+none of them matches the file the digest above names, which is what the
+run-time digest settles rather than a transcription in this record.  The
+run also binds what it measured: the digests of the binaries it builds,
+the `git_head` stamped in every report it regenerates, and the
+`v4/cli/evidence/battery-manifest.json` it emits from those reports must
+all describe one revision.
+
+No battery step has been executed against this working tree at the time
+of writing.  The qualification record below is therefore the set of
+committed gates run individually against the merged tree, and the
+battery run stands as the open validation item with its completion
+condition.
+
+### Validation gate
+
+Executed against the merged working tree at HEAD
+`22da3778444a9b8cb469fbf8a62ac9f076bb1189`, everything under `nice`:
+
+- Go suite: `nice go -C v4/go test -count=1 ./...` → rc 0, 25 packages
+  ok, 0 failures.
+- Rust suite: `nice cargo test --manifest-path v4/rust/Cargo.toml
+  --all-features` → rc 0, 54 `test result: ok` summaries, 968 tests
+  passed, 0 failed.  The implementation record above states 966 for the
+  same command; two tests were added after it was written, and this run
+  is the current measurement of the merged tree.
+- Corpus: 71 case files × 4 matrices.  Single-engine `rust` 71/71 and
+  `go` 71/71; the two mixed directions execute 40 cases and skip 31
+  each with the recorded capability reasons.  All four rc 0.
+- Parity gate `--self-test`: rc 0, printing "PASSED: 56 cases
+  (committed total 56), 23 arms x 21 path kinds = 483 cells x 2
+  engines, 36 pins".  `SELF_TEST_CASES_TOTAL = 56`; the implementation
+  record above recorded 54 for the same invocation, and the control set
+  grew after that record was written.
+- Parity gate live: rc 0 — 483/483 cells, 0 divergences, 0 hangs, 0
+  flaky, 36/36 pins, verdict PASS with the binary ledger bound; with
+  `--pressure routine` the axis executed 108/108 cells with 0 hangs and
+  9 cells reported as host state for the unbuildable Rust band-3 cells.
+  Those 108 cells include 12 cells where the engines did not both
+  succeed; every one of them is a band-gap cell in which the engine that
+  answered kept its own pinned below-minimum class, which is the allowed
+  state and is reported rather than scored as agreement.
+- Kind gate, against the committed evidence: **expected red**, rc 1, 66
+  findings, because the committed artifacts predate this tree — the
+  eight case files this wave added are absent from their inventories,
+  they count 63 corpus files against the 71 now present, their parity
+  report records a
+  418-cell grid with 29 pins against the derived 483 and 36, their
+  `params.negative.budget_recovery` and `params.negative.budget_validation`
+  rows record 5 params rejections against the 8 the committed case
+  definitions now declare, and their battery manifest predates the
+  binary-ledger binding.  `check_kind_coverage.py --self-test` is red for
+  the same reason (rc 1): one of its controls requires the committed
+  evidence to pass this gate.  Its control set is pinned at
+  `min_controls = 106`, so no control can be dropped while the gate is
+  being repaired.  This is the pre-rotation condition, not a product
+  failure.
+- Forgery battery: rc 1 with `VERDICT: HARNESS OK, EVIDENCE RED` — all
+  18 `EXPECTED_CLASSES` forgeries were rejected, each on a reason the
+  unmutated baseline does not report, and the battery names the stale
+  committed evidence as the reason its own run is not a pass.
+- Rotation contract: closing the kind gate requires
+  `/tmp/qualsvc/battery-w1925.sh` (identity in "Battery and identities"
+  above) to regenerate every consumed report from one tree and emit
+  `v4/cli/evidence/battery-manifest.json`, which binds every report's
+  content digest to one revision and to the binary ledger; the gate then
+  consumes that manifest with `--battery-manifest`.  Closure of this item
+  is a battery-produced artifact set whose reports and manifest agree,
+  with the kind gate and its `--self-test` both at rc 0.
+- Race battery: rc 0, verdict PASS, 10 arm-records (5 arms × 2
+  engines), 0 failures, detector `hangs=2` with 1 confirmed wedge;
+  `--self-test` rc 0 with 13 mutation controls.
+- Crash battery: 16/16 probes in both mixed directions (Rust
+  producer against the Go consumer, and the reverse), each rc 0; both
+  `/usr/bin/false` negatives exit 1 with all 16 probes recorded as
+  failed, so an engine that cannot run cannot produce a passing
+  attestation.  These fresh reports stamp
+  `git_head = 22da3778444a9b8cb469fbf8a62ac9f076bb1189`, the revision
+  they were measured against, which is exactly the field the committed
+  set does not yet carry.
+- Harness self-tests, each rc 0 with its pinned count: FIFO surface
+  18 + 5 structural (17 arms × 2 engines); golden 25; coverage 17;
+  sensitivity 22; throughput 12 + 4; resource 25 groups; crash 26;
+  Windows guard 35 (+1 native-only); `command_sanitize` 31; producer
+  privacy 32; housekeeping report verification 9.
+- Legacy suite: `tests.d/103-ipv6-fullrange-cardinality` passes and its
+  output matches the committed `output` file byte for byte.
+- Windows compile: `GOOS=windows go vet ./...` → rc 0 over the whole
+  `v4/go` module, including the test files.  This is the machine check
+  behind the build-constraint rule for tests that import
+  `golang.org/x/sys/unix`: every such file must carry a `//go:build`
+  expression that excludes `windows`, and a file that admits Windows
+  breaks this build rather than a file tally.
+- Open validation items, each with its completion condition, dated
+  2026-09-15:
+  1. Linux battery run at the accepted revision.  Completes when
+     `/tmp/qualsvc/battery-w1925.sh` exits 0 for every step and writes
+     the report set plus `battery-manifest.json` bound to that one
+     revision; the kind gate must then pass against the committed
+     evidence with rc 0.
+  2. Windows re-qualification on the authorized host.  Completes when
+     `go test ./... -count=1` and `cargo test -p iprange-cli` (with the
+     worker-colocation step) pass natively and both Windows reports are
+     regenerated on that host, installed, and accepted by
+     `windows_housekeeping_harness.py --verify-report` and the kind
+     gate's Windows checks with `checkout_root` null and no profile
+     paths.
+  3. Full pressure axis (`--pressure full`, 9 arms × 42 profiles) at the
+     milestone gate.  Completes when the run reports every mandatory
+     profile, the 378-class pinned table, and no blocked or
+     host-unsupported cell counted as coverage.
+  4. Self-identification of the battery.  Completes when the launcher
+     emits `sha256sum /tmp/qualsvc/battery-w1925.sh` at run start, so
+     the battery's own log begins with that line, and the digest it
+     prints equals the SHA-256 recorded in "Battery and identities"
+     above.  The battery file is not edited for this: emitting the digest
+     is the launcher's job, and that is what attributes the
+     evidence-rotating run to a script content instead of to a
+     workstation path.
+- Named costs (project rule: a step expected beyond about 2
+  wall-minutes is named with its expected cost before it runs).  Each
+  figure below is measured on this workstation under `nice` at this
+  revision, and the measured artifacts are named so a reviewer can
+  re-check the cost claim itself:
+  - `[9b]` refusal-class parity live with `--pressure routine`:
+    about 409 s wall (~7 wall-minutes).  Composition: the 483-cell grid
+    (23 arms x 21 path kinds) across both engines, 34.357 s per the
+    gate's own `elapsed_seconds`, plus the routine pressure axis of 108
+    cells (9 arms x 12 profiles, both engines, at least 2 runs per
+    cell).  The axis is bound by its 8 s per-cell ceiling
+    (`v4/cli/check_refusal_class_parity.py:1122`), so concurrent cells
+    do not shorten the step.  Measured: 395 s from launch to report for
+    the gate process (2026-09-15 06:29:20 to 06:35:55), plus about 1 s
+    for the 56-control self-test the step runs first; report
+    `/tmp/w1925-L/b9b/reports/refusal-class-parity.json`.
+  - `[23e]` `fd_pressure_harness.py grid` on the routine profile: about
+    3 s (~2.9 s measured at `--jobs 5`) for 136 cells, verdicts 112 pass
+    and 24 host-unsupported, `failed = 0`.  The 24 host-unsupported
+    cells are the expected outcome on this Linux host and are reported
+    as host state, never as coverage: bands 3 to 5 with three held
+    descriptors cannot fit stdio plus the holds, and the Rust dynamic
+    loader needs one free descriptor above stdio plus holds at b3/h0 and
+    b6/h3.  Source
+    `/tmp/w1925-L/fdp-full/reports/fd-pressure-routine.json`.
+  - the full grid of design section 10 (9 arms x 10 bands x 2 table
+    states x 2 runtime states x both engines = 736 cells: 480 pass, 198
+    host-unsupported, 58 blocked, with about 1,472 pressured processes)
+    costs about 4 minutes at `--jobs 5`.  It belongs to a milestone gate
+    and not to the battery's routine budget; its measured record is the
+    one in "Descriptor-budget implementation, in summary" above, so it
+    is named here for budget and not restated.
+  - staging precondition for `[23e]`, because getting it wrong produces
+    an answer that looks like the product's: every staged engine binary
+    needs its version-matched `iprange-v4-worker` beside it, since the
+    routine grid includes the hostile-null-device `validate(worker)`
+    cells.  A staging pass that omits the workers yields 2 wrong-class
+    cells — measured in
+    `/tmp/w1925-L/fdp-smoke/reports/fd-pressure-routine.json`, the two
+    Rust hostile `validate(worker)` cells answered
+    `os_unsupported`/`read_only_failure` where the committed law
+    requires `io`/`read_only_failure` — while the same grid with both
+    workers staged (`/tmp/w1925-L/fdp-full/`) reported `failed = 0`.
+    That difference is a staging defect and must be repaired by
+    restaging, never by relaxing an expectation.
+- Sensitive-data gate: the added text was grepped for the personal name,
+  the operator home path, and the validation-host alias, and is clean;
+  the committed reports keep `checkout_root: null` and the shared writer
+  refuses a profile-naming artifact.
+- Artifact-maintenance gate: `AGENTS.md` unchanged (no workflow or
+  guardrail change); runtime project skills unchanged (the final-review
+  and v4-rust skills already govern this wave); specs unchanged — the
+  durability ordering, the maintenance member rule and the descriptor
+  contract implement what `.agents/sow/specs/binary-format-v4.md` and
+  `.agents/sow/specs/iprange-jsonrpc-v1.md` already require, and the
+  two open contract questions above are recorded there rather than
+  silently redefined; end-user docs: `v4/cli/README.md` and
+  `v4/cli/evidence/README.md` updated for the corpus and gate sizes, the
+  runner's fail-closed exit codes, the gate inventory flags, the shared
+  report writer, the verification modes, and the committed identity
+  records with their `--emit-build-ids` and `--commit-report` producer
+  verbs; end-user/operator skills: none affected — no public method,
+  schema member, or default changed;
+  SOW lifecycle: this SOW stays current/in-progress until the re-anchor
+  round and the external control review pass on the final commit.
+- Lessons: an evidence set is one artifact, so it must be rotated as one
+  unit and bound by a manifest a reader can verify without the
+  workstation that produced it; a gate that reads a report without
+  re-deriving its claims is documentation, not a check; and a defense
+  that no neutralization can turn red is a label, not a defense, and
+  must be reported as unevidenced.
+
+### Followup mapping
+
+Every open item this wave touches is implemented, rejected with
+evidence, or carried by a real SOW or a recorded decision.
+
+- Implemented here: the caller-open witness port, the `::/0`
+  saturation, the snapshot bind ordering, the feed outcome parity, the
+  maintenance round-trip, the budget cases, the host-neutral build id,
+  the Windows tally fail-close, the committed race battery, the runner's
+  fail-closed exits, the kind-gate consumption and manifest, the shared
+  report writer, and the descriptor-budget rebuild with its pressure
+  axis.
+- Rejected with evidence: a blanket startup descriptor refusal (ruling
+  1B; the readiness decision plus per-owner sizing is what was
+  measured to hold), a band-parity claim for the Go reader and worker
+  arms (the classes are equal, the bands are not, and the cause is
+  named), and any claim that the two unobservable Rust checks are
+  defenses.
+- Tracked by a real SOW: engine performance residuals and the
+  diagnostic-text alignment above → pending `SOW-0030`; the JSON-RPC
+  WebSocket transport → pending `SOW-0029`; the projection-report output
+  path → pending `SOW-0031`; snapshot authentication and publication →
+  `SOW-0017` (status `paused`, in `current/`); the pure-Go port chunks
+  → `pending/pure-go-v4-port-milestone-2-gap-analysis.md`.
+- Recorded inconsistency, not moved by this wave because it is outside
+  its write set:
+  `pending/pure-go-v4-port-milestone-2-gap-analysis.md` carries
+  `Status: in progress` while living in `pending/`, and the repository
+  rule puts an in-progress SOW in `current/`.  Its chunk-level states
+  (chunk 1 gate closed, chunk 2 open, chunk 3 in progress) make the
+  intent clear; the file's location and status need the lead's decision
+  at integration time.  The sibling `pure-go-m1-gap-analysis.md`,
+  `pure-go-v4-port-milestone-0-report.md` and
+  `pure-go-v4-port-milestone-1-report.md` carry no `Status:` line at
+  all, which the same rule set does not permit for a SOW file.
+- Owned here as decisions, listed above: the housekeeping removable-row
+  question, the `inert_payload` identity question, and the Go
+  reader-coordination sidecar hold (open contract finding 3, whose
+  completion condition is a re-measured grid or a documented owner for
+  the second descriptor).
+
+### Closure procedure
+
+The eight roles re-anchor against this wave's integration commit.  Each
+role's report is retained in its sandbox and its verdict is delivered
+out-of-band; no repository commit follows an accepted round, so the
+reviewed revision remains HEAD at closure.  The external cross-model
+control session remains the last check.

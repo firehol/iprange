@@ -17,6 +17,7 @@ package main
 import (
 	"time"
 
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 	"github.com/firehol/iprange/v4/go/internal/recovery"
@@ -235,7 +236,7 @@ func serveCleanup(control *worker.Control, guard *recovery.RecoverySourceCleanup
 			if !control.ParentAlive() {
 				return nil
 			}
-			time.Sleep(pollInterval)
+			calleropen.Sleep(pollInterval)
 		}
 		complete, problem := guard.RetryCleanup()
 		if complete {
@@ -270,7 +271,7 @@ func waitAcknowledgement(control *worker.Control) error {
 		if !control.ParentAlive() {
 			return &format.Error{Code: format.CodeCancelled, Detail: "SDK worker parent exited"}
 		}
-		time.Sleep(pollInterval)
+		calleropen.Sleep(pollInterval)
 	}
 	return nil
 }

@@ -1154,17 +1154,75 @@ mod windows_judgment_tests {
         std::fs::remove_dir_all(&directory).expect("clean the fixture");
     }
 
+    /// Report one Windows pin as unscored because its fixture is not
+    /// available on this host, naming the condition.
+    ///
+    /// A silent `return` here would let a run report a pin as passed without
+    /// having judged anything, which is how an owner under test can rot: the
+    /// status is therefore only accepted when the caller asked for a tally
+    /// through `IPRANGE_V4_WIN_PIN_TALLY`, and the run fails when the fixture
+    /// is unavailable and nobody asked to record it. The two pins below are
+    /// the only users, so the helper sits with them.
+    fn record_unsupported(pin: &str, reason: &str) {
+        match std::env::var_os("IPRANGE_V4_WIN_PIN_TALLY") {
+            Some(tally) => {
+                use std::io::Write;
+                let mut sink = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&tally)
+                    .unwrap_or_else(|error| {
+                        panic!("{pin}: cannot record the unscored status in {tally:?}: {error}")
+                    });
+                writeln!(sink, "UNSCORED {pin}: {reason}")
+                    .unwrap_or_else(|error| panic!("{pin}: cannot record the status: {error}"));
+            }
+            None => panic!(
+                "{pin}: {reason}; the fixture is unavailable and no tally destination is \
+                 configured, so the pin fails rather than passing unverified (set \
+                 IPRANGE_V4_WIN_PIN_TALLY=<file> to record it as UNSCORED)"
+            ),
+        }
+    }
+
     /// A character device is refused through the opened handle, exactly as the
     /// Go owners refuse it from `file.Stat().Mode().IsRegular()` of the handle
-    /// they opened. `\\.\NUL` needs no fixture and no privilege; the pin
-    /// skips when the device cannot be opened at all, so a host without it
-    /// cannot turn a product answer into an environment failure.
+    /// they opened.
+    ///
+    /// The device is probed twice: once without the product path, to learn
+    /// whether this host can open `\\.\NUL` at all, and once through
+    /// `open_regular`, whose answer is the product behaviour under test. An
+    /// error from the product path is therefore never an environment excuse.
+    /// When the host cannot open the device, the pin is reported unscored with
+    /// the named condition and only then returns: an unrecorded skip fails, so
+    /// a run cannot report this pin as passed without having judged anything.
     #[test]
     fn character_device_is_refused_as_not_regular() {
         let nul = std::path::Path::new(r"\\.\NUL");
-        let Ok(opened) = super::open_regular(nul) else {
-            return;
-        };
+        match OpenOptions::new().read(true).open(nul) {
+            Ok(handle) => drop(handle),
+            Err(probe)
+                if matches!(
+                    probe.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+                ) =>
+            {
+                record_unsupported(
+                    "character_device_is_refused_as_not_regular",
+                    &format!(r"the host cannot open {nul:?} ({probe})"),
+                );
+                return;
+            }
+            Err(probe) => panic!(
+                "unexpected failure probing {nul:?}: {probe}; only a missing or \
+                 access-denied device may leave this pin unscored"
+            ),
+        }
+        // The probe above proved the device is openable here, so an error from
+        // the product path is a product answer, never an environment excuse.
+        let opened = super::open_regular(nul).unwrap_or_else(|error| {
+            panic!("the product must refuse {nul:?} as non-regular, not fail on it: {error}")
+        });
         assert!(
             opened.is_none(),
             "a character device must be refused as non-regular, not read"
@@ -1174,16 +1232,35 @@ mod windows_judgment_tests {
     /// A symlinked regular input stays accepted: these arms deliberately do not
     /// apply `O_NOFOLLOW` semantics, so `CreateFileW` resolves the link and the
     /// handle carries the target's attributes, not the link's reparse point.
+    ///
+    /// Creating a symlink needs the symbolic-link privilege (developer mode)
+    /// and a reparse-capable volume, so the pin reports the exact missing
+    /// condition instead of returning quietly. An unrecorded skip fails.
     #[test]
     fn symlinked_regular_input_is_accepted() {
+        // ERROR_PRIVILEGE_NOT_HELD: the account lacks SeCreateSymbolicLinkPrivilege.
+        // ERROR_INVALID_FUNCTION / ERROR_NOT_SUPPORTED: the volume cannot hold a
+        // reparse point. Anything else is not a platform capability this pin
+        // may treat as absent.
+        const MISSING_CAPABILITY: [i32; 3] = [1314, 1, 50];
         let directory = scratch_dir("symlink");
         let target = directory.join("target.txt");
         let link = directory.join("link.txt");
         write_file(&target, b"10.0.0.1\n");
-        if symlink_file(&target, &link).is_err() {
-            // Creating a symlink needs developer mode or the symbolic-link
-            // privilege; the pin is only meaningful where that is available.
+        if let Err(error) = symlink_file(&target, &link) {
             std::fs::remove_dir_all(&directory).ok();
+            let reason = match error.raw_os_error() {
+                Some(code) if MISSING_CAPABILITY.contains(&code) => {
+                    format!("the host cannot create a symlink here (os error {code}: {error})")
+                }
+                _ => panic!(
+                    "unexpected symlink failure (os error {:?}: {error}); only a \
+                     missing privilege or a reparse-incapable volume may leave this \
+                     pin unscored",
+                    error.raw_os_error()
+                ),
+            };
+            record_unsupported("symlinked_regular_input_is_accepted", &reason);
             return;
         }
         let file = open_regular_fixture(&link);
@@ -1221,5 +1298,122 @@ mod windows_judgment_tests {
         assert_eq!(bytes, b"hello");
         drop(file);
         std::fs::remove_dir_all(&directory).expect("clean the fixture");
+    }
+}
+
+/// Fail-closed shape check for the Windows judgment pins above.
+///
+/// Those pins are compiled only on Windows, so the host that runs the
+/// battery cannot observe whether an unavailable fixture is reported or
+/// merely returned. Reading this file is the check available to any host,
+/// the same technique `tests/thread_creation_discipline.rs` uses for the
+/// thread-creation contract. Reverting either pin to a quiet `return`, or
+/// muting the tally requirement inside `record_unsupported`, fails here.
+#[cfg(test)]
+mod windows_pin_fail_closed_tests {
+    const SOURCE: &str = include_str!("caller_open.rs");
+    const RECORD: &str = "record_unsupported(";
+
+    /// The text of one function, from its opening brace to the matching
+    /// closing brace. Every brace in these bodies is balanced, so a depth
+    /// counter is enough and an unbalanced body panics rather than guesses.
+    fn body_of(name: &str) -> &str {
+        let head = format!("fn {name}(");
+        let start = SOURCE
+            .find(&head)
+            .unwrap_or_else(|| panic!("expected fn {name} in the pinned source"));
+        let relative = SOURCE[start..]
+            .find('{')
+            .unwrap_or_else(|| panic!("expected a body for fn {name}"));
+        let open = start + relative;
+        let mut depth = 0i32;
+        for (offset, byte) in SOURCE[open..].bytes().enumerate() {
+            match byte {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return &SOURCE[open..open + offset + 1];
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("unbalanced braces in fn {name}");
+    }
+
+    /// `body` with each sanctioned exit removed: a `record_unsupported(..)`
+    /// call and the `return` that may follow it. Any `return` still in the
+    /// text is an exit that reports nothing.
+    fn without_recorded_exits(body: &str) -> String {
+        let mut out = String::new();
+        let mut rest = body;
+        while let Some(at) = rest.find(RECORD) {
+            out.push_str(&rest[..at]);
+            let mut tail = &rest[at + RECORD.len()..];
+            let mut depth = 1i32;
+            let mut closed = None;
+            for (offset, byte) in tail.bytes().enumerate() {
+                match byte {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            closed = Some(offset + 1);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            let closed = closed.unwrap_or_else(|| panic!("unterminated call to {RECORD}"));
+            tail = tail[closed..].trim_start();
+            if let Some(after) = tail.strip_prefix(';') {
+                tail = after.trim_start();
+            }
+            if let Some(after) = tail.strip_prefix("return") {
+                tail = after.trim_start();
+                if let Some(after) = tail.strip_prefix(';') {
+                    tail = after.trim_start();
+                }
+            }
+            rest = tail;
+        }
+        out.push_str(rest);
+        out
+    }
+
+    #[test]
+    fn a_pin_that_cannot_build_its_fixture_must_report_it_unscored() {
+        for pin in [
+            "character_device_is_refused_as_not_regular",
+            "symlinked_regular_input_is_accepted",
+        ] {
+            let body = body_of(pin);
+            assert!(
+                body.contains(RECORD),
+                "{pin}: a fixture this host cannot create must be reported unscored, because a \
+                 pin that returns quietly lets a run that judged nothing be tallied as a pass"
+            );
+            let leftover = without_recorded_exits(body);
+            assert!(
+                !leftover.contains("return"),
+                "{pin}: only the recorded-unscored path may leave the pin early; found an exit \
+                 that reports nothing"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unscored_pin_without_a_tally_destination_panics() {
+        let body = body_of("record_unsupported");
+        assert!(
+            body.contains("IPRANGE_V4_WIN_PIN_TALLY"),
+            "the tally destination is what turns a missing fixture into a recorded status"
+        );
+        assert!(
+            body.contains("panic!"),
+            "a missing fixture with no tally destination must fail, not pass unverified"
+        );
     }
 }

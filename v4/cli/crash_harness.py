@@ -103,14 +103,18 @@ import time
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SELF_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from command_sanitize import (  # noqa: E402  (side-effect free)
+    audit_report_writers,
     checkout_root,
-    personal_path_in_report,
+    owned_temp_dir,
+    profile_path,
     recorded_checkout_root,
-    recorded_git_identity,
-    sanitized_command,
+    require_paths_outside_profile,
+    run_shared_self_test,
     under_profile,
+    write_committed_report,
 )
 
 import run  # noqa: E402  (normal JSON-RPC client; import is side-effect free)
@@ -529,6 +533,32 @@ def validate_params(path, findings_out):
                                               "max_output_bytes": "33554432",
                                               "max_rows": "200000"}},
     }
+
+
+def export_flush_observed(work_dir):
+    """True when a private export temp holds real flushed bytes.
+
+    The export and validate writers open their O_EXCL temp and buffer
+    64 KiB, so a 0-byte temp proves only that the file was created.
+    These scenarios kill the producer at the first marker, and the
+    marker has to mean "the attempt was writing", not "it had started".
+    """
+
+    return any(
+        os.path.getsize(os.path.join(work_dir, name)) > 0
+        for name in export_temp_basenames(work_dir))
+
+
+def draft_growth_observed(main_path, size_before):
+    """True when a live draft grew past its pre-replace size.
+
+    Scenario D's crash point: an uncommitted direct replacement advances
+    the main file while it builds the draft.  Growth is an observable
+    process-crash marker only, never a storage-sync claim.
+    """
+
+    return (os.path.isfile(main_path)
+            and os.path.getsize(main_path) > size_before)
 
 
 def export_temp_basenames(work_dir):
@@ -1945,8 +1975,8 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
             producer_service, "4", "iprange.v1.direct.replace",
             direct_replace_params(interrupted_main, feed),
             POLL_DEADLINE_SECONDS,
-            seen=lambda: os.path.isfile(interrupted_main)
-            and os.path.getsize(interrupted_main) > size_before)
+            seen=lambda: draft_growth_observed(interrupted_main,
+                                                size_before))
         if seen_ms is None:
             raise ScenarioFailure(
                 "live draft-growth marker was not observed; "
@@ -2244,9 +2274,7 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
         outcome, seen_ms, thread = call_with_worker(
             producer_service, "3", "iprange.v1.export",
             export_params(source, dest), POLL_DEADLINE_SECONDS,
-            seen=lambda: any(
-                os.path.getsize(os.path.join(work, name)) > 0
-                for name in export_temp_basenames(work)))
+            seen=lambda: export_flush_observed(work))
         if seen_ms is None:
             raise ScenarioFailure(
                 "export partial-output marker (real flushed output) was "
@@ -2569,9 +2597,7 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
         outcome, seen_ms, thread = call_with_worker(
             producer_service, "3", "iprange.v1.validate",
             validate_params(source, findings_out), POLL_DEADLINE_SECONDS,
-            seen=lambda: any(
-                os.path.getsize(os.path.join(work, name)) > 0
-                for name in export_temp_basenames(work)))
+            seen=lambda: export_flush_observed(work))
         if seen_ms is None:
             raise ScenarioFailure(
                 "validate findings-output flush marker (real flushed "
@@ -2954,17 +2980,317 @@ def observed_kinds(scenario_report):
     return kinds
 
 
+# Executed-control counts for ``--self_test``, per class, as literals.  The
+# scenarios themselves drive two product binaries and SIGKILL a producer, so
+# they cannot run offline; what this pins is everything the scenarios judge.
+# The counts are compared at the end, so a control that stops being reached --
+# a renamed fixture, a guard that started returning early -- fails the gate as
+# loudly as a control that fails.
+CRASH_SELF_TEST_CONTROLS = {
+    "destination": 4,
+    "reservation": 3,
+    "scratch": 3,
+    "sidecar": 2,
+    "orphan": 2,
+    "marker": 6,
+    "kinds": 4,
+    "provenance": 2,
+}
+
+
+def _self_test():
+    """Offline controls for the crash classifier, markers, and report shape.
+
+    Covers the four ``classify_destination`` states, the reservation's
+    recorded output digest (the sole authority scenarios A1 and A2 compare a
+    destination against), the authenticated scratch header, the sidecar
+    creating state, the exactly-one export-orphan bound, the poll predicates
+    scenarios D/E/F kill on, ``observed_kinds`` actor lineage, and this
+    writer's own provenance path.  No product binary is executed.
+    """
+    executed = {name: 0 for name in CRASH_SELF_TEST_CONTROLS}
+    problems = []
+
+    def check(kind, label, condition, detail=""):
+        assert kind in executed, f"uncounted control class {kind!r}"
+        executed[kind] += 1
+        ok = bool(condition)
+        print(f"{'ok  ' if ok else 'BAD '} [{kind:11}] {label:56} {detail[:70]}")
+        if not ok:
+            problems.append(f"[{kind}] {label}: {detail}")
+
+    root = owned_temp_dir("qual-crash-selftest-")
+    try:
+        work = os.path.join(root, "work")
+        os.makedirs(work)
+        prior = os.path.join(work, "target.iprange")
+        with open(prior, "wb") as stream:
+            stream.write(b"prior content")
+        prior_sha256, prior_sha512 = sha256_file(prior), sha512_file(prior)
+        attempt = os.path.join(work, "attempt.txt")
+        with open(attempt, "wb") as stream:
+            stream.write(b"the interrupted attempt wrote these bytes")
+        attempt_sha512 = sha512_file(attempt)
+        missing = os.path.join(work, "never-created.iprange")
+        foreign = os.path.join(work, "foreign.txt")
+        with open(foreign, "wb") as stream:
+            stream.write(b"someone else wrote this")
+
+        # classify_destination: the four states a crash-left destination can
+        # be in.  A1 and A2 accept only prior_complete and attempt_complete,
+        # so a classifier that blurred "foreign" into a completed attempt
+        # would let a corrupted destination pass.
+        check("destination", "a destination the crash never created is absent",
+              classify_destination(missing, prior_sha256, prior_sha512,
+                                   attempt_sha512) == "absent")
+        check("destination", "byte-identical to the pre-crash file is prior",
+              classify_destination(prior, prior_sha256, prior_sha512,
+                                   attempt_sha512) == "prior_complete")
+        check("destination", "the reservation digest completes the attempt",
+              classify_destination(attempt, prior_sha256, prior_sha512,
+                                   attempt_sha512) == "attempt_complete")
+        check("destination", "any other content is foreign, never an attempt",
+              classify_destination(foreign, prior_sha256, prior_sha512,
+                                   attempt_sha512) == "foreign")
+
+        # The reservation is the sole authority on what the interrupted
+        # attempt wrote (binary-format-v4.md 20.1: the output SHA-512 lives
+        # at offset 160 as 64 raw bytes).  A1 and A2 classify a destination
+        # against exactly this value, so a reader that took the digest from
+        # anywhere else, or accepted a header it should not have trusted,
+        # would still print a green run.  Each control gets its own
+        # directory: the reader returns on the first reservation it names.
+        def with_reservation(name, digest_hex, size=256,
+                             magic=RESERVATION_MAGIC, tag="r"):
+            room = os.path.join(root, f"res-{tag}")
+            os.makedirs(room, exist_ok=True)
+            block = bytearray(256)
+            block[0:8] = magic
+            if digest_hex:
+                block[160:224] = bytes.fromhex(digest_hex)
+            with open(os.path.join(room, name), "wb") as stream:
+                stream.write(bytes(block)[:size])
+            return room
+
+        good_reservation = with_reservation(
+            RESERVATION_PREFIX + "a" + PRIVATE_TMP_SUFFIX, attempt_sha512,
+            tag="good")
+        check("reservation", "the recorded output digest reads back exactly",
+              reservation_output_sha512(good_reservation) == attempt_sha512,
+              str(reservation_output_sha512(good_reservation)))
+        bad_magic = with_reservation(
+            RESERVATION_PREFIX + "b" + PRIVATE_TMP_SUFFIX, attempt_sha512,
+            magic=b"IPR4XXXX", tag="magic")
+        check("reservation", "a reservation without its magic records nothing",
+              reservation_output_sha512(bad_magic) is None,
+              str(reservation_output_sha512(bad_magic)))
+        short = with_reservation(
+            RESERVATION_PREFIX + "c" + PRIVATE_TMP_SUFFIX, attempt_sha512,
+            size=100, tag="short")
+        check("reservation",
+              "a reservation shorter than its digest field records nothing",
+              reservation_output_sha512(short) is None,
+              str(reservation_output_sha512(short)))
+        # Authorized scratch (scenario C) is only a valid kill point once
+        # the 128-byte ownership header is complete and CRC-valid: an
+        # unauthenticated partial header leaves a lookalike the engine API
+        # truthfully refuses to remove.
+        def scratch_file(tag, mutate=None):
+            room = os.path.join(root, f"scratch-{tag}")
+            os.makedirs(room, exist_ok=True)
+            head = bytearray(128)
+            head[0:8] = SCRATCH_MAGIC
+            head[8:10] = (1).to_bytes(2, "little")
+            head[10:12] = (128).to_bytes(2, "little")
+            crc = crc32c(bytes(head[:124]) + b"\x00" * 4)
+            head[124:128] = crc.to_bytes(4, "little")
+            if mutate is not None:
+                mutate(head)
+            path = os.path.join(
+                room, SCRATCH_PREFIX + "a-1" + PRIVATE_TMP_SUFFIX)
+            with open(path, "wb") as stream:
+                stream.write(bytes(head))
+            return room, path
+
+        good_room, good_scratch = scratch_file("ok")
+        check("scratch", "a complete CRC-valid header is authentic",
+              scratch_header_authentic(good_scratch)
+              and scratch_attempt_seen(good_room))
+        broken_room, broken_scratch = scratch_file(
+            "crc", lambda head: head.__setitem__(slice(124, 128), b"\xff\xff\xff\xff"))
+        check("scratch", "a header whose CRC-32C does not validate is refused",
+              not scratch_header_authentic(broken_scratch)
+              and not scratch_attempt_seen(broken_room),
+              "a tampered header would move the kill point into an "
+              "unremovable residue")
+        wrong_room, wrong_version = scratch_file(
+            "version", lambda head: head.__setitem__(slice(8, 10), (7).to_bytes(2, "little")))
+        check("scratch", "a header with an unexpected version or size is refused",
+              not scratch_header_authentic(wrong_version)
+              and not scratch_attempt_seen(wrong_room))
+
+        # The live sidecar is only observable in its creating state
+        # (scenario B's kill point).
+        def sidecar_file(tag, state):
+            room = os.path.join(root, f"sidecar-{tag}")
+            os.makedirs(room, exist_ok=True)
+            head = bytearray(16)
+            head[0:8] = SIDECAR_MAGIC
+            head[12:16] = state.to_bytes(4, "little")
+            path = os.path.join(room, "live.iprange" + LIVE_SIDECAR_SUFFIX)
+            with open(path, "wb") as stream:
+                stream.write(bytes(head))
+            return path
+
+        check("sidecar", "a sidecar in the creating state is observed",
+              sidecar_creating_state_seen(sidecar_file("creating", 0)))
+        check("sidecar", "a sidecar past the creating state is not observed",
+              not sidecar_creating_state_seen(sidecar_file("active", 1)))
+
+        # The bounded export residue: exactly one private temp, named to the
+        # O_EXCL pattern the writers use.  A larger residue would hide a
+        # recreated or foreign temporary.
+        _orphan_contract_self_test()
+        check("orphan", "the exactly-one private export-temp bound rejects "
+                        "0, 2, and lookalike residues", True)
+        residue = os.path.join(root, "residue")
+        os.makedirs(residue)
+        for name in (".handle-a.export.tmp", ".iprange-publish-x.tmp",
+                     "notes.txt", "handle-b.export.tmp"):
+            with open(os.path.join(residue, name), "wb") as stream:
+                stream.write(b"x" if name.startswith(".handle-a") else b"")
+        # The collector takes any *.export.tmp basename: enforcing that the
+        # residue is *private* (leading dot, non-empty handle) is
+        # assert_one_export_orphan's job, exercised by the control above.
+        # What this control pins is that no other durable artifact -- above
+        # all the publication temp -- is mistaken for export residue.
+        check("orphan", "export residue is collected by its own suffix only",
+              export_temp_basenames(residue)
+              == [".handle-a.export.tmp", "handle-b.export.tmp"],
+              str(export_temp_basenames(residue)))
+
+        # The poll predicates that decide when each scenario kills the
+        # producer.  A marker that fires too early moves the kill out of
+        # the operation under test, and the scenario still passes.
+        empty = os.path.join(root, "flush-empty")
+        os.makedirs(empty)
+        with open(os.path.join(empty, ".handle-a.export.tmp"), "wb") as stream:
+            stream.write(b"")
+        check("marker", "a 0-byte export temp is not real flushed output",
+              not export_flush_observed(empty))
+        with open(os.path.join(empty, ".handle-a.export.tmp"), "wb") as stream:
+            stream.write(b"flushed")
+        check("marker", "the first flushed block is the export kill point",
+              export_flush_observed(empty))
+        grown = os.path.join(root, "draft.iprange")
+        with open(grown, "wb") as stream:
+            stream.write(b"12345")
+        check("marker", "a draft that has not grown is not the replace point",
+              not draft_growth_observed(grown, 5))
+        check("marker", "growth past the pre-replace size is the replace point",
+              draft_growth_observed(grown, 4))
+        check("marker", "a main the crash never created cannot show growth",
+              not draft_growth_observed(os.path.join(root, "nope.iprange"), 0))
+        check("marker", "a reservation with its magic is the publish kill point",
+              reservation_seen(good_reservation, RESERVATION_MAGIC))
+
+        # observed_kinds is the shape the kind gate consumes: an artifact
+        # kind is credited to the operation that really produced or opened
+        # it.  A scenario that stopped recording its ordinal must lose the
+        # ref, not silently inherit a "producer.0".
+        exported = observed_kinds({
+            "destination_state": {"class": "export_partial_output"},
+            "created_ordinals": {"v4_main": 1, "adapter_output": 2},
+            "adapter_output_opens": {"producer": 3},
+            "reopen_outcome": {
+                "before_resolution": {"opened_complete_destination": True},
+                "consumer_main_open_ordinal": 4}})
+        check("kinds", "an adapter output is credited to its creator and opener",
+              exported.get("adapter_output") == {
+                  "created_by": ["producer.2"], "opened_by": ["producer.3"]}
+              and exported.get("v4_main", {}).get("opened_by")
+              == ["consumer.4"], str(exported))
+        validated = observed_kinds({
+            "destination_state": {"class": "validate_findings_aborted"},
+            "created_ordinals": {"v4_main": 1}})
+        check("kinds", "an aborted findings delivery credits the main only",
+              "adapter_output" not in validated
+              and validated.get("v4_main", {}).get("created_by")
+              == ["producer.1"], str(validated))
+        drafted = observed_kinds({
+            "destination_state": {
+                "class": "live_dataset_with_uncommitted_write"},
+            "created_ordinals": {"live_sidecar": 2},
+            "live_reader_opens": {"producer": 1, "consumer": 5},
+            "fixture_created_main": True})
+        check("kinds", "a fixture-made main is never credited to the producer",
+              drafted.get("v4_main", {}).get("created_by") == []
+              and drafted.get("live_sidecar", {}).get("opened_by")
+              == ["producer.1", "consumer.5"], str(drafted))
+        published = observed_kinds({
+            "destination_state": {
+                "reservation_basenames": [RESERVATION_PREFIX + "a.tmp"],
+                "publish_temp_basenames": [PUBLISH_TEMP_PREFIX + "b.tmp"],
+                "scratch_basenames": [SCRATCH_PREFIX + "c-1.tmp"]},
+            "created_ordinals": {}})
+        check("kinds", "the three publication residues each keep their kind",
+              {"publication_reservation", "publication_temp",
+               "authorized_scratch"} <= set(published), str(sorted(published)))
+
+        # Provenance: this writer may only reach its artifact through the
+        # shared owner, and an artifact that carries a personal path is
+        # refused with no file left behind.
+        audit = audit_report_writers(cli_dir=_SELF_DIR, writers=["crash_harness.py"],
+                                     artifacts=False)
+        check("provenance", "this writer commits through the shared owner",
+              not audit, "; ".join(audit))
+        leaky = os.path.join(root, "crash.json")
+        profile = profile_path() or "/nonexistent-profile"
+        try:
+            write_committed_report(leaky, {"schema": "x", "work_dir":
+                                          profile + "/W-crash"},
+                                   caller_paths=())
+            refused = False
+        except SystemExit:
+            refused = True
+        check("provenance", "a scenario path under the profile is refused",
+              refused and not os.path.exists(leaky),
+              "the leaky artifact would have been written")
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    run_shared_self_test("crash_harness")
+    for problem in problems:
+        print(f"FAIL crash self-test: {problem}")
+    if executed != CRASH_SELF_TEST_CONTROLS:
+        print(f"crash self-test FAILED: executed={executed}, "
+              f"expected={CRASH_SELF_TEST_CONTROLS}")
+        return 1
+    if problems:
+        print(f"crash self-test FAILED: {len(problems)} problem(s)")
+        return 1
+    summary = ", ".join("{}={}".format(name, count)
+                        for name, count
+                        in sorted(CRASH_SELF_TEST_CONTROLS.items()))
+    print(f"crash self-test PASSED: "
+          f"{sum(CRASH_SELF_TEST_CONTROLS.values())} controls ({summary})")
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="External process-crash harness for the iprange v1 "
                     "JSON-RPC product interface (milestone-4 W5 gate).")
-    parser.add_argument("--producer", metavar="PATH", required=True,
+    parser.add_argument("--self-test", action="store_true",
+                        help="run the offline classifier, marker, and report-"
+                             "shape controls (no product binaries) and exit")
+    parser.add_argument("--producer", metavar="PATH",
                         help="absolute producer executable (iprange --jsonrpc)")
-    parser.add_argument("--consumer", metavar="PATH", required=True,
+    parser.add_argument("--consumer", metavar="PATH",
                         help="absolute consumer executable (iprange --jsonrpc)")
-    parser.add_argument("--fixture-tool", metavar="PATH", required=True,
+    parser.add_argument("--fixture-tool", metavar="PATH",
                         help="absolute v4-fixture producer executable")
-    parser.add_argument("--work-dir", metavar="DIR", required=True,
+    parser.add_argument("--work-dir", metavar="DIR",
                         help="absolute existing root; every scenario runs in "
                              "a fresh unique subdirectory")
     parser.add_argument("--json-report", metavar="PATH",
@@ -2973,6 +3299,16 @@ def main():
                         help="keep per-scenario work directories (default: "
                              "remove them after the run)")
     args = parser.parse_args()
+    if args.self_test:
+        return _self_test()
+    missing = [label for label, value in (("--producer", args.producer),
+                                          ("--consumer", args.consumer),
+                                          ("--fixture-tool", args.fixture_tool),
+                                          ("--work-dir", args.work_dir))
+               if not value]
+    if missing:
+        parser.error(f"missing required arguments: {', '.join(missing)} "
+                     "(or run --self-test)")
 
     if not os.path.isdir(args.work_dir) or not os.path.isabs(args.work_dir):
         parser.error("--work-dir must be an absolute existing directory")
@@ -2981,20 +3317,17 @@ def main():
     # outside the profile (the documented authorized scratch area), so
     # the whole serialized report is inherently personal-path-free;
     # the write-time structural scan below is the second net.
-    for label, path in (("producer", args.producer),
-                        ("consumer", args.consumer),
-                        ("fixture tool", args.fixture_tool)):
-        if under_profile(path):
-            parser.error(
-                f"{label} executable {path} lives under the operator's "
-                "profile; stage binaries under the authorized scratch "
-                "area so committed evidence cannot carry personal paths")
-    for path in (args.work_dir, args.json_report):
-        if path and under_profile(path):
-            parser.error(
-                f"path {path} lives under the operator's profile; use "
-                "the authorized scratch area so committed evidence "
-                "cannot carry personal paths")
+    args.caller_paths = (("--producer", args.producer),
+                         ("--consumer", args.consumer),
+                         ("--fixture-tool", args.fixture_tool),
+                         ("--work-dir", args.work_dir),
+                         ("--json-report", args.json_report))
+    # Durable-artifact policy: the report records the measured binary paths
+    # and every per-scenario work path, so a profile-rooted input is exactly
+    # how an operator-home path reaches a committed file.  The shared writer
+    # repeats the check at commit time; refusing here means no scenario child
+    # is ever spawned for a run whose artifact would be refused anyway.
+    require_paths_outside_profile(args.caller_paths)
     try:
         _orphan_contract_self_test()
     except AssertionError as exc:
@@ -3006,9 +3339,6 @@ def main():
 
     report = {
         "schema": "iprange-cli-crash-report-v1",
-        "command": sanitized_command(),
-        "checkout_root": recorded_checkout_root(),
-        "git_head": recorded_git_identity(),
         "platform": {
             "system": platform.system(),
             "release": platform.release(),
@@ -3134,17 +3464,12 @@ def main():
     # (including per-scenario paths), refuse to serialize a report
     # that still carries the operator's profile path in any string
     # value.
-    personal = personal_path_in_report(report)
-    if personal is not None:
-        raise SystemExit(
-            f"refusing to write evidence containing the operator's "
-            f"profile path: {personal!r}; stage all inputs outside "
-            "the profile")
-
     if args.json_report:
-        with open(args.json_report, "w", encoding="utf-8") as stream:
-            json.dump(report, stream, indent=2, sort_keys=True)
-            stream.write("\n")
+        # The shared writer owns the provenance members and the write-time
+        # personal-path scan over every string value, including the
+        # per-scenario paths filled above.
+        write_committed_report(args.json_report, report,
+                               caller_paths=args.caller_paths, indent=2)
 
     total = len(report["scenarios"])
     print(f"{total - failed} passed, {failed} failed "

@@ -43,7 +43,6 @@ import argparse
 import hashlib
 import json
 import os
-import re
 import platform
 import shutil
 import subprocess
@@ -55,12 +54,18 @@ sys.dont_write_bytecode = True
 _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
+_SELF_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from command_sanitize import (  # noqa: E402
-    recorded_checkout_root,
+    audit_report_writers,
+    committed_report_problems,
+    personal_path_in_report,
+    profile_path,
     recorded_git_identity,
-    sanitized_command,
+    require_paths_outside_profile,
+    run_shared_self_test,
     sanitized_path_value,
+    write_committed_report,
 )
 
 REPORT_SCHEMA = "iprange-cli-coverage-go-report-v1"
@@ -597,6 +602,12 @@ def live_run(args):
     integ_dir = os.path.join(work, "cov-integration")
     matrices = tuple(m.strip() for m in args.matrices.split(",") if m.strip())
 
+    require_paths_outside_profile((("--go-module", args.go_module),
+                                   ("--work", args.work),
+                                   ("--rust", args.rust),
+                                   ("--fixture-tool", args.fixture_tool),
+                                   ("--v4-tree", args.v4_tree),
+                                   ("--json-report", args.json_report)))
     built = build_covered(module_dir, staging, go)
     unit = measure_unit(module_dir, unit_dir, go)
     runs, integ_files = measure_integration(module_dir, integ_dir, staging,
@@ -617,11 +628,10 @@ def live_run(args):
 
     report = {
         "schema": REPORT_SCHEMA,
-        # The revision the instrumented measurement actually compiled and
-        # executed, not merely the checkout's current HEAD.
-        "git_head": git_head,
-        "checkout_root": recorded_checkout_root(),
-        "command": sanitized_command(sys.argv),
+        # ``command``, ``git_head`` and ``checkout_root`` belong to the shared
+        # provenance owner, which writes them at commit time.  The revision
+        # this measurement actually compiled is a separate fact and is
+        # recorded below as ``measured_git_head``.
         "platform": {"system": platform.system(),
                      "release": platform.release(),
                      "machine": platform.machine(),
@@ -661,12 +671,24 @@ def live_run(args):
         "elapsed_seconds": None,
     }
     report["elapsed_seconds"] = round(time.monotonic() - started, 2)
-    text = json.dumps(report, indent=1, sort_keys=True) + "\n"
     if args.json_report:
         target = os.path.abspath(args.json_report)
         os.makedirs(os.path.dirname(target), exist_ok=True)
-        with open(target, "w", encoding="utf-8") as stream:
-            stream.write(text)
+        # The shared writer owns the provenance members and the privacy scan.
+        # It records ``git_head`` as the revision of the checkout that ran the
+        # measurement; the revision the instrumented binaries were *staged*
+        # from is a separate fact and stays in ``measured_git_head`` (equal to
+        # ``git_head`` for a working-tree run, different for --revision).
+        report["measured_git_head"] = git_head
+        write_committed_report(
+            target, report,
+            caller_paths=(("--go-module", args.go_module),
+                          ("--work", args.work), ("--rust", args.rust),
+                          ("--fixture-tool", args.fixture_tool),
+                          ("--v4-tree", args.v4_tree),
+                          ("--revision", args.revision),
+                          ("--json-report", args.json_report)),
+            indent=1)
     print(f"unit        statements={unit_percent['statements']} "
           f"functions={unit_percent['functions']} "
           f"blocks={unit_percent['blocks']}")
@@ -686,8 +708,21 @@ def _go_version(go):
     return out.strip() if rc == 0 else None
 
 
+# Executed-control count of ``_self_test``, as a literal.  The line used to
+# print "PASSED (N cases)" from whatever the counter reached, so a control
+# that stopped being reached lowered N and still exited 0.
+COVERAGE_SELF_TEST_CONTROLS = 17
+
+
 def _self_test():
-    """The parsing helpers must not invent a percentage."""
+    """The parsers and the provenance pin must not invent a verdict.
+
+    Offline: the measurement itself runs instrumented Go binaries and cannot
+    execute here, so what this checks is the parsing of
+    ``go tool covdata``/``go tool cover`` output, the staging and merge
+    guards, and that this harness can only reach its committed artifact
+    through the shared provenance owner.
+    """
 
     failures = 0
     counter = {"n": 0}
@@ -731,15 +766,52 @@ def _self_test():
            overall["statements"] == percent_of(4, 6), str(overall))
 
     # The committed artifact must never record the operator's home
-    # directory: every "command" field the harness stores goes through the
-    # shared sanitizer.  This is a source pin because the real recording
-    # paths execute built binaries and cannot run in the offline suite.
-    with open(os.path.abspath(__file__), encoding="utf-8") as source_stream:
-        own_source = source_stream.read()
-    raw_command_records = [line.strip() for line in own_source.splitlines()
-                           if re.search(r'"command":\s*command\s*[,}]', line)]
-    expect("every recorded command passes through sanitized_command()",
-           not raw_command_records, "; ".join(raw_command_records))
+    # directory, and the identity fields must be the ones the sanitizer
+    # measured.  This used to be a regular-expression pin on the *spelling*
+    # of the recording line, so binding the value through an intermediate
+    # (``_raw_cmd = [str(a) for a in sys.argv]`` then ``"command": _raw_cmd``)
+    # kept it green while the artifact went unsanitized.  The pin is now the
+    # shared structural audit: it reads this module's AST, requires the commit
+    # to go through ``write_committed_report`` -- the only function that owns
+    # ``command``/``git_head``/``checkout_root`` and runs the personal-path
+    # scan -- and refuses any direct ``json.dump`` or a commit that never
+    # hands over the options it screened.  The rules cannot be met by editing
+    # the harness toward a different spelling, because the sanctioned path is
+    # a call, not a pattern.
+    own_problems = audit_report_writers(cli_dir=_SELF_DIR, writers=["coverage_harness.py"],
+                                        artifacts=False)
+    expect("this harness commits through the shared provenance owner",
+           not own_problems, "; ".join(own_problems))
+    # A behavioural control, because the guarantee is about the artifact and
+    # not about the source: a report that carries an unsanitized command, or
+    # that lost the derived privacy block, must be refused by the same rules
+    # the writer applies before it serializes.
+    profile = profile_path() or "/nonexistent-profile"
+    forged = {"schema": REPORT_SCHEMA, "command": [profile, "x"],
+              "git_head": "0" * 40, "checkout_root": None}
+    expect("a record that did not go through the sanitizer is refused",
+           any("sanitized_command" in problem or "carries a personal path"
+               in problem for problem in
+               committed_report_problems(forged, require_privacy=True,
+                                         screened=("--work",))),
+           str(committed_report_problems(forged, require_privacy=True,
+                                         screened=("--work",))))
+    expect("an artifact from this harness without the privacy block is refused",
+           any("privacy" in problem for problem in
+               committed_report_problems(
+                   {"schema": REPORT_SCHEMA, "command": ["v4/cli/x.py"],
+                    "git_head": "0" * 40, "checkout_root": None},
+                   where="coverage-go.json", require_privacy=True,
+                   screened=("--work",))),
+           "no privacy complaint")
+    expect("a personal path anywhere in a committed report is refused",
+           any("carries a personal path" in problem for problem in
+               committed_report_problems(
+                   {"schema": REPORT_SCHEMA, "command": ["v4/cli/x.py"],
+                    "git_head": "0" * 40, "checkout_root": None,
+                    "staging": profile + "/stage"},
+                   where="coverage-go.json", require_privacy=False)),
+           "no personal-path complaint")
 
     empty = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                          ".coverage-harness-empty-self-test")
@@ -834,10 +906,15 @@ def _self_test():
     finally:
         shutil.rmtree(base, ignore_errors=True)
 
+    run_shared_self_test("coverage_harness")
+    if counter["n"] != COVERAGE_SELF_TEST_CONTROLS:
+        print(f"coverage harness self-test FAILED: executed {counter['n']} "
+              f"controls, expected exactly {COVERAGE_SELF_TEST_CONTROLS}")
+        return 1
     if failures:
         print(f"coverage harness self-test FAILED: {failures} case(s)")
         return 1
-    print(f"coverage harness self-test PASSED ({counter['n']} cases)")
+    print(f"coverage harness self-test PASSED ({counter['n']} controls)")
     return 0
 
 

@@ -93,14 +93,15 @@ import time
 import uuid
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SELF_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from command_sanitize import (  # noqa: E402  (side-effect free)
+    audit_report_writers,
     owned_temp_root,
-    personal_path_in_report,
-    recorded_checkout_root,
-    recorded_git_identity,
-    sanitized_command,
+    require_paths_outside_profile,
+    run_shared_self_test,
     under_profile,
+    write_committed_report,
 )
 
 from schema import frame  # noqa: E402  (shared response validator)
@@ -1099,6 +1100,31 @@ def _kill_process_group(proc):
         proc.wait(timeout=5)
 
 
+# Executed-control groups of ``self_test()``, per class, as literals.  The
+# PASS line used to say only "0 failures", which cannot tell a run where every
+# control executed from a run where a control was never reached (a guard that
+# started returning early, a stub list that lost an entry).  Each control group
+# below calls ``control(<class>)`` exactly once; the totals are compared against
+# this table at the end, so a dropped control fails the gate.
+RESOURCE_SELF_TEST_CONTROLS = {
+    "read": 1,
+    "write": 1,
+    "duplicate-id": 1,
+    "drain-flood": 1,
+    "trailing-residue": 1,
+    "drain-eof": 1,
+    "crlf": 1,
+    "id-type": 1,
+    "proof-b": 4,
+    "cancelled-answer": 4,
+    "cancel-proof-a": 3,
+    "cancel-proof-d": 3,
+    "shared-read": 1,
+    "shared-write": 1,
+    "leftover": 1,
+}
+
+
 def self_test():
     """Bounded-I/O negative controls (no product binaries required).
 
@@ -1142,6 +1168,11 @@ def self_test():
     root = tempfile.mkdtemp(prefix="iprange-self-test-proofb-",
                              dir=owned_temp_root())
     failures = []
+    executed = {}
+
+    def control(name):
+        """Record that one control group ran, under its pinned class name."""
+        executed[name] = executed.get(name, 0) + 1
 
     # Read control: partial line plus a sleeping child.
     stub = subprocess.Popen(
@@ -1158,6 +1189,7 @@ def self_test():
         responses = read_responses(stub, 1, 0.1)
         elapsed = time.monotonic() - started
         partial = _PENDING_STDOUT_BYTES.pop(stub.pid, b"")
+        control("read")
         print(f"self-test read control: read_responses returned in "
               f"{elapsed:.3f} s with {len(responses)} responses and "
               f"unterminated bytes retained {partial!r}")
@@ -1193,6 +1225,7 @@ def self_test():
         else:
             failure_text = None
         elapsed = time.monotonic() - started
+        control("write")
         print(f"self-test write control: "
               f"{failure_text or 'unexpected success'} "
               f"in {elapsed:.3f} s")
@@ -1225,6 +1258,7 @@ def self_test():
         except ResourceFailure as exc:
             failure_text = str(exc)
         elapsed = time.monotonic() - started
+        control("duplicate-id")
         print(f"self-test duplicate-id control: "
               f"{failure_text or 'unexpected success'} in {elapsed:.3f} s")
         if failure_text is None:
@@ -1259,6 +1293,7 @@ def self_test():
         except ResourceFailure as exc:
             failure_text = str(exc)
         elapsed = time.monotonic() - started
+        control("drain-flood")
         print(f"self-test drain-flood control: "
               f"{failure_text or 'unexpected success'} in {elapsed:.3f} s")
         if failure_text is None:
@@ -1293,6 +1328,7 @@ def self_test():
         responses = read_responses(stub, 1, 2.0)
         drained, reached_eof = drain_stdout(stub, 1.0)
         elapsed = time.monotonic() - started
+        control("trailing-residue")
         print(f"self-test trailing-residue control: "
               f"{len(responses)} expected response plus "
               f"{len(drained)} residue bytes "
@@ -1357,6 +1393,7 @@ def self_test():
             drain_eof_text = str(exc)
         else:
             drain_eof_text = None
+        control("drain-eof")
         print(f"self-test drain-eof control: "
               f"{drain_eof_text or 'unexpected acceptance of a non-EOF drain'}")
         if drain_eof_text is None:
@@ -1386,6 +1423,7 @@ def self_test():
         else:
             crlf_text = None
             responses = responses
+        control("crlf")
         print(f"self-test CRLF control: "
               f"{crlf_text or 'unexpected acceptance of a CRLF frame'}")
         if crlf_text is None:
@@ -1415,6 +1453,7 @@ def self_test():
     try:
         responses = read_responses(numeric, 1, 2.0)
         matched = exact_id_response(responses, "1")
+        control("id-type")
         print(f"self-test id-type control: numeric id 1 "
               f"{'matched' if matched is not None else 'did not match'} "
               "the string id lookup")
@@ -1475,6 +1514,7 @@ def self_test():
         else:
             failed_now = None
         elapsed = time.monotonic() - started
+        control("proof-b")
         print(f"self-test proof-b {label}: "
               f"{failed_now or 'accepted'} in {elapsed:.2f} s")
         if should_pass and failed_now is not None:
@@ -1522,6 +1562,7 @@ def self_test():
             now = None
         except ResourceFailure as exc:
             now = str(exc)
+        control("cancelled-answer")
         print(f"self-test cancelled-answer {label}: "
               f"{now or 'accepted'}")
         if should_pass and now is not None:
@@ -1626,6 +1667,7 @@ def self_test():
             failed_now = str(exc)
         elapsed = time.monotonic() - started
         _wait_for_export_temp = original_wait_export_temp
+        control(f"cancel-proof-{proof}")
         print(f"self-test proof-{proof} {label}: "
               f"{failed_now or 'accepted'} in {elapsed:.2f} s")
         if failed_now is not None:
@@ -1691,6 +1733,7 @@ def self_test():
     # the forced-termination report is allowed here (the stub is
     # designed to stay alive).
     stalled_read.close(allow_forced=True)
+    control("shared-read")
     print(f"self-test shared-path read deadline: "
           f"{read_failure or 'unexpected success'} in {elapsed:.2f} s")
     if read_failure is None:
@@ -1724,6 +1767,7 @@ def self_test():
         write_failure = None
     elapsed = time.monotonic() - started
     stalled_write.close(allow_forced=True)
+    control("shared-write")
     print(f"self-test shared-path write deadline: "
           f"{write_failure or 'unexpected success'} in {elapsed:.2f} s")
     if write_failure is None:
@@ -1739,15 +1783,35 @@ def self_test():
     shutil.rmtree(root, ignore_errors=True)
 
     leftover = no_leftover_processes()
+    control("leftover")
     if leftover:
         failures.append(f"self-test left owned children alive: {leftover}")
+
+    # Counting gate: the table is the contract, so a control that stopped
+    # being reached fails here even when everything that ran passed.
+    for name in sorted(set(executed) | set(RESOURCE_SELF_TEST_CONTROLS)):
+        want = RESOURCE_SELF_TEST_CONTROLS.get(name, 0)
+        got = executed.get(name, 0)
+        if got != want:
+            failures.append(f"control group {name!r} executed {got} time(s), "
+                            f"expected exactly {want}")
 
     for failure in failures:
         print(f"FAIL self-test: {failure}")
     if failures:
         print(f"FAIL self-test: {len(failures)} failure(s)")
         return 1
-    print("PASS self-test: bounded read and write controls")
+    run_shared_self_test("resource_harness")
+    audit = audit_report_writers(cli_dir=_SELF_DIR, writers=["resource_harness.py"],
+                                artifacts=False)
+    for problem in audit:
+        print(f"FAIL self-test: {problem}")
+    if audit:
+        print(f"FAIL self-test: {len(audit)} provenance problem(s)")
+        return 1
+    total = sum(RESOURCE_SELF_TEST_CONTROLS.values())
+    print(f"PASS self-test: bounded read and write controls "
+          f"({total} control groups executed)")
     return 0
 
 
@@ -1787,6 +1851,9 @@ def main():
     # outside the profile (the documented authorized scratch area), so
     # the whole serialized report is inherently personal-path-free;
     # the write-time structural scan below is the second net.
+    require_paths_outside_profile([("--binaries", path)
+                                   for path in parse_binaries(
+                                       args.binaries).values()])
     for label, path in parse_binaries(args.binaries).items():
         if under_profile(path):
             parser.error(
@@ -1804,11 +1871,11 @@ def main():
     for label, path in parse_binaries(args.binaries).items():
         binaries[label] = executable(path, f"{label} binary")
 
+    caller_paths = (("--binaries", " ".join(args.binaries or [])),
+                    ("--work-dir", args.work_dir),
+                    ("--json-report", args.json_report))
     report = {
         "schema": "iprange-cli-resource-report-v1",
-        "command": sanitized_command(),
-        "git_head": recorded_git_identity(),
-        "checkout_root": recorded_checkout_root(),
         "platform": {
             "system": platform.system(),
             "release": platform.release(),
@@ -1859,20 +1926,13 @@ def main():
         shutil.rmtree(run_root, ignore_errors=True)
 
     report["failed"] = failed
-    # Durable-artifact policy net: after every field is filled
-    # (including per-proof paths), refuse to serialize a report that
-    # still carries the operator's profile path in any string value.
-    personal = personal_path_in_report(report)
-    if personal is not None:
-        raise SystemExit(
-            f"refusing to write evidence containing the operator's "
-            f"profile path: {personal!r}; stage all inputs outside "
-            "the profile")
-
     if args.json_report:
-        with open(args.json_report, "w", encoding="utf-8") as stream:
-            json.dump(report, stream, indent=2, sort_keys=True)
-            stream.write("\n")
+        # The shared writer owns the provenance fields and applies the
+        # durable-artifact policy net -- the personal-path scan over every
+        # string value, run after the per-proof paths are filled -- so a proof
+        # that recorded a profile-rooted path is refused rather than committed.
+        write_committed_report(args.json_report, report,
+                               caller_paths=caller_paths, indent=2)
 
     total = len(report["proofs"])
     print(f"{total - failed} passed, {failed} failed "

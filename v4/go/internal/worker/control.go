@@ -78,10 +78,22 @@ func CreateParent() (*Control, error) {
 	return c, nil
 }
 
-// workerSecurityFailure maps any creator-only policy failure to the
-// worker's Conflict class exactly like Rust control.rs namespace_error
-// (the detail is the exact Rust string; the cause is folded away).
+// workerSecurityFailure maps a creator-only policy failure to the worker's
+// Conflict class exactly like Rust control.rs namespace_error (the detail is
+// the exact Rust string; the cause is folded away).
+//
+// An exhausted descriptor table is not a policy conflict: nothing about the
+// file's ownership was refused, the kernel simply would not hand out a
+// descriptor for the check to run. Reporting Conflict there is the fold
+// design section 7 removes, because Conflict is the class of a worker that
+// started and misbehaved and would let an unspawnable worker read as a
+// protocol disagreement. The reference answers the io class for a worker it
+// cannot resource (design section 9.4), so the resource failure keeps its own
+// class and the handlers map it to io with outcome read_only_failure.
 func workerSecurityFailure(cause error) error {
+	if isDescriptorExhaustion(cause) {
+		return &format.Error{Code: format.CodeIO, Detail: "worker control access policy: " + cause.Error()}
+	}
 	return &format.Error{Code: format.CodeConflict, Detail: "worker control access policy could not be established"}
 }
 

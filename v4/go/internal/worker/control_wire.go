@@ -17,6 +17,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/publication"
 )
@@ -295,7 +296,7 @@ func (c *Control) RequestExternalPoll() bool {
 		if !c.ParentAlive() {
 			return true
 		}
-		time.Sleep(pollInterval)
+		calleropen.Sleep(pollInterval)
 	}
 	return c.Response() != 0 || c.Cancelled()
 }
@@ -422,7 +423,7 @@ func (c *Control) WaitFor(wanted uint32) error {
 		if !c.ParentAlive() {
 			return &format.Error{Code: format.CodeConflict, Detail: "SDK worker parent exited"}
 		}
-		time.Sleep(pollInterval)
+		calleropen.Sleep(pollInterval)
 	}
 	return &format.Error{Code: format.CodeConflict, Detail: "worker protocol timed out"}
 }

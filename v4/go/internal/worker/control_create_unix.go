@@ -6,6 +6,8 @@ import (
 	"os"
 
 	"github.com/firehol/iprange/v4/go/internal/security"
+
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 )
 
 // createControlFile opens the private control path with the creator-only
@@ -16,7 +18,10 @@ import (
 // failure maps to the worker's Conflict class exactly like Rust
 // namespace_error over create_file.
 func createControlFile(path string, profile security.Profile) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+	// O_NONBLOCK is promptness for the open; calleropen clears it before
+	// handing the handle back, so the control page stays out of the
+	// runtime network poller (wave-19.25 design section 5).
+	f, err := calleropen.Open(path, os.O_RDWR|os.O_CREATE|os.O_EXCL|calleropen.NonBlocking, 0o600)
 	if err != nil {
 		return nil, workerSecurityFailure(err)
 	}

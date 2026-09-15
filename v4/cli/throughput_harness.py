@@ -58,11 +58,12 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from command_sanitize import (  # noqa: E402
-    recorded_checkout_root,
-    recorded_git_identity,
-    sanitized_command,
+    audit_report_writers,
+    require_paths_outside_profile,
+    run_shared_self_test,
     sanitized_path_value,
     under_profile,
+    write_committed_report,
 )
 
 REPORT_SCHEMA = "iprange-cli-throughput-report-v1"
@@ -233,6 +234,19 @@ def measure_threads(binary, work, requests):
             "exit_status": exit_status}
 
 
+def _screen_inputs(args):
+    """Refuse every path-valued option that lives under the profile.
+
+    The committed report records the binary paths it measured and the strace
+    command line, so a profile-rooted input is exactly how a personal path
+    reaches a durable artifact.  Checking here, before any child is spawned,
+    means the run never happens and no partial artifact exists either.
+    """
+    require_paths_outside_profile((("--go", args.go), ("--rust", args.rust),
+                                   ("--work", args.work),
+                                   ("--json-report", args.json_report)))
+
+
 def _require_empty_work(value):
     if not value or not os.path.isabs(value):
         raise SystemExit(f"--work must be an absolute path, got {value!r}")
@@ -346,6 +360,7 @@ def structural_problems(product, engines):
 
 
 def attestation(args):
+    _screen_inputs(args)
     work = _require_empty_work(args.work)
     engines = {"go": _require_executable("--go", args.go),
                "rust": _require_executable("--rust", args.rust)}
@@ -381,9 +396,6 @@ def attestation(args):
     problems = structural_problems(product, sorted(engines))
     report = {
         "schema": REPORT_SCHEMA,
-        "git_head": recorded_git_identity(),
-        "checkout_root": recorded_checkout_root(),
-        "command": sanitized_command(),
         "platform": {"system": platform.system(),
                      "release": platform.release(),
                      "machine": platform.machine(),
@@ -406,15 +418,22 @@ def attestation(args):
         "result": "PASS" if not problems else "FAIL",
         "problems": problems,
     }
-    text = json.dumps(report, indent=1, sort_keys=True) + "\n"
     if args.json_report:
         # Relative spellings resolve against the invocation directory,
         # like every other harness in this suite.
-        target = args.json_report
-        parent = os.path.dirname(os.path.abspath(target))
+        target = os.path.abspath(args.json_report)
+        parent = os.path.dirname(target)
         os.makedirs(parent, exist_ok=True)
-        with open(target, "w", encoding="utf-8") as stream:
-            stream.write(text)
+        # The shared writer owns command/git_head/checkout_root and the
+        # personal-path scan; the per-engine records carry binary paths and
+        # the strace command line, so the screening list is what a reader
+        # re-derives the privacy claim from.
+        write_committed_report(
+            target, report,
+            caller_paths=(("--go", args.go), ("--rust", args.rust),
+                          ("--work", args.work),
+                          ("--json-report", args.json_report)),
+            indent=1)
     for problem in problems:
         print(f"PROBLEM {problem}")
     if problems:
@@ -422,6 +441,13 @@ def attestation(args):
         return 1
     print(f"\nthroughput attestation PASSED (git_head={report['git_head']})")
     return 0
+
+
+# Executed-control counts for ``--self_test``, as literals (see the pins in
+# the body).  Adding a mutation class here means raising these numbers.
+THROUGHPUT_SELF_TEST_CASES = 12
+THROUGHPUT_SELF_TEST_REJECTED = 10
+THROUGHPUT_SELF_TEST_STRUCTURAL = 4
 
 
 def _self_test():
@@ -549,11 +575,45 @@ def _self_test():
             failures += 1
             for problem in problems[:3]:
                 print(f"       {problem}")
+
+    # Count and split pins.  ``cases`` is built by appends and the old PASS
+    # line printed len(cases), so a control that stopped being appended
+    # lowered the number and still exited 0.  The positive/negative split is
+    # pinned as well: a mutation whose target field moved would otherwise turn
+    # its own control into a no-op that "passes".
+    structural = [
+        ("the pinned number of cases ran",
+         len(cases) == THROUGHPUT_SELF_TEST_CASES,
+         f"{len(cases)} cases, expected {THROUGHPUT_SELF_TEST_CASES}"),
+        ("the pinned number of doctored records were refused",
+         sum(1 for _, _, expect in cases if expect)
+         == THROUGHPUT_SELF_TEST_REJECTED,
+         f"{sum(1 for _, _, expect in cases if expect)} rejected, expected "
+         f"{THROUGHPUT_SELF_TEST_REJECTED}"),
+        ("the genuine attestation still passes (non-vacuity anchor)",
+         not structural_problems(good(), ["go", "rust"]),
+         "the checker now rejects good measurement data"),
+        ("this writer commits through the shared provenance owner",
+         not audit_report_writers(cli_dir=_HERE,
+                                  writers=["throughput_harness.py"],
+                                  artifacts=False),
+         "see command_sanitize.audit_report_writers"),
+    ]
+    for description, condition, detail in structural:
+        print(f"{'ok  ' if condition else 'BAD '} {description:52} {detail}")
+        if not condition:
+            failures += 1
+    if len(structural) != THROUGHPUT_SELF_TEST_STRUCTURAL:
+        print(f"BAD  structural control count drifted: {len(structural)} != "
+              f"{THROUGHPUT_SELF_TEST_STRUCTURAL}")
+        failures += 1
+    run_shared_self_test("throughput_harness")
     print()
     if failures:
         print(f"throughput self-test FAILED: {failures} case(s)")
         return 1
-    print(f"throughput self-test PASSED: {len(cases)} cases")
+    print(f"throughput self-test PASSED: {len(cases)} cases + "
+          f"{len(structural)} structural")
     return 0
 
 

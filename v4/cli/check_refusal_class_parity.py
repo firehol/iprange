@@ -40,27 +40,53 @@ Rust observable behavior is the semantic authority for refusal classes where
 the JSON-RPC specification does not pin a class.  Parity alone is not enough
 to protect that authority: a future wave could change *both* engines to a new
 class and this gate would still report agreement.  ``PINNED_REFUSALS`` is
-therefore the second, independent anchor -- it names cells whose ``data.code``
-is fixed from the Rust reference, and the verifier requires both engines to
-answer the pinned class.  ``MANDATORY_PATH_KINDS`` is the third: it names the
-path kinds whose coverage is an obligation, so deleting a shape from the table
-(a reviewer's cheapest mutation) fails the gate instead of shrinking it.
+therefore the second, independent anchor -- it names
+cells whose ``data.code``, and where the contract turns on it their
+``data.outcome`` and publication evidence, are fixed from the Rust reference,
+and the verifier requires both engines to answer the pinned class.  The table
+itself is the third anchor: its committed entry count
+(``PINNED_REFUSAL_COUNT``) and digest (``PINNED_REFUSALS_SHA256``) are checked
+against the live table on every run, so deleting a pin, or loosening one from a
+mapping to a bare class -- which silently drops the outcome and evidence
+requirements while keeping the class -- fails the gate instead of weakening it.
+Adding a pin is a deliberate act that updates both anchors in the same change.
+``MANDATORY_PATH_KINDS`` and ``MANDATORY_ARMS`` are the fourth: they name,
+literally rather than by derivation from the sweep tables, every shape and
+every arm whose coverage is an obligation, and the verifier compares the two
+lists against the tables in both directions, so deleting a row from either side
+fails the gate instead of shrinking it.
 
 Usage
 -----
     nice python3 v4/cli/check_refusal_class_parity.py \
         --go BIN --rust BIN --fixture BIN --work EMPTY_DIR \
-        [--json-report FILE] [--deadline 4.0] [--retries 2] \
-        [--budget-seconds 55]
+        [--json-report FILE] [--sha256-ledger PATH] [--deadline 4.0] \
+        [--retries 2] [--budget-seconds 55]
 
     nice python3 v4/cli/check_refusal_class_parity.py --self-test
+
+``--json-report`` defaults to ``refusal-class-parity.json`` inside the
+caller's ``--work`` directory, which the caller owns and can discard: a bare
+gate run never writes the tracked evidence at
+``v4/cli/evidence/refusal-class-parity.json``, because an uncorroborated sweep
+is not evidence and must not overwrite the evidence under review.  Pass that
+path explicitly to record a run as evidence.
+
+``--sha256-ledger`` names a ``sha256sum``-format ledger of the staged
+binaries; when supplied, every binary digest the report records must appear in
+it, so the verdict is attributable to the artifacts the wave staged.
 
 ``--self-test`` is offline: it fabricates a report from the tables and proves
 the verifier rejects a synthetic divergence, an empty cell set, a deleted
 fold shape, a dropped arm, a missing mandatory path kind, an unhashed or
-mislabeled binary, a hang reported as agreement, and a broken pin.  The live
-run additionally enforces a per-attempt deadline (a cell that never returns is
-a hang, not a divergence) and a whole-run budget.
+mislabeled binary, a hang reported as agreement, and a broken pin; a pin
+deleted from both the table and the report; a pin loosened to a bare class; a
+table row whose obligation was un-named; and a binary digest the staged ledger
+does not list.  Its own length is an obligation: the run fails unless it
+executes exactly ``SELF_TEST_CASES_TOTAL`` controls, so a control cannot be
+removed to leave a shorter self-test that still reports PASS.  The live run
+additionally enforces a per-attempt deadline (a cell that never returns is a
+hang, not a divergence) and a whole-run budget.
 """
 
 import argparse
@@ -74,6 +100,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 sys.dont_write_bytecode = True
@@ -83,14 +110,34 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 from command_sanitize import (  # noqa: E402
-    recorded_checkout_root,
-    recorded_git_identity,
-    sanitized_command,
+    audit_report_writers,
+    profile_path,
+    report_provenance,
+    require_paths_outside_profile,
+    run_shared_self_test,
     sanitized_path_value,
+    write_committed_report,
 )
 
 REPORT_SCHEMA = "iprange-cli-refusal-class-parity-report-v1"
-DEFAULT_REPORT = os.path.join(_HERE, "evidence", "refusal-class-parity.json")
+# The committed evidence file is written only when a caller names it. A bare
+# gate run must not overwrite tracked evidence: the run that found this wrote
+# over evidence/refusal-class-parity.json while that file was under review, so
+# the default is a scratch report inside the caller's --work directory, which
+# is itself required to be empty and is the caller's to discard.
+DEFAULT_REPORT_NAME = "refusal-class-parity.json"
+EVIDENCE_REPORT = os.path.join(_HERE, "evidence", "refusal-class-parity.json")
+
+
+def resolve_report_path(args):
+    """Where one run writes its report: the explicit path, else scratch."""
+
+    if args.json_report:
+        return args.json_report
+    if args.work:
+        return os.path.join(args.work, DEFAULT_REPORT_NAME)
+    return os.path.join(tempfile.gettempdir(), f"{os.getpid()}-"
+                        + DEFAULT_REPORT_NAME)
 
 # Transport code for a product-level refusal.  -32602 is the params
 # validator's answer, which happens before any path is opened and is pinned
@@ -258,9 +305,21 @@ ARMS = [
      lambda t, c: {"path": t, "old_feed": "nosuch", "new_feed": "other",
                    "metadata": {"mode": "keep"},
                    "writer_budget": dict(WRITER_BUDGET)}),
+    # The imported source is swept by ``feeds.import``; the database being
+    # imported INTO is swept by ``feeds.import_target``. The two slots are
+    # decided by different owners -- the source open is a read-side
+    # classification, while the target is opened by the live writer and its
+    # value kind and value tag are checked against the source -- so pinning
+    # only the source leaves the whole target side of the workflow unswept.
     ("feeds.import", "iprange.v1.feeds.import", "source.path",
      lambda t, c: {"path": c["membership_main"],
                    "source": {"path": t, "mode": "immutable"},
+                   "metadata": {"mode": "keep"},
+                   "writer_budget": dict(WRITER_BUDGET)}),
+    ("feeds.import_target", "iprange.v1.feeds.import", "path",
+     lambda t, c: {"path": t,
+                   "source": {"path": c["membership_main"],
+                              "mode": "immutable"},
                    "metadata": {"mode": "keep"},
                    "writer_budget": dict(WRITER_BUDGET)}),
     # Bounded maintenance over a probed database.
@@ -333,6 +392,12 @@ PATH_KINDS = (
     "regular-valid",
     "regular-valid-membership",
     "live-membership",
+    # The live database whose value kind is direct, i.e. the one that cannot
+    # carry a named feed at all. Sweeping the named-feed arms over it is what
+    # pins the value-kind refusal, and it is a distinct shape from
+    # ``live-membership`` because the refusal happens after the writer opened
+    # a healthy database rather than while classifying a node.
+    "live-direct",
     "missing",
     "dir",
     "unix-socket",
@@ -352,6 +417,15 @@ PATH_KINDS = (
     # refusal from the post-visibility unknown outcome.
     "dest-parent-unreadable",
     "dest-collision",
+    # A destination node on a filesystem the durability proof refuses.
+    # ``replace_existing`` publication must answer the durability class here
+    # at every node shape, because the exchange cannot be atomic on such a
+    # filesystem at all; classifying the node first would answer the
+    # namespace collision class of a node that merely happens to sit at the
+    # destination name and downgrade that refusal. The node is a FIFO so the
+    # two answers are distinguishable: a FIFO is exactly the shape an
+    # open-then-inspect probe classifies as a collision.
+    "dest-fifo-crossfs",
 )
 
 # Shapes whose coverage is an obligation, stated independently of the table
@@ -362,13 +436,31 @@ PATH_KINDS = (
 # ``symlink-regular`` and ``live-membership`` carry the writer and named-feed
 # outcome rulings.  Removing one here is a design change the gate reports, not
 # a way to pass.
-MANDATORY_PATH_KINDS = ("sidecar-folded", "fifo", "symlink-regular",
-                        "symlink-live", "hardlink-live", "zero-length-live",
-                        "live-membership",
-                        # Deleting either of these would quietly drop the only
-                        # cells that prove the outcome-ambiguity boundary of
-                        # the publication path, so they are obligations.
-                        "dest-parent-unreadable", "dest-collision")
+MANDATORY_PATH_KINDS = (
+    # Every shape is an obligation, listed literally rather than derived
+    # from ``PATH_KINDS``: a table entry that is not also an obligation can
+    # be deleted, and deleting a row is the cheapest way to shrink this
+    # gate to nothing. ``verify_report`` checks the two lists against each
+    # other in both directions, so adding a shape without naming it here and
+    # deleting a shape named here both fail.
+    "regular-valid", "regular-valid-membership", "live-membership",
+    "live-direct", "missing", "dir", "unix-socket", "fifo",
+    "symlink-regular", "symlink-dir", "symlink-fifo", "symlink-live",
+    "hardlink-live", "procfs", "sysfs", "zero-length-live", "junk",
+    "sidecar-folded", "dest-parent-unreadable", "dest-collision",
+    "dest-fifo-crossfs")
+
+MANDATORY_ARMS = (
+    # The same obligation on the other axis, stated independently of
+    # ``ARMS``: each arm is a distinct product surface, and deleting one
+    # would delete every cell that measures it.
+    "reader.open", "database.info", "database.metadata.get", "validate.live",
+    "recovery.inspect.live", "recovery.inspect.offline", "recover.live",
+    "export", "direct.replace", "direct.csv_input", "metadata_source_read",
+    "database.metadata.replace", "feeds.create", "feeds.delete",
+    "feeds.rename", "feeds.import", "feeds.import_target",
+    "database.reclaim", "snapshot.publish", "at_file_list",
+    "metadata.file_delivery", "export.destination", "removals_output")
 
 # Cells whose class is fixed from the Rust reference implementation, beyond
 # what Go-vs-Rust parity can prove.  Each entry is (arm, path-kind) ->
@@ -419,6 +511,32 @@ PINNED_REFUSALS = {
         "data_code": "name_not_found", "outcome": "read_only_failure"},
     ("feeds.rename", "live-membership"): {
         "data_code": "name_not_found", "outcome": "read_only_failure"},
+    # A named-feed workflow over a live database whose value kind cannot
+    # carry feeds opened that database, read its header, and refused: the
+    # refusal is a read-only failure of a started operation, and an arm that
+    # labels it ``not_started`` claims no work happened when a writer is
+    # open. Both the value-kind refusal (a direct database cannot hold a
+    # feed) and the value-tag refusal (an import whose source tag differs
+    # from the target's) are pinned here, on both the target slot
+    # (``feeds.import_target``) and the create/delete/rename arms.
+    ("feeds.create", "live-direct"): {
+        "data_code": "wrong_value_kind", "outcome": "read_only_failure"},
+    ("feeds.delete", "live-direct"): {
+        "data_code": "wrong_value_kind", "outcome": "read_only_failure"},
+    ("feeds.rename", "live-direct"): {
+        "data_code": "wrong_value_kind", "outcome": "read_only_failure"},
+    ("feeds.import_target", "live-direct"): {
+        "data_code": "wrong_value_kind", "outcome": "read_only_failure"},
+    ("feeds.import_target", "live-membership"): {
+        "data_code": "wrong_value_tag", "outcome": "read_only_failure"},
+    # The destination durability boundary: a node sitting at the
+    # destination name on a filesystem the durability proof refuses is the
+    # durability refusal, never that node's own namespace class, and it
+    # arrives before any output is constructed.
+    ("snapshot.publish", "dest-fifo-crossfs"): {
+        "data_code": "durability_unsupported", "outcome": "not_started"},
+    ("snapshot.publish", "procfs"): {
+        "data_code": "durability_unsupported", "outcome": "not_started"},
     # Post-visibility durability of an adapter-owned output.  Once the
     # destination name is visible, a failure to establish durability is the
     # unknown outcome of a delivered file: the class is ``io``, the outcome is
@@ -451,6 +569,1165 @@ PINNED_REFUSALS = {
         "data_code": "name_exists", "outcome": "committed",
         "facts": "absent"},
 }
+
+# The pinned-refusal table is itself an obligation. Parity proves the two
+# engines agree; the pins prove they agree on the class the Rust reference
+# chose. A table entry can therefore purchase a PASS by being deleted (the
+# cell stops being checked) or by being loosened from a mapping to a bare
+# class (the outcome and publication-evidence requirements silently
+# disappear). Both edits leave every executed cell self-consistent, so only a
+# check against the committed table can see them: the count and digest below
+# are that table's committed identity, and the verifier refuses any run whose
+# live table differs from them. Adding a pin is a deliberate act: update both
+# constants in the same change that states the new obligation.
+PINNED_REFUSAL_COUNT = 36
+PINNED_REFUSALS_SHA256 = (
+    "f1734d17ead1b70a4538333631fd8870079026df0f70d91931e8b392650611ab")
+
+
+# ---------------------------------------------------------------------------
+# Third axis: descriptor pressure (SOW-0028 wave-19.25 design section 14).
+#
+# The two axes above change the *target* an arm is given. Descriptor pressure
+# changes the *environment*: the target stays valid and the operation stays
+# valid, and what is under test is which operation notices that it cannot
+# claim a descriptor and with what class it answers. That is a different
+# failure mode -- a per-request probe invented `io`/`not_started` for arms
+# that needed no descriptor at all, refused the releasing operation
+# `reader.close`, and still left the process able to die inside the runtime --
+# so it gets its own tables instead of being smuggled in as another path kind.
+#
+# A profile names the environment, not an expectation: the soft AND hard
+# RLIMIT_NOFILE the launcher installs before execve, how many descriptors it
+# additionally holds on a file outside the work directory, whether the session
+# completed an initializing valid request first, and what the null device is.
+# The expectation for a cell is `PINNED_PRESSURE_CLASSES`, fixed from the
+# measured Rust reference (design section 7's tables) and anchored by
+# committed count and digest exactly like `PINNED_REFUSALS`, so loosening a pin
+# from a mapping to a bare class -- dropping its wedge, poller, or coverage
+# obligation while keeping the class -- fails the gate instead of weakening it.
+#
+# Cells whose environment the launcher itself cannot build are host state and
+# are never refusals or coverage. `host_floor` says the minimum band at which a
+# cell is a product cell at all: the launcher needs 3 + held descriptors for
+# itself, and the delivered dynamically linked Rust artifact needs three more
+# for its loader (design section 13.1's measured exit 127).
+
+PRESSURE_BANDS = (3, 4, 5, 6, 7, 8, 9, 10, 11, 12)
+PRESSURE_HOLDS = (0, 3)
+PRESSURE_RUNTIMES = ("before", "after")
+PRESSURE_HOSTILE_NULL = ("fifo", "absent")
+PRESSURE_GENEROUS_BAND = 64
+
+PRESSURE_SUCCESS = ("RESULT", "RESULT")
+
+# The band at which the reader.open/reader.close warm-up that establishes the
+# "after" runtime state first completes on a fresh table (design section 7).
+# It is the immutable-reader arm's own minimum, so the occupied-table floor is
+# that plus the held count.
+WARMUP_MINIMUM_BAND = 5
+
+# The delivered Rust artifact is dynamically linked and its loader needs one
+# free descriptor to start (measured: exit 127 at zero free, success at one,
+# with and without the launcher's holds). Design section 13.1.
+RUST_LOADER_FLOOR = 4
+
+# The arms the pressure matrix defines. Each is a valid operation against a
+# valid target, so a refusal can only come from the environment. The names are
+# the pressure vocabulary of v4/cli/fd_pressure_harness.py, which owns the
+# pressured launcher and the per-arm frame scripts; one authoritative
+# implementation of each, composed here.
+PRESSURE_ARMS = (
+    "system.describe",              # claims no descriptor of its own
+    "reader-open-close-immutable",  # one reader
+    "reader-open-close-live",       # reader plus the coordination sidecar
+    "direct.replace",               # the writer family
+    "current.publish",              # the adapter publish family
+    "current.publish.hostname",     # the resolver arm (design section 6)
+    "maintenance.remove",           # the releasing family
+    "validate(worker)",             # the colocated worker family
+    "recovery.inspect(worker)",     # the colocated worker family
+)
+
+# Per-arm law, taken from design section 7's measured reference columns: the
+# band at which the operation completes on a fresh table (Rust `minimum`, and
+# the owned Go floor `go_minimum`), the class it must answer below that, the
+# classes that may never appear for it, and the terms that make a cell coverage
+# rather than an answer. Sections 11 and 13.3 record the writer and worker
+# families as staying two bands behind the reference: the classes must match,
+# the bands may not, and this table encodes that by pinning both numbers
+# separately instead of declaring parity.
+ARM_PRESSURE_LAW = {
+    "system.describe": {
+        "minimum": 4, "go_minimum": 3, "below": None,
+        "never": [("io", "not_started")], "releasing": False,
+    },
+    "reader-open-close-immutable": {
+        "minimum": 5, "go_minimum": 5, "below": ("io", "read_only_failure"),
+        "never": [("io", "not_started")], "releasing": True,
+    },
+    "reader-open-close-live": {
+        "minimum": 6, "go_minimum": 7, "below": ("io", "read_only_failure"),
+        "never": [("io", "not_started")], "releasing": True,
+    },
+    "direct.replace": {
+        "minimum": 6, "go_minimum": 8, "below": ("io", "not_started"),
+        # Measured one band under the owned Go floor: the transaction has
+        # begun and an open inside it yields EMFILE, so the writer answers
+        # its own abort class with the cleanup facts. The reference completes
+        # at 6 and has no measurement there to copy, so the class is pinned
+        # from the owned build's behaviour rather than declared as parity
+        # (design sections 11 and 13.3).
+        "go_below_extra": [("transaction_aborted", "not_committed")],
+        "never": [], "releasing": False,
+    },
+    "current.publish": {
+        # The reference is not monotone across bands 5 and 6 (io/not_published
+        # at 5, io/not_started at 6), so below the minimum either of the
+        # handler's own classes is the answer: what is pinned is the
+        # justification of the class, not the band ordering.
+        "minimum": 7, "go_minimum": 8, "below": None,
+        "below_any": [("io", "not_started"), ("io", "not_published")],
+        "never": [], "releasing": False,
+    },
+    "current.publish.hostname": {
+        # The same publish whose list carries a host name, so below the
+        # publish minimum it is refused by the publish path's own opens and
+        # answers the publish family's classes; design section 6 only decides
+        # what happens once the operation reaches the resolver, and there the
+        # answer is the reference class of a lookup that could not be
+        # performed. Whether the poller was created is a separate assertion
+        # (the arm is section 10's only exemption from poller freedom, and it
+        # is exempt, not required).
+        "minimum": 7, "go_minimum": 8, "below": None,
+        "below_any": [("io", "not_started"), ("io", "not_published")],
+        "success": ("input_format", "not_started"),
+        "never": [], "releasing": False,
+    },
+    "maintenance.remove": {
+        # The SDK removal class is unchanged by pressure and must never be a
+        # probe invention. The entry removed comes from a maintenance.list in
+        # the same session; a cell whose list is empty is not coverage
+        # (sections 10 and 13.4).
+        "minimum": None, "go_minimum": None, "below": None,
+        "never": [("io", "not_started")], "releasing": True,
+        "list_required": True,
+    },
+    "validate(worker)": {
+        # A worker that cannot be resourced is the io class, not a protocol
+        # conflict: conflict is the class of a worker that started and
+        # misbehaved, and inventing it for an exhausted table is the fold this
+        # wave removes.
+        "minimum": 8, "go_minimum": 10, "below": ("io", "read_only_failure"),
+        "never": [("conflict", None)], "releasing": False, "worker": True,
+        # Below the reference's launchable band the handler's own pre-attempt
+        # class is allowed (design section 13.1: no measured class to copy).
+        "pre_reference": [("io", "not_started")],
+    },
+    "recovery.inspect(worker)": {
+        "minimum": 7, "go_minimum": 9, "below": ("io", "read_only_failure"),
+        "never": [("conflict", None)], "releasing": False, "worker": True,
+        "pre_reference": [("io", "not_started")],
+    },
+}
+
+
+def pressure_profile_name(band, held, runtime_state, null_device_state):
+    """Stable identity of one pressure environment.
+
+    The name carries every parameter so a report reader can reconstruct the
+    environment from the cell alone; the band is zero-padded so the table
+    prints in sweep order.
+    """
+
+    return f"b{band:02d}h{held}-{runtime_state}-{null_device_state}"
+
+
+def _build_pressure_profiles():
+    """Bands 3..12 x fresh and occupied tables x before and after runtime
+    initialization, plus each hostile null device at a generous band."""
+
+    profiles = {}
+    for band in PRESSURE_BANDS:
+        for held in PRESSURE_HOLDS:
+            for runtime in PRESSURE_RUNTIMES:
+                name = pressure_profile_name(band, held, runtime, "normal")
+                profiles[name] = {
+                    "name": name, "limit": band, "held": held,
+                    "runtime_state": runtime, "null_device_state": "normal",
+                    # The warm-up that defines the "after" state is itself
+                    # the immutable-reader arm, so below its own minimum the
+                    # state cannot be established for any engine: host state,
+                    # per the same rule design section 13.2 applies to the
+                    # launcher's held count.
+                    "host_floor": max(3 + held,
+                                      WARMUP_MINIMUM_BAND + held
+                                      if runtime == "after" else 3 + held),
+                    # The loader's need is one descriptor on top of what the
+                    # process already holds, so it moves with the occupied
+                    # count: measured as exit 127 with nothing free above
+                    # stdio+holds, and success one band later.
+                    "rust_host_floor": max(RUST_LOADER_FLOOR + held, 3 + held,
+                                           WARMUP_MINIMUM_BAND + held
+                                           if runtime == "after" else 0),
+                    "expected_minimum_band": band,
+                }
+    for null_state in PRESSURE_HOSTILE_NULL:
+        name = pressure_profile_name(PRESSURE_GENEROUS_BAND, 0, "before",
+                                     null_state)
+        profiles[name] = {
+            "name": name, "limit": PRESSURE_GENEROUS_BAND, "held": 0,
+            "runtime_state": "before", "null_device_state": null_state,
+            "host_floor": 3, "rust_host_floor": 4,
+            "expected_minimum_band": PRESSURE_GENEROUS_BAND,
+        }
+    return tuple(profiles[name] for name in sorted(profiles))
+
+
+PRESSURE_PROFILES = _build_pressure_profiles()
+PRESSURE_PROFILE_BY_NAME = {profile["name"]: profile
+                            for profile in PRESSURE_PROFILES}
+
+# Every environment is an obligation, named literally rather than derived from
+# the table above: deleting a row of PRESSURE_PROFILES is the cheapest way to
+# shrink this axis, so the verifier compares the two lists in both directions
+# exactly as it does for path kinds and arms.
+MANDATORY_PRESSURE_PROFILES = (
+    "b03h0-after-normal", "b03h0-before-normal", "b03h3-after-normal",
+    "b03h3-before-normal", "b04h0-after-normal", "b04h0-before-normal",
+    "b04h3-after-normal", "b04h3-before-normal", "b05h0-after-normal",
+    "b05h0-before-normal", "b05h3-after-normal", "b05h3-before-normal",
+    "b06h0-after-normal", "b06h0-before-normal", "b06h3-after-normal",
+    "b06h3-before-normal", "b07h0-after-normal", "b07h0-before-normal",
+    "b07h3-after-normal", "b07h3-before-normal", "b08h0-after-normal",
+    "b08h0-before-normal", "b08h3-after-normal", "b08h3-before-normal",
+    "b09h0-after-normal", "b09h0-before-normal", "b09h3-after-normal",
+    "b09h3-before-normal", "b10h0-after-normal", "b10h0-before-normal",
+    "b10h3-after-normal", "b10h3-before-normal", "b11h0-after-normal",
+    "b11h0-before-normal", "b11h3-after-normal", "b11h3-before-normal",
+    "b12h0-after-normal", "b12h0-before-normal", "b12h3-after-normal",
+    "b12h3-before-normal", "b64h0-before-absent", "b64h0-before-fifo",
+)
+
+# The routine subset, for the cost budget in AGENTS.md: the band boundaries of
+# each family on a fresh table, one occupied-table probe, one after-init probe,
+# and both hostile null devices. The full PRESSURE_PROFILES product runs at a
+# milestone.
+ROUTINE_PRESSURE_PROFILES = (
+    "b03h0-before-normal", "b04h0-before-normal", "b05h0-before-normal",
+    "b06h0-before-normal", "b07h0-before-normal", "b08h0-before-normal",
+    "b10h0-before-normal", "b12h0-before-normal", "b08h3-before-normal",
+    "b08h0-after-normal", "b64h0-before-fifo", "b64h0-before-absent",
+)
+
+# The poller-free promise binds the Go engine, which owns a runtime network
+# poller whose creation has no failure path: every arm except the resolver must
+# answer with neither anon_inode:[eventpoll] nor anon_inode:[eventfd] in its
+# table (design section 10). The resolver arm alone may hold the one pair the
+# poller-readiness decision created deliberately.
+# The hostile-null-device law (design section 9), defined once, here, where the
+# committed class maps live. The cells replace /dev/null with a FIFO, or remove
+# it, inside a private mount namespace, and what section 9 requires is an answer
+# in both engines with the same class and no control file left behind: the
+# descriptor-owning spawn refuses a node that is not the null character device
+# rather than handing an undrained pipe to the child, so the worker arms answer
+# the class section 9.4 pins for a worker that cannot be resourced, and the file
+# arms are unaffected. The pressure harness grades the same table, so the sweep
+# and the verifier cannot drift apart.
+PRESSURE_HOSTILE_CLASSES = {
+    "system.describe": {"fifo": ("RESULT", "RESULT"), "absent": ("RESULT", "RESULT")},
+    "direct.replace": {"fifo": ("RESULT", "RESULT"), "absent": ("RESULT", "RESULT")},
+    "reader-open-close-immutable": {"fifo": ("RESULT", "RESULT"),
+                                    "absent": ("RESULT", "RESULT")},
+    "reader-open-close-live": {"fifo": ("RESULT", "RESULT"),
+                               "absent": ("RESULT", "RESULT")},
+    "validate(worker)": {"fifo": ("io", "read_only_failure"),
+                         "absent": ("io", "read_only_failure")},
+    "recovery.inspect(worker)": {"fifo": ("io", "read_only_failure"),
+                                 "absent": ("io", "read_only_failure")},
+    "current.publish": {"fifo": ("RESULT", "RESULT"), "absent": ("RESULT", "RESULT")},
+    "current.publish.hostname": {"fifo": ("input_format", "not_started"),
+                                 "absent": ("input_format", "not_started")},
+    # Section 13.4: this arm has no producer of a listable artifact, so the
+    # hostile cells are the blocked cells, which are reported and never scored.
+    "maintenance.remove": {"fifo": None, "absent": None},
+}
+
+BLOCKED_NAME = "blocked"          # the launcher's section 13.4 verdict
+HOST_UNSUPPORTED_NAME = "host-unsupported"   # the launcher's section 13.2 verdict
+
+RESOLVER_PRESSURE_ARM = "current.publish.hostname"
+POLLER_FREE_ARMS = tuple(a for a in PRESSURE_ARMS if a != RESOLVER_PRESSURE_ARM)
+
+# poller_demand_free mirrors the engine's constant in
+# v4/go/internal/calleropen/poller_readiness.go: the poller allocates two
+# descriptors and the resolver's datagram socket takes a third, so four free
+# slots cover the creation plus the request that provokes it. The launcher
+# hands over 3 stdio + held descriptors and nothing else, which is what makes
+# the authorized boundary computable from the cell.
+POLLER_DEMAND_FREE = 4
+POLLER_STDIO_FLOOR = 3
+
+
+def poller_authorized(profile):
+    """Whether the engine's poller-readiness decision authorized the poller."""
+
+    record = PRESSURE_PROFILE_BY_NAME[profile]
+    return (record["limit"] - (POLLER_STDIO_FLOOR + record["held"])
+            >= POLLER_DEMAND_FREE)
+
+
+def pinned_pressure_expectation(arm, profile):
+    """One cell's obligation, derived from the arm's law and the environment.
+
+    Returned as a mapping rather than a bare class so the obligation carries
+    the wedge, poller, and coverage terms with the class: a pin that names only
+    a class cannot fail a cell that answered that class while wedging, leaking
+    the poller, or never reaching an open.
+    """
+
+    law = ARM_PRESSURE_LAW[arm]
+    record = PRESSURE_PROFILE_BY_NAME[profile]
+    null_state = record.get("null_device_state", "normal")
+    if null_state != "normal":
+        # The hostile cells are not a band question: at a generous band every
+        # arm can complete, and what is under test is the spawn's and the
+        # open's handling of a /dev/null that is not the null device. The class
+        # is therefore the section 9 table, and a None entry is section 13.4's
+        # blocked cell rather than an expectation.
+        want = PRESSURE_HOSTILE_CLASSES[arm][null_state]
+        state = "hostile" if want is not None else "blocked"
+        return {
+            "data_code": None if want is None else want[0],
+            "outcome": None if want is None else want[1],
+            "band_state": state,
+            "below": (list(law["below"]) if law.get("below") else None),
+            "success": list(law.get("success", PRESSURE_SUCCESS)),
+            "hostile_class": (list(want) if want is not None else None),
+            "go_below_extra": [list(item) for item in law.get("go_below_extra", [])],
+            "pre_reference": [list(item) for item in law.get("pre_reference", [])],
+            "below_any": [list(item) for item in law.get("below_any", [])],
+            "never": [list(item) for item in law.get("never", [])],
+            "wedge": "never",
+            "poller": ("authorized-pair-or-none" if arm == RESOLVER_PRESSURE_ARM
+                       else "absent"),
+            # An empty list for the blocked arm means "no removal was possible",
+            # which is the blocked shape, not coverage (section 14).
+            "vacuous": "fail",
+            "host_unsupported": ("allowed" if record["limit"] < record["host_floor"]
+                                 else "forbidden"),
+            "rust_host_unsupported": ("allowed" if record["limit"]
+                                      < record["rust_host_floor"] else "forbidden"),
+            "releasing": bool(law.get("releasing")),
+            "list_required": bool(law.get("list_required")),
+            "minimum_band": law["minimum"],
+            "go_minimum_band": law["go_minimum"],
+        }
+    if law.get("anywhere"):
+        want, state = law["anywhere"], "band-independent"
+    elif law["minimum"] is None:
+        want, state = None, "factual"
+    else:
+        minimum = law["minimum"] + record["held"]
+        if record["limit"] >= minimum:
+            want, state = law.get("success", PRESSURE_SUCCESS), "at-or-above-minimum"
+        else:
+            state = "below-minimum"
+            if law.get("below"):
+                want = law["below"]
+            elif law.get("below_any"):
+                want = law["below_any"][0]
+            else:
+                want = None
+    return {
+        "data_code": None if want is None else want[0],
+        "outcome": None if want is None else want[1],
+        # band_state records which side of the arm minimum the
+        # environment sits on. It is stored, not re-derived at verdict
+        # time: without it a pin would accept success or the
+        # below-minimum class in either band, so a band regression
+        # stayed invisible while the class still matched.
+        "band_state": state,
+        "hostile_class": None,
+        # The exhaustion class is a property of the arm, not of the band the
+        # reference minimum happens to sit in, so it is stored here. Without
+        # it an engine judged below its own floor would be read as owing the
+        # class the *other* engine's band_state selected, which for the writer
+        # family is a success.
+        "below": (list(law["below"]) if law.get("below") else None),
+        # What the arm owes once it is at or above its own minimum. Most arms
+        # complete; the host-name arm's completion is the resolver class,
+        # because its list can never resolve in the harness environment.
+        "success": list(law.get("success", PRESSURE_SUCCESS)),
+        "go_below_extra": [list(item) for item in law.get("go_below_extra", [])],
+        # Design section 13.1: below the band the dynamic loader can start in
+        # there is no measured reference class to copy, so the arm's own
+        # pre-attempt class is allowed. The never-lists and the poller
+        # assertion keep binding, and the obligation is unchanged from the
+        # first band where the reference exists.
+        "pre_reference": [list(item) for item in law.get("pre_reference", [])],
+        "below_any": [list(item) for item in law.get("below_any", [])],
+        "never": [list(item) for item in law.get("never", [])],
+        "wedge": "never",
+        "poller": ("authorized-pair-or-none" if arm == RESOLVER_PRESSURE_ARM
+                   else "absent"),
+        "vacuous": "fail",
+        "host_unsupported": ("allowed" if record["limit"] < record["host_floor"]
+                             else "forbidden"),
+        "rust_host_unsupported": ("allowed" if record["limit"]
+                                  < record["rust_host_floor"] else "forbidden"),
+        "releasing": bool(law.get("releasing")),
+        "list_required": bool(law.get("list_required")),
+        "minimum_band": law["minimum"],
+        "go_minimum_band": law["go_minimum"],
+    }
+
+
+def _build_pinned_pressure_classes():
+    return {(arm, profile["name"]): pinned_pressure_expectation(
+                arm, profile["name"])
+            for arm in PRESSURE_ARMS for profile in PRESSURE_PROFILES}
+
+
+PINNED_PRESSURE_CLASSES = _build_pinned_pressure_classes()
+
+# The committed identity of the pressure table, exactly like the pinned-refusal
+# anchors: deleting a cell, adding one, or loosening one's mapping changes the
+# digest, and the count catches a shrink that a re-derivation would hide.
+# Literal, not derived: a count computed from the swept tables would stay
+# self-consistent when an arm or a profile row was deleted, which is the
+# shrink this anchor exists to catch.
+PINNED_PRESSURE_CLASS_COUNT = 378
+PINNED_PRESSURE_CLASSES_SHA256 = (
+    "314d8be5618e9775d9dd386ad6d7e521ff27ee9ba63d7c9501746de941ad1456")
+
+
+def pinned_pressure_fingerprint(table=None):
+    """The digest of the pressure-pinned table in a stable encoding.
+
+    JSON with sorted keys and no optional whitespace over the
+    ``((arm, profile), value)`` pairs, so a bare class and a mapping that
+    requires the same class cannot digest alike: the encoding records the shape
+    of the obligation, not only its class.
+    """
+
+    source = PINNED_PRESSURE_CLASSES if table is None else table
+    encoded = json.dumps([[[arm, profile], value]
+                          for (arm, profile), value in sorted(source.items())])
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def pressure_cell_from_records(arm, profile, records, attempts):
+    """Fold the pressured launcher's per-engine records into one cell.
+
+    ``records`` maps engine -> the record v4/cli/fd_pressure_harness.py
+    produced for that (arm, environment, attempt); ``attempts`` is how many
+    runs the cell had. The launcher, the per-arm frame scripts, and the
+    descriptor-table sampler stay in that file (one authoritative
+    implementation of each); this function only translates them into the
+    shape the parity verifier compares.
+    """
+
+    record = PRESSURE_PROFILE_BY_NAME[profile]
+    cell = {"arm": arm, "profile": profile,
+            "band": record["limit"], "held": record["held"],
+            "runtime": record["runtime_state"],
+            "null_device": record["null_device_state"],
+            "attempts": attempts, "agreed": True, "hung": False,
+            "flaky": False, "vacuous": False, "list_empty": False,
+            "close_refused": False, "go_poller": [None, None]}
+    for engine in ("go", "rust"):
+        source = records.get(engine)
+        if source is None:
+            cell[engine] = {"kind": "missing"}
+            continue
+        answer = source.get("answer")
+        verdict = source.get("verdict")
+        kind, transport_code, data_code, outcome = None, None, None, None
+        exit_class = None
+        if verdict == BLOCKED_NAME:
+            # Section 13.4: an arm with no removable entry is reported blocked.
+            # It answered nothing, and that is the honest outcome, so it must
+            # not be folded into the wedge term.
+            kind, exit_class = "blocked", None
+        elif verdict == HOST_UNSUPPORTED_NAME:
+            # Sections 13.1 and 13.2: the launcher could not build this
+            # environment (its own descriptor floor, the dynamic loader, or the
+            # warm-up the "after" state needs). No product code ran, so there
+            # is no answer to read -- that is host state, never a wedge.
+            kind, exit_class = "host", "host"
+        elif verdict == "wedge" or answer is None:
+            kind, exit_class = "no-answer", None
+        else:
+            parsed = json.loads(answer) if isinstance(answer, str) else answer
+            if isinstance(parsed, dict) and parsed.get("error"):
+                error = parsed["error"]
+                data = error.get("data") or {}
+                kind, transport_code = "error", error.get("code")
+                data_code, outcome = data.get("code"), data.get("outcome")
+                exit_class = "refused"
+            elif isinstance(parsed, dict) and "result" in parsed:
+                kind, transport_code, data_code, outcome = (
+                    "answered", 0, "RESULT", "RESULT")
+                exit_class = "success"
+            else:
+                kind = "no-answer"
+        # The launcher's three no-answer verdicts stay distinct here: a host
+        # state (sections 13.1-13.2) or a blocked arm (section 13.4) answered
+        # nothing for a stated reason, and folding either into "no-answer"
+        # would report an unbuildable environment or an unproducible artifact
+        # as an engine wedge.
+        cell[engine] = {"kind": "answered" if kind in ("answered", "error")
+                        else "host" if kind == "host"
+                        else "blocked" if kind == "blocked"
+                        else "no-answer",
+                        "transport_code": transport_code,
+                        "data_code": data_code, "outcome": outcome,
+                        "result": kind == "answered",
+                        "exit_class": ("host" if kind == "host" else
+                                       "success" if kind == "answered" else
+                                       "refused" if kind == "error" else "none"),
+                        "verdict": verdict, "why": source.get("why")}
+        if verdict == "disagreement":
+            cell["flaky"] = True
+        if kind == "no-answer":
+            cell["hung"] = True
+        if source.get("close_class") not in (None, ("result", "RESULT", "RESULT")):
+            cell["close_refused"] = True
+        if verdict == "blocked" or source.get("verdict") == "blocked":
+            cell["list_empty"] = True
+        if verdict == "wrong-class" and kind == "error":
+            # A "valid" request refused by validation before any open is not
+            # coverage; the launcher's own below-minimum expectations are
+            # graded by the pin, so a wrong class that is also a validation
+            # refusal is reported as vacuous and fails.
+            if data_code in ("invalid_argument", "invalid_params",
+                             "not_supported"):
+                cell["vacuous"] = True
+    if (cell["go"].get("kind") == "answered"
+            and cell["rust"].get("kind") == "answered"):
+        cell["agreed"] = _pressure_answer(cell, "go") == _pressure_answer(
+            cell, "rust")
+    poller = records.get("go")
+    if poller is not None and poller.get("poller_ever") is not None:
+        cell["go_poller"] = list(poller["poller_ever"])
+    return cell
+
+
+def run_pressure_sweep(go, rust, fixture, work, profiles, runs=2, jobs=1):
+    """Execute the pressure axis with the launcher of design section 10.
+
+    One fresh process per cell per engine, soft and hard RLIMIT_NOFILE set by
+    the launcher before execve, the table pre-occupied by descriptors held on a
+    file outside the work directory, everything nice'd, an 8 s per-cell budget
+    so a cell that needs the whole budget is a wedge, the child's descriptor
+    table sampled throughout, stderr scanned for the runtime's fatal tokens, and
+    every cell executed at least twice with any disagreement failing. All of
+    that lives in v4/cli/fd_pressure_harness.py, which owns the launcher; this
+    import is deferred because that module imports this one for its own
+    materialization helpers, and neither side may duplicate the other.
+    """
+
+    import fd_pressure_harness  # noqa: PLC0415  (deferred: circular by design)
+
+    bins = {"go": go, "rust": rust}
+    # Read into distinct names first: a class body resolves a name it also
+    # binds against the class namespace and then the module globals, so it
+    # cannot see the enclosing function's parameter of the same name.
+    go_dir = os.path.dirname(os.path.abspath(go))
+    rust_dir = os.path.dirname(os.path.abspath(rust))
+    fixture_bin = os.path.abspath(fixture)
+    scratch_dir = os.path.join(work, "fd-pressure")
+
+    class _LauncherArgs:           # the harness CLI's shape, filled directly
+        go_bin = go_dir
+        rust_bin = rust_dir
+        fixture = fixture_bin
+        scratch = scratch_dir
+        keep_work = True
+
+    _, contexts, hold_path = fd_pressure_harness.prepare_ctx(_LauncherArgs(),
+                                                             bins,
+                                                             slots=max(1, jobs))
+    cells, failures = [], 0
+    slot = 0
+    for arm in PRESSURE_ARMS:
+        for profile in profiles:
+            record = PRESSURE_PROFILE_BY_NAME[profile]
+            attempts = max(2, runs)
+            per_engine = {}
+            for engine in ("go", "rust"):
+                # Host state (design sections 13.1-13.2) is decided by the
+                # launcher inside run_cell, which owns that classification and
+                # answers it without starting a doomed process; the sweep
+                # reads the verdict back rather than duplicating the rule.
+                best = None
+                for _attempt in range(attempts):
+                    candidate = fd_pressure_harness.run_cell(
+                        engine, bins, contexts[slot % len(contexts)],
+                        hold_path, arm, record["limit"], record["held"],
+                        record["runtime_state"], record["null_device_state"])
+                    if best is None or (candidate.get("verdict") == "pass"):
+                        best = candidate
+                    if candidate.get("verdict") != best.get("verdict"):
+                        best["verdict"] = "disagreement"
+                        best["why"] = "cell disagreed across runs"
+                per_engine[engine] = best
+            slot += 1
+            cell = pressure_cell_from_records(arm, profile, per_engine, attempts)
+            cells.append(cell)
+            pin = PINNED_PRESSURE_CLASSES.get((arm, profile))
+            if pin is None:
+                failures += 1
+                continue
+            for engine in ("go", "rust"):
+                problems = pressure_cell_problems(cell, pin, engine)
+                if problems:
+                    failures += 1
+                    cell.setdefault("problems", []).extend(problems)
+                    break
+    rollup = pressure_rollup(cells, profiles)
+    rollup["failed"] = failures
+    return {"mode": None, "cells": cells, "runs": max(2, runs), **rollup}
+
+
+def expected_pressure_cells(profiles=None):
+    """Every (arm, profile) cell the pressure axis owes, derived here."""
+
+    chosen = (MANDATORY_PRESSURE_PROFILES if profiles is None else tuple(profiles))
+    return [(arm, profile) for arm in PRESSURE_ARMS for profile in chosen]
+
+
+def pressure_table_integrity_problems():
+    """Every way the pressure axis can be shrunk without being noticed.
+
+    Checked against the committed constants rather than the report, so this is
+    the term that turns a deleted profile, a deleted arm, a deleted pin, or a
+    loosened pin into a gate failure instead of a smaller gate.
+    """
+    problems = []
+    names = [profile["name"] for profile in PRESSURE_PROFILES]
+    for entry in MANDATORY_PRESSURE_PROFILES:
+        if entry not in names:
+            problems.append(
+                f"pressure profile {entry!r} is an obligation but is missing "
+                f"from PRESSURE_PROFILES; deleting an environment is not a "
+                f"way to pass")
+    for entry in names:
+        if entry not in MANDATORY_PRESSURE_PROFILES:
+            problems.append(
+                f"pressure profile {entry!r} is swept but is not an "
+                f"obligation, so deleting it would shrink the gate unnoticed; "
+                f"name it in MANDATORY_PRESSURE_PROFILES")
+    if not ROUTINE_PRESSURE_PROFILES:
+        problems.append("the routine pressure subset is empty; a gate that "
+                        "sweeps no pressure profile verifies nothing")
+    for entry in ROUTINE_PRESSURE_PROFILES:
+        if entry not in names:
+            problems.append(
+                f"routine pressure profile {entry!r} is not in "
+                f"PRESSURE_PROFILES; the routine subset must be a subset")
+    if len(PINNED_PRESSURE_CLASSES) != PINNED_PRESSURE_CLASS_COUNT:
+        problems.append(
+            f"the pinned-pressure-class table has {len(PINNED_PRESSURE_CLASSES)} "
+            f"entries, not the committed {PINNED_PRESSURE_CLASS_COUNT}; a cell "
+            f"cannot be deleted to make the gate pass")
+    digest = pinned_pressure_fingerprint()
+    if digest != PINNED_PRESSURE_CLASSES_SHA256:
+        problems.append(
+            f"the pinned-pressure-class table digests to {digest}, not the "
+            f"committed {PINNED_PRESSURE_CLASSES_SHA256}; deleting a cell, "
+            f"adding one, or loosening one from a mapping to a bare class "
+            f"(dropping its wedge, poller, or coverage obligation) all read "
+            f"as tampering with the authority this gate is anchored to")
+    for arm in PRESSURE_ARMS:
+        if arm not in ARM_PRESSURE_LAW:
+            problems.append(f"pressure arm {arm!r} has no law entry")
+    for arm in ARM_PRESSURE_LAW:
+        if arm not in PRESSURE_ARMS:
+            problems.append(
+                f"pressure law entry {arm!r} is not a swept arm; a law without "
+                f"an arm cannot be exercised")
+    for (arm, profile) in expected_pressure_cells():
+        if (arm, profile) not in PINNED_PRESSURE_CLASSES:
+            problems.append(
+                f"pressure cell ({arm!r}, {profile!r}) is owed by the derived "
+                f"product but has no pinned class")
+    return problems
+
+
+def _pressure_answer(cell, engine):
+    """The (data_code, outcome) one engine answered in a pressure cell."""
+
+    record = cell.get(engine) or {}
+    if record.get("kind") == "answered" and record.get("result"):
+        return PRESSURE_SUCCESS
+    return (record.get("data_code"), record.get("outcome"))
+
+
+def _pressure_band_state(pin, engine, profile):
+    """Which side of *this engine's* arm minimum the cell sits on.
+
+    ``pinned_pressure_expectation`` stores ``band_state`` from the Rust
+    reference minimum, which design section 7 makes the authority. Go carries
+    its own measured floor separately: design sections 11 and 13.3 record the
+    writer and worker families as staying behind the reference on purpose, so
+    the table pins both numbers instead of declaring band parity. Re-deriving
+    the state against the engine's own minimum is what lets a Go cell that
+    completes two bands early read as a success while a Go cell that lost a
+    band still reads as a regression. A cell whose arm has no minimum at all
+    (a factual or band-independent arm) keeps the stored state, which is not
+    band-shaped.
+    """
+
+    if pin["band_state"] not in ("at-or-above-minimum", "below-minimum"):
+        # hostile, blocked, factual and band-independent cells are not a band
+        # question, so the stored state is the answer.
+        return pin["band_state"]
+    minimum = (pin["minimum_band"] if engine == "rust"
+               else pin["go_minimum_band"])
+    if minimum is None:
+        return pin["band_state"]
+    record = PRESSURE_PROFILE_BY_NAME[profile]
+    return ("at-or-above-minimum"
+            if record["limit"] >= minimum + record["held"]
+            else "below-minimum")
+
+
+def _pressure_expected_answer(pin, engine, profile):
+    """The class one engine owes in one cell, from its own arm minimum.
+
+    The obligation is symmetric across the engines only in its *classes*: the
+    writer and worker families sit behind the Rust reference bands on purpose
+    (design sections 11 and 13.3), so each engine is judged against the minimum
+    the table measured for it. This is the single derivation of that answer;
+    both the verdict and the fabricated report use it, so a report cannot be
+    built from one rule and judged by another.
+    """
+
+    state = _pressure_band_state(pin, engine, profile)
+    if state == "hostile":
+        # Section 9's class, identical in both engines: the hostile cells exist
+        # to prove the two engines react to a poisoned /dev/null the same way.
+        return tuple(pin["hostile_class"])
+    if state == "blocked":
+        return None
+    if state == "at-or-above-minimum":
+        # The completion class is the arm's own: the publish family completes,
+        # and the host-name arm, whose list can never resolve in this
+        # environment, completes into the resolver's reference class.
+        return tuple(pin["success"])
+    if state == "below-minimum":
+        if pin["below"] is not None:
+            return tuple(pin["below"])
+        if pin["below_any"]:
+            return tuple(pin["below_any"][0])
+        # An arm whose reference names no exhaustion class: the operation
+        # claims no descriptor of its own, so the honest answer in a band the
+        # loader can still start in is the completion.
+        return PRESSURE_SUCCESS
+    return tuple(pin["success"])
+
+
+def _pressure_divergence_is_band_gap(pin, cell, go_answer, rust_answer):
+    """Whether a cross-engine difference is the gap design 13.3 expects.
+
+    In the band window between the Rust minimum and the owned-Go minimum one
+    engine completes and the other answers the exhaustion class of the same
+    arm. That pair is the expected result of a sweep, not a parity failure.
+    Every other difference is: two refusals naming different classes, a
+    success beside a class that is not this arm's exhaustion refusal, or a
+    difference while both engines stand on the same side of their own minimum.
+    """
+
+    if go_answer == rust_answer:
+        return True
+    states = {engine: _pressure_band_state(pin, engine, cell["profile"])
+              for engine in ("go", "rust")}
+    answers = {"go": go_answer, "rust": rust_answer}
+    if sorted(states.values()) == ["below-minimum", "below-minimum"]:
+        # Neither engine stands on a band where it owes a completion, so the
+        # obligation is each engine's own pinned below-minimum class and there
+        # is no cross-engine equality to assert. The per-engine verdict applies
+        # the same list, so this admits nothing the table does not already pin.
+        return all(answers[engine] in _pressure_accepted_answers(
+            pin, engine, cell["profile"]) for engine in ("go", "rust"))
+    if sorted(states.values()) != ["at-or-above-minimum", "below-minimum"]:
+        return False
+    winner = min(("go", "rust"), key=lambda engine: states[engine]
+                 != "at-or-above-minimum")
+    loser = "rust" if winner == "go" else "go"
+    law = ARM_PRESSURE_LAW[cell["arm"]]
+    if answers[winner] != tuple(law.get("success", PRESSURE_SUCCESS)):
+        return False
+    allowed = [tuple(law["below"])] if law.get("below") else []
+    allowed += [tuple(item) for item in law.get("below_any", [])]
+    if loser == "go":
+        allowed += [tuple(item) for item in law.get("go_below_extra", [])]
+    allowed.append(tuple(law.get("success", PRESSURE_SUCCESS)))
+    allowed.append((None, None))
+    return answers[loser] in allowed
+
+
+def _pressure_accepted_answers(pin, engine, profile):
+    """Every class this engine may answer below its own arm minimum.
+
+    One derivation, used by the per-engine verdict and by the cross-engine
+    divergence term: below both minima neither engine owes the other a class,
+    because the committed table pins each engine's own exhaustion answer.
+    """
+
+    want = _pressure_expected_answer(pin, engine, profile)
+    accepted = ([want] if want is not None else [])
+    accepted += [tuple(item) for item in pin.get("below_any", [])]
+    if engine == "go":
+        accepted += [tuple(item) for item in pin.get("go_below_extra", [])]
+    record = PRESSURE_PROFILE_BY_NAME[profile]
+    if record["limit"] < RUST_LOADER_FLOOR + record["held"]:
+        accepted += [tuple(item) for item in pin.get("pre_reference", [])]
+    return list(dict.fromkeys(accepted))
+
+
+def pressure_cell_problems(cell, pin, engine):
+    """Verdict problems for one engine's half of one pressure cell.
+
+    The order is the one the parity report already uses: answered at all (a
+    wedge is its own verdict, never a class), transport code, data.code,
+    data.outcome, exit-status class, and the descriptor-set assertion. Host
+    state is consulted first, because a cell whose environment the launcher
+    could not build is neither a refusal nor coverage (design sections 10 and
+    13.2), and a vacuous cell -- one that never reached a real open -- is not
+    coverage either (design section 14).
+    """
+
+    problems = []
+    where = f"pressure cell ({cell['arm']}, {cell['profile']}, {engine})"
+    record = cell.get(engine) or {}
+    answered = record.get("kind") in ("answered", "host", "blocked")
+    if record.get("kind") == "host":
+        allowed = (pin["host_unsupported"] if engine == "go"
+                   else pin["rust_host_unsupported"])
+        if allowed != "allowed":
+            problems.append(
+                f"{where}: reported host state where the environment was "
+                f"buildable (host_floor allows {allowed!r}); host state is "
+                f"never a substitute for an answer")
+        return problems
+    if not answered:
+        problems.append(f"{where}: {pin['wedge']} rule violated -- the arm "
+                        f"never answered within the cell budget (a wedge is a "
+                        f"failure, not a class)")
+        return problems
+    if record.get("transport_code") not in (None, PRODUCT_ERROR, 0):
+        problems.append(f"{where}: unexpected transport code "
+                        f"{record.get('transport_code')!r}")
+    if (record.get("exit_class") not in ("success", "refused", "host")
+            and record.get("kind") != "blocked"):
+        # A blocked cell (section 13.4) answered nothing by design, so it has
+        # no exit-status class to name; the wedge term above already decided
+        # that this is the honest outcome rather than a missing answer.
+        problems.append(f"{where}: missing exit-status class")
+    if pin["releasing"] and cell.get("close_refused"):
+        problems.append(
+            f"{where}: the releasing operation was refused after a successful "
+            f"open (design section 7: reader.close is never refused)")
+    if cell.get("list_blocked"):
+        if cell.get("agreed"):
+            problems.append(
+                f"{where}: claimed coverage although maintenance.list reported "
+                f"no removable entry; a removal that removed nothing is not "
+                f"coverage, it is the blocked cell of design section 13.4 and "
+                f"must be reported as such")
+        return problems
+    if cell.get("vacuous"):
+        problems.append(
+            f"{where}: vacuous -- the request was refused by validation before "
+            f"any open, which is not coverage (design section 14)")
+    for banned in pin["never"]:
+        if _pressure_answer(cell, engine) == tuple(banned):
+            problems.append(
+                f"{where}: answered {tuple(banned)}, a class this arm may never "
+                f"produce (design section 7)")
+    got = _pressure_answer(cell, engine)
+    want = _pressure_expected_answer(pin, engine, cell["profile"])
+    state = _pressure_band_state(pin, engine, cell["profile"])
+    if state == "blocked":
+        # Section 13.4: this arm has no producer of a removable entry, so the
+        # honest verdict for the cell is blocked. An engine that reports a real
+        # answer here either removed something it cannot remove or is counting
+        # a refusal as coverage; both are the failure this term exists for. The
+        # vacuous and list_blocked terms above catch the softer variants.
+        if record.get("kind") == "answered" and record.get("result"):
+            problems.append(
+                f"{where}: reported coverage for an arm design section 13.4 "
+                f"records as blocked (no removable entry); a removal that "
+                f"removed nothing is not coverage")
+        return problems
+    if state == "hostile":
+        # Section 9 grades the hostile null-device cells: the answer must be
+        # the pinned class and it must be the same class in both engines. The
+        # band rules below do not apply (the cells run at a generous band), but
+        # the poller assertion at the end of this function still does, so the
+        # result is not returned early.
+        if got != want:
+            problems.append(
+                f"{where}: hostile null device answered {got}, want {want}; the "
+                f"class section 9 pins is the same in both engines")
+    minimum = (pin["minimum_band"] if engine == "rust"
+               else pin["go_minimum_band"])
+    profile_record = PRESSURE_PROFILE_BY_NAME[cell["profile"]]
+    extra = (" or one of " + str(pin["below_any"])) if pin.get("below_any") else ""
+    if state == "at-or-above-minimum" and got != want:
+        problems.append(
+            f"{where}: answered {got} at or above the arm minimum band "
+            f"{minimum} plus the held count; a valid operation must complete "
+            f"there (design section 7)")
+    elif state == "below-minimum":
+        accepted = _pressure_accepted_answers(pin, engine, cell["profile"])
+        if got not in accepted:
+            problems.append(
+                f"{where}: answered {got} below the arm minimum band {minimum}; "
+                f"the reference pins {want}{extra} (design section 7)")
+    elif state == "band-independent" and got != want:
+        problems.append(
+            f"{where}: answered {got}; the reference pins {want} in every band "
+            f"(design sections 6 and 7)")
+    if engine == "go":
+        counts = cell.get("go_poller")
+        if pin["poller"] == "absent":
+            if counts != [0, 0]:
+                problems.append(
+                    f"{where}: the process held {counts[0]} eventpoll and "
+                    f"{counts[1]} eventfd descriptors; every arm except the "
+                    f"resolver must be poller-free (design section 10)")
+        elif counts not in ([0, 0], [1, 1]):
+            problems.append(
+                f"{where}: the resolver's poller is {counts}; the authorized "
+                f"state is the deliberate pair (1, 1) or, when the readiness "
+                f"decision refused it, none (design sections 6 and 10)")
+    return problems
+
+
+def pressure_rollup(cells, profiles=None):
+    """Counts the verifier and the report reader need beside each other."""
+
+    executed = {(cell.get("arm"), cell.get("profile")) for cell in cells}
+    # The obligation follows the profiles this section swept (defaulting
+    # to the mandatory list), so a routine sweep is judged against the
+    # routine obligation and a milestone sweep against the whole product;
+    # neither can quietly report fewer cells than it owes.
+    swept = tuple(profiles) if profiles else MANDATORY_PRESSURE_PROFILES
+    expected = set(expected_pressure_cells(swept))
+    coverage = [cell for cell in cells
+                if not cell.get("list_blocked") and not cell.get("vacuous")]
+    return {
+        "arms": list(PRESSURE_ARMS),
+        "profiles": list(swept),
+        "mandatory_profiles": list(MANDATORY_PRESSURE_PROFILES),
+        "cells_expected": len(expected),
+        "cells_executed": len({(cell.get("arm"), cell.get("profile"))
+                               for cell in coverage} & expected),
+        "cells_missing": sorted(f"{arm}/{profile}"
+                                for (arm, profile) in (expected - executed)),
+        "pinned_table_count": len(PINNED_PRESSURE_CLASSES),
+        "pinned_table_sha256": pinned_pressure_fingerprint(),
+        "agreements": sum(1 for cell in cells if cell.get("agreed")),
+        "divergences": sum(1 for cell in cells
+                           if not cell.get("agreed") and not cell.get("hung")),
+        "hangs": sum(1 for cell in cells if cell.get("hung")),
+        "flaky": sum(1 for cell in cells if cell.get("flaky")),
+        "vacuous": sum(1 for cell in cells if cell.get("vacuous")),
+        "blocked": sum(1 for cell in cells if cell.get("list_blocked")),
+        "host_state": sum(1 for cell in cells
+                          if (cell.get("go") or {}).get("kind") == "host"
+                          or (cell.get("rust") or {}).get("kind") == "host"),
+    }
+
+
+def verify_pressure_report(report):
+    """Verify one pressure sweep against the committed tables and pins.
+
+    Present-only enforcement: a report without the section is an ordinary
+    parity sweep and is judged by the two original axes, and a report that
+    claims the axis must satisfy all of it. The grid is re-derived here,
+    independently of the report, so the executed cell set is an obligation
+    rather than a choice.
+    """
+
+    # Table-level integrity is assessed by table_integrity_problems(), on every
+    # run, whether or not this report claims the axis. Here only the report is
+    # judged: coverage re-derived from the committed tables, the pinned class of
+    # each executed cell, the wedge/poller/vacuous terms, and the rollup.
+    problems = []
+    pressure = report.get("pressure")
+    if not isinstance(pressure, dict):
+        return [f"pressure section is {type(pressure).__name__}"]
+    cells = pressure.get("cells")
+    if not isinstance(cells, list):
+        return problems + ["pressure section has no cell list"]
+    for name in ("arms", "profiles", "mandatory_profiles", "cells_expected",
+                 "cells_executed", "cells_missing", "pinned_table_count",
+                 "pinned_table_sha256", "agreements", "divergences", "hangs",
+                 "flaky", "vacuous", "blocked", "host_state"):
+        if name not in pressure:
+            problems.append(f"pressure rollup is missing {name!r}")
+    executed = {}
+    for cell in cells:
+        key = (cell.get("arm"), cell.get("profile"))
+        if key in executed:
+            problems.append(f"pressure cell {key} is reported twice")
+            continue
+        executed[key] = cell
+    for arm, profile in expected_pressure_cells(pressure.get("profiles")
+                                                or MANDATORY_PRESSURE_PROFILES):
+        if (arm, profile) not in executed:
+            problems.append(
+                f"pressure cell ({arm!r}, {profile!r}) was never executed; the "
+                f"product of arms and profiles is an obligation")
+            continue
+        pin = PINNED_PRESSURE_CLASSES.get((arm, profile))
+        if pin is None:
+            problems.append(
+                f"pressure cell ({arm!r}, {profile!r}) has no pinned class")
+            continue
+        cell = executed[(arm, profile)]
+        if not isinstance(pin, dict):
+            # A loosened pin is tampering, not an obligation: judged any
+            # further it would be read as a class with no wedge, poller, or
+            # coverage term attached, which is exactly the meaning the
+            # loosening discards. The table-level digest anchor names the
+            # change; here the cell is reported and left unjudged.
+            problems.append(
+                f"pressure cell ({arm}, {profile}) has a pinned obligation "
+                f"that is {type(pin).__name__}, not a mapping: a pressure pin "
+                f"must carry its wedge, poller, and coverage terms")
+            continue
+        for engine in ("go", "rust"):
+            problems.extend(pressure_cell_problems(cell, pin, engine))
+        go_answer, rust_answer = (_pressure_answer(cell, "go"),
+                                  _pressure_answer(cell, "rust"))
+        if (cell.get("go") or {}).get("kind") == "answered" and \
+                (cell.get("rust") or {}).get("kind") == "answered" \
+                and not _pressure_divergence_is_band_gap(pin, cell, go_answer,
+                                                         rust_answer):
+            problems.append(
+                f"pressure cell ({arm}, {profile}) diverged between engines: "
+                f"go {go_answer} vs rust {rust_answer}; the classes of a "
+                f"descriptor-pressure cell must match across the engines, and "
+                f"the only expected difference is one engine completing inside "
+                f"the band gap design section 13.3 records (design section 14)")
+    rollup = pressure_rollup(list(executed.values()),
+                             pressure.get("profiles"))
+    for name in ("cells_expected", "cells_executed", "agreements",
+                 "divergences", "hangs", "flaky", "vacuous", "blocked",
+                 "host_state"):
+        if pressure.get(name) != rollup[name]:
+            problems.append(
+                f"pressure rollup {name} says {pressure.get(name)!r}, the "
+                f"executed cells say {rollup[name]!r}")
+    if pressure.get("pinned_table_sha256") != pinned_pressure_fingerprint():
+        problems.append("pressure rollup digests the pinned table differently "
+                        "than the committed table does")
+    if pressure.get("pinned_table_count") != len(PINNED_PRESSURE_CLASSES):
+        problems.append("pressure rollup counts the pinned table differently "
+                        "than the committed table does")
+    return problems
+
+
+def pinned_table_fingerprint(table=None):
+    """The digest of the pinned-refusal table in a stable encoding.
+
+    JSON with sorted keys and no optional whitespace, over the
+    ``(key, value)`` pairs. The value is encoded as it is written, so a bare
+    class and a mapping that pins the same class cannot digest alike: the
+    encoding records the shape of the obligation, not only its class.
+    """
+
+    source = PINNED_REFUSALS if table is None else table
+    encoded = json.dumps([[[arm, kind], value]
+                          for (arm, kind), value in sorted(source.items())])
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def table_integrity_problems():
+    """Every way the committed tables can be shrunk without being noticed.
+
+    Checked against the committed constants rather than against the report,
+    so this is the term that turns a deleted pin, a loosened pin, a deleted
+    arm, or a deleted path kind into a gate failure instead of a smaller gate.
+    """
+
+    problems = []
+    if len(PINNED_REFUSALS) != PINNED_REFUSAL_COUNT:
+        problems.append(
+            f"the pinned-refusal table has {len(PINNED_REFUSALS)} entries, "
+            f"not the committed {PINNED_REFUSAL_COUNT}; a pin cannot be "
+            f"deleted to make the gate pass")
+    digest = pinned_table_fingerprint()
+    if digest != PINNED_REFUSALS_SHA256:
+        problems.append(
+            f"the pinned-refusal table digests to {digest}, not the committed "
+            f"{PINNED_REFUSALS_SHA256}; deleting a pin, adding one, or "
+            f"loosening one to a bare class (dropping its outcome or "
+            f"publication-evidence requirement) all read as tampering with "
+            f"the authority this gate is anchored to")
+    for name, table, mandatory in (("path kind", list(PATH_KINDS),
+                                    MANDATORY_PATH_KINDS),
+                                   ("arm", list(ARM_NAMES), MANDATORY_ARMS)):
+        for entry in mandatory:
+            if entry not in table:
+                problems.append(
+                    f"{name} {entry!r} is an obligation but is missing from "
+                    f"the table; deleting a swept shape is not a way to pass")
+        for entry in table:
+            if entry not in mandatory:
+                problems.append(
+                    f"{name} {entry!r} is swept but is not an obligation, so "
+                    f"deleting it would shrink the gate unnoticed; name it in "
+                    f"the mandatory table")
+    # The third axis is anchored with the same term, so deleting a pressure
+    # profile, an arm, or a pinned class fails every gate run rather than
+    # producing a quieter one.
+    problems.extend(pressure_table_integrity_problems())
+    return problems
+
+
+def _sha256_ledger(path):
+    """Read a sha256sum-format ledger: ``{digest: {recorded path, ...}}``.
+
+    The format is the one ``sha256sum`` writes: digest, two spaces, then the
+    staged path. A parity verdict is only as good as the artifacts that
+    produced it, so the committed report names each binary's digest and the
+    ledger is the reviewer-side list of what the wave staged. It is an
+    additional binder, consulted only when supplied, exactly like the other
+    harnesses of this battery.
+    """
+
+    if not path:
+        return None
+    resolved = os.path.realpath(path)
+    if not os.path.isfile(resolved):
+        raise SystemExit(f"--sha256-ledger {path} does not exist")
+    entries = {}
+    with open(resolved, encoding="utf-8") as stream:
+        for number, line in enumerate(stream, start=1):
+            line = line.rstrip("\n")
+            if not line.strip():
+                continue
+            digest, _, recorded = line.partition("  ")
+            digest = digest.strip()
+            recorded = recorded.strip()
+            if len(digest) != 64 or not all(
+                    character in "0123456789abcdef" for character in digest) \
+                    or not recorded:
+                raise SystemExit(
+                    f"--sha256-ledger {path}:{number} is not a "
+                    f"'<sha256>  <path>' line")
+            entries.setdefault(digest, set()).add(recorded)
+    if not entries:
+        raise SystemExit(f"--sha256-ledger {path} lists no entries")
+    return entries
+
 
 def pin_expectation(value):
     """Normalize one ``PINNED_REFUSALS`` entry to a comparable expectation.
@@ -815,6 +2092,17 @@ def materialize(kind_name, ctx):
         shutil.copyfile(ctx["live_membership_main"], base)
         shutil.copyfile(ctx["live_membership_sidecar"], base + ".readers")
         return base
+    elif kind_name == "live-direct":
+        # Copied fresh per attempt like the refresh target: a named-feed
+        # arm commits a transaction, so a shared database would make each
+        # attempt start from a different generation and let a class depend
+        # on sweep order instead of on the shape under test.
+        base = os.path.join(work, "ld-main.iprange")
+        _remove_any(base)
+        _remove_any(base + ".readers")
+        shutil.copyfile(ctx["live_main"], base)
+        shutil.copyfile(ctx["live_sidecar"], base + ".readers")
+        return base
     elif kind_name == "missing":
         pass
     elif kind_name == "dir":
@@ -889,6 +2177,26 @@ def materialize(kind_name, ctx):
         destination = os.path.join(target, "out.iprange")
         with open(destination, "wb") as stream:
             stream.write(b"pre-existing destination content\n")
+        return destination
+    elif kind_name == "dest-fifo-crossfs":
+        # /dev/shm is tmpfs, which the Linux durability whitelist rejects for
+        # both engines (the whitelist is shared: internal/fslocal and Rust
+        # require_local_filesystem name the same filesystems). The work
+        # directory stays on the qualified filesystem, so this cell is the
+        # cross-filesystem pair the finding names rather than a uniform
+        # refusal of every destination. The parent is rebuilt from scratch on
+        # every attempt so neither engine measures the other's leftovers.
+        crossfs = "/dev/shm"
+        if not os.path.isdir(crossfs) or not os.access(crossfs, os.W_OK):
+            raise SystemExit(f"{crossfs} is not a writable directory; the "
+                             f"cross-filesystem destination cell cannot be "
+                             f"materialized")
+        parent = os.path.join(crossfs,
+                             "iprange-parity-" + os.path.basename(work))
+        _drop_dir(parent)
+        os.makedirs(parent)
+        destination = os.path.join(parent, "out.iprange")
+        os.mkfifo(destination, 0o600)
         return destination
     elif kind_name == "junk":
         with open(target, "wb") as stream:
@@ -1057,11 +2365,15 @@ def build_report(go, rust, fixture, work, deadline, retries, budget,
                      else record["rust"]["outcome"],
                      "rust_facts": None if record is None
                      else bool(record["rust"].get("publication_facts"))})
+    # The identity members come from the shared owner (``report_provenance``)
+    # rather than from this file, and ``write_committed_report`` overwrites them
+    # with the same values at the write.  They are present before the verdict
+    # because ``assess_report`` judges the report in the shape it will be
+    # committed in: a field the gate requires but the writer had not yet added
+    # would be a gate failure instead of an evidence defect.
     return {
         "schema": REPORT_SCHEMA,
-        "git_head": recorded_git_identity(),
-        "checkout_root": recorded_checkout_root(),
-        "command": sanitized_command(argv),
+        **report_provenance(argv),
         "platform": {"system": platform.system(),
                      "release": platform.release(),
                      "machine": platform.machine(),
@@ -1077,6 +2389,9 @@ def build_report(go, rust, fixture, work, deadline, retries, budget,
                              "implementation": "rust"}},
         "grid": {"arms": ARM_NAMES, "path_kinds": kind_names(),
                  "mandatory_path_kinds": list(MANDATORY_PATH_KINDS),
+                 "mandatory_arms": list(MANDATORY_ARMS),
+                 "pinned_table_count": len(PINNED_REFUSALS),
+                 "pinned_table_sha256": pinned_table_fingerprint(),
                  "cells_expected": len(expected_cells())},
         "method": {"attempt_deadline_seconds": deadline, "retries": retries,
                    "run_budget_seconds": budget,
@@ -1156,7 +2471,8 @@ def _pin_facts_ok(expected_facts, go_facts, rust_facts):
     return True
 
 
-def assess_report(report, deadline=ATTEMPT_DEADLINE_SECONDS):
+def assess_report(report, deadline=ATTEMPT_DEADLINE_SECONDS,
+                  sha256_ledger=None):
     """Verify one refusal-class parity report against the committed tables.
 
     The grid is re-derived here, independently of the report, so the executed
@@ -1167,8 +2483,16 @@ def assess_report(report, deadline=ATTEMPT_DEADLINE_SECONDS):
     """
 
     problems = []
+    problems.extend(table_integrity_problems())
     if not isinstance(report, dict):
         return [f"report is {type(report).__name__}, not an object"]
+    # The third axis is optional per report and total when present: a sweep
+    # that claims descriptor-pressure coverage is judged against the committed
+    # profile and pin tables here, and one that omits the section is an
+    # ordinary two-axis parity sweep (the routine gate keeps its cost budget,
+    # and the milestone gate turns the axis on).
+    if report.get("pressure") is not None:
+        problems.extend(verify_pressure_report(report))
     if report.get("schema") != REPORT_SCHEMA:
         problems.append(f"unexpected schema {report.get('schema')!r}")
     for member in ("git_head", "checkout_root", "command", "platform",
@@ -1199,6 +2523,18 @@ def assess_report(report, deadline=ATTEMPT_DEADLINE_SECONDS):
                 and all(c in "0123456789abcdef" for c in digest)):
             problems.append(
                 f"binary {label!r} has no measured sha256")
+        elif sha256_ledger is not None and digest not in sha256_ledger:
+            problems.append(
+                f"binary {label!r} digest {digest} is not in the staged "
+                f"--sha256-ledger; the verdict would otherwise be "
+                f"attributable to an artifact no one staged")
+    if sha256_ledger is not None:
+        grid = report.get("grid") or {}
+        if grid.get("pinned_table_sha256") != pinned_table_fingerprint():
+            problems.append(
+                "the report records a pinned-refusal table digest other than "
+                "the committed table; the binaries that were swept must be "
+                "bound to the obligations they were measured against")
 
     # Re-derive the obligation independently of the report.
     expected = set(expected_cells())
@@ -1399,6 +2735,11 @@ def assess_report(report, deadline=ATTEMPT_DEADLINE_SECONDS):
             f"{summary['flaky']} cell(s) changed their answer across retries; "
             f"a nondeterministic refusal is not parity evidence for either "
             f"engine")
+    if summary.get("pins_expected") != PINNED_REFUSAL_COUNT:
+        problems.append(
+            f"summary pins_expected {summary.get('pins_expected')!r} is not "
+            f"the committed {PINNED_REFUSAL_COUNT}; a report over fewer "
+            f"pinned refusals than the table obliges is not a parity verdict")
     pins_ok = summary.get("pins_satisfied") == summary.get("pins_expected")
     if not pins_ok:
         problems.append(
@@ -1414,14 +2755,33 @@ def assess_report(report, deadline=ATTEMPT_DEADLINE_SECONDS):
     return problems
 
 
-def verdict(report, deadline=ATTEMPT_DEADLINE_SECONDS):
+def verdict(report, deadline=ATTEMPT_DEADLINE_SECONDS, sha256_ledger=None):
     """Return ``(ok, problems)`` for one report."""
 
-    problems = assess_report(report, deadline=deadline)
+    problems = assess_report(report, deadline=deadline,
+                             sha256_ledger=sha256_ledger)
     return not problems, problems
 
 
+def live_run_caller_paths(args):
+    """The sweep's path-valued options, in the shape the shared defences take.
+
+    The labels are the registry's screened set: dropping one stops the input
+    refusal *and* fails the committed-report audit, which is the point of
+    naming them in one place.
+    """
+    return (("--go", args.go),
+            ("--rust", args.rust),
+            ("--fixture", args.fixture),
+            ("--work", args.work),
+            ("--json-report", args.json_report))
+
+
 def live_run(args):
+    # Durable-artifact policy, applied before any product starts: the report
+    # records the measured binary, work and report paths, so a profile-rooted
+    # input is how an operator-home path reaches a committed file.
+    require_paths_outside_profile(live_run_caller_paths(args))
     for label, value in (("--go", args.go), ("--rust", args.rust),
                          ("--fixture", args.fixture)):
         if not isinstance(value, str) or not os.path.isfile(value) \
@@ -1446,12 +2806,45 @@ def live_run(args):
                           args.deadline, args.retries, args.budget_seconds,
                           sys.argv, cells, started, ended,
                           provenance=args.provenance_note)
-    ok, problems = verdict(report, deadline=args.deadline)
+    # The third axis is opt-in per run because of its cost (design section 14's
+    # budget clause): the routine gate sweeps the two target axes, the routine
+    # pressure subset covers the descriptor boundaries, and the full
+    # ARMS x PRESSURE_PROFILES product belongs to a milestone. A report that
+    # carries the section is verified against the committed profile and pin
+    # tables by assess_report, exactly like the other two axes.
+    if getattr(args, "pressure", "off") != "off":
+        profiles = (ROUTINE_PRESSURE_PROFILES if args.pressure == "routine"
+                    else MANDATORY_PRESSURE_PROFILES)
+        print(f"sweeping the descriptor-pressure axis: {len(PRESSURE_ARMS)} arms "
+              f"x {len(profiles)} profiles x 2 engines x >=2 runs, under nice")
+        report["pressure"] = run_pressure_sweep(
+            args.go, args.rust, args.fixture, work, profiles,
+            runs=args.pressure_runs, jobs=args.pressure_jobs)
+        print(f"pressure: {report['pressure']['cells_executed']} of "
+              f"{report['pressure']['cells_expected']} cells, "
+              f"{report['pressure']['divergences']} divergences, "
+              f"{report['pressure']['hangs']} hangs, "
+              f"{report['pressure']['flaky']} flaky, "
+              f"{report['pressure']['vacuous']} vacuous, "
+              f"{report['pressure']['host_state']} host-state")
+        for cell in report["pressure"]["cells"]:
+            for problem in cell.get("problems", []):
+                print(f"  PRESSURE {problem}")
+    ledger = _sha256_ledger(getattr(args, "sha256_ledger", None))
+    ok, problems = verdict(report, deadline=args.deadline,
+                           sha256_ledger=ledger)
     report["result"] = "PASS" if ok else "FAIL"
-    text = json.dumps(report, sort_keys=True, indent=1)
-    if args.json_report:
-        with open(args.json_report, "w", encoding="utf-8") as stream:
-            stream.write(text + "\n")
+    report["sha256_ledger"] = (
+        sanitized_path_value(args.sha256_ledger)
+        if getattr(args, "sha256_ledger", None) else None)
+    report_path = resolve_report_path(args)
+    # The shared writer refuses the write -- leaving no file -- when a screened
+    # input or any finished string value names the operator's profile, so a
+    # sweep that ran on profile-rooted material is reported instead of
+    # committed.
+    text = write_committed_report(report_path, report, argv=sys.argv,
+                                  caller_paths=live_run_caller_paths(args),
+                                  indent=1)
     diverged = [entry for entry in report["divergences"]]
     for entry in diverged[:40]:
         print(f"DIV {entry['arm']}/{entry['path_kind']}: "
@@ -1460,6 +2853,7 @@ def live_run(args):
         print(f"... {len(diverged) - 40} more divergent cells")
     for problem in problems[:20]:
         print(f"FAIL: {problem}")
+    print(f"report: {sanitized_path_value(report_path)}")
     print(f"cells executed: {report['summary']['cells_executed']} of "
           f"{report['summary']['cells_expected']} in "
           f"{report['elapsed_seconds']}s; divergences "
@@ -1472,6 +2866,89 @@ def live_run(args):
         return 1
     print("REFUSAL-CLASS PARITY: PASS")
     return 0
+
+
+def _fabricated_pressure_engine_record(pin, engine, profile):
+    """One engine's half of a fabricated pressure cell.
+
+    It answers exactly what the pin obliges, or reports host state exactly
+    where the profile says the environment cannot be built (the launcher's own
+    descriptor floor, and three more for the Rust loader).
+    """
+
+    record = PRESSURE_PROFILE_BY_NAME[profile]
+    floor = record["host_floor"] if engine == "go" else record["rust_host_floor"]
+    if record["limit"] < floor:
+        return {"kind": "host", "transport_code": None, "data_code": None,
+                "outcome": None, "result": False, "exit_class": "host",
+                "verdict": "host-unsupported", "why": "fabricated host state"}
+    if pin["band_state"] == "blocked":
+        # Section 13.4: this arm has no removable entry, so the honest
+        # fabricated record is the blocked verdict with no class to name.
+        return {"kind": "blocked", "transport_code": None, "data_code": None,
+                "outcome": None, "result": False, "exit_class": None,
+                "verdict": "blocked", "why": "fabricated blocked cell"}
+    data_code, outcome = _pressure_expected_answer(pin, engine, profile)
+    result = data_code == "RESULT"
+    return {"kind": "answered",
+            "transport_code": 0 if result else PRODUCT_ERROR,
+            "data_code": data_code, "outcome": outcome, "result": result,
+            "exit_class": "success" if result else "refused",
+            "verdict": "pass", "why": "fabricated"}
+
+
+def _fabricated_pressure_section(profiles=None):
+    """A pressure section derived from the committed tables, executing nothing.
+
+    Like the two-axis fabricator this exists so ``--self-test`` can attack the
+    pressure verifier with reports that are internally consistent and carry
+    exactly one defect each.
+    """
+
+    chosen = tuple(profiles or MANDATORY_PRESSURE_PROFILES)
+    cells = []
+    for arm in PRESSURE_ARMS:
+        for profile in chosen:
+            pin = PINNED_PRESSURE_CLASSES[(arm, profile)]
+            cell = {"arm": arm, "profile": profile, "attempts": 2,
+                    "hung": False, "flaky": False, "vacuous": False,
+                    "list_blocked": False, "close_refused": False,
+                    "go_poller": [1, 1] if (
+                        arm == RESOLVER_PRESSURE_ARM
+                        and poller_authorized(profile)) else [0, 0]}
+            for engine in ("go", "rust"):
+                cell[engine] = _fabricated_pressure_engine_record(
+                    pin, engine, profile)
+            if pin["list_required"]:
+                # Design section 13.4: no public-method producer of a listable
+                # entry exists, so the honest cell is the blocked one. Claiming
+                # it removed something would be the defect.
+                cell["list_blocked"] = True
+            cell["agreed"] = (not cell["list_blocked"]) and _pressure_answer(
+                cell, "go") == _pressure_answer(cell, "rust")
+            cells.append(cell)
+    rollup = pressure_rollup(cells, chosen)
+    rollup["failed"] = 0
+    section = {"mode": "fabricated", "cells": cells, "runs": 2}
+    section.update(rollup)
+    return section
+
+
+def _sync_pressure_summary(report):
+    """Recompute the pressure rollup after a control mutated a cell.
+
+    A pressure control that left the counters stale would be testing the
+    counter check instead of the term it names, the same reason the two-axis
+    reports are re-synced.
+    """
+
+    pressure = report.get("pressure")
+    if not isinstance(pressure, dict):
+        return report
+    cells = pressure.get("cells") or []
+    pressure.update(pressure_rollup(cells, pressure.get("profiles")))
+    pressure["failed"] = 0
+    return report
 
 
 def _fabricated_report():
@@ -1553,6 +3030,9 @@ def _fabricated_report():
                              "sha256": "c" * 64, "implementation": "rust"}},
         "grid": {"arms": ARM_NAMES, "path_kinds": kind_names(),
                  "mandatory_path_kinds": list(MANDATORY_PATH_KINDS),
+                 "mandatory_arms": list(MANDATORY_ARMS),
+                 "pinned_table_count": len(PINNED_REFUSALS),
+                 "pinned_table_sha256": pinned_table_fingerprint(),
                  "cells_expected": len(expected_cells())},
         "method": {"attempt_deadline_seconds": ATTEMPT_DEADLINE_SECONDS,
                    "retries": RETRIES,
@@ -1565,6 +3045,7 @@ def _fabricated_report():
                     "pins_expected": len(PINNED_REFUSALS),
                     "pins_satisfied": len(PINNED_REFUSALS)},
         "durability": durability_rollup(cells),
+        "pressure": _fabricated_pressure_section(ROUTINE_PRESSURE_PROFILES),
         "divergences": [],
     }
 
@@ -1595,6 +3076,14 @@ def _sync_summary(report):
                   c["rust"]["data_code"], c["rust"]["outcome"]]}
         for c in bad]
     return report
+
+
+# The number of controls this harness runs, committed so that a control cannot
+# be deleted to leave a shorter self-test that still looks green. It covers the
+# doctored-report cases and every control that assesses a report or mutates the
+# tables directly; adding or removing one changes this constant in the same
+# change, and a run whose total drifts from it fails.
+SELF_TEST_CASES_TOTAL = 56
 
 
 def _self_test():
@@ -1959,6 +3448,430 @@ def _self_test():
             failures += 1
     finally:
         PATH_KINDS = saved_kinds
+    # --- table-shrinking controls. Each mutates the committed tables the
+    # verifier re-derives its obligations from, runs the verifier on a report
+    # that still describes the full sweep, and requires the specific problem.
+    # The mutations go through globals() so the tables are restored exactly,
+    # and each restores before the next control can observe it.
+    def with_tables(mutations, description, needle):
+        """Apply table mutations, require one verifier problem, restore."""
+
+        nonlocal failures
+        saved = {name: globals()[name] for name, _value in mutations}
+        try:
+            for name, value in mutations:
+                globals()[name] = value
+            problems = assess_report(copy.deepcopy(baseline))
+        finally:
+            for name, value in saved.items():
+                globals()[name] = value
+        hit = any(needle in problem for problem in problems)
+        tally["controls"] += 1
+        print(f"{'ok  ' if hit else 'BAD '} {description:58} "
+              f"needle_hit={hit} problems={len(problems)}")
+        if not hit:
+            failures += 1
+            for problem in problems[:3]:
+                print(f"       {problem}")
+
+    def with_pins(mutate, dropped_key, loosened, description, needle):
+        """Mutate the pinned table *and* the report's pin records.
+
+        A pin can only leave the verdict by leaving both, which is the
+        mutation the committed count and digest exist to catch; half a
+        mutation is already caught by the record-versus-table check and would
+        prove nothing about the anchors.
+        """
+
+        nonlocal failures
+        saved = dict(PINNED_REFUSALS)
+        try:
+            mutate(PINNED_REFUSALS)
+            report = copy.deepcopy(baseline)
+            if dropped_key is not None:
+                report["pins"] = [pin for pin in report["pins"]
+                                  if (pin["arm"], pin["path_kind"])
+                                  != dropped_key]
+            for key, value in (loosened or {}).items():
+                for pin in report["pins"]:
+                    if (pin["arm"], pin["path_kind"]) == key:
+                        code, outcome, facts = pin_expectation(value)
+                        pin["expected_data_code"] = code
+                        pin["expected_outcome"] = outcome
+                        pin["expected_facts"] = facts
+            _sync_summary(report)
+            problems = assess_report(report)
+        finally:
+            PINNED_REFUSALS.clear()
+            PINNED_REFUSALS.update(saved)
+        hit = any(needle in problem for problem in problems)
+        tally["controls"] += 1
+        print(f"{'ok  ' if hit else 'BAD '} {description:58} "
+              f"needle_hit={hit} problems={len(problems)}")
+        if not hit:
+            failures += 1
+            for problem in problems[:3]:
+                print(f"       {problem}")
+
+    # A mapping pin is the interesting sample: it is the shape a reviewer can
+    # loosen to a bare class, which silently drops the outcome and evidence
+    # requirements while keeping the class.
+    sample_key = max(PINNED_REFUSALS,
+                     key=lambda key: isinstance(PINNED_REFUSALS[key], dict))
+    sample_pin = PINNED_REFUSALS[sample_key]
+    bare_pin = sample_pin["data_code"] if isinstance(sample_pin, dict) \
+        else sample_pin
+
+    def drop_pin(table, key=sample_key):
+        del table[key]
+
+    with_pins(drop_pin, sample_key, None,
+              "deleting a pin (table and report) must FAIL",
+              "not the committed")
+
+    def loosen_pin(table, key=sample_key, value=bare_pin):
+        table[key] = value
+
+    with_pins(loosen_pin, None, {sample_key: bare_pin},
+              "loosening a pin to a bare class must FAIL", "digests to")
+
+    with_tables([("PATH_KINDS", tuple(k for k in PATH_KINDS
+                                      if k != "live-direct"))],
+                "deleting a path kind from the table must FAIL",
+                "is an obligation but is missing from the table")
+    with_tables([("MANDATORY_PATH_KINDS",
+                  tuple(k for k in MANDATORY_PATH_KINDS
+                        if k != "live-direct"))],
+                "un-naming a path kind obligation must FAIL",
+                "is swept but is not an obligation")
+    with_tables([("ARM_NAMES", [a for a in ARM_NAMES
+                                if a != "feeds.import_target"]),
+                 ("ARM_BY_NAME", {k: v for k, v in ARM_BY_NAME.items()
+                                  if k != "feeds.import_target"})],
+                "deleting an arm from the table must FAIL",
+                "is an obligation but is missing from the table")
+    with_tables([("MANDATORY_ARMS", tuple(a for a in MANDATORY_ARMS
+                                          if a != "feeds.import_target"))],
+                "un-naming an arm obligation must FAIL",
+                "is swept but is not an obligation")
+
+    # The binary binding: the verdict must be attributable to the artifacts
+    # the wave staged, so a recorded digest the ledger does not list cannot
+    # carry it. The control hands the verifier a ledger that lists every
+    # recorded binary except the Go product.
+    def ledger_control(report):
+        listed = {record["sha256"]
+                  for name, record in report["binaries"].items()
+                  if name != "go"}
+        return assess_report(report, sha256_ledger=listed)
+
+    report = copy.deepcopy(baseline)
+    problems = ledger_control(report)
+    hit = any("not in the staged --sha256-ledger" in problem
+              for problem in problems)
+    tally["controls"] += 1
+    print(f"{'ok  ' if hit else 'BAD '} a binary digest absent from the "
+          f"ledger must FAIL{'':19} needle_hit={hit} "
+          f"problems={len(problems)}")
+    if not hit:
+        failures += 1
+        for problem in problems[:3]:
+            print(f"       {problem}")
+
+    # --- pressure-axis controls. The third axis is anchored by a committed
+    # count and digest and by a mandatory-profile list checked in both
+    # directions, so each of those anchors gets its own control; the rest
+    # attack the terms a report can lie about (vacuous, blocked, poller,
+    # wedge, host state, and the band gap design section 13.3 says must not be
+    # reported as parity).
+    PRESSURE_SAMPLE_CELL = ("direct.replace", "b06h0-before-normal")
+
+    def pressure_cell_in(report, key):
+        for cell in report["pressure"]["cells"]:
+            if (cell["arm"], cell["profile"]) == key:
+                return cell
+        raise AssertionError(f"the pressure cell {key} is missing")
+
+    def with_pressure_table(mutate, description, needle):
+        """Mutate the pinned pressure table, require the anchor's problem."""
+
+        nonlocal failures
+        saved = dict(PINNED_PRESSURE_CLASSES)
+        try:
+            mutate(PINNED_PRESSURE_CLASSES)
+            problems = assess_report(copy.deepcopy(baseline))
+        finally:
+            PINNED_PRESSURE_CLASSES.clear()
+            PINNED_PRESSURE_CLASSES.update(saved)
+        hit = any(needle in problem for problem in problems)
+        tally["controls"] += 1
+        print(f"{'ok  ' if hit else 'BAD '} {description:58} "
+              f"needle_hit={hit} problems={len(problems)}")
+        if not hit:
+            failures += 1
+            for problem in problems[:3]:
+                print(f"       {problem}")
+
+    def with_pressure_report(mutate, description, needle):
+        """Mutate one pressure cell truthfully, re-sync, require the term."""
+
+
+        nonlocal failures
+        report = copy.deepcopy(baseline)
+        mutate(report)
+        _sync_summary(report)
+        _sync_pressure_summary(report)
+        problems = assess_report(report)
+        hit = any(needle in problem for problem in problems)
+        tally["controls"] += 1
+        print(f"{'ok  ' if hit else 'BAD '} {description:58} "
+              f"needle_hit={hit} problems={len(problems)}")
+        if not hit:
+            failures += 1
+            for problem in problems[:3]:
+                print(f"       {problem}")
+
+    def hostile_worker_claimed_success(report):
+        # Section 9: a worker arm under a poisoned /dev/null must refuse to
+        # spawn, and io/read_only_failure is the pinned class. Answering
+        # success there means the spawn handed the child a stream that can
+        # never drain, which is the wedge this axis exists to remove.
+        target = pressure_cell_in(report, ("validate(worker)", "b64h0-before-fifo"))
+        target["rust"] = {"kind": "answered", "transport_code": 0,
+                          "data_code": "RESULT", "outcome": "RESULT",
+                          "exit_class": "success"}
+
+    with_pressure_report(hostile_worker_claimed_success,
+                         "a hostile worker cell that claimed success must FAIL",
+                         "hostile null device answered")
+
+    def hostile_one_engine_only(report):
+        # The hostile class must be the same in both engines; one engine
+        # answering success is the section 9 defect, not a band gap.
+        target = pressure_cell_in(report, ("validate(worker)", "b64h0-before-fifo"))
+        target["go"] = {"kind": "answered", "transport_code": 0,
+                        "data_code": "RESULT", "outcome": "RESULT",
+                        "exit_class": "success"}
+
+    with_pressure_report(hostile_one_engine_only,
+                         "a hostile cell answered success by one engine must FAIL",
+                         "hostile null device answered")
+
+    def blocked_cell_claimed_coverage(report):
+        # Section 13.4 with the softer terms disabled: an engine that reports a
+        # completed removal for the arm that has nothing to remove.
+        target = pressure_cell_in(report, ("maintenance.remove", "b64h0-before-fifo"))
+        target["list_blocked"] = False
+        target["rust"] = {"kind": "answered", "transport_code": 0,
+                          "data_code": "RESULT", "outcome": "RESULT",
+                          "result": True, "exit_class": "success"}
+
+    with_pressure_report(blocked_cell_claimed_coverage,
+                         "a blocked arm claiming a completed removal must FAIL",
+                         "records as blocked")
+
+    def hostile_cell_leaked_the_poller(report):
+        # The hostile cells fall through to the descriptor-set assertion, so a
+        # worker arm that reached the runtime poller under a poisoned
+        # /dev/null is still a section 10 failure.
+        target = pressure_cell_in(report, ("validate(worker)", "b64h0-before-fifo"))
+        target["go_poller"] = [1, 1]
+
+    with_pressure_report(hostile_cell_leaked_the_poller,
+                         "a hostile worker cell that leaked the poller must FAIL",
+                         "poller-free")
+
+
+    with_pressure_table(
+        lambda table: table.pop(PRESSURE_SAMPLE_CELL, None),
+        "deleting a pinned pressure cell must FAIL", "not the committed")
+
+    def loosen_pressure_pin(table, key=PRESSURE_SAMPLE_CELL):
+        table[key] = [table[key]["data_code"], table[key]["outcome"]]
+
+    with_pressure_table(loosen_pressure_pin,
+                        "loosening a pressure pin to a bare class must FAIL",
+                        "not a mapping")
+
+    def drop_poller_term(table, key=(RESOLVER_PRESSURE_ARM,
+                                     ROUTINE_PRESSURE_PROFILES[0])):
+        table[key] = dict(table[key], poller="absent")
+
+    with_pressure_table(drop_poller_term,
+                        "dropping the resolver's poller obligation must FAIL",
+                        "digests to")
+
+    with_tables([("PRESSURE_PROFILES",
+                  tuple(row for row in PRESSURE_PROFILES
+                        if row["name"] != ROUTINE_PRESSURE_PROFILES[0]))],
+                "deleting a pressure environment must FAIL",
+                "is an obligation but is missing from PRESSURE_PROFILES")
+    with_tables([("MANDATORY_PRESSURE_PROFILES",
+                  tuple(name for name in MANDATORY_PRESSURE_PROFILES
+                        if name != ROUTINE_PRESSURE_PROFILES[0]))],
+                "un-naming a pressure obligation must FAIL",
+                "is swept but is not an obligation")
+    with_tables([("ROUTINE_PRESSURE_PROFILES",
+                  ROUTINE_PRESSURE_PROFILES + ("b99h0-before-normal",))],
+                "a routine profile outside the table must FAIL",
+                "the routine subset must be a subset")
+    with_tables([("PRESSURE_ARMS",
+                  tuple(arm for arm in PRESSURE_ARMS
+                        if arm != "recovery.inspect(worker)"))],
+                "deleting a pressure arm must FAIL",
+                "is not a swept arm")
+
+    def claim_vacuous_as_coverage(report):
+        cell = pressure_cell_in(report, PRESSURE_SAMPLE_CELL)
+        cell["vacuous"] = True
+
+    with_pressure_report(claim_vacuous_as_coverage,
+                         "a vacuous cell reported as coverage must FAIL",
+                         "not coverage (design section 14)")
+
+    def claim_blocked_as_coverage(report):
+        cell = pressure_cell_in(report, ("maintenance.remove",
+                                         ROUTINE_PRESSURE_PROFILES[0]))
+        cell["agreed"] = True
+
+    with_pressure_report(claim_blocked_as_coverage,
+                         "a blocked removal reported as coverage must FAIL",
+                         "blocked cell of design section 13.4")
+
+    def leak_the_poller(report):
+        cell = pressure_cell_in(report, PRESSURE_SAMPLE_CELL)
+        cell["go_poller"] = [1, 1]
+
+    with_pressure_report(leak_the_poller,
+                         "a poller in a non-resolver arm must FAIL",
+                         "must be poller-free")
+
+    def record_a_wedge_as_answer(report):
+        cell = pressure_cell_in(report, PRESSURE_SAMPLE_CELL)
+        for engine in ("go", "rust"):
+            cell[engine]["kind"] = "pending"
+
+    with_pressure_report(record_a_wedge_as_answer,
+                         "a pressure wedge must FAIL, not name a class",
+                         "a wedge is a failure")
+
+    def fake_host_state(report):
+        cell = pressure_cell_in(report, PRESSURE_SAMPLE_CELL)
+        cell["go"] = {"kind": "host", "transport_code": None,
+                      "data_code": None, "outcome": None, "result": False,
+                      "exit_class": "host", "verdict": "host-unsupported",
+                      "why": "claimed the table could not be built"}
+
+    with_pressure_report(fake_host_state,
+                         "host state where the band is buildable must FAIL",
+                         "never a substitute for an answer")
+
+    def hide_the_missing_cell(report):
+        report["pressure"]["cells"] = [
+            cell for cell in report["pressure"]["cells"]
+            if (cell["arm"], cell["profile"]) != PRESSURE_SAMPLE_CELL]
+
+    with_pressure_report(hide_the_missing_cell,
+                         "a missing pressure cell must FAIL",
+                         "was never executed")
+
+    def declare_band_parity(report):
+        """The Go writer answers success two bands under its own floor.
+
+        Design section 13.3 forbids reporting the writer and worker families
+        as band-parity with the reference; the cheapest forgery is to answer
+        the Rust success in the Go column and keep the cell agreed.
+        """
+
+        cell = pressure_cell_in(report, PRESSURE_SAMPLE_CELL)
+        cell["go"] = {"kind": "answered", "transport_code": 0,
+                      "data_code": "RESULT", "outcome": "RESULT",
+                      "result": True, "exit_class": "success",
+                      "verdict": "pass", "why": "claimed parity"}
+
+    with_pressure_report(declare_band_parity,
+                         "Go success claimed below its own floor must FAIL",
+                         "the reference pins")
+
+    def hide_a_real_divergence(report):
+        cell = pressure_cell_in(report, ("reader-open-close-immutable",
+                                         "b05h0-before-normal"))
+        cell["go"] = dict(cell["go"], kind="answered", transport_code=PRODUCT_ERROR,
+                          data_code="io", outcome="read_only_failure",
+                          result=False, exit_class="refused")
+
+    with_pressure_report(hide_a_real_divergence,
+                         "a divergence reported as agreement must FAIL",
+                         "diverged between engines")
+
+    forged_pressure = copy.deepcopy(baseline)
+    _sync_summary(forged_pressure)
+    forged_pressure["pressure"]["agreements"] = 0
+    problems = assess_report(forged_pressure)
+    rejected = any("pressure rollup agreements" in problem
+                   for problem in problems)
+    tally["controls"] += 1
+    print(f"{'ok  ' if rejected else 'BAD '} a pressure rollup that lies "
+          f"must FAIL                             rejected={rejected} "
+          f"expected_rejected=True")
+    if not rejected:
+        failures += 1
+        for problem in problems[:3]:
+            print(f"       {problem}")
+
+    forged_digest = copy.deepcopy(baseline)
+    _sync_summary(forged_digest)
+    forged_digest["pressure"]["pinned_table_sha256"] = "0" * 64
+    problems = assess_report(forged_digest)
+    rejected = any("digests the pinned table differently" in problem
+                   for problem in problems)
+    tally["controls"] += 1
+    print(f"{'ok  ' if rejected else 'BAD '} a forged pressure table digest "
+          f"must FAIL                          rejected={rejected} "
+          f"expected_rejected=True")
+    if not rejected:
+        failures += 1
+        for problem in problems[:3]:
+            print(f"       {problem}")
+
+    # The committed-report contract of this writer, measured rather than
+    # asserted.  A parity report names the binaries it swept, the work
+    # directory it built them in, and the operator's command line, so it is
+    # exactly the artifact class that carried a home path into evidence before
+    # the shared writer existed; these two controls are what keep it from
+    # regressing to a hand-serialized report.
+    tally["controls"] += 1
+    audit = audit_report_writers(cli_dir=_HERE,
+                                 writers=["check_refusal_class_parity.py"],
+                                 artifacts=False)
+    commits_cleanly = not audit
+    print(f"{'ok  ' if commits_cleanly else 'BAD '} this writer commits only "
+          f"through the shared writer          problems={len(audit)}")
+    if not commits_cleanly:
+        failures += 1
+        for problem in audit[:3]:
+            print(f"       {problem}")
+
+    tally["controls"] += 1
+    leaky = os.path.join(tempfile.gettempdir(),
+                         f"{os.getpid()}-parity-provenance-leak.json")
+    profile = profile_path()
+    refused_and_clean = True
+    if profile:
+        try:
+            write_committed_report(leaky, {"schema": REPORT_SCHEMA,
+                                           "work": profile + "/W-parity"},
+                                   caller_paths=(("--work", None),))
+            refused_and_clean = False
+        except SystemExit:
+            refused_and_clean = not os.path.exists(leaky)
+    print(f"{'ok  ' if refused_and_clean else 'BAD '} a report that carries "
+          f"the profile path is refused        "
+          f"refused={refused_and_clean}")
+    if not refused_and_clean:
+        failures += 1
+    run_shared_self_test("check_refusal_class_parity")
+
     for description, report, expect_problem in cases:
         problems = assess_report(report)
         rejected = bool(problems)
@@ -1970,14 +3883,26 @@ def _self_test():
             for problem in problems[:3]:
                 print(f"       {problem}")
     print()
+    ran = len(cases) + tally["controls"]
+    # The count is an obligation, not a printout. A control deleted from
+    # this list leaves the harness green and the published number smaller,
+    # which is indistinguishable to a reader from a harness that still
+    # proves everything, so the total is compared against the committed
+    # constant and a drift fails the run.
+    if ran != SELF_TEST_CASES_TOTAL:
+        print(f"refusal-class parity self-test FAILED: it ran {ran} cases, "
+              f"not the committed {SELF_TEST_CASES_TOTAL}; a control was "
+              f"added or removed without updating the obligation")
+        return 1
     if failures:
         print(f"refusal-class parity self-test FAILED: {failures} case(s) "
-              f"of {len(cases) + tally['controls']}")
+              f"of {ran}")
         return 1
-    print(f"refusal-class parity self-test PASSED: "
-          f"{len(cases) + tally['controls']} cases, "
+    print(f"refusal-class parity self-test PASSED: {ran} cases "
+          f"(committed total {SELF_TEST_CASES_TOTAL}), "
           f"{len(ARM_NAMES)} arms x {len(kind_names())} path kinds = "
-          f"{len(expected_cells())} cells x 2 engines")
+          f"{len(expected_cells())} cells x 2 engines, "
+          f"{len(PINNED_REFUSALS)} pins")
     return 0
 
 
@@ -1987,7 +3912,15 @@ def main():
     parser.add_argument("--rust")
     parser.add_argument("--fixture")
     parser.add_argument("--work")
-    parser.add_argument("--json-report", default=DEFAULT_REPORT)
+    parser.add_argument("--json-report", default=None,
+                        help="where to write the report; the default is "
+                             f"{DEFAULT_REPORT_NAME} inside --work, never the "
+                             "tracked evidence file, which is written only "
+                             "when named explicitly")
+    parser.add_argument("--sha256-ledger", default=None, metavar="PATH",
+                        help="a sha256sum-format ledger of the staged "
+                             "binaries; every recorded binary digest must "
+                             "appear in it")
     parser.add_argument("--deadline", type=float,
                         default=ATTEMPT_DEADLINE_SECONDS,
                         help="per-attempt bound in seconds; a cell that does "
@@ -2001,6 +3934,22 @@ def main():
     parser.add_argument("--provenance-note", default=None,
                         help="one sentence, recorded verbatim in the report, "
                              "on where the swept binaries came from")
+    parser.add_argument("--pressure", choices=("off", "routine", "full"),
+                        default="off",
+                        help="sweep the descriptor-pressure axis (design "
+                             "section 14) in addition to the two target axes: "
+                             "'routine' is the boundary profile subset, 'full' "
+                             "is every pressure arm x every profile and belongs "
+                             "to a milestone gate. The axis is executed by the "
+                             "launcher of v4/cli/fd_pressure_harness.py and "
+                             "verified against PINNED_PRESSURE_CLASSES.")
+    parser.add_argument("--pressure-runs", type=int, default=2,
+                        help="runs per pressure cell; never below 2, because a "
+                             "cell that disagrees with itself fails (design "
+                             "section 10 determinism)")
+    parser.add_argument("--pressure-jobs", type=int, default=1,
+                        help="pressure cells to sweep concurrently over "
+                             "independent work materializations")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
@@ -2011,6 +3960,8 @@ def main():
         raise SystemExit("--deadline must be in (0, 30] seconds")
     if args.budget_seconds > 120:
         raise SystemExit("--budget-seconds must stay <= 120 (resource policy)")
+    if getattr(args, "pressure_jobs", 1) < 1:
+        raise SystemExit("--pressure-jobs must be >= 1")
     if len(expected_cells()) > MAX_CELLS:
         raise SystemExit(f"the derived grid is {len(expected_cells())} cells, "
                          f"over the {MAX_CELLS}-cell ceiling")

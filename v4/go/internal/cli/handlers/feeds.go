@@ -360,14 +360,14 @@ func drainFeedV4(reader *rpc.ReaderValue, name string, present bool, add func([]
 		batch = append(batch, record)
 		if len(batch) >= rangeBatchCapacity {
 			if err := add(batch); err != nil {
-				return SDKError(err, "not_started")
+				return readError(err)
 			}
 			batch = batch[:0]
 		}
 	}
 	if len(batch) > 0 {
 		if err := add(batch); err != nil {
-			return SDKError(err, "not_started")
+			return readError(err)
 		}
 	}
 	return nil
@@ -401,14 +401,14 @@ func drainFeedV6(reader *rpc.ReaderValue, name string, present bool, add func([]
 		batch = append(batch, record)
 		if len(batch) >= rangeBatchCapacity {
 			if err := add(batch); err != nil {
-				return SDKError(err, "not_started")
+				return readError(err)
 			}
 			batch = batch[:0]
 		}
 	}
 	if len(batch) > 0 {
 		if err := add(batch); err != nil {
-			return SDKError(err, "not_started")
+			return readError(err)
 		}
 	}
 	return nil
@@ -502,15 +502,6 @@ func withSourceClose(value any, failure *rpc.HandlerError, sourceClose map[strin
 	return value, nil
 }
 
-// sdkWorkflow maps one SDK workflow failure to a handler error.
-func sdkWorkflow[T any](value T, err error) (T, *rpc.HandlerError) {
-	if err != nil {
-		var zero T
-		return zero, SDKError(err, "not_started")
-	}
-	return value, nil
-}
-
 // ---------------------------------------------------------------------------
 // Handlers.
 // ---------------------------------------------------------------------------
@@ -583,7 +574,12 @@ func publisherFeedWorkflow(st *rpc.SessionState, params json.RawMessage, method 
 }
 
 // runFeedWorkflow creates or replaces one named feed from the current
-// coverage source ranges (Rust feeds.rs run_feed_workflow).
+// coverage source ranges (Rust feeds.rs run_feed_workflow). Every step
+// after the writer open is a read of the live catalog or the source, so
+// each maps through the read-only fold (Rust sdk() -> reader::read_error):
+// a refused value kind or value tag performed reads and wrote nothing,
+// which is read_only_failure, not the pre-attempt not_started the caller's
+// writer open reports.
 func runFeedWorkflow(writer *iprangedb.LiveWriter, reader *rpc.ReaderValue, currentFeed string, target iprangedb.FeedName, create bool, token *iprangedb.CancellationToken) (*iprangedb.FinishedWorkflow, *rpc.HandlerError) {
 	info, err := readerInfoErr(reader)
 	if err != nil {
@@ -596,7 +592,7 @@ func runFeedWorkflow(writer *iprangedb.LiveWriter, reader *rpc.ReaderValue, curr
 	var finished *iprangedb.FinishedWorkflow
 	if info.Family == iprangedb.AddressFamilyIPv6 {
 		if create {
-			draft, herr := sdkWorkflow(writer.BeginCreateFeed(target, token))
+			draft, herr := sdk(writer.BeginCreateFeed(target, token))
 			if herr != nil {
 				return nil, herr
 			}
@@ -605,7 +601,7 @@ func runFeedWorkflow(writer *iprangedb.LiveWriter, reader *rpc.ReaderValue, curr
 			}
 			finished, err = draft.FinishInput()
 		} else {
-			draft, herr := sdkWorkflow(writer.BeginReplaceFeed(target, token))
+			draft, herr := sdk(writer.BeginReplaceFeed(target, token))
 			if herr != nil {
 				return nil, herr
 			}
@@ -615,7 +611,7 @@ func runFeedWorkflow(writer *iprangedb.LiveWriter, reader *rpc.ReaderValue, curr
 			finished, err = draft.FinishInput()
 		}
 	} else if create {
-		draft, herr := sdkWorkflow(writer.BeginCreateFeed(target, token))
+		draft, herr := sdk(writer.BeginCreateFeed(target, token))
 		if herr != nil {
 			return nil, herr
 		}
@@ -624,7 +620,7 @@ func runFeedWorkflow(writer *iprangedb.LiveWriter, reader *rpc.ReaderValue, curr
 		}
 		finished, err = draft.FinishInput()
 	} else {
-		draft, herr := sdkWorkflow(writer.BeginReplaceFeed(target, token))
+		draft, herr := sdk(writer.BeginReplaceFeed(target, token))
 		if herr != nil {
 			return nil, herr
 		}
@@ -634,13 +630,15 @@ func runFeedWorkflow(writer *iprangedb.LiveWriter, reader *rpc.ReaderValue, curr
 		finished, err = draft.FinishInput()
 	}
 	if err != nil {
-		return nil, SDKError(err, "not_started")
+		return nil, readError(err)
 	}
 	return finished, nil
 }
 
 // runImportWorkflow starts and finishes one complete membership import
-// from the pinned reader (Rust feeds.rs run_import).
+// from the pinned reader (Rust feeds.rs run_import). Like the named-feed
+// workflow, both steps are reads of an already-open writer, so their
+// refusals carry the read-only outcome.
 func runImportWorkflow(writer *iprangedb.LiveWriter, reader *rpc.ReaderValue, token *iprangedb.CancellationToken) (*iprangedb.FinishedWorkflow, *rpc.HandlerError) {
 	var source iprangedb.MembershipImportSource
 	if reader.Live != nil {
@@ -648,13 +646,13 @@ func runImportWorkflow(writer *iprangedb.LiveWriter, reader *rpc.ReaderValue, to
 	} else {
 		source = iprangedb.MembershipImportSourceImmutable(reader.Immutable)
 	}
-	draft, herr := sdkWorkflow(writer.BeginMembershipImport(source, token))
+	draft, herr := sdk(writer.BeginMembershipImport(source, token))
 	if herr != nil {
 		return nil, herr
 	}
 	finished, err := draft.FinishInput()
 	if err != nil {
-		return nil, SDKError(err, "not_started")
+		return nil, readError(err)
 	}
 	return finished, nil
 }

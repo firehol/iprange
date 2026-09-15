@@ -1,0 +1,193 @@
+{
+ "fixtures": [
+  {
+   "path": "membership.iprange",
+   "source": {
+    "generator": "v4_fixture",
+    "seed": 1
+   }
+  }
+ ],
+ "name": "feeds.direct_value_kind_read_only",
+ "requires": "iprange.v1.feeds.create",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "producer",
+   "expect_result": {
+    "address_family": "ipv4",
+    "commit_nonce": {
+     "$ignore": true
+    },
+    "database_id": {
+     "$ignore": true
+    },
+    "directory_identity": {
+     "$ignore": true
+    },
+    "housekeeping": {
+     "artifacts": []
+    },
+    "main_basename": "direct.iprange",
+    "main_identity": {
+     "$ignore": true
+    },
+    "reader_capacity": 8,
+    "residue_possible": false,
+    "sidecar_id": {
+     "$ignore": true
+    },
+    "sidecar_identity": {
+     "$ignore": true
+    },
+    "state": "created",
+    "structure_kind": "none",
+    "value_kind": "direct",
+    "value_tag": {
+     "hex": "706172697479"
+    },
+    "visible_housekeeping": []
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.database.create",
+   "params": {
+    "family": "ipv4",
+    "path": "$WORK/direct.iprange",
+    "reader_capacity": 8,
+    "structure_kind": "none",
+    "value_kind": "direct",
+    "value_tag": {
+     "text": "parity"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "wrong_value_kind",
+    "outcome": "read_only_failure"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.feeds.create",
+   "params": {
+    "current": {
+     "feed": "alpha",
+     "source": {
+      "mode": "immutable",
+      "path": "$WORK/membership.iprange"
+     }
+    },
+    "feed": "gamma",
+    "metadata": {
+     "mode": "keep"
+    },
+    "path": "$WORK/direct.iprange",
+    "writer_budget": {
+     "max_growth_pages": "20000",
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_private_pages": "20000"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "wrong_value_kind",
+    "outcome": "read_only_failure"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.feeds.replace",
+   "params": {
+    "current": {
+     "feed": "alpha",
+     "source": {
+      "mode": "immutable",
+      "path": "$WORK/membership.iprange"
+     }
+    },
+    "feed": "gamma",
+    "metadata": {
+     "mode": "keep"
+    },
+    "path": "$WORK/direct.iprange",
+    "writer_budget": {
+     "max_growth_pages": "20000",
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_private_pages": "20000"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "wrong_value_kind",
+    "outcome": "read_only_failure"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.feeds.delete",
+   "params": {
+    "feed": "nosuch",
+    "metadata": {
+     "mode": "keep"
+    },
+    "path": "$WORK/direct.iprange",
+    "writer_budget": {
+     "max_growth_pages": "20000",
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_private_pages": "20000"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "wrong_value_kind",
+    "outcome": "read_only_failure"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.feeds.rename",
+   "params": {
+    "metadata": {
+     "mode": "keep"
+    },
+    "new_feed": "other",
+    "old_feed": "nosuch",
+    "path": "$WORK/direct.iprange",
+    "writer_budget": {
+     "max_growth_pages": "20000",
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_private_pages": "20000"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "wrong_value_kind",
+    "outcome": "read_only_failure"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.feeds.import",
+   "params": {
+    "metadata": {
+     "mode": "keep"
+    },
+    "path": "$WORK/direct.iprange",
+    "source": {
+     "mode": "immutable",
+     "path": "$WORK/membership.iprange"
+    },
+    "writer_budget": {
+     "max_growth_pages": "20000",
+     "max_heap_bytes": "16777216",
+     "max_open_files": 4,
+     "max_private_pages": "20000"
+    }
+   }
+  }
+ ]
+}

@@ -1,0 +1,14 @@
+# OK: ipv6 ::/0 cardinality -> 1,340282366920938463463374607431768211455
+# OK: duplicated ipv6 ::/0 cardinality -> 1,340282366920938463463374607431768211455
+# OK: ipv6 explicit full range cardinality -> 1,340282366920938463463374607431768211455
+# OK: ipv6 full range and ::/0 together -> 1,340282366920938463463374607431768211455
+# OK: ipv6 two halves cardinality -> 1,340282366920938463463374607431768211455
+# OK: ipv6 two halves reversed cardinality -> 1,340282366920938463463374607431768211455
+# OK: ipv6 two halves duplicated cardinality -> 1,340282366920938463463374607431768211455
+# OK: ipv6 exact count below saturation -> 2,79228162514264337593543950339
+# OK: ipv6 exact count at the top of the space -> 2,258
+# OK: ipv6 with an ipv4-mapped address cardinality -> 2,2
+# OK: ipv4 0.0.0.0/0 cardinality -> 1,4294967296
+# OK: ipv4 two ranges cardinality -> 2,16777472
+# OK: ipv6 entry dropped in ipv4 mode -> 1,10 with the dropped-entry notice
+# OK: 13 cardinality cases matched the pinned values and the C reference

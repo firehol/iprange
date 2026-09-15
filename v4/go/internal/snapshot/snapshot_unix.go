@@ -61,11 +61,40 @@ func fileIdentityOf(f *os.File) (uint64, uint64, error) {
 	return uint64(st.Dev), uint64(st.Ino), nil
 }
 
-// directoryIdentityOf captures the device+inode of the destination
-// parent directory (Rust Destination::bind Directory::open identity;
-// the reject_live_self same-filesystem rule compares the destination
-// file against it).
+// directoryIdentityOf proves the destination parent and captures its
+// device+inode (Rust Destination::bind Directory::open identity; the
+// reject_live_self same-filesystem rule compares the destination file
+// against it).
+//
+// The proof is the engine's one authoritative directory bind
+// (live.OpenDirectory mirrors Rust Directory::open: open with
+// O_DIRECTORY|O_NOFOLLOW, the directory check, require_local_filesystem,
+// name_max) and it must run before the destination node is classified
+// by openDestinationNoFollow. A destination under a filesystem that
+// cannot carry the live contract (procfs, sysfs, tmpfs, a network mount)
+// is then the durability refusal at every node shape, which is what
+// binary-format-v4.md requires of a replacement publication: classifying
+// the node first would answer the namespace collision class for a
+// directory, FIFO, or symlink that happens to already sit at the
+// destination name, downgrading the durability refusal to a conflict
+// over a filesystem the exchange can never be durable on.
 func directoryIdentityOf(path string) (device uint64, inode uint64, err error) {
+	dir, err := live.OpenDirectory(path)
+	if err != nil {
+		// The bind's own vocabulary decides the class here, with the same
+		// fold publication.namespaceProblem applies at the machine
+		// boundary: the unsupported kind (a filesystem outside the
+		// durability whitelist, or one whose name_max cannot be proved)
+		// is the durability refusal, and every other bind failure keeps
+		// the plain io class the path probe gave it before.
+		if nerr, ok := live.AsNamespaceError(err); ok && nerr.Kind == live.NamespaceUnsupported {
+			return 0, 0, &format.Error{Code: format.CodeDurabilityUnsupported, Detail: "filesystem lacks required durable namespace operations"}
+		}
+		return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}
+	}
+	dir.Close()
+	// The bind proved this name is a qualified directory; the numbers
+	// the cross-filesystem rule compares are taken from that same name.
 	var st unix.Stat_t
 	if err := unix.Lstat(path, &st); err != nil {
 		return 0, 0, &format.Error{Code: format.CodeIO, Detail: "publication filesystem operation failed"}

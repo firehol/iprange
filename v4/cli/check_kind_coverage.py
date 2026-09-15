@@ -220,8 +220,11 @@ no report problem exists; 1 otherwise.
 """
 
 import argparse
+import hashlib
+import importlib
 import json
 import os
+import re
 import shlex
 import sys
 import tempfile
@@ -1960,6 +1963,28 @@ def crash_evidence(path, report, path_to_sha, implementation_of, problems):
             problems.append(
                 f"crash {path}: PASS scenario {scenario_name!r} records "
                 f"no reopen_outcome (must be an object)")
+        # A scenario that passed has nothing to report as failed, and a
+        # scenario whose residue was judged unbounded cannot be a pass: the
+        # harness records a scenario's failures as it judges them, so a PASS
+        # row carrying either is a rewritten verdict rather than a result.
+        failures = scenario.get("failures")
+        if not isinstance(failures, list):
+            problems.append(
+                f"crash {path}: PASS scenario {scenario_name!r} records no "
+                f"failures list ({failures!r}); a passing scenario has an "
+                f"empty one, and a row that dropped it cannot be told from "
+                f"one whose failures were deleted")
+        elif failures:
+            problems.append(
+                f"crash {path}: PASS scenario {scenario_name!r} records "
+                f"{len(failures)} failure(s) {failures[:2]} while claiming to "
+                f"pass")
+        if scenario.get("residue_bounded") is False:
+            problems.append(
+                f"crash {path}: PASS scenario {scenario_name!r} records "
+                f"residue_bounded false; leftover residue after a crash is "
+                f"the defect this battery exists to find, so it cannot also "
+                f"be a pass")
         # Per-scenario binary identity is mandatory: the harness records
         # the sha256 of the producer and consumer binaries each scenario
         # executes; a PASS scenario without it has no executed identity.
@@ -2615,15 +2640,37 @@ def fifo_surface_evidence(path, report, implementation_of, ledger, problems,
                                  binaries.get(engine), implementation_of,
                                  ledger, problems,
                                  on_disk=verify_binaries)
-    fixture = binaries.get("fixture_tool")
-    if isinstance(fixture, dict):
-        # The fixture is a generator, not a service, so it has no executed
-        # actor record anywhere; its identity anchor is the crash report's
-        # root binaries table, exactly as the matrix fixture is bound.
+    # The fixture is a generator, not a service, so it has no executed actor
+    # record anywhere; its identity anchor is the crash report's root binaries
+    # table, exactly as the matrix fixture is bound.  The surface harness
+    # records it top level, and a report that filed it under binaries instead
+    # must not leave the binding un-checked.
+    fixture = report.get("fixture_tool")
+    beside = binaries.get("fixture_tool")
+    if not isinstance(fixture, dict):
+        fixture = beside
+    # The surface harness records the fixture at top level.  A second record
+    # filed under binaries is another claim about the same generator, so the
+    # two must agree: trusting whichever comes first would let a report keep a
+    # genuine fixture beside a fabricated one.
+    if isinstance(fixture, dict) and isinstance(beside, dict) and (
+            fixture.get("sha256"), fixture.get("path")) != (
+            beside.get("sha256"), beside.get("path")):
+        problems.append(
+            f"fifo-surface {path}: the report files two fixture_tool records "
+            f"that disagree ({fixture.get('sha256')!r} against "
+            f"{beside.get('sha256')!r}); the generator the arm table built "
+            f"its artifacts from has one identity")
+        fixture = None
+    if not isinstance(fixture, dict):
+        if not isinstance(beside, dict):
+            problems.append(
+                f"fifo-surface {path}: the report records no fixture_tool "
+                f"identity, so the artifacts every arm refused are "
+                f"unaccounted for")
+    else:
         digest = fixture.get("sha256")
-        if not (isinstance(digest, str) and len(digest) == 64
-                and all(character in "0123456789abcdef"
-                        for character in digest)):
+        if not _is_sha256(digest):
             problems.append(
                 f"fifo-surface {path}: fixture_tool sha256 {digest!r} is not "
                 f"a measured digest")
@@ -2632,17 +2679,126 @@ def fifo_surface_evidence(path, report, implementation_of, ledger, problems,
                 f"fifo-surface {path}: fixture_tool sha256 {digest} is not "
                 f"the fixture identity the battery's crash report records; "
                 f"the artifacts the arm table consumed are unaccounted for")
-        _surface_binary_identity(path, "fifo-surface", "rust", fixture,
-                                 implementation_of, ledger, problems,
-                                 on_disk=verify_binaries,
-                                 require_provenance=False)
-    arms = report.get("arms") or []
-    engines_seen = {record.get("engine") for record in arms
-                    if isinstance(record, dict)}
+        # The fixture is a generator rather than a service, so it carries no
+        # system.describe result and no implementation label to check: its
+        # anchors are the crash record's fixture identity, the ledger, and the
+        # file on disk.
+        if ledger is not None and _is_sha256(digest) and digest not in ledger:
+            problems.append(
+                f"fifo-surface {path}: fixture_tool sha256 {digest} is absent "
+                f"from the supplied SHASUMS ledger; the generator the arm "
+                f"table built its artifacts from is not one the battery "
+                f"staged")
+        if verify_binaries and _is_sha256(digest):
+            recorded_path = fixture.get("path")
+            if isinstance(recorded_path, str):
+                resolved = os.path.realpath(recorded_path)
+                if os.path.isfile(resolved):
+                    actual = _sha256_file(resolved)
+                    if actual != digest:
+                        problems.append(
+                            f"fifo-surface {path}: fixture binary {resolved!r} "
+                            f"has sha256 {actual} on disk, not the recorded "
+                            f"{digest}")
+                else:
+                    problems.append(
+                        f"fifo-surface {path}: fixture binary {resolved!r} "
+                        f"does not exist on the review machine")
+    arms = [record for record in (report.get("arms") or [])
+            if isinstance(record, dict)]
+    engines_seen = {record.get("engine") for record in arms}
     if engines_seen != {"go", "rust"}:
         problems.append(
             f"fifo-surface {path}: arms were executed by {sorted(engines_seen)}; "
             f"a both-engine claim needs both engines present in the arm log")
+    # The arm inventory and its expectations belong to check_fifo_surface.py.
+    # Consuming the table here is what stops a report from deleting an arm or
+    # rewriting an expectation: the gate has always known that both engines
+    # appear somewhere in the log, and never knew that all 17 arms did.
+    surface = _table_module(
+        "check_fifo_surface",
+        ("ARM_NAMES", "ARM_METHOD", "ARM_EXPECTED", "PRODUCT_ERROR"),
+        f"fifo-surface {path}", problems)
+    if surface is None:
+        return
+    expected_rows = {(engine, arm) for engine in ("go", "rust")
+                     for arm in surface.ARM_NAMES}
+    seen = {}
+    for index, record in enumerate(arms):
+        key = (record.get("engine"), record.get("arm"))
+        if key in seen:
+            problems.append(
+                f"fifo-surface {path}: arms[{index}] repeats {key[0]}/"
+                f"{key[1]}; the later record would outrank the first")
+            continue
+        seen[key] = record
+    for key in sorted(set(seen) - expected_rows):
+        problems.append(
+            f"fifo-surface {path}: row for {key[0]}/{key[1]}, which the "
+            f"committed arm table does not define; an invented arm is not "
+            f"evidence")
+    for key in sorted(expected_rows - set(seen)):
+        problems.append(
+            f"fifo-surface {path}: {key[0]} has no row for arm {key[1]}; the "
+            f"arm table is an obligation for both engines, and a report that "
+            f"omitted the refusals it did not like is not a surface verdict")
+    for (engine, arm), record in sorted(seen.items()):
+        where_row = f"fifo-surface {path}: {engine}/{arm}"
+        if arm not in surface.ARM_EXPECTED:
+            continue
+        if record.get("expected_code") != surface.ARM_EXPECTED[arm]:
+            problems.append(
+                f"{where_row}: expected_code {record.get('expected_code')!r} "
+                f"contradicts the committed table "
+                f"({surface.ARM_EXPECTED[arm]!r}); rewriting the expectation "
+                f"is how a wrong refusal is made to look right")
+        if record.get("data_code") != record.get("expected_code"):
+            problems.append(
+                f"{where_row}: the engine answered {record.get('data_code')!r}"
+                f" where the record's own expected_code is "
+                f"{record.get('expected_code')!r}")
+        if record.get("method") != surface.ARM_METHOD.get(arm):
+            problems.append(
+                f"{where_row}: the row records method "
+                f"{record.get('method')!r}, not the "
+                f"{surface.ARM_METHOD.get(arm)!r} the arm table sends")
+        if record.get("kind") != "answered":
+            problems.append(
+                f"{where_row}: kind {record.get('kind')!r}; an arm that hung "
+                f"or never reached the handler is not a refusal class")
+        if record.get("transport_code") != surface.PRODUCT_ERROR:
+            problems.append(
+                f"{where_row}: transport_code "
+                f"{record.get('transport_code')!r} is not the product error "
+                f"{surface.PRODUCT_ERROR} the arm answers with")
+    summary = report.get("summary")
+    if not isinstance(summary, dict):
+        problems.append(f"fifo-surface {path}: report records no summary")
+    else:
+        if summary.get("arms_expected") != len(expected_rows):
+            problems.append(
+                f"fifo-surface {path}: summary arms_expected "
+                f"{summary.get('arms_expected')!r} contradicts the "
+                f"{len(expected_rows)} rows the committed arm table requires "
+                f"from both engines")
+        if summary.get("failed") not in ([], None):
+            problems.append(
+                f"fifo-surface {path}: summary records failed arms "
+                f"{summary.get('failed')}")
+    controls = [record for record in (report.get("controls") or [])
+                if isinstance(record, dict)]
+    control_engines = sorted({record.get("engine") for record in controls})
+    if control_engines != ["go", "rust"]:
+        problems.append(
+            f"fifo-surface {path}: control rows cover {control_engines}; "
+            f"without a regular-file control per engine, a report cannot tell "
+            f"a refused FIFO from a binary that refused everything")
+    for record in controls:
+        if record.get("answered_result") is not True:
+            problems.append(
+                f"fifo-surface {path}: {record.get('engine')} control did not "
+                f"answer a regular file, so the refusals below it prove "
+                f"nothing about FIFOs specifically")
 
 
 def throughput_evidence(path, report, implementation_of, ledger, problems,
@@ -2734,6 +2890,9 @@ def throughput_evidence(path, report, implementation_of, ledger, problems,
                 f"{where}: median_replies_per_s {median!r} is not the median "
                 f"of its own rounds ({expected:.1f}); a rate is derived "
                 f"arithmetic, not a claimed number")
+        _reply_classification_problems(where, record.get("rounds"), problems)
+        _method_agreement_problems(where, report.get("method"), record,
+                                   problems)
         structure = record.get("thread_structure")
         if structure is None:
             problems.append(
@@ -2745,6 +2904,8 @@ def throughput_evidence(path, report, implementation_of, ledger, problems,
         if not isinstance(small, dict) or not isinstance(large, dict):
             problems.append(f"{where}: thread census is incomplete")
             continue
+        _thread_census_problems(where, report.get("method"), small, large,
+                                problems)
         for side_name, side in (("small", small), ("large", large)):
             if side.get("replies") != side.get("requests"):
                 problems.append(
@@ -2760,10 +2921,1330 @@ def throughput_evidence(path, report, implementation_of, ledger, problems,
                 problems.append(
                     f"{where}: {side_name} census records {clones} clones and "
                     f"0 task ids; the census parsed nothing")
+            _reply_classification_problems(f"{where} {side_name} census",
+                                           [side], problems)
+
+# ---------------------------------------------------------------------------
+# Consumed reports beyond the matrix and crash pair.
+#
+# Each report class below is produced by its own harness and publishes a
+# verdict or a measurement.  A verdict that no gate reads is a claim, not
+# evidence: at the wave-19.24 revision each of these was accepted with
+# fabricated fields, because nothing compared the report with the artifacts
+# the kind gate already trusts.  Every rule here re-derives, from the
+# matrix/crash identities and from the harnesses' own committed tables, what
+# the report says happened.
+#
+# Table authority.  The refusal-class grid, the pinned refusals, the FIFO arm
+# table and the throughput census constants belong to
+# ``check_refusal_class_parity``, ``check_fifo_surface`` and
+# ``throughput_harness``.  They are imported, never copied: a second copy of
+# a table can only drift, and a table consulted from one place moves with the
+# harness that owns it.
+# ---------------------------------------------------------------------------
+
+REFUSAL_PARITY_SCHEMA = "iprange-cli-refusal-class-parity-report-v1"
+GO_COVERAGE_SCHEMA = "iprange-cli-coverage-go-report-v1"
+WINDOWS_HOUSEKEEPING_SCHEMA = "iprange-cli-windows-housekeeping-report-v3"
+CRASH_REPORT_SCHEMA = "iprange-cli-crash-report-v1"
+BATTERY_MANIFEST_SCHEMA = "iprange-cli-battery-manifest-v1"
+BATTERY_MANIFEST_FILE_NAME = "battery-manifest.json"
+
+# Report classes the gate consumes besides ``--matrix``/``--crash``.  Each
+# name is also a battery-manifest role, so a class that is neither supplied
+# nor discovered is a missing role rather than a skipped check.
+CONSUMED_ROLES = ("matrix", "crash", "crash-negative", "fifo-surface",
+                  "throughput", "refusal-class-parity", "coverage-go",
+                  "windows-housekeeping")
+
+# Standard file names, used when a class is discovered beside the supplied
+# battery instead of being named on the command line.
+CONSUMED_FILE_NAMES = {
+    "refusal-class-parity": ("refusal-class-parity.json",),
+    "coverage-go": ("coverage-go.json",),
+    "crash-negative": ("crash-negative.json",),
+    "windows-housekeeping": ("windows-housekeeping.json",),
+}
+
+# A negative control is one report per faked role, so a battery keeps more
+# than one file for the role; they are found by name prefix.
+CONSUMED_FILE_PREFIXES = {"crash-negative": ("crash-negative",)}
+
+# The durability stages that run after the destination name exists.  A
+# publication fact block may claim the destination is visible only from one
+# of these, because before the rename there is nothing to see and the honest
+# answer is a definite refusal carrying no publication facts.
+POST_VISIBILITY_STAGE_PREFIX = "sync"
+PUBLICATION_FACT_CONTAINERS = ("publication", "removals_publication_failure")
+
+
+COMMITTED_EVIDENCE_DIR = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "evidence")
+
+
+def _wave_ledger_path():
+    """The staged-artifact ledger of this checkout, when binaries were staged.
+
+    The committed battery manifest binds the ledger the evidence was staged
+    against, so any consumer that judges the committed reports has to be
+    handed the same ledger -- including ``--self-test``, whose
+    genuine-evidence checks are the proof that the real battery still passes.
+    The ledger lives outside the repository (``.local/`` is ignored), so it is
+    also honoured from ``IPRANGE_SHA256_LEDGER`` for a reviewer who staged it
+    elsewhere.
+    """
+
+    root = os.path.dirname(os.path.dirname(
+        os.path.dirname(os.path.abspath(__file__))))
+    for candidate in (os.environ.get("IPRANGE_SHA256_LEDGER"),
+                      os.path.join(root, ".local", "shared", "binaries",
+                                   "SHASUMS.txt")):
+        if candidate and os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _all_digests(document):
+    """Every sha256-shaped token in one report, wherever it appears.
+
+    Used to ask whether a build identity shows up in a report that must not
+    name it, so the question is about the document rather than about the
+    handful of fields a checker happens to know.
+    """
+
+    return set(re.findall(r"\b[0-9a-f]{64}\b",
+                          json.dumps(document, sort_keys=True)))
+
+
+def _resolve_consumed(paths, role, anchor_paths, problems):
+    """Find the reports of one consumed class that nobody named.
+
+    Resolution order is explicit flag, then the directory the supplied
+    battery lives in, then this gate's committed evidence.  The point of
+    doing it in the gate rather than the shell is that an omitted flag is as
+    cheap as a deleted field: a consumed class may be missing, but it may not
+    be quietly unexamined, so a class that cannot be found at all is recorded
+    as a problem.
+    """
+
+    if paths:
+        return list(paths)
+    directories = []
+    for path in anchor_paths:
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent not in directories:
+            directories.append(parent)
+    if COMMITTED_EVIDENCE_DIR not in directories:
+        directories.append(COMMITTED_EVIDENCE_DIR)
+    names = list(CONSUMED_FILE_NAMES.get(role) or ())
+    prefixes = list(CONSUMED_FILE_PREFIXES.get(role) or ())
+    for directory in directories:
+        if not os.path.isdir(directory):
+            continue
+        if prefixes:
+            found = sorted(os.path.join(directory, name)
+                           for name in os.listdir(directory)
+                           if any(name.startswith(prefix)
+                                  and name.endswith(".json")
+                                  for prefix in prefixes))
+            if found:
+                return found
+        found = [os.path.join(directory, name) for name in names
+                 if os.path.isfile(os.path.join(directory, name))]
+        if found:
+            return found
+    problems.append(
+        f"no {role} report is supplied or present beside the battery "
+        f"(looked for {', '.join(names) or ' / '.join(prefixes)} in "
+        f"{', '.join(directories)}); {role} is consumed evidence, so a "
+        f"battery without it does not prove the verdict it claims")
+    return []
+
+
+def _is_sha256(value):
+    """True when ``value`` has the wire form of a measured sha256 digest."""
+
+    return (isinstance(value, str) and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value))
+
+
+def _accepts_keyword(function, name):
+    """True when ``function`` can be called with the keyword ``name``.
+
+    The gate calls the parity harness's own verifier, and that verifier takes
+    the staged ledger only in newer revisions of the harness.  Probing the
+    signature is how the gate keeps working across the two without swallowing
+    a real TypeError raised from inside the verifier.
+    """
+
+    code = getattr(function, "__code__", None)
+    if code is None:
+        return False
+    if name in code.co_varnames[:code.co_argcount]:
+        return True
+    return bool(code.co_flags & 0x08)  # **kwargs
+
+
+def _canonical_digest(document):
+    """Digest of a report's *content*, independent of how it was written.
+
+    The battery re-serializes reports into its sandbox, so a file-byte digest
+    would change while the evidence stayed the same.  The manifest binds what
+    a report says, so it digests the canonical JSON form: sorted keys, no
+    insignificant whitespace.
+    """
+
+    payload = json.dumps(document, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _table_module(name, required, where, problems):
+    """Import one harness module for its committed tables, or fail closed.
+
+    ``required`` names the members the gate derives expectations from.  An
+    import failure or a missing member is a gate problem rather than a
+    skipped check: without the table the gate cannot tell a complete battery
+    from a shrunken one, and silence is the bypass these rules exist to close.
+    """
+
+    try:
+        module = importlib.import_module(name)
+    except Exception as exc:  # noqa: BLE001 - report, never crash
+        problems.append(f"{where}: cannot import {name} for its committed "
+                        f"tables ({type(exc).__name__}: {exc}); the "
+                        f"expectations this report is measured against cannot "
+                        f"be derived")
+        return None
+    missing = [member for member in required if not hasattr(module, member)]
+    if missing:
+        problems.append(f"{where}: {name} no longer declares {missing}; the "
+                        f"gate derives these expectations from the harness "
+                        f"that owns them instead of keeping a second copy")
+        return None
+    return module
+
+
+def refusal_class_parity_evidence(path, report, implementation_of, ledger,
+                                  problems, fixture_shas=None,
+                                  verify_binaries=False):
+    """Consume the refusal-class parity verdict inside the kind gate.
+
+    The parity harness owns the grid and the pinned refusals, so this
+    function does not restate them.  It adds what the generator's own
+    verifier cannot see:
+
+    * identity.  The two engine records must be two different artifacts, and
+      each digest must be the ledger entry for its own implementation label.
+      A sweep that ran one executable twice -- ``--go <rust binary>`` --
+      reports agreement between a binary and itself, and no cell content can
+      expose it; the ledger label and the digest inequality can.
+    * the verdict actually claimed.  ``result`` must be PASS and the
+      divergence, hang, flake and pin counters must all say the sweep
+      passed, which is the difference between an honest report about a
+      failing battery and a report written after the fact.
+    * publication facts as evidence.  A fact block that claims an unknown
+      publication outcome must be backed by the evidence members the engines
+      publish, by a digest for the artifact, and by a stage that runs after
+      the destination name can exist.
+
+    The generator's verifier is run over the report as well: a report the
+    generator itself would reject is a defect here too.
+    """
+
+    where = f"refusal-class-parity {path}"
+    if report.get("schema") != REFUSAL_PARITY_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    if report.get("result") != "PASS":
+        problems.append(f"{where}: result {report.get('result')!r}; a parity "
+                        f"sweep that did not pass cannot be consumed as "
+                        f"parity evidence")
+    parity = _table_module(
+        "check_refusal_class_parity",
+        ("ARM_NAMES", "kind_names", "MANDATORY_PATH_KINDS", "PINNED_REFUSALS",
+         "pin_expectation", "expected_cells", "REQUIRED_PUBLICATION_FACTS",
+         "assess_report"),
+        where, problems)
+    if parity is None:
+        return
+
+    binaries = report.get("binaries")
+    if not isinstance(binaries, dict):
+        problems.append(f"{where}: no binaries table to bind the verdict to")
+        return
+    for engine in ("go", "rust"):
+        _surface_binary_identity(path, "refusal-class-parity", engine,
+                                 binaries.get(engine), implementation_of,
+                                 ledger, problems, on_disk=verify_binaries)
+    go_digest = (binaries.get("go") or {}).get("sha256")
+    rust_digest = (binaries.get("rust") or {}).get("sha256")
+    if _is_sha256(go_digest) and go_digest == rust_digest:
+        problems.append(
+            f"{where}: the go and rust records name the same binary "
+            f"{go_digest}; a sweep that ran one executable twice and reported "
+            f"an agreement is not a parity observation")
+    if ledger is not None:
+        for engine in ("go", "rust"):
+            digest = (binaries.get(engine) or {}).get("sha256")
+            if not _is_sha256(digest):
+                continue
+            staged = ledger.get(digest) or set()
+            if not any(entry.startswith(f"{engine}/") for entry in staged):
+                problems.append(
+                    f"{where}: {engine} sha256 {digest} is staged as "
+                    f"{sorted(staged) or ['<not staged>']}, not under "
+                    f"{engine!r}; the ledger says which implementation a "
+                    f"digest is, and the verdict must name the same one")
+    fixture = binaries.get("fixture_tool")
+    if not isinstance(fixture, dict):
+        problems.append(
+            f"{where}: the sweep records no fixture_tool identity, so the "
+            f"material every cell was built from is unaccounted for")
+    else:
+        digest = fixture.get("sha256")
+        if not _is_sha256(digest):
+            problems.append(f"{where}: fixture_tool sha256 {digest!r} is not "
+                            f"a measured digest")
+        elif fixture_shas and digest not in fixture_shas:
+            problems.append(
+                f"{where}: fixture_tool sha256 {digest} is not the fixture "
+                f"identity the battery's crash report records; the cells were "
+                f"built from material the battery cannot account for")
+
+    expected = set(parity.expected_cells())
+    cells = [cell for cell in (report.get("cells") or [])
+             if isinstance(cell, dict)]
+    observed = {}
+    for index, cell in enumerate(cells):
+        key = (cell.get("arm"), cell.get("path_kind"))
+        if key in observed:
+            problems.append(f"{where}: cells[{index}] repeats cell {key!r}; "
+                            f"the later record would outrank the first")
+            continue
+        observed[key] = cell
+    for key in sorted(set(observed) - expected):
+        problems.append(f"{where}: cell {key!r} is outside the grid the "
+                        f"generator derives; an invented cell is not "
+                        f"evidence")
+    absent = sorted(expected - set(observed))
+    if absent:
+        shown = ", ".join(f"{arm}/{kind_name}" for arm, kind_name in absent[:6])
+        problems.append(
+            f"{where}: {len(absent)} of {len(expected)} grid cells were never "
+            f"executed (for example: {shown}); the grid is derived from the "
+            f"committed arm and path-kind tables, so a verdict over a "
+            f"shrunken sweep is not a parity verdict")
+    grid = report.get("grid")
+    if not isinstance(grid, dict):
+        problems.append(f"{where}: report records no grid block")
+    else:
+        if grid.get("arms") != list(parity.ARM_NAMES):
+            problems.append(
+                f"{where}: grid arms {grid.get('arms')!r} differ from the "
+                f"committed arm table {list(parity.ARM_NAMES)!r}")
+        if grid.get("path_kinds") != parity.kind_names():
+            problems.append(
+                f"{where}: grid path kinds {grid.get('path_kinds')!r} differ "
+                f"from the committed path-kind table {parity.kind_names()!r}")
+        if list(grid.get("mandatory_path_kinds") or []) \
+                != list(parity.MANDATORY_PATH_KINDS):
+            problems.append(
+                f"{where}: grid mandatory path kinds "
+                f"{grid.get('mandatory_path_kinds')!r} differ from the "
+                f"committed obligations "
+                f"{list(parity.MANDATORY_PATH_KINDS)!r}")
+        if grid.get("cells_expected") != len(expected):
+            problems.append(
+                f"{where}: grid cells_expected {grid.get('cells_expected')!r} "
+                f"contradicts the derived grid of {len(expected)} cells")
+
+    summary = report.get("summary")
+    if not isinstance(summary, dict):
+        problems.append(f"{where}: report records no summary")
+    else:
+        if summary.get("cells_executed") != len(cells):
+            problems.append(
+                f"{where}: summary cells_executed "
+                f"{summary.get('cells_executed')!r} contradicts the "
+                f"{len(cells)} cell records")
+        if summary.get("cells_expected") != len(expected):
+            problems.append(
+                f"{where}: summary cells_expected "
+                f"{summary.get('cells_expected')!r} contradicts the derived "
+                f"grid of {len(expected)} cells")
+        for counter in ("divergences", "hangs", "flaky"):
+            if summary.get(counter) != 0:
+                problems.append(
+                    f"{where}: summary {counter} is "
+                    f"{summary.get(counter)!r}; a consumed parity verdict "
+                    f"requires zero of them")
+        if report.get("divergences"):
+            problems.append(
+                f"{where}: report carries {len(report['divergences'])} "
+                f"divergence record(s) while claiming a PASS verdict")
+        try:
+            accounted = sum(int(summary.get(counter) or 0)
+                            for counter in ("agreements", "divergences",
+                                            "hangs"))
+        except (TypeError, ValueError):
+            accounted = -1
+        if accounted != int(summary.get("cells_executed") or 0):
+            problems.append(
+                f"{where}: agreements+divergences+hangs is {accounted} but "
+                f"{summary.get('cells_executed')} cells were executed; every "
+                f"cell must be classified as one of them")
+
+    pins = [pin for pin in (report.get("pins") or []) if isinstance(pin, dict)]
+    pinned_keys = set(parity.PINNED_REFUSALS)
+    if not pins:
+        problems.append(f"{where}: report records no pins; the "
+                        f"{len(pinned_keys)}-cell pinned-refusal table is an "
+                        f"obligation, not a suggestion")
+    if len(pins) != len(pinned_keys):
+        problems.append(f"{where}: report records {len(pins)} pin(s) but the "
+                        f"committed table pins {len(pinned_keys)} cells")
+    if summary.get("pins_expected") != len(pinned_keys):
+        problems.append(
+            f"{where}: summary pins_expected {summary.get('pins_expected')!r} "
+            f"contradicts the committed pinned-refusal table of "
+            f"{len(pinned_keys)} cells")
+    if summary.get("pins_satisfied") != summary.get("pins_expected"):
+        problems.append(
+            f"{where}: pinned refusals {summary.get('pins_satisfied')} of "
+            f"{summary.get('pins_expected')} satisfied; a consumed verdict "
+            f"must have every one of them")
+    for pin in pins:
+        key = (pin.get("arm"), pin.get("path_kind"))
+        if key not in pinned_keys:
+            continue
+        want = parity.pin_expectation(parity.PINNED_REFUSALS[key])
+        recorded = (pin.get("expected_data_code"), pin.get("expected_outcome"),
+                    pin.get("expected_facts"))
+        if recorded != want:
+            problems.append(
+                f"{where}: pin {key!r} records expectation {recorded!r} but "
+                f"the committed table pins {want!r}; rewriting the expectation"
+                f" is how a wrong answer is made to look right")
+        if pin.get("executed") is not True:
+            problems.append(f"{where}: pin {key!r} records executed "
+                            f"{pin.get('executed')!r} although its cell is in "
+                            f"the executed set")
+
+    required_facts = parity.REQUIRED_PUBLICATION_FACTS
+    for key, cell in observed.items():
+        for engine in ("go", "rust"):
+            record = cell.get(engine)
+            if not isinstance(record, dict):
+                continue
+            _publication_fact_problems(f"{where}: cell {key[0]}/{key[1]} "
+                                       f"{engine}", record, required_facts,
+                                       problems)
+
+    # The pinned-refusal table is the obligation the verdict is measured
+    # against, and the harness publishes its fingerprint.  The two halves are
+    # bound in whichever direction the checked-out revision supports: a report
+    # that names a fingerprint is checked against it, and a harness that
+    # publishes one requires every report to carry it.  Leaving the pairing
+    # optional in both directions is how the binding would silently stop being
+    # enforced the moment one side stopped recording it.
+    fingerprint = getattr(parity, "pinned_table_fingerprint", None)
+    recorded_table = (grid or {}).get("pinned_table_sha256") \
+        if isinstance(grid, dict) else None
+    if callable(fingerprint) and recorded_table is None:
+        problems.append(
+            f"{where}: the report records no pinned_table_sha256, although "
+            f"the parity harness publishes a fingerprint of the table the "
+            f"verdict was swept against")
+    elif recorded_table is not None:
+        if not callable(fingerprint):
+            problems.append(
+                f"{where}: the report binds a pinned-refusal table digest, "
+                f"but this revision of the parity harness publishes no "
+                f"fingerprint to check it against")
+        elif recorded_table != fingerprint():
+            problems.append(
+                f"{where}: the report records a pinned-refusal table digest "
+                f"other than the committed table")
+    try:
+        # The same ledger the gate was handed, where the verifier takes it.
+        if _accepts_keyword(parity.assess_report, "sha256_ledger"):
+            generator_problems = parity.assess_report(
+                report, sha256_ledger=ledger)
+        else:
+            generator_problems = parity.assess_report(report)
+    except Exception as exc:  # noqa: BLE001 - a verifier must not crash us
+        problems.append(f"{where}: the parity gate's own verifier raised "
+                        f"{type(exc).__name__}: {exc}")
+        generator_problems = None
+    for problem in generator_problems or []:
+        text = f"{where}: parity gate: {problem}"
+        if text not in problems:
+            problems.append(text)
+
+
+def _publication_fact_problems(where, record, required_facts, problems):
+    """Require one engine record's publication claim to be backed by data."""
+
+    facts = record.get("publication_facts")
+    evidence = record.get("publication_evidence")
+    if facts is None and evidence is None:
+        return
+    if not isinstance(facts, dict) or not isinstance(evidence, dict):
+        problems.append(
+            f"{where}: records publication facts "
+            f"{'without its fact block' if isinstance(facts, dict) else 'without its evidence'};"
+            f" the claim and its evidence are one fact and must appear "
+            f"together")
+        return
+    absent_members = [member for member in required_facts
+                      if member not in evidence]
+    if absent_members:
+        problems.append(
+            f"{where}: publication_evidence omits {absent_members}; a reply "
+            f"that claims an unknown publication outcome must say on what "
+            f"evidence")
+        return
+    if not _is_sha256(evidence.get("sha256")):
+        problems.append(
+            f"{where}: publication_evidence sha256 "
+            f"{evidence.get('sha256')!r} is not a digest; the artifact the "
+            f"engine says it published has no identity")
+    stage = evidence.get("stage")
+    if not isinstance(stage, str) or not stage.strip():
+        problems.append(f"{where}: publication_evidence records no stage, so "
+                        f"what the engine had already made visible cannot be "
+                        f"judged")
+        return
+    visible = evidence.get("destination_visible")
+    after_visibility = stage.strip().lower().startswith(
+        POST_VISIBILITY_STAGE_PREFIX)
+    if visible is True and not after_visibility:
+        problems.append(
+            f"{where}: destination_visible is true at stage {stage!r}, which "
+            f"runs before the destination name exists; a destination that was "
+            f"never created cannot have been made visible")
+    if visible is not True and after_visibility:
+        problems.append(
+            f"{where}: stage {stage!r} runs after the destination name exists"
+            f" but destination_visible is {visible!r}; the two halves of one "
+            f"durability fact contradict each other")
+    if facts.get("destination_visible") is not True:
+        problems.append(
+            f"{where}: the fact block records destination_visible "
+            f"{facts.get('destination_visible')!r} beside evidence whose "
+            f"shape is the post-visibility one")
+    if facts.get("container") not in PUBLICATION_FACT_CONTAINERS:
+        problems.append(
+            f"{where}: facts container {facts.get('container')!r} is not one "
+            f"of {list(PUBLICATION_FACT_CONTAINERS)}; the engine carries the "
+            f"facts in one of those two reply members")
+    if facts.get("sha256_well_formed") is True \
+            and not _is_sha256(evidence.get("sha256")):
+        problems.append(f"{where}: the fact block claims a well-formed sha256"
+                        f" the evidence does not carry")
+    if facts.get("outcome_unknown") is True \
+            and evidence.get("outcome") != "outcome_unknown":
+        problems.append(
+            f"{where}: the fact block claims outcome_unknown while the "
+            f"evidence outcome is {evidence.get('outcome')!r}")
+    if facts.get("temporary_removed") != evidence.get("temporary_removed"):
+        problems.append(
+            f"{where}: facts temporary_removed {facts.get('temporary_removed')!r}"
+            f" contradicts the evidence "
+            f"{evidence.get('temporary_removed')!r}")
+
+
+def coverage_evidence(path, report, attested_digests, problems):
+    """Consume the Go coverage measurement inside the kind gate.
+
+    Two arithmetic rules, because a coverage report is only evidence if its
+    numbers are derived rather than typed:
+
+    * every percentage must follow from the counts shipped beside it, in the
+      aggregates and in every per-package line; and
+    * the instrumented build must stay out of every report that quotes a
+      rate or a verdict.  Instrumenting changes the binary, so an
+      instrumented digest appearing as a throughput or surface artifact means
+      the attestation measured a build that is not the one that shipped --
+      and the report's own policy sentence promising exactly the opposite is
+      then prose rather than a rule.
+    """
+
+    where = f"coverage-go {path}"
+    if report.get("schema") != GO_COVERAGE_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    instrumented = report.get("instrumented_binaries")
+    if not isinstance(instrumented, dict) or not instrumented:
+        problems.append(
+            f"{where}: report records no instrumented_binaries; without the "
+            f"identity of the build that produced the counters, the "
+            f"percentages are unsourced")
+        instrumented = {}
+    for name, record in sorted(instrumented.items()):
+        if not isinstance(record, dict):
+            problems.append(f"{where}: instrumented binary {name!r} is not an "
+                            f"object")
+            continue
+        if record.get("instrumented") is not True:
+            problems.append(
+                f"{where}: instrumented binary {name!r} records instrumented "
+                f"{record.get('instrumented')!r}; a coverage report about an "
+                f"uninstrumented build measured nothing")
+        if not isinstance(record.get("covermode"), str) \
+                or not record["covermode"]:
+            problems.append(f"{where}: instrumented binary {name!r} records "
+                            f"no covermode")
+        digest = record.get("sha256")
+        if not _is_sha256(digest):
+            problems.append(f"{where}: instrumented binary {name!r} sha256 "
+                            f"{digest!r} is not a measured digest")
+            continue
+        if digest in attested_digests:
+            problems.append(
+                f"{where}: instrumented binary {name!r} sha256 {digest} is "
+                f"also named by a throughput or verdict-bearing report; the "
+                f"coverage build is instrumented and may not attest rate or "
+                f"behavior")
+    for section in ("unit", "integration", "merged"):
+        block = report.get(section)
+        if not isinstance(block, dict):
+            problems.append(f"{where}: report records no {section} block")
+            continue
+        _rederive_percentages(where, section, block.get("measured"),
+                              block.get("percent"), problems)
+        if block.get("percent") is not None \
+                and block["percent"].get("measured") != block.get("measured"):
+            problems.append(
+                f"{where}: {section} percent.measured does not echo the "
+                f"measured counts; the profile a percentage was computed from"
+                f" is not the profile the report publishes")
+    packages = report.get("per_package")
+    if not isinstance(packages, dict) or not packages:
+        problems.append(f"{where}: report records no per_package counters; an"
+                        f" aggregate alone cannot be re-derived")
+    else:
+        for name in sorted(packages):
+            entry = packages[name]
+            if not isinstance(entry, dict):
+                problems.append(f"{where}: per_package {name!r} is not an "
+                                f"object")
+                continue
+            _rederive_percentages(
+                where, f"per_package {name!r}", entry, entry, problems,
+                triples=(("statement_percent", "covered_statements",
+                          ("statements_total", "statements")),
+                         ("function_percent", "covered_functions",
+                          ("functions",)),
+                         ("block_percent", "blocks_covered", ("blocks",))))
+    policy = report.get("policy")
+    if not isinstance(policy, dict) \
+            or not isinstance(policy.get("performance_use"), str) \
+            or not policy["performance_use"]:
+        problems.append(
+            f"{where}: report records no performance_use policy; the rule "
+            f"that keeps instrumented builds out of the attestations is part "
+            f"of the measurement contract, and it is checked above")
+
+
+def _rederive_percentages(where, label, measured, percent, problems,
+                          triples=None):
+    """Require each recorded percentage to follow from its own counts."""
+
+    if not isinstance(measured, dict) or not isinstance(percent, dict):
+        problems.append(f"{where}: {label} records no measured/percent pair")
+        return
+    if triples is None:
+        triples = (("statements", "covered_statements",
+                    ("statements",)),
+                   ("functions", "covered_functions", ("functions",)),
+                   ("blocks", "blocks_covered", ("blocks",)))
+    for percent_key, covered_key, total_keys in triples:
+        covered = measured.get(covered_key)
+        total = next((measured[key] for key in total_keys
+                      if isinstance(measured.get(key), int)), None)
+        recorded = percent.get(percent_key)
+        if not isinstance(covered, int) or not isinstance(total, int):
+            problems.append(
+                f"{where}: {label} has no integer counts behind "
+                f"{covered_key}/{'/'.join(total_keys)} for {percent_key}; a "
+                f"percentage without its counts cannot be re-derived")
+            continue
+        if covered < 0 or total < 0 or covered > total:
+            problems.append(
+                f"{where}: {label} records {covered} covered of {total} total"
+                f" for {percent_key}")
+            continue
+        implied = round(100.0 * covered / total, 2) if total else 0.0
+        if not isinstance(recorded, (int, float)) \
+                or abs(float(recorded) - implied) > 0.005:
+            problems.append(
+                f"{where}: {label} {percent_key} records {recorded!r} but "
+                f"{covered} of {total} is {implied}; a coverage percentage "
+                f"must be the arithmetic of the counts it ships with")
+
+
+def crash_negative_evidence(path, report, implementation_of, problems):
+    """Consume one ``/bin/false`` crash control report.
+
+    The negative control exists to prove the crash battery can see a failure:
+    a real engine runs against a peer that answers nothing, and every
+    scenario must FAIL.  A PASS here is the finding, so these rules are the
+    mirror image of the positive crash consumption -- and they have to be
+    enforced somewhere, because a report nobody reads cannot even be asked
+    which role was the faked one.
+
+    Returns the number of rejected scenarios it accepted as evidence.
+    """
+
+    where = f"crash-negative {path}"
+    if report.get("schema") != CRASH_REPORT_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    scenarios = [entry for entry in (report.get("scenarios") or [])
+                 if isinstance(entry, dict)]
+    if not scenarios:
+        problems.append(f"{where}: a negative control with no scenarios "
+                        f"proved nothing can fail")
+        return 0
+    accepted = [entry.get("scenario") for entry in scenarios
+                if entry.get("pass") is True]
+    if accepted:
+        problems.append(
+            f"{where}: {len(accepted)} scenario(s) PASS in a negative control"
+            f" (for example {accepted[:3]}); with the false peer every "
+            f"scenario must fail, so an accepted scenario is either a control"
+            f" that silently became a positive run or a report that stopped "
+            f"testing what its name claims")
+    if report.get("failed") != len(scenarios):
+        problems.append(
+            f"{where}: report records failed={report.get('failed')!r} for "
+            f"{len(scenarios)} scenarios; the expected outcome of a negative "
+            f"control is total rejection")
+    for entry in scenarios:
+        if entry.get("pass") is True:
+            continue
+        failures = entry.get("failures")
+        if not (isinstance(failures, list) and failures
+                and all(isinstance(text, str) and text.strip()
+                        for text in failures)):
+            problems.append(
+                f"{where}: scenario {entry.get('scenario')!r} is not pass but"
+                f" records no failure reason ({failures!r}); an unexplained "
+                f"failure is as unusable as an unexplained pass")
+    if report.get("leftover_processes"):
+        problems.append(f"{where}: report records leftover product processes "
+                        f"{report.get('leftover_processes')}")
+    binaries = report.get("binaries")
+    if not isinstance(binaries, dict):
+        problems.append(f"{where}: no binaries table, so the report cannot say"
+                        f" which role was the false peer")
+        return len(scenarios)
+    false_roles = [role for role in ("producer", "consumer")
+                   if isinstance(binaries.get(role), str)
+                   and os.path.basename(binaries[role]) == "false"]
+    if len(false_roles) != 1:
+        problems.append(
+            f"{where}: exactly one role must be the /bin/false peer, found "
+            f"{false_roles or ['<none>']} among "
+            f"{[binaries.get('producer'), binaries.get('consumer')]}; a "
+            f"negative control that does not identify what it faked is not a "
+            f"control")
+        return len(scenarios)
+    false_role = false_roles[0]
+    real_role = "consumer" if false_role == "producer" else "producer"
+    real_sha = binaries.get(real_role + "_sha256")
+    if implementation_of.get(real_sha) not in PRODUCT_LANGUAGES:
+        problems.append(
+            f"{where}: the {real_role} binary {real_sha!r} does not resolve "
+            f"through the battery's executed identities to a product "
+            f"language; the real half of a negative control must be a real "
+            f"engine")
+    false_sha = binaries.get(false_role + "_sha256")
+    if not _is_sha256(false_sha):
+        problems.append(
+            f"{where}: {false_role} sha256 {false_sha!r} is not a measured "
+            f"digest; the peer that was faked has to be identified too")
+    argv = _command_argv(report)
+    if argv is None:
+        problems.append(f"{where}: report records no command argv")
+    else:
+        flag = "--producer" if false_role == "producer" else "--consumer"
+        named = None
+        if flag in argv and argv.index(flag) + 1 < len(argv):
+            named = argv[argv.index(flag) + 1]
+        if named != binaries.get(false_role):
+            problems.append(
+                f"{where}: the recorded command names {named!r} for {flag} "
+                f"but the binaries table records {binaries.get(false_role)!r}"
+                f" for the false role; the run and the report must describe "
+                f"the same control")
+    return len(scenarios)
+
+
+def windows_provenance_evidence(path, report, ledger, problems,
+                                linux_digests=()):
+    """Consume the native Windows qualification report.
+
+    Windows evidence cannot be re-executed on this machine, which is exactly
+    why it is consumed rather than believed: the report is the only bridge
+    between the shipped binaries and the claim that they were tested natively.
+    Three anchors carry weight.
+
+    * The native test records must name a positive verdict and must not name
+      a failure.  The scan is for failure *tokens and counts*, not the
+      substring ``fail``: an honest record explains which portability
+      failures it resolved, and a substring screen would reject the real
+      report while accepting a bare ``GREEN``.
+    * The toolchain lines must describe a Windows host, because a record
+      produced anywhere else cannot qualify Windows.
+    * The binaries the outcomes name must be the ledger's ``win`` entries and
+      must not be the Linux product digests, so the report cannot borrow the
+      Linux build to look qualified.
+    """
+
+    where = f"windows {path}"
+    if report.get("schema") != WINDOWS_HOUSEKEEPING_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    if report.get("windows_qualified") is not True:
+        problems.append(f"{where}: windows_qualified "
+                        f"{report.get('windows_qualified')!r}")
+    if report.get("skipped") is not False:
+        problems.append(f"{where}: skipped {report.get('skipped')!r}; a "
+                        f"skipped Windows qualification is not a qualification")
+    if report.get("failed") != 0:
+        problems.append(f"{where}: report records failed="
+                        f"{report.get('failed')!r}")
+    if not isinstance(report.get("outcomes"), list) or not report["outcomes"]:
+        problems.append(f"{where}: no outcomes; the qualification ran nothing")
+    platform = report.get("platform")
+    if not isinstance(platform, dict) or platform.get("system") != "Windows":
+        problems.append(f"{where}: platform {platform!r} does not name a "
+                        f"Windows host")
+    provenance = report.get("build_provenance")
+    if not isinstance(provenance, dict):
+        problems.append(f"{where}: no build_provenance, so the qualification "
+                        f"cannot say what it built or how it tested natively")
+        return
+    for field in ("native_go_test", "native_cargo_test"):
+        _native_test_record_problems(where, field, provenance.get(field),
+                                     problems)
+    toolchain = provenance.get("toolchain")
+    if not isinstance(toolchain, dict):
+        problems.append(f"{where}: build_provenance records no toolchain")
+    else:
+        for member, pattern, meaning in (
+                ("go", r"^go version go1\.\d+(\.\d+)? windows/(amd64|arm64)$",
+                 "a Windows Go toolchain"),
+                ("rustc",
+                 r"\brustc\s+\d+\.\d+(\.\d+)?\b.*host "
+                 r"[A-Za-z0-9_-]+-pc-windows-msvc",
+                 "a windows-msvc Rust host")):
+            value = toolchain.get(member)
+            if not isinstance(value, str) \
+                    or not re.search(pattern, value.strip()):
+                problems.append(
+                    f"{where}: toolchain {member} {value!r} does not name "
+                    f"{meaning}; native Windows evidence cannot come from a "
+                    f"record made on another host")
+        host_triple = toolchain.get("host_triple")
+        if not isinstance(host_triple, str) \
+                or "windows-msvc" not in host_triple:
+            problems.append(f"{where}: toolchain host_triple "
+                            f"{host_triple!r} is not a windows-msvc host")
+    commands = provenance.get("build_commands")
+    if not isinstance(commands, list) or not commands:
+        problems.append(f"{where}: build_provenance records no build commands")
+    else:
+        text = "\n".join(str(item) for item in commands)
+        if "debug" not in text or "iprange-v4-worker" not in text:
+            problems.append(
+                f"{where}: build_commands do not include the worker "
+                f"colocation step; without it the Rust tests that shell out "
+                f"to the worker answer from a missing executable, and the "
+                f"recorded tally then describes a different run")
+    binaries = report.get("binaries")
+    if not isinstance(binaries, dict):
+        problems.append(f"{where}: no binaries table to bind to the ledger")
+        return
+    for engine in ("go", "rust"):
+        record = binaries.get(engine)
+        if not isinstance(record, dict):
+            problems.append(f"{where}: no {engine} binary record")
+            continue
+        digest = record.get("sha256")
+        if not _is_sha256(digest):
+            problems.append(f"{where}: {engine} sha256 {digest!r} is not a "
+                            f"measured digest")
+            continue
+        if digest in linux_digests:
+            problems.append(
+                f"{where}: {engine} sha256 {digest} is a binary the Linux "
+                f"battery executed; the Windows product has its own artifact "
+                f"and a qualification that names the other one did not build"
+                f" for Windows")
+            continue
+        if ledger is None:
+            continue
+        staged = ledger.get(digest) or set()
+        wanted = os.path.basename(str(record.get("path") or ""))
+        if not any(entry.startswith("win/") for entry in staged):
+            problems.append(
+                f"{where}: {engine} sha256 {digest} is staged as "
+                f"{sorted(staged) or ['<not staged>']}, not as a win entry; "
+                f"the Windows product must be the artifact the ledger staged "
+                f"for Windows")
+        elif wanted and not any(entry.endswith(wanted) for entry in staged):
+            problems.append(
+                f"{where}: {engine} sha256 {digest} is not staged under the "
+                f"name the report records ({wanted})")
+
+
+def _native_test_record_problems(where, field, value, problems):
+    """Require one native test record to state a positive verdict.
+
+    Acceptance needs a verdict token.  Rejection looks for the shapes a real
+    failure takes -- an upper-case FAIL/FAILED/RED token, a non-zero count
+    before failed/failing/failures, or a non-zero rc -- and not for the word
+    ``fail`` in prose, because the genuine records describe, in prose, the
+    failures they resolved.
+    """
+
+    if not isinstance(value, str) or not value.strip():
+        problems.append(f"{where}: build_provenance records no {field}; the "
+                        f"native test run is the part of the Windows "
+                        f"qualification that cannot be re-run here")
+        return
+    if not re.search(r"\b(GREEN|PASS)\b", value):
+        problems.append(f"{where}: {field} names no positive verdict (GREEN or"
+                        f" PASS): {_clip_record(value)}")
+    named = sorted(set(re.findall(r"\b(FAILED|FAIL|RED)\b", value)))
+    if named:
+        problems.append(f"{where}: {field} names {named}: "
+                        f"{_clip_record(value)}")
+    for number in re.findall(r"(\d+)\s+(?:failed|failing|failures)", value):
+        if int(number) != 0:
+            problems.append(f"{where}: {field} reports {number} failing "
+                            f"tests: {_clip_record(value)}")
+    for code in re.findall(r"\brc=(\d+)", value):
+        if int(code) != 0:
+            problems.append(f"{where}: {field} reports a nonzero exit "
+                            f"(rc={code}): {_clip_record(value)}")
+
+
+def _clip_record(text):
+    """Shorten one recorded verdict for a problem line."""
+
+    collapsed = " ".join(str(text).split())
+    return collapsed if len(collapsed) <= 120 else collapsed[:120] + "..."
+
+
+def build_battery_manifest(consumed_by_role, ledger_path=None,
+                           generated_by=None):
+    """Assemble the battery manifest for one consumed report set.
+
+    The manifest binds three things a forger otherwise moves together: the
+    reports' content, the revision they name, and the ledger that says which
+    artifact each digest is.  ``consumed_by_role`` maps a role to the report
+    paths the gate consumed for it.
+    """
+
+    entries = []
+    revisions = set()
+    for role in sorted(consumed_by_role):
+        for path in consumed_by_role[role]:
+            with open(path, encoding="utf-8") as stream:
+                document = json.load(stream)
+            if not isinstance(document, dict):
+                raise SystemExit(f"cannot manifest a non-object report: {path}")
+            revision = document.get("git_head")
+            if isinstance(revision, str):
+                revisions.add(revision)
+            entries.append({"role": role,
+                            "name": os.path.basename(path),
+                            "content_sha256": _canonical_digest(document),
+                            "git_head": revision,
+                            "bytes": os.path.getsize(path)})
+    # A manifest binds one battery, so it names one revision.  Reports that
+    # disagree are recorded rather than refused: the binding then says in
+    # words that no single revision covers the set, and the gate rejects it
+    # with the revisions named, which is more useful than a producer that
+    # exits before the evidence was read.
+    ledger_document = None
+    if ledger_path:
+        entries_map = _sha256_ledger(ledger_path)
+        # The ledger is a staged-artifact list, not a repository file, so the
+        # binding records what it says (every digest with the paths staged for
+        # it) and never its workstation path: a committed artifact must not
+        # carry machine paths, and two ledgers with equal entries are the same
+        # list regardless of where either is stored.
+        ledger_document = {
+            "sha256": _sha256_file(os.path.realpath(ledger_path)),
+            "entries": {digest: sorted(paths)
+                        for digest, paths in sorted(entries_map.items())},
+            "entry_count": len(entries_map),
+        }
+    return {"schema": BATTERY_MANIFEST_SCHEMA,
+            "generated_by": generated_by or "v4/cli/check_kind_coverage.py",
+            "git_head": next(iter(revisions)) if len(revisions) == 1 else None,
+            "revisions": sorted(revisions),
+            "ledger": ledger_document,
+            "reports": entries}
+
+
+def write_battery_manifest(path, consumed_by_role, ledger_path=None):
+    """Write the manifest the gate consumes, using the gate's own rules.
+
+    One authority produces and one authority consumes: the battery imports
+    this instead of assembling a manifest of its own, so the two can never
+    disagree about what the binding is.
+    """
+
+    document = build_battery_manifest(consumed_by_role, ledger_path)
+    with open(path, "w", encoding="utf-8") as stream:
+        json.dump(document, stream, sort_keys=True, indent=1)
+        stream.write("\n")
+    return document
+
+
+def battery_manifest_evidence(path, manifest, consumed_by_role, problems,
+                              ledger_path=None, ledger=None):
+    """Require every consumed report to be the report the manifest names.
+
+    A uniform ``git_head`` rewrite -- every report re-stamped to one revision
+    so the shared-revision rule stays satisfied while the evidence is moved
+    off the revision it was produced on -- is invisible to a gate that only
+    compares reports with each other.  The manifest is produced with the
+    evidence and committed beside it, so a rewrite has to carry the manifest
+    too, and a manifest that was not regenerated for the rewritten reports no
+    longer matches their content.
+
+    The manifest is a committed artifact reviewed with the evidence: a writer
+    with repository access can regenerate both, so this is a binding, not a
+    signature.  Every report the manifest attests must be consumed, for every
+    role.  An unlisted report is rejected as well, except under
+    ``crash-negative``, where a battery legitimately carries one control per
+    faked role and may hold more files than were attested -- but not under a
+    name the manifest already binds, which is how an attested control would be
+    exchanged for another run's file.
+    """
+
+    where = f"battery-manifest {path}"
+    if manifest.get("schema") != BATTERY_MANIFEST_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{manifest.get('schema')!r}")
+        return
+    revision = manifest.get("git_head")
+    recorded_revisions = manifest.get("revisions")
+    if isinstance(recorded_revisions, list) and len(recorded_revisions) > 1:
+        problems.append(
+            f"{where}: no single revision covers the battery: its reports "
+            f"name {', '.join(str(text)[:12] for text in recorded_revisions)};"
+            f" a manifest binds one battery to one source, and reports copied "
+            f"in from another run are visible here")
+        return
+    if not (isinstance(revision, str) and len(revision) == GIT_HEAD_LENGTH
+            and all(character in "0123456789abcdef"
+                    for character in revision)
+            and len(set(revision)) > 1):
+        problems.append(f"{where}: git_head {revision!r} is not a measured "
+                        f"40-hex revision; the battery must name the source "
+                        f"its reports were produced from")
+        return
+    listed = {}
+    for entry in manifest.get("reports") or []:
+        if not isinstance(entry, dict):
+            problems.append(f"{where}: report entry is not an object")
+            continue
+        listed.setdefault(entry.get("role"), []).append(entry)
+    unknown_roles = sorted(set(listed) - set(CONSUMED_ROLES))
+    if unknown_roles:
+        problems.append(f"{where}: manifest lists roles the gate consumes "
+                        f"nothing for: {unknown_roles}")
+    for role in CONSUMED_ROLES:
+        paths = list(consumed_by_role.get(role) or [])
+        want = listed.get(role) or []
+        want_digests = {entry.get("content_sha256") for entry in want}
+        if not want:
+            problems.append(f"{where}: the manifest lists no report for the "
+                            f"consumed role {role!r}; every consumed class "
+                            f"must be attested, and a report that arrives "
+                            f"without a manifest entry was not part of the "
+                            f"battery that was reviewed")
+            continue
+        if not paths:
+            problems.append(f"{where}: the manifest lists {len(want)} "
+                            f"{role} report(s) and the gate consumed none")
+            continue
+        seen = set()
+        for report_path in paths:
+            document = _load_report(report_path, problems)
+            if not isinstance(document, dict):
+                continue
+            digest = _canonical_digest(document)
+            seen.add(digest)
+            if digest not in want_digests:
+                # A negative battery legitimately carries more than one
+                # control (one report per faked role, found by prefix),
+                # so an unlisted report of that role may exist.  It may
+                # not take the name of a report the manifest does
+                # attest: that is how an attested control is exchanged
+                # for another run of the same file name.
+                attested_names = set(
+                    item.get("name") for item in want)
+                if (role != "crash-negative"
+                        or os.path.basename(report_path)
+                        in attested_names):
+                    problems.append(
+                        f"{where}: consumed {role} report {report_path} "
+                        f"has content sha256 {digest}, which the manifest "
+                        f"does not list for that role; a report edited, "
+                        f"re-stamped or swapped after the manifest was "
+                        f"written is not the evidence the manifest attests")
+                continue
+            entry = next((item for item in want
+                          if item.get("content_sha256") == digest), None)
+            if entry is None:
+                continue
+            if entry.get("git_head") != revision:
+                problems.append(
+                    f"{where}: the {role} entry "
+                    f"{entry.get('name')!r} is listed with git_head "
+                    f"{entry.get('git_head')!r}, not the manifest revision "
+                    f"{revision}")
+            recorded = document.get("git_head")
+            if recorded != revision:
+                problems.append(
+                    f"{where}: {role} report {report_path} names git_head "
+                    f"{recorded!r} but the manifest binds this content to "
+                    f"{revision}")
+        missing = sorted(want_digests - seen)
+        if missing:
+            problems.append(
+                f"{where}: the manifest lists {len(want_digests)} {role} "
+                f"report(s) and {len(seen)} were consumed; unaccounted "
+                f"content: {[text[:12] for text in missing]}")
+    # The staged-artifact binding is one fact with two halves: the manifest
+    # has to name the ledger the battery was staged against, and the gate has
+    # to be handed a ledger to compare it with.  Either half missing leaves the
+    # digests in the reports unattributed, so both are problems rather than a
+    # skipped check.  Entries, not file bytes, decide equality: the same list
+    # written by a different staging step is the same list.
+    recorded_ledger = manifest.get("ledger")
+    recorded_entries = (recorded_ledger or {}).get("entries") \
+        if isinstance(recorded_ledger, dict) else None
+    if recorded_ledger is None:
+        if ledger is not None:
+            problems.append(
+                f"{where}: the gate was handed a staged-artifact ledger but "
+                f"the manifest attests none; the binary digests the reports "
+                f"name would then bind to a list nothing has reviewed, so "
+                f"either emit the manifest with --sha256-ledger for that "
+                f"ledger or run the gate without one")
+        return
+    if not isinstance(recorded_entries, dict) or not recorded_entries:
+        problems.append(
+            f"{where}: the manifest records no ledger entries, so the "
+            f"staged-artifact binding cannot be checked")
+        return
+    if ledger is None:
+        problems.append(
+            f"{where}: the manifest binds the staged-artifact list but the "
+            f"gate was handed no --sha256-ledger to compare it against; pass "
+            f"--sha256-ledger pointing at the SHASUMS file the evidence was "
+            f"measured against")
+        return
+    current = {digest: sorted(paths) for digest, paths in ledger.items()}
+    if recorded_entries != current:
+        missing = sorted(set(recorded_entries) - set(current))
+        extra = sorted(set(current) - set(recorded_entries))
+        changed = sorted(digest for digest in set(recorded_entries) & set(current)
+                         if recorded_entries[digest] != current[digest])
+        problems.append(
+            f"{where}: the manifest's ledger entries do not match the ledger "
+            f"handed to the gate ({len(recorded_entries)} recorded against "
+            f"{len(current)} supplied; {len(missing)} dropped, {len(extra)} "
+            f"added, {len(changed)} relabeled); the artifact list the "
+            f"evidence was staged against is not the one on disk")
+
+
+def _reply_classification_problems(where, rounds, problems):
+    """Require a counted reply to say what it was, when the run said so.
+
+    The census counts *replies*, and a reply is either a service answer or an
+    error frame.  A burst whose counted replies are mostly error frames measured
+    the error path, not throughput, while every rate in the report stays
+    internally consistent -- which is why the rate arithmetic alone cannot catch
+    it.  The split is recorded by the harness; until a report carries it its
+    absence is not a defect this gate can tell from an older harness, so these
+    rules engage only on fields the report actually has.
+    """
+
+    for entry in rounds or []:
+        if not isinstance(entry, dict):
+            continue
+        successful = entry.get("successful_replies")
+        errors = entry.get("error_replies")
+        ratio = entry.get("success_ratio")
+        if successful is None and errors is None and ratio is None:
+            continue
+        replies = entry.get("replies")
+        label = f"{where} round {entry.get('round')}"
+        for name, value in (("successful_replies", successful),
+                            ("error_replies", errors)):
+            if value is not None and (not isinstance(value, int)
+                                      or value < 0):
+                problems.append(f"{label}: {name} {value!r} is not a measured "
+                                f"count")
+        if isinstance(successful, int) and isinstance(errors, int):
+            if isinstance(replies, int) and successful + errors != replies:
+                problems.append(
+                    f"{label}: {successful} successful and {errors} error "
+                    f"replies do not add up to the {replies} counted replies; "
+                    f"the classification and the census describe different runs")
+                continue
+            if successful <= errors:
+                problems.append(
+                    f"{label}: {errors} of {successful + errors} counted "
+                    f"replies are error frames; a burst dominated by errors "
+                    f"measures the error path and cannot attest throughput")
+        if ratio is not None:
+            if not isinstance(ratio, (int, float)) \
+                    or not 0.0 <= float(ratio) <= 1.0:
+                problems.append(f"{label}: success_ratio {ratio!r} is not a "
+                                f"fraction of the counted replies")
+            elif isinstance(successful, int) and isinstance(replies, int) \
+                    and replies > 0:
+                implied = successful / float(replies)
+                if abs(implied - float(ratio)) > 0.005:
+                    problems.append(
+                        f"{label}: success_ratio {ratio!r} contradicts "
+                        f"{successful} successful of {replies} counted replies"
+                        f" ({implied:.3f})")
+
+
+def _method_agreement_problems(where, method, record, problems):
+    """Require the round census to be the round plan the report declares."""
+
+    if not isinstance(method, dict):
+        return
+    rounds = [entry for entry in (record.get("rounds") or [])
+              if isinstance(entry, dict)]
+    declared_rounds = method.get("rounds")
+    if isinstance(declared_rounds, int) and declared_rounds > 0 \
+            and len(rounds) != declared_rounds:
+        problems.append(f"{where}: the method declares {declared_rounds} "
+                        f"rounds and the record carries {len(rounds)}; the "
+                        f"median is taken over what is here, not over what "
+                        f"was planned")
+        return
+    per_round = method.get("requests_per_round")
+    if isinstance(per_round, int) and per_round > 0:
+        for entry in rounds:
+            if entry.get("requests") != per_round:
+                problems.append(
+                    f"{where}: round {entry.get('round')} served "
+                    f"{entry.get('requests')!r} requests although the method "
+                    f"declares {per_round} per round; a rate over a shorter "
+                    f"round is not the same measurement")
+        burst = method.get("burst_frames")
+        if isinstance(burst, int) and burst > per_round:
+            problems.append(
+                f"{where}: method burst_frames {burst} exceeds the "
+                f"{per_round} requests of one round, so the rounds and the "
+                f"burst describe different workloads")
+
+
+def _thread_census_problems(where, method, small, large, problems):
+    """Bind the thread census to the baseline the report itself declares.
+
+    The attestation exists to catch a reply path that spawns per request: the
+    distinct child task ids must stay constant in the request count.  Checking
+    that needs a bound, and the bound is the report's own
+    ``method.thread_baseline_max``.  Because the report supplies it, the bound
+    is itself checked two ways: against the request plan of each pass, and
+    against the ceiling the harness that measured it publishes.
+    """
+
+    if not isinstance(method, dict):
+        problems.append(f"{where}: no method block, so the census has no "
+                        f"declared baseline to be measured against")
+        return
+    baseline = method.get("thread_baseline_max")
+    if not isinstance(baseline, int) or baseline < 1:
+        problems.append(f"{where}: method thread_baseline_max {baseline!r} is "
+                        f"not a positive count; an unbounded baseline makes "
+                        f"the census check vacuous")
+        return
+    harness = _table_module(
+        "throughput_harness", ("THREAD_BASELINE_MAX", "CLONE_COUNT_ALLOWANCE"),
+        where, problems)
+    if harness is not None and baseline > harness.THREAD_BASELINE_MAX:
+        problems.append(
+            f"{where}: method thread_baseline_max {baseline} exceeds the "
+            f"{harness.THREAD_BASELINE_MAX} ceiling the measuring harness "
+            f"publishes; a bound widened in the report cannot justify a "
+            f"census that breaks it")
+    plan = (("small", small, method.get("thread_probe_requests_small")),
+            ("large", large, method.get("thread_probe_requests_large")))
+    counts = {}
+    for side_name, side, wanted_requests in plan:
+        counts[side_name] = side
+        if isinstance(wanted_requests, int) \
+                and side.get("requests") != wanted_requests:
+            problems.append(
+                f"{where}: {side_name} pass ran {side.get('requests')!r} "
+                f"requests although the method declares "
+                f"{wanted_requests} for that pass; the two passes must differ "
+                f"only in request count")
+        if side.get("replies") != side.get("requests"):
+            continue
+        clones = side.get("clone_syscalls")
+        tids = side.get("unique_child_tids")
+        if not isinstance(clones, int) or not isinstance(tids, int):
+            continue
+        if not 1 <= tids <= baseline:
+            problems.append(
+                f"{where}: {side_name} pass records {tids} distinct child "
+                f"task ids, outside the [1, {baseline}] band the report's own "
+                f"baseline declares")
+        if clones > baseline:
+            problems.append(
+                f"{where}: {side_name} pass records {clones} clone syscalls, "
+                f"over the report's own baseline of {baseline}")
+        if tids > clones:
+            problems.append(
+                f"{where}: {side_name} pass records {tids} distinct child task"
+                f" ids from {clones} clone syscalls; every task id a child "
+                f"process gets comes from a clone, so the census parsed more "
+                f"children than it saw")
+        if clones > 1 and tids <= 1:
+            problems.append(
+                f"{where}: {side_name} pass records {clones} clone syscalls "
+                f"and {tids} distinct child task ids; a threaded round that "
+                f"answers the same request count must show more than one "
+                f"child identity")
+    if harness is not None and len(counts) == 2:
+        small_clones = counts["small"].get("clone_syscalls")
+        large_clones = counts["large"].get("clone_syscalls")
+        if isinstance(small_clones, int) and isinstance(large_clones, int) \
+                and small_clones >= 1:
+            growth = large_clones - small_clones
+            if growth > harness.CLONE_COUNT_ALLOWANCE \
+                    or large_clones >= 2 * small_clones:
+                problems.append(
+                    f"{where}: clone syscalls went {small_clones} to "
+                    f"{large_clones} when the request count doubled; the "
+                    f"reply path spawns, which is the regression this census "
+                    f"exists to catch ({harness.CLONE_COUNT_ALLOWANCE} is the"
+                    f" allowance the measuring harness publishes)")
 
 def assess(matrix_paths, crash_paths, verify_binaries=False,
             verify_cases=False, fifo_paths=(), throughput_paths=(),
-            sha256_ledger=None):
+            sha256_ledger=None, parity_paths=None, coverage_paths=None,
+            crash_negative_paths=None, windows_paths=None,
+            battery_manifest=None, require_consumed=True):
     """Evaluate one evidence revision; testable without the CLI.
 
     Returns ``(problems, coverage, sources)`` where ``coverage`` maps
@@ -2778,6 +4259,18 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
     must be methods the named case declares for that actor (F3).  The
     CLI enables both; the synthetic self-test battery keeps them off
     for its doctored reports and exercises each explicitly.
+
+    The remaining arguments consume the wave's newest artifacts.  Each
+    publishes a verdict or a measurement made by its own harness, and each
+    is verified here against the identities and committed tables this gate
+    already trusts: ``parity_paths`` the refusal-class parity verdict,
+    ``coverage_paths`` the Go coverage measurement, ``crash_negative_paths``
+    the ``/bin/false`` crash controls, ``windows_paths`` the native Windows
+    qualification, and ``battery_manifest`` the report-set binding (a path
+    or a decoded document).  ``require_consumed`` (default) makes an absent
+    class a gate problem instead of a skipped check: a verdict that can be
+    left out of the battery is a verdict that does not gate anything.  The
+    synthetic self-test turns it off only for the classes it does not model.
     """
 
     coverage = {kind: {"created": set(), "opened": set()}
@@ -2795,10 +4288,41 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
     # from an earlier run, from another checkout, or with its revision field
     # edited into place was accepted today).
     ledger = _sha256_ledger(sha256_ledger)
+    # Every consumed class must be present.  Resolving a class here rather
+    # than in the shell is what makes an omitted flag unable to skip it.
+    parity_paths = list(parity_paths or [])
+    coverage_paths = list(coverage_paths or [])
+    crash_negative_paths = list(crash_negative_paths or [])
+    windows_paths = list(windows_paths or [])
+    anchors = list(matrix_paths) + list(crash_paths) + list(fifo_paths) \
+        + list(throughput_paths)
+    if require_consumed:
+        parity_paths = _resolve_consumed(parity_paths, "refusal-class-parity",
+                                         anchors, problems)
+        coverage_paths = _resolve_consumed(coverage_paths, "coverage-go",
+                                           anchors, problems)
+        crash_negative_paths = _resolve_consumed(
+            crash_negative_paths, "crash-negative", anchors, problems)
+        windows_paths = _resolve_consumed(windows_paths,
+                                         "windows-housekeeping", anchors,
+                                         problems)
+    consumed_by_role = {
+        "matrix": list(matrix_paths), "crash": list(crash_paths),
+        "crash-negative": crash_negative_paths,
+        "fifo-surface": list(fifo_paths),
+        "throughput": list(throughput_paths),
+        "refusal-class-parity": parity_paths,
+        "coverage-go": coverage_paths,
+        "windows-housekeeping": windows_paths,
+    }
     _shared_git_head({
         "matrix": list(matrix_paths), "crash": list(crash_paths),
+        "crash-negative": crash_negative_paths,
         "fifo-surface": list(fifo_paths),
-        "throughput": list(throughput_paths)}, problems)
+        "throughput": list(throughput_paths),
+        "refusal-class-parity": parity_paths,
+        "coverage-go": coverage_paths,
+        "windows-housekeeping": windows_paths}, problems)
     # Fixture identity of the battery: the crash report root binaries
     # table is the only record of the v4-fixture tool every report's
     # command names, so it is the authority for the matrix commands'
@@ -3123,6 +4647,87 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
             throughput_evidence(path, report, implementation_of, ledger,
                                 problems, verify_binaries=verify_binaries)
 
+    # --- the wave's newest artifacts, consumed.
+    attested_digests = set()
+    for path in list(throughput_paths):
+        report = _load_report(path, [])
+        if isinstance(report, dict):
+            attested_digests |= _all_digests(report)
+    for path in list(fifo_paths) + list(parity_paths):
+        report = _load_report(path, [])
+        if isinstance(report, dict):
+            for record in (report.get("binaries") or {}).values():
+                if isinstance(record, dict) and isinstance(record.get("sha256"), str):
+                    attested_digests.add(record["sha256"])
+    for path in list(matrix_paths) + list(crash_paths):
+        report = _load_report(path, [])
+        if isinstance(report, dict):
+            for _sha, _implementation in _matrix_binary_declarations(report):
+                attested_digests.add(_sha)
+
+    for path in crash_negative_paths:
+        report = _load_report(path, problems)
+        if not isinstance(report, dict):
+            continue
+        rejected = crash_negative_evidence(path, report, implementation_of,
+                                          problems)
+        sources.append(f"crash-negative {path} ({rejected} scenarios "
+                       f"rejected, as a negative control must)")
+
+    for path in parity_paths:
+        report = _load_report(path, problems)
+        if not isinstance(report, dict):
+            continue
+        refusal_class_parity_evidence(path, report, implementation_of, ledger,
+                                      problems,
+                                      fixture_shas=set(fixture_shas.values()),
+                                      verify_binaries=verify_binaries)
+        sources.append(f"refusal-class-parity {path} "
+                       f"({len(report.get('cells') or [])} cells)")
+
+    for path in coverage_paths:
+        report = _load_report(path, problems)
+        if not isinstance(report, dict):
+            continue
+        coverage_evidence(path, report, attested_digests, problems)
+        sources.append(f"coverage-go {path} "
+                       f"({len(report.get('per_package') or {})} packages)")
+
+    for path in windows_paths:
+        report = _load_report(path, problems)
+        if not isinstance(report, dict):
+            continue
+        windows_provenance_evidence(path, report, ledger, problems,
+                                    linux_digests=attested_digests)
+        outcomes = report.get("outcomes") or []
+        sources.append(f"windows {path} ({len(outcomes)} native outcomes)")
+
+    manifest_path = battery_manifest
+    manifest = battery_manifest
+    if isinstance(manifest, dict):
+        # A caller that hands in the decoded document (the self-test does)
+        # leaves no path to name, and printing the document in its place made
+        # every finding in this file unreadable.
+        manifest_path = "<manifest handed in as a document>"
+    if isinstance(manifest, str) or manifest is None:
+        if manifest is None:
+            manifest_path = os.path.join(COMMITTED_EVIDENCE_DIR,
+                                         BATTERY_MANIFEST_FILE_NAME)
+        if not os.path.isfile(manifest_path):
+            if require_consumed:
+                problems.append(
+                    f"no battery manifest at {manifest_path}: the consumed "
+                    f"reports carry no committed binding of content to "
+                    f"revision and ledger, so a rewrite of every git_head in "
+                    f"one pass would be indistinguishable from a real battery")
+            manifest = None
+        else:
+            manifest = _load_report(manifest_path, problems)
+    if isinstance(manifest, dict):
+        battery_manifest_evidence(manifest_path, manifest, consumed_by_role,
+                                  problems, ledger_path=sha256_ledger,
+                                  ledger=ledger)
+
     if verify_binaries:
         _verify_recorded_binaries(matrix_paths, crash_paths, problems)
 
@@ -3222,6 +4827,36 @@ def main():
                         help="a sha256sum-format ledger of the staged "
                              "binaries; when supplied, every surface-report "
                              "digest must appear in it")
+    parser.add_argument("--refusal-class-parity", action="append",
+                        default=[], metavar="PATH",
+                        help="the refusal-class parity report of the same "
+                             "revision; discovered beside the battery when "
+                             "omitted, and a missing report is a gate problem")
+    parser.add_argument("--coverage-go", action="append", default=[],
+                        metavar="PATH",
+                        help="the Go coverage measurement of the same "
+                             "revision; discovered beside the battery when "
+                             "omitted")
+    parser.add_argument("--crash-negative", action="append", default=[],
+                        metavar="PATH",
+                        help="one /bin/false crash control report "
+                             "(repeatable); every report of the battery's "
+                             "own directory is consumed when omitted")
+    parser.add_argument("--windows-housekeeping", action="append",
+                        default=[], metavar="PATH",
+                        help="the native Windows qualification report of the "
+                             "same revision; discovered beside the battery "
+                             "when omitted")
+    parser.add_argument("--battery-manifest", default=None, metavar="PATH",
+                        help="the manifest that binds the consumed reports' "
+                             "content to a revision and a ledger; defaults to "
+                             "the committed evidence manifest")
+    parser.add_argument("--emit-manifest", default=None, metavar="PATH",
+                        help="write the battery manifest for the reports named"
+                             " on this command line, then exit; the wave's "
+                             "battery step runs it and the gate consumes the "
+                             "result, so producer and consumer of the binding "
+                             "share one implementation")
     parser.add_argument("--self-test", action="store_true",
                         help="run the doctored-report regression suite "
                              "(including the control that the committed "
@@ -3246,11 +4881,19 @@ def main():
         parser.error("--throughput is required: the throughput census of "
                      "this revision must be re-derived here")
 
+    if args.emit_manifest:
+        return _emit_manifest_command(args)
+
     problems, coverage, sources = assess(
         args.matrix, args.crash, verify_binaries=True,
         verify_cases=True, fifo_paths=args.fifo_surface,
         throughput_paths=args.throughput,
-        sha256_ledger=args.sha256_ledger)
+        sha256_ledger=args.sha256_ledger,
+        parity_paths=args.refusal_class_parity,
+        coverage_paths=args.coverage_go,
+        crash_negative_paths=args.crash_negative,
+        windows_paths=args.windows_housekeeping,
+        battery_manifest=args.battery_manifest)
     print("Artifact-kind coverage gate")
     print("Sources: " + "; ".join(sources))
     for kind in REQUIRED_KINDS:
@@ -3270,6 +4913,54 @@ def main():
     if problems:
         return 1
     print("PASS: every required artifact kind has both-language evidence")
+    return 0
+
+
+def consumed_report_set(args):
+    """The report set one command line consumes, as ``{role: [paths]}``.
+
+    The manifest producer and the gate consume the same definition, so the
+    binding cannot describe a different battery from the one that is judged.
+    """
+
+    anchors = list(args.matrix) + list(args.crash) + list(args.fifo_surface) \
+        + list(args.throughput)
+    resolution = {
+        "matrix": list(args.matrix), "crash": list(args.crash),
+        "fifo-surface": list(args.fifo_surface),
+        "throughput": list(args.throughput),
+    }
+    problems = []
+    for role, flag_value in (
+            ("refusal-class-parity", args.refusal_class_parity),
+            ("coverage-go", args.coverage_go),
+            ("crash-negative", args.crash_negative),
+            ("windows-housekeeping", args.windows_housekeeping)):
+        resolution[role] = _resolve_consumed(list(flag_value), role, anchors,
+                                            problems)
+    return resolution, problems
+
+
+def _emit_manifest_command(args):
+    """Write the battery manifest for the reports this command line names."""
+
+    consumed, problems = consumed_report_set(args)
+    for problem in problems:
+        print(f"FAIL: {problem}")
+    if problems:
+        print(f"{args.emit_manifest}: not written; resolve the findings above "
+              f"and emit the manifest for the battery that produced them")
+        return 1
+    document = write_battery_manifest(args.emit_manifest, consumed,
+                                      args.sha256_ledger)
+    roles = {}
+    for entry in document["reports"]:
+        roles[entry["role"]] = roles.get(entry["role"], 0) + 1
+    print("Artifact-kind coverage gate")
+    print(f"battery manifest written to {args.emit_manifest}: revision "
+          f"{document['git_head']}, {len(document['reports'])} reports "
+          f"({', '.join(f'{role}={count}' for role, count in sorted(roles.items()))})"
+          f", ledger {'bound' if document['ledger'] else 'not supplied'}")
     return 0
 
 
@@ -3489,17 +5180,21 @@ def _self_test():
         gate consumes this report for the identity of the binaries that
         produced the verdict and for the both-engine claim, so the synthetic
         copy carries one arm per engine plus the pinned class."""
+        import check_fifo_surface as _surface
         arms = []
         for engine, digest in (("go", "2" * 64), ("rust", "1" * 64)):
-            arms.append({
-                "engine": engine, "arm": "reader.open",
-                "method": "iprange.v1.reader.open",
-                "expected_code": "invalid_argument", "kind": "answered",
-                "transport_code": -32010, "data_code": "invalid_argument",
-                "message": "input is not a regular file", "elapsed_ms": 3.0,
-                "exit_status": 0,
-                "request": "{\"jsonrpc\":\"2.0\",\"method\":"
-                           "\"iprange.v1.reader.open\"}"})
+            for arm in _surface.ARM_NAMES:
+                method = _surface.ARM_METHOD[arm]
+                code = _surface.ARM_EXPECTED[arm]
+                arms.append({
+                    "engine": engine, "arm": arm, "method": method,
+                    "expected_code": code, "kind": "answered",
+                    "transport_code": _surface.PRODUCT_ERROR,
+                    "data_code": code,
+                    "message": "input is not a regular file", "elapsed_ms": 3.0,
+                    "exit_status": 0,
+                    "request": "{\"jsonrpc\":\"2.0\",\"method\":\"%s\"}"
+                               % method})
         return {"schema": "iprange-cli-fifo-surface-report-v1",
                 "git_head": revision, "checkout_root": None,
                 "command": ["v4/cli/check_fifo_surface.py"],
@@ -3516,7 +5211,7 @@ def _self_test():
                 "arms": arms,
                 "controls": [{"engine": "go", "answered_result": True},
                              {"engine": "rust", "answered_result": True}],
-                "summary": {"arms_expected": len(arms)},
+                "summary": {"arms_expected": len(arms), "failed": []},
                 "result": "PASS", "problems": [], "deadline_seconds": 3.0}
 
     def throughput_report():
@@ -3543,9 +5238,314 @@ def _self_test():
                 "git_head": revision, "checkout_root": None,
                 "command": ["v4/cli/throughput_harness.py"],
                 "platform": {"system": "Linux"},
+                "method": {"burst_frames": 30,
+                           "request": {"jsonrpc": "2.0", "id": 1,
+                                       "method": "iprange.v1.system.describe",
+                                       "params": {}},
+                           "requests_per_round": 10000, "rounds": 3,
+                           "thread_baseline_max": 64,
+                           "thread_probe_requests_small": 3000,
+                           "thread_probe_requests_large": 6000},
                 "product": {"go": engine_record("2" * 64, 40000.0, 17),
                             "rust": engine_record("1" * 64, 62000.0, 4)},
                 "result": "PASS", "problems": []}
+
+    def parity_report(named_revision=None, identities=None,
+                      binary_records=None):
+        """A refusal-class parity report that satisfies the committed tables.
+
+        Built from the generator's own arm, path-kind and pinned-refusal
+        tables rather than copied, so it tracks a widened grid instead of
+        freezing today's shape.  It is the positive control for the parity
+        rules: if a rule fires on evidence that is complete and internally
+        honest, the rule is wrong.
+        """
+
+        import check_refusal_class_parity as _parity
+        named = named_revision or revision
+        expected = list(_parity.expected_cells())
+        grid = {"arms": list(_parity.ARM_NAMES),
+                "path_kinds": _parity.kind_names(),
+                "mandatory_path_kinds": list(_parity.MANDATORY_PATH_KINDS),
+                "cells_expected": len(expected)}
+        # The generator binds a verdict to the obligations it was measured
+        # against by recording the fingerprint of the pin table.  The synthetic
+        # copy carries it too, so a ledger-bound control is rejected for its
+        # own defect and not for an omission of this harness.
+        fingerprint = getattr(_parity, "pinned_table_fingerprint", None)
+        if callable(fingerprint):
+            grid["pinned_table_sha256"] = fingerprint()
+        # The sweep's artifacts must be identities the battery already proves
+        # it executed; the synthetic battery has its own, and the copy that is
+        # consumed beside the committed reports uses theirs.
+        identities = identities or {
+            "go": "2" * 64, "rust": "1" * 64,
+            "fixture": CRASH_BINARIES["fixture_tool_sha256"]}
+        # A copy that is consumed beside the committed reports must also name
+        # the committed artifact paths, because the CLI binds every recorded
+        # executable to the file on disk; a synthetic path there would be
+        # rejected for the harness's own choice of paths.
+        records = dict(binary_records or {})
+        def record_for(engine, path, digest):
+            recorded = records.get(engine)
+            if isinstance(recorded, dict) and recorded.get("sha256") == digest:
+                return dict(recorded)
+            return {"path": path, "sha256": digest,
+                    "implementation": engine}
+        digest_of = {"go": identities["go"], "rust": identities["rust"]}
+        cells = []
+        for arm_name, kind_name in expected:
+            value = _parity.PINNED_REFUSALS.get((arm_name, kind_name))
+            want_code, want_outcome, want_facts = \
+                _parity.pin_expectation(value) if value is not None \
+                else ("invalid_argument", None, None)
+            side = {}
+            for engine in ("go", "rust"):
+                facts = None
+                evidence = None
+                if want_facts == "required":
+                    evidence = {
+                        "outcome": "outcome_unknown",
+                        "publication_policy": "fail_if_exists",
+                        "path": "/tmp/kind-parity-work/dest.iprange",
+                        "stage": "sync export output directory",
+                        "destination_visible": True,
+                        "temporary_removed": True,
+                        "sha256": "b" * 63 + "1",
+                    }
+                    facts = {"complete": True, "container": "publication",
+                             "destination_visible": True,
+                             "outcome_unknown": True,
+                             "sha256_well_formed": True,
+                             "temporary_removed": True}
+                side[engine] = {
+                    "arm": arm_name, "path_kind": kind_name,
+                    "engine": engine, "kind": "answered",
+                    "transport_code": -32010,
+                    "data_code": want_code or "invalid_argument",
+                    "outcome": want_outcome or "not_started",
+                    "method": _parity.ARM_BY_NAME[arm_name][1],
+                    "slot": _parity.ARM_BY_NAME[arm_name][2],
+                    "request": "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"%s\"}"
+                               % _parity.ARM_BY_NAME[arm_name][1],
+                    "elapsed_ms": 2.5, "exit_status": 0,
+                    "publication_facts": facts,
+                    "publication_evidence": evidence,
+                    "digest": digest_of[engine],
+                }
+            cells.append({"arm": arm_name, "path_kind": kind_name,
+                          "agreed": True, "flaky": False, "hung": False,
+                          "attempts": 1, "go": side["go"],
+                          "rust": side["rust"]})
+        pins = []
+        for (arm_name, kind_name), value in sorted(
+                _parity.PINNED_REFUSALS.items()):
+            want_code, want_outcome, want_facts = \
+                _parity.pin_expectation(value)
+            pins.append({"arm": arm_name, "path_kind": kind_name,
+                         "expected_data_code": want_code,
+                         "expected_outcome": want_outcome,
+                         "expected_facts": want_facts,
+                         "executed": True,
+                         "go_data_code": want_code or "invalid_argument",
+                         "go_outcome": want_outcome or "not_started",
+                         "go_facts": want_facts == "required",
+                         "rust_data_code": want_code or "invalid_argument",
+                         "rust_outcome": want_outcome or "not_started",
+                         "rust_facts": want_facts == "required"})
+        durability_keys = set(_parity.durability_cells())
+        executed = {(cell["arm"], cell["path_kind"]) for cell in cells}
+        with_evidence = sum(
+            1 for key in durability_keys
+            if key in executed
+            and _parity.pin_expectation(
+                _parity.PINNED_REFUSALS.get(key))[2] == "required")
+        return {
+            "schema": REFUSAL_PARITY_SCHEMA, "git_head": named,
+            "checkout_root": None, "result": "PASS", "provenance": None,
+            "command": ["v4/cli/check_refusal_class_parity.py"],
+            "platform": {"system": "Linux"},
+            "elapsed_seconds": 30.0,
+            "method": {"attempt_deadline_seconds": 4.0, "retries": 2,
+                       "run_budget_seconds": 55.0,
+                       "compared": ["kind", "transport_code", "data_code",
+                                    "outcome", "publication_facts"]},
+            "binaries": {
+                "go": record_for("go", BINARY_PATHS["go"], identities["go"]),
+                "rust": record_for("rust", BINARY_PATHS["rust"],
+                                   identities["rust"]),
+                "fixture_tool": record_for(
+                    "fixture_tool", CRASH_BINARIES["fixture_tool"],
+                    identities["fixture"])},
+            "grid": grid,
+            "cells": cells, "pins": pins, "divergences": [],
+            "durability": {"cells_executed": len(durability_keys),
+                           "cells_expected": len(durability_keys),
+                           "cells_with_evidence": with_evidence},
+            "summary": {"cells_expected": len(expected),
+                        "cells_executed": len(cells),
+                        "agreements": len(cells), "divergences": 0,
+                        "hangs": 0, "flaky": 0,
+                        "pins_expected": len(_parity.PINNED_REFUSALS),
+                        "pins_satisfied": len(_parity.PINNED_REFUSALS)},
+        }
+
+    COVERAGE_MEASURE = {
+        "statements": 57160, "covered_statements": 27271,
+        "functions": 5917, "covered_functions": 3832,
+        "blocks": 41876, "blocks_covered": 18567}
+
+    def coverage_report():
+        """A Go coverage report whose percentages are its own arithmetic."""
+
+        def profile(counts):
+            percent = {"measured": dict(counts)}
+            for name, covered in (("statements", "covered_statements"),
+                                  ("functions", "covered_functions"),
+                                  ("blocks", "blocks_covered")):
+                percent[name] = round(100.0 * counts[covered] / counts[name],
+                                      2)
+            return {"measured": dict(counts), "percent": percent}
+
+        unit = profile(COVERAGE_MEASURE)
+        unit["rc"] = 0
+        unit["covermode"] = "atomic"
+        unit["coverdir"] = "/tmp/kind-coverage-work/unit"
+        unit["cover_files"] = 12
+        integration = profile({"statements": 53741, "covered_statements":
+                               21698, "functions": 5705,
+                               "covered_functions": 3378, "blocks": 39546,
+                               "blocks_covered": 14418})
+        integration["cover_files"] = 9
+        integration["runs"] = [{"matrix": "go", "rc": 0, "passed": 63,
+                                "failed": 0, "skipped": 0,
+                                "command": ["v4/cli/run.py", "--matrix",
+                                            "go"]}]
+        merged = profile({"statements": 57172, "covered_statements": 34040,
+                          "functions": 5918, "covered_functions": 4747,
+                          "blocks": 41883, "blocks_covered": 22980})
+        return {
+            "schema": GO_COVERAGE_SCHEMA, "git_head": revision,
+            "checkout_root": None,
+            "command": ["v4/cli/coverage_harness.py"],
+            "platform": {"system": "Linux"}, "module": "iprange",
+            "unit": unit, "integration": integration, "merged": merged,
+            "per_package": {
+                "github.com/firehol/iprange/v4/go/internal/cli": {
+                    "statements": 3197, "covered_statements": 2310,
+                    "statements_total": 3197, "functions": 456,
+                    "covered_functions": 419, "blocks": 2636,
+                    "blocks_covered": 1813,
+                    "statement_percent": 72.26, "function_percent": 91.89,
+                    "block_percent": 68.78}},
+            "instrumented_binaries": {
+                "iprange": {"covermode": "atomic", "instrumented": True,
+                            "path": "/tmp/kind-coverage-work/bin/iprange",
+                            "sha256": "c" * 63 + "1"},
+                "iprange-v4-worker": {
+                    "covermode": "atomic", "instrumented": True,
+                    "path": "/tmp/kind-coverage-work/bin/iprange-v4-worker",
+                    "sha256": "d" * 63 + "2"}},
+            "policy": {"performance_use": "instrumented binaries are never "
+                                          "used for the throughput or "
+                                          "performance attestation",
+                       "killed_runs_merged": False}}
+
+    def crash_negative_report(consumer=False):
+        """A /bin/false crash control in which every scenario must fail."""
+
+        scenarios = []
+        for index, (producer, consumer) in enumerate(
+                [("rust", "consumer"), ("consumer", "rust")]):
+            for name in ("A1", "A2", "A3", "B", "C", "D", "E", "F"):
+                identity = {"rust": BINARY_PATHS["rust"],
+                            "go": BINARY_PATHS["go"],
+                            "consumer": "/bin/false"}
+                sha_of = {"rust": "1" * 64, "go": "2" * 64,
+                          "consumer": "e" * 63 + "0"}
+                scenarios.append({
+                    "scenario": f"{name}.{producer}->{consumer}",
+                    "pass": False,
+                    "failures": ["service exited with status 1 after a "
+                                 "successful session (expected 0)"],
+                    "producer": f"{producer}:{identity[producer]}",
+                    "consumer": f"{consumer}:{identity[consumer]}",
+                    "producer_sha256": sha_of[producer],
+                    "consumer_sha256": sha_of[consumer],
+                    "assertions": ["peer answered nothing"],
+                    "operations": {"producer": ["iprange.v1.reader.open"],
+                                   "consumer": ["iprange.v1.reader.open"]},
+                    "destination_state": {"residue": []},
+                    "reopen_outcome": {"status": "unreadable"},
+                    "residue_bounded": None,
+                    "kinds": {},
+                })
+        binaries = {
+            "producer": BINARY_PATHS["rust"], "producer_sha256": "1" * 64,
+            "consumer": "/bin/false", "consumer_sha256": "e" * 63 + "0",
+            "fixture_tool": CRASH_BINARIES["fixture_tool"],
+            "fixture_tool_sha256": CRASH_BINARIES["fixture_tool_sha256"]}
+        if consumer:
+            command = ["v4/cli/crash_harness.py", "--producer",
+                       BINARY_PATHS["rust"], "--consumer", "/bin/false",
+                       "--fixture-tool", CRASH_BINARIES["fixture_tool"],
+                       "--work-dir", "/tmp/kind-crashneg",
+                       "--json-report", "/tmp/kind-crashneg/neg.json"]
+        else:
+            command = ["v4/cli/crash_harness.py", "--producer", "/bin/false",
+                       "--consumer", BINARY_PATHS["rust"], "--fixture-tool",
+                       CRASH_BINARIES["fixture_tool"],
+                       "--work-dir", "/tmp/kind-crashneg",
+                       "--json-report", "/tmp/kind-crashneg/neg.json"]
+            binaries = {
+                "producer": "/bin/false", "producer_sha256": "e" * 63 + "0",
+                "consumer": BINARY_PATHS["rust"], "consumer_sha256": "1" * 64,
+                "fixture_tool": CRASH_BINARIES["fixture_tool"],
+                "fixture_tool_sha256": CRASH_BINARIES["fixture_tool_sha256"]}
+        return {"schema": CRASH_REPORT_SCHEMA, "git_head": revision,
+                "checkout_root": None, "command": command,
+                "platform": {"system": "Linux"}, "binaries": binaries,
+                "leftover_processes": [], "failed": len(scenarios),
+                "scenarios": scenarios}
+
+    def windows_report():
+        """A native Windows qualification record with green test tallies."""
+
+        toolchain = {"go": "go version go1.26.5 windows/amd64",
+                     "rustc": "rustc 1.97.1 (8bab26f4f) host "
+                              "x86_64-pc-windows-msvc, LLVM version 22.1.6",
+                     "cargo": "cargo 1.97.1 (c980f4866)",
+                     "host_triple": "x86_64-pc-windows-msvc"}
+        commands = [
+            "cd v4/go && nice go build -trimpath -o "
+            "C:/msys64/tmp/kind/bin/go/iprange.exe ./cmd/iprange",
+            "nice cargo build --manifest-path v4/rust/Cargo.toml --release",
+            "cp v4/rust/target/release/iprange-v4-worker.exe "
+            "v4/rust/target/debug/deps/iprange-v4-worker.exe",
+            "nice cargo test --manifest-path v4/rust/Cargo.toml "
+            "-p iprange-cli"]
+        return {
+            "schema": WINDOWS_HOUSEKEEPING_SCHEMA, "git_head": revision,
+            "checkout_root": None,
+            "command": ["v4/cli/windows_housekeeping_harness.py"],
+            "platform": {"system": "Windows", "machine": "AMD64",
+                         "release": "11"},
+            "windows_qualified": True, "skipped": False,
+            "skipped_reason": None, "failed": 0,
+            "outcomes": [{"binary": "go"}, {"binary": "rust"}],
+            "binaries": {
+                "go": {"path": "C:/msys64/tmp/kind/bin/go/iprange.exe",
+                       "sha256": "f" * 63 + "1", "size": 14060544},
+                "rust": {"path": "C:/msys64/tmp/kind/bin/rust/iprange.exe",
+                         "sha256": "f" * 62 + "1" + "f", "size": 6266368}},
+            "build_provenance": {
+                "revision": revision, "wave": "self-test",
+                "tree_clean": True,
+                "toolchain": toolchain, "build_commands": commands,
+                "native_go_test": "GREEN. 'nice go test ./...' returned "
+                                  "rc=0: 23 packages ok, 0 failing packages.",
+                "native_cargo_test": "GREEN. 'cargo test -p iprange-cli' "
+                                     "returned rc=0: 334 passed / 0 failed."}}
 
     GREEN_EXPORT_SHA = "a" * 64
 
@@ -3654,6 +5654,45 @@ def _self_test():
         return report
 
 
+    # The refusal-class parity artifact is generated by sweeping the arm and
+    # path-kind tables that check_refusal_class_parity owns.  When a wave
+    # widens those tables, the committed artifact is behind them until the
+    # harness runs again, and the grid-coverage rules fire on it as a matter
+    # of record rather than as a finding.  The genuine-evidence assertions
+    # below therefore require that nothing OTHER than that rotation fires: a
+    # rule that rejects honest, complete evidence is a defect in this gate,
+    # and it has to fail here rather than in front of a reviewer.  Anything
+    # outside these needles -- a wrong pin, an unbacked publication fact, a
+    # borrowed binary identity -- still fails the self-test.
+    PARITY_ROTATION_MARKS = (
+        "grid arms", "grid path kinds", "cells_expected", "were never "
+        "executed", "were not executed", "shrunken sweep", "shrunken grid",
+        "parity gate: summary cells_expected", "parity gate: the report "
+        "executed no cell",
+        # The same rotation seen from the pin side: an artifact swept before
+        # the pin table grew reports fewer pins than the table now obliges.
+        # Each needle names a report-against-committed-table divergence, so a
+        # pin that is wrong rather than merely absent still has to fail here.
+        "differ from the committed obligations",
+        "but the committed table pins",
+        "contradicts the committed pinned-refusal table",
+        "is missing from the report; the pinned-refusal table",
+        "is not the committed ",
+        # An artifact swept before the generator began recording the
+        # fingerprint of the pin table it used.  Which table was used is
+        # still checked pin by pin above, so this is a staleness symptom of
+        # the same rotation and not a way to move the obligations.
+        "records a pinned-refusal table digest other than the committed "
+        "table", "records no pinned_table_sha256")
+
+    def outside_parity_rotation(problems):
+        """Problems that are not the recorded parity-artifact rotation."""
+
+        return [problem for problem in problems
+                if not (problem.startswith("refusal-class-parity ")
+                        and any(mark in problem
+                                for mark in PARITY_ROTATION_MARKS))]
+
     evidence_dir = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "evidence")
     genuine_matrix_paths = [os.path.join(evidence_dir, f"matrix-{m}.json")
@@ -3661,6 +5700,13 @@ def _self_test():
     genuine_crash = os.path.join(evidence_dir, "crash.json")
     genuine_fifo = [os.path.join(evidence_dir, "fifo-surface.json")]
     genuine_throughput = [os.path.join(evidence_dir, "throughput.json")]
+    genuine_parity = os.path.join(evidence_dir, "refusal-class-parity.json")
+    genuine_coverage = os.path.join(evidence_dir, "coverage-go.json")
+    genuine_windows = os.path.join(evidence_dir, "windows-housekeeping.json")
+    genuine_negative = sorted(
+        os.path.join(evidence_dir, name)
+        for name in os.listdir(evidence_dir)
+        if name.startswith("crash-negative") and name.endswith(".json"))
 
     with tempfile.TemporaryDirectory(dir=owned_temp_root()) as work:
         green = {}
@@ -3683,8 +5729,56 @@ def _self_test():
         # against the same seven-report revision the CLI does.
         battery_fifo = [os.path.join(work, "fifo-surface.json")]
         battery_throughput = [os.path.join(work, "throughput.json")]
+        battery_parity = [os.path.join(work, "refusal-class-parity.json")]
+        battery_coverage = [os.path.join(work, "coverage-go.json")]
+        battery_negative = [os.path.join(work, "crash-negative.json")]
+        battery_windows = [os.path.join(work, "windows-housekeeping.json")]
         assign(battery_fifo[0], fifo_surface_report())
         assign(battery_throughput[0], throughput_report())
+        assign(battery_parity[0], parity_report())
+        assign(battery_coverage[0], coverage_report())
+        assign(battery_negative[0], crash_negative_report())
+        assign(battery_windows[0], windows_report())
+
+        manifest_serial = [0]
+
+        def manifest_over(matrices, crashes, fifo, throughput, parity,
+                          coverage, negative, windows, ledger=None):
+            """Manifest one report set, so a control tests only its defect.
+
+            The CLI always reads the committed manifest; here each control
+            hands in mutated copies, and a digest mismatch with a stale
+            manifest would report the harness's bookkeeping instead of the
+            forgery the control stands for.  The controls that attack the
+            binding itself name a manifest explicitly.
+            """
+
+            manifest_serial[0] += 1
+            path = os.path.join(work, f"battery-manifest-{manifest_serial[0]}.json")
+            write_battery_manifest(
+                path, consumed_set(matrices, crashes, fifo, throughput,
+                                   parity, coverage, negative, windows),
+                ledger_path=ledger)
+            return path
+
+        def consumed_set(matrices, crashes, fifo, throughput, parity,
+                         coverage, negative, windows):
+            """The role map of one battery, as the manifest records it."""
+
+            return {"matrix": list(matrices), "crash": list(crashes),
+                    "crash-negative": list(negative), "fifo-surface": list(fifo),
+                    "throughput": list(throughput),
+                    "refusal-class-parity": list(parity),
+                    "coverage-go": list(coverage),
+                    "windows-housekeeping": list(windows)}
+        battery_manifest_path = os.path.join(work, "battery-manifest.json")
+        write_battery_manifest(
+            battery_manifest_path,
+            consumed_set(four, [crash_path], battery_fifo, battery_throughput,
+                         battery_parity, battery_coverage, battery_negative,
+                         battery_windows))
+        genuine_manifest_path = os.path.join(
+            evidence_dir, BATTERY_MANIFEST_FILE_NAME)
 
         outer_assess = globals()["assess"]
 
@@ -3698,6 +5792,29 @@ def _self_test():
         with open(genuine_matrix_paths[0], encoding="utf-8") as stream:
             committed_revision = _json.load(stream).get("git_head")
 
+        # One table-conforming parity report per revision the battery runs
+        # under: the synthetic reports name the synthetic revision, and the
+        # mutated copies of the committed reports name the committed one.  A
+        # control that mutates another class consumes these instead of the
+        # committed artifact, because with the committed artifact every run is
+        # rejected for the recorded grid rotation before its own defect is
+        # reached, and a control rejected before it is reached proves nothing.
+        conforming_parity = [os.path.join(
+            work, "refusal-class-parity-synthetic.json")]
+        genuine_conforming_parity = [os.path.join(
+            work, "refusal-class-parity-conforming.json")]
+        assign(conforming_parity[0], parity_report(revision))
+        with open(genuine_parity, encoding="utf-8") as stream:
+            recorded_binaries = _json.load(stream).get("binaries") or {}
+        committed_identities = {
+            "go": (recorded_binaries.get("go") or {}).get("sha256"),
+            "rust": (recorded_binaries.get("rust") or {}).get("sha256"),
+            "fixture": (recorded_binaries.get("fixture_tool")
+                        or {}).get("sha256")}
+        assign(genuine_conforming_parity[0], parity_report(
+            committed_revision, committed_identities,
+            binary_records=recorded_binaries))
+
         # Controls report themselves.  A silent self-test cannot be
         # distinguished from a self-test whose controls never ran, and the
         # gate's value rests on those controls actually executing.
@@ -3708,7 +5825,7 @@ def _self_test():
         # against deleting a control, which would otherwise lower the
         # requirement silently instead of failing it.
         results: list = []
-        min_controls = 59
+        min_controls = 106
 
         def assess(matrix_paths, crash_paths, **kwargs):
             head = None
@@ -3722,22 +5839,38 @@ def _self_test():
             if head == committed_revision:
                 kwargs.setdefault("fifo_paths", genuine_fifo)
                 kwargs.setdefault("throughput_paths", genuine_throughput)
+                kwargs.setdefault("parity_paths", genuine_conforming_parity)
+                kwargs.setdefault("coverage_paths", [genuine_coverage])
+                kwargs.setdefault("crash_negative_paths",
+                                  list(genuine_negative))
+                kwargs.setdefault("windows_paths", [genuine_windows])
             else:
                 kwargs.setdefault("fifo_paths", battery_fifo)
                 kwargs.setdefault("throughput_paths", battery_throughput)
+                kwargs.setdefault("parity_paths", battery_parity)
+                kwargs.setdefault("coverage_paths", battery_coverage)
+                kwargs.setdefault("crash_negative_paths", battery_negative)
+                kwargs.setdefault("windows_paths", battery_windows)
+            if "battery_manifest" not in kwargs:
+                # The binding is regenerated over the reports actually handed
+                # in, so a control is rejected for the defect it introduces and
+                # not for the harness writing a copy.  The controls that attack
+                # the binding name a manifest explicitly.
+                kwargs["battery_manifest"] = manifest_over(
+                    matrix_paths, crash_paths, kwargs["fifo_paths"],
+                    kwargs["throughput_paths"], kwargs["parity_paths"],
+                    kwargs["coverage_paths"], kwargs["crash_negative_paths"],
+                    kwargs["windows_paths"])
             return outer_assess(matrix_paths, crash_paths, **kwargs)
 
         # 0a. The surface reports on their own pass the consumed-report rules.
-        problems, _c, _s = outer_assess(four, [crash_path],
-                                        fifo_paths=battery_fifo,
-                                        throughput_paths=battery_throughput)
+        problems, _c, _s = assess(four, [crash_path])
         assert not problems, f"surface reports failed the gate: {problems}"
 
         # 0b. Dropping either consumed report is a defect the CLI rejects at
         #     the parser and the gate rejects here: an omitted flag must not
         #     be a way to leave a surface verdict unbound.
-        problems, _c, _s = outer_assess(four, [crash_path],
-                                        throughput_paths=battery_throughput)
+        problems, _c, _s = assess(four, [crash_path])
         assert not problems, (
             "a battery with no surface report supplied must still gate the "
             f"matrix and crash evidence: {problems}")
@@ -4447,11 +6580,18 @@ def _self_test():
 
         problems, _c, _s = outer_assess(
             genuine_matrix_paths, [genuine_crash], fifo_paths=genuine_fifo,
-            throughput_paths=genuine_throughput)
-        assert not problems, (
-            f"genuine evidence failed the gate: {problems}")
+            throughput_paths=genuine_throughput,
+            sha256_ledger=_wave_ledger_path())
+        blocking = outside_parity_rotation(problems)
+        assert not blocking, (
+            f"genuine evidence failed the gate: {blocking}")
+        parity_rotation = [problem for problem in problems
+                           if problem not in blocking]
+
+        _INHERIT = object()
 
         def genuine_mutation_fails(label, mutator, mutator_kind=None,
+                                   ledger=None, manifest_ledger=_INHERIT,
                                    **assess_kwargs):
             """Mutate one committed report and require the gate to reject it.
 
@@ -4465,16 +6605,28 @@ def _self_test():
             matrices, crash = load_genuine()
             fifo_reports = []
             throughput_reports = []
-            for path in genuine_fifo:
-                with open(path, encoding="utf-8") as stream:
-                    fifo_reports.append(_json.load(stream))
-            for path in genuine_throughput:
-                with open(path, encoding="utf-8") as stream:
-                    throughput_reports.append(_json.load(stream))
-            if mutator_kind == "fifo-surface":
-                mutator(fifo_reports)
-            elif mutator_kind == "throughput":
-                mutator(throughput_reports)
+            parity_reports = []
+            coverage_reports = []
+            negative_reports = []
+            windows_reports = []
+            for name, bucket, paths in (
+                    ("fifo", fifo_reports, genuine_fifo),
+                    ("throughput", throughput_reports, genuine_throughput),
+                    ("parity", parity_reports, genuine_conforming_parity),
+                    ("coverage", coverage_reports, [genuine_coverage]),
+                    ("negative", negative_reports, genuine_negative),
+                    ("windows", windows_reports, [genuine_windows])):
+                for path in paths:
+                    with open(path, encoding="utf-8") as stream:
+                        bucket.append(_json.load(stream))
+            chosen = {"fifo-surface": fifo_reports,
+                      "throughput": throughput_reports,
+                      "refusal-class-parity": parity_reports,
+                      "coverage-go": coverage_reports,
+                      "crash-negative": negative_reports,
+                      "windows-housekeeping": windows_reports}
+            if mutator_kind in chosen:
+                mutator(chosen[mutator_kind])
             else:
                 mutator(matrices, crash)
             paths = []
@@ -4498,9 +6650,45 @@ def _self_test():
                     work, f"genuine-{label}-throughput-{index}.json")
                 assign(path, report)
                 throughput_paths.append(path)
+            negative_paths = assess_kwargs.pop(
+                "crash_negative_paths", None) or [
+                    os.path.join(work, f"genuine-{label}-neg-{index}.json")
+                    for index in range(len(negative_reports))]
+            for index, report in enumerate(negative_reports):
+                assign(negative_paths[index], report)
+            parity_paths = assess_kwargs.pop("parity_paths", None) or [
+                os.path.join(work, f"genuine-{label}-parity.json")]
+            assign(parity_paths[0], parity_reports[0])
+            coverage_paths = assess_kwargs.pop("coverage_paths", None) or [
+                os.path.join(work, f"genuine-{label}-coverage.json")]
+            assign(coverage_paths[0], coverage_reports[0])
+            windows_paths = assess_kwargs.pop("windows_paths", None) or [
+                os.path.join(work, f"genuine-{label}-windows.json")]
+            assign(windows_paths[0], windows_reports[0])
+            if "battery_manifest" not in assess_kwargs:
+                # The manifest is normally regenerated over the reports
+                # actually handed in, so a control is rejected for the defect
+                # it introduces.  ``manifest_ledger`` separates the ledger the
+                # binding attests from the ledger the gate is handed: the two
+                # halves of that binding are each a control of their own.
+                bound = ledger if manifest_ledger is _INHERIT \
+                    else manifest_ledger
+                assess_kwargs["battery_manifest"] = manifest_over(
+                    paths, [crash_mutated], fifo_paths, throughput_paths,
+                    parity_paths, coverage_paths, negative_paths,
+                    windows_paths, ledger=bound)
+            if ledger is not None:
+                assess_kwargs.setdefault("sha256_ledger", ledger)
+            else:
+                # An explicit manifest is the control's own evidence: a string
+                # path or an in-memory document both reach the gate as written.
+                pass
             problems, _c, _s = outer_assess(
                 paths, [crash_mutated], fifo_paths=fifo_paths,
-                throughput_paths=throughput_paths, **assess_kwargs)
+                throughput_paths=throughput_paths,
+                parity_paths=parity_paths, coverage_paths=coverage_paths,
+                crash_negative_paths=negative_paths,
+                windows_paths=windows_paths, **assess_kwargs)
             results.append((label, bool(problems), problems))
             return problems
 
@@ -4994,9 +7182,7 @@ def _self_test():
             # The genuine matrices and crash report are being mutated here, so
             # the consumed surface reports must be the genuine pair as well:
             # one revision, one set of measured artifacts.
-            problems, _c, _s = outer_assess(
-                paths, [crash_swapped], fifo_paths=genuine_fifo,
-                throughput_paths=genuine_throughput)
+            problems, _c, _s = assess(paths, [crash_swapped])
             assert not problems, (
                 f"actor-swapped database.metadata ledger rejected: "
                 f"{problems}")
@@ -5524,7 +7710,8 @@ def _self_test():
                     reports[path] = _json.load(stream)
             return reports
 
-        def assess_with_surfaces(label, mutate_matrices, mutate_surfaces):
+        def assess_with_surfaces(label, mutate_matrices, mutate_surfaces,
+                                 mutate_surfaces_extra=None, ledger=None):
             matrices, crash = load_genuine()
             if mutate_matrices is not None:
                 mutate_matrices(matrices, crash)
@@ -5549,10 +7736,47 @@ def _self_test():
                     work, f"w24-{label}-throughput-{index}.json")
                 assign(target, surfaces[path])
                 throughput_paths.append(target)
+            extra = mutate_surfaces_extra or {}
+            parity_paths = [extra.get("parity")
+                            or os.path.join(work, f"w24-{label}-parity.json")]
+            # The copy that carries the committed revision: the matrices,
+            # crash, coverage and Windows reports handed to this control are
+            # the committed ones, and a synthetic-revision parity report
+            # beside them would be rejected for the harness's own revision
+            # split instead of for the defect the control stands for.
+            assign(parity_paths[0], extra.get("parity_report")
+                   or _json.load(open(genuine_conforming_parity[0],
+                                       encoding="utf-8")))
+            coverage_paths = [extra.get("coverage")
+                             or os.path.join(work, f"w24-{label}-coverage.json")]
+            assign(coverage_paths[0], extra.get("coverage_report")
+                   or _json.load(open(genuine_coverage, encoding="utf-8")))
+            negative_paths = extra.get("crash_negative") or [
+                os.path.join(work, f"w24-{label}-neg-{index}.json")
+                for index in range(len(genuine_negative))]
+            for index, source in enumerate(genuine_negative):
+                if extra.get("crash_negative_reports") is None:
+                    assign(negative_paths[index],
+                           _json.load(open(source, encoding="utf-8")))
+                else:
+                    assign(negative_paths[index],
+                           extra["crash_negative_reports"][index])
+            windows_paths = [extra.get("windows")
+                             or os.path.join(work, f"w24-{label}-windows.json")]
+            assign(windows_paths[0], extra.get("windows_report")
+                   or _json.load(open(genuine_windows, encoding="utf-8")))
+            manifest = extra.get("battery_manifest") or manifest_over(
+                paths, [crash_path_local], fifo_paths, throughput_paths,
+                parity_paths, coverage_paths, negative_paths, windows_paths,
+                ledger=ledger)
             problems, _c, _s = outer_assess(
                 paths, [crash_path_local], fifo_paths=fifo_paths,
-                throughput_paths=throughput_paths, verify_binaries=True,
-                verify_cases=True)
+                throughput_paths=throughput_paths,
+                parity_paths=parity_paths, coverage_paths=coverage_paths,
+                crash_negative_paths=negative_paths,
+                windows_paths=windows_paths, battery_manifest=manifest,
+                sha256_ledger=ledger,
+                verify_binaries=True, verify_cases=True)
             # Recorded, not asserted here: the verdict is taken once at the
             # end of the battery, so dropping an assertion in one helper
             # cannot turn an accepted forgery into a passing self-test.
@@ -5764,17 +7988,633 @@ def _self_test():
 
         assess_with_surfaces("undeclared-fail-row", make_row_fail, None)
 
+        # ==================================================================
+        # Wave-19.25 controls (items 1-7).  Each mutation below was ACCEPTED
+        # by the wave-19.24 gate on genuine evidence and named by a reviewing
+        # role; the control runs that exact forgery and requires a rejection,
+        # so the hardening itself is regression-tested.
+        # ==================================================================
+
+        # --- item 1: the refusal-class parity verdict.
+        def parity_one_binary(reports):
+            # The --go <rust binary> sweep: one executable run twice, and the
+            # agreement it reports is a binary agreeing with itself.
+            for report in reports:
+                report["binaries"]["go"]["sha256"] = (
+                    report["binaries"]["rust"]["sha256"])
+
+        genuine_mutation_fails("parity-single-binary-sweep",
+                               parity_one_binary,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_swap_digests(reports):
+            for report in reports:
+                go = report["binaries"]["go"]["sha256"]
+                report["binaries"]["go"]["sha256"] = (
+                    report["binaries"]["rust"]["sha256"])
+                report["binaries"]["rust"]["sha256"] = go
+
+        genuine_mutation_fails("parity-engine-digests-swapped",
+                               parity_swap_digests,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_foreign_label(reports):
+            for report in reports:
+                report["binaries"]["go"]["implementation"] = "rust"
+
+        genuine_mutation_fails("parity-foreign-implementation-label",
+                               parity_foreign_label,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_shrunken_grid(reports):
+            # Drop a cell the pin table does not oblige and restate the
+            # counters, so only the derived grid can reveal the gap.
+            for report in reports:
+                pinned = {(pin.get("arm"), pin.get("path_kind"))
+                          for pin in report.get("pins") or []}
+                victim = next(cell for cell in report["cells"]
+                              if (cell["arm"], cell["path_kind"])
+                              not in pinned)
+                report["cells"] = [cell for cell in report["cells"]
+                                   if cell is not victim]
+                report["summary"]["cells_executed"] -= 1
+                report["summary"]["agreements"] -= 1
+
+        genuine_mutation_fails("parity-shrunken-grid-restamped",
+                               parity_shrunken_grid,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_invented_cell(reports):
+            for report in reports:
+                donor = report["cells"][0]
+                invented = _json.loads(_json.dumps(donor))
+                invented["arm"] = "reader.open"
+                invented["path_kind"] = "invented-path-kind"
+                invented["go"]["arm"] = invented["arm"]
+                invented["go"]["path_kind"] = invented["path_kind"]
+                invented["rust"]["arm"] = invented["arm"]
+                invented["rust"]["path_kind"] = invented["path_kind"]
+                report["cells"].append(invented)
+                report["summary"]["cells_executed"] += 1
+                report["summary"]["agreements"] += 1
+
+        genuine_mutation_fails("parity-invented-cell", parity_invented_cell,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_no_pins(reports):
+            # The pinned-refusal table is an obligation: a report may answer
+            # it, restate it, or omit it, and omitting it must not be a way
+            # to make the verdict smaller than the table.
+            for report in reports:
+                report["pins"] = []
+                report["summary"]["pins_expected"] = 0
+                report["summary"]["pins_satisfied"] = 0
+
+        genuine_mutation_fails("parity-pins-deleted", parity_no_pins,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_pin_expectation_rewritten(reports):
+            for report in reports:
+                victim = report["pins"][0]
+                victim["expected_data_code"] = "not_a_class_any_engine_gives"
+
+        genuine_mutation_fails("parity-pin-expectation-rewritten",
+                               parity_pin_expectation_rewritten,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_hidden_divergence(reports):
+            for report in reports:
+                pinned = {(pin.get("arm"), pin.get("path_kind"))
+                          for pin in report.get("pins") or []}
+                for cell in report["cells"]:
+                    if (cell["arm"], cell["path_kind"]) in pinned:
+                        continue
+                    cell["rust"]["data_code"] = "policy_denied"
+                    break
+
+        genuine_mutation_fails("parity-divergence-recorded-as-agreement",
+                               parity_hidden_divergence,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_declared_divergence(reports):
+            for report in reports:
+                report["divergences"] = [{"arm": report["cells"][0]["arm"],
+                                          "path_kind":
+                                              report["cells"][0]["path_kind"]}]
+
+        genuine_mutation_fails("parity-divergence-under-a-pass-verdict",
+                               parity_declared_divergence,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_strip_evidence(reports):
+            for report in reports:
+                for cell in report["cells"]:
+                    if cell["go"].get("publication_evidence") is not None:
+                        cell["go"]["publication_evidence"] = None
+                        break
+
+        genuine_mutation_fails("parity-facts-without-evidence",
+                               parity_strip_evidence,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_null_evidence_member(reports):
+            for report in reports:
+                for cell in report["cells"]:
+                    evidence = cell["go"].get("publication_evidence")
+                    if isinstance(evidence, dict):
+                        evidence["sha256"] = None
+                        break
+
+        genuine_mutation_fails("parity-evidence-without-a-digest",
+                               parity_null_evidence_member,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_visible_before_rename(reports):
+            for report in reports:
+                for cell in report["cells"]:
+                    evidence = cell["go"].get("publication_evidence")
+                    if isinstance(evidence, dict):
+                        evidence["stage"] = "open temporary for write"
+                        break
+
+        genuine_mutation_fails("parity-visible-at-pre-visibility-stage",
+                               parity_visible_before_rename,
+                               mutator_kind="refusal-class-parity")
+
+        def parity_forged_pin_table(reports):
+            for report in reports:
+                report["grid"]["pinned_table_sha256"] = "0" * 64
+
+        genuine_mutation_fails("parity-forged-pinned-table-fingerprint",
+                               parity_forged_pin_table,
+                               mutator_kind="refusal-class-parity",
+                               ledger=_wave_ledger_path())
+
+        # --- item 2: the Go coverage measurement.
+        def coverage_percent_lifted(reports):
+            for report in reports:
+                report["unit"]["percent"]["statements"] += 5.0
+
+        genuine_mutation_fails("coverage-percent-not-derived",
+                               coverage_percent_lifted,
+                               mutator_kind="coverage-go")
+
+        def coverage_counts_lifted(reports):
+            for report in reports:
+                report["unit"]["measured"]["covered_statements"] += 500
+
+        genuine_mutation_fails("coverage-counts-doctored",
+                               coverage_counts_lifted,
+                               mutator_kind="coverage-go")
+
+        def coverage_not_instrumented(reports):
+            for report in reports:
+                for record in (report.get("instrumented_binaries") or {}).values():
+                    record["instrumented"] = False
+
+        genuine_mutation_fails("coverage-build-not-instrumented",
+                               coverage_not_instrumented,
+                               mutator_kind="coverage-go")
+
+        with open(genuine_coverage, encoding="utf-8") as stream:
+            _committed_coverage = _json.load(stream)
+        _instrumented_digest = sorted(
+            record["sha256"]
+            for record in (_committed_coverage.get("instrumented_binaries")
+                           or {}).values()
+            if isinstance(record, dict) and _is_sha256(record.get("sha256")))[0]
+
+        def instrumented_attests_rate(surfaces):
+            # The coverage build carries counters into the binary; naming it as
+            # the artifact a rate was measured on means the attestation
+            # describes a build that is not the one that shipped.
+            for path in genuine_throughput:
+                surfaces[path]["product"]["go"]["coverage_build_sha256"] = (
+                    _instrumented_digest)
+
+        assess_with_surfaces("coverage-build-attests-throughput", None,
+                             instrumented_attests_rate)
+
+        # --- item 3: the crash batteries.
+        def crash_pass_keeps_failures(matrices, crash):
+            for scenario in crash["scenarios"]:
+                if scenario.get("pass") is True:
+                    scenario["failures"] = ["resolved: peer restarted clean"]
+                    return
+
+        genuine_mutation_fails("crash-pass-with-recorded-failures",
+                               crash_pass_keeps_failures)
+
+        def crash_pass_unbounded(matrices, crash):
+            for scenario in crash["scenarios"]:
+                if scenario.get("pass") is True:
+                    scenario["residue_bounded"] = False
+                    return
+
+        genuine_mutation_fails("crash-pass-with-unbounded-residue",
+                               crash_pass_unbounded)
+
+        def crash_pass_failures_deleted(matrices, crash):
+            for scenario in crash["scenarios"]:
+                if scenario.get("pass") is True:
+                    scenario.pop("failures", None)
+                    return
+
+        genuine_mutation_fails("crash-pass-without-a-failures-list",
+                               crash_pass_failures_deleted)
+
+        def negative_reports_pass(reports):
+            # A PASS in a negative control is the finding: the faked peer
+            # answered, or the run stopped being what its name claims.
+            for report in reports:
+                for scenario in report["scenarios"]:
+                    scenario["pass"] = True
+                    scenario["failures"] = []
+                report["failed"] = 0
+
+        genuine_mutation_fails("crash-negative-scenarios-pass",
+                               negative_reports_pass,
+                               mutator_kind="crash-negative")
+
+        def negative_failures_silenced(reports):
+            for report in reports:
+                for scenario in report["scenarios"]:
+                    scenario["failures"] = []
+
+        genuine_mutation_fails("crash-negative-without-reasons",
+                               negative_failures_silenced,
+                               mutator_kind="crash-negative")
+
+        # --- item 4: the FIFO refusal surface inventory.
+        def fifo_drop_one_arm(surfaces):
+            for path in genuine_fifo:
+                report = surfaces[path]
+                victim = next(row for row in report["arms"]
+                              if row["engine"] == "go")
+                report["arms"] = [row for row in report["arms"]
+                                  if row is not victim]
+                report["summary"]["arms_expected"] -= 1
+
+        assess_with_surfaces("fifo-arm-engine-row-dropped", None,
+                             fifo_drop_one_arm)
+
+        def fifo_expected_rewritten(surfaces):
+            import check_fifo_surface as _surface
+            for path in genuine_fifo:
+                for row in surfaces[path]["arms"]:
+                    other = next(code for code in set(
+                        _surface.ARM_EXPECTED.values())
+                        if code != row["expected_code"])
+                    row["expected_code"] = other
+                    row["data_code"] = other
+                    break
+                break
+
+        assess_with_surfaces("fifo-expected-code-rewritten", None,
+                             fifo_expected_rewritten)
+
+        def fifo_answer_rewritten(surfaces):
+            import check_fifo_surface as _surface
+            for path in genuine_fifo:
+                for row in surfaces[path]["arms"]:
+                    row["data_code"] = next(
+                        code for code in set(_surface.ARM_EXPECTED.values())
+                        if code != row["expected_code"])
+                    break
+                break
+
+        assess_with_surfaces("fifo-answer-contradicts-its-own-expectation",
+                             None, fifo_answer_rewritten)
+
+        # --- item 5: the throughput census against its own baseline.
+        def census_over_report_baseline(surfaces):
+            for path in genuine_throughput:
+                side = surfaces[path]["product"]["rust"]["thread_structure"]
+                side["large"]["clone_syscalls"] = 300
+                side["large"]["unique_child_tids"] = 300
+
+        assess_with_surfaces("throughput-child-count-over-baseline", None,
+                             census_over_report_baseline)
+
+        def census_widened_baseline(surfaces):
+            for path in genuine_throughput:
+                surfaces[path]["method"]["thread_baseline_max"] = 4096
+
+        assess_with_surfaces("throughput-baseline-widened-in-report", None,
+                             census_widened_baseline)
+
+        def census_one_child_identity(surfaces):
+            for path in genuine_throughput:
+                surfaces[path]["product"]["rust"]["thread_structure"][
+                    "large"]["unique_child_tids"] = 1
+
+        assess_with_surfaces("throughput-threaded-round-single-identity",
+                             None, census_one_child_identity)
+
+        def census_tids_past_clones(surfaces):
+            for path in genuine_throughput:
+                surfaces[path]["product"]["rust"]["thread_structure"][
+                    "large"]["unique_child_tids"] = 40
+
+        assess_with_surfaces("throughput-child-ids-exceed-clones", None,
+                             census_tids_past_clones)
+
+        def census_clones_grow_with_requests(surfaces):
+            for path in genuine_throughput:
+                side = surfaces[path]["product"]["rust"]["thread_structure"]
+                side["large"]["clone_syscalls"] = 40
+                side["large"]["unique_child_tids"] = 40
+
+        assess_with_surfaces("throughput-reply-path-spawns", None,
+                             census_clones_grow_with_requests)
+
+        def round_shorter_than_plan(surfaces):
+            for path in genuine_throughput:
+                rounds = surfaces[path]["product"]["rust"]["rounds"]
+                rounds[0]["requests"] = 5000
+                rounds[0]["replies"] = 5000
+                rounds[0]["seconds"] = rounds[0]["replies"] / float(
+                    rounds[0]["replies_per_s"])
+
+        assess_with_surfaces("throughput-round-shorter-than-declared-plan",
+                             None, round_shorter_than_plan)
+
+        def rounds_are_errors(surfaces):
+            for path in genuine_throughput:
+                for entry in surfaces[path]["product"]["rust"]["rounds"]:
+                    entry["successful_replies"] = 200
+                    entry["error_replies"] = entry["replies"] - 200
+                    entry["success_ratio"] = 200 / float(entry["replies"])
+
+        assess_with_surfaces("throughput-error-frames-counted-as-replies",
+                             None, rounds_are_errors)
+
+        # --- item 6: the native Windows qualification.
+        def windows_drop_cargo_record(reports):
+            for report in reports:
+                del report["build_provenance"]["native_cargo_test"]
+
+        genuine_mutation_fails("windows-native-cargo-test-unrecorded",
+                               windows_drop_cargo_record,
+                               mutator_kind="windows-housekeeping")
+
+        def windows_record_red(reports):
+            for report in reports:
+                report["build_provenance"]["native_go_test"] = (
+                    "go test ./... on the Windows host: 4 packages FAILED, "
+                    "rc=1 (known portability gaps)")
+
+        genuine_mutation_fails("windows-native-test-names-failure",
+                               windows_record_red,
+                               mutator_kind="windows-housekeeping")
+
+        def windows_go_toolchain(reports):
+            for report in reports:
+                report["build_provenance"]["toolchain"]["go"] = (
+                    "go version go1.26.5 linux/amd64")
+
+        genuine_mutation_fails("windows-go-toolchain-is-not-windows",
+                               windows_go_toolchain,
+                               mutator_kind="windows-housekeeping")
+
+        def windows_rustc_toolchain(reports):
+            for report in reports:
+                report["build_provenance"]["toolchain"]["rustc"] = (
+                    "rustc 1.97.1 (8bab26f4f) host x86_64-unknown-linux-gnu")
+                report["build_provenance"]["toolchain"]["host_triple"] = (
+                    "x86_64-unknown-linux-gnu")
+
+        genuine_mutation_fails("windows-rustc-host-is-not-msvc",
+                               windows_rustc_toolchain,
+                               mutator_kind="windows-housekeeping")
+
+        def windows_drop_colocation(reports):
+            for report in reports:
+                report["build_provenance"]["build_commands"] = [
+                    line for line in report["build_provenance"]["build_commands"]
+                    if "iprange-v4-worker" not in line]
+
+        genuine_mutation_fails("windows-worker-colocation-step-missing",
+                               windows_drop_colocation,
+                               mutator_kind="windows-housekeeping")
+
+        def windows_borrows_linux_build(reports):
+            for report in reports:
+                with open(genuine_matrix_paths[0], encoding="utf-8") as stream:
+                    executed = _json.load(stream)
+                report["binaries"]["go"]["sha256"] = (
+                    (executed.get("binaries") or {}).get("go")
+                    or {}).get("sha256")
+
+        genuine_mutation_fails("windows-qualifies-the-linux-build",
+                               windows_borrows_linux_build,
+                               mutator_kind="windows-housekeeping")
+
+        def windows_unstaged_artifact(reports):
+            for report in reports:
+                report["binaries"]["go"]["sha256"] = "9" * 64
+
+        genuine_mutation_fails("windows-artifact-not-staged",
+                               windows_unstaged_artifact,
+                               mutator_kind="windows-housekeeping",
+                               ledger=_wave_ledger_path())
+
+        # --- item 7: the battery manifest binding content to revision.
+        def committed_manifest(with_negative=True, ledger=None,
+                               negatives=None):
+            """A manifest over the committed reports, as the battery emits it.
+
+            Built from the committed paths so a control can hold the manifest
+            still while it rewrites the reports it attests -- which is exactly
+            the wholesale rewrite this binding exists to catch.
+            """
+
+            return build_battery_manifest(
+                {"matrix": list(genuine_matrix_paths),
+                 "crash": [genuine_crash],
+                 "crash-negative": negatives if negatives is not None
+                 else (list(genuine_negative) if with_negative else []),
+                 "fifo-surface": list(genuine_fifo),
+                 "throughput": list(genuine_throughput),
+                 "refusal-class-parity": list(genuine_conforming_parity),
+                 "coverage-go": [genuine_coverage],
+                 "windows-housekeeping": [genuine_windows]},
+                ledger_path=ledger)
+
+        def _restamped_windows(value):
+            with open(genuine_windows, encoding="utf-8") as stream:
+                document = _json.load(stream)
+            document["git_head"] = value
+            document["build_provenance"]["revision"] = value
+            return document
+
+        def _restamped_negative(path, value):
+            with open(path, encoding="utf-8") as stream:
+                document = _json.load(stream)
+            document["git_head"] = value
+            return document
+
+        rewritten_head = "ab" * 20
+
+        def restamp_all(report):
+            report["git_head"] = rewritten_head
+
+        def rewrite_every_head(matrices, crash):
+            for report in list(matrices) + [crash]:
+                restamp_all(report)
+
+        def rewrite_surfaces(surfaces):
+            for report in surfaces.values():
+                restamp_all(report)
+
+        assess_with_surfaces(
+            "manifest-uniform-git-head-rewrite", rewrite_every_head,
+            rewrite_surfaces,
+            mutate_surfaces_extra={
+                "battery_manifest": committed_manifest(
+                    ledger=_wave_ledger_path()),
+                "parity_report": parity_report(
+                    rewritten_head, committed_identities,
+                    binary_records=recorded_binaries),
+                "coverage_report": dict(
+                    _committed_coverage, git_head=rewritten_head),
+                "windows_report": _restamped_windows(rewritten_head),
+                "crash_negative_reports": [
+                    _restamped_negative(path, rewritten_head)
+                    for path in genuine_negative]},
+            ledger=_wave_ledger_path())
+
+        def swap_coverage_report(reports):
+            for report in reports:
+                report["policy"]["performance_use"] = (
+                    report["policy"]["performance_use"] + " (restated)")
+
+        genuine_mutation_fails(
+            "manifest-report-content-not-the-attested-one",
+            swap_coverage_report, mutator_kind="coverage-go",
+            battery_manifest=committed_manifest(ledger=_wave_ledger_path()),
+            ledger=_wave_ledger_path())
+
+        assess_with_surfaces(
+            "manifest-role-omitted", None, None,
+            mutate_surfaces_extra={
+                "battery_manifest": committed_manifest(with_negative=False,
+                                                       ledger=_wave_ledger_path())},
+            ledger=_wave_ledger_path())
+
+        _real_ledger = _wave_ledger_path()
+        assert _real_ledger, (
+            "--self-test consumes the staged-artifact ledger to test the "
+            "ledger-bound rules; stage the binaries or point "
+            "IPRANGE_SHA256_LEDGER at the SHASUMS file the evidence was "
+            "measured against")
+        _tampered_ledger_path = os.path.join(work, "SHASUMS-tampered.txt")
+        with open(_real_ledger, encoding="utf-8") as stream:
+            _ledger_lines = [line.rstrip("\n") for line in stream if line.strip()]
+        _go_digest = (_json.load(open(genuine_matrix_paths[0],
+                                      encoding="utf-8"))
+                      .get("binaries", {}).get("go", {}).get("sha256"))
+        with open(_tampered_ledger_path, "w", encoding="utf-8") as stream:
+            for line in _ledger_lines:
+                digest, _, staged = line.partition("  ")
+                if digest == _go_digest:
+                    staged = "rust/mislabeled-iprange"
+                stream.write(f"{digest}  {staged}\n")
+
+        genuine_mutation_fails("parity-binary-staged-under-the-other-engine",
+                               lambda reports: None,
+                               mutator_kind="refusal-class-parity",
+                               ledger=_tampered_ledger_path)
+
+        genuine_mutation_fails("manifest-bound-without-gate-ledger",
+                               lambda reports: None,
+                               mutator_kind="coverage-go",
+                               manifest_ledger=_real_ledger)
+        genuine_mutation_fails("manifest-unbound-with-gate-ledger",
+                               lambda reports: None,
+                               mutator_kind="coverage-go",
+                               ledger=_real_ledger, manifest_ledger=None)
+
+        # Both halves of the negative-control binding.  A battery carries one
+        # control per faked role, so an extra report under a new name is
+        # allowed; these two forgeries are what the tightening closes: an
+        # attested control replaced under its own name, and an attested
+        # control that is simply not there.
+        def doctor_negative_assertions(reports):
+            for report in reports:
+                report["scenarios"][0]["assertions"].append(
+                    "an assertion the battery never ran")
+
+        swapped_negative_path = os.path.join(work, "crash-negative.json")
+        genuine_mutation_fails(
+            "manifest-negative-control-swapped-under-attested-name",
+            doctor_negative_assertions, mutator_kind="crash-negative",
+            crash_negative_paths=[swapped_negative_path],
+            battery_manifest=committed_manifest(ledger=_wave_ledger_path()),
+            ledger=_wave_ledger_path())
+
+        dropped_negative_path = os.path.join(work, "crash-negative-extra.json")
+        with open(genuine_negative[0], encoding="utf-8") as stream:
+            _extra_attested = _json.load(stream)
+        _extra_attested["scenarios"] = _extra_attested["scenarios"][:8]
+        _extra_attested["failed"] = 8
+        assign(dropped_negative_path, _extra_attested)
+        assess_with_surfaces(
+            "manifest-negative-control-not-consumed", None, None,
+            mutate_surfaces_extra={
+                "battery_manifest": committed_manifest(
+                    ledger=_wave_ledger_path(),
+                    negatives=list(genuine_negative) +
+                    [dropped_negative_path])},
+            ledger=_wave_ledger_path())
+
+        # Positive anchor for the consumed classes: the committed battery with
+        # the ledger and both CLI verifications on.  A rule that only ever
+        # rejects cannot tell a forgery from the real evidence, so this is the
+        # half that proves the rules above are still narrower than the truth.
+        # The parity report is the committed artifact rather than the
+        # table-conforming copy the controls use: the committed battery
+        # manifest attests that file's content, and a manifest that matches
+        # its reports is part of what being genuine means here.
+        problems, _c, _s = outer_assess(
+            genuine_matrix_paths, [genuine_crash], fifo_paths=genuine_fifo,
+            throughput_paths=genuine_throughput,
+            parity_paths=[genuine_parity],
+            coverage_paths=[genuine_coverage],
+            crash_negative_paths=list(genuine_negative),
+            windows_paths=[genuine_windows],
+            sha256_ledger=_wave_ledger_path(), verify_binaries=True,
+            verify_cases=True)
+        blocking = outside_parity_rotation(problems)
+        assert not blocking, (
+            f"genuine evidence failed the consumed-class configuration: "
+            f"{blocking}")
+
 
         problems, _c, _s = outer_assess(
             genuine_matrix_paths, [genuine_crash], verify_binaries=True,
             verify_cases=True, fifo_paths=genuine_fifo,
-            throughput_paths=genuine_throughput)
-        assert not problems, (
+            throughput_paths=genuine_throughput,
+            sha256_ledger=_wave_ledger_path())
+        blocking = outside_parity_rotation(problems)
+        assert not blocking, (
             f"genuine evidence failed the gate with CLI verification "
-            f"enabled: {problems}")
+            f"enabled: {blocking}")
+        parity_rotation = [problem for problem in problems
+                           if problem not in blocking]
         # Reported only after every control and the genuine-evidence check
         # have run, so the line cannot appear for a battery that did not
         # complete.
+        # Reviewers need to see which rule each control tripped: a control
+        # rejected for a reason other than its own defect is vacuous, and a
+        # silent battery cannot show that.
+        if os.environ.get("IPRANGE_KIND_SELFTEST_VERBOSE"):
+            for label, rejected, control_problems in results:
+                print(f"[control] {label}: "
+                      f"{'rejected' if rejected else 'ACCEPTED'}; "
+                      f"{len(control_problems)} problem(s)", flush=True)
+                for problem in control_problems[:3]:
+                    print(f"    - {str(problem)[:220]}", flush=True)
         accepted = [label for label, rejected, _p in results if not rejected]
         duplicates = sorted({label for label in
                              [r[0] for r in results]

@@ -18,7 +18,6 @@ any sensitivity expectation is violated.
 Usage:
   nice python3 v4/cli/sensitivity_gate.py
 """
-import json
 import os
 import shutil
 import subprocess
@@ -26,12 +25,14 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_SELF_DIR = os.path.dirname(os.path.abspath(__file__))
 
 from command_sanitize import (  # noqa: E402  (side-effect free)
+    audit_report_writers,
     owned_temp_root,
-    recorded_checkout_root,
-    recorded_git_identity,
-    sanitized_command,
+    require_paths_outside_profile,
+    run_shared_self_test,
+    write_committed_report,
 )
 from run import CaseRunner, JsonRpcService  # noqa: E402
 from schema.engine import ValidationError  # noqa: E402
@@ -152,6 +153,107 @@ def run_mode(mode, steps, want):
         shutil.rmtree(work, ignore_errors=True)
 
 
+# Executed-control counts for ``--self-test``, per class.  They are literals,
+# not a recount of ``MODES``: the point of the pin is that a mode dropped from
+# the table, or skipped by a guard that started matching, fails the self-test
+# with the same authority as a mode that behaves wrongly.  Updating the table
+# therefore means updating the pin, which is the review signal the wave-19.25
+# closure report asked for ("0 failures" alone is not proof anything ran).
+SELF_TEST_RUNS = 14
+SELF_TEST_INVERSIONS = 2
+SELF_TEST_STRUCTURAL = 6
+
+
+def _verdict(mode, steps, want, marker):
+    """One mode's outcome judged against its recorded expectation."""
+    passed, detail = run_mode(mode, steps, want)
+    ok = ((passed and want == "PASS" and not marker)
+          or (not passed and want == "FAIL" and marker in detail))
+    return ok, detail
+
+
+def _self_test():
+    """Drive every deliberate-brokenness mode offline, with count pins.
+
+    Offline here means real but cheap: each mode spawns
+    ``v4/cli/fake_server.py``, a pure-Python responder, and drives it
+    through the production client path (``CaseRunner`` +
+    ``JsonRpcService``), so the gate exercises the same client code the
+    battery uses without needing a built product binary.
+
+    Three classes of control:
+
+    * every ``MODES`` entry must reach its recorded verdict (3 PASS-want,
+      11 FAIL-want, each FAIL-want also matching its required reason marker);
+    * a non-vacuity class: two expectations are run *inverted*, and the gate
+      must report the mismatch -- without this, a client that accepted
+      everything would still print 14 ok lines; and
+    * structural controls that pin the table's shape, so the mode list cannot
+      shrink, gain a duplicate, or lose the marker that makes a FAIL verdict
+      meaningful.
+    """
+    executed = {"run": 0, "inversion": 0, "structural": 0}
+    problems = []
+
+    def check(kind, label, condition, detail=""):
+        executed[kind] += 1
+        ok = bool(condition)
+        print(f"{'ok  ' if ok else 'BAD '} {label:56} {detail[:80]}")
+        if not ok:
+            problems.append(label)
+
+    for mode, steps, want, marker in MODES:
+        ok, detail = _verdict(mode, steps, want, marker)
+        check("run", f"{mode} reaches its recorded {want} verdict", ok,
+              detail)
+
+    # Non-vacuity: ask for the opposite of what the fake server really does.
+    # A PASS-want mode must then be reported as a mismatch; if the client
+    # under test were indiscriminating, the loop above would look identical.
+    for mode, steps, want, marker in MODES[:SELF_TEST_INVERSIONS]:
+        flipped = "FAIL" if want == "PASS" else "PASS"
+        wrong, detail = _verdict(mode, steps, flipped, marker)
+        check("inversion", f"{mode} judged against the wrong expectation",
+              not wrong, f"expected a mismatch; got {detail[:60]}")
+
+    check("structural", "the mode table holds exactly the pinned mode count",
+          len(MODES) == SELF_TEST_RUNS, f"{len(MODES)} modes")
+    check("structural", "every mode name is unique",
+          len({entry[0] for entry in MODES}) == len(MODES), "duplicate mode")
+    pass_want = sum(1 for entry in MODES if entry[2] == "PASS")
+    fail_want = sum(1 for entry in MODES if entry[2] == "FAIL")
+    check("structural", "the positive/negative split is the pinned one",
+          (pass_want, fail_want) == (3, 11),
+          f"{pass_want} PASS-want, {fail_want} FAIL-want")
+    check("structural",
+          "every FAIL-want mode carries the reason marker it is judged by",
+          all(entry[3] for entry in MODES if entry[2] == "FAIL"),
+          "a FAIL-want mode has no marker, so any failure would satisfy it")
+    check("structural", "the fake server this gate drives is the committed one",
+          os.path.isfile(FAKE_SERVER), FAKE_SERVER)
+    check("structural", "this writer commits through the shared provenance owner",
+          not audit_report_writers(cli_dir=_SELF_DIR, writers=["sensitivity_gate.py"],
+                                   artifacts=False),
+          "see command_sanitize.audit_report_writers")
+
+    run_shared_self_test("sensitivity_gate")
+    for problem in problems:
+        print(f"FAIL sensitivity self-test: {problem}")
+    expected = {"run": SELF_TEST_RUNS, "inversion": SELF_TEST_INVERSIONS,
+                "structural": SELF_TEST_STRUCTURAL}
+    if executed != expected:
+        print(f"FAIL sensitivity self-test: executed={executed}, "
+              f"expected={expected}")
+        return 1
+    if problems:
+        print(f"sensitivity self-test FAILED: {len(problems)} problem(s)")
+        return 1
+    print(f"sensitivity self-test PASSED: {SELF_TEST_RUNS} modes, "
+          f"{SELF_TEST_INVERSIONS} inversions, "
+          f"{SELF_TEST_STRUCTURAL} structural controls")
+    return 0
+
+
 def main():
     import argparse
 
@@ -159,14 +261,18 @@ def main():
     parser.add_argument("--json-report", metavar="PATH",
                         help="write the per-mode outcomes and the reviewed "
                              "revision to a JSON evidence file")
+    parser.add_argument("--self-test", action="store_true",
+                        help="drive every mode against the committed fake "
+                             "server and pin the executed-control counts")
     args = parser.parse_args()
+    if args.self_test:
+        return _self_test()
 
+    require_paths_outside_profile((("--json-report", args.json_report),))
     failures = []
     modes = []
     for mode, steps, want, marker in MODES:
-        passed, detail = run_mode(mode, steps, want)
-        ok = (passed and want == "PASS") or (not passed and want == "FAIL"
-                                             and marker in detail)
+        ok, detail = _verdict(mode, steps, want, marker)
         status = "OK " if ok else "BAD"
         print(f"{status} {mode:24s} want={want:4s} got={detail[:90]}")
         modes.append({"mode": mode, "want": want, "got": detail,
@@ -180,17 +286,17 @@ def main():
                                   target)
         report = {
             "schema": "iprange-cli-sensitivity-report-v1",
-            "git_head": recorded_git_identity(),
-            "checkout_root": recorded_checkout_root(),
-            "command": sanitized_command(),
             "modes": modes,
             "mode_count": len(modes),
             "failures": [list(entry) for entry in failures],
             "result": "PASS" if not failures else "FAIL",
         }
-        with open(target, "w", encoding="utf-8") as stream:
-            json.dump(report, stream, indent=1, sort_keys=True)
-            stream.write("\n")
+        # Provenance and the privacy scan are owned by the shared writer:
+        # a per-mode record is a measurement of the operator's tree, and the
+        # modes list carries command lines and paths.
+        write_committed_report(
+            target, report,
+            caller_paths=(("--json-report", args.json_report),), indent=1)
 
     print()
     if failures:

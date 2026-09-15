@@ -1,0 +1,431 @@
+{
+ "fixtures": [
+  {
+   "path": "res/.iprange-reservation-e1e2e3e4e5e6e7e8e9eaebecedeeeff0.tmp",
+   "source": {
+    "base64": "cGFydGlhbA=="
+   }
+  }
+ ],
+ "name": "maintenance.roundtrip.reservation",
+ "requires": "iprange.v1.maintenance.list",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "consumer",
+   "expect_result": {
+    "output": {
+     "bytes": {
+      "$ignore": true
+     },
+     "path": {
+      "$ignore": true
+     },
+     "rows": "1",
+     "sha256": {
+      "$ignore": true
+     }
+    },
+    "reports": [
+     {
+      "entries": "1",
+      "kind": "reservation"
+     }
+    ]
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.list",
+   "params": {
+    "directory": "$WORK/res",
+    "kinds": [
+     "reservation"
+    ],
+    "max_entries": 64,
+    "output": {
+     "format": "jsonl",
+     "path": "$WORK/rows-reservation.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "directory_identity_mismatch",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "reservation",
+     "publication_attempt_id": "e1e2e3e4e5e6e7e8e9eaebecedeeeff0"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "directory_identity_mismatch",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "evidence": {
+      "output": {
+       "digest": {
+        "byte_length": "8192",
+        "sha512": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+       },
+       "identity": {
+        "file": "6",
+        "volume": "5"
+       },
+       "tuple": {
+        "commit_nonce": "fedcba9876543210fedcba9876543210",
+        "database_id": "0123456789abcdef0123456789abcdef",
+        "transaction_id": "7"
+       }
+      },
+      "phase": "prepared",
+      "policy": "replace_existing"
+     },
+     "kind": "reservation",
+     "publication_attempt_id": "e1e2e3e4e5e6e7e8e9eaebecedeeeff0"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "directory_identity_mismatch",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "evidence": {
+      "output": {
+       "digest": {
+        "byte_length": "8192",
+        "sha512": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+       },
+       "identity": {
+        "file": "6",
+        "volume": "5"
+       },
+       "tuple": {
+        "commit_nonce": "fedcba9876543210fedcba9876543210",
+        "database_id": "0123456789abcdef0123456789abcdef",
+        "transaction_id": "7"
+       }
+      },
+      "phase": "prepared",
+      "policy": "replace_existing",
+      "previous": {
+       "digest": {
+        "byte_length": "4096",
+        "sha512": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+       },
+       "identity": {
+        "file": "8",
+        "volume": "7"
+       }
+      }
+     },
+     "kind": "reservation",
+     "publication_attempt_id": "e1e2e3e4e5e6e7e8e9eaebecedeeeff0"
+    }
+   }
+  },
+  {
+   "actor": "consumer",
+   "expect_result": {
+    "output": {
+     "bytes": {
+      "$ignore": true
+     },
+     "path": {
+      "$ignore": true
+     },
+     "rows": "1",
+     "sha256": {
+      "$ignore": true
+     }
+    },
+    "reports": [
+     {
+      "entries": "1",
+      "kind": "reservation"
+     }
+    ]
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.list",
+   "params": {
+    "directory": "$WORK/res",
+    "kinds": [
+     "reservation"
+    ],
+    "max_entries": 64,
+    "output": {
+     "format": "jsonl",
+     "path": "$WORK/rows-reservation-after.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "reservation",
+     "publication_attempt_id": "e1e2e3e4e5e6e7e8e9eaebecedeeeff0"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "reservation",
+     "publication_attempt_id": "e1e2e3e4e5e6e7e8e9eaebecedeeeff0",
+     "unknown_member": "x"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "evidence": {
+      "output": {
+       "digest": {
+        "byte_length": "8192",
+        "sha512": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+       },
+       "identity": {
+        "file": "6",
+        "volume": "5"
+       },
+       "tuple": {
+        "commit_nonce": "fedcba9876543210fedcba9876543210",
+        "database_id": "0123456789abcdef0123456789abcdef",
+        "transaction_id": "7"
+       }
+      },
+      "phase": "prepared"
+     },
+     "kind": "reservation",
+     "publication_attempt_id": "e1e2e3e4e5e6e7e8e9eaebecedeeeff0"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "evidence": {
+      "output": {
+       "digest": {
+        "byte_length": "8192",
+        "sha512": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+       },
+       "identity": {
+        "file": "6",
+        "volume": "5"
+       },
+       "tuple": {
+        "commit_nonce": "fedcba9876543210fedcba9876543210",
+        "database_id": "0123456789abcdef0123456789abcdef",
+        "transaction_id": "7"
+       }
+      },
+      "phase": null,
+      "policy": "replace_existing"
+     },
+     "kind": "reservation",
+     "publication_attempt_id": "e1e2e3e4e5e6e7e8e9eaebecedeeeff0"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "evidence": {
+      "output": {
+       "identity": {
+        "file": "6",
+        "volume": "5"
+       },
+       "tuple": {
+        "commit_nonce": "fedcba9876543210fedcba9876543210",
+        "database_id": "0123456789abcdef0123456789abcdef",
+        "transaction_id": "7"
+       }
+      },
+      "phase": "prepared",
+      "policy": "replace_existing"
+     },
+     "kind": "reservation",
+     "publication_attempt_id": "e1e2e3e4e5e6e7e8e9eaebecedeeeff0"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "evidence": {
+      "output": {
+       "digest": {
+        "byte_length": "08192",
+        "sha512": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+       },
+       "identity": {
+        "file": "6",
+        "volume": "5"
+       },
+       "tuple": {
+        "commit_nonce": "fedcba9876543210fedcba9876543210",
+        "database_id": "0123456789abcdef0123456789abcdef",
+        "transaction_id": "7"
+       }
+      },
+      "phase": "prepared",
+      "policy": "replace_existing"
+     },
+     "kind": "reservation",
+     "publication_attempt_id": "e1e2e3e4e5e6e7e8e9eaebecedeeeff0"
+    }
+   }
+  }
+ ]
+}

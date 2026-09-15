@@ -1599,12 +1599,16 @@ mod live_source_tests {
     //!
     //! The build profile does not matter. The version handshake compares
     //! `IPRANGE_V4_BUILD_ID`, which `iprange-livedb/build.rs` computes from
-    //! that package's `Cargo.toml` and every file under its `src`, so it is
-    //! source-derived and profile-independent. The same handshake is why a
-    //! copied worker must be refreshed after any change to `iprange-livedb`:
-    //! the spawn loop returns the first candidate that starts and the build ID
-    //! is checked afterwards, so a stale executable in `deps` is rejected
-    //! rather than skipped in favour of a matching one in the parent.
+    //! that package's `Cargo.toml` and every `.rs` file under its `src`, each
+    //! hashed as the file bytes plus its path components joined by `/` rather
+    //! than the build host's own path spelling. The identity is therefore
+    //! source-derived, profile-independent, and identical on every build host:
+    //! one source state yields one value whether the checkout was built on a
+    //! POSIX or a Windows host. The same handshake is why a copied worker must
+    //! be refreshed after any change to `iprange-livedb`: the spawn loop
+    //! returns the first candidate that starts and the build ID is checked
+    //! afterwards, so a stale executable in `deps` is rejected rather than
+    //! skipped in favour of a matching one in the parent.
     use super::*;
     use iprange_livedb::snapshot::{SnapshotBudget, SnapshotPublicationPolicy, SnapshotSourceMode};
     use iprange_livedb::snapshot_to;

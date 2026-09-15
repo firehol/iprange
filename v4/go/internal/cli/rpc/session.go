@@ -266,11 +266,16 @@ func (s *Session) Run(reader io.Reader, writer io.Writer) error {
 	// uncooperative states.
 	// Installing the os/signal watcher is unconditional: on Linux the
 	// runtime wakes os/signal through a futex note rather than a
-	// self-pipe, so the watcher claims no descriptor and never reaches
-	// the network poller. Skipping it under a low RLIMIT_NOFILE would
-	// leave SIGTERM to the default disposition while the main loop was
-	// still waiting, which is the difference between terminating and
-	// ignoring the signal.
+	// self-pipe, so the WATCHER itself claims no descriptor and never
+	// reaches the network poller. That claim covers the watcher only:
+	// the force-exit path it starts (below) bounds the graceful window
+	// with calleropen.Sleep and the join above bounds theirs with
+	// calleropen.WaitUntil, the timer-free waits owned by
+	// internal/calleropen, because a runtime timer arm would initialize
+	// the network poller with no failure path. Skipping the watcher
+	// under a low RLIMIT_NOFILE would leave SIGTERM to the default
+	// disposition while the main loop was still waiting, which is the
+	// difference between terminating and ignoring the signal.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(sigCh)
@@ -295,7 +300,7 @@ func (s *Session) Run(reader io.Reader, writer io.Writer) error {
 		st.controlMu.Unlock()
 		close(sigRecorded)
 		go reportFatal(events, s, err)
-		time.Sleep(signalForceExitTimeout)
+		calleropen.Sleep(signalForceExitTimeout)
 		// Reached only when the process did not exit through the
 		// graceful path in time (main loop wedged or still draining
 		// an uncooperative worker); never leave the signal unserved.
@@ -308,7 +313,7 @@ func (s *Session) Run(reader io.Reader, writer io.Writer) error {
 			fmt.Fprintf(os.Stderr, "iprange: terminated by signal %d: forcing exit\n",
 				int(sig.(syscall.Signal)))
 		}()
-		time.Sleep(forceExitDiagnosticGrace)
+		calleropen.Sleep(forceExitDiagnosticGrace)
 		os.Exit(1)
 	}()
 
@@ -465,6 +470,20 @@ func (s *Session) closeRegisteredResources() error {
 	return errors.New(message)
 }
 
+// workerJoined observes the closed workerDone channel without blocking
+// and without arming a runtime timer: the bounded joins below poll it
+// through calleropen.WaitUntil instead of select/time.After, which arms
+// a timer and thereby initializes the network poller
+// (runtime/time.go:455-461).
+func (s *Session) workerJoined() bool {
+	select {
+	case <-s.workerDone:
+		return true
+	default:
+		return false
+	}
+}
+
 // shutdown is the EOF path: stop acceptance, cancel queued and active
 // work, wait for the worker, close resources; zero unless the
 // transport itself failed. The worker join is bounded by
@@ -476,9 +495,7 @@ func (s *Session) closeRegisteredResources() error {
 // the deadline still wins over the exit-zero EOF outcome.
 func (s *Session) shutdown(forceExitCode int) error {
 	s.beginShutdown()
-	select {
-	case <-s.workerDone:
-	case <-time.After(eofForceExitTimeout):
+	if !calleropen.WaitUntil(eofForceExitTimeout, s.workerJoined) {
 		st := s.state
 		st.controlMu.Lock()
 		exitCode := forceExitCode
@@ -494,7 +511,7 @@ func (s *Session) shutdown(forceExitCode int) error {
 		go fmt.Fprintf(os.Stderr,
 			"iprange: EOF shutdown: worker blocked on undeliverable stdout for %v; forcing exit\n",
 			eofForceExitTimeout)
-		time.Sleep(forceExitDiagnosticGrace)
+		calleropen.Sleep(forceExitDiagnosticGrace)
 		os.Exit(exitCode)
 	}
 	var workerErr error
@@ -521,16 +538,14 @@ func (s *Session) shutdown(forceExitCode int) error {
 // session P3, wave-19.18 integration review).
 func (s *Session) fatal(err error, _ io.Writer, _ *FrameWriter) error {
 	s.beginShutdown()
-	select {
-	case <-s.workerDone:
-	case <-time.After(eofForceExitTimeout):
+	if !calleropen.WaitUntil(eofForceExitTimeout, s.workerJoined) {
 		// Best-effort diagnostic: stderr may itself be the same full
 		// undrained pipe, so the write runs detached and os.Exit is
 		// bounded by forceExitDiagnosticGrace (mirrors shutdown()).
 		go fmt.Fprintf(os.Stderr,
 			"iprange: fatal shutdown: worker blocked on undeliverable stdout for %v; forcing exit\n",
 			eofForceExitTimeout)
-		time.Sleep(forceExitDiagnosticGrace)
+		calleropen.Sleep(forceExitDiagnosticGrace)
 		os.Exit(1)
 	}
 	closeErr := s.closeRegisteredResources()
@@ -576,12 +591,18 @@ func writeLineBounded(fw *FrameWriter, writerMu *sync.Mutex, text string) error 
 		writerMu.Unlock()
 		writeDone <- werr
 	}()
-	select {
-	case werr := <-writeDone:
-		return werr
-	case <-time.After(eofForceExitTimeout):
+	var werr error
+	if !calleropen.WaitUntil(eofForceExitTimeout, func() bool {
+		select {
+		case werr = <-writeDone:
+			return true
+		default:
+			return false
+		}
+	}) {
 		return errResponseUndeliverable
 	}
+	return werr
 }
 
 // signalForceExitTimeout bounds the process lifetime from the moment
@@ -629,16 +650,21 @@ const signalEofGracePoll = 25 * time.Millisecond
 // when no signal was recorded within the window. It never receives
 // from sigCh itself, for the FIFO reason documented at the watcher.
 func (s *Session) waitSignalRecorded(sigRecorded <-chan struct{}, grace time.Duration) error {
-	select {
-	case <-sigRecorded:
-		st := s.state
-		st.controlMu.Lock()
-		err := st.control.fatalWrite
-		st.controlMu.Unlock()
-		return err
-	case <-time.After(grace):
+	if !calleropen.WaitUntil(grace, func() bool {
+		select {
+		case <-sigRecorded:
+			return true
+		default:
+			return false
+		}
+	}) {
 		return nil
 	}
+	st := s.state
+	st.controlMu.Lock()
+	err := st.control.fatalWrite
+	st.controlMu.Unlock()
+	return err
 }
 
 // reportFatal delivers the worker's terminal failure to the main
@@ -964,17 +990,6 @@ func encodeRawResponseObject(raw json.RawMessage) (string, *SchemaError) {
 	return string(raw), nil
 }
 
-// requestDescriptorReserve is the number of free descriptors a request
-// needs before its handler runs. The session itself holds only the three
-// standard streams, so a table of six or more descriptors always leaves
-// this much headroom, and the probe changes no answer that the released
-// binaries produce at or above that limit. Below it, the handler would
-// run out of descriptors part-way through its work — and an open that
-// asks the runtime for the network poller aborts the process instead of
-// reporting an error — so the adapter answers the io class up front, the
-// same class Rust returns when the handler's first open yields EMFILE.
-const requestDescriptorReserve = 3
-
 // execute resolves, validates, and runs one request's handler.
 func execute(s *Session, request *Request) json.RawMessage {
 	validator, handler, ok := resolve(request.Method)
@@ -984,17 +999,13 @@ func execute(s *Session, request *Request) json.RawMessage {
 	if err := validator(request.Params); err != nil {
 		return ErrorResponse(request.ID, StdInvalidParams, err.Error(), nil)
 	}
-	// Refuse work the process cannot resource before the handler touches
-	// a descriptor: an exhausted descriptor table then answers the io
-	// class promptly, as Rust does by propagating the EMFILE of the
-	// handler's first open. Without the probe the same request can die
-	// inside the runtime, which has no failure path for a network poller
-	// it cannot create, and the caller never receives an answer.
-	if !calleropen.HasDescriptorReserve(requestDescriptorReserve) {
-		return ErrorResponse(request.ID, ProductError,
-			"too many open files: the process cannot claim a descriptor",
-			map[string]any{"code": "io", "outcome": "not_started"})
-	}
+	// Descriptor-exhaustion classes belong to the operation that needs
+	// the descriptor (wave-19.25 design section 5): the dispatcher must
+	// not answer for resources it does not own, and the releasing
+	// operations run regardless of pressure. The process-wide hazards
+	// the probe existed to hide are owned at their sources instead
+	// (caller-open persistent reads, timer-free waits, direct entropy,
+	// the poller-readiness decision).
 	var result any
 	var herr *HandlerError
 	st := s.state

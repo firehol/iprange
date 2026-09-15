@@ -21,7 +21,26 @@ import (
 	"os"
 	"sort"
 	"syscall"
+
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 )
+
+// readWholeFile is the caller-open replacement for os.ReadFile on the
+// legacy one-shot inputs. os.ReadFile goes through os.OpenFile, which on
+// Linux registers the descriptor with the runtime network poller
+// regardless of flags, and that registration aborts the process under a
+// low RLIMIT_NOFILE instead of reporting the io error the open should
+// have produced. Routing through calleropen keeps the same
+// *os.PathError shape (open/read failures report their op and path), so
+// every caller below keeps its strerror(err) rendering.
+func readWholeFile(path string) ([]byte, error) {
+	file, err := calleropen.Open(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	return io.ReadAll(file)
+}
 
 // C MAX_LINE (fgets buffer): one line record is at most 1023 bytes
 // plus the trailing newline slot.
@@ -104,7 +123,7 @@ func loadAllImpl(o *Options, stdin io.Reader) (*Loaded, error) {
 				context := "iprange: Cannot load ipset: " + arg
 				lastSource = context
 				var data []byte
-				data, err = os.ReadFile(arg)
+				data, err = readWholeFile(arg)
 				if err != nil {
 					err = fmt.Errorf("iprange: %s - %s\n%s", arg, strerror(err), context)
 				} else {
@@ -228,7 +247,7 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 				context = fmt.Sprintf("iprange: Cannot load file %s", path)
 			}
 			*lastSource = context
-			data, err := os.ReadFile(path)
+			data, err := readWholeFile(path)
 			if err != nil {
 				return nil, fmt.Errorf("iprange: %s - %s\n%s", path, strerror(err), context)
 			}
@@ -247,7 +266,7 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 	if o.Debug {
 		fmt.Fprintf(os.Stderr, "iprange: Loading files from list %s\n", list)
 	}
-	content, err := os.ReadFile(list)
+	content, err := readWholeFile(list)
 	if err != nil {
 		return nil, fmt.Errorf("iprange: Cannot open file list: %s - %s", list, strerror(err))
 	}
@@ -267,7 +286,7 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 		}
 		context := fmt.Sprintf("iprange: Cannot load file %s from list %s (line %d)", path, list, lineid)
 		*lastSource = context
-		data, err := os.ReadFile(path)
+		data, err := readWholeFile(path)
 		if err != nil {
 			return nil, fmt.Errorf("iprange: %s - %s\n%s", path, strerror(err), context)
 		}

@@ -1,0 +1,297 @@
+{
+ "fixtures": [
+  {
+   "path": "res/.iprange-scratch-d1d2d3d4d5d6d7d8d9dadbdcdddedfe0-00000009.tmp",
+   "source": {
+    "base64": "SVBSNFNDUjEBAIAAAgAAAAEAAAAAAAAAAAAAAAAAAAAHAAAAAAAAAAIAAAAAAAAAAAAAAAAAAADR0tPU1dbX2Nna29zd3t/gCQAAAAEAAABaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWgAAAAAAAAAAAAAAAKxgHYA="
+   }
+  }
+ ],
+ "name": "maintenance.roundtrip.scratch",
+ "requires": "iprange.v1.maintenance.list",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "consumer",
+   "expect_result": {
+    "output": {
+     "bytes": {
+      "$ignore": true
+     },
+     "path": {
+      "$ignore": true
+     },
+     "rows": "1",
+     "sha256": {
+      "$ignore": true
+     }
+    },
+    "reports": [
+     {
+      "entries": "1",
+      "kind": "scratch"
+     }
+    ]
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.list",
+   "params": {
+    "directory": "$WORK/res",
+    "kinds": [
+     "scratch"
+    ],
+    "max_entries": 64,
+    "output": {
+     "format": "jsonl",
+     "path": "$WORK/rows-scratch.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "directory_identity_mismatch",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "authentication": {
+      "kind": "authenticated",
+      "owner": "recovery"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "scratch",
+     "ordinal": 9
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "directory_identity_mismatch",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "authentication": {
+      "kind": "authenticated",
+      "owner": "recovery"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "scratch",
+     "ordinal": 9
+    }
+   }
+  },
+  {
+   "actor": "consumer",
+   "expect_result": {
+    "output": {
+     "bytes": {
+      "$ignore": true
+     },
+     "path": {
+      "$ignore": true
+     },
+     "rows": "1",
+     "sha256": {
+      "$ignore": true
+     }
+    },
+    "reports": [
+     {
+      "entries": "1",
+      "kind": "scratch"
+     }
+    ]
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.list",
+   "params": {
+    "directory": "$WORK/res",
+    "kinds": [
+     "scratch"
+    ],
+    "max_entries": 64,
+    "output": {
+     "format": "jsonl",
+     "path": "$WORK/rows-scratch-after.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "authentication": {
+      "kind": "authenticated",
+      "owner": "recovery"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "scratch"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "authentication": {
+      "kind": "authenticated",
+      "owner": "recovery"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "scratch",
+     "ordinal": "9"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "scratch",
+     "ordinal": 9
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "authentication": {
+      "kind": "authenticated"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "scratch",
+     "ordinal": 9
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "attempt_id": "d1d2d3d4d5d6d7d8d9dadbdcdddedfe0",
+     "authentication": {
+      "kind": "authenticated",
+      "owner": "recovery"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "evidence": null,
+     "kind": "scratch",
+     "ordinal": 9
+    }
+   }
+  }
+ ]
+}

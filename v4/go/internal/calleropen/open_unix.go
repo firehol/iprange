@@ -67,3 +67,9 @@ func blockingFile(fd int, name string) (*os.File, error) {
 	}
 	return file, nil
 }
+
+// NonBlocking is the platform's O_NONBLOCK open flag, exposed so a
+// portable caller can ask for a prompt open without importing the unix
+// syscall package (Open clears the flag again before handing the handle
+// back, which is the whole point of the owner).
+const NonBlocking = unix.O_NONBLOCK

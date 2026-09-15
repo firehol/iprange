@@ -105,6 +105,68 @@ MATRIX_FILES = [os.path.join(EVIDENCE, f"matrix-{name}.json")
 CRASH_FILE = os.path.join(EVIDENCE, "crash.json")
 FIFO_SURFACE_FILE = os.path.join(EVIDENCE, "fifo-surface.json")
 THROUGHPUT_FILE = os.path.join(EVIDENCE, "throughput.json")
+PARITY_FILE = os.path.join(EVIDENCE, "refusal-class-parity.json")
+COVERAGE_FILE = os.path.join(EVIDENCE, "coverage-go.json")
+WINDOWS_FILE = os.path.join(EVIDENCE, "windows-housekeeping.json")
+MANIFEST_FILE = os.path.join(EVIDENCE, "battery-manifest.json")
+# A negative control is one report per faked role, so the battery carries
+# every crash-negative* file the evidence directory holds.
+CRASH_NEGATIVE_FILES = sorted(
+    os.path.join(EVIDENCE, name) for name in os.listdir(EVIDENCE)
+    if name.startswith("crash-negative") and name.endswith(".json"))
+
+# The report classes the gate consumes besides matrices and crash, with the
+# flag that names each.  The battery passes every flag explicitly: a class
+# left to the gate's own discovery would be read from the committed directory
+# instead of from this run's sandbox, and a mutated copy would then be judged
+# against the untouched original.
+BATTERY_FLAGS = (("parity", "--refusal-class-parity"),
+                 ("coverage", "--coverage-go"),
+                 ("windows", "--windows-housekeeping"))
+
+from check_kind_coverage import build_battery_manifest  # noqa: E402
+
+
+class Bundle:
+    """Every report one gate invocation consumes, as a class mutates it.
+
+    The gate's verdict covers eight report classes, so the battery's
+    comparison of a forged set against the genuine set -- and the command it
+    hands the gate -- has to cover the same eight.  ``manifest`` is the report
+    set's content binding; it stays ``None`` for every class except the one
+    that attacks the binding itself, which points the gate at the committed
+    manifest while it rewrites the reports.
+    """
+
+    __slots__ = ("matrices", "crash", "fifo", "throughput", "parity",
+                 "coverage", "negatives", "windows", "manifest")
+
+    def __init__(self, **fields):
+        for name in self.__slots__:
+            setattr(self, name, fields.get(name))
+
+    def state(self):
+        """What the G2 no-op guard compares between runs."""
+        return (self.matrices, self.crash, self.fifo, self.throughput,
+                self.parity, self.coverage, self.negatives, self.windows,
+                self.manifest)
+
+
+def _read(path):
+    with open(path, encoding="utf-8") as stream:
+        return json.load(stream)
+
+
+def _load_bundle():
+    return Bundle(
+        matrices=[_read(path) for path in MATRIX_FILES],
+        crash=_read(CRASH_FILE),
+        fifo=_read(FIFO_SURFACE_FILE),
+        throughput=_read(THROUGHPUT_FILE),
+        parity=_read(PARITY_FILE),
+        coverage=_read(COVERAGE_FILE),
+        negatives=[_read(path) for path in CRASH_NEGATIVE_FILES],
+        windows=_read(WINDOWS_FILE))
 
 # What the gate prints when it actually evaluated a report set.  Their
 # presence is what separates a gate verdict from an argparse error or an
@@ -136,9 +198,30 @@ class BatteryHarnessError(RuntimeError):
 # sandbox and runs the gate CLI on the copies.
 FORGERIES = []
 
+# Eleven classes cover the matrix and crash report forgeries this battery was
+# written for; seven more, one per consumed-artifact item, cover the parity
+# verdict, the coverage measurement, the negative crash controls, the FIFO
+# inventory, the thread census, the Windows provenance, and the manifest that
+# binds the report set to a revision.
+EXPECTED_CLASSES = 18
 
-def _forgery(label):
+
+def _forgery(label, whole_bundle=False):
+    """Register one forgery class.
+
+    ``whole_bundle`` classes edit the reports the wave added (parity,
+    coverage, the negative controls, the surface reports, the Windows
+    qualification) and receive the ``Bundle``; the older classes keep their
+    ``(matrices, crash)`` signature and are adapted here rather than rewritten,
+    so the existing classes stay untouched by this widening.
+    """
+
     def register(mutator):
+        if not whole_bundle:
+            adapted = mutator
+
+            def mutator(bundle, adapted=adapted):
+                return adapted(bundle.matrices, bundle.crash)
         FORGERIES.append((label, mutator))
         return mutator
     return register
@@ -268,10 +351,78 @@ def f11(matrices, crash):
                 entry["argv"] = missing
 
 
-def _load_genuine():
-    matrices = [json.load(open(path)) for path in MATRIX_FILES]
-    crash = json.load(open(CRASH_FILE))
-    return matrices, crash
+# --- the seven consumed-artifact classes (wave-19.25 items 1-7).
+#
+# Each is the exact forgery the gate was reported as accepting, on the report
+# class the gate did not read at all before this wave.  Genuine evidence must
+# still be accepted (the f0 baseline), and each class must be rejected for a
+# reason the baseline does not report (guard G3).
+
+
+@_forgery("W1-parity-one-binary-swept-twice", whole_bundle=True)
+def w1(bundle):
+    # --go <rust binary>: the sweep ran one executable twice, so every cell
+    # compares the rust engine with itself and still reads as agreement.
+    rust = bundle.parity["binaries"]["rust"]["sha256"]
+    bundle.parity["binaries"]["go"]["sha256"] = rust
+
+
+@_forgery("W2-coverage-percent-typed-not-derived", whole_bundle=True)
+def w2(bundle):
+    bundle.coverage["unit"]["percent"]["statements"] = (
+        float(bundle.coverage["unit"]["percent"]["statements"]) + 5.0)
+
+
+@_forgery("W3-negative-control-reports-a-pass", whole_bundle=True)
+def w3(bundle):
+    # The /bin/false control exists to prove the crash battery can see a
+    # failure.  A PASS in it is the finding, not a result.
+    for report in bundle.negatives:
+        for scenario in report["scenarios"]:
+            scenario["pass"] = True
+            scenario["failures"] = []
+        report["failed"] = 0
+
+
+@_forgery("W4-fifo-arm-row-deleted", whole_bundle=True)
+def w4(bundle):
+    for row in bundle.fifo["arms"]:
+        if row.get("engine") == "go":
+            bundle.fifo["arms"] = [item for item in bundle.fifo["arms"]
+                                   if item is not row]
+            bundle.fifo["summary"]["arms_expected"] -= 1
+            return
+
+
+@_forgery("W5-threaded-round-one-child-identity", whole_bundle=True)
+def w5(bundle):
+    side = bundle.throughput["product"]["rust"]["thread_structure"]["large"]
+    side["unique_child_tids"] = 1
+
+
+@_forgery("W6-windows-native-test-names-red", whole_bundle=True)
+def w6(bundle):
+    bundle.windows["build_provenance"]["native_cargo_test"] = (
+        "cargo test -p iprange-cli on the native Windows host returned rc=1: "
+        "330 passed, 4 FAILED (path-separator cases)")
+
+
+@_forgery("W7-uniform-git-head-rewrite", whole_bundle=True)
+def w7(bundle):
+    # Every report re-stamped to one fresh revision satisfies the rule that
+    # compares reports with each other, and is only visible against the
+    # committed binding of this report set to the revision it was produced on.
+    forged = "ab" * 20
+    for report in list(bundle.matrices) + [bundle.crash, bundle.fifo,
+                                           bundle.throughput, bundle.parity,
+                                           bundle.coverage, bundle.windows]:
+        report["git_head"] = forged
+    for report in bundle.negatives:
+        report["git_head"] = forged
+        provenance = report.get("build_provenance")
+        if isinstance(provenance, dict):
+            provenance["revision"] = forged
+    bundle.manifest = MANIFEST_FILE
 
 
 def _parse_args(argv):
@@ -287,14 +438,27 @@ def _parse_args(argv):
     return parser.parse_args(argv)
 
 
-def _gate_command(matrix_paths, crash_path, ledger):
-    """The canonical gate invocation, as documented in evidence/README.md."""
+def _gate_command(paths, ledger):
+    """The canonical gate invocation, as documented in evidence/README.md.
+
+    ``paths`` maps each consumed report class to the files of this run's
+    sandbox that hold it, so every class is named rather than discovered: the
+    battery judges the copies it mutated, not the committed originals that
+    discovery beside the battery would find.
+    """
     command = [GATE]
-    for path in matrix_paths:
+    for path in paths["matrix"]:
         command += ["--matrix", path]
-    command += ["--crash", crash_path,
-                "--fifo-surface", FIFO_SURFACE_FILE,
-                "--throughput", THROUGHPUT_FILE]
+    for path in paths["crash"]:
+        command += ["--crash", path]
+    command += ["--fifo-surface", paths["fifo"][0],
+                "--throughput", paths["throughput"][0]]
+    for name, flag in BATTERY_FLAGS:
+        for path in paths[name]:
+            command += [flag, path]
+    for path in paths["crash-negative"]:
+        command += ["--crash-negative", path]
+    command += ["--battery-manifest", paths["battery-manifest"][0]]
     if ledger:
         command += ["--sha256-ledger", ledger]
     return command
@@ -364,21 +528,64 @@ def _invoke_gate(command):
     return completed.returncode, completed.stdout, completed.stderr
 
 
-def _run_gate(work_dir, matrices, crash, tag, ledger):
-    """Serialize one report set to the sandbox and ask the gate about it."""
-    paths = []
-    for index, report in enumerate(matrices):
-        path = os.path.join(work_dir, f"{tag}-m{index}.json")
-        with open(path, "w", encoding="utf-8") as stream:
-            json.dump(report, stream)
-        paths.append(path)
-    crash_path = os.path.join(work_dir, f"{tag}-crash.json")
-    with open(crash_path, "w", encoding="utf-8") as stream:
-        json.dump(crash, stream)
-    tokens = ([(path, f"matrix#{index + 1}")
-               for index, path in enumerate(paths)]
-              + [(crash_path, "crash#0")])
-    command = _gate_command(paths, crash_path, ledger)
+def _write(work_dir, tag, name, document, index=None):
+    """Serialize one report of this run into the sandbox."""
+    suffix = "" if index is None else f"{index}"
+    path = os.path.join(work_dir, f"{tag}-{name}{suffix}.json")
+    with open(path, "w", encoding="utf-8") as stream:
+        json.dump(document, stream)
+    return path
+
+
+def _run_gate(work_dir, bundle, tag, ledger):
+    """Serialize one report set to the sandbox and ask the gate about it.
+
+    The content binding is written here, by the gate's own producer, over the
+    reports this run actually hands over: the battery and the gate therefore
+    agree on what the battery is without the battery keeping a second copy of
+    the rule.  A class that attacks the binding sets ``bundle.manifest`` and
+    this step honours that path instead.
+    """
+    paths = {}
+    tokens = []
+    paths["matrix"] = []
+    for index, report in enumerate(bundle.matrices):
+        path = _write(work_dir, tag, f"m{index}", report)
+        paths["matrix"].append(path)
+        tokens.append((path, f"matrix#{index + 1}"))
+    paths["crash"] = [_write(work_dir, tag, "crash", bundle.crash)]
+    tokens.append((paths["crash"][0], "crash#0"))
+    for name, document in (("fifo", bundle.fifo),
+                           ("throughput", bundle.throughput),
+                           ("parity", bundle.parity),
+                           ("coverage", bundle.coverage),
+                           ("windows", bundle.windows)):
+        paths[name] = [_write(work_dir, tag, name, document)]
+        tokens.append((paths[name][0], f"{name}#0"))
+    paths["crash-negative"] = []
+    for index, report in enumerate(bundle.negatives):
+        path = _write(work_dir, tag, f"negative{index}", report)
+        paths["crash-negative"].append(path)
+        tokens.append((path, f"crash-negative#{index}"))
+    if bundle.manifest:
+        paths["battery-manifest"] = [bundle.manifest]
+    else:
+        # The manifest speaks the gate's role names; the sandbox speaks the
+        # battery's short names.  One mapping, in one place.
+        document = build_battery_manifest(
+            {"matrix": paths["matrix"], "crash": paths["crash"],
+             "crash-negative": paths["crash-negative"],
+             "fifo-surface": paths["fifo"],
+             "throughput": paths["throughput"],
+             "refusal-class-parity": paths["parity"],
+             "coverage-go": paths["coverage"],
+             "windows-housekeeping": paths["windows"]},
+            ledger_path=ledger)
+        manifest_path = os.path.join(work_dir, f"{tag}-manifest.json")
+        with open(manifest_path, "w", encoding="utf-8") as stream:
+            json.dump(document, stream, sort_keys=True, indent=1)
+        paths["battery-manifest"] = [manifest_path]
+    command = _gate_command(paths, ledger)
     rc, stdout, stderr = _invoke_gate(command)
     return _verdict(rc, stdout, stderr, command, tokens)
 
@@ -434,7 +641,7 @@ def _run_battery(ledger):
     with tempfile.TemporaryDirectory(dir=owned_temp_root()) as work:
         # G1 + positive control: the unmutated genuine evidence must reach a
         # gate verdict before any forgery is worth judging.
-        baseline = _run_gate(work, *_load_genuine(), "f0-baseline", ledger)
+        baseline = _run_gate(work, _load_bundle(), "f0-baseline", ledger)
         baseline_keys = set(baseline.keys)
         control_accepted = baseline.rc == 0
         print(f"[f0-genuine-evidence] rc={baseline.rc} -> "
@@ -449,16 +656,16 @@ def _run_battery(ledger):
         gaps = []
         uninformative = []
         for label, mutator in FORGERIES:
-            matrices, crash = _load_genuine()
-            reference = copy.deepcopy((matrices, crash))
-            mutator(matrices, crash)
-            if (matrices, crash) == reference:
+            bundle = _load_bundle()
+            reference = copy.deepcopy(bundle.state())
+            mutator(bundle)
+            if bundle.state() == reference:
                 raise BatteryHarnessError(
                     f"{label}: the mutator left the report set identical to "
                     "the genuine evidence, so this class tests nothing; a "
                     "field or path it rewrites no longer exists in the "
                     "committed reports")
-            result = _run_gate(work, matrices, crash, label, ledger)
+            result = _run_gate(work, bundle, label, ledger)
             verdict, note, own = _classify(result, baseline_keys)
             new_reasons[label] = tuple(sorted(key for key, _ in own))
             if verdict == "ACCEPTED":
@@ -484,7 +691,15 @@ def _run_battery(ledger):
           + ("" if not duplicated else
              f"; {len(duplicated)} reason set(s) shared by more than one "
              "class"))
-    preview = _gate_command(["<matrix x4>"], "<crash.json>", ledger)
+    preview = _gate_command(
+        {"matrix": ["<matrix x4>"], "crash": ["<crash.json>"],
+         "fifo": ["<fifo-surface.json>"],
+         "throughput": ["<throughput.json>"],
+         "parity": ["<refusal-class-parity.json>"],
+         "coverage": ["<coverage-go.json>"],
+         "windows": ["<windows-housekeeping.json>"],
+         "crash-negative": ["<crash-negative.json>"],
+         "battery-manifest": ["<battery-manifest.json>"]}, ledger)
     print("  gate invocation: python3 " + " ".join(preview))
     print("  positive control: "
           + ("accepted (rc=0)" if control_accepted else
@@ -546,7 +761,13 @@ def _self_test():
     # P1: the gate declares --fifo-surface and --throughput required; an
     # invocation without either must be classified as a broken harness, not
     # as a rejection of the forgery under test.
-    canonical = _gate_command(MATRIX_FILES, CRASH_FILE, None)
+    canonical = _gate_command(
+        {"matrix": list(MATRIX_FILES), "crash": [CRASH_FILE],
+         "fifo": [FIFO_SURFACE_FILE], "throughput": [THROUGHPUT_FILE],
+         "parity": [PARITY_FILE], "coverage": [COVERAGE_FILE],
+         "windows": [WINDOWS_FILE],
+         "crash-negative": list(CRASH_NEGATIVE_FILES),
+         "battery-manifest": [MANIFEST_FILE]}, None)
     for flag in ("--fifo-surface", "--throughput"):
         cut = canonical.index(flag)
         truncated = canonical[:cut] + canonical[cut + 2:]
@@ -608,15 +829,36 @@ def _self_test():
     assert not _duplicate_groups({"A": ("kind x",), "B": ("kind y",)}), (
         "distinct reason sets were reported as duplicates")
 
-    # P8: the G2 no-op detection compares what it must compare.
-    matrices, crash = _load_genuine()
-    reference = copy.deepcopy((matrices, crash))
-    assert (matrices, crash) == reference, (
+    # P8: the G2 no-op detection compares what it must compare -- all eight
+    # consumed classes and the binding, not only the two report classes the
+    # battery started with.  A class that mutates only the Windows
+    # qualification, or only the manifest it points at, must be visible here.
+    bundle = _load_bundle()
+    reference = copy.deepcopy(bundle.state())
+    assert bundle.state() == reference, (
         "the G2 comparison is inverted: a fresh copy already differs")
-    matrices[0]["cases"][0]["status"] = "FORGED-BY-SELF-TEST"
-    assert (matrices, crash) != reference, (
+    bundle.matrices[0]["cases"][0]["status"] = "FORGED-BY-SELF-TEST"
+    assert bundle.state() != reference, (
         "the G2 comparison never fires, so a no-op mutator would pass "
         "unnoticed")
+    untouched = _load_bundle()
+    untouched.windows["build_provenance"]["native_go_test"] = "RED"
+    assert untouched.state() != copy.deepcopy(_load_bundle().state()), (
+        "the G2 comparison ignores the Windows qualification, so a class "
+        "that edits only it would be stopped as a no-op")
+    binding = _load_bundle()
+    binding.manifest = MANIFEST_FILE
+    assert binding.state() != copy.deepcopy(_load_bundle().state()), (
+        "the G2 comparison ignores the content binding, so the class that "
+        "attacks it would be stopped as a no-op")
+
+    # The class count is pinned exactly: a floor would let a deleted class
+    # pass as a battery that still covers every item it claims to cover.
+    assert len(labels) == EXPECTED_CLASSES, (
+        f"the battery registers {len(labels)} classes but is specified as "
+        f"{EXPECTED_CLASSES}; each of the seven consumed-artifact items has "
+        f"its own class, and losing one is a regression rather than a "
+        f"simplification")
     return len(labels)
 
 

@@ -67,6 +67,17 @@ nice python3 v4/cli/run.py --matrix go_to_rust --rust "$RUST_IPRANGE" --go "$GO_
   --fixture-tool "$FIXTURE_TOOL" --work-dir /tmp/w --allow-skips
 ```
 
+`run.py` fails closed.  An engine that dies mid-matrix is recorded in
+the report's `engine_deaths` list and a matrix that cannot be driven at
+all records a `matrix_verdicts` entry, and either one forces exit 1 even
+when every case row that did execute passed — a runner that silently
+scores a partial or dead run as success is the failure mode this
+prevents.  A case row for a case that no engine executed is an invented
+row and fails.  `--json-report` and `--work-dir` inside the checkout are
+refused at argument parsing (exit 2), so the runner cannot write evidence
+into the tree it is measuring, and every binary argument must be an
+absolute executable file.
+
 The mixed matrices (`rust_to_go`, `go_to_rust`) are two-binary
 cross-language proofs: every rpc step declares the service role that
 runs it (`actor: producer` for artifact creation/mutation,
@@ -151,7 +162,20 @@ deleting a row:
   remove from the grid, and a table lacking any of them fails;
 - `PINNED_REFUSALS` records the Rust-authority class for specific
   (arm, path-kind) cells, so a both-engine drift into a new shared class
-  fails as well as a divergence.
+  fails as well as a divergence;
+- `MANDATORY_ARMS` (23) and `MANDATORY_PATH_KINDS` (21) are checked in
+  both directions, so the grid is a fixed contract and not the table the
+  run happened to build.  One crossing of them is
+  23 arms x 21 path kinds = 483 cells per engine.
+- A third axis applies the same comparison under descriptor pressure:
+  `PRESSURE_ARMS` (9) against `PRESSURE_PROFILES` (42, all mandatory),
+  each profile a distinct `RLIMIT_NOFILE` band and table state, with
+  `PINNED_PRESSURE_CLASS_COUNT = 378` pinned refusals under SHA-256
+  `314d8be5618e9775d9dd386ad6d7e521ff27ee9ba63d7c9501746de941ad1456`.
+  `--pressure` takes `off`, `routine` (12 profiles) or `full` (42).  A
+  cell the environment cannot build is reported as host state, and a
+  report that counts a blocked or host-unsupported cell as coverage
+  fails.
 
 The verdict has two halves, and they catch different things. The first
 checks that a report describes its own execution honestly: the cell count
@@ -235,9 +259,17 @@ cell and requires a report of zero executed cells to FAIL; it deletes
 the fixture that pins the `validate.live` sidecar-fold shape
 (`live_recovery_coordination_unavailable`) and requires the fold check to
 FAIL, at both the report level and the table level; and it attacks the
-publication-durability terms listed above. 26 controls, all rejected.
-The full battery runs in well under a minute (measured 29.3 s for 418 cells
-on both engines: 22 arms x 19 path kinds).
+publication-durability terms listed above.  It also attacks the pressure
+axis: deleting a pinned pressure cell or a pressure arm, loosening a
+pressure pin to a bare class, un-naming a profile obligation, reporting a
+wedge as an answer, dropping a missing cell, a rollup that lies, and a
+forged pressure-table digest must each FAIL.  `SELF_TEST_CASES_TOTAL`
+pins the count at 56 controls (`--self-test` reported "PASSED: 56 cases (committed total
+56)"), so a control deleted from the gate is a self-test failure rather
+than a silent shrink.
+The full battery runs in well under a minute (measured 34.4 s for
+483 cells on both engines: 23 arms x 21 path kinds, plus 108 cells of the
+routine pressure axis).
 
 The committed artifact is `evidence/refusal-class-parity.json`. It records
 the SHA-256 and `system.describe` implementation label of each binary it
@@ -360,7 +392,7 @@ gate resolves checkout-relative command arguments against; putting an
 object id in that field would break the identity binding rather than
 record it.
 
-- `cases/` — the declarative method-family cases (63 files). Every
+- `cases/` — the declarative method-family cases (71 files). Every
   rpc step declares its service role explicitly (`actor: producer` for
   artifact creation/mutation, `actor: consumer` for observation and
   transformation), so a transformation can run on either binary in a
@@ -606,6 +638,82 @@ nice python3 v4/cli/crash_harness.py --producer "$GO_IPRANGE" --consumer "$RUST_
   The first command runs the harness in both directions
   (producer=rust then producer=go) in one invocation; the report
   schema is `iprange-cli-crash-report-v1`.
+
+## Committed identity records and the two producer verbs
+
+Two artifacts in `evidence/` are identity records rather than
+measurements of a product, and `command_sanitize.py` is their registered
+producer because it is the module that knows how a committed report must
+identify the tree it names.  Both reach disk only through
+`command_sanitize.write_committed_report`, so the provenance and privacy
+rules that bind a harness report bind them too.
+
+`--emit-build-ids DEST` recomputes `IPRANGE_V4_BUILD_ID` for the
+`iprange-livedb` package and commits the record.  The digest is a pure
+function of `v4/rust/iprange-livedb/Cargo.toml` and every `.rs` file
+under `v4/rust/iprange-livedb/src`, hashed in the order `build.rs` uses
+— manifest first, then the sources sorted by logical name — as one
+record per input: `u64le(name-length) name u64le(content-length)
+content`.  The logical name is the file path split on both `/` and `\`,
+with empty and `.` components dropped and the rest joined by `/`.  That
+split is why one source state has one identity and the record's four
+host entries (`darwin`, `freebsd`, `linux`, `windows`) agree; hashing
+the build host's own path spelling instead makes the value differ
+between a POSIX and a Windows checkout, and the record carries both of
+those pre-normalizer digests as the evidence for why the split is
+required.  The identity is what the Rust CLI and the co-located
+`iprange-v4-worker` exchange during the worker handshake
+(`v4/rust/iprange-livedb/src/worker/control.rs`), so a host-dependent
+value could not attest that two binaries came from one tree.  With
+`--built-cli` and `--built-worker` the recomputed digest is searched for
+verbatim in the bytes of those executables; a role that is not named is
+recorded `not measured` rather than inheriting an earlier run's claim.
+`--rust-tree` selects a different package root.
+
+`--commit-report SRC --commit-report-to DEST` promotes a staged report
+into the evidence directory through the same writer.  The report bytes
+stay the producing gate's: this verb adds only the identity members the
+writer owns (`command`, `checkout_root`, `git_head`) and the derived
+`privacy` block.  It refuses the write before anything is created when a
+screened input lives under the operator's profile, when source and
+destination name the same file (promoting a report onto itself would
+hide which writer produced it), or when DEST is registered to another
+writer (this module would then be recorded as the producer of a report
+it did not measure).  `check_kind_coverage.py --emit-manifest` authors
+`battery-manifest.json` and cannot import the writer, so promotion is
+how that file reaches `evidence/`; because a promotion overwrites
+`command`, the record names the promoting invocation, which keeps a
+promoted artifact distinguishable from a writer that committed its own
+measurement.
+
+In `COMMITTED_REPORT_WRITERS` both files belong to the
+`command_sanitize.py` entry: `owner` `lead`, tier `shared-writer`, and
+`screened` the six path-valued options of these two verbs
+(`--emit-build-ids`, `--rust-tree`, `--built-cli`, `--built-worker`,
+`--commit-report`, `--commit-report-to`).  Every one is handed to
+`require_paths_outside_profile` and recorded in the artifact's
+`privacy.checked_inputs`, so dropping the screening of one option is a
+gate failure rather than a silent leak;
+`command_sanitize.py --audit-committed-reports` enumerates the directory
+against that table, so an identity file from an unregistered producer
+fails the way a registered writer that bypasses the helpers does.
+
+```bash
+# Regenerate the identity record from the package that built the
+# binaries under test; the products are staged, so the recomputed digest
+# is checked against their bytes.
+nice python3 v4/cli/command_sanitize.py --emit-build-ids \
+  /tmp/qualsvc/reports/build-ids.json \
+  --built-cli /tmp/qualsvc/bin/rust/iprange \
+  --built-worker /tmp/qualsvc/bin/rust/iprange-v4-worker
+
+# Promote the battery's staged manifest into the evidence directory.
+# The destination is checkout-relative, so the committed record carries a
+# checkout-relative path and no personal prefix.
+nice python3 v4/cli/command_sanitize.py \
+  --commit-report /tmp/qualsvc/reports/battery-manifest.json \
+  --commit-report-to v4/cli/evidence/battery-manifest.json
+```
 
 ## Adapter outputs, outcomes, and the two input surfaces
 

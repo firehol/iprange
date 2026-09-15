@@ -24,6 +24,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
 	"github.com/firehol/iprange/v4/go/internal/format"
 	"github.com/firehol/iprange/v4/go/internal/pathname"
 )
@@ -166,7 +167,7 @@ func idlePoll(child *Process, control *Control, check Checkpoint, state uint32, 
 	if exited {
 		return conflict("SDK worker exited without a terminal record")
 	}
-	time.Sleep(pollInterval)
+	calleropen.Sleep(pollInterval)
 	return nil
 }
 
@@ -282,14 +283,45 @@ func WorkerFailure(child *Process, control *Control) error {
 
 // SpawnWorker starts one isolated worker process (Rust
 // worker/client.rs spawn): the first candidate of workerCandidates that
-// executes with `--control <path>` and null stdio wins; a NotFound
-// failure falls through to the next candidate; the last NotFound
-// surfaces as the Io class and an empty candidate list as the
-// unsupported class.
+// executes with `--control <path>` wins; a NotFound failure falls
+// through to the next candidate; the last NotFound surfaces as the Io
+// class and an empty candidate list as the unsupported class.
+//
+// The spawn owns the descriptors the child and the parent need
+// (design section 9): the headroom is proven by a descriptor-table read
+// before forking, bounded by the named spawnDescriptorWait (shorter
+// than startLimit), and the child's standard streams are handed as
+// descriptors the parent opened itself instead of exec.Cmd's nil-stdio
+// path — which opens the null device by name, blocks forever on a
+// planted FIFO, and registers that descriptor with the runtime network
+// poller. A spawn that cannot be resourced answers the io class the
+// reference answers for a worker whose table is exhausted (mapped by
+// the read-only handlers to io/read_only_failure), removes its control
+// file, and never invents a refusal for work it did not attempt.
 func SpawnWorker(control *Control) (*Process, error) {
 	candidates, err := workerCandidates()
 	if err != nil {
 		return nil, err
+	}
+	// Descriptor headroom before the fork (design section 9.1/9.3). An
+	// unreadable table is not a refusal: the owned null open below is
+	// the ultimate EMFILE guard and keeps its own class.
+	if !waitForSpawnHeadroom() {
+		_ = control.RemovePath()
+		return nil, &format.Error{Code: format.CodeIO, Detail: "worker spawn: descriptor table exhausted"}
+	}
+	null, nullErr := spawnNullStdio()
+	if nullErr != nil {
+		// The null device is absent or is not the null device: the
+		// worker cannot be resourced, and the answer is the io class
+		// (design section 9.4), with the control file removed.
+		_ = control.RemovePath()
+		return nil, &format.Error{Code: format.CodeIO, Detail: "worker spawn: null stdio: " + nullErr.Error()}
+	}
+	closeNull := func() {
+		if null != nil {
+			_ = null.Close()
+		}
 	}
 	attempted := false
 	var lastNotFound error
@@ -304,8 +336,11 @@ func SpawnWorker(control *Control) (*Process, error) {
 		}
 		attempted = true
 		cmd := exec.Command(executable, "--control", control.path)
-		// nil stdin/stdout/stderr connect to the null device
-		// (os/exec), exactly the Rust Stdio::null() triple.
+		// The caller-owned null descriptor replaces exec.Cmd's
+		// nil-stdio path on every standard stream (design section
+		// 9.2); os/exec duplicates it into the child's 0,1,2 without
+		// opening any path and without touching the poller.
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = null, null, null
 		if err := cmd.Start(); err != nil {
 			// Candidate fallthrough on a missing executable (Rust
 			// spawn ErrorKind::NotFound): os/exec reports the missing
@@ -316,10 +351,19 @@ func SpawnWorker(control *Control) (*Process, error) {
 				lastNotFound = err
 				continue
 			}
+			closeNull()
+			// No child will ever own the control page this spawn created,
+			// so the spawn that could not resource itself removes it (design
+			// section 9.4) instead of leaving it for a later sweep.
+			_ = control.RemovePath()
 			return nil, &format.Error{Code: format.CodeIO, Detail: "worker spawn: " + err.Error()}
 		}
+		// The parent has no further use for the stdio descriptor once
+		// the child holds its own duplicate (design section 5.5).
+		closeNull()
 		return newProcess(cmd), nil
 	}
+	closeNull()
 	if !attempted {
 		return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "SDK validation/recovery worker is unavailable"}
 	}
@@ -327,6 +371,29 @@ func SpawnWorker(control *Control) (*Process, error) {
 		return nil, &format.Error{Code: format.CodeIO, Detail: "worker spawn: " + lastNotFound.Error()}
 	}
 	return nil, &format.Error{Code: format.CodeOSUnsupported, Detail: "SDK validation/recovery worker is unavailable"}
+}
+
+// waitForSpawnHeadroom retries the descriptor-table read until the
+// spawn's demand is provably claimable or the named bound expires
+// (design section 9.1/9.3). The read never opens a caller-reachable
+// path, so it cannot block and cannot be poisoned; a table the kernel
+// will not describe is treated as having headroom and left to the
+// owned null open to answer EMFILE with the right class.
+func waitForSpawnHeadroom() bool {
+	if spawnDescriptorDemand <= 0 {
+		return true
+	}
+	deadline := time.Now().Add(spawnDescriptorWait)
+	for {
+		free, ok := calleropen.FreeDescriptors()
+		if !ok || free >= spawnDescriptorDemand {
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			return false
+		}
+		calleropen.Sleep(pollInterval)
+	}
 }
 
 // StartWorker runs the version handshake and marks the session Running
@@ -368,7 +435,7 @@ func Handshake(child *Process, control *Control) error {
 			child.Abort()
 			return conflict("SDK worker version handshake timed out")
 		}
-		time.Sleep(pollInterval)
+		calleropen.Sleep(pollInterval)
 	}
 }
 
@@ -603,7 +670,7 @@ func (w *WorkerCleanup) Release() error {
 			w.lastProblem = &WireProblem{Code: format.CodeConflict, Detail: "isolated cleanup worker timed out"}
 			return w.operationError()
 		}
-		time.Sleep(pollInterval)
+		calleropen.Sleep(pollInterval)
 	}
 }
 

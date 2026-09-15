@@ -27,6 +27,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/firehol/iprange/v4/go/internal/calleropen"
+
 	iprangedb "github.com/firehol/iprange/v4/go"
 )
 
@@ -1574,6 +1576,16 @@ func singleRange(value uint128) parsedRange {
 // round-robin worker distribution; IPv4 mode keeps only A records and
 // refuses a result without any (Rust resolve_hostnames).
 func resolveHostnames(names []string, family AddressFamilyInput, threads int, silent bool) ([]net.IP, error) {
+	// The poller-readiness decision (design section 6) is the only
+	// gate this process keeps over descriptor-using code: entering net
+	// would lazily initialize the runtime network poller, whose
+	// creation has no failure path under a low RLIMIT_NOFILE. When the
+	// decision says the poller cannot be created, host-name resolution
+	// is not attempted and the caller's input_format class answers
+	// before anything enters net, so no timer and no socket is created.
+	if !calleropen.ResolverAllowed() {
+		return nil, fmt.Errorf("resolver not permitted: the process declined to create the network poller under descriptor pressure")
+	}
 	workers := len(names)
 	if threads < workers {
 		workers = threads
@@ -1642,7 +1654,7 @@ func resolveOne(name string, silent bool) ([]net.IP, error) {
 			if !silent {
 				stderrDiag("iprange: DNS: '%s' will be retried: %v\n", name, err)
 			}
-			time.Sleep(time.Second)
+			calleropen.Sleep(time.Second)
 			continue
 		}
 		if !silent {

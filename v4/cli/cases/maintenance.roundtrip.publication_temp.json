@@ -1,0 +1,347 @@
+{
+ "fixtures": [
+  {
+   "path": "res/.iprange-publish-f1f2f3f4f5f6f7f8f9fafbfcfdfeff01.tmp",
+   "source": {
+    "base64": "cGFydGlhbA=="
+   }
+  }
+ ],
+ "name": "maintenance.roundtrip.publication_temp",
+ "requires": "iprange.v1.maintenance.list",
+ "schema": "iprange-cli-case-v1",
+ "steps": [
+  {
+   "actor": "consumer",
+   "expect_result": {
+    "output": {
+     "bytes": {
+      "$ignore": true
+     },
+     "path": {
+      "$ignore": true
+     },
+     "rows": "1",
+     "sha256": {
+      "$ignore": true
+     }
+    },
+    "reports": [
+     {
+      "entries": "1",
+      "kind": "publication_temp"
+     }
+    ]
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.list",
+   "params": {
+    "directory": "$WORK/res",
+    "kinds": [
+     "publication_temp"
+    ],
+    "max_entries": 64,
+    "output": {
+     "format": "jsonl",
+     "path": "$WORK/rows-publication_temp.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "directory_identity_mismatch",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "publication_temp",
+     "publication_attempt_id": "f1f2f3f4f5f6f7f8f9fafbfcfdfeff01"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "directory_identity_mismatch",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "digest": {
+      "byte_length": "8192",
+      "sha512": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "publication_temp",
+     "publication_attempt_id": "f1f2f3f4f5f6f7f8f9fafbfcfdfeff01",
+     "tuple": {
+      "commit_nonce": "fedcba9876543210fedcba9876543210",
+      "database_id": "0123456789abcdef0123456789abcdef",
+      "transaction_id": "7"
+     }
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "directory_identity_mismatch",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "publication_temp",
+     "publication_attempt_id": "f1f2f3f4f5f6f7f8f9fafbfcfdfeff01"
+    }
+   }
+  },
+  {
+   "actor": "consumer",
+   "expect_result": {
+    "output": {
+     "bytes": {
+      "$ignore": true
+     },
+     "path": {
+      "$ignore": true
+     },
+     "rows": "1",
+     "sha256": {
+      "$ignore": true
+     }
+    },
+    "reports": [
+     {
+      "entries": "1",
+      "kind": "publication_temp"
+     }
+    ]
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.list",
+   "params": {
+    "directory": "$WORK/res",
+    "kinds": [
+     "publication_temp"
+    ],
+    "max_entries": 64,
+    "output": {
+     "format": "jsonl",
+     "path": "$WORK/rows-publication_temp-after.jsonl",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_open_files": 3,
+      "max_output_bytes": "65536",
+      "max_rows": "64"
+     }
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "publication_temp"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "publication_temp",
+     "publication_attempt_id": "f1f2f3f4f5f6f7f8f9fafbfcfdfeff01",
+     "unknown_member": "x"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "publication_temp",
+     "publication_attempt_id": "f1f2f3f4f5f6f7f8f9fafbfcfdfeff01",
+     "tuple": {
+      "commit_nonce": "fedcba9876543210fedcba9876543210",
+      "database_id": "0123456789abcdef0123456789abcdef",
+      "transaction_id": "7"
+     }
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "digest": {
+      "byte_length": "8192",
+      "sha512": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "publication_temp",
+     "publication_attempt_id": "f1f2f3f4f5f6f7f8f9fafbfcfdfeff01"
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "digest": {
+      "byte_length": "8192",
+      "sha512": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "publication_temp",
+     "publication_attempt_id": "f1f2f3f4f5f6f7f8f9fafbfcfdfeff01",
+     "tuple": null
+    }
+   }
+  },
+  {
+   "actor": "producer",
+   "expect_error": {
+    "code": "invalid_argument",
+    "outcome": "not_started"
+   },
+   "kind": "rpc",
+   "method": "iprange.v1.maintenance.remove",
+   "params": {
+    "entry": {
+     "artifact_identity": {
+      "file": "4",
+      "volume": "3"
+     },
+     "digest": {
+      "byte_length": "8192",
+      "sha512": "0"
+     },
+     "directory": "$WORK/res",
+     "directory_identity": {
+      "file": "2",
+      "volume": "1"
+     },
+     "kind": "publication_temp",
+     "publication_attempt_id": "f1f2f3f4f5f6f7f8f9fafbfcfdfeff01",
+     "tuple": {
+      "commit_nonce": "fedcba9876543210fedcba9876543210",
+      "database_id": "0123456789abcdef0123456789abcdef",
+      "transaction_id": "7"
+     }
+    }
+   }
+  }
+ ]
+}
