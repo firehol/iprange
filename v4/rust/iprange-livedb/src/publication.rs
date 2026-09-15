@@ -45,6 +45,15 @@ pub use maintenance::{
     WindowsHousekeepingCandidateKind, WindowsHousekeepingEntry, WindowsHousekeepingList,
     WindowsHousekeepingRemoval, WindowsHousekeepingSink, WindowsHousekeepingSinkControl,
 };
+/// Conformance-support arm of the creator-only private creation (see
+/// `publication::security::create_private_artifact`). Doc-hidden: it is
+/// not part of the supported SDK surface, it exists so the iprange-cli
+/// conformance fixtures can plant maintenance residue through the same
+/// protected-DACL creation the product uses instead of inventing one.
+#[cfg(windows)]
+#[doc(hidden)]
+pub use security::create_private_artifact;
+
 pub use residue::{
     inspect_publication_residue, remove_publication_residue, PublicationResidueCoordination,
     PublicationResidueHandle, PublicationResidueInspection, PublicationResidueMain,

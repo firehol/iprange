@@ -27,6 +27,7 @@ import argparse
 import ast
 import hashlib
 import json
+import ntpath
 import os
 import re
 import subprocess
@@ -377,6 +378,65 @@ def _is_drive_relative(value):
                  or value[2] not in (os.sep, "/", "\\")))
 
 
+def drive_relative_spellings(value):
+    """Every comparison spelling of one Windows drive-relative value.
+
+    ``C:db.iprange.readers`` denotes a file in the *current directory of
+    that drive*.  That is per-drive process state, so a scan that resolved
+    it through ``os.path.abspath`` accepted or refused the same report
+    depending on the directory the reviewer happened to launch from.  The
+    Windows guard harness hit exactly that: its case list carries the
+    drive-relative spellings on purpose, and launching it from inside the
+    operator's profile turned every one of those literals into a profile
+    path, so the shared writer refused the harness's own report
+    (wave-19.25).
+
+    The report scan uses two spellings derived from the value alone:
+
+    * the value as written, which ``_profile_comparisons`` matches against
+      the profile's own drive-relative form, so a literal that really does
+      spell ``C:Users\\<operator>\\...`` is still refused; and
+
+    * the same remainder anchored at the drive root, so a spelling that
+      reaches the profile only through an unknown per-drive current
+      directory is not treated as one that names the profile outright.
+
+    Pure ``ntpath`` string work, so it is checkable on any host, and called
+    from ``_privacy_spellings`` only on Windows, where the form exists.
+    Input screening keeps the kernel's resolution: ``under_profile()``
+    compares the realpath, which resolves a drive-relative path through the
+    calling process, and that is the right context there because this
+    process is the one that would open the path.
+    """
+    drive, remainder = value[:2], value[2:]
+    root_anchored = drive + _WIN_SEP + remainder.lstrip(_WIN_SEP + "/")
+    return [value, _fold_windows(ntpath.normpath(root_anchored))]
+
+
+# The two privacy entry points are pinned at the source level as well, so a
+# change that quietly reintroduces process state into the report scan (or drops
+# the kernel resolution from input screening, where it belongs) is a named
+# control failure rather than a review finding.  The pins read the calls the
+# function actually makes, not its text: a docstring that merely mentions
+# ``abspath`` or ``realpath`` must not satisfy a control on its own.
+def _privacy_calls(name):
+    """Every function name called directly inside one function here."""
+    import ast
+    import inspect
+    import textwrap
+    tree = ast.parse(textwrap.dedent(inspect.getsource(globals()[name])))
+    called = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if isinstance(func, ast.Attribute):
+            called.add(func.attr)
+        elif isinstance(func, ast.Name):
+            called.add(func.id)
+    return called
+
+
 def _privacy_spellings(value):
     """Candidate normcased spellings of one string used for the
     operator-profile comparison.
@@ -386,11 +446,9 @@ def _privacy_spellings(value):
     catches the literal form; the lexically resolved spelling catches
     ``..`` parent segments and, on POSIX, doubled leading separators
     (the kernel resolves ``//home`` as ``/home``); a drive-relative
-    spelling (``C:Users\\...``) is kept as-is so the profile's own
-    drive-relative comparison form can match it, and is additionally
-    anchored through ``os.path.abspath`` (native Windows resolution
-    consults the per-drive current directory) for the kernel's own
-    resolution semantics.
+    spelling (``C:Users\\...``) is expanded by
+    ``drive_relative_spellings`` against a pinned context, never
+    against the process working directory.
     """
     if _IS_WINDOWS:
         norm = value.replace("/", _WIN_SEP)
@@ -410,9 +468,9 @@ def _privacy_spellings(value):
     if resolved != out[0]:
         out.append(resolved)
     if _IS_WINDOWS and _is_drive_relative(norm):
-        anchored = fold(os.path.normpath(os.path.abspath(norm)))
-        if anchored not in out:
-            out.append(anchored)
+        for spelling in drive_relative_spellings(norm):
+            if spelling not in out:
+                out.append(spelling)
     if _IS_WINDOWS:
         # re.sub interprets backslashes in a string replacement as
         # escapes, so the two-separator root is supplied through a
@@ -429,24 +487,43 @@ def _privacy_spellings(value):
 def _profile_comparisons(profile):
     """Profile spellings to match candidates against.
 
-    The absolute form and, on Windows, its drive-relative form
-    (``C:Users\\alice`` for ``C:\\Users\\alice``): a
-    drive-relative candidate (``C:Users\\alice\\...``) then
-    matches without depending on the per-drive current directory
-    (native Windows resolution consults the drive's current
-    directory, which the comparison must not rely on)."""
+    The absolute form and, for a profile spelled with a Windows drive prefix,
+    its drive-relative form (``C:Users\\alice`` for ``C:\\Users\\alice``): a
+    drive-relative candidate then matches without depending on the per-drive
+    current directory, which native Windows resolution consults and a
+    comparison must not.
+
+    The second form is derived from the shape of the profile string rather
+    than from ``os.name``.  A POSIX profile is never drive-shaped, so this is
+    a no-op there, and the Windows comparison becomes checkable from any host
+    -- which is what lets the shared privacy controls pin the drive-relative
+    behaviour without waiting for a Windows runner.
+    """
     forms = [profile]
-    if os.name == "nt" and len(profile) >= 3 and profile[1] == ":":
+    if (len(profile) >= 3 and profile[1] == ":"
+            and profile[2] in (_WIN_SEP, "/")):
         forms.append(profile[:2] + profile[3:])
     return forms
 
 
 def _matches_profile(spelling, profile):
-    """True when one normcased spelling is at or under any of the
-    profile's comparison forms."""
-    sep = _WIN_SEP if _IS_WINDOWS else os.sep
-    return any(spelling == form or spelling.startswith(form + sep)
-               for form in _profile_comparisons(profile))
+    """True when one normcased spelling is at or under any of the profile's
+    comparison forms.
+
+    Either separator counts as a segment boundary.  The candidates a scan
+    compares come from ``_privacy_spellings``, which folds Windows spellings
+    to backslashes and POSIX spellings to ``os.sep``; accepting both keeps a
+    drive-relative candidate such as ``C:Users\\alice\\x`` comparable to the
+    profile's drive-relative form on every interpreter, and can only ever add
+    a refusal, never remove one.
+    """
+    for form in _profile_comparisons(profile):
+        if spelling == form:
+            return True
+        for sep in {_WIN_SEP, os.sep}:
+            if spelling.startswith(form + sep):
+                return True
+    return False
 
 
 def _checkout_suffix(path):
@@ -474,17 +551,26 @@ def _checkout_suffix(path):
 
 
 def recorded_checkout_root():
-    """Producer checkout root to record in a report for evidence
-    binding, or None when the checkout lives under the operator's
-    profile.
+    """The checkout this module runs from, for RUNTIME decisions only.
 
-    The kind gate resolves checkout-relative command values against
-    the recorded root, so evidence produced from one checkout keeps
-    its binary-identity binding when assessed from another clone;
-    a personal checkout root must never reach the report, so the
-    field records None there and relative values fall back to the
-    gate's own checkout root (None, absent, and empty are
-    equivalent to the gate)."""
+    Returns None when the checkout lives under the operator's profile, and
+    the directory otherwise.  This is a resolution helper for callers that
+    have to decide something about the filesystem right now -- ``run.py``
+    refuses a runner output path inside the checkout, ``races/aggregate.py``
+    refuses a ``--report-dir`` inside it -- and for reports that are staged
+    rather than committed.
+
+    It must never feed a committed report.  The committed ``checkout_root``
+    member is owned by ``report_provenance()``, which records null
+    unconditionally, because ``committed_report_problems()`` refuses any
+    report whose ``checkout_root`` is non-null.  A producer that recorded the
+    directory of a non-personal checkout therefore authored an artifact its own
+    writer refused to write: ``_provenance_self_test`` pins both halves of
+    that, that an outside-profile checkout's committed record carries a null
+    ``checkout_root``, and that a caller-forced one is overwritten rather than
+    recorded.  Readers are unaffected -- the kind gate treats null, absent,
+    and empty alike and resolves checkout-relative command values against
+    its own checkout (``check_kind_coverage._report_checkout_root``)."""
     root = _CHECKOUT
     if under_profile(root):
         return None
@@ -546,10 +632,13 @@ def under_profile(path):
     """True when a path lives at or under the operator's profile.
 
     Every candidate spelling of the path is compared --- the direct
-    form, the lexically resolved form, the drive-relative anchored
-    form, and the realpath (so a symlink or junction into the profile
-    is refused with the same spelling the evidence records will
-    carry).
+    form, the lexically resolved form, the pinned drive-relative forms,
+    and the realpath.  The realpath is what keeps the kernel's own
+    resolution in the comparison, so here (unlike the report scan, see
+    ``drive_relative_spellings``) a drive-relative spelling that reaches
+    the profile through this process's working directory is refused, and a
+    symlink or junction into the profile is refused with the same spelling
+    the evidence records would carry.
     """
     profile = profile_path()
     if not profile:
@@ -1019,7 +1108,14 @@ COMMITTED_REPORT_WRITERS = {
         "owner": "lead",
     },
     "crash_harness.py": {
-        "artifacts": ("crash.json", "crash-negative.json"),
+        # The battery installs one report per crash direction and one per
+        # negative control, all four produced by this harness with its role
+        # options swapped.  Claiming only two of them left the other two to be
+        # reported as "committed report from an unregistered writer" the moment
+        # the wave's integration commit tracked them.
+        "artifacts": ("crash.json", "crash-go_to_rust.json",
+                      "crash-negative.json",
+                      "crash-negative-producer-false.json"),
         "screened": ("--producer", "--consumer", "--fixture-tool",
                      "--work-dir", "--json-report"),
         "tier": SHARED_TIER,
@@ -1099,6 +1195,20 @@ COMMITTED_REPORT_WRITERS = {
         "tier": SHARED_TIER,
         "owner": "gate-c",
     },
+    "races/aggregate.py": {
+        # The swap-race battery's report is committed evidence: it is the only
+        # record of the stat->open window being raced, the kind gate consumes
+        # it, and the wave installs it as evidence/race-battery.json.  Its
+        # path-valued inputs are the two staged engines, the fixture tool, and
+        # the private report directory.  --provenance-note is screened too:
+        # free text is how a workstation path once reached this artifact, and
+        # the note -- not the gate -- turned out to be the defect.
+        "artifacts": ("race-battery.json",),
+        "screened": ("--rust", "--go", "--fixture-tool", "--report-dir",
+                     "--provenance-note"),
+        "tier": SHARED_TIER,
+        "owner": "gate-c",
+    },
 }
 
 # Files in the evidence directory that are not harness measurements and so
@@ -1121,12 +1231,22 @@ def shared_tier_writers():
 def report_provenance(argv=None):
     """The provenance members every committed report carries.
 
-    ``command`` is the sanitized invocation (never the raw argv) and the
-    revision/checkout pair binds the measurement to the tree it measured.
-    """
+    ``command`` is the sanitized invocation (never the raw argv) and
+    ``git_head`` binds the measurement to the reviewed tree.
+
+    ``checkout_root`` is always null.  A committed artifact may not name a
+    machine directory: the operator-profile spelling is refused by the
+    privacy scan, and any other absolute spelling is host-specific prose that
+    no reviewer can check and no reader resolves against anything -- the kind
+    gate falls back to its own checkout for null, absent, and empty alike.
+    Recording the producer's directory for a non-personal checkout therefore
+    only ever made a report refuse its own writer, since
+    ``committed_report_problems()`` rejects a non-null value here; the field
+    stays in the schema so a reader can tell "the producer recorded nothing"
+    from "this report has no provenance block"."""
     return {
         "command": sanitized_command(argv),
-        "checkout_root": recorded_checkout_root(),
+        "checkout_root": None,
         "git_head": recorded_git_identity(),
     }
 
@@ -1799,7 +1919,11 @@ def _provenance_self_test():
     the same authority as a control that fails, which is the defect class the
     wave-19.24 review found across the harness self-tests.
     """
+    # The outside-profile controls below emulate where this checkout sits, so
+    # they assert the same thing on a workstation, a scratch clone, and CI.
+    global _CHECKOUT, profile_path
     import shutil
+    import tempfile
 
     checks = 0
     root = owned_temp_dir("qual-provenance-selftest-")
@@ -2085,6 +2209,152 @@ def _provenance_self_test():
         expect("a shared-tier writer that skips run_shared_self_test is named",
                any("run_shared_self_test" in problem
                    for problem in silent_problems), str(silent_problems))
+
+        # 10: the drive-relative privacy anchor is pinned, not ambient.  A
+        # report scan that resolved ``C:db.iprange.readers`` through
+        # ``os.path.abspath`` made the verdict depend on the directory the
+        # reviewer launched from, because that spelling means "relative to the
+        # current directory of C:".  The Windows guard harness hit exactly
+        # that: its case list carries drive-relative spellings on purpose, and
+        # launched from inside the profile it was refused by its own shared
+        # writer (wave-19.25).  The controls below pin the semantics every scan
+        # uses and keep both halves of the policy able to fire: case data stays
+        # data, and a path that really does name the profile is still refused.
+        CASE_LITERAL = "C:db" + _WIN_SEP + "iprange.readers"
+        PINNED = "c:" + _WIN_SEP + "db" + _WIN_SEP + "iprange.readers"
+        inside_dir = os.path.join(root, "cwd-inside-profile")
+        os.makedirs(inside_dir, exist_ok=True)
+        outside_dir = os.path.join(root, "cwd-outside")
+        os.makedirs(outside_dir, exist_ok=True)
+        saved_cwd = os.getcwd()
+        try:
+            os.chdir(outside_dir)
+            spellings_outside = drive_relative_spellings(CASE_LITERAL)
+            ambient_outside = _fold_windows(
+                ntpath.normpath(os.path.abspath(CASE_LITERAL)))
+            os.chdir(inside_dir)
+            spellings_inside = drive_relative_spellings(CASE_LITERAL)
+            ambient_inside = _fold_windows(
+                ntpath.normpath(os.path.abspath(CASE_LITERAL)))
+        finally:
+            os.chdir(saved_cwd)
+        expect("the drive-relative anchor is pinned to the drive root",
+               spellings_outside[1] == PINNED,
+               "%r != %r" % (spellings_outside[1], PINNED))
+        expect("the pinned anchor does not depend on the working directory",
+               spellings_outside == spellings_inside,
+               "%s vs %s" % (spellings_outside, spellings_inside))
+        expect("the raw drive-relative spelling is kept so the profile's own"
+               " drive-relative form can match it",
+               CASE_LITERAL in spellings_outside, str(spellings_outside))
+        expect("the ambient resolution this pin replaces was cwd-dependent",
+               ambient_outside != ambient_inside
+               and ambient_outside.startswith(
+                   _fold_windows(ntpath.normpath(outside_dir))),
+               "%s vs %s" % (ambient_outside, ambient_inside))
+        expect("a literal spelling the profile below its drive still matches",
+               _matches_profile("c:users" + _WIN_SEP + "operator" + _WIN_SEP
+                                + "leaked.iprange",
+                                "c:" + _WIN_SEP + "users" + _WIN_SEP + "operator"),
+               "drive-relative profile containment stopped matching")
+        expect("the report scan delegates drive-relative anchoring",
+               "drive_relative_spellings" in _privacy_calls(
+                   "_privacy_spellings")
+               and "abspath" not in _privacy_calls("_privacy_spellings"),
+               sorted(_privacy_calls("_privacy_spellings")))
+        expect("input screening keeps the kernel resolution",
+               "realpath" in _privacy_calls("under_profile"),
+               sorted(_privacy_calls("under_profile")))
+        planted = os.path.join(root, "planted.json")
+        if profile:
+            try:
+                write(planted, {"schema": "s",
+                               "cases": [os.path.join(
+                                   profile, "leaked.iprange")]},
+                     argv=["v4/cli/selftest.py"])
+                planted_refused = False
+            except SystemExit:
+                planted_refused = True
+            expect("a planted real profile path in a report is refused",
+                   planted_refused)
+            expect("the planted refusal left no artifact",
+                   not os.path.exists(planted))
+
+        # 11: committed evidence never names the producer's checkout
+        # directory.  The member used to be filled from the producer's
+        # checkout whenever that checkout was not personal, so a report
+        # authored from a scratch clone or a CI directory named that machine's
+        # path -- and was then refused by its own writer, because
+        # ``committed_report_problems()`` rejects any non-null
+        # ``checkout_root``.  The branch could never produce a committable
+        # artifact: dead privacy-surface code with a live failure mode.  Both
+        # directions are pinned here with the checkout emulated, so no control
+        # depends on where this checkout happens to live.
+        fake_home = os.path.join(neutral_temp_root(),
+                                 "qual-selftest-home", "operator")
+        os.makedirs(fake_home, exist_ok=True)
+        foreign_checkout = tempfile.mkdtemp(prefix="qual-selftest-record-",
+                                            dir=neutral_temp_root())
+        saved_checkout = _CHECKOUT
+        saved_profile_path = profile_path
+        try:
+            profile_path = lambda: _normcase(os.path.normpath(fake_home))
+            # The helper keeps its resolution role for the non-committed
+            # consumers named in its docstring; only the record is fixed.
+            _CHECKOUT = os.path.join(fake_home, "src", "iprange")
+            expect("a profile-rooted checkout records no directory",
+                   recorded_checkout_root() is None,
+                   repr(recorded_checkout_root()))
+            _CHECKOUT = foreign_checkout
+            expect("a non-personal checkout still resolves for the runtime "
+                   "consumers of the helper",
+                   recorded_checkout_root() == foreign_checkout,
+                   repr(recorded_checkout_root()))
+            authored = os.path.join(root, "authored-outside-profile.json")
+            stored = json.loads(write(authored, {"schema": "s"},
+                                      argv=["v4/cli/selftest.py"]))
+            expect("a report authored outside the operator profile is still "
+                   "written", os.path.isfile(authored))
+            expect("an outside-profile checkout's committed record carries a "
+                   "null checkout_root",
+                   stored.get("checkout_root") is None,
+                   repr(stored.get("checkout_root")))
+            forced = json.loads(write(os.path.join(root, "forced.json"),
+                                      {"schema": "s",
+                                       "checkout_root": foreign_checkout},
+                                      argv=["v4/cli/selftest.py"]))
+            expect("a caller-forced checkout_root is overwritten, never "
+                   "recorded", forced.get("checkout_root") is None,
+                   repr(forced.get("checkout_root")))
+            smuggled = json.loads(json.dumps(forced))
+            smuggled["checkout_root"] = foreign_checkout
+            expect("the validator refuses a report that carries a checkout "
+                   "directory",
+                   any("must be null or absent" in problem
+                       for problem in committed_report_problems(smuggled)),
+                   str(committed_report_problems(smuggled)))
+            # The artifact-side audit judges the names a registered writer
+            # claims, so this is the path a hand-edited or copied-forward
+            # installed file actually takes.
+            installed = os.path.join(root, "fakecli")
+            os.makedirs(os.path.join(installed, "evidence"), exist_ok=True)
+            with open(os.path.join(installed, "evidence", "golden.json"),
+                      "w", encoding="utf-8") as stream:
+                # The shared serializer, not a direct json.dump: this module is
+                # itself a registered shared-tier writer and the registry audit
+                # flags any json.dump outside write_committed_report().
+                stream.write(committed_report_text(smuggled))
+            expect("the artifact-side audit names an installed report that "
+                   "carries a checkout directory",
+                   any("must be null or absent" in problem
+                       for problem in audit_committed_reports(
+                           cli_dir=installed)),
+                   "no checkout_root complaint from the artifact audit")
+        finally:
+            _CHECKOUT = saved_checkout
+            profile_path = saved_profile_path
+            shutil.rmtree(foreign_checkout, ignore_errors=True)
+            shutil.rmtree(os.path.dirname(fake_home), ignore_errors=True)
     finally:
         shutil.rmtree(root, ignore_errors=True)
     return checks
@@ -2093,8 +2363,11 @@ def _provenance_self_test():
 # Executed-control count of ``_provenance_self_test``.  A harness self-test
 # that only prints "0 failures" cannot tell a passed run from a run in which
 # nothing executed, so the count is asserted here and by every harness that
-# calls into this module.
-PROVENANCE_SELF_TEST_CHECKS = 31
+# calls into this module.  47 = the 40 controls of wave-19.25 plus the seven
+# controls of group 11, which pin that a committed report never carries a
+# checkout directory and that the resolution helper keeps its non-committed
+# consumers.
+PROVENANCE_SELF_TEST_CHECKS = 47
 
 
 def _self_test():

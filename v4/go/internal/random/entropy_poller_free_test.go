@@ -134,6 +134,13 @@ func runDeltaEntropyChild() int {
 const tightEntropyLimit = 4
 
 func runTightEntropyChild() {
+	// The coverage runtime initializes the network poller when it opens its
+	// counter file at exit. Under the table this child is about to claim, that
+	// write dies in netpollinit with EMFILE, and the case would read as a
+	// product poller regression caused by the instrumentation. Only the parent's
+	// run is measured: a re-exec role child never emits coverage data. This is
+	// the first statement so no poller-capable work happens before it.
+	os.Unsetenv("GOCOVERDIR")
 	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &syscall.Rlimit{
 		Cur: tightEntropyLimit, Max: tightEntropyLimit,
 	}); err != nil {

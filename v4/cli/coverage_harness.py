@@ -40,6 +40,7 @@ The report is written outside the operator profile and copied into
 """
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -64,6 +65,7 @@ from command_sanitize import (  # noqa: E402
     recorded_git_identity,
     require_paths_outside_profile,
     run_shared_self_test,
+    sanitized_command,
     sanitized_path_value,
     write_committed_report,
 )
@@ -85,17 +87,25 @@ MIN_COVER_FILES_PER_RUN = 1
 # keeps the two halves compatible.
 COVERMODE = "atomic"
 
-# The module's own tests open the shared conformance corpus as a *sibling* of
-# the module directory (``../conformance/cases.json`` from the package root,
-# ``../../../conformance/rust/*.iprdb`` from ``internal/reader``).  Copying
-# only ``v4/go`` into a private build directory therefore makes those tests
-# fail for the wrong reason, and a harness that ignored the failure would
-# publish a percentage measured over a partial run.  The harness stages the
-# module together with every sibling it reads, and refuses to proceed when a
-# required sibling member is absent.
-STAGED_MEMBERS = ("go", "conformance")
-REQUIRED_STAGED_MEMBERS = ("go", "conformance")
-STAGED_REQUIRED_FILE = ("conformance", "cases.json")
+# The module's own tests open two trees as a *sibling* of the module
+# directory: the shared conformance corpus (``../conformance/cases.json`` from
+# the package root, ``../../../conformance/rust/*.iprdb`` from
+# ``internal/reader``) and the committed harnesses, because
+# ``internal/cli/handlers/fd_pressure_unix_test.go`` executes
+# ``../cli/fd_pressure_harness.py`` and that harness imports its
+# same-directory siblings.  Copying only ``v4/go`` into a private build
+# directory therefore makes those tests fail for the wrong reason, and a
+# harness that ignored the failure would publish a percentage measured over a
+# partial run.  The harness stages the module together with every sibling it
+# reads, and refuses to proceed when a required sibling member is absent.
+STAGED_MEMBERS = ("go", "conformance", "cli")
+REQUIRED_STAGED_MEMBERS = ("go", "conformance", "cli")
+# The file per required member whose absence turns a specific test red rather
+# than making it skip.  Checking them here means an incomplete staging fails
+# with the reason, instead of surfacing as a red suite that reads like a
+# product defect.
+STAGED_REQUIRED_FILES = (("conformance", "cases.json"),
+                         ("cli", "fd_pressure_harness.py"))
 
 
 def run(command, cwd=None, env=None, timeout=3600):
@@ -354,8 +364,8 @@ def stage_from_revision(revision, dest, members=STAGED_MEMBERS):
     """
 
     # The harness lives at <checkout>/v4/cli, so the checkout root is two
-    # levels up.  recorded_checkout_root() is deliberately None for a
-    # personal checkout and is used only for what the report records.
+    # levels up.  This is a filesystem decision (is there a .git here?), not a
+    # report field: committed evidence records null for its checkout.
     root = os.path.dirname(os.path.dirname(_HERE))
     if not os.path.isfile(os.path.join(root, ".git", "HEAD")) and not \
             os.path.isdir(os.path.join(root, ".git")):
@@ -386,25 +396,26 @@ def stage_from_revision(revision, dest, members=STAGED_MEMBERS):
         raise SystemExit(f"--revision {revision} does not name a commit in "
                          f"{root}")
     # ``git archive v4/<name>`` preserves the archived path, so the members
-    # land under dest/v4 and the module keeps its conformance sibling.
+    # land under dest/v4 and the module keeps its siblings.
     staged_root = os.path.join(dest, "v4")
     staged_module = os.path.join(staged_root, "go")
     if not os.path.isfile(os.path.join(staged_module, "go.mod")):
         raise SystemExit(f"revision {revision} staged no go module at "
                          f"{staged_module}")
-    probe = os.path.join(staged_root, *STAGED_REQUIRED_FILE)
-    if not os.path.isfile(probe):
-        raise SystemExit(f"revision {revision} staged tree has no {probe}")
+    for member in STAGED_REQUIRED_FILES:
+        probe = os.path.join(staged_root, *member)
+        if not os.path.isfile(probe):
+            raise SystemExit(f"revision {revision} staged tree has no {probe}")
     return staged_module, extracted, commit
 
 
 def stage_sources(v4_tree, dest, members=STAGED_MEMBERS):
-    """Copy the measured module and the sibling data trees it reads.
+    """Copy the measured module and the sibling trees its tests read.
 
     Returns the staged module directory.  A missing sibling is fatal: the Go
-    tests that consume the conformance corpus skip nothing, they fail, and a
-    coverage number taken from a tree that could not run them is not a
-    measurement of the module.
+    tests that consume the conformance corpus and the sibling harness skip
+    nothing, they fail, and a coverage number taken from a tree that could not
+    run them is not a measurement of the module.
     """
 
     missing = [name for name in REQUIRED_STAGED_MEMBERS
@@ -413,20 +424,24 @@ def stage_sources(v4_tree, dest, members=STAGED_MEMBERS):
         raise SystemExit(
             f"cannot stage the coverage source tree from {v4_tree}: "
             f"{', '.join(missing)} is missing; the Go unit suite reads "
-            f"../conformance as a sibling of the module")
+            f"../conformance and ../cli as siblings of the module")
     os.makedirs(dest, exist_ok=True)
     for name in members:
         source = os.path.join(v4_tree, name)
         if not os.path.isdir(source):
             continue
+        # ``.coverage-harness-*`` names this harness's own self-test scratch,
+        # which another process may be holding in the checkout right now.
         shutil.copytree(source, os.path.join(dest, name), symlinks=False,
                         ignore=shutil.ignore_patterns("target", "node_modules",
-                                                      "__pycache__", "*.pyc"))
-    probe = os.path.join(dest, *STAGED_REQUIRED_FILE)
-    if not os.path.isfile(probe):
-        raise SystemExit(
-            f"staged coverage tree {dest} has no {probe}: the unit suite "
-            f"would under-measure rather than fail loudly")
+                                                      "__pycache__", "*.pyc",
+                                                      ".coverage-harness-*"))
+    for member in STAGED_REQUIRED_FILES:
+        probe = os.path.join(dest, *member)
+        if not os.path.isfile(probe):
+            raise SystemExit(
+                f"staged coverage tree {dest} has no {probe}: the unit suite "
+                f"would under-measure rather than fail loudly")
     return os.path.join(dest, os.path.basename(os.path.abspath(
         os.path.join(v4_tree, "go"))))
 
@@ -584,8 +599,7 @@ def live_run(args):
         staging_mode = {"mode": "revision", "revision": staged_commit,
                        "requested": args.revision,
                         "members": staged_from,
-                        "checkout_root": sanitized_path_value(
-                            recorded_checkout_root()),
+                        "checkout_root": None,
                         "git_head": recorded_git_identity()}
     else:
         v4_tree = os.path.abspath(args.v4_tree or os.path.dirname(module_dir))
@@ -594,8 +608,12 @@ def live_run(args):
         staging_mode = {"mode": "working-tree", "v4_tree":
                         sanitized_path_value(v4_tree),
                         "members": list(STAGED_MEMBERS),
-                        "checkout_root": sanitized_path_value(
-                            recorded_checkout_root())}
+                        # A committed record never names the producer's
+                        # checkout: command_sanitize owns the member and
+                        # committed_report_problems() refuses a directory
+                        # here.  The key stays so the member is visibly
+                        # "recorded as null", never "forgotten".
+                        "checkout_root": None}
     module_dir = staged_module
     staging = os.path.join(work, "bin")
     unit_dir = os.path.join(work, "cov-unit")
@@ -711,7 +729,37 @@ def _go_version(go):
 # Executed-control count of ``_self_test``, as a literal.  The line used to
 # print "PASSED (N cases)" from whatever the counter reached, so a control
 # that stopped being reached lowered N and still exited 0.
-COVERAGE_SELF_TEST_CONTROLS = 17
+COVERAGE_SELF_TEST_CONTROLS = 19
+
+
+def _unimported_shared_helpers(module_file=None, helper_file=None):
+    """Public ``command_sanitize`` helpers this module calls but never imports.
+
+    Every shared provenance and privacy helper lives in ``command_sanitize``;
+    calling one without importing it is a ``NameError`` on whichever branch
+    names it, and a branch only the live run takes is invisible to every other
+    control (wave-19.25 step [18b] died exactly that way, two functions deep
+    into ``live_run``, while the self-test stayed green).  The check reads both
+    modules' ASTs, so it cannot be satisfied by a comment or a differently
+    spelled call site.
+    """
+    module_file = os.path.abspath(__file__) if module_file is None else os.path.abspath(module_file)
+    helper_file = (os.path.join(_SELF_DIR, "command_sanitize.py")
+                   if helper_file is None else os.path.abspath(helper_file))
+    with open(helper_file, encoding="utf-8") as stream:
+        helpers = {node.name for node in ast.parse(stream.read(), filename=helper_file).body
+                   if isinstance(node, ast.FunctionDef) and not node.name.startswith("_")}
+    with open(module_file, encoding="utf-8") as stream:
+        tree = ast.parse(stream.read(), filename=module_file)
+    imported = {alias.name for node in ast.walk(tree)
+                if isinstance(node, ast.ImportFrom) and node.module == "command_sanitize"
+                for alias in node.names}
+    defined = {node.name for node in tree.body
+               if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    used = {node.id for node in ast.walk(tree)
+            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)}
+    return sorted(name for name in helpers
+                  if name in used and name not in imported and name not in defined)
 
 
 def _self_test():
@@ -878,11 +926,17 @@ def _self_test():
         with open(os.path.join(complete, "conformance", "cases.json"), "w",
                   encoding="utf-8") as stream:
             stream.write("{}\n")
+        os.makedirs(os.path.join(complete, "cli"), exist_ok=True)
+        with open(os.path.join(complete, "cli", "fd_pressure_harness.py"),
+                  "w", encoding="utf-8") as stream:
+            stream.write("# staged sibling harness\n")
         staged = stage_sources(complete, os.path.join(base, "staged-full"))
-        expect("a complete tree stages the module and the corpus sibling",
+        expect("a complete tree stages the module with its sibling trees",
                os.path.isdir(staged) and os.path.isfile(
                    os.path.join(os.path.dirname(staged), "conformance",
-                                "cases.json")), staged)
+                                "cases.json")) and os.path.isfile(
+                   os.path.join(os.path.dirname(staged), "cli",
+                                "fd_pressure_harness.py")), staged)
 
         empty_v4 = os.path.join(base, "nocorp")
         os.makedirs(os.path.join(empty_v4, "go"), exist_ok=True)
@@ -903,8 +957,36 @@ def _self_test():
             refused = True
         expect("a staged tree missing conformance/cases.json is refused",
                refused)
+
+        # The descriptor-pressure suite runs the sibling harness and fails,
+        # not skips, when that file is absent, so staging that omits it would
+        # be reported as a red module rather than a broken measurement.
+        noharness = os.path.join(base, "noharness")
+        os.makedirs(os.path.join(noharness, "go"), exist_ok=True)
+        os.makedirs(os.path.join(noharness, "conformance"), exist_ok=True)
+        os.makedirs(os.path.join(noharness, "cli"), exist_ok=True)
+        with open(os.path.join(noharness, "go", "go.mod"), "w",
+                  encoding="utf-8") as stream:
+            stream.write("module github.com/firehol/iprange/v4/go\n")
+        with open(os.path.join(noharness, "conformance", "cases.json"), "w",
+                  encoding="utf-8") as stream:
+            stream.write("{}\n")
+        try:
+            stage_sources(noharness, os.path.join(base, "staged-noharness"))
+            refused = False
+        except SystemExit:
+            refused = True
+        expect("a staged tree whose cli member lacks the harness is refused",
+               refused)
     finally:
         shutil.rmtree(base, ignore_errors=True)
+
+    # The live-only branches are where an unimported shared helper hides: no
+    # other control reaches them, so the binding is checked structurally here.
+    missing_helpers = _unimported_shared_helpers()
+    expect("every shared helper this module calls is imported",
+           not missing_helpers,
+           "not imported from command_sanitize: %s" % ", ".join(missing_helpers))
 
     run_shared_self_test("coverage_harness")
     if counter["n"] != COVERAGE_SELF_TEST_CONTROLS:

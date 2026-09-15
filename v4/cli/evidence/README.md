@@ -119,7 +119,7 @@ stale grid (418 cells versus the derived 483) and a stale pin table
 (29 versus 36), which the kind gate reports; the live gate run over the
 current tree gives 483/483 cells with 0 divergences, 0 hangs, 0 flaky
 and 36/36 pins, plus 108/108 routine pressure cells.  `--self-test`
-(56 controls, pinned by `SELF_TEST_CASES_TOTAL`, offline)
+(61 controls, pinned by `SELF_TEST_CASES_TOTAL`, offline)
 includes the three anchors this gate exists to provide: an injected
 synthetic divergence must FAIL, a report with zero executed cells must
 FAIL, and deleting the fixture that pins the `validate.live`
@@ -128,7 +128,7 @@ The mid-wave 42-divergence state those product workers were created for
 is closed: the writer-symlink, recovery-order, feeds-outcome, zero-length,
 procfs/sysfs, and unix-socket classes all agree cell-for-cell now.
 
-Kind-coverage gate (hardened).  Its `--self-test` runs 59 controls
+Kind-coverage gate (hardened).  Its `--self-test` runs 110 rejection controls plus 4 acceptance controls
 offline; each records its outcome and the battery judges the run once at
 the end, so an assertion removed from a single helper cannot turn an
 accepted forgery into a passing self-test, and the control count is
@@ -1965,11 +1965,19 @@ reports from the current one, and that an empty or omitted report set
 cannot be presented as a passing battery.
 
 `git_head` is deliberately a separate member from `checkout_root`.
-`checkout_root` is the directory the gate resolves checkout-relative command
-arguments against (so evidence produced in one clone keeps its binary-identity
-binding when assessed from another); it is `null` here because the developer
-checkout lives under the operator's profile, which the durable-artifact
-policy keeps out of committed reports. A checkout root and a commit OID are
+`checkout_root` is the directory a reader resolves checkout-relative command
+arguments against (null, absent, and empty all mean "the reviewing checkout",
+which is what `check_kind_coverage._report_checkout_root()` falls back to).
+Committed reports record it as `null` unconditionally, whatever machine
+authored them: the operator-profile spelling is refused by the privacy scan,
+and any other absolute spelling is host-specific prose that no reviewer can
+check and no consumer resolves anything against. A producer that recorded the
+directory of a non-personal checkout therefore authored an artifact its own
+writer refused, since `committed_report_problems()` rejects a non-null value.
+The value is still available to the harnesses that need a real path for a
+filesystem decision (refusing output inside the checkout, refusing a
+`--report-dir` inside it) through `command_sanitize.recorded_checkout_root()`,
+which must never feed a committed report. A checkout root and a commit OID are
 different kinds of thing, and putting the OID in the path field would break
 the binding that field provides.
 
@@ -2306,9 +2314,9 @@ the derived `privacy` block, screens the inputs the caller declares, and
 refuses the write when any screened input or any finished string value
 names an operator profile path.  Splitting the write from the provenance
 would let a harness keep the artifact and drop the audit, so the registry
-is audited as a set: `command_sanitize.py --self-test` executes 31
+is audited as a set: `command_sanitize.py --self-test` executes 47
 controls over the whole registry, and every harness self-test must report
-`shared command_sanitize controls executed=31 expected=31` before its own
+`shared command_sanitize controls executed=47 expected=47` before its own
 result counts.  `check_producer_privacy.py` attacks the three
 lead-owned writers from the outside with 32 committed controls, so
 neither a writer that screens nothing, nor one that serializes its own
@@ -2319,21 +2327,22 @@ control is a failure and not a smaller run:
 
 ```bash
 # Gate and harness self-tests (offline, no products needed).
-nice python3 v4/cli/check_refusal_class_parity.py --self-test   # 56 controls
-nice python3 v4/cli/check_kind_coverage.py --self-test          # 106 controls
+nice python3 v4/cli/check_refusal_class_parity.py --self-test   # 61 controls
+nice python3 v4/cli/check_kind_coverage.py --self-test          # 110 controls + 4 acceptance
 nice python3 v4/cli/forgery_battery.py                           # 18 classes
 nice python3 v4/cli/check_fifo_surface.py --self-test   # 18 + 5 structural, 17 arms x 2 engines
 nice python3 v4/cli/check_golden.py --self-test          # 7 walk + 17 reject + 1 structural
-nice python3 v4/cli/coverage_harness.py --self-test      # 17 controls
+nice python3 v4/cli/coverage_harness.py --self-test      # 19 controls
 nice python3 v4/cli/sensitivity_gate.py --self-test      # 14 modes + 2 inversions + 6 structural
 nice python3 v4/cli/throughput_harness.py --self-test   # 12 cases + 4 structural
 nice python3 v4/cli/resource_harness.py --self-test      # 25 control groups
 nice python3 v4/cli/crash_harness.py --self-test         # 26 controls, eight groups
-nice python3 v4/cli/windows_guard_harness.py --self-test # 35 controls + 1 native-only
-nice python3 v4/cli/command_sanitize.py --self-test      # 31 registry controls
+nice python3 v4/cli/windows_guard_harness.py --self-test # 38 controls + 1 native-only
+nice python3 v4/cli/command_sanitize.py --self-test      # 47 registry controls
 nice python3 v4/cli/check_producer_privacy.py --self-test # 32 producer controls
 nice python3 v4/cli/windows_housekeeping_harness.py --self-test  # incl. 9 report-verification controls
-nice python3 v4/cli/races/runner.py --self-test          # 13 mutation + clean-arm/clean-detector/report-location
+nice python3 v4/cli/races/runner.py --self-test          # 22 mutation (15 arm, 7 detector) + 6 committed-report writer controls
+                                                         # + clean-arm/clean-detector/report-location
 
 # Re-check one committed Windows report without re-running the harness:
 # the same verifier the battery uses, applied to the artifact on disk.

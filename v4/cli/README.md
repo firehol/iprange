@@ -175,7 +175,15 @@ deleting a row:
   `--pressure` takes `off`, `routine` (12 profiles) or `full` (42).  A
   cell the environment cannot build is reported as host state, and a
   report that counts a blocked or host-unsupported cell as coverage
-  fails.
+  fails.  Two engines that both answered owe the same class unless the
+  committed table itself separates them: the Go writer and worker arms
+  reach success one or two bands above the Rust reference, so such a cell
+  is counted as `band_gap` and printed as `BANDGAP (arm, profile)`, not
+  as a divergence.  Whether a cell is one of those gaps is derived from
+  `PINNED_PRESSURE_CLASSES` and the two recorded replies -- each engine's
+  reply must be a class its own pin allows in its own band -- and never
+  from a flag the report carries, so a genuine class divergence cannot be
+  reported away as a gap.
 
 The verdict has two halves, and they catch different things. The first
 checks that a report describes its own execution honestly: the cell count
@@ -263,9 +271,14 @@ publication-durability terms listed above.  It also attacks the pressure
 axis: deleting a pinned pressure cell or a pressure arm, loosening a
 pressure pin to a bare class, un-naming a profile obligation, reporting a
 wedge as an answer, dropping a missing cell, a rollup that lies, and a
-forged pressure-table digest must each FAIL.  `SELF_TEST_CASES_TOTAL`
-pins the count at 56 controls (`--self-test` reported "PASSED: 56 cases (committed total
-56)"), so a control deleted from the gate is a self-test failure rather
+forged pressure-table digest must each FAIL.  The band-gap allowance is
+attacked in both directions: a cell the table does not support must FAIL
+when it claims the gap, a cell the table does support must FAIL when it
+denies the gap, a rollup that scores the reported gaps as divergences must
+FAIL, and the conforming pair must report them with a divergence count of
+zero.  `SELF_TEST_CASES_TOTAL`
+pins the count at 61 controls (`--self-test` reported "PASSED: 61 cases (committed total
+61)"), so a control deleted from the gate is a self-test failure rather
 than a silent shrink.
 The full battery runs in well under a minute (measured 34.4 s for
 483 cells on both engines: 23 arms x 21 path kinds, plus 108 cells of the
@@ -323,9 +336,11 @@ instead of from the working tree. Other workers edit the checkout
 concurrently, and one in-flight file makes the instrumented build fail for
 reasons unrelated to the revision under attestation; staging by commit
 pins the measurement and records the commit it measured. The staged tree
-must include the `conformance` corpus beside the module — the Go tests open
-`../conformance/...` as a sibling of the module — and a staging that omits
-it is refused rather than scored.
+must include the siblings the Go tests open: the `conformance` corpus
+(`../conformance/...` from the module) and the committed harnesses in `../cli`
+(the descriptor-pressure suite executes `../cli/fd_pressure_harness.py`, which
+imports its own same-directory siblings). A staging that omits either is
+refused rather than scored.
 
 `run.py` forwards `GOCOVERDIR` to the product child, and only that one
 coverage variable, so the harness can direct counter output without adding

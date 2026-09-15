@@ -34,6 +34,21 @@ with EACCES on both engines) and ``dest-collision`` (a normal parent with a
 pre-existing destination under ``fail_if_exists``) -- and the arms that
 publish pin the expected class, outcome, and fact set.
 
+Descriptor pressure
+-------------------
+``--pressure`` adds a third axis: the same arms under a bounded
+``RLIMIT_NOFILE`` band and a pre-occupied descriptor table, one fresh process
+per cell and engine.  There the two engines do not owe the same class in every
+band.  Design section 13.3 measures the Go writer and worker arms as reaching
+success one or two bands above the Rust reference, so a cell in which exactly
+one engine completed is a band gap: it is reported, and it is not scored as a
+divergence.  The allowance is bounded by the committed table rather than by the
+shape of the answer -- a cell is a gap only when each engine's own reply is a
+class that pin allows for that engine in that band -- and the verifier derives
+the pair from ``PINNED_PRESSURE_CLASSES`` and the recorded answers instead of
+trusting the flag the sweep wrote, so neither the sweep nor a doctored report
+can relabel a real class divergence as a gap.
+
 Authority
 ---------
 Rust observable behavior is the semantic authority for refusal classes where
@@ -112,6 +127,7 @@ if _HERE not in sys.path:
 from command_sanitize import (  # noqa: E402
     audit_report_writers,
     profile_path,
+    personal_path_in_report,
     report_provenance,
     require_paths_outside_profile,
     run_shared_self_test,
@@ -1034,6 +1050,7 @@ def pressure_cell_from_records(arm, profile, records, attempts):
             "runtime": record["runtime_state"],
             "null_device": record["null_device_state"],
             "attempts": attempts, "agreed": True, "hung": False,
+            "band_gap": False,
             "flaky": False, "vacuous": False, "list_empty": False,
             "close_refused": False, "go_poller": [None, None]}
     for engine in ("go", "rust"):
@@ -1180,6 +1197,7 @@ def run_pressure_sweep(go, rust, fixture, work, profiles, runs=2, jobs=1):
             if pin is None:
                 failures += 1
                 continue
+            _, cell["band_gap"] = _pressure_cell_divergence(pin, cell)
             for engine in ("go", "rust"):
                 problems = pressure_cell_problems(cell, pin, engine)
                 if problems:
@@ -1369,6 +1387,38 @@ def _pressure_divergence_is_band_gap(pin, cell, go_answer, rust_answer):
     return answers[loser] in allowed
 
 
+def _pressure_cell_divergence(pin, cell):
+    """Derive ``(divergent, band_gap)`` for one executed pressure cell.
+
+    One derivation, called by the sweep that stamps the cell, by the rollup
+    that counts it, and by the verifier that judges a report: the pair comes
+    from the cell's own recorded answers and the committed pin, never from a
+    flag a report carries. Two engines that both answered owe either the same
+    class or the band gap design section 13.3 records; anything else is a
+    divergence, so a band gap cannot be claimed by relabelling a cell whose
+    classes the table does not support for each engine's own outcome.
+    """
+
+    for engine in ("go", "rust"):
+        if (cell.get(engine) or {}).get("kind") != "answered":
+            # A host-unsupported or blocked side answered nothing to compare
+            # (design sections 13.2 and 13.4), and a missing answer is the
+            # wedge term's business, not a class question.
+            return False, False
+    go_answer, rust_answer = (_pressure_answer(cell, "go"),
+                              _pressure_answer(cell, "rust"))
+    if go_answer == rust_answer:
+        return False, False
+    if not isinstance(pin, dict):
+        # Nothing supports an allowance for a cell the table does not define,
+        # so a difference there stays a divergence (the missing pin is itself a
+        # verdict problem, named by verify_pressure_report).
+        return True, False
+    if _pressure_divergence_is_band_gap(pin, cell, go_answer, rust_answer):
+        return False, True
+    return True, False
+
+
 def _pressure_accepted_answers(pin, engine, profile):
     """Every class this engine may answer below its own arm minimum.
 
@@ -1532,8 +1582,21 @@ def pressure_rollup(cells, profiles=None):
         "pinned_table_count": len(PINNED_PRESSURE_CLASSES),
         "pinned_table_sha256": pinned_pressure_fingerprint(),
         "agreements": sum(1 for cell in cells if cell.get("agreed")),
+        # The band gap design section 13.3 expects is reported as a band gap,
+        # never scored as a divergence: the divergence term stays what the
+        # verdict fails on, and a cell only leaves it when the pinned classes
+        # of each engine's own answer support the gap (_pressure_cell_
+        # divergence, derived from the table rather than from the cell).
         "divergences": sum(1 for cell in cells
-                           if not cell.get("agreed") and not cell.get("hung")),
+                           if _pressure_cell_divergence(
+                               PINNED_PRESSURE_CLASSES.get(
+                                   (cell.get("arm"), cell.get("profile"))),
+                               cell)[0]),
+        "band_gap": sum(1 for cell in cells
+                        if _pressure_cell_divergence(
+                            PINNED_PRESSURE_CLASSES.get(
+                                (cell.get("arm"), cell.get("profile"))),
+                            cell)[1]),
         "hangs": sum(1 for cell in cells if cell.get("hung")),
         "flaky": sum(1 for cell in cells if cell.get("flaky")),
         "vacuous": sum(1 for cell in cells if cell.get("vacuous")),
@@ -1567,8 +1630,9 @@ def verify_pressure_report(report):
         return problems + ["pressure section has no cell list"]
     for name in ("arms", "profiles", "mandatory_profiles", "cells_expected",
                  "cells_executed", "cells_missing", "pinned_table_count",
-                 "pinned_table_sha256", "agreements", "divergences", "hangs",
-                 "flaky", "vacuous", "blocked", "host_state"):
+                 "pinned_table_sha256", "agreements", "divergences",
+                 "band_gap", "hangs", "flaky", "vacuous", "blocked",
+                 "host_state"):
         if name not in pressure:
             problems.append(f"pressure rollup is missing {name!r}")
     executed = {}
@@ -1604,12 +1668,21 @@ def verify_pressure_report(report):
             continue
         for engine in ("go", "rust"):
             problems.extend(pressure_cell_problems(cell, pin, engine))
-        go_answer, rust_answer = (_pressure_answer(cell, "go"),
-                                  _pressure_answer(cell, "rust"))
-        if (cell.get("go") or {}).get("kind") == "answered" and \
-                (cell.get("rust") or {}).get("kind") == "answered" \
-                and not _pressure_divergence_is_band_gap(pin, cell, go_answer,
-                                                         rust_answer):
+        divergent, band_gap = _pressure_cell_divergence(pin, cell)
+        if bool(cell.get("band_gap")) != band_gap:
+            # The per-cell flag is a report about the table, so it is judged
+            # against the table: a cell cannot join the reported band gaps by
+            # asserting one, and a genuine band gap cannot be pushed back into
+            # the divergence count by denying it.
+            problems.append(
+                f"pressure cell ({arm}, {profile}) records band_gap="
+                f"{bool(cell.get('band_gap'))!r} where the pinned classes of "
+                f"its own answers derive band_gap={band_gap}; whether a cell "
+                f"is design section 13.3's gap is what the committed table "
+                f"says for each engine's own outcome, not a label")
+        if divergent:
+            go_answer, rust_answer = (_pressure_answer(cell, "go"),
+                                       _pressure_answer(cell, "rust"))
             problems.append(
                 f"pressure cell ({arm}, {profile}) diverged between engines: "
                 f"go {go_answer} vs rust {rust_answer}; the classes of a "
@@ -1619,8 +1692,8 @@ def verify_pressure_report(report):
     rollup = pressure_rollup(list(executed.values()),
                              pressure.get("profiles"))
     for name in ("cells_expected", "cells_executed", "agreements",
-                 "divergences", "hangs", "flaky", "vacuous", "blocked",
-                 "host_state"):
+                 "divergences", "band_gap", "hangs", "flaky", "vacuous",
+                 "blocked", "host_state"):
         if pressure.get(name) != rollup[name]:
             problems.append(
                 f"pressure rollup {name} says {pressure.get(name)!r}, the "
@@ -2777,11 +2850,32 @@ def live_run_caller_paths(args):
             ("--json-report", args.json_report))
 
 
+def _reject_profile_rooted_provenance_note(note):
+    """Refuse a provenance note that would name the operator's profile.
+
+    ``--provenance-note`` is recorded verbatim, and the committed-report writer
+    refuses any report carrying a profile path, so the note is screened here by
+    the same owner the writer uses (``command_sanitize``). Refusing at the end
+    of a run costs the whole sweep -- the routine pressure axis is about seven
+    minutes -- and leaves the operator with a red step and no report; refusing
+    at the start names the option that carried the path.
+    """
+
+    if isinstance(note, str) and personal_path_in_report({"provenance": note}):
+        raise SystemExit(
+            "--provenance-note names the operator's profile path, and it is "
+            "recorded verbatim in a committed report; pass a note that refers "
+            "to the staged binaries by a checkout-relative or scratch-dir "
+            "spelling")
+
+
 def live_run(args):
     # Durable-artifact policy, applied before any product starts: the report
     # records the measured binary, work and report paths, so a profile-rooted
     # input is how an operator-home path reaches a committed file.
     require_paths_outside_profile(live_run_caller_paths(args))
+    _reject_profile_rooted_provenance_note(
+        getattr(args, "provenance_note", None))
     for label, value in (("--go", args.go), ("--rust", args.rust),
                          ("--fixture", args.fixture)):
         if not isinstance(value, str) or not os.path.isfile(value) \
@@ -2823,10 +2917,19 @@ def live_run(args):
         print(f"pressure: {report['pressure']['cells_executed']} of "
               f"{report['pressure']['cells_expected']} cells, "
               f"{report['pressure']['divergences']} divergences, "
+              f"{report['pressure']['band_gap']} band-gap, "
               f"{report['pressure']['hangs']} hangs, "
               f"{report['pressure']['flaky']} flaky, "
               f"{report['pressure']['vacuous']} vacuous, "
               f"{report['pressure']['host_state']} host-state")
+        for cell in report["pressure"]["cells"]:
+            if cell.get("band_gap"):
+                # Reported, not scored as agreement (design section 13.3): the
+                # two engines stand on opposite sides of the Go arm's own
+                # minimum, and each kept the class the table pins for it.
+                print(f"  BANDGAP ({cell['arm']}, {cell['profile']}): "
+                      f"go={_pressure_answer(cell, 'go')} "
+                      f"rust={_pressure_answer(cell, 'rust')}")
         for cell in report["pressure"]["cells"]:
             for problem in cell.get("problems", []):
                 print(f"  PRESSURE {problem}")
@@ -2926,6 +3029,7 @@ def _fabricated_pressure_section(profiles=None):
                 cell["list_blocked"] = True
             cell["agreed"] = (not cell["list_blocked"]) and _pressure_answer(
                 cell, "go") == _pressure_answer(cell, "rust")
+            _, cell["band_gap"] = _pressure_cell_divergence(pin, cell)
             cells.append(cell)
     rollup = pressure_rollup(cells, chosen)
     rollup["failed"] = 0
@@ -3083,7 +3187,7 @@ def _sync_summary(report):
 # doctored-report cases and every control that assesses a report or mutates the
 # tables directly; adding or removing one changes this constant in the same
 # change, and a run whose total drifts from it fails.
-SELF_TEST_CASES_TOTAL = 56
+SELF_TEST_CASES_TOTAL = 61
 
 
 def _self_test():
@@ -3803,6 +3907,104 @@ def _self_test():
     with_pressure_report(hide_a_real_divergence,
                          "a divergence reported as agreement must FAIL",
                          "diverged between engines")
+
+    # --- the band gap of design section 13.3. The Go writer and worker arms
+    # reach success one or two bands above the reference, so a cell where
+    # exactly one engine completed is the expected result of the sweep: it is
+    # reported, and it is not scored as a divergence. The allowance is bounded
+    # by the pinned class each engine owes for its own band -- these controls
+    # pin both the allowance and the bound.
+
+    def the_first_band_gap_cell(report):
+        for candidate in report["pressure"]["cells"]:
+            if candidate.get("band_gap"):
+                return candidate
+        raise AssertionError("the committed tables produced no band-gap cell;"
+                             " the allowance has nothing to be about")
+
+    band_gap_cells = [cell for cell in baseline["pressure"]["cells"]
+                      if cell.get("band_gap")]
+    scored = [problem for problem in assess_report(copy.deepcopy(baseline))
+              if "diverged between engines" in problem]
+    honest = (bool(band_gap_cells)
+              and baseline["pressure"]["divergences"] == 0
+              and baseline["pressure"]["band_gap"] == len(band_gap_cells)
+              and not scored)
+    tally["controls"] += 1
+    print(f"{'ok  ' if honest else 'BAD '} reported band gap is not a divergence     "
+          f"{'':9} band_gap={len(band_gap_cells)} scored={len(scored)}")
+    if not honest:
+        failures += 1
+        for problem in scored[:3]:
+            print(f"       {problem}")
+
+    def deny_the_derived_band_gap(report):
+        # The lagging engine kept its pinned class, so the cell is the gap; a
+        # report that refuses to name it contradicts the table it copied the
+        # answers from.
+        the_first_band_gap_cell(report)["band_gap"] = False
+
+    with_pressure_report(deny_the_derived_band_gap,
+                         "denying a band gap the table derives must FAIL",
+                         "derive band_gap=True")
+
+    def claim_the_band_gap_for_another_class(report):
+        # The bound, not the allowance: the lagging engine answers a class the
+        # committed table does not pin for it, and the cell still claims the
+        # gap. Blanket acceptance is the defect this control exists to catch.
+        cell = the_first_band_gap_cell(report)
+        loser = "go" if cell["go"].get("data_code") != "RESULT" else "rust"
+        cell[loser] = {"kind": "answered", "transport_code": PRODUCT_ERROR,
+                       "data_code": "denied", "outcome": "permission_denied",
+                       "result": False, "exit_class": "refused",
+                       "verdict": "wrong-class", "why": "forged"}
+
+    with_pressure_report(claim_the_band_gap_for_another_class,
+                         "a band gap over an unpinned class must FAIL",
+                         "derive band_gap=False")
+
+    def note_pre_flight_reports_itself():
+        """The note screen runs before the sweep, on the same owner."""
+        leaky = None
+        try:
+            _reject_profile_rooted_provenance_note(
+                f"{profile_path()}/staging/SHASUMS.txt")
+        except SystemExit as exit_value:
+            leaky = str(exit_value)
+        clean = None
+        try:
+            _reject_profile_rooted_provenance_note(
+                "engines staged under the battery scratch directory and "
+                "bound by the staging-relative ledger SHASUMS.txt")
+        except SystemExit as exit_value:
+            clean = str(exit_value)
+        return (leaky is not None and "profile" in leaky
+                and clean is None
+                and _reject_profile_rooted_provenance_note(None) is None)
+
+    screened = note_pre_flight_reports_itself()
+    tally["controls"] += 1
+    print(f"{'ok  ' if screened else 'BAD '} a profile-rooted note is refused up front   "
+          f"{'':9} refused={screened}")
+    if not screened:
+        failures += 1
+
+    forged_gap = copy.deepcopy(baseline)
+    _sync_summary(forged_gap)
+    forged_gap["pressure"]["divergences"] = (
+        forged_gap["pressure"]["divergences"]
+        + forged_gap["pressure"]["band_gap"])
+    forged_gap["pressure"]["band_gap"] = 0
+    problems = assess_report(forged_gap)
+    rejected = any("pressure rollup divergences" in problem
+                   for problem in problems)
+    tally["controls"] += 1
+    print(f"{'ok  ' if rejected else 'BAD '} a rollup scoring gaps as divergences must "
+          f"FAIL{'':4} rejected={rejected}")
+    if not rejected:
+        failures += 1
+        for problem in problems[:3]:
+            print(f"       {problem}")
 
     forged_pressure = copy.deepcopy(baseline)
     _sync_summary(forged_pressure)

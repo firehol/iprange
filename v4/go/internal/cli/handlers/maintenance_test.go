@@ -15,7 +15,6 @@ import (
 	iprangedb "github.com/firehol/iprange/v4/go"
 	"github.com/firehol/iprange/v4/go/internal/cli/rpc"
 	"github.com/firehol/iprange/v4/go/internal/format"
-	"github.com/firehol/iprange/v4/go/internal/security"
 )
 
 // reservationEvidence builds one valid reservation remove evidence
@@ -244,16 +243,20 @@ func maintenanceFileIdentityOf(device, inode uint64) iprangedb.FileIdentity {
 	return identity
 }
 
-// maintenanceScratchArtifact writes one recovery-scratch artifact under its
-// exact 62-byte basename and returns its path. The 128-byte ownership
-// header follows the recorded scratch format of binary-format-v4.md:
-// magic, fixed fields, meta facts, attempt, ordinal, the platform
-// creator-only security kind, the captured creator commitment, and the
-// CRC-32C of the header with its own checksum field zeroed. The header
-// authenticates, so the row lists as authenticated and the removal
-// machine accepts it.
-func maintenanceScratchArtifact(t *testing.T, directory string, attempt [16]byte, ordinal uint32) string {
-	t.Helper()
+// maintenanceScratchHeader builds the 128-byte ownership header of one
+// recovery-scratch artifact (the recorded scratch format of
+// binary-format-v4.md): magic, fixed fields, meta facts, attempt, ordinal,
+// the platform creator-only security kind, the creator commitment the
+// artifact's access policy actually carries, and the CRC-32C of the header
+// with its own checksum field zeroed. The header authenticates, so the row
+// lists as authenticated and the removal machine accepts it.
+//
+// The caller supplies the security kind and the commitment because both
+// must describe how the artifact was actually created: the POSIX arm records
+// the 0600 creator-only mode with the captured profile commitment, and the
+// Windows arm records the protected single-ACE DACL with the commitment the
+// created file's descriptor carries.
+func maintenanceScratchHeader(attempt [16]byte, ordinal uint32, securityKind uint16, commitment [32]byte) [128]byte {
 	var header [128]byte
 	copy(header[0:8], "IPR4SCR1")
 	format.PutU16(header[8:10], 1)
@@ -264,41 +267,26 @@ func maintenanceScratchArtifact(t *testing.T, directory string, attempt [16]byte
 	copy(header[40:56], []byte{2})  // commit nonce
 	copy(header[56:72], attempt[:])
 	format.PutU32(header[72:76], ordinal)
-	securityKind := uint16(1)
-	if runtime.GOOS == "windows" {
-		securityKind = 2
-	}
 	format.PutU16(header[76:78], securityKind)
-	profile, err := security.Capture()
-	if err != nil {
-		t.Fatalf("capture the creator profile: %v", err)
-	}
-	commitment := profile.Commitment()
 	copy(header[80:112], commitment[:])
 	checksum, ok := format.CRC32CWithZeroed(header[:], 124, 4)
 	if !ok {
-		t.Fatal("the scratch header has a fixed checksum range")
+		panic("the scratch header has a fixed checksum range")
 	}
 	format.PutU32(header[124:128], checksum)
-	path := filepath.Join(directory, fmt.Sprintf(".iprange-scratch-%x-%08x.tmp", attempt, ordinal))
-	if err := os.WriteFile(path, header[:], 0o600); err != nil {
-		t.Fatalf("write the scratch artifact: %v", err)
-	}
-	return path
+	return header
 }
 
-// maintenancePrivateResidue writes one exact-pattern private artifact of
-// the given prefix whose content is neither a readable reservation record
-// nor readable v4 geometry, which is what a killed publisher leaves behind.
-// maintenance.list reports such an artifact without its optional evidence
-// members.
-func maintenancePrivateResidue(t *testing.T, directory, prefix string, attempt [16]byte) string {
-	t.Helper()
-	path := filepath.Join(directory, fmt.Sprintf("%s%x.tmp", prefix, attempt))
-	if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
-		t.Fatalf("write %s residue: %v", prefix, err)
-	}
-	return path
+// maintenanceScratchPath is the exact 62-byte basename of one
+// recovery-scratch artifact of the given attempt and ordinal.
+func maintenanceScratchPath(directory string, attempt [16]byte, ordinal uint32) string {
+	return filepath.Join(directory, fmt.Sprintf(".iprange-scratch-%x-%08x.tmp", attempt, ordinal))
+}
+
+// maintenancePrivatePath is the exact basename of one private artifact of
+// the given prefix and attempt identity.
+func maintenancePrivatePath(directory, prefix string, attempt [16]byte) string {
+	return filepath.Join(directory, fmt.Sprintf("%s%x.tmp", prefix, attempt))
 }
 
 // maintenanceListRows runs iprange.v1.maintenance.list over one directory

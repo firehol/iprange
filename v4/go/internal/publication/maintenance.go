@@ -160,10 +160,21 @@ func removeAbandonedPublicationTemp(path string, expectedDirectory LocalFileIden
 		return AbandonedArtifactRemoval{}, problem(format.CodeInvalidArgument, "publication tuple and digest evidence must both be present or absent")
 	}
 	var expected *publicationOutputEvidence
+	var payload *maintenanceRetirementPayload
 	if expectedTuple != nil {
 		expected = &publicationOutputEvidence{tuple: *expectedTuple, digest: *expectedDigest}
+		// The readable evidence is the exact content proof the GC envelope
+		// commits (Rust output.rs remove: the payload derives from the same
+		// expected tuple and digest the removal verified).
+		payload = &maintenanceRetirementPayload{
+			byteLength:    expected.digest.byteLength,
+			sha512:        expected.digest.sha512,
+			databaseID:    expected.tuple.databaseID,
+			transactionID: expected.tuple.transactionID,
+			commitNonce:   expected.tuple.commitNonce,
+		}
 	}
-	return maintenancePublicationTemp.remove(path, expectedDirectory, attempt, expectedArtifact, live.MainLifetimeOffset, check, func(file *os.File, _ live.FileIdentity) error {
+	return maintenancePublicationTemp.remove(path, expectedDirectory, attempt, expectedArtifact, live.MainLifetimeOffset, check, 0, ArtifactPrivateOutput, payload, func(file *os.File, _ live.FileIdentity) error {
 		if evidence, err := contentEvidence(file, check); err != nil {
 			return err
 		} else if !samePublicationOutputEvidence(evidence, expected) {
@@ -205,7 +216,7 @@ func removeAbandonedReservationArtifact(path string, expectedDirectory LocalFile
 	if err := live.Checkpoint(check); err != nil {
 		return AbandonedArtifactRemoval{}, sdkProblem(err)
 	}
-	return maintenanceReservationArtifact.remove(path, expectedDirectory, attempt, expectedArtifact, reservationOperationLock, check, func(file *os.File, identity live.FileIdentity) error {
+	return maintenanceReservationArtifact.remove(path, expectedDirectory, attempt, expectedArtifact, reservationOperationLock, check, 1, ArtifactPrivateReservation, nil, func(file *os.File, identity live.FileIdentity) error {
 		return requireReadableReservationBinding(file, attempt, identity)
 	})
 }

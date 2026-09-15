@@ -7,9 +7,15 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
+
+	// The sweep below reads each descriptor's kernel link target. This file is
+	// constrained to unix, which is what the package's unix-only rule requires
+	// of a test that reaches for golang.org/x/sys/unix.
+	"golang.org/x/sys/unix"
 )
 
 // The four one-shot inputs of design section 5.2 (a plain file argument, a
@@ -40,6 +46,21 @@ func TestLegacyOneShotReadsRegisterNoPoller(t *testing.T) {
 	if os.Getenv(legacyPollerFreeEnv) == "1" {
 		runLegacyPollerFreeChild()
 		return // unreachable: the child exits itself
+	}
+	// The child establishes its own descriptor table by reading each open
+	// descriptor's kernel link target, and only Linux exposes /proc/self/fd to
+	// read it from. Where the target is unavailable the child cannot tell
+	// "the product registered the poller" from "the launcher left a descriptor
+	// open", so the premise of the measurement is missing and its failure would
+	// be a host limitation reported as a product regression: skip on the stated
+	// reason instead. The question is asked of the kernel at runtime rather
+	// than read off a build tag, because a Linux host with /proc unmounted has
+	// the same problem the tag would only describe. Design section 13.5
+	// records the kqueue platforms as unmeasured by this wave.
+	if !legacyDescriptorsAreClassifiable() {
+		t.Skip("this platform exposes no /proc/self/fd, so the child cannot " +
+			"establish its own descriptor baseline; design section 13.5 records " +
+			"it as unmeasured by this wave")
 	}
 	dir := t.TempDir()
 	entries := filepath.Join(dir, "entries")
@@ -83,6 +104,15 @@ func TestLegacyOneShotReadsRegisterNoPoller(t *testing.T) {
 	if !strings.Contains(text, "LEGACY_POLLER_FREE_OK") {
 		t.Fatalf("the child never reported a completed read set:\n%s", text)
 	}
+	// The child caps its table at legacyPollerFreeLimit and then performs four
+	// real reads, so two descriptors it never claimed are enough to make the
+	// first read answer EMFILE. Requiring the baseline report is what keeps
+	// "the child freed its table" from becoming an assumption rather than an
+	// observation.
+	if !strings.Contains(text, "LEGACY_POLLER_FREE_STRAY=") {
+		t.Fatalf("the child never reported its descriptor baseline, so it read against a "+
+			"table it did not establish:\n%s", text)
+	}
 }
 
 // TestLegacyOneShotReadsUseTheOwner is the structural half of the same pin.
@@ -113,6 +143,18 @@ func TestLegacyOneShotReadsUseTheOwner(t *testing.T) {
 }
 
 func runLegacyPollerFreeChild() {
+	// Coverage is the parent's business, not the child's: the child exists to
+	// measure one thing and exit. A child that inherits GOCOVERDIR opens its own
+	// counter file at exit, that open goes through os.OpenFile, and on Linux
+	// os.newFile arms the runtime network poller (os/file_unix.go:219 ->
+	// internal/poll.(*FD).Init -> netpollGenericInit). Under the descriptor table
+	// this case owns, that registration is the allocation with no failure path,
+	// and the resulting netpollinit abort reads as a product poller regression
+	// caused by the harness. Clearing it here keeps emission off; only the
+	// parent's own run contributes coverage data. Must stay the first statement,
+	// before any work that could take a descriptor.
+	os.Unsetenv("GOCOVERDIR")
+
 	paths := strings.Split(os.Getenv("IPRANGE_GO_LEGACY_POLLER_FREE_ARGS"),
 		string(os.PathListSeparator))
 	if len(paths) != 3 {
@@ -120,6 +162,11 @@ func runLegacyPollerFreeChild() {
 		os.Exit(2)
 	}
 	entry, list, batch := paths[0], paths[1], paths[2]
+	stray, strayOK := closeInheritedDescriptors()
+	if !strayOK {
+		fmt.Println("LEGACY_POLLER_FREE_ERR=descriptor-baseline:" + stray)
+		os.Exit(2)
+	}
 	var zero syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &zero); err != nil {
 		fmt.Println("LEGACY_POLLER_FREE_ERR=getrlimit:" + err.Error())
@@ -156,6 +203,99 @@ func runLegacyPollerFreeChild() {
 	if _, err := expandAt(o, resolver, list, &lastSource, &dnsUsed); err != nil {
 		fail("expand-list", err)
 	}
+	fmt.Println("LEGACY_POLLER_FREE_STRAY=" + stray)
 	fmt.Println("LEGACY_POLLER_FREE_OK")
 	os.Exit(0)
+}
+
+// closeInheritedDescriptors releases every descriptor above the three standard
+// streams that this child did not claim, and reports what it released and what
+// it deliberately kept. It must run before the child caps RLIMIT_NOFILE, so
+// that the two numbers legacyPollerFreeLimit leaves free are the case's own.
+//
+// Go's Linux exec path installs no descriptor sweep in the child (syscall
+// carries no CloseFds arm; the child's table is whatever survived execve), so a
+// descriptor an outer launcher holds without FD_CLOEXEC arrives here. The wave
+// battery is that launcher: `exec 3>&1 4>&2` keeps its own stdout and stderr
+// duplicated for its whole run, and under `go test ./...` those two
+// descriptors land in this child, which is why the case passed on its own and
+// failed in the battery with "Too many open files" on the first read.
+//
+// The sweep is narrow on purpose: closing a descriptor the runtime owns would
+// turn a host-state problem into a broken process. The standard streams are
+// never touched, and a descriptor whose kernel link target names an inode
+// family the runtime uses (or that cannot be read at all, because the platform
+// exposes no /proc/self/fd) is kept and reported instead of closed; the reads
+// below then fail loudly on a table the case did not establish, which is the
+// honest verdict.
+//
+// Discovery uses fcntl(F_GETFD) rather than a directory walk so the sweep takes
+// no descriptor of its own. internal/calleropen/child_fd_baseline_test.go owns
+// the same sweep for that package's children; it cannot be shared, because an
+// unexported test helper cannot cross a package boundary and the alternatives
+// would either add a descriptor-destroying call to the product surface or
+// change the module's package inventory that the committed coverage reports pin.
+// legacyDescriptorsAreClassifiable reports whether this platform lets the
+// sweep below identify an open descriptor by its kernel link target. Linux
+// exposes /proc/self/fd; darwin uses /dev/fd and netbsd, openbsd and dragonfly
+// expose no descriptor link namespace there at all, so a Readlink would fail
+// for every number and the sweep could not tell a stray descriptor from a
+// poller descriptor. The answer is asked of the kernel rather than read off a
+// build tag, because a Linux host with /proc unmounted has the same problem
+// the tag would only describe.
+func legacyDescriptorsAreClassifiable() bool {
+	var buffer [1]byte
+	length, err := unix.Readlink("/proc/self/fd/0", buffer[:])
+	return err == nil && length > 0
+}
+
+func closeInheritedDescriptors() (string, bool) {
+	// The scan window is this child's own ceiling, bounded so the sweep is
+	// constant work regardless of what the host allows.
+	const scanBound = 4096
+	window := uint64(scanBound)
+	// Rlimit.Max is uint64 on Linux, OpenBSD, NetBSD and Darwin but int64 on
+	// FreeBSD and DragonFly, so it is normalized before the comparison; see
+	// fd_pressure_limit_bsd_test.go for the same platform split.
+	var limit syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &limit); err == nil {
+		if hard := uint64(limit.Max); hard > 0 && hard < window {
+			window = hard
+		}
+	}
+	var closed, kept []string
+	for fd := 3; fd < int(window); fd++ {
+		if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err != nil {
+			continue // not an open descriptor
+		}
+		number := strconv.Itoa(fd)
+		var buffer [256]byte
+		length, linkErr := unix.Readlink("/proc/self/fd/"+number, buffer[:])
+		switch {
+		case linkErr != nil:
+			kept = append(kept, number+"=unclassifiable:"+linkErr.Error())
+		case strings.HasPrefix(string(buffer[:length]), "anon_inode:"),
+			strings.HasPrefix(string(buffer[:length]), "signalfd:"),
+			strings.HasPrefix(string(buffer[:length]), "pidfd:"):
+			kept = append(kept, number+"=runtime:")
+		default:
+			if err := unix.Close(fd); err != nil {
+				kept = append(kept, number+"=close-failed:"+err.Error())
+				continue
+			}
+			closed = append(closed, number+"="+baseNameOf(string(buffer[:length])))
+		}
+	}
+	if len(closed) == 0 && len(kept) == 0 {
+		return "none", true
+	}
+	return "closed[" + strings.Join(closed, ",") + "] kept[" + strings.Join(kept, ",") + "]", true
+}
+
+// baseNameOf shortens one link target enough to recognize it in a report.
+func baseNameOf(target string) string {
+	if i := strings.LastIndex(target, "/"); i >= 0 {
+		return target[i+1:]
+	}
+	return target
 }

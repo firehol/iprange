@@ -147,6 +147,31 @@ completion conditions in the wave-19.25 section.  The <=1.3x performance
 gate remains FAILED, not waived (pending SOW-0030 owns engine
 residuals); SOW-0017 stays paused; milestone 5 is unstarted.
 
+Wave-19.25b state (2026-09-15): the 17-step battery failure at the
+wave-19.25 merged tree traced to six root causes — cross-compile partition
+holes in the Go caller-open arms, deterministic descriptor inheritance into
+fd-capped test children from the battery launcher's non-CLOEXEC log
+redirections, a fatal coverage-instrumentation poller arm in the re-exec
+children, a provenance note that embedded the operator profile path (also
+behind the parity and race step refusals), parity-rollup reporting that
+displayed the pinned Go-band-above-Rust cells as divergences on a passing
+gate, and a genuine Go product gap for Windows maintenance-artifact
+retirement with fixture residue no publisher could have left.  All six are
+closed with reproduction-and-mutation evidence in the wave-19.25b section;
+the shared control surface moved 31 -> 40 -> 47, kind-gate self-test 106 ->
+110 rejection + 4 acceptance, parity self-test 56 -> 61, coverage 19, race
+battery 22 + 6, and the integrated verification pass is green everywhere
+except the two Windows win-ledger digests that the native re-qualification
+leg will refresh.  The delivered battery is the self-identifying pair
+(`run_battery_w1925.sh` launcher + `battery-w1925.sh`, SHA-256
+38830d8633a4fc3f3ab5824f3743cc9e0e659f7c69d26a022de779fa5f2e7b94).  Open:
+native Windows re-qualification at this revision, the full battery rotation,
+the `--pressure full` axis at the milestone gate, the eight-role re-anchor
+round, and the external control review; the closure decision stays with the
+user.  The <=1.3x performance gate remains FAILED, not waived (pending
+SOW-0030 owns engine residuals); SOW-0017 stays paused; milestone 5 is
+unstarted.
+
 Wave-19.23 state (2026-09-14): the eight-role adversarial round
 reviewed the wave-19.22 final revision `cfbee7887fb71de67df35ea913d6f7ae70c5c011`
 and every role returned FAIL — 38 numbered findings total
@@ -15619,3 +15644,209 @@ role's report is retained in its sandbox and its verdict is delivered
 out-of-band; no repository commit follows an accepted round, so the
 reviewed revision remains HEAD at closure.  The external cross-model
 control session remains the last check.
+
+## Wave-19.25b repair continuation (2026-09-15)
+
+### Anchor
+
+The full Linux battery (`/tmp/qualsvc/battery-w1925.sh` at the state recorded
+below) ran 2026-09-15 06:4x–07:14 against the merged tree and finished
+`BATTERY_MISMATCHES: 17`.  Every mismatch traces to one of six root causes;
+all six are closed here, each by a worker report with reproduction, fix, and
+mutation evidence, then by one integration verification pass over the merged
+tree (all 40 executable gates green, `TREE-READY` after the three README
+control pins below were corrected).
+
+### Root causes and repairs
+
+1. Cross-compile partition holes in `v4/go/internal/calleropen` and
+   `internal/snapshot` tests (battery [4]).  `WaitUntil`
+   (`wait_unix_common.go`, `//go:build unix`) called `Sleep`, which was
+   defined only for `linux || freebsd`, `darwin`, and `!unix`; every other
+   unix family had no arm.  The partition is now `unix && !darwin && !ios`
+   (clock_nanosleep/`unix.Nanosleep`), `darwin || ios` (select(2)), `!unix`
+   (documented timer fallback) — disjoint and exhaustive; kqueue platforms
+   keep a non-timer sleep because their poller allocates a descriptor.
+   `unix.Mkdev` returns uint64 only on FreeBSD, so the snapshot mknod test
+   helper split into per-GOOS files.  A second silent gap was found by audit:
+   `poller_table_windows.go` carried `//go:build !unix` but the `_windows`
+   filename independently restricted it to GOOS=windows, leaving plan9/js/
+   wasip1 with no `FreeDescriptors` (the gate vets only Windows, so the gap
+   was invisible); renamed to `poller_table_other.go` with the naming rule
+   documented.  `go build ./internal/calleropen` now succeeds for all 15
+   supported GOOSes (build success also proves exactly-one definition), and
+   `check_goos_matrix.sh` reports 15 ran / 1 skipped, rc 0.
+
+2. Deterministic full-module failures (battery [2]) — root cause, not
+   flakiness: the battery launcher holds `exec 3>&1 4>&2` without
+   `FD_CLOEXEC`, and Go's Linux exec performs no descriptor sweep, so every
+   re-exec'd fd-capped test child started with two descriptors it never
+   claimed (`+2` over the established baseline with the child's own counters
+   reading `POLLER=0 EVENTPOLL=0 EVENTFD=0`).  Each such child now
+   establishes its own descriptor baseline before lowering `RLIMIT_NOFILE`
+   (discovery via `fcntl(F_GETFD)`, classification via `/proc/self/fd`,
+   stdio and runtime-owned `anon_inode:`/`signalfd:`/`pidfd:` kept and
+   reported, unclassifiable kept and reported), the parents require the
+   reported stray field, and a kernel-asked probe skips honestly on platforms
+   without `/proc/self/fd` (mutation-proven: without the guard the legacy
+   case blames a host limit on the product and the calleropen case passes
+   vacuously).  Neutralizations M8/M9/M11–M14 each turn the suite red.
+
+3. `go test -cover` was fatal in the three re-exec children (coverage
+   counter-file open arms the poller under the cap: `epollcreate failed with
+   24`, `fatal error: runtime: netpollinit failed`): `os.Unsetenv
+   ("GOCOVERDIR")` is now the first statement of every re-exec child entry
+   (`runWaitPollerFreeChild`, `runLegacyPollerFreeChild`,
+   `runTightEntropyChild`, readiness child).  Load-bearing at caps 4 and 5
+   (mutation-red); at the readiness child's soft limit 6 the arithmetic shows
+   file+epoll+eventfd fit, so the clear there is determinism-only and is
+   recorded as not independently observable, in the style of the Rust
+   pre-fork disclosure.  Battery [18b] coverage then runs green (self-test 19
+   controls; unit 48.57 % / integration 41.29 % / merged 60.06 % statements —
+   figures will be regenerated by the rotation run).  A portability bug
+   surfaced by the new tests was fixed: `Rlimit.Max` is int64 on
+   freebsd/dragonfly; both sweeps normalize with `uint64(rlimit.Max)`.
+
+4. Parity gate live (battery [9b]) exited rc 1 for a producing-side reason:
+   the battery's single `--provenance-note` embedded the absolute checkout
+   path, so the shared committed-report writer's personal-path scan refused
+   the report after the 400 s sweep.  The note now comes from one
+   `render_provenance_note()` source rendered through the sanitizer, pinned
+   path-free by a new battery step that screens for personal paths, the
+   verbatim checkout root, and any absolute path (mutation-proven, including
+   the exact 07:14 string).  Separately the gate's pressure rollup printed
+   "12 divergences" while the verdict correctly PASSed: the 12 cells are the
+   pinned Go-bands-above-Rust band-gap cells of the measured register
+   (winner completes, loser answers its own pinned exhaustion class).  The
+   divergence count is now derived from the pinned table by a single
+   `_pressure_cell_divergence` used by the sweep, the rollup, and the
+   verifier (a report claiming or denying a gap the table disagrees with is
+   red in both directions); band-gap cells are reported, not scored;
+   self-test 56 -> 61 controls.  Three consecutive full sweeps at the shipped
+   bytes: rc 0, 483/483 cells, 0 divergences, 36/36 pins, pressure 108/108
+   with 12 band-gap and 9 host-state, deterministic cell set, ~396 s per
+   step.  The gate also refuses a profile-rooted provenance note at t=0.
+
+5. Maintenance artifact removal on Windows (open validation item 2) was a
+   real product gap in Go plus a fixture-truthfulness gap in both engines.
+   Measured natively: `maintenanceArtifact.remove` had no Windows arm; the
+   POSIX `UnlinkExact` it would need cannot prove absence while it holds the
+   handle (its own `RequireAbsent` open answers ERROR_ACCESS_DENIED —
+   permanently pinned by `TestUnlinkExactCannotProveAbsenceWhileItHoldsThe
+   Handle`), and fixtures planted residue with `0o600`-style modes that
+   cannot produce the creator-only DACL the native security proof requires.
+   Go now retires maintenance artifacts through the attempt-bound GC envelope
+   exactly like the Rust reference (`retire_windows`/`resume_windows`
+   semantics: ordinal/kind/payload retirement authority, creator-only
+   commitment committed into the envelope, housekeeping facts become the
+   removal outcome; the POSIX arm moved verbatim and stays bit-exact),
+   reachable only after adding the arm; that arm's first call also exposed a
+   latent fixed-buffer panic in `gcPrivateName` (sized from the output
+   prefix, 17, while the reservation prefix is 21) — fixed via
+   `gcMaxPrivatePrefix` and pinned.  Windows fixtures create residue through
+   the SDK creator-only path on both engines; the Rust scratch round-trip
+   `#[cfg(unix)]` gate is lifted (the Windows round-trip is now proven).
+   One new SDK-visible item, lead-approved: a single `#[doc(hidden)] pub`
+   cross-crate creator `create_private_artifact` (file, commitment) over the
+   existing private `create_private` + `creator_only_commitment`, following
+   the recorded `c_abi_support::worker_main` precedent; unix-gating the Rust
+   round-trips again was the rejected alternative.  Native re-qualification:
+   host Go suite 24 ok packages / 0 failures, `cargo test -p iprange-cli`
+   341 passed / 0 failed, 6/6 judgment pins, zero UNSCORED, both harness
+   legs green; the two committed Windows reports were installed with
+   `checkout_root` null.  The Windows build identity was cross-checked
+   against a local recompute (same digest over 357 sources).  The battery
+   win-binary restage and the kind-gate win-ledger match remain for the
+   rotation run below.
+
+6. Evidence-gate integrity repairs found by the qualification chain: the
+   committed-report writer now records `checkout_root` null unconditionally
+   (option A; every committed artifact already recorded null, so the
+   non-null branch was dead privacy-surface code whose live failure mode was
+   a writer that refused its own reports from a non-profile checkout; the
+   runtime consumers — runner work/report-path refusals — are retained, and
+   the reader-side non-null judgement is kept for staged artifacts,
+   cross-checkout control included); a Windows drive-relative case literal
+   is judged as data (two pinned spellings, pure `ntpath`) instead of
+   resolving through the process cwd, so identical reports no longer pass or
+   fail by launch directory (AST-pinned: no `abspath` in the report scan,
+   kernel `realpath` kept for input screening); the kind gate accepts
+   authentic native `rustc` captures (`host`/`host:` on any line of a `-vV`
+   block; every named host must be `*-pc-windows-msvc`, foreign-host
+   forgeries rejection-controlled) instead of only a hand-collapsed single
+   line; the crash-negative self-test arity crash is fixed (`aligned_paths`
+   enforces one staged path per loaded report; the swap-under-attested-name
+   control now genuinely exercises both negative artifacts);
+   `genuine_mutation_fails` consumes the real two-report crash set instead
+   of one; races reports gained per-attempt and per-detection host context
+   (run queue, load average, nproc, deadline) recorded as facts with the
+   anti-escape-hatch pin that an `engine-hang` fails whatever the numbers
+   say (22 mutation + 6 committed-report writer controls), and
+   `race-battery.json` is committed evidence authored through the shared
+   writer with an install gate that re-derives the producer's contract
+   (missing privacy block, dropped screened option, dropped host context,
+   or contradicted oversubscription all refuse the install).
+   Shared control count history for the record: 31 -> 40 (drive-relative and
+   AST controls) -> 47 (checkout-root null group); the shipped constant is
+   `PROVENANCE_SELF_TEST_CHECKS = 47` and all 14 consumers pin
+   `executed=47 expected=47`; kind-gate `--self-test` is 110 rejection + 4
+   acceptance controls; parity `--self-test` 61; coverage 19;
+   windows_guard 38 + 1 native-only.  The three stale pins in
+   `v4/cli/evidence/README.md` (56, 106, 59) were corrected to match.
+
+### Battery identity
+
+The script evolved under the repair workers; the delivered file is
+`/tmp/qualsvc/battery-w1925.sh`, SHA-256
+`38830d8633a4fc3f3ab5824f3743cc9e0e659f7c69d26a022de779fa5f2e7b94`
+(78,128 bytes, measured on disk 2026-09-15).  Earlier digests recorded for
+this path during the repair (`bdd7db84…`, `fe99065c…`, `b7044ab7…`,
+`603bc62f…`, `f73a737d…`) are superseded; as before, the identity of a run
+is the digest its launcher prints at run start, and the launcher is
+`/tmp/qualsvc/run_battery_w1925.sh`, whose first console-log action is
+`sha256sum` of the script it is about to execute (open validation item 4,
+satisfied by the launcher, not the script).
+
+### Validation state after this section
+
+Integrated verification pass over the merged tree: `go vet` 0; full Go suite
+0 (25 ok, 0 FAIL); `-cover` trio 0; Rust workspace 968 passed / 0 failed;
+clippy clean on new code; `cargo fmt --check` failures byte-identical to the
+pre-existing baseline (zero newly unformatted); GOOS matrix 15 ran / 1
+skipped; `GOOS=windows go vet` 0; every harness self-test green at its
+pinned count; committed-report privacy scan clean; index clean.  A bounded
+Linux-side `cargo check` for the `x86_64-pc-windows-gnu` target compiled the
+new `#[cfg(windows)]` Rust lines with 0 errors (native proof remains the
+Windows leg).  Open, in order: (1) native Windows re-qualification at this
+committed revision to refresh the win ledger entries and the two Windows
+reports together (clears the last two kind-gate complaints); (2) the full
+battery at this revision via the self-identifying launcher, rotating every
+consumed report and the manifest to one revision with the kind gate and its
+self-test rc 0 (open validation items 1 and 4); (3) the `--pressure full`
+axis at the milestone gate (item 3); (4) the eight-role re-anchor round and
+the glm whole-milestone round at the exact final revision; (5) external
+control review; (6) the milestone-4 closure decision, which remains the
+user's.  The <=1.3x performance gate remains FAILED, not waived (pending
+SOW-0030 owns engine residuals); SOW-0017 stays paused; milestone 5 is
+unstarted.
+
+### Carried findings (not parked silently)
+
+- The Go reader-coordination sidecar's second descriptor hold (band gap 8
+  vs 6 on `direct.replace` et al.) remains open contract finding 3 with its
+  completion condition.
+- `genuine_mutation_fails` still consumes one crash report while the
+  manifest attests two; verified no control rests on the ambient complaint
+  alone; normalizing that is a follow-up in this SOW's scope.
+- Lifecycle-label identifiers persist in some durable-artifact prose
+  (`command_sanitize.py:392/2218/2364`, `check_kind_coverage.py:8003`,
+  `check_golden.py:316`, `coverage_harness.py:741`, `sensitivity_gate.py:160`,
+  `windows_guard_harness.py:410`, `fd_pressure_harness.py:2/1235`,
+  `check_refusal_class_parity.py:605`); same prose rule as the fixed
+  `recorded_checkout_root` docstring; to be renamed to content-based
+  identities in the next records pass of this SOW.
+- Pre-existing cross-compile debt outside the gated matrix (`internal/live`
+  and `internal/cli/legacy` on solaris/illumos/aix; `parse_strerror_other.go`
+  duplicate key on aix) — same bug class as repair 1; a whole-module
+  all-GOOS vet leg needs its own SOW because it would fail today; not a
+  regression of this wave and not silently deferred: tracked here.

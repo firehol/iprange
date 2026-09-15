@@ -699,12 +699,16 @@ def _report_checkout_root(report):
     to (the producer's recorded root), or the reviewing gate's own
     checkout root when the report does not record one.
 
-    The runner records a non-personal producer checkout root in the
-    report (``checkout_root``); resolving against it keeps the
-    binary-identity binding stable when the evidence is assessed from
-    another clone.  Personal producer roots are never recorded, so
-    the fallback is the gate's checkout — the same authority the
-    sanitizer uses when it rewrites those values."""
+    The shared committed-report writer owns ``checkout_root`` and
+    records null unconditionally (``command_sanitize
+    .report_provenance``), so every committed report takes the
+    fallback below: the gate's own checkout, the same authority the
+    sanitizer uses when it rewrites those values.  The staged value is
+    still judged rather than trusted, because a report that was staged
+    rather than committed, or hand-edited after staging, can carry any
+    string here; only a non-empty absolute path is honoured, and null,
+    absent, empty, and relative spellings all resolve the same way an
+    absent one does."""
     root = (report or {}).get("checkout_root")
     if isinstance(root, str) and root and os.path.isabs(root):
         return root
@@ -3682,6 +3686,43 @@ def crash_negative_evidence(path, report, implementation_of, problems):
     return len(scenarios)
 
 
+def _rustc_record_problems(where, value, problems):
+    """Require the recorded rustc version string to be a native Windows one.
+
+    rustc prints its identity in two authentic shapes.  ``rustc --version``
+    prints the version banner alone (``rustc 1.97.1 (8bab26f4f 2026-07-14)``)
+    and no host at all; the host only appears in ``rustc -vV``, which prints a
+    ``key: value`` block whose host line is spelled ``host: <triple>``.  Both
+    are honest native captures and both are accepted here, in either the
+    ``host:`` or the ``host <triple>`` spelling, on any line of the record.
+
+    A record still cannot pass when it names a host that is not the MSVC
+    Windows triple.  The banner alone carries no host, so the host of a
+    banner-only record comes from ``toolchain.host_triple``, which the caller
+    requires to name a windows-msvc host; a record that names a host and
+    contradicts that member is a record made on another machine, and a string
+    that is not a rustc version record at all is not a toolchain capture.
+    """
+
+    if not isinstance(value, str) or not re.search(
+            r"\brustc\s+\d+\.\d+(\.\d+)?\b", value.strip()):
+        problems.append(
+            f"{where}: toolchain rustc {value!r} is not a rustc version "
+            f"record; native Windows evidence cannot come from a record made "
+            f"on another host")
+        return
+    # One capture per host line, in either spelling; a record may name none
+    # (the ``--version`` banner) but may not name one that is not Windows.
+    named = re.findall(r"\bhost(?:[ \t]*:[ \t]*|[ \t]+)"
+                       r"([A-Za-z0-9_.+-]+)", value)
+    if any(not re.fullmatch(r"[A-Za-z0-9_.+-]*-pc-windows-msvc", host)
+           for host in named):
+        problems.append(
+            f"{where}: toolchain rustc {value!r} does not name a "
+            f"windows-msvc Rust host; native Windows evidence cannot come "
+            f"from a record made on another host")
+
+
 def windows_provenance_evidence(path, report, ledger, problems,
                                 linux_digests=()):
     """Consume the native Windows qualification report.
@@ -3734,20 +3775,15 @@ def windows_provenance_evidence(path, report, ledger, problems,
     if not isinstance(toolchain, dict):
         problems.append(f"{where}: build_provenance records no toolchain")
     else:
-        for member, pattern, meaning in (
-                ("go", r"^go version go1\.\d+(\.\d+)? windows/(amd64|arm64)$",
-                 "a Windows Go toolchain"),
-                ("rustc",
-                 r"\brustc\s+\d+\.\d+(\.\d+)?\b.*host "
-                 r"[A-Za-z0-9_-]+-pc-windows-msvc",
-                 "a windows-msvc Rust host")):
-            value = toolchain.get(member)
-            if not isinstance(value, str) \
-                    or not re.search(pattern, value.strip()):
-                problems.append(
-                    f"{where}: toolchain {member} {value!r} does not name "
-                    f"{meaning}; native Windows evidence cannot come from a "
-                    f"record made on another host")
+        go_value = toolchain.get("go")
+        if not isinstance(go_value, str) or not re.search(
+                r"^go version go1\.\d+(\.\d+)? windows/(amd64|arm64)$",
+                go_value.strip()):
+            problems.append(
+                f"{where}: toolchain go {go_value!r} does not name a Windows "
+                f"Go toolchain; native Windows evidence cannot come from a "
+                f"record made on another host")
+        _rustc_record_problems(where, toolchain.get("rustc"), problems)
         host_triple = toolchain.get("host_triple")
         if not isinstance(host_triple, str) \
                 or "windows-msvc" not in host_triple:
@@ -5698,6 +5734,17 @@ def _self_test():
     genuine_matrix_paths = [os.path.join(evidence_dir, f"matrix-{m}.json")
                             for m in REQUIRED_MATRICES]
     genuine_crash = os.path.join(evidence_dir, "crash.json")
+    # The battery installs one crash report per direction, so the committed
+    # crash set is ``crash.json`` plus every ``crash-<direction>.json`` beside
+    # it (discovered the way the crash-negative class already is).  An anchor
+    # that consumed only ``crash.json`` could never match a manifest bound to
+    # the full set: it reported a manifest/content disagreement for a report
+    # it had never read.
+    genuine_crash_reports = [genuine_crash] + sorted(
+        os.path.join(evidence_dir, name)
+        for name in os.listdir(evidence_dir)
+        if name.startswith("crash-") and not name.startswith("crash-negative")
+        and name.endswith(".json"))
     genuine_fifo = [os.path.join(evidence_dir, "fifo-surface.json")]
     genuine_throughput = [os.path.join(evidence_dir, "throughput.json")]
     genuine_parity = os.path.join(evidence_dir, "refusal-class-parity.json")
@@ -5825,7 +5872,15 @@ def _self_test():
         # against deleting a control, which would otherwise lower the
         # requirement silently instead of failing it.
         results: list = []
-        min_controls = 106
+        # Acceptance controls are the mirror image of the battery above: each
+        # one mutates a committed report into a shape the gate must NOT reject,
+        # so that a rule which only ever rejects cannot hide a lost capability.
+        # They are a separate pinned list for the same reason ``results`` is:
+        # an assertion deleted from one helper must not turn a refused
+        # authentic capture into a passing self-test.
+        accepted_controls: list = []
+        min_controls = 110
+        min_acceptance_controls = 4
 
         def assess(matrix_paths, crash_paths, **kwargs):
             head = None
@@ -6579,7 +6634,7 @@ def _self_test():
             return matrices, crash
 
         problems, _c, _s = outer_assess(
-            genuine_matrix_paths, [genuine_crash], fifo_paths=genuine_fifo,
+            genuine_matrix_paths, genuine_crash_reports, fifo_paths=genuine_fifo,
             throughput_paths=genuine_throughput,
             sha256_ledger=_wave_ledger_path())
         blocking = outside_parity_rotation(problems)
@@ -6590,9 +6645,31 @@ def _self_test():
 
         _INHERIT = object()
 
+        def aligned_paths(label, prefix, supplied, sources):
+            """One staged path per report of a prefix-discovered class.
+
+            ``crash-negative`` is found by filename prefix, so a control that
+            hands in its own path list has to cover the class as the evidence
+            directory holds it.  Silence here would mean a report the gate
+            never read, and a short list an IndexError that took the whole
+            battery down with it.
+            """
+
+            if supplied is None:
+                return [
+                    os.path.join(work, f"{prefix}-{label}-neg-{index}.json")
+                    for index in range(len(sources))]
+            if len(supplied) != len(sources):
+                raise AssertionError(
+                    f"self-test control {label!r} named {len(supplied)} "
+                    f"crash-negative paths for a class holding "
+                    f"{len(sources)} reports; consuming a prefix-discovered "
+                    f"class means consuming all of it")
+            return list(supplied)
+
         def genuine_mutation_fails(label, mutator, mutator_kind=None,
                                    ledger=None, manifest_ledger=_INHERIT,
-                                   **assess_kwargs):
+                                   register=True, **assess_kwargs):
             """Mutate one committed report and require the gate to reject it.
 
             ``mutator_kind`` selects which consumed report the mutator edits:
@@ -6600,6 +6677,10 @@ def _self_test():
             crash report, ``"fifo-surface"`` and ``"throughput"`` mutate the
             single surface report of that name.  The remaining reports stay
             genuine so a control isolates one defect.
+
+            ``register=False`` runs the same mutated battery without claiming a
+            slot in the rejection battery, for the acceptance controls that
+            require the opposite verdict.
             """
 
             matrices, crash = load_genuine()
@@ -6650,10 +6731,16 @@ def _self_test():
                     work, f"genuine-{label}-throughput-{index}.json")
                 assign(path, report)
                 throughput_paths.append(path)
-            negative_paths = assess_kwargs.pop(
-                "crash_negative_paths", None) or [
-                    os.path.join(work, f"genuine-{label}-neg-{index}.json")
-                    for index in range(len(negative_reports))]
+            # The negative-control class is discovered by filename prefix, so
+            # its size is a property of the evidence directory and not of the
+            # control.  A control that names its own paths must consume every
+            # report the class holds: consuming fewer used to raise IndexError
+            # from inside this helper and kill the whole battery instead of
+            # reporting the one control that was mis-written.
+            negative_paths = aligned_paths(
+                label, "genuine",
+                assess_kwargs.pop("crash_negative_paths", None),
+                negative_reports)
             for index, report in enumerate(negative_reports):
                 assign(negative_paths[index], report)
             parity_paths = assess_kwargs.pop("parity_paths", None) or [
@@ -6689,8 +6776,30 @@ def _self_test():
                 parity_paths=parity_paths, coverage_paths=coverage_paths,
                 crash_negative_paths=negative_paths,
                 windows_paths=windows_paths, **assess_kwargs)
-            results.append((label, bool(problems), problems))
+            if register:
+                results.append((label, bool(problems), problems))
             return problems
+
+        def genuine_mutation_is_accepted(label, mutator, must_stay_clean,
+                                         mutator_kind=None, **assess_kwargs):
+            """Mutate a committed report and require the gate to stay quiet
+            about ``must_stay_clean``.
+
+            The mirror image of ``genuine_mutation_fails``.  A rule that only
+            ever rejects is indistinguishable from a rule that lost the ability
+            to read the real thing, so every rejection rule needs a positive
+            anchor over the shapes an authentic producer emits.  The verdict is
+            recorded, not asserted in place, for the same reason the rejection
+            battery is: dropping an assertion in one helper must not be able to
+            turn a refused authentic record into a passing self-test.
+            """
+
+            problems = genuine_mutation_fails(
+                label, mutator, mutator_kind=mutator_kind, register=False,
+                **assess_kwargs)
+            accepted_controls.append(
+                (label, [problem for problem in problems
+                         if must_stay_clean in str(problem)]))
 
         # Abbreviated overrides: the real runners select these values
         # with argparse abbreviations enabled, so the mutated command
@@ -7751,16 +7860,20 @@ def _self_test():
                              or os.path.join(work, f"w24-{label}-coverage.json")]
             assign(coverage_paths[0], extra.get("coverage_report")
                    or _json.load(open(genuine_coverage, encoding="utf-8")))
-            negative_paths = extra.get("crash_negative") or [
-                os.path.join(work, f"w24-{label}-neg-{index}.json")
-                for index in range(len(genuine_negative))]
-            for index, source in enumerate(genuine_negative):
-                if extra.get("crash_negative_reports") is None:
-                    assign(negative_paths[index],
-                           _json.load(open(source, encoding="utf-8")))
-                else:
-                    assign(negative_paths[index],
-                           extra["crash_negative_reports"][index])
+            supplied_reports = extra.get("crash_negative_reports")
+            if supplied_reports is None:
+                supplied_reports = [_json.load(open(source, encoding="utf-8"))
+                                    for source in genuine_negative]
+            negative_paths = aligned_paths(
+                label, "w24", extra.get("crash_negative"), supplied_reports)
+            if len(supplied_reports) != len(negative_paths):
+                raise AssertionError(
+                    f"self-test control {label!r} supplied "
+                    f"{len(supplied_reports)} crash-negative reports for "
+                    f"{len(negative_paths)} paths; consuming a "
+                    f"prefix-discovered class means consuming all of it")
+            for index, report in enumerate(supplied_reports):
+                assign(negative_paths[index], report)
             windows_paths = [extra.get("windows")
                              or os.path.join(work, f"w24-{label}-windows.json")]
             assign(windows_paths[0], extra.get("windows_report")
@@ -7957,7 +8070,7 @@ def _self_test():
                     "observed": "fabricated for the control",
                 }}
             problems, _c, _s = outer_assess(
-                genuine_matrix_paths, [genuine_crash],
+                genuine_matrix_paths, genuine_crash_reports,
                 fifo_paths=genuine_fifo, throughput_paths=genuine_throughput)
             # Match the entry the control itself injected, by case name and
             # by the verdict word, so this cannot be satisfied by the
@@ -8388,6 +8501,73 @@ def _self_test():
                                windows_rustc_toolchain,
                                mutator_kind="windows-housekeeping")
 
+        # The four spellings a native capture actually produces.  ``rustc
+        # --version`` prints the version banner and no host at all, ``rustc
+        # -vV`` prints a ``key: value`` block whose host line is
+        # ``host: <triple>``, and a filtered capture yields the collapsed
+        # ``host <triple>`` line.  The first is the string the committed
+        # Windows report carries, so a matcher that refused it could only be
+        # satisfied by hand-editing the toolchain record.
+        VV_BLOCK = ("rustc 1.97.1 (8bab26f4f 2026-07-14)\n"
+                    "binary: rustc\n"
+                    "commit-hash: 8bab26f4f1e0e0e0d6f2f3b3b3b3b3b3b3b3b3b3\n"
+                    "commit-date: 2026-07-14\n"
+                    "host: {host}\n"
+                    "release: 1.97.1\n"
+                    "LLVM version: 21.1.2\n")
+        WINDOWS_HOST = "x86_64-pc-windows-msvc"
+        FOREIGN_HOST = "x86_64-unknown-linux-gnu"
+
+        def rustc_record(value):
+            """Mutator that replaces only the rustc capture."""
+
+            def mutator(reports):
+                for report in reports:
+                    report["build_provenance"]["toolchain"]["rustc"] = value
+            return mutator
+
+        def rustc_record_over_windows_host(value):
+            """Mutator that pins host_triple and forges only the rustc capture.
+
+            Keeping the member the caller checks at its genuine Windows value
+            isolates the rustc record, so the control proves the record rule
+            and not the host_triple rule.
+            """
+
+            def mutator(reports):
+                for report in reports:
+                    toolchain = report["build_provenance"]["toolchain"]
+                    toolchain["rustc"] = value
+                    toolchain["host_triple"] = WINDOWS_HOST
+            return mutator
+
+        for shape, record in (
+                ("version-banner",
+                 "rustc 1.97.1 (8bab26f4f 2026-07-14)"),
+                ("vv-block", VV_BLOCK.format(host=WINDOWS_HOST)),
+                ("colon-spelling",
+                 "rustc 1.97.1 (8bab26f4f) host: " + WINDOWS_HOST),
+                ("collapsed-spelling",
+                 "rustc 1.97.1 (8bab26f4f) host " + WINDOWS_HOST
+                 + ", LLVM version 22.1.6")):
+            genuine_mutation_is_accepted(
+                f"windows-rustc-{shape}-is-consumed",
+                rustc_record(record), "toolchain rustc",
+                mutator_kind="windows-housekeeping")
+
+        for shape, record in (
+                ("vv-block", VV_BLOCK.format(host=FOREIGN_HOST)),
+                ("colon-spelling",
+                 "rustc 1.97.1 (8bab26f4f) host: " + FOREIGN_HOST),
+                ("second-foreign-host",
+                 VV_BLOCK.format(
+                     host=WINDOWS_HOST + "\nhost: " + FOREIGN_HOST)),
+                ("not-a-version-capture", "host: " + WINDOWS_HOST)):
+            genuine_mutation_fails(
+                f"windows-rustc-{shape}-names-a-foreign-host",
+                rustc_record_over_windows_host(record),
+                mutator_kind="windows-housekeeping")
+
         def windows_drop_colocation(reports):
             for report in reports:
                 report["build_provenance"]["build_commands"] = [
@@ -8431,7 +8611,7 @@ def _self_test():
 
             return build_battery_manifest(
                 {"matrix": list(genuine_matrix_paths),
-                 "crash": [genuine_crash],
+                 "crash": genuine_crash_reports,
                  "crash-negative": negatives if negatives is not None
                  else (list(genuine_negative) if with_negative else []),
                  "fifo-surface": list(genuine_fifo),
@@ -8545,11 +8725,18 @@ def _self_test():
                 report["scenarios"][0]["assertions"].append(
                     "an assertion the battery never ran")
 
-        swapped_negative_path = os.path.join(work, "crash-negative.json")
+        # Every negative report the evidence directory holds is rewritten
+        # under its own attested basename.  Consuming only one of them was both
+        # a crash (the helper indexes one staged path per loaded report) and a
+        # weaker control: the untouched half stayed genuine, so the battery
+        # proved only that one attested name could be checked.
+        swapped_negative_paths = [
+            os.path.join(work, os.path.basename(source))
+            for source in genuine_negative]
         genuine_mutation_fails(
             "manifest-negative-control-swapped-under-attested-name",
             doctor_negative_assertions, mutator_kind="crash-negative",
-            crash_negative_paths=[swapped_negative_path],
+            crash_negative_paths=swapped_negative_paths,
             battery_manifest=committed_manifest(ledger=_wave_ledger_path()),
             ledger=_wave_ledger_path())
 
@@ -8577,7 +8764,7 @@ def _self_test():
         # manifest attests that file's content, and a manifest that matches
         # its reports is part of what being genuine means here.
         problems, _c, _s = outer_assess(
-            genuine_matrix_paths, [genuine_crash], fifo_paths=genuine_fifo,
+            genuine_matrix_paths, genuine_crash_reports, fifo_paths=genuine_fifo,
             throughput_paths=genuine_throughput,
             parity_paths=[genuine_parity],
             coverage_paths=[genuine_coverage],
@@ -8592,7 +8779,7 @@ def _self_test():
 
 
         problems, _c, _s = outer_assess(
-            genuine_matrix_paths, [genuine_crash], verify_binaries=True,
+            genuine_matrix_paths, genuine_crash_reports, verify_binaries=True,
             verify_cases=True, fifo_paths=genuine_fifo,
             throughput_paths=genuine_throughput,
             sha256_ledger=_wave_ledger_path())
@@ -8634,8 +8821,23 @@ def _self_test():
             f"specified as {min_controls}; a control removed from this "
             f"battery is a regression, not a simplification, and the count "
             f"is only allowed to change together with this constant")
+        refused_authentic = [label for label, offenders in accepted_controls
+                             if offenders]
+        refused_detail = [
+            (label, offenders[:1])
+            for label, offenders in accepted_controls if offenders]
+        assert not refused_authentic, (
+            f"{len(refused_authentic)} acceptance control(s) were rejected by "
+            f"the gate for the field they stand for, which means the gate "
+            f"refuses authentic evidence: {refused_detail[:3]}")
+        # Exact, for the same reason the rejection battery is: an acceptance
+        # control that stopped being registered has to fail loudly.
+        assert len(accepted_controls) == min_acceptance_controls, (
+            f"self-test ran {len(accepted_controls)} acceptance controls but "
+            f"the battery is specified as {min_acceptance_controls}")
         print(f"kind-gate self-test PASSED: {len(results)} controls "
-              f"executed, all rejected", flush=True)
+              f"executed, all rejected; {len(accepted_controls)} acceptance "
+              f"controls, all consumed", flush=True)
 
 
 if __name__ == "__main__":

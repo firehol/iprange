@@ -11,6 +11,9 @@ mod platform;
 
 #[cfg(windows)]
 pub(crate) use platform::create_private;
+#[cfg(windows)]
+#[doc(hidden)]
+pub use platform::create_private_artifact;
 #[cfg(unix)]
 pub(crate) use platform::CREATOR_MODE;
 pub(crate) use platform::{creator_only_commitment, secure_creator_only, Profile};

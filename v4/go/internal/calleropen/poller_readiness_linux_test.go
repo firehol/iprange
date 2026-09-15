@@ -242,6 +242,16 @@ func runReadinessCase(t *testing.T, tc readinessCase) readinessReport {
 	if report.err != "none" {
 		t.Fatalf("%s %d/%d: child setup failed: %s (raw %q)", tc.role, tc.softLimit, tc.held, report.err, report.raw)
 	}
+	// A child that never established its own descriptor table would measure
+	// whatever its launcher happened to leave behind, and every count below
+	// would then be a number about someone else's process. The sweep reports
+	// "none" when there was nothing to remove, so an empty field can only
+	// mean the child never ran it.
+	if report.stray == "" {
+		t.Fatalf("%s %d/%d: the child never reported its descriptor baseline, so the "+
+			"counts below measure a table the case did not establish (raw %q)",
+			tc.role, tc.softLimit, tc.held, report.raw)
+	}
 	return report
 }
 
@@ -259,6 +269,7 @@ type readinessReport struct {
 	eventpoll      int
 	eventfd        int
 	baselinePoller int
+	stray          string
 	err            string
 	raw            string
 }
@@ -304,6 +315,8 @@ func parseReadinessReport(text string) (readinessReport, error) {
 				report.eventfd = readinessInt(value)
 			case "BASELINE":
 				report.baselinePoller = readinessInt(value)
+			case "STRAY":
+				report.stray = value
 			case "ERR":
 				report.err = value
 			}
@@ -323,6 +336,18 @@ func readinessInt(text string) int {
 // register the poller and destroy the state the case measures), performs the
 // one measured call, and prints the table observation.
 func runReadinessChildProcess(spec string) int {
+	// Coverage is the parent's business, not the child's: the child exists to
+	// measure one thing and exit. A child that inherits GOCOVERDIR opens its own
+	// counter file at exit, that open goes through os.OpenFile, and on Linux
+	// os.newFile arms the runtime network poller (os/file_unix.go:219 ->
+	// internal/poll.(*FD).Init -> netpollGenericInit). Under the descriptor table
+	// this case owns, that registration is the allocation with no failure path,
+	// and the resulting netpollinit abort reads as a product poller regression
+	// caused by the harness. Clearing it here keeps emission off; only the
+	// parent's own run contributes coverage data. Must stay the first statement,
+	// before any work that could take a descriptor.
+	os.Unsetenv("GOCOVERDIR")
+
 	parts := strings.Split(spec, ":")
 	if len(parts) != 3 {
 		fmt.Fprintf(os.Stderr, "readiness child: malformed spec %q\n", spec)
@@ -340,16 +365,29 @@ func runReadinessChildProcess(spec string) int {
 		return 2
 	}
 
+	// The case describes a table the child itself establishes, so the child
+	// first removes the descriptors it never claimed: see the note in
+	// child_fd_baseline_test.go. This runs before the limit is lowered, so
+	// the sweep can still see the table the launcher left behind.
+	stray, strayOK := closeInheritedDescriptors()
+
 	fail := func(reason string) int {
 		fmt.Printf("READINESS ROLE=%s FREE=-1 SCANFREE=-1 WALKCOUNT=-1 FREEOK=0 DECIDED=0 READY=0 "+
-			"ALLOWED=0 POLLER=-1 EVENTPOLL=-1 EVENTFD=-1 BASELINE=-1 ERR=%s\n", role, reason)
+			"ALLOWED=0 POLLER=-1 EVENTPOLL=-1 EVENTFD=-1 BASELINE=-1 STRAY=%s ERR=%s\n",
+			role, stray, "baseline:"+reason)
 		return 0
+	}
+	if !strayOK {
+		return fail("descriptor-baseline:" + stray)
 	}
 
 	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &unix.Rlimit{
 		Cur: uint64(softLimit), Max: uint64(softLimit),
 	}); err != nil {
-		return fail("setrlimit:" + err.Error())
+		fmt.Printf("READINESS ROLE=%s FREE=-1 SCANFREE=-1 WALKCOUNT=-1 FREEOK=0 DECIDED=0 READY=0 "+
+			"ALLOWED=0 POLLER=-1 EVENTPOLL=-1 EVENTFD=-1 BASELINE=-1 STRAY=%s ERR=%s\n",
+			role, stray, "setrlimit:"+err.Error())
+		return 0
 	}
 	// The hold target is created with raw syscalls for the same reason the
 	// holds themselves are raw: os.CreateTemp goes through os.OpenFile and
@@ -459,10 +497,53 @@ func runReadinessChildProcess(spec string) int {
 		return fail("final-table")
 	}
 	fmt.Printf("READINESS ROLE=%s FREE=%d SCANFREE=%d WALKCOUNT=%d FREEOK=%d DECIDED=%d READY=%d "+
-		"ALLOWED=%d POLLER=%d EVENTPOLL=%d EVENTFD=%d BASELINE=%d ERR=%s\n",
+		"ALLOWED=%d POLLER=%d EVENTPOLL=%d EVENTFD=%d BASELINE=%d STRAY=%s ERR=%s FDLIST=%s\n",
 		role, free, scanFree, walkCount, boolToInt(freeOK), boolToInt(decided), boolToInt(ready),
-		boolToInt(allowed), poller-baselinePoller, eventpoll, eventfd, baselinePoller, errMessage)
+		boolToInt(allowed), poller-baselinePoller, eventpoll, eventfd, baselinePoller, stray,
+		errMessage, describeDescriptorTable())
 	return 0
+}
+
+// describeDescriptor names this process's descriptors and their kernel link
+// targets on one space-free line. Every count this file asserts is otherwise
+// just a number: the failure "free descriptors = 1, want 3" says nothing about
+// the two descriptors that caused it, and the descriptor that caused it is the
+// finding. The walk uses raw syscalls for the reason readDescriptorTable does:
+// the os package would register a descriptor with the poller while reporting.
+func describeDescriptorTable() string {
+	out := ""
+	for fd := 0; fd < maxScanDescriptors; fd++ {
+		if _, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0); err != nil {
+			continue
+		}
+		var buffer [256]byte
+		length, err := unix.Readlink("/proc/self/fd/"+strconv.Itoa(fd), buffer[:])
+		target := "?"
+		if err == nil {
+			target = compactChildLink(string(buffer[:length]))
+		}
+		if out != "" {
+			out += ";"
+		}
+		out += strconv.Itoa(fd) + "=" + target
+	}
+	return out
+}
+
+// compactChildLink keeps one descriptor recognizable inside a failure line.
+func compactChildLink(target string) string {
+	switch target {
+	case "/dev/null":
+		return "devnull"
+	case "anon_inode:[eventpoll]":
+		return "eventpoll"
+	case "anon_inode:[eventfd]":
+		return "eventfd"
+	}
+	if i := strings.LastIndex(target, "/"); i >= 0 {
+		return target[i+1:]
+	}
+	return target
 }
 
 // readDescriptorTable counts this process's descriptors, and the runtime

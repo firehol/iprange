@@ -1,4 +1,4 @@
-//go:build linux || freebsd
+//go:build unix && !darwin && !ios
 
 package calleropen
 
@@ -18,6 +18,20 @@ import (
 // so the session, worker, lock and resolver waits use it instead of
 // time.Sleep. Signals that return EINTR resume the remainder, matching
 // time.Sleep's guarantee that the call returns only once d has elapsed.
+//
+// This arm covers every unix platform whose x/sys/unix binding has
+// nanosleep(2): linux, android, freebsd, netbsd, openbsd, dragonfly,
+// illumos, solaris and aix. The kqueue platforms (netbsd, openbsd,
+// dragonfly) keep the timer-free path for the same reason Linux does --
+// their poller allocates a kqueue descriptor too, so time.Sleep carries
+// the identical fatal-under-low-RLIMIT_NOFILE hazard there (see
+// poller_readiness.go's platform clause). Only the Mach platforms lack a
+// nanosleep binding and get their own arm (wait_darwin.go).
+//
+// Verified against golang.org/x/sys v0.35.0: unix.Nanosleep is declared
+// for every GOOS in this constraint's family, and unix.ClockNanosleep
+// exists only on linux/android, so this file deliberately uses
+// nanosleep(2) rather than the Linux-only clock_nanosleep(2) binding.
 func Sleep(d time.Duration) {
 	if d <= 0 {
 		return

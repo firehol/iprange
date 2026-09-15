@@ -79,13 +79,18 @@ const (
 	gcReadersResetSuffix = ".readers.reset"
 )
 
+// gcMaxPrivatePrefix is the longest private prefix, so the fixed scratch
+// of gcPrivateName covers the output and the reservation names exactly
+// (the Rust arm builds the name dynamically).
+const gcMaxPrivatePrefix = max(len(gcOutputPrefix), len(gcReservationPrefix))
+
 // gcPrivateName builds one private artifact name: prefix, 32 lowercase
 // hex attempt characters, suffix (Rust private_name; no ordinal).
 func gcPrivateName(prefix string, attempt [16]byte) (string, error) {
 	if attempt == [16]byte{} {
 		return "", nsInvalidNameError()
 	}
-	var buf [len(gcOutputPrefix) + 32 + len(gcPrivateSuffix)]byte
+	var buf [gcMaxPrivatePrefix + 32 + len(gcPrivateSuffix)]byte
 	off := copy(buf[:], prefix)
 	gcHexEncode(buf[off:off+32], attempt[:])
 	copy(buf[off+32:], gcPrivateSuffix)

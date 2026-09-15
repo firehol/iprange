@@ -633,13 +633,17 @@ def _orphan_contract_self_test():
 def _report_construction_self_test():
     """In-memory control for the report-dict construction path.
 
-    The crash report records the producer ``checkout_root`` through
-    ``recorded_checkout_root``; a missing import or a personal root
-    would surface only when a real battery runs.  This control builds
-    the exact report field at harness startup (no processes, no
-    files): the recorded root must be None under a profile checkout,
-    or an absolute non-personal path otherwise, and the checkout the
-    harness would record must itself be non-personal.
+    ``command_sanitize.recorded_checkout_root`` is the helper this
+    harness resolves its own checkout against; the committed
+    ``checkout_root`` report member is owned by the shared writer,
+    which records null there (``command_sanitize
+    .report_provenance``), so nothing on this path feeds a committed
+    artifact.  A broken import or a personal checkout would still
+    surface only when a real battery runs, so this control evaluates
+    the helper at harness startup (no processes, no files): it must
+    return None under a profile checkout or an absolute non-personal
+    path otherwise, and the checkout the harness resolves against must
+    itself be non-personal.
     """
 
     root = recorded_checkout_root()

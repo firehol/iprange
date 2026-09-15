@@ -188,10 +188,6 @@ REFRESH_VALUE = 123456
 # Additive report schema marker: v3 keeps every v2 member and adds the
 # exact removal-log facts (removals_log_rows, removals_log_sha256,
 # removals_advertised) recorded by complete_native_refresh_exercise.
-from command_sanitize import (  # noqa: E402  (side-effect free)
-    recorded_checkout_root,
-    recorded_git_identity,
-)
 REPORT_SCHEMA = "iprange-cli-windows-housekeeping-report-v3"
 
 

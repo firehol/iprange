@@ -64,11 +64,13 @@ _HERE = os.path.dirname(os.path.abspath(__file__))  # the v4/cli harness directo
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
+import command_sanitize  # noqa: E402  (side-effect free)
 from command_sanitize import (  # noqa: E402  (side-effect free)
+    audit_report_writers,
+    personal_path_in_report,
     require_paths_outside_profile,
-    write_committed_report,    audit_report_writers,
     run_shared_self_test,
-
+    write_committed_report,
 )
 from crash_harness import HarnessJsonRpcService  # noqa: E402
 from schema.results import validate_result  # noqa: E402
@@ -217,7 +219,7 @@ def product_all_ok(product):
 # unreachable control lowers the count while still printing nothing but PASS
 # for the survivors.  "0 failures" is only evidence when the number that ran
 # is pinned.
-GUARD_SELF_TEST_CONTROLS = 36
+GUARD_SELF_TEST_CONTROLS = 39
 # The destination-comparison control compares backslash-spelled Windows
 # paths, so it is unreachable on a POSIX run; the pin covers both shapes
 # rather than being loosened to whatever the current host happens to reach.
@@ -398,6 +400,49 @@ def selftest():
            (all(name in names_win for name in volume_guid_trail)) == IS_WINDOWS)
     expect("posix skips the volume-GUID head x trailing leaf class",
            not any(name in names_posix for name in volume_guid_trail))
+    # The case table is DATA, not a location this harness resolved: a case is
+    # named by the Windows spelling of the sidecar it addresses and the report
+    # records that spelling verbatim.  A personal-path scan that resolves a
+    # drive-relative spelling through the invocation directory judges where the
+    # operator launched the harness instead of what the harness measured, and
+    # launching a guard run from inside the operator profile turned the harness's
+    # own literals into profile paths so the shared writer refused the report
+    # (wave-19.25).  This pair is the standing regression gate for that.  Both
+    # halves are required: a pin satisfied by only the first could be bought by
+    # switching the scan off, so the second proves the scan still fires on a
+    # path that really does name the profile.  _IS_WINDOWS is pinned because the
+    # drive-relative spelling only exists on the Windows leg; on that leg the
+    # control runs natively, with the ambient platform facts.
+    win_table = {name: destination
+                 for name, _expectation, destination in win_cases}
+    guard_report = {"schema": REPORT_SCHEMA, "products": {"go": {"cases": {
+        name: {"destination": destination, "ok": True}
+        for name, destination in win_table.items()}}}}
+    expect("the windows case table carries a drive-relative literal",
+           any(destination.startswith("C:")
+               and destination[2:3] not in ("/", chr(92))
+               for destination in win_table.values()))
+    profile = command_sanitize.profile_path()
+    saved_windows = command_sanitize._IS_WINDOWS
+    saved_cwd = os.getcwd()
+    try:
+        command_sanitize._IS_WINDOWS = True
+        os.chdir(profile or saved_cwd)
+        expect("the case table survives the personal-path scan from inside the"
+               " operator profile",
+               personal_path_in_report(guard_report) is None)
+        planted_refused = True
+        if profile:
+            planted = json.loads(json.dumps(guard_report))
+            planted["products"]["go"]["cases"]["planted"] = {
+                "destination": profile + os.sep + "leaked.iprange",
+                "ok": True}
+            planted_refused = personal_path_in_report(planted) is not None
+        expect("a planted real profile path in the same report shape is refused",
+               planted_refused)
+    finally:
+        command_sanitize._IS_WINDOWS = saved_windows
+        os.chdir(saved_cwd)
     wanted = (GUARD_SELF_TEST_CONTROLS
               - (0 if IS_WINDOWS else GUARD_SELF_TEST_NATIVE_ONLY))
     if executed[0] != wanted:

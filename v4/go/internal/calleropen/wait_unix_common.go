@@ -4,6 +4,14 @@ package calleropen
 
 import "time"
 
+// Platform partition for Sleep: exactly one definition must exist for
+// every GOOS, and the goos matrix gate (v4/cli/check_goos_matrix.sh,
+// which runs `go vet ./...` per GOOS) is the instrument that fails a
+// missing arm. wait_nanosleep.go takes `unix && !darwin && !ios`,
+// wait_darwin.go takes `darwin || ios`, and wait_other.go takes `!unix`.
+// A new Sleep arm must keep those three constraints disjoint and
+// exhaustive: they are checked by that gate, not by the Linux test run.
+
 // waitPollStep is the poll granularity of WaitUntil. One millisecond
 // matches the worker-control pollInterval already used across the
 // product, so a bounded wait observes its predicate with the same

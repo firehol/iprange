@@ -106,6 +106,38 @@ pub(crate) fn creator_only_commitment(file: &File) -> Result<[u8; 32], Namespace
     SecurityInfo::read(file)?.verify()
 }
 
+/// Creates one exact private file with the protected creator-only DACL
+/// this module installs for every product artifact, and returns it open
+/// together with the commitment its descriptor proves.
+///
+/// This is the conformance-suite arm of [`create_private`]: the
+/// dual-language CLI conformance fixtures plant maintenance residue
+/// (private reservations, publication temps, and recovery-scratch
+/// artifacts) through the product's own creation, because the Windows
+/// retirement machine proves this access policy on the retained handle
+/// and the scratch ownership header must record the commitment the file
+/// actually carries. A descriptor applied by the fixture itself would
+/// only qualify a policy the product never installs, so it could not
+/// establish the native proof.
+#[doc(hidden)]
+pub fn create_private_artifact(path: &Path) -> std::io::Result<(File, [u8; 32])> {
+    let profile = Profile::capture().map_err(io_failure)?;
+    let file = create_private(path, &profile, true).map_err(io_failure)?;
+    let commitment = creator_only_commitment(&file).map_err(io_failure)?;
+    Ok((file, commitment))
+}
+
+/// Renders one namespace failure as an I/O error, preserving the source
+/// when there is one, so the creator-only failure can cross the crate
+/// boundary without exposing the crate-private error type.
+fn io_failure(error: NamespaceError) -> std::io::Error {
+    match error {
+        NamespaceError::Io(source) => source,
+        NamespaceError::IoAt { source, .. } => source,
+        other => std::io::Error::other(format!("creator-only creation refused: {other:?}")),
+    }
+}
+
 struct Descriptor {
     descriptor: Box<SECURITY_DESCRIPTOR>,
     acl: *mut ACL,

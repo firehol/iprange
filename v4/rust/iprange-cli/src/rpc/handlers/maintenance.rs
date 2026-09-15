@@ -1748,18 +1748,63 @@ mod tests {
 
     /// Writes one recovery-scratch artifact whose 128-byte ownership header
     /// authenticates: magic, fixed fields, meta facts, attempt, ordinal, the
-    /// platform creator-only security kind, a non-zero creator commitment,
-    /// and the header checksum. The POSIX removal arm does not compare the
-    /// commitment against the live profile, so the artifact is a true
-    /// abandoned-scratch entry; the Windows arm does, so this fixture — and
-    /// the round-trip that uses it — is unix-only.
-    #[cfg(unix)]
+    /// platform creator-only security kind, the creator commitment the
+    /// artifact's access policy actually carries, and the header checksum.
+    ///
+    /// The two platform arms create the artifact the way the product does,
+    /// because that policy is what the removal machine proves:
+    ///
+    /// * POSIX: the creator-only `0600` mode is the policy, the mode bits are
+    ///   the DACL, and the removal arm does not compare the recorded
+    ///   commitment against the live profile, so a non-zero commitment
+    ///   authenticates the entry.
+    /// * Windows: the policy is the protected single-ACE creator DACL that
+    ///   `security::create_private` installs, and both the retirement
+    ///   authority and the GC resolver compare the file's live commitment with
+    ///   the commitment the header records. The residue is therefore created
+    ///   through the SDK's own creator-only creation and records the commitment
+    ///   that creation proves; a plain write would inherit the parent
+    ///   directory's ACL and qualify an access policy no publisher can leave
+    ///   behind.
     fn authenticated_scratch_artifact(
         directory: &std::path::Path,
         attempt: [u8; 16],
         ordinal: u32,
     ) -> std::path::PathBuf {
+        let path = directory.join(scratch_basename(attempt, ordinal));
+        write_scratch_artifact(&path, attempt, ordinal);
+        path
+    }
+
+    /// Windows arm: creates the artifact through the SDK creator-only
+    /// creation and records the commitment that creation proves, so the
+    /// native DACL and commitment proofs see a real product artifact.
+    #[cfg(windows)]
+    fn write_scratch_artifact(path: &std::path::Path, attempt: [u8; 16], ordinal: u32) {
+        use std::io::Write as _;
+        let (mut file, commitment) = iprange_livedb::publication::create_private_artifact(path)
+            .expect("create the scratch artifact through the SDK creator-only creation");
+        let header = scratch_header(attempt, ordinal, commitment);
+        file.write_all(&header).expect("write the scratch artifact");
+        file.sync_all().expect("flush the scratch artifact");
+    }
+
+    /// POSIX arm: the creator-only `0600` mode is the access policy, and the
+    /// removal arm does not compare the recorded commitment against the live
+    /// profile, so a non-zero commitment authenticates the entry.
+    #[cfg(not(windows))]
+    fn write_scratch_artifact(path: &std::path::Path, attempt: [u8; 16], ordinal: u32) {
         use std::os::unix::fs::PermissionsExt as _;
+        let header = scratch_header(attempt, ordinal, [0x5a; 32]);
+        std::fs::write(path, header).expect("write the scratch artifact");
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+            .expect("make the scratch artifact creator-only");
+    }
+
+    /// Builds the 128-byte ownership header of one recovery-scratch artifact;
+    /// the commitment must be the one the created file's access policy
+    /// carries (see `authenticated_scratch_artifact`).
+    fn scratch_header(attempt: [u8; 16], ordinal: u32, commitment: [u8; 32]) -> [u8; 128] {
         let mut header = [0u8; 128];
         header[0..8].copy_from_slice(b"IPR4SCR1");
         header[8..10].copy_from_slice(&1u16.to_le_bytes()); // version
@@ -1771,14 +1816,10 @@ mod tests {
         header[56..72].copy_from_slice(&attempt);
         header[72..76].copy_from_slice(&ordinal.to_le_bytes());
         header[76..78].copy_from_slice(&SCRATCH_CREATION_SECURITY_KIND.to_le_bytes());
-        header[80..112].copy_from_slice(&[0x5a; 32]); // non-zero commitment
+        header[80..112].copy_from_slice(&commitment);
         let checksum = scratch_checksum(&header, 124, 4);
         header[124..128].copy_from_slice(&checksum.to_le_bytes());
-        let path = directory.join(scratch_basename(attempt, ordinal));
-        std::fs::write(&path, header).expect("write the scratch artifact");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
-            .expect("make the scratch artifact creator-only");
-        path
+        header
     }
 
     /// Writes one exact-pattern private artifact of `prefix` whose content
@@ -1791,8 +1832,28 @@ mod tests {
         attempt: [u8; 16],
     ) -> std::path::PathBuf {
         let path = directory.join(format!("{prefix}{}.tmp", attempt_hex(attempt)));
-        std::fs::write(&path, b"partial").expect("write the private residue");
+        write_private_residue(&path, b"partial");
         path
+    }
+
+    /// Writes the content of one private artifact whose access policy must be
+    /// the one the product installs (see `authenticated_scratch_artifact`):
+    /// the creator-only `0600` mode on POSIX, and the SDK creator-only
+    /// creation on Windows, where the retirement machine proves the protected
+    /// single-ACE creator DACL on the retained handle.
+    #[cfg(windows)]
+    fn write_private_residue(path: &std::path::Path, content: &[u8]) {
+        use std::io::Write as _;
+        let (mut file, _) = iprange_livedb::publication::create_private_artifact(path)
+            .expect("create the private residue through the SDK creator-only creation");
+        file.write_all(content).expect("write the private residue");
+        file.sync_all().expect("flush the private residue");
+    }
+
+    /// POSIX arm of [`write_private_residue`].
+    #[cfg(not(windows))]
+    fn write_private_residue(path: &std::path::Path, content: &[u8]) {
+        std::fs::write(path, content).expect("write the private residue");
     }
 
     /// Runs iprange.v1.maintenance.list for the given kinds and returns the
@@ -2069,7 +2130,6 @@ mod tests {
 
     #[test]
     fn list_rows_round_trip_into_remove_for_every_removable_kind() {
-        #[cfg(unix)]
         require_row_roundtrip("scratch", &|directory| {
             authenticated_scratch_artifact(directory, maintenance_attempt(0xa1), 7)
         });
@@ -2089,7 +2149,6 @@ mod tests {
     fn one_list_covers_every_kind_and_every_row_stays_removable() {
         let directory = probe_directory("all-kinds");
         let mut planted: Vec<(&str, std::path::PathBuf)> = Vec::new();
-        #[cfg(unix)]
         planted.push((
             "scratch",
             authenticated_scratch_artifact(&directory, maintenance_attempt(0xd1), 3),

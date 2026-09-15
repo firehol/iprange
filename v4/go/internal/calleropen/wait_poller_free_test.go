@@ -41,6 +41,21 @@ func TestTimerFreeWaitsRegisterNoPoller(t *testing.T) {
 		runWaitPollerFreeChild()
 		return // unreachable: the child exits itself
 	}
+	// The child establishes its own descriptor table by reading each open
+	// descriptor's kernel link target, and only Linux exposes /proc/self/fd to
+	// read it from. Where the target is unavailable the child cannot tell
+	// "the product registered the poller" from "the launcher left a descriptor
+	// open", so the premise of the measurement is missing and its failure would
+	// be a host limitation reported as a product regression: skip on the stated
+	// reason instead. The question is asked of the kernel at runtime rather
+	// than read off a build tag, because a Linux host with /proc unmounted has
+	// the same problem the tag would only describe. Design section 13.5
+	// records the kqueue platforms as unmeasured by this wave.
+	if !childDescriptorsAreClassifiable() {
+		t.Skip("this platform exposes no /proc/self/fd, so the child cannot " +
+			"establish its own descriptor baseline; design section 13.5 records " +
+			"it as unmeasured by this wave")
+	}
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -60,9 +75,39 @@ func TestTimerFreeWaitsRegisterNoPoller(t *testing.T) {
 	if !strings.Contains(text, "WAIT_POLLER_FREE_OK") {
 		t.Fatalf("the child never reported a completed wait:\n%s", text)
 	}
+	// The child caps its table at waitPollerFreeLimit, so it must also be the
+	// process that decided what that table contains: a child that skipped the
+	// sweep could pass only because nothing it needed happened to be left.
+	if !strings.Contains(text, "WAIT_POLLER_FREE_STRAY=") {
+		t.Fatalf("the child never reported its descriptor baseline, so it measured a "+
+			"table it did not establish:\n%s", text)
+	}
 }
 
 func runWaitPollerFreeChild() {
+	// Coverage is the parent's business, not the child's: the child exists to
+	// measure one thing and exit. A child that inherits GOCOVERDIR opens its own
+	// counter file at exit, that open goes through os.OpenFile, and on Linux
+	// os.newFile arms the runtime network poller (os/file_unix.go:219 ->
+	// internal/poll.(*FD).Init -> netpollGenericInit). Under the descriptor table
+	// this case owns, that registration is the allocation with no failure path,
+	// and the resulting netpollinit abort reads as a product poller regression
+	// caused by the harness. Clearing it here keeps emission off; only the
+	// parent's own run contributes coverage data. Must stay the first statement,
+	// before any work that could take a descriptor.
+	os.Unsetenv("GOCOVERDIR")
+
+	// Claim the table before capping it. Go's Linux exec path performs no
+	// descriptor sweep in the child, so a descriptor the battery launcher
+	// holds without FD_CLOEXEC (it keeps `exec 3>&1 4>&2` for its whole run)
+	// would otherwise arrive here and take two of the four numbers this case
+	// deliberately leaves, turning a clean wait into an EMFILE failure that
+	// reads like a poller regression. See child_fd_baseline_test.go.
+	stray, strayOK := closeInheritedDescriptors()
+	if !strayOK {
+		fmt.Println("WAIT_POLLER_FREE_ERR=descriptor-baseline:" + stray)
+		os.Exit(2)
+	}
 	var current syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &current); err != nil {
 		fmt.Println("WAIT_POLLER_FREE_ERR=getrlimit:" + err.Error())
@@ -87,6 +132,7 @@ func runWaitPollerFreeChild() {
 		fmt.Println("WAIT_POLLER_FREE_ERR=deadline-miss")
 		os.Exit(1)
 	}
+	fmt.Println("WAIT_POLLER_FREE_STRAY=" + stray)
 	fmt.Println("WAIT_POLLER_FREE_OK")
 	os.Exit(0)
 }

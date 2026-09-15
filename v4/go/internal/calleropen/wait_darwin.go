@@ -1,4 +1,4 @@
-//go:build darwin
+//go:build darwin || ios
 
 package calleropen
 
@@ -14,6 +14,10 @@ import (
 // sleeps for the requested timeout, costs no descriptor the poller would
 // need, and never enters net. EINTR resumes against the same deadline so
 // the guarantee matches time.Sleep.
+//
+// ios shares the Mach x/sys/unix bindings (and the same missing
+// nanosleep binding) with darwin, so it takes this arm; both are unix
+// for the purposes of the partition described in wait_unix_common.go.
 func Sleep(d time.Duration) {
 	if d <= 0 {
 		return

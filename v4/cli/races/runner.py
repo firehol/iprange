@@ -45,6 +45,7 @@ if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
 import arms as arm_module  # noqa: E402
+import hostcontext  # noqa: E402
 import service as race_service  # noqa: E402
 from aggregate import (  # noqa: E402
     Battery,
@@ -219,6 +220,7 @@ def _control(arm, binary, kind, deadline):
         arm_module.pin_fifo(arm)
         expected = arm.stable_refusal
     session = race_service.EngineSession(binary, arm.work)
+    start_host = hostcontext.sample(deadline)
     observation = session.call(arm.request(), deadline)
     if observation.kind == race_service.TIMEOUT:
         observation.blocked = session.blocked_threads()
@@ -226,10 +228,16 @@ def _control(arm, binary, kind, deadline):
             arm.target, arm.payload(),
             lambda seconds: session.read_more(seconds).kind == "answered")
     session.kill()
+    silent = observation.kind == race_service.TIMEOUT
     return {"control": kind, "kind": observation.kind,
             "shape": observation.shape, "expected": expected,
             "ok": observation.kind == "answered" and observation.shape in expected,
-            "blocked": list(observation.blocked), "wedge": observation.wedge}
+            "blocked": list(observation.blocked), "wedge": observation.wedge,
+            # A silent control is as ambiguous as a silent attempt, so it
+            # carries the same pair of host samples.
+            "host_at_attempt_start": start_host,
+            "host_at_detection": (hostcontext.sample(deadline) if silent
+                                  else start_host)}
 
 
 def run_arm(battery, label, binary, arm_name, options, report_dir):
@@ -269,10 +277,16 @@ def run_arm(battery, label, binary, arm_name, options, report_dir):
     swapper = Swapper(arm.target, arm.regular_template, work,
                       f"{label}-{arm_name}")
     final = None
+    start_samples = []
     try:
         swapper.start_racing(options.interval)
         baseline = swapper.counters()
         for index in range(options.attempts):
+            # Sampled before the process is spawned: the deadline the attempt
+            # is judged against starts counting the moment the request goes
+            # out, and the engine has to be scheduled to answer it at all.
+            start_host = hostcontext.sample(options.deadline)
+            start_samples.append(start_host)
             swapper.open_window()
             try:
                 session = race_service.EngineSession(binary, work)
@@ -284,6 +298,7 @@ def run_arm(battery, label, binary, arm_name, options, report_dir):
                         lambda seconds: (
                             session.read_more(seconds).kind == "answered"),
                         stage_dir=swapper.stage_dir)
+                    detection_host = hostcontext.sample(options.deadline)
                 session.kill()
             finally:
                 swapper.close_window()
@@ -291,7 +306,10 @@ def run_arm(battery, label, binary, arm_name, options, report_dir):
             classes[observation.shape] = classes.get(observation.shape, 0) + 1
             record["attempts_completed"] = record.get("attempts_completed", 0) + 1
             if observation.kind == race_service.TIMEOUT:
-                record.setdefault("hangs", []).append(observation.record())
+                hung = observation.record()
+                hung["host_at_attempt_start"] = start_host
+                hung["host_at_detection"] = detection_host
+                record.setdefault("hangs", []).append(hung)
                 if len(record["hangs"]) >= options.stop_after:
                     break
         final = swapper.stop()
@@ -330,6 +348,8 @@ def run_arm(battery, label, binary, arm_name, options, report_dir):
         record.setdefault("timing_window", {"exercised": False})
         record.setdefault("refusal_observed_in_race", 0)
         record.setdefault("classes", {})
+    record["host_context"] = hostcontext.summarize(options.deadline,
+                                                   start_samples)
     judge_arm(battery, subject, record, attempts=options.attempts)
     battery.add(subject, record)
 
@@ -364,19 +384,28 @@ def run_detector(battery, options, report_dir):
     swapper = Swapper(target, template, work, "detector")
     record = {"subject_label": "detector", "attempts": 0,
               "hangs": 0, "confirmed_wedges": 0}
+    start_samples = []
     try:
         swapper.start_racing(options.interval)
         baseline = swapper.counters()
         for index in range(DETECTOR_ATTEMPTS):
+            start_host = hostcontext.sample(options.deadline)
+            start_samples.append(start_host)
             swapper.open_window()
             try:
                 outcome = _sentinel_once(work, target, template, options,
-                                         stage_dir=swapper.stage_dir)
+                                         stage_dir=swapper.stage_dir,
+                                         start_host=start_host)
             finally:
                 swapper.close_window()
             record["attempts"] += 1
             if outcome["kind"] == "hang":
                 record["hangs"] += 1
+                # The detector counts its silent attempts, and each count is
+                # backed by the observation that earned it.
+                record.setdefault("hang_observations", []).append(
+                    outcome.get("observation") or {
+                        "missing": "the silent attempt produced no observation"})
                 if outcome["confirmed"]:
                     record["confirmed_wedges"] += 1
             if record["confirmed_wedges"] >= DETECTOR_MIN_WEDGES and \
@@ -391,6 +420,8 @@ def run_detector(battery, options, report_dir):
     finally:
         swapper.close_window()
         battery.write_log(report_dir, subject, swapper.log)
+    record["host_context"] = hostcontext.summarize(options.deadline,
+                                                   start_samples)
     if final is not None:
         deltas_in_flight = (final.get("in_flight_to_fifo", 0)
                             - baseline.get("in_flight_to_fifo", 0))
@@ -409,7 +440,8 @@ def run_detector(battery, options, report_dir):
     battery.add(subject, record)
 
 
-def _sentinel_once(work, target, template, options, stage_dir=None):
+def _sentinel_once(work, target, template, options, stage_dir=None,
+                   start_host=None):
     """Run one sentinel attempt and classify it.
 
     The sentinel must first announce that it started; without that marker the
@@ -479,10 +511,15 @@ def _sentinel_once(work, target, template, options, stage_dir=None):
         wedge = race_service.confirm_wedge(
             target, payload, collect, stage_dir=stage_dir)
         confirmed = wedge.startswith("wedge-confirmed")
+        start = start_host or hostcontext.sample(options.deadline)
+        observation = {"kind": "hang", "shape": "OPENED" if confirmed else "blocked",
+                       "blocked": blocked, "wedge": wedge,
+                       "host_at_attempt_start": start,
+                       "host_at_detection": hostcontext.sample(options.deadline)}
         return {"ok": bool(confirmed), "kind": "hang",
                 "shape": "OPENED" if confirmed else "blocked",
                 "confirmed": bool(confirmed), "blocked": blocked,
-                "wedge": wedge}
+                "wedge": wedge, "observation": observation}
     finally:
         if proc.poll() is None:
             try:

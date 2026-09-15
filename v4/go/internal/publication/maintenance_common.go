@@ -199,11 +199,27 @@ func (a *maintenanceArtifact) durableAbsence(dir *live.Directory, name string) e
 	return nil
 }
 
+// maintenanceRetirementPayload is the exact content evidence one
+// retirement commits into its GC envelope (Rust
+// maintenance::common::RetirementPayload). The POSIX arm has no GC
+// envelope and ignores it, so it is carried as plain fields here and
+// converted only by the Windows arm.
+type maintenanceRetirementPayload struct {
+	byteLength    uint64
+	sha512        [64]byte
+	databaseID    [16]byte
+	transactionID uint64
+	commitNonce   [16]byte
+}
+
 // remove runs one exact artifact removal (Rust Artifact::remove: the
-// directory identity proof, the owned open or durable absence, the
-// content verification, the cancellation checkpoint, and the unix
-// retirement).
-func (a *maintenanceArtifact) remove(path string, expectedDirectory LocalFileIdentity, attempt [16]byte, expectedArtifact LocalFileIdentity, lockOffset uint64, check func() error, verifyContent func(file *os.File, identity live.FileIdentity) error) (AbandonedArtifactRemoval, error) {
+// directory identity proof, the GC resume of an abandoned retirement,
+// the owned open or durable absence, the content verification, the
+// cancellation checkpoint, and the platform retirement). ordinal, kind,
+// and payload are the retirement authority of this artifact family:
+// the Windows GC machine binds them to the envelope it creates for the
+// removal, the POSIX unlink arm does not use them.
+func (a *maintenanceArtifact) remove(path string, expectedDirectory LocalFileIdentity, attempt [16]byte, expectedArtifact LocalFileIdentity, lockOffset uint64, check func() error, ordinal uint32, kind live.ArtifactKind, payload *maintenanceRetirementPayload, verifyContent func(file *os.File, identity live.FileIdentity) error) (AbandonedArtifactRemoval, error) {
 	expectedDirectoryIdentity, err := a.identity(expectedDirectory)
 	if err != nil {
 		return AbandonedArtifactRemoval{}, err
@@ -228,6 +244,9 @@ func (a *maintenanceArtifact) remove(path string, expectedDirectory LocalFileIde
 	if err != nil {
 		return AbandonedArtifactRemoval{}, a.namespaceError(err)
 	}
+	if result, resumed := a.resumePlatform(dir, attempt, name, expectedArtifactIdentity, ordinal, kind, payload, present); resumed {
+		return result, nil
+	}
 	regular, err := a.openOwned(dir, name, found, present, expectedArtifactIdentity, lockOffset, check)
 	if err != nil {
 		return AbandonedArtifactRemoval{}, err
@@ -242,37 +261,7 @@ func (a *maintenanceArtifact) remove(path string, expectedDirectory LocalFileIde
 	if err := live.Checkpoint(check); err != nil {
 		return AbandonedArtifactRemoval{}, err
 	}
-	return a.retire(dir, name, regular, expectedArtifactIdentity)
-}
-
-// retire unlinks the exact inode and proves the retained link count
-// and the durable absence (Rust Artifact::retire_unix: every unlink
-// error is the cleanup class, a missing exact name is the lost
-// class, a linked inode is the remained-linked cause, and the
-// post-removal absence failure folds into the sdk class).
-func (a *maintenanceArtifact) retire(dir *live.Directory, name string, regular *live.RegularFile, expected live.FileIdentity) (AbandonedArtifactRemoval, error) {
-	unlinked, err := dir.UnlinkExact(name, expected)
-	if err != nil {
-		return AbandonedArtifactRemoval{}, a.cleanupError(err)
-	}
-	if !unlinked {
-		return AbandonedArtifactRemoval{}, problem(format.CodeCleanupConflict, a.lostName)
-	}
-	count, err := live.RegularLinkCount(regular.File)
-	var cause error
-	switch {
-	case err != nil:
-		cause = namespaceProblem(err)
-	case count != 0:
-		cause = problem(format.CodeCleanupConflict, a.remainedLinked)
-	}
-	if cause != nil {
-		return removalResult(true, cause), nil
-	}
-	if err := a.durableAbsence(dir, name); err != nil {
-		return removalResult(true, sdkProblem(err)), nil
-	}
-	return removalResult(true, nil), nil
+	return a.retirePlatform(dir, name, regular, attempt, expectedArtifactIdentity, ordinal, kind, payload)
 }
 
 // namespaceError maps one namespace failure of the scan/remove
@@ -332,11 +321,23 @@ func directoryIdentityMismatchProblem() *format.Error {
 }
 
 // removalResult builds one factual removal outcome (Rust
-// maintenance::removal: the cleanup state derives from the cause).
+// maintenance::removal: the cleanup state derives from the cause, and a
+// retirement without a cause reports the clean state and no
+// housekeeping facts).
 func removalResult(sourcePresent bool, cause error) AbandonedArtifactRemoval {
 	state := CleanupStateClean
 	if cause != nil {
 		state = CleanupStateResiduePossible
 	}
 	return AbandonedArtifactRemoval{SourcePresent: sourcePresent, CleanupState: state, Cause: cause}
+}
+
+// retirementResult folds one completed retirement into the factual
+// removal outcome (Rust maintenance::retirement: the housekeeping class
+// and the visible artifacts ride the retirement facts).
+func retirementResult(sourcePresent bool, housekeeping Housekeeping, visible []HousekeepingArtifact, cause error) AbandonedArtifactRemoval {
+	result := removalResult(sourcePresent, cause)
+	result.Housekeeping = housekeeping
+	result.VisibleHousekeeping = visible
+	return result
 }
