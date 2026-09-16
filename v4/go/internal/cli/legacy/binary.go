@@ -75,12 +75,10 @@ func (r *lineReader) take(n int) []byte {
 }
 
 // lineText renders a line for the "found '%s'" diagnostics: EOF
-// renders as an empty quoted string (the C `s ? s : ""`).
+// renders as an empty quoted string (the C `s ? s : ""`), and the
+// fprintf("%s") that prints it stops at the first NUL byte.
 func lineText(line []byte) string {
-	if line == nil {
-		return ""
-	}
-	return string(line)
+	return string(nulPrefix(line))
 }
 
 // parseU64Field is the C parse_binary_size_field /
@@ -89,7 +87,9 @@ func lineText(line []byte) string {
 // end-of-buffer). The C prints the raw rest-of-line (newline
 // included) inside the quotes.
 func parseU64Field(source, field string, value []byte) (uint64, error) {
-	text := string(value)
+	// The C echoes the value through fprintf("%s"), which stops at the
+	// first NUL; the scan below keeps the raw bytes.
+	text := string(nulPrefix(value))
 	if len(value) == 0 || value[0] < '0' || value[0] > '9' {
 		return 0, fmt.Errorf("iprange: %s: invalid %s value '%s'", source, field, text)
 	}
@@ -112,7 +112,9 @@ func parseU64Field(source, field string, value []byte) (uint64, error) {
 // parseU128Field is the C parse_binary6_u128_field: decimal u128
 // with wrap detection ("value overflow") and the same line-end rule.
 func parseU128Field(source, field string, value []byte) (IP128, error) {
-	text := string(value)
+	// Echoed through fprintf("%s"): cut at the first NUL, as in
+	// parseU64Field.
+	text := string(nulPrefix(value))
 	if len(value) == 0 || value[0] < '0' || value[0] > '9' {
 		return IP128{}, fmt.Errorf("iprange: %s: invalid %s value '%s'", source, field, text)
 	}

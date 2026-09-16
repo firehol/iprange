@@ -131,7 +131,7 @@ func Run(prog string, args []string) int {
 			// tokens; iprange6_run() re-applies the option to the
 			// IPv6 array whenever -6 is present (with the IPv6
 			// 1..128 bound at that phase).
-			list, err := parsePrefixList(nextValue(), o.Family)
+			list, err := parsePrefixList(nextValue(), o.Family, o.Debug)
 			if err != nil {
 				fmt.Fprintln(os.Stderr, err)
 				os.Exit(1)
@@ -376,7 +376,11 @@ func parseSize(option, value, expected string, max uint64) uint64 {
 // truncated to int before the bound test, so 0 and negatives are rejected
 // and an overflow reports the truncated value. limit is 32 for IPv4 and 128
 // for IPv6; the diagnostic text differs per family, as in C.
-func parsePrefixList(value string, fam Family) ([]int, error) {
+// parsePrefixList tokenizes the --prefixes value. `debug` is the state
+// of -v at this argv position: the C parses the option inside its
+// sequential scan, so a -v that comes after --prefixes announces
+// nothing.
+func parsePrefixList(value string, fam Family, debug bool) ([]int, error) {
 	limit, diag := int64(32), "iprange: Only prefixes from 1 to 32 can be set (32 is always enabled). %d is invalid."
 	if fam == V6 {
 		limit, diag = int64(128), "iprange: Only prefixes from 1 to 128 can be set. %d is invalid."
@@ -390,6 +394,12 @@ func parsePrefixList(value string, fam Family) ([]int, error) {
 		j := int32(parsed) // C casts the long to int before testing it
 		if j <= 0 || int64(j) > limit {
 			return nil, fmt.Errorf(diag, j)
+		}
+		// The IPv4 argv scan announces each accepted token with no
+		// `iprange: ` prefix (src/iprange.c:549); iprange6_run()
+		// parses the option without any debug output.
+		if debug && fam == V4 {
+			fmt.Fprintf(os.Stderr, "Enabling prefix %d\n", j)
 		}
 		list = append(list, int(j))
 		if e+next < len(value) && (value[e+next] == ',' || value[e+next] == ' ') {

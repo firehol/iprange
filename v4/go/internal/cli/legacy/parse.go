@@ -207,6 +207,15 @@ func readStdinOnce(stdin io.Reader, cache *[]byte, used *bool) []byte {
 // expandAt expands `@path`: a directory loads every regular file
 // sorted by name (C qsort + strcmp byte order on the full path); a
 // plain file is a file list of paths, one per line.
+// v4Verbose gates the load-bookkeeping diagnostics that only the IPv4
+// twin prints: iprange6_run() and ipset6_load.c carry no debug
+// statement for them, so in -6 mode the C prints none of Loaded,
+// Binary loaded, <name> is empty, or the @dir/@list expansion lines
+// (src/ipset_load.c:275,289,418; src/iprange.c:762,810,821,851,875,900).
+func v4Verbose(o *Options) bool {
+	return o.Debug && o.Family == V4
+}
+
 func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, dnsUsed *bool) ([]LoadedSet, error) {
 	md, err := os.Stat(list)
 	if err != nil {
@@ -214,7 +223,7 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 	}
 
 	if md.IsDir() {
-		if o.Debug {
+		if v4Verbose(o) {
 			fmt.Fprintf(os.Stderr, "iprange: Loading files from directory %s\n", list)
 		}
 
@@ -243,7 +252,7 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 		sort.Strings(files)
 
 		if len(files) == 0 {
-			if o.Debug {
+			if v4Verbose(o) {
 				fmt.Fprintf(os.Stderr, "iprange: Directory %s is empty or contains no valid files\n", list)
 			}
 			return nil, fmt.Errorf("iprange: No valid files found in directory: %s", list)
@@ -251,7 +260,7 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 
 		sets := make([]LoadedSet, 0, len(files))
 		for _, path := range files {
-			if o.Debug {
+			if v4Verbose(o) {
 				fmt.Fprintf(os.Stderr, "iprange: Loading file %s from directory %s\n", path, list)
 			}
 			var context string
@@ -277,7 +286,7 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 
 	// A non-directory @ target is a file list (C opendir() fails
 	// with ENOTDIR and falls into the list branch).
-	if o.Debug {
+	if v4Verbose(o) {
 		fmt.Fprintf(os.Stderr, "iprange: Loading files from list %s\n", list)
 	}
 	content, err := readWholeFile(list)
@@ -290,12 +299,17 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 	recs := &records{data: content}
 	for rec := recs.next(); rec != nil; rec = recs.next() {
 		lineid++
-		s := skipWs(rec)
+		// C keeps the record in a `char[]` and treats it as a C string
+		// from the first byte: `*s == '\0'` ends the entry
+		// (src/iprange.c:869-872), so everything after the first NUL is
+		// invisible to the empty/comment test, the trailing-whitespace
+		// trim, the open, the set name and the diagnostics alike.
+		s := nulPrefix(skipWs(rec))
 		if len(s) == 0 || s[0] == '\n' || s[0] == '\r' || s[0] == '#' || s[0] == ';' {
 			continue
 		}
 		path := string(trimTrailingWs(s))
-		if o.Debug {
+		if v4Verbose(o) {
 			fmt.Fprintf(os.Stderr, "iprange: Loading file %s from list (line %d)\n", path, lineid)
 		}
 		context := fmt.Sprintf("iprange: Cannot load file %s from list %s (line %d)", path, list, lineid)
@@ -313,7 +327,7 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 	}
 
 	if len(sets) == 0 {
-		if o.Debug {
+		if v4Verbose(o) {
 			fmt.Fprintf(os.Stderr, "iprange: File list %s is empty or contains no valid entries\n", list)
 		}
 		return nil, fmt.Errorf("iprange: No valid files found in file list: %s", list)
@@ -349,7 +363,7 @@ func loadOne(o *Options, resolver *Resolver, name string, data []byte, context s
 	first := recs.next()
 	if first == nil {
 		// C: the first fgets() returns NULL: valid empty set.
-		if o.Debug {
+		if v4Verbose(o) {
 			fmt.Fprintf(os.Stderr, "iprange: %s is empty\n", name)
 		}
 		return NewIpSet(o.Family), false, nil
@@ -362,6 +376,11 @@ func loadOne(o *Options, resolver *Resolver, name string, data []byte, context s
 
 	// Binary detection: the whole first record must equal the header
 	// line (newline included); the rest of the file is binary.
+	//
+	// Every failure below is an ipset_load() failure, and both C twins
+	// answer those with the caller's context line (src/iprange.c:911,
+	// src/iprange6_main.c:320), so it follows the specific diagnostic
+	// exactly like the open-failure family.
 	if string(first) == binaryHeaderV10 || string(first) == binaryHeaderV20 {
 		var set *IpSet
 		var err error
@@ -369,19 +388,19 @@ func loadOne(o *Options, resolver *Resolver, name string, data []byte, context s
 		case o.Family == V4 && string(first) == binaryHeaderV10:
 			set, err = LoadV1(data, name)
 			if err != nil {
-				return nil, false, fmt.Errorf("%s\niprange: Cannot fast load %s", err, name)
+				return nil, false, fmt.Errorf("%s\niprange: Cannot fast load %s\n%s", err, name, context)
 			}
 		case o.Family == V6 && string(first) == binaryHeaderV20:
 			set, err = LoadV2(data, name)
 			if err != nil {
-				return nil, false, fmt.Errorf("%s\niprange: Cannot load binary v2 %s", err, name)
+				return nil, false, fmt.Errorf("%s\niprange: Cannot load binary v2 %s\n%s", err, name, context)
 			}
 		case o.Family == V4:
-			return nil, false, fmt.Errorf("iprange: %s: IPv6 binary file cannot be loaded in IPv4 mode (use -6)", name)
+			return nil, false, fmt.Errorf("iprange: %s: IPv6 binary file cannot be loaded in IPv4 mode (use -6)\n%s", name, context)
 		default:
-			return nil, false, fmt.Errorf("iprange: %s: IPv4 binary file cannot be loaded in IPv6 mode", name)
+			return nil, false, fmt.Errorf("iprange: %s: IPv4 binary file cannot be loaded in IPv6 mode\n%s", name, context)
 		}
-		if o.Debug {
+		if v4Verbose(o) {
 			kind := "non-optimized"
 			if set.Optimized {
 				kind = "optimized"
@@ -421,7 +440,7 @@ func loadOne(o *Options, resolver *Resolver, name string, data []byte, context s
 						continue
 					}
 					seen[addr] = struct{}{}
-					addEntry(set, Range{Lo: addr, Hi: addr})
+					addEntry(o, set, Range{Lo: addr, Hi: addr}, name)
 				}
 			} else {
 				// The DNS pool renders the C failure line; silent
@@ -434,6 +453,10 @@ func loadOne(o *Options, resolver *Resolver, name string, data []byte, context s
 				issues.dnsFailed = true
 			}
 		}
+		// C dns_done() prints the per-file summary after the replies it
+		// summarizes were added (src/ipset_dns.c:363-375), so the flush
+		// follows the loop instead of preceding it.
+		resolver.FlushSummary()
 	}
 	if (issues.dnsFailed && o.Family == V4) || issues.requestFailed {
 		return nil, false, errors.New(context)
@@ -444,7 +467,7 @@ func loadOne(o *Options, resolver *Resolver, name string, data []byte, context s
 	if issues.droppedV6 > 0 {
 		fmt.Fprintln(os.Stderr, fmtDropWarning(name, issues.droppedV6))
 	}
-	if o.Debug {
+	if v4Verbose(o) {
 		kind := "non-optimized"
 		if set.Optimized {
 			kind = "optimized"
@@ -494,6 +517,16 @@ type lineOutcome struct {
 // action of its outcome (C parse_line/parse_line6 plus the
 // ipset_load() switch).
 func processRecord(o *Options, resolver *Resolver, rec []byte, lineid int, name string, set *IpSet, issues *fileIssues) {
+	// C classifies the fgets buffer through C-string APIs: every end-of-line
+	// test in parse_line()/parse_line6() accepts '\0' (src/ipset_load.c:150,
+	// 173, 195, 224; src/ipset6_load.c:68, 99, 127, 144), every token scan
+	// stops at it, and the IPv6-drop scan strchr(line, ":")
+	// (src/ipset_load.c:309) cannot see past it. Only the bytes before the
+	// first NUL can change the outcome. The record itself stays raw: record
+	// boundaries and ids come from the '\n' split in records.next(), and the
+	// echo of an unparseable record already stops at the NUL like C's %s.
+	rec = nulPrefix(rec)
+
 	var out lineOutcome
 	if o.Family == V4 {
 		out = classifyV4(rec, lineid)
@@ -505,7 +538,7 @@ func processRecord(o *Options, resolver *Resolver, rec []byte, lineid int, name 
 	case lineEmpty:
 		// nothing on this line
 	case lineOneIP:
-		if err := addToken(o, out.tok, set); err != nil {
+		if err := addToken(o, out.tok, set, name); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			fmt.Fprintln(os.Stderr, fmtCannotUnderstand(lineid, name, rec))
 			issues.parseFailed = true
@@ -540,12 +573,12 @@ func processRecord(o *Options, resolver *Resolver, rec []byte, lineid int, name 
 		if r2.Hi.Compare(hi) > 0 {
 			hi = r2.Hi
 		}
-		addEntry(set, Range{Lo: lo, Hi: hi})
+		addEntry(o, set, Range{Lo: lo, Hi: hi}, name)
 	case lineWarnedRange:
 		// C prints during line classification and still adds the
 		// first IP as a single entry.
 		fmt.Fprintln(os.Stderr, out.warning)
-		if err := addToken(o, out.tok, set); err != nil {
+		if err := addToken(o, out.tok, set, name); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			fmt.Fprintln(os.Stderr, fmtCannotUnderstand(lineid, name, rec))
 			issues.parseFailed = true
@@ -574,7 +607,7 @@ func processRecord(o *Options, resolver *Resolver, rec []byte, lineid int, name 
 			// convert back to IPv4, everything else is dropped with
 			// the per-file counter.
 			if r, ok := ConvertForeignV4(string(skipWs(rec))); ok {
-				addEntry(set, r)
+				addEntry(o, set, r, name)
 			} else {
 				issues.droppedV6++
 			}
@@ -600,21 +633,64 @@ func parseToken(o *Options, token string) (Range, error) {
 
 // addToken parses one token and adds it; the error carries the C
 // family diagnostic.
-func addToken(o *Options, tok string, set *IpSet) error {
+func addToken(o *Options, tok string, set *IpSet, name string) error {
 	r, err := parseToken(o, tok)
 	if err != nil {
 		return err
 	}
-	addEntry(set, r)
+	addEntry(o, set, r, name)
 	return nil
 }
 
-// addEntry adds one range with the C `lines` accounting: every
-// successful add increments lines, even when it adjacency-merges
-// into the last range (C ipset_added_entry).
-func addEntry(set *IpSet, r Range) {
+// addEntry adds one range with the C ipset_added_entry accounting:
+// every successful add increments lines (even an adjacency merge), and
+// the first append that breaks the sorted/non-overlapping order clears
+// the optimized flag.
+//
+// Under -v the C prints one NON-OPTIMIZED line naming the set, the
+// record and both ranges at exactly that transition
+// (src/ipset.h:107-121, src/ipset6.h:100-106). The ordering rule stays
+// in IpSet.AddRange; this wrapper only observes the flag transition, so
+// the diagnostic cannot drift from it.
+func addEntry(o *Options, set *IpSet, r Range, name string) {
+	wasOptimized := set.Optimized
+	prevEntries := set.Entries
+	var prevLast Range
+	if prevEntries > 0 {
+		prevLast = set.Ranges[prevEntries-1]
+	}
 	set.Lines++
 	set.AddRange(r)
+	if !o.Debug || !wasOptimized || set.Optimized || prevEntries == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "iprange: NON-OPTIMIZED %s at line %d, entry %d, last was %s",
+		name, set.Lines, prevEntries, fmtAddr(o, prevLast.Lo))
+	if o.Family == V4 {
+		fmt.Fprintf(os.Stderr, " (%d)", prevLast.Lo.Lo)
+	}
+	fmt.Fprintf(os.Stderr, " - %s", fmtAddr(o, prevLast.Hi))
+	if o.Family == V4 {
+		fmt.Fprintf(os.Stderr, " (%d)", prevLast.Hi.Lo)
+	}
+	fmt.Fprintf(os.Stderr, ", new is %s", fmtAddr(o, r.Lo))
+	if o.Family == V4 {
+		fmt.Fprintf(os.Stderr, " (%d)", r.Lo.Lo)
+	}
+	fmt.Fprintf(os.Stderr, " - %s", fmtAddr(o, r.Hi))
+	if o.Family == V4 {
+		fmt.Fprintf(os.Stderr, " (%d)", r.Hi.Lo)
+	}
+	fmt.Fprintln(os.Stderr)
+}
+
+// nulPrefix is what the C can see of a buffer: the bytes up to (but not
+// including) its first NUL. Idempotent, and a no-op when there is no NUL.
+func nulPrefix(b []byte) []byte {
+	if i := bytes.IndexByte(b, 0); i >= 0 {
+		return b[:i]
+	}
+	return b
 }
 
 // colons counts `:` bytes (C strchr loop detects a second colon).
@@ -919,11 +995,19 @@ func (r *records) next() []byte {
 // Diagnostic texts (byte-for-byte C copies)
 // ---------------------------------------------------------------------------
 
-// fmtCannotUnderstand embeds the raw record verbatim, including its
-// trailing newline (the C buffer printed by %s), so the caller adds
-// only the closing newline.
+// cstring is the byte prefix C `%s` prints for one buffer: everything
+// up to the first NUL. A record read from a damaged binary payload can
+// hold NUL bytes, and fprintf stops at the first one.
+func cstring(b []byte) string {
+	return string(nulPrefix(b))
+}
+
+// fmtCannotUnderstand embeds the raw record the way C prints its line
+// buffer with %s: the bytes up to the first NUL, trailing newline
+// included when no NUL comes first, so the caller adds only the closing
+// newline.
 func fmtCannotUnderstand(lineid int, name string, raw []byte) string {
-	return fmt.Sprintf("iprange: Cannot understand line No %d from %s: %s", lineid, name, string(raw))
+	return fmt.Sprintf("iprange: Cannot understand line No %d from %s: %s", lineid, name, cstring(raw))
 }
 
 func fmtIgnoreText(lineid int, found string) string {

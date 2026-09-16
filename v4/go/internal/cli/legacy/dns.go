@@ -9,6 +9,16 @@
 // reference; the recorded drain-shape deviation below fixes a
 // multi-file hang that the Rust arithmetic has (the C oracle drains
 // per file and never hangs).
+//
+// The reply list holds one record per resolved ADDRESS, because the C
+// stacks one DNSREP node per address (src/ipset_dns.c:253-255) and
+// dns_process_replies() adds one ipset entry per node with no
+// deduplication (src/ipset_dns.c:275-281, src/ipset6_dns.c:223-233);
+// ipset_added_entry() then counts one `lines` unit per added entry
+// (src/ipset.h:89, src/ipset6.h:72). Go's LookupIP already returns
+// IPv6 before IPv4 where glibc returns IPv4 first, so the reply order
+// needs no reversal to match the C insertion order (measured: see
+// .local/w14a-dns/MECHANISM.md).
 
 package legacy
 
@@ -75,9 +85,14 @@ func (e *DnsError) Error() string { return e.Line }
 // system class always prints (parse.go's dnsSilentGated contract).
 func (e *DnsError) silentGated() bool { return e.Class == DnsErrorNotFound }
 
-// ReplyRecord is one completed reply, kept in submission order for
-// the per-file drain; the parse worker renders the failure lines and
-// decides file failure exactly like the C reply processing.
+// ReplyRecord is one completed reply: exactly one address of one
+// host (one C DNSREP node), or one failed request (the C prints one
+// line per request, not per address). Addrs therefore holds a single
+// address for a successful reply; the parse worker adds one ipset
+// entry per record, which is what makes the C per-reply
+// ipset_add_ip_range() and its `lines` increment observable.
+// Records of one host keep the C reply-stack order, and a stable sort
+// by Seq preserves it across hosts.
 type ReplyRecord struct {
 	Seq   int
 	Addrs []IP128
@@ -106,9 +121,27 @@ type dnsJob struct {
 	reply chan dnsOutcome
 }
 
-// dnsOutcome is the resolution result of one host.
+// dnsOutcome is the resolution result of one host. addrs is the
+// first-occurrence list (the synchronous resolve() contract); full is
+// every address the resolver answered, duplicates included, in C
+// insertion order -- one entry per C DNSREP node.
+//
+// No reversal is applied when building full. The C stacks each answer
+// (src/ipset_dns.c:253-255), so it inserts the answers in the reverse of
+// the order the resolver returned them. Whether Go's answer order equals
+// the reverse of glibc's is a property of the qualification host's NSS
+// configuration, not a Go API guarantee: measured here with
+// CGO_ENABLED=0, LookupIP("localhost") answers ::1 then 127.0.0.1 while
+// the C's files+myhostname chain answers 127.0.0.1 then ::1, so Go's
+// answer order already matches the C's insertion order. Reversing here
+// would insert 127.0.0.1-mapped first and print a NON-OPTIMIZED line the
+// C does not print (measured: -6 -v on a localhost fixture,
+// src/ipset.h:100-121 semantics in src/ipset6.h:96-105). Answer-set and
+// reply-count divergences between resolvers are recorded compatibility
+// exceptions, not silently accepted (SOW-0028, DNS parity scope).
 type dnsOutcome struct {
 	addrs []IP128
+	full  []IP128
 	err   error
 }
 
@@ -132,6 +165,11 @@ type dnsShared struct {
 	repliesMu   sync.Mutex
 	repliesCond *sync.Cond
 	replies     []ReplyRecord
+	// jobsDone counts the requests of the current batch that
+	// terminated. The drain waits on it (C dns_requests_pending
+	// reaching zero, src/ipset_dns.c:337-345) because the number of
+	// reply addresses is not the number of requests.
+	jobsDone int
 }
 
 // dnsWorker is one worker goroutine; done is closed when the worker
@@ -156,6 +194,12 @@ type Resolver struct {
 	// one line per attempt, a storm under resource exhaustion); the
 	// pool keeps serving with the workers that exist.
 	spawnFailed bool
+	// pendingDiag holds the per-file -v line Drain() computed for
+	// FlushSummary(). The loader owns when it is printed, because C
+	// dns_done() prints it after the additions of its own drain
+	// (src/ipset_dns.c:363-375). Only the loading goroutine reads or
+	// writes it, so it needs no lock.
+	pendingDiag string
 }
 
 // NewResolver creates the pool: threads is the C thread count
@@ -276,10 +320,16 @@ func (r *Resolver) submit(host string) (<-chan dnsOutcome, error) {
 }
 
 // Drain collects the replies of the current per-file batch in load
-// order, prints the C per-file diagnostics, and resets the per-file
-// counters (C dns_done() + dns_reset_stats()). Every reply is
-// returned, failed ones included: the caller renders the per-host C
-// failure lines and decides whether the run fails.
+// order, keeps the C per-file diagnostic for FlushSummary(), and
+// resets the per-file counters (C dns_done() + dns_reset_stats()).
+// Every reply is returned, failed ones included: the caller renders
+// the per-host C failure lines and decides whether the run fails.
+//
+// The diagnostic is not printed here. C dns_done() prints it after its
+// last dns_process_replies() call (src/ipset_dns.c:363-375), and those
+// additions are the loader's, so the caller must print the additions
+// first and then call FlushSummary(); a summary printed before them
+// swaps the two lines against the C.
 func (r *Resolver) Drain() []ReplyRecord {
 	shared := r.shared
 	r.shared.statsMu.Lock()
@@ -288,6 +338,7 @@ func (r *Resolver) Drain() []ReplyRecord {
 	batchLen := r.nextSeq - r.batchStart
 	if made == 0 || batchLen == 0 {
 		r.batchStart = r.nextSeq
+		r.pendingDiag = ""
 		return nil
 	}
 
@@ -306,34 +357,38 @@ func (r *Resolver) Drain() []ReplyRecord {
 		}
 	}
 
-	// Wait for every job of the batch to record its reply. Every
-	// previous drain removed its batch, so the pending records are
-	// exactly this batch, in completion order (sorted below). The
-	// Rust reference waits on batch_start+batch_len absolute
-	// indices instead and deadlocks on the second DNS-using file
-	// (reproduced: rust iprange hangs, rc=124); the C oracle drains
-	// per file and resets the counters, so the length-based wait is
-	// the C behavior.
+	// Wait until every request of the batch terminated (C
+	// dns_done()'s `while (pending)` condition). The count is
+	// requests, not reply addresses: a host that answers with two
+	// addresses terminates one request and records two replies, so
+	// waiting on the record count would never end (and waiting on
+	// absolute sequence indices deadlocks the second DNS-using
+	// file, because every drain removes its batch).
 	shared.repliesMu.Lock()
-	for len(shared.replies) < batchLen {
+	for shared.jobsDone < batchLen {
 		shared.repliesCond.Wait()
 	}
-	batch := make([]ReplyRecord, batchLen)
-	copy(batch, shared.replies[:batchLen])
-	shared.replies = shared.replies[:0]
+	batch := shared.replies
+	shared.replies = nil
+	shared.jobsDone = 0
 	shared.repliesMu.Unlock()
-	sort.Slice(batch, func(i, j int) bool { return batch[i].Seq < batch[j].Seq })
+	// Stable: the records of one host must keep the reply-stack
+	// order the worker stacked them in.
+	sort.SliceStable(batch, func(i, j int) bool { return batch[i].Seq < batch[j].Seq })
 
 	threadsUsed := uint32(len(r.workers))
 	r.shared.statsMu.Lock()
 	made, failed, retries, found := r.shared.stats.made, r.shared.stats.failed, r.shared.stats.retries, r.shared.stats.found
 	r.shared.statsMu.Unlock()
+	r.pendingDiag = ""
 	if shared.family == V4 {
-		// C dns_done(): debug wins over the progress bar.
+		// C dns_done(): debug wins over the progress bar; the IPv6
+		// pool prints no summary at all (dns6_done(),
+		// src/ipset6_dns.c:270).
 		if shared.debug {
-			fmt.Fprintln(os.Stderr, summaryLine(made, failed, retries, found, threadsUsed, r.threadsMax))
+			r.pendingDiag = summaryLine(made, failed, retries, found, threadsUsed, r.threadsMax)
 		} else if shared.progress {
-			fmt.Fprintln(os.Stderr, progressBar())
+			r.pendingDiag = progressBar()
 		}
 	}
 
@@ -344,6 +399,22 @@ func (r *Resolver) Drain() []ReplyRecord {
 	r.shared.statsMu.Unlock()
 	r.batchStart = r.nextSeq
 	return batch
+}
+
+// FlushSummary emits the per-file DNS diagnostic Drain() computed, which is
+// the C dns_done() summary line or, without -v, its progress bar
+// (src/ipset_dns.c:375). Call it after the drained replies were added to the
+// ipset: that is where dns_done() prints it, and it is the whole reason the
+// text is not printed inside Drain(). It prints nothing for the IPv6 pool and
+// for a batch that made no request, printing twice is a no-op, and a Drain()
+// that was never flushed cannot leak its text into the next batch because
+// Drain() overwrites it.
+func (r *Resolver) FlushSummary() {
+	if r.pendingDiag == "" {
+		return
+	}
+	fmt.Fprintln(os.Stderr, r.pendingDiag)
+	r.pendingDiag = ""
 }
 
 // Finish waits for all in-flight work and prints the C summary/
@@ -363,6 +434,9 @@ func (r *Resolver) Finish() bool {
 			}
 		}
 	}
+	// The loader drained its own file, so anything still pending here
+	// has no additions to precede it and the diagnostic can go out.
+	r.FlushSummary()
 	r.shared.jobsMu.Lock()
 	r.shared.closed = true
 	r.shared.jobsCond.Broadcast()
@@ -400,7 +474,19 @@ func workerLoop(shared *dnsShared) {
 		res := resolveHost(shared, job.host)
 		job.reply <- res
 		shared.repliesMu.Lock()
-		shared.replies = append(shared.replies, ReplyRecord{Seq: job.seq, Addrs: res.addrs, Err: res.err})
+		if res.err != nil {
+			// C dns_request_failed(): a failed request stacks no
+			// address and produces one diagnostic line.
+			shared.replies = append(shared.replies, ReplyRecord{Seq: job.seq, Err: res.err})
+		} else {
+			// C dns_thread_resolve(): one DNSREP node per address,
+			// stacked together, so the addresses of one host stay
+			// adjacent in the drain.
+			for _, addr := range res.full {
+				shared.replies = append(shared.replies, ReplyRecord{Seq: job.seq, Addrs: []IP128{addr}})
+			}
+		}
+		shared.jobsDone++
 		shared.repliesCond.Broadcast()
 		shared.repliesMu.Unlock()
 	}
@@ -461,7 +547,7 @@ func resolveHost(shared *dnsShared, host string) dnsOutcome {
 	for {
 		ips, err := lookupLegacyHost(network, host)
 		if err == nil {
-			addrs, raw := collectAddrs(shared, host, ips)
+			addrs, full, raw := collectAddrs(shared, host, ips)
 			shared.statsMu.Lock()
 			shared.stats.finished++
 			// C dns_request_done(): zero addresses counts as a
@@ -472,7 +558,7 @@ func resolveHost(shared *dnsShared, host string) dnsOutcome {
 				shared.stats.found += uint64(raw)
 			}
 			shared.statsMu.Unlock()
-			return dnsOutcome{addrs: addrs}
+			return dnsOutcome{addrs: addrs, full: full}
 		}
 
 		if retriable(err) && tries > 0 {
@@ -556,8 +642,10 @@ func failureLine(fam Family, host string, err error, retriesExhausted bool) (str
 
 // collectAddrs converts each lookup result with the C family policy
 // (v4: AF_INET only; v6: AAAA raw and A mapped to ::ffff:a.b.c.d)
-// and feeds the sink (debug lines, dedup, raw count).
-func collectAddrs(shared *dnsShared, host string, ips []net.IP) ([]IP128, int) {
+// and feeds the sink (debug lines, reply list, dedup list, raw count).
+// It returns the deduplicated list (the resolve() contract), the full
+// per-address reply list, and the raw address count.
+func collectAddrs(shared *dnsShared, host string, ips []net.IP) ([]IP128, []IP128, int) {
 	sink := newAddrSink(shared, host)
 	for _, ip := range ips {
 		var value IP128
@@ -583,17 +671,20 @@ func collectAddrs(shared *dnsShared, host string, ips []net.IP) ([]IP128, int) {
 		}
 		sink.push(value)
 	}
-	return sink.addrs, sink.raw
+	return sink.addrs, sink.full, sink.raw
 }
 
 // addrSink collects one reply's addresses: the C per-address debug
-// line (IPv4 only), first-occurrence dedup of the returned slice
-// (the C ipset dedup), and the raw address count (C added, includes
+// line (IPv4 only), the full reply list the C stacks (one DNSREP node
+// per address, duplicates kept, in the insertion order documented on
+// dnsOutcome.full), the first-occurrence dedup of that list (the
+// resolve() contract), and the raw address count (C added, includes
 // per-host duplicates).
 type addrSink struct {
 	shared *dnsShared
 	host   string
 	addrs  []IP128
+	full   []IP128
 	seen   map[IP128]struct{}
 	raw    int
 }
@@ -606,6 +697,7 @@ func newAddrSink(shared *dnsShared, host string) *addrSink {
 // the address is new (inserted into the returned slice).
 func (s *addrSink) push(value IP128) bool {
 	s.raw++
+	s.full = append(s.full, value)
 	if s.shared.debug && s.shared.family == V4 {
 		// C ipset_dns.c per-address line (no IPv6 equivalent).
 		fmt.Fprintf(os.Stderr, "iprange: DNS: '%s' = %s\n", s.host, FmtAddrV4(IP128{Lo: value.Lo}))

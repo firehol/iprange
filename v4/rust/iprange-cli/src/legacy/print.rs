@@ -20,8 +20,10 @@
 //! may hold bytes that are not valid UTF-8, and C writes them to
 //! stdout unchanged.
 
+use std::ffi::OsStr;
 use std::io;
 
+use super::argv;
 use super::argv::bytes as wrapper_bytes;
 use super::binary;
 use super::family::{Family, FamilyImpl};
@@ -171,14 +173,32 @@ fn split_range<F: FamilyImpl, W: io::Write>(
 pub fn print_set<F: FamilyImpl, W: io::Write>(
     w: &mut W,
     options: &Options,
-    name: &str,
+    name: impl AsRef<OsStr>,
     set: &IpSet<F>,
 ) -> io::Result<()> {
-    // C ipset_print()/ipset6_print(): `if(!(flags & OPTIMIZED)) optimize`.
+    // The set label reaches the printer from argv (a file name, or the
+    // group-A name the C `ipset_exclude()` gives its result), and C
+    // writes it with `%s`, so the bytes go out unchanged.
+    let name = argv::bytes(name.as_ref());
+    // C ipset_print()/ipset6_print(): `if(!(flags & OPTIMIZED)) optimize`
+    // — the guarded call, so a dirty set prints one `Optimizing` line
+    // (never `Is already optimized`, which only the unguarded callers
+    // can reach) and it is printed before the binary early return.
     let mut owned;
     let set = if set.optimized {
         set
     } else {
+        if options.debug {
+            argv::eprint_raw(&[
+                b"iprange: Optimizing ",
+                &name,
+                if F::FAMILY == Family::V6 {
+                    b" (IPv6)".as_slice()
+                } else {
+                    b"".as_slice()
+                },
+            ]);
+        }
         owned = set.clone();
         owned.optimize();
         &owned
@@ -196,15 +216,28 @@ pub fn print_set<F: FamilyImpl, W: io::Write>(
 
     // C debug "Printing ..." line (after the binary early return).
     if options.debug {
-        match F::FAMILY {
-            Family::V4 => eprintln!(
-                "iprange: Printing {name} with {} ranges, {} unique IPs",
-                set.entries, set.unique
-            ),
-            Family::V6 => eprintln!(
-                "iprange: Printing {name} (IPv6) with {} ranges, {} unique IPs",
-                set.entries, set.unique
-            ),
+        let entries = set.entries.to_string();
+        let unique = set.unique.to_string();
+        if F::FAMILY == Family::V6 {
+            argv::eprint_raw(&[
+                b"iprange: Printing ",
+                &name,
+                b" (IPv6) with ",
+                entries.as_bytes(),
+                b" ranges, ",
+                unique.as_bytes(),
+                b" unique IPs",
+            ]);
+        } else {
+            argv::eprint_raw(&[
+                b"iprange: Printing ",
+                &name,
+                b" with ",
+                entries.as_bytes(),
+                b" ranges, ",
+                unique.as_bytes(),
+                b" unique IPs",
+            ]);
         }
     }
 

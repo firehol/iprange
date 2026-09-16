@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use super::argv;
 use super::binary;
-use super::diag::Diag;
+use super::diag::{cstr, Diag, DiagMsg};
 use super::dns::{DnsError, Resolver};
 use super::family::{Family, FamilyImpl};
 use super::options::{Options, SourceKind};
@@ -60,6 +60,20 @@ const MAX_TOKEN6: usize = 256;
 /// Binary header lines (exact first-record match, newline included).
 const BINARY_HEADER_V10: &[u8] = b"iprange binary format v1.0\n";
 const BINARY_HEADER_V20: &[u8] = b"iprange binary format v2.0\n";
+
+/// The gate for the load-bookkeeping diagnostics that only the IPv4
+/// twin prints.
+///
+/// `iprange6_run()` and `ipset6_load.c` carry no `debug` statement for
+/// load bookkeeping: in `-6` mode the C prints only `Loading from ...
+/// (IPv6 mode)` and the per-operation lines, never `Loaded ...`,
+/// `Binary loaded ...`, `<name> is empty`, or the `@dir`/`@list`
+/// expansion lines. Those come from the IPv4 `ipset_load()` and the
+/// IPv4 `main()` argv scan (`src/ipset_load.c:275,289,418`,
+/// `src/iprange.c:762,810,821,851,875,900`).
+fn v4_verbose<F: FamilyImpl>(options: &Options) -> bool {
+    options.debug && F::FAMILY == Family::V4
+}
 
 /// Load every source in argv order. Group A and group B are both
 /// loaded here (per-source sets in argv order, each `@file`/`@dir`
@@ -219,7 +233,7 @@ fn expand_at<F: FamilyImpl>(
     let list_name = argv::bytes(list.as_os_str());
     match std::fs::metadata(list) {
         Ok(md) if md.is_dir() => {
-            if options.debug {
+            if v4_verbose::<F>(options) {
                 Diag::from_parts(&[b"iprange: Loading files from directory ", &list_name]).emit();
             }
 
@@ -254,7 +268,7 @@ fn expand_at<F: FamilyImpl>(
             files.sort();
 
             if files.is_empty() {
-                if options.debug {
+                if v4_verbose::<F>(options) {
                     Diag::from_parts(&[
                         b"iprange: Directory ",
                         &list_name,
@@ -271,7 +285,7 @@ fn expand_at<F: FamilyImpl>(
             let mut sets = Vec::with_capacity(files.len());
             for path in &files {
                 let path_name = argv::bytes(path.as_os_str());
-                if options.debug {
+                if v4_verbose::<F>(options) {
                     Diag::from_parts(&[
                         b"iprange: Loading file ",
                         &path_name,
@@ -310,7 +324,7 @@ fn expand_at<F: FamilyImpl>(
         Ok(_) => {
             // A non-directory @ target is a file list (C opendir()
             // fails with ENOTDIR and falls into the list branch).
-            if options.debug {
+            if v4_verbose::<F>(options) {
                 Diag::from_parts(&[b"iprange: Loading files from list ", &list_name]).emit();
             }
             let content = std::fs::read(list).map_err(|e| {
@@ -326,20 +340,23 @@ fn expand_at<F: FamilyImpl>(
             let mut lineid = 0usize;
             for rec in Records::new(&content) {
                 lineid += 1;
-                let s = skip_ws(rec);
+                // C keeps the record in a `char[]` and treats it as a C
+                // string from the first byte: `*s == '\0'` ends the entry
+                // (src/iprange.c:869-872), so everything after the first
+                // NUL is invisible to the empty/comment test, the
+                // trailing-whitespace trim, `fopen`, the CSV name and the
+                // diagnostics alike.
+                let s = cstr(skip_ws(rec));
                 if matches!(
                     s.first(),
                     None | Some(b'\n') | Some(b'\r') | Some(b'#') | Some(b';')
                 ) {
                     continue;
                 }
-                // The record names the file by its bytes (C `fopen`
-                // over the line verbatim), so the open, the CSV name
-                // and the diagnostics all carry the same bytes.
                 let path = argv::path_from_bytes(trim_trailing_ws(s));
                 let path_name = argv::bytes(path.as_os_str());
                 let lineid_text = lineid.to_string();
-                if options.debug {
+                if v4_verbose::<F>(options) {
                     Diag::from_parts(&[
                         b"iprange: Loading file ",
                         &path_name,
@@ -376,7 +393,7 @@ fn expand_at<F: FamilyImpl>(
             }
 
             if sets.is_empty() {
-                if options.debug {
+                if v4_verbose::<F>(options) {
                     Diag::from_parts(&[
                         b"iprange: File list ",
                         &list_name,
@@ -449,7 +466,7 @@ fn load_one<F: FamilyImpl>(
     let mut records = Records::new(data);
     let Some(first) = records.next() else {
         // C: the first fgets() returns NULL: valid empty set.
-        if options.debug {
+        if v4_verbose::<F>(options) {
             Diag::from_parts(&[b"iprange: ", &name, b" is empty"]).emit();
         }
         return Ok((IpSet::default(), false));
@@ -464,44 +481,50 @@ fn load_one<F: FamilyImpl>(
     // Binary detection: the whole first record must equal the header
     // line (newline included); the rest of the file is binary.
     if first == BINARY_HEADER_V10 || first == BINARY_HEADER_V20 {
-        // The binary-format validator reports its own diagnostics as
-        // text, so its `source` label is the lossy view of the name.
-        // That message family is the binary format, not the open/load
-        // path whose currency carries the name bytes.
-        let source_text = String::from_utf8_lossy(&name).into_owned();
+        // The validator echoes the source label and the header values
+        // with `%s`, so both travel as bytes. Every failure here is an
+        // `ipset_load()` failure, and both C twins answer those with
+        // the caller's context line (`src/iprange.c:911`,
+        // `src/iprange6_main.c:320`), so it follows the specific
+        // diagnostic exactly like the open-failure family.
+        let with_context = |inner: Diag| Diag::from_parts(&[inner.bytes(), b"\n", context.bytes()]);
         let set = match F::FAMILY {
             Family::V4 if first == BINARY_HEADER_V10 => {
-                let set = binary::load_v1(data, &source_text).map_err(|inner| {
-                    Diag::from_parts(&[inner.as_bytes(), b"\niprange: Cannot fast load ", &name])
+                let set = binary::load_v1(data, &name).map_err(|inner| {
+                    with_context(Diag::from_parts(&[
+                        inner.bytes(),
+                        b"\niprange: Cannot fast load ",
+                        &name,
+                    ]))
                 })?;
                 convert_set::<u32, F>(set)
             }
             Family::V6 if first == BINARY_HEADER_V20 => {
-                let set = binary::load_v2(data, &source_text).map_err(|inner| {
-                    Diag::from_parts(&[
-                        inner.as_bytes(),
+                let set = binary::load_v2(data, &name).map_err(|inner| {
+                    with_context(Diag::from_parts(&[
+                        inner.bytes(),
                         b"\niprange: Cannot load binary v2 ",
                         &name,
-                    ])
+                    ]))
                 })?;
                 convert_set::<u128, F>(set)
             }
             Family::V4 => {
-                return Err(Diag::from_parts(&[
+                return Err(with_context(Diag::from_parts(&[
                     b"iprange: ",
                     &name,
                     b": IPv6 binary file cannot be loaded in IPv4 mode (use -6)",
-                ]));
+                ])));
             }
             Family::V6 => {
-                return Err(Diag::from_parts(&[
+                return Err(with_context(Diag::from_parts(&[
                     b"iprange: ",
                     &name,
                     b": IPv4 binary file cannot be loaded in IPv6 mode",
-                ]));
+                ])));
             }
         };
-        if options.debug {
+        if v4_verbose::<F>(options) {
             Diag::from_parts(&[
                 b"iprange: Binary loaded ",
                 if set.optimized {
@@ -560,7 +583,7 @@ fn load_one<F: FamilyImpl>(
                     for addr in addrs {
                         if seen.insert(addr) {
                             let ip = F::from_u128(addr);
-                            add_entry(&mut set, Range { lo: ip, hi: ip });
+                            add_entry(&mut set, Range { lo: ip, hi: ip }, &name, options);
                         }
                     }
                 }
@@ -594,7 +617,7 @@ fn load_one<F: FamilyImpl>(
     if issues.dropped_v6 > 0 {
         fmt_drop_warning(&name, issues.dropped_v6).emit();
     }
-    if options.debug {
+    if v4_verbose::<F>(options) {
         Diag::from_parts(&[
             b"iprange: Loaded ",
             if set.optimized {
@@ -623,6 +646,16 @@ fn process_record<F: FamilyImpl>(
     set: &mut IpSet<F>,
     issues: &mut FileIssues,
 ) {
+    // C classifies the fgets buffer through C-string APIs: every end-of-line
+    // test in parse_line()/parse_line6() accepts '\0' (src/ipset_load.c:150,
+    // 173, 195, 224; src/ipset6_load.c:68, 99, 127, 144), every token scan
+    // stops at it, and the IPv6-drop scan strchr(line, ":")
+    // (src/ipset_load.c:309) cannot see past it. Only the bytes before the
+    // first NUL can change the outcome. The record itself stays raw: record
+    // boundaries and ids come from the '\n' split in Records, and the echo of
+    // an unparseable record already stops at the NUL like C's %s.
+    let rec = cstr(rec);
+
     let outcome = match F::FAMILY {
         Family::V4 => classify_v4(rec, lineid),
         Family::V6 => classify_v6(rec),
@@ -632,7 +665,7 @@ fn process_record<F: FamilyImpl>(
         LineOutcome::Empty => {}
 
         LineOutcome::OneIp(tok) => {
-            if let Err(inner) = add_token::<F>(&tok, options, set) {
+            if let Err(inner) = add_token::<F>(&tok, options, set, name) {
                 eprintln!("{inner}");
                 fmt_cannot_understand(lineid, name, rec).emit();
                 issues.parse_failed = true;
@@ -669,14 +702,14 @@ fn process_record<F: FamilyImpl>(
             }
             let lo = if r1.lo < r2.lo { r1.lo } else { r2.lo };
             let hi = if r1.hi > r2.hi { r1.hi } else { r2.hi };
-            add_entry(set, Range { lo, hi });
+            add_entry(set, Range { lo, hi }, name, options);
         }
 
         LineOutcome::WarnedRange { first, warning } => {
             // C prints during line classification and still adds the
             // first IP as a single entry.
             eprintln!("{warning}");
-            if let Err(inner) = add_token::<F>(&first, options, set) {
+            if let Err(inner) = add_token::<F>(&first, options, set, name) {
                 eprintln!("{inner}");
                 fmt_cannot_understand(lineid, name, rec).emit();
                 issues.parse_failed = true;
@@ -729,7 +762,7 @@ fn process_record<F: FamilyImpl>(
                 // convert back to IPv4, everything else is dropped
                 // with the per-file counter.
                 match F::convert_foreign(&ascii_lossy(skip_ws(rec))) {
-                    Some(range) => add_entry(set, range),
+                    Some(range) => add_entry(set, range, name, options),
                     None => issues.dropped_v6 += 1,
                 }
             } else {
@@ -754,16 +787,71 @@ fn add_token<F: FamilyImpl>(
     tok: &str,
     options: &Options,
     set: &mut IpSet<F>,
+    name: &[u8],
 ) -> Result<(), String> {
-    parse_token::<F>(tok, options).map(|range| add_entry(set, range))
+    parse_token::<F>(tok, options).map(|range| add_entry(set, range, name, options))
 }
 
-/// Add one entry with the C `lines` accounting: every successful add
-/// increments `lines`, even when it adjacency-merges into the last
-/// range (C `ipset_added_entry`).
-fn add_entry<T: IpNum>(set: &mut IpSet<T>, range: Range<T>) {
+/// Add one entry with the C `ipset_added_entry` accounting: `lines`
+/// counts every successful add (even an adjacency merge), and the
+/// first append that breaks the sorted/non-overlapping order clears
+/// the optimized flag.
+///
+/// Under `-v` the C prints one `NON-OPTIMIZED` line naming the set,
+/// the record, and both ranges at exactly that transition
+/// (`src/ipset.h:107-121`, `src/ipset6.h:100-106`). The ordering rule
+/// itself stays in `IpSet::add_range`; this wrapper only observes the
+/// flag transition, so the diagnostic cannot drift from it.
+fn add_entry<F: FamilyImpl>(set: &mut IpSet<F>, range: Range<F>, name: &[u8], options: &Options) {
+    let was_optimized = set.optimized;
+    let prev_entries = set.entries;
+    let prev_last = set.ranges.last().copied();
     set.lines += 1;
     set.add_range(range);
+    if !options.debug || !was_optimized || set.optimized || prev_entries == 0 {
+        return;
+    }
+    let last = prev_last.expect("entries > 0 means a last range exists");
+    let mut msg = DiagMsg::new(b"");
+    // DiagMsg always writes the `iprange: ` prefix, so the label is
+    // appended by hand to keep the C word order.
+    let line = set.lines.to_string();
+    let entry = prev_entries.to_string();
+    msg.push(b"NON-OPTIMIZED ");
+    msg.push(name);
+    msg.push(b" at line ");
+    msg.push(line.as_bytes());
+    msg.push(b", entry ");
+    msg.push(entry.as_bytes());
+    msg.push(b", last was ");
+    msg.push(F::fmt_addr(last.lo).as_bytes());
+    if F::FAMILY == Family::V4 {
+        msg.push(b" (");
+        msg.number(last.lo.as_u128());
+        msg.push(b")");
+    }
+    msg.push(b" - ");
+    msg.push(F::fmt_addr(last.hi).as_bytes());
+    if F::FAMILY == Family::V4 {
+        msg.push(b" (");
+        msg.number(last.hi.as_u128());
+        msg.push(b")");
+    }
+    msg.push(b", new is ");
+    msg.push(F::fmt_addr(range.lo).as_bytes());
+    if F::FAMILY == Family::V4 {
+        msg.push(b" (");
+        msg.number(range.lo.as_u128());
+        msg.push(b")");
+    }
+    msg.push(b" - ");
+    msg.push(F::fmt_addr(range.hi).as_bytes());
+    if F::FAMILY == Family::V4 {
+        msg.push(b" (");
+        msg.number(range.hi.as_u128());
+        msg.push(b")");
+    }
+    msg.build().emit();
 }
 
 /// Family-neutral view of a concrete binary payload set. The only
@@ -1133,17 +1221,19 @@ impl<'a> Iterator for Records<'a> {
 /// record is embedded verbatim, including its trailing newline (the
 /// C buffer printed by %s), so the caller adds only the closing \n.
 fn fmt_cannot_understand(lineid: usize, name: &[u8], raw: &[u8]) -> Diag {
-    // C prints the line buffer with `%s`: the record's own bytes,
-    // trailing newline included (which is why the C output can show an
-    // apparent blank line after the echoed record). The name and the
-    // record are both written as bytes.
+    // C prints the line buffer with `%s`: the echo is the record's bytes
+    // up to the first NUL, trailing newline included when no NUL comes
+    // first (which is why the C output can show an apparent blank line
+    // after the echoed record). The name and the record are both written
+    // as bytes, so a damaged binary payload read as text echoes exactly
+    // the prefix C would print and nothing beyond it.
     Diag::from_parts(&[
         b"iprange: Cannot understand line No ",
         lineid.to_string().as_bytes(),
         b" from ",
         name,
         b": ",
-        raw,
+        cstr(raw),
     ])
 }
 
@@ -2076,9 +2166,14 @@ mod tests {
         let mut o = opts();
         o.sources.push(path_spec(&f));
         let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
+        // Every ipset_load() failure is followed by the caller's
+        // context line (src/iprange.c:911), exactly like the
+        // open-failure family above.
         assert_eq!(
             diag_text(&err),
-            format!("iprange: {f}: IPv6 binary file cannot be loaded in IPv4 mode (use -6)")
+            format!(
+                "iprange: {f}: IPv6 binary file cannot be loaded in IPv4 mode (use -6)\niprange: Cannot load ipset: {f}"
+            )
         );
 
         // v1 header in v6 mode: never reaches binary::load_v1.
@@ -2089,7 +2184,9 @@ mod tests {
         let err = load_all_impl::<F6>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
         assert_eq!(
             diag_text(&err),
-            format!("iprange: {g}: IPv4 binary file cannot be loaded in IPv6 mode")
+            format!(
+                "iprange: {g}: IPv4 binary file cannot be loaded in IPv6 mode\niprange: Cannot load ipset: {g}"
+            )
         );
     }
 

@@ -22,9 +22,26 @@ Run either binary and drive it over stdin/stdout:
 cargo build --release --manifest-path v4/rust/Cargo.toml
 v4/rust/target/release/iprange --jsonrpc
 
-go build -C v4/go -o /tmp/iprange-go ./cmd/iprange
+env CGO_ENABLED=0 go build -C v4/go -trimpath -o /tmp/iprange-go ./cmd/iprange
 /tmp/iprange-go --jsonrpc
 ```
+
+`CGO_ENABLED=0` is the canonical, qualified Go build: a statically linked
+binary using Go's pure resolver, which is the configuration every DNS
+parity pin in this repository was qualified against. Accepted
+compatibility boundary: C and Rust resolve hostnames through the platform
+`getaddrinfo`, the canonical Go build through Go's pure resolver. Where
+the host answers a name differently for those two paths — different
+address sets, different failures, different duplicate counts, different
+answer order — the C, Rust, and Go outputs may differ in the `-v` DNS
+bookkeeping lines, `IPs got N`, `totals: N lines read`, and the `lines`
+field of the legacy binary v1/v2 header (derived from those counters);
+this difference is a documented limitation of the resolver boundary, not
+a defect, and is defined in the legacy coexistence section of
+`.agents/sow/specs/iprange-jsonrpc-v1.md`. Numeric-IP parsing, address
+handling, accounting, and diagnostic ordering inside the engines remain
+byte-pinned. A cgo-linked Go build uses the host NSS stack instead and can
+add further ordering differences; it is not the qualified configuration.
 
 The transport is one JSON-RPC 2.0 object per physical line (LF or
 CRLF), with these limits:

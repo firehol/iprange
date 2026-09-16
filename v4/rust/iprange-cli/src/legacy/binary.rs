@@ -25,6 +25,7 @@
 
 use std::io;
 
+use super::diag::{cstr, line_text, Diag, DiagMsg};
 use super::range::{IpNum, IpSet, Range};
 
 const BINARY_HEADER_V10: &[u8] = b"iprange binary format v1.0\n";
@@ -71,21 +72,26 @@ impl<'a> LineReader<'a> {
     }
 }
 
-/// C `s ? s : ""` in the "found '%s'" diagnostics: EOF renders as
-/// an empty quoted string.
-fn line_text(line: Option<&[u8]>) -> String {
-    line.map(|l| String::from_utf8_lossy(l).into_owned())
-        .unwrap_or_default()
+/// C `fprintf(stderr, "%s: %s: invalid %s value '%s'\n", PROG,
+/// ips->filename, field, value)`: the field value is the rest of the
+/// header line, echoed with `%s`, so it carries the raw bytes.
+fn invalid_value(source: &[u8], field: &str, value: &[u8]) -> Diag {
+    DiagMsg::new(source)
+        .push(b": invalid ")
+        .push(field.as_bytes())
+        .push(b" value '")
+        .push(cstr(value))
+        .push(b"'")
+        .build()
 }
 
 /// C `parse_binary_size_field` / `parse_binary_u64_field`: the value
 /// must start with an ASCII digit, parse as an unsigned decimal, and
 /// end at the line end (`\n` or end-of-buffer). The C prints the raw
 /// rest-of-line (newline included) inside the quotes.
-fn parse_u64_field(source: &str, field: &str, value: &[u8]) -> Result<u64, String> {
-    let text = String::from_utf8_lossy(value).into_owned();
+fn parse_u64_field(source: &[u8], field: &str, value: &[u8]) -> Result<u64, Diag> {
     if value.first().is_none_or(|b| !b.is_ascii_digit()) {
-        return Err(format!("iprange: {source}: invalid {field} value '{text}'"));
+        return Err(invalid_value(source, field, value));
     }
     let mut parsed: u64 = 0;
     let mut rest = value;
@@ -96,21 +102,20 @@ fn parse_u64_field(source: &str, field: &str, value: &[u8]) -> Result<u64, Strin
         parsed = parsed
             .checked_mul(10)
             .and_then(|v| v.checked_add((b - b'0') as u64))
-            .ok_or_else(|| format!("iprange: {source}: invalid {field} value '{text}'"))?;
+            .ok_or_else(|| invalid_value(source, field, value))?;
         rest = tail;
     }
     if !(rest.is_empty() || rest == b"\n") {
-        return Err(format!("iprange: {source}: invalid {field} value '{text}'"));
+        return Err(invalid_value(source, field, value));
     }
     Ok(parsed)
 }
 
 /// C `parse_binary6_u128_field`: decimal u128 with wrap detection
 /// ("value overflow") and the same line-end rule.
-fn parse_u128_field(source: &str, field: &str, value: &[u8]) -> Result<u128, String> {
-    let text = String::from_utf8_lossy(value).into_owned();
+fn parse_u128_field(source: &[u8], field: &str, value: &[u8]) -> Result<u128, Diag> {
     if value.first().is_none_or(|b| !b.is_ascii_digit()) {
-        return Err(format!("iprange: {source}: invalid {field} value '{text}'"));
+        return Err(invalid_value(source, field, value));
     }
     let mut parsed: u128 = 0;
     let mut rest = value;
@@ -120,15 +125,31 @@ fn parse_u128_field(source: &str, field: &str, value: &[u8]) -> Result<u128, Str
         }
         let next = parsed.wrapping_mul(10).wrapping_add((b - b'0') as u128);
         if next < parsed {
-            return Err(format!("iprange: {source}: {field} value overflow"));
+            return Err(DiagMsg::new(source)
+                .push(b": ")
+                .push(field.as_bytes())
+                .push(b" value overflow")
+                .build());
         }
         parsed = next;
         rest = tail;
     }
     if !(rest.is_empty() || rest == b"\n") {
-        return Err(format!("iprange: {source}: invalid {field} value '{text}'"));
+        return Err(invalid_value(source, field, value));
     }
     Ok(parsed)
+}
+
+/// C `fprintf(stderr, "%s: %s: unique IPs (%"PRIu64\") do not match
+/// the binary payload (%"PRIu64\")\n", ...)`: both totals are decimal.
+fn unique_mismatch(source: &[u8], expected: u128, actual: u128) -> Diag {
+    let mut msg = DiagMsg::new(source);
+    msg.push(b": unique IPs (")
+        .number(expected)
+        .push(b") do not match the binary payload (")
+        .number(actual)
+        .push(b")");
+    msg.build()
 }
 
 /// C `binary_validate_payload` (src/ipset_binary.c): verifies record
@@ -136,28 +157,27 @@ fn parse_u128_field(source: &str, field: &str, value: &[u8]) -> Result<u128, Str
 /// optimized payload, sort-and-merge sweep otherwise), and rejects a
 /// header that claims optimized over a non-optimized payload.
 fn validate_payload_v1(
-    source: &str,
+    source: &[u8],
     header_optimized: bool,
     entries: usize,
     expected: u128,
     ranges: &[Range<u32>],
-) -> Result<bool, String> {
+) -> Result<bool, Diag> {
     let mut payload_optimized = true;
     if entries == 0 {
         if expected != 0 {
-            return Err(format!(
-                "iprange: {source}: unique IPs ({expected}) do not match the binary payload (0)"
-            ));
+            return Err(unique_mismatch(source, expected, 0));
         }
         return Ok(true);
     }
 
     for (i, r) in ranges.iter().enumerate() {
         if r.lo > r.hi {
-            return Err(format!(
-                "iprange: {source}: invalid binary record {} has addr > broadcast",
-                i + 1
-            ));
+            return Err(DiagMsg::new(source)
+                .push(b": invalid binary record ")
+                .number(i + 1)
+                .push(b" has addr > broadcast")
+                .build());
         }
     }
 
@@ -199,15 +219,13 @@ fn validate_payload_v1(
     };
 
     if expected != actual {
-        return Err(format!(
-            "iprange: {source}: unique IPs ({expected}) do not match the binary payload ({actual})"
-        ));
+        return Err(unique_mismatch(source, expected, actual));
     }
 
     if header_optimized && !payload_optimized {
-        return Err(format!(
-            "iprange: {source}: binary payload claims to be optimized but contains overlapping, adjacent, or unsorted records"
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b": binary payload claims to be optimized but contains overlapping, adjacent, or unsorted records")
+            .build());
     }
 
     Ok(payload_optimized)
@@ -218,28 +236,29 @@ fn validate_payload_v1(
 /// re-optimized after loading) and the unique total wraps like the
 /// C u128 arithmetic.
 fn validate_payload_v2(
-    source: &str,
+    source: &[u8],
     header_optimized: bool,
     entries: usize,
     expected: u128,
     ranges: &[Range<u128>],
-) -> Result<bool, String> {
+) -> Result<bool, Diag> {
     let mut payload_optimized = true;
     if entries == 0 {
         if expected != 0 {
-            return Err(format!(
-                "iprange: {source}: unique IPs do not match the binary payload"
-            ));
+            return Err(DiagMsg::new(source)
+                .push(b": unique IPs do not match the binary payload")
+                .build());
         }
         return Ok(true);
     }
 
     for (i, r) in ranges.iter().enumerate() {
         if r.lo > r.hi {
-            return Err(format!(
-                "iprange: {source}: invalid binary record {} has addr > broadcast",
-                i + 1
-            ));
+            return Err(DiagMsg::new(source)
+                .push(b": invalid binary record ")
+                .number(i + 1)
+                .push(b" has addr > broadcast")
+                .build());
         }
     }
 
@@ -257,9 +276,9 @@ fn validate_payload_v2(
 
     if !payload_optimized {
         if header_optimized {
-            return Err(format!(
-                "iprange: {source}: binary payload claims to be optimized but contains overlapping, adjacent, or unsorted records"
-            ));
+            return Err(DiagMsg::new(source)
+                .push(b": binary payload claims to be optimized but contains overlapping, adjacent, or unsorted records")
+                .build());
         }
         return Ok(false);
     }
@@ -271,12 +290,24 @@ fn validate_payload_v2(
         actual = actual.wrapping_add(r.hi.wrapping_sub(r.lo).wrapping_add(1));
     }
     if expected != actual {
-        return Err(format!(
-            "iprange: {source}: unique IPs do not match the binary payload"
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b": unique IPs do not match the binary payload")
+            .build());
     }
 
     Ok(true)
+}
+
+/// C `fprintf(stderr, "%s: %s <grammar> but found '%s'.\n", PROG,
+/// ips->filename, s ? s : "")`: the echoed line is raw file bytes.
+fn found_line(source: &[u8], what: &[u8], line: Option<&[u8]>) -> Diag {
+    DiagMsg::new(source)
+        .push(b" ")
+        .push(what)
+        .push(b" but found '")
+        .push(line_text(line))
+        .push(b"'.")
+        .build()
 }
 
 /// Seven/eight-line header parse starting at the top of `r`.
@@ -285,10 +316,10 @@ fn validate_payload_v2(
 /// `record_bytes` is the record size the caller expects (8 or 32).
 fn parse_header<'a>(
     r: &mut LineReader<'a>,
-    source: &str,
+    source: &[u8],
     is_v2: bool,
     record_bytes: u64,
-) -> Result<(bool, u64, u64, u64, u128), String> {
+) -> Result<(bool, u64, u64, u64, u128), Diag> {
     let expected_header = if is_v2 {
         BINARY_HEADER_V20
     } else {
@@ -303,19 +334,13 @@ fn parse_header<'a>(
         } else {
             "expecting binary header"
         };
-        return Err(format!(
-            "iprange: {source} {what} but found '{}'.",
-            line_text(line)
-        ));
+        return Err(found_line(source, what.as_bytes(), line));
     }
 
     if is_v2 {
         let line = r.next();
         if line != Some(b"ipv6\n") {
-            return Err(format!(
-                "iprange: {source} expected family 'ipv6' but found '{}'.",
-                line_text(line)
-            ));
+            return Err(found_line(source, b"expected family 'ipv6'", line));
         }
     }
 
@@ -329,25 +354,19 @@ fn parse_header<'a>(
             } else {
                 "expected optimized flag"
             };
-            return Err(format!(
-                "iprange: {source} {what} but found '{}'.",
-                line_text(line)
-            ));
+            return Err(found_line(source, what.as_bytes(), line));
         }
     };
 
     // The remaining five header lines carry a fixed key prefix; a
     // missing line or a wrong key uses the C per-line diagnostic.
-    let mut field = |key: &[u8], what_v1: &str, what_v2: &str| -> Result<&'a [u8], String> {
+    let mut field = |key: &[u8], what_v1: &str, what_v2: &str| -> Result<&'a [u8], Diag> {
         let line = r.next();
         match line {
             Some(line) if line.starts_with(key) => Ok(&line[key.len()..]),
             _ => {
                 let what = if v1 { what_v1 } else { what_v2 };
-                Err(format!(
-                    "iprange: {source} {what} but found '{}'.",
-                    line_text(line)
-                ))
+                Err(found_line(source, what.as_bytes(), line))
             }
         }
     };
@@ -359,9 +378,13 @@ fn parse_header<'a>(
     )?;
     let size = parse_u64_field(source, "record size", value)?;
     if size != record_bytes {
-        return Err(format!(
-            "iprange: {source}: invalid record size {size} (expected {record_bytes})"
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b": invalid record size ")
+            .number(size)
+            .push(b" (expected ")
+            .number(record_bytes)
+            .push(b")")
+            .build());
     }
 
     let value = field(
@@ -403,19 +426,22 @@ fn parse_header<'a>(
 /// `read_one` decodes a single record.
 fn read_records<'a, T: IpNum>(
     r: &mut LineReader<'a>,
-    source: &str,
+    source: &[u8],
     entries: usize,
     record_bytes: usize,
     read_one: impl Fn(&[u8]) -> Range<T>,
-) -> Result<Vec<Range<T>>, String> {
+) -> Result<Vec<Range<T>>, Diag> {
     let need = entries
         .checked_mul(record_bytes)
-        .ok_or_else(|| format!("iprange: {source}: invalid number of records ({entries})"))?;
+        .ok_or_else(|| invalid_records(source, entries))?;
     if r.remaining() < need {
         let loaded = r.remaining() / record_bytes;
-        return Err(format!(
-            "iprange: {source}: expected to load {entries} entries, loaded {loaded}"
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b": expected to load ")
+            .number(entries)
+            .push(b" entries, loaded ")
+            .number(loaded)
+            .build());
     }
     let mut ranges = Vec::with_capacity(entries);
     for _ in 0..entries {
@@ -425,26 +451,38 @@ fn read_records<'a, T: IpNum>(
     Ok(ranges)
 }
 
+/// C `fprintf(stderr, "%s: %s: invalid number of records (%zu)\n",
+/// PROG, ips->filename, entries)`.
+fn invalid_records<E: std::fmt::Display>(source: &[u8], entries: E) -> Diag {
+    let mut msg = DiagMsg::new(source);
+    msg.push(b": invalid number of records (")
+        .number(entries)
+        .push(b")");
+    msg.build()
+}
+
 /// C allocation-overflow guard (`invalid number of records`).
-fn check_entries_overflow(source: &str, entries: u64, record_bytes: u64) -> Result<usize, String> {
+fn check_entries_overflow(source: &[u8], entries: u64, record_bytes: u64) -> Result<usize, Diag> {
     let max = ((usize::MAX as u64).saturating_sub(4)) / record_bytes;
     if entries > max {
-        return Err(format!(
-            "iprange: {source}: invalid number of records ({entries})"
-        ));
+        return Err(invalid_records(source, entries));
     }
     Ok(entries as usize)
 }
 
 /// Read the u32 marker and verify it against the native endianness
 /// marker (C `fread` + `endian != endianness` checks).
-fn check_marker(r: &mut LineReader, source: &str) -> Result<(), String> {
+fn check_marker(r: &mut LineReader, source: &[u8]) -> Result<(), Diag> {
     if r.remaining() < 4 {
-        return Err(format!("iprange: {source}: cannot load ipset header"));
+        return Err(DiagMsg::new(source)
+            .push(b": cannot load ipset header")
+            .build());
     }
     let raw: [u8; 4] = r.take(4).try_into().unwrap();
     if u32::from_ne_bytes(raw) != ENDIAN_MARKER {
-        return Err(format!("iprange: {source}: incompatible endianness"));
+        return Err(DiagMsg::new(source)
+            .push(b": incompatible endianness")
+            .build());
     }
     Ok(())
 }
@@ -453,7 +491,7 @@ fn check_marker(r: &mut LineReader, source: &str) -> Result<(), String> {
 /// exact header lines and native-endian record layout. Errors carry
 /// the exact C diagnostic text of `src/ipset_binary.c` (the parse
 /// layer adds the outer "Cannot fast load {name}" wrapper).
-pub fn load_v1(data: &[u8], source: &str) -> Result<IpSet<u32>, String> {
+pub(crate) fn load_v1(data: &[u8], source: &[u8]) -> Result<IpSet<u32>, Diag> {
     let mut r = LineReader::new(data);
     let (header_optimized, entries, bytes, lines, unique) = parse_header(&mut r, source, false, 8)?;
 
@@ -462,22 +500,34 @@ pub fn load_v1(data: &[u8], source: &str) -> Result<IpSet<u32>, String> {
 
     let expected_bytes = entries as u128 * 8 + 4;
     if bytes as u128 != expected_bytes {
-        return Err(format!(
-            "iprange: {source} invalid number of bytes, found {bytes}, expected {expected_bytes}."
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b" invalid number of bytes, found ")
+            .number(bytes)
+            .push(b", expected ")
+            .number(expected_bytes)
+            .push(b".")
+            .build());
     }
 
     check_marker(&mut r, source)?;
 
     if unique < entries as u128 {
-        return Err(format!(
-            "iprange: {source}: unique IPs ({unique}) cannot be less than entries ({entries})"
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b": unique IPs (")
+            .number(unique)
+            .push(b") cannot be less than entries (")
+            .number(entries)
+            .push(b")")
+            .build());
     }
     if lines < entries as u64 {
-        return Err(format!(
-            "iprange: {source}: lines ({lines}) cannot be less than entries ({entries})"
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b": lines (")
+            .number(lines)
+            .push(b") cannot be less than entries (")
+            .number(entries)
+            .push(b")")
+            .build());
     }
 
     let ranges = read_records(&mut r, source, entries, 8, |raw: &[u8]| {
@@ -490,9 +540,9 @@ pub fn load_v1(data: &[u8], source: &str) -> Result<IpSet<u32>, String> {
     })?;
 
     if r.remaining() != 0 {
-        return Err(format!(
-            "iprange: {source}: trailing data found after binary payload"
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b": trailing data found after binary payload")
+            .build());
     }
 
     let payload_optimized =
@@ -510,7 +560,7 @@ pub fn load_v1(data: &[u8], source: &str) -> Result<IpSet<u32>, String> {
 /// Parse the released IPv6 binary payload (v2.0). Errors carry the
 /// exact C diagnostic text of `src/ipset6_binary.c` (the parse layer
 /// adds the outer "Cannot load binary v2 {name}" wrapper).
-pub fn load_v2(data: &[u8], source: &str) -> Result<IpSet<u128>, String> {
+pub(crate) fn load_v2(data: &[u8], source: &[u8]) -> Result<IpSet<u128>, Diag> {
     let mut r = LineReader::new(data);
     let (header_optimized, entries, bytes, lines, unique) = parse_header(&mut r, source, true, 32)?;
 
@@ -519,23 +569,33 @@ pub fn load_v2(data: &[u8], source: &str) -> Result<IpSet<u128>, String> {
 
     let expected_bytes = entries as u128 * 32 + 4;
     if bytes as u128 != expected_bytes {
-        return Err(format!(
-            "iprange: {source} invalid number of bytes, found {bytes}, expected {expected_bytes}."
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b" invalid number of bytes, found ")
+            .number(bytes)
+            .push(b", expected ")
+            .number(expected_bytes)
+            .push(b".")
+            .build());
     }
 
     check_marker(&mut r, source)?;
 
     // C: `unique < entries && unique != 0`.
     if unique < entries as u128 && unique != 0 {
-        return Err(format!(
-            "iprange: {source}: unique IPs cannot be less than entries ({entries})"
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b": unique IPs cannot be less than entries (")
+            .number(entries)
+            .push(b")")
+            .build());
     }
     if lines < entries as u64 {
-        return Err(format!(
-            "iprange: {source}: lines ({lines}) cannot be less than entries ({entries})"
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b": lines (")
+            .number(lines)
+            .push(b") cannot be less than entries (")
+            .number(entries)
+            .push(b")")
+            .build());
     }
 
     let ranges = read_records(&mut r, source, entries, 32, |raw: &[u8]| {
@@ -548,9 +608,9 @@ pub fn load_v2(data: &[u8], source: &str) -> Result<IpSet<u128>, String> {
     })?;
 
     if r.remaining() != 0 {
-        return Err(format!(
-            "iprange: {source}: trailing data found after binary payload"
-        ));
+        return Err(DiagMsg::new(source)
+            .push(b": trailing data found after binary payload")
+            .build());
     }
 
     let payload_optimized =
@@ -647,6 +707,12 @@ mod tests {
 
     /// Assemble a v1 payload with the given header values and raw
     /// record bytes (marker is appended automatically).
+    /// The production error currency is bytes; these assertions are
+    /// ASCII, so the test compares the rendered text.
+    fn diag_text(d: &Diag) -> String {
+        String::from_utf8(d.bytes().to_vec()).expect("diagnostic is valid UTF-8")
+    }
+
     fn payload_v1(
         optimized: &str,
         record_size: &str,
@@ -746,7 +812,7 @@ mod tests {
         assert_eq!(set.unique, 5);
         let mut buf = Vec::new();
         write_v1(&mut buf, &set).unwrap();
-        let loaded = load_v1(&buf, "rt.bin").unwrap();
+        let loaded = load_v1(&buf, b"rt.bin").unwrap();
         assert_eq!(loaded.ranges, set.ranges);
         assert_eq!(loaded.entries, 2);
         assert_eq!(loaded.lines, 2);
@@ -772,7 +838,7 @@ mod tests {
         assert_eq!(set.unique, 1 + big);
         let mut buf = Vec::new();
         write_v2(&mut buf, &set).unwrap();
-        let loaded = load_v2(&buf, "rt6.bin").unwrap();
+        let loaded = load_v2(&buf, b"rt6.bin").unwrap();
         assert_eq!(loaded.ranges, set.ranges);
         assert_eq!(loaded.entries, 2);
         assert_eq!(loaded.lines, 2);
@@ -804,7 +870,7 @@ mod tests {
             &ENDIAN_MARKER.to_ne_bytes(),
             &[],
         );
-        let loaded = load_v1(&data, "empty.bin").unwrap();
+        let loaded = load_v1(&data, b"empty.bin").unwrap();
         assert!(loaded.ranges.is_empty());
         assert_eq!(loaded.entries, 0);
         assert_eq!(loaded.unique, 0);
@@ -822,7 +888,7 @@ mod tests {
             &[],
         );
         assert_eq!(
-            load_v1(&bad, "bad.bin").unwrap_err(),
+            diag_text(&load_v1(&bad, b"bad.bin").unwrap_err()),
             "iprange: bad.bin: unique IPs (5) do not match the binary payload (0)"
         );
     }
@@ -831,17 +897,17 @@ mod tests {
     fn v1_load_rejects_wrong_header_text() {
         let data = b"iprange binary format v9.9\noptimized\nrecord size 8\nrecords 0\nbytes 4\nlines 0\nunique ips 0\n";
         assert_eq!(
-            load_v1(data, "h.bin").unwrap_err(),
+            diag_text(&load_v1(data, b"h.bin").unwrap_err()),
             "iprange: h.bin expecting binary header but found 'iprange binary format v9.9\n'."
         );
         // EOF at the header (no bytes at all).
         assert_eq!(
-            load_v1(b"", "e.bin").unwrap_err(),
+            diag_text(&load_v1(b"", b"e.bin").unwrap_err()),
             "iprange: e.bin expecting binary header but found ''."
         );
         // Truncated header without newline.
         assert_eq!(
-            load_v1(b"iprange binary format v1.0", "t.bin").unwrap_err(),
+            diag_text(&load_v1(b"iprange binary format v1.0", b"t.bin").unwrap_err()),
             "iprange: t.bin expecting binary header but found 'iprange binary format v1.0'."
         );
     }
@@ -850,7 +916,7 @@ mod tests {
     fn v1_load_rejects_bad_optimized_line() {
         let data = b"iprange binary format v1.0\nmaybe-optimized\n";
         assert_eq!(
-            load_v1(data, "o.bin").unwrap_err(),
+            diag_text(&load_v1(data, b"o.bin").unwrap_err()),
             "iprange: o.bin 2nd line should be the optimized flag, but found 'maybe-optimized\n'."
         );
     }
@@ -868,7 +934,7 @@ mod tests {
             &[],
         );
         assert_eq!(
-            load_v1(&data, "s.bin").unwrap_err(),
+            diag_text(&load_v1(&data, b"s.bin").unwrap_err()),
             "iprange: s.bin: invalid record size 4 (expected 8)"
         );
     }
@@ -878,7 +944,7 @@ mod tests {
         // test 57: "records 0x10" must fail like the C strtoull tail.
         let data = b"iprange binary format v1.0\noptimized\nrecord size 8\nrecords 0x10\nbytes 4\nlines 0\nunique ips 0\n";
         assert_eq!(
-            load_v1(data, "x.bin").unwrap_err(),
+            diag_text(&load_v1(data, b"x.bin").unwrap_err()),
             "iprange: x.bin: invalid records value '0x10\n'"
         );
     }
@@ -896,7 +962,7 @@ mod tests {
             &u32_le(1),
         );
         assert_eq!(
-            load_v1(&data, "b.bin").unwrap_err(),
+            diag_text(&load_v1(&data, b"b.bin").unwrap_err()),
             "iprange: b.bin invalid number of bytes, found 4, expected 12."
         );
     }
@@ -906,7 +972,7 @@ mod tests {
         // No marker bytes at all.
         let data = payload_v1("optimized", "8", "0", "4", "0", "0", &[], &[]);
         assert_eq!(
-            load_v1(&data, "m.bin").unwrap_err(),
+            diag_text(&load_v1(&data, b"m.bin").unwrap_err()),
             "iprange: m.bin: cannot load ipset header"
         );
         // Wrong marker value.
@@ -921,7 +987,7 @@ mod tests {
             &[],
         );
         assert_eq!(
-            load_v1(&data, "m.bin").unwrap_err(),
+            diag_text(&load_v1(&data, b"m.bin").unwrap_err()),
             "iprange: m.bin: incompatible endianness"
         );
     }
@@ -939,7 +1005,7 @@ mod tests {
             &[u32_le(1), u32_le(1), u32_le(2), u32_le(2)].concat(),
         );
         assert_eq!(
-            load_v1(&data, "u.bin").unwrap_err(),
+            diag_text(&load_v1(&data, b"u.bin").unwrap_err()),
             "iprange: u.bin: unique IPs (1) cannot be less than entries (2)"
         );
     }
@@ -957,7 +1023,7 @@ mod tests {
             &[u32_le(1), u32_le(1), u32_le(2), u32_le(2)].concat(),
         );
         assert_eq!(
-            load_v1(&data, "l.bin").unwrap_err(),
+            diag_text(&load_v1(&data, b"l.bin").unwrap_err()),
             "iprange: l.bin: lines (1) cannot be less than entries (2)"
         );
     }
@@ -975,7 +1041,7 @@ mod tests {
             &u32_le(1), // only one record's worth of bytes
         );
         assert_eq!(
-            load_v1(&data, "short.bin").unwrap_err(),
+            diag_text(&load_v1(&data, b"short.bin").unwrap_err()),
             "iprange: short.bin: expected to load 2 entries, loaded 0"
         );
     }
@@ -993,7 +1059,7 @@ mod tests {
             &[u32_le(0x0102_0304), u32_le(0x0102_0304), b"JUNK".to_vec()].concat(),
         );
         assert_eq!(
-            load_v1(&data, "trail.bin").unwrap_err(),
+            diag_text(&load_v1(&data, b"trail.bin").unwrap_err()),
             "iprange: trail.bin: trailing data found after binary payload"
         );
     }
@@ -1012,7 +1078,7 @@ mod tests {
             &[u32_le(0x0403_0201), u32_le(0x0403_0201)].concat(),
         );
         assert_eq!(
-            load_v1(&data, "fake.bin").unwrap_err(),
+            diag_text(&load_v1(&data, b"fake.bin").unwrap_err()),
             "iprange: fake.bin: unique IPs (999) do not match the binary payload (1)"
         );
     }
@@ -1038,7 +1104,7 @@ mod tests {
             .concat(),
         );
         assert_eq!(
-            load_v1(&data, "dup.bin").unwrap_err(),
+            diag_text(&load_v1(&data, b"dup.bin").unwrap_err()),
             "iprange: dup.bin: binary payload claims to be optimized but contains overlapping, adjacent, or unsorted records"
         );
     }
@@ -1063,7 +1129,7 @@ mod tests {
             ]
             .concat(),
         );
-        let mut loaded = load_v1(&data, "raw.bin").unwrap();
+        let mut loaded = load_v1(&data, b"raw.bin").unwrap();
         assert!(!loaded.optimized);
         assert_eq!(loaded.entries, 2);
         assert_eq!(loaded.unique, 2);
@@ -1096,7 +1162,7 @@ mod tests {
             .concat(),
         );
         assert_eq!(
-            load_v1(&bad, "raw.bin").unwrap_err(),
+            diag_text(&load_v1(&bad, b"raw.bin").unwrap_err()),
             "iprange: raw.bin: unique IPs (3) do not match the binary payload (2)"
         );
     }
@@ -1117,7 +1183,7 @@ mod tests {
             &[u32_le(1), u32_le(1), u32_le(2), u32_le(2)].concat(),
         );
         assert_eq!(
-            load_v1(&data, "adj.bin").unwrap_err(),
+            diag_text(&load_v1(&data, b"adj.bin").unwrap_err()),
             "iprange: adj.bin: unique IPs (3) do not match the binary payload (2)"
         );
     }
@@ -1126,12 +1192,12 @@ mod tests {
     fn v2_load_rejects_family_and_flag_lines() {
         let data = b"iprange binary format v2.0\nipv4\n";
         assert_eq!(
-            load_v2(data, "f.bin").unwrap_err(),
+            diag_text(&load_v2(data, b"f.bin").unwrap_err()),
             "iprange: f.bin expected family 'ipv6' but found 'ipv4\n'."
         );
         let data = b"iprange binary format v2.0\nipv6\noptimize\n";
         assert_eq!(
-            load_v2(data, "f.bin").unwrap_err(),
+            diag_text(&load_v2(data, b"f.bin").unwrap_err()),
             "iprange: f.bin expected optimized flag but found 'optimize\n'."
         );
     }
@@ -1143,7 +1209,7 @@ mod tests {
         recs.extend(u128_le(1));
         let data = payload_v2("ipv6", "optimized", "32", "1", "36", "1", "7", &recs);
         assert_eq!(
-            load_v2(&data, "u6.bin").unwrap_err(),
+            diag_text(&load_v2(&data, b"u6.bin").unwrap_err()),
             "iprange: u6.bin: unique IPs do not match the binary payload"
         );
     }
@@ -1153,7 +1219,7 @@ mod tests {
         // 2^128 cannot be represented in the u128 header field.
         let data = b"iprange binary format v2.0\nipv6\noptimized\nrecord size 32\nrecords 0\nbytes 4\nlines 0\nunique ips 340282366920938463463374607431768211456\n";
         assert_eq!(
-            load_v2(data, "o6.bin").unwrap_err(),
+            diag_text(&load_v2(data, b"o6.bin").unwrap_err()),
             "iprange: o6.bin: unique ips value overflow"
         );
     }
@@ -1167,7 +1233,7 @@ mod tests {
         recs.extend(u128_le(2));
         recs.extend(u128_le(2));
         let data = payload_v2("ipv6", "non-optimized", "32", "2", "68", "2", "0", &recs);
-        let loaded = load_v2(&data, "z6.bin").unwrap();
+        let loaded = load_v2(&data, b"z6.bin").unwrap();
         assert_eq!(loaded.entries, 2);
         assert_eq!(loaded.unique, 0);
         assert!(!loaded.optimized);
@@ -1181,12 +1247,12 @@ mod tests {
         recs.extend(b"JUNK");
         let data = payload_v2("ipv6", "optimized", "32", "1", "36", "1", "1", &recs);
         assert_eq!(
-            load_v2(&data, "t6.bin").unwrap_err(),
+            diag_text(&load_v2(&data, b"t6.bin").unwrap_err()),
             "iprange: t6.bin: trailing data found after binary payload"
         );
         let data = payload_v2("ipv6", "optimized", "32", "2", "68", "2", "2", &[]);
         assert_eq!(
-            load_v2(&data, "s6.bin").unwrap_err(),
+            diag_text(&load_v2(&data, b"s6.bin").unwrap_err()),
             "iprange: s6.bin: expected to load 2 entries, loaded 0"
         );
     }
@@ -1208,7 +1274,7 @@ mod tests {
         assert!(buf
             .windows(header_line.len())
             .any(|w| w == header_line.as_bytes()));
-        let loaded = load_v2(&buf, "big.bin").unwrap();
+        let loaded = load_v2(&buf, b"big.bin").unwrap();
         assert_eq!(loaded.unique, big);
         assert_eq!(loaded.entries, 1);
         assert!(loaded.optimized);
@@ -1222,7 +1288,7 @@ mod tests {
         let mut buf = Vec::new();
         write_v1(&mut buf, &set).unwrap();
         assert!(buf.starts_with(b"iprange binary format v1.0\nnon-optimized\n"));
-        let loaded = load_v1(&buf, "raw.bin").unwrap();
+        let loaded = load_v1(&buf, b"raw.bin").unwrap();
         assert!(!loaded.optimized);
         assert_eq!(loaded.entries, 2);
         assert_eq!(loaded.unique, set.unique);

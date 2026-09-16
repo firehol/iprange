@@ -12,11 +12,24 @@
 //! tuple, same family policy) because the `libc` crate does not
 //! expose the winsock getaddrinfo on Windows.
 //!
+//! The reply path reproduces the C exactly.  The worker prints one
+//! `DNS: '%s' = %s` debug line per returned address in resolver order
+//! (`src/ipset_dns.c:246-249`), then pushes every address onto the
+//! shared reply list (`src/ipset_dns.c:245-247`), and
+//! `dns_process_replies()` drains that list head-first, adding one
+//! ipset range per address (`src/ipset_dns.c:264-271`, IPv6 twin
+//! `src/ipset6_dns.c:215-233`).  Nothing is deduplicated, so one
+//! hostname with N answers becomes N entries and N units of the `-v`
+//! `lines read` counter, which the C increments once per added entry
+//! (`src/ipset.h:89`, `src/ipset6.h:72`).  The list is a stack, so the
+//! insertion order is the reverse of the resolver's answer order, and
+//! that order is observable: it decides whether `ipset_added_entry()`
+//! sees an out-of-order entry and clears the optimized flag
+//! (`src/ipset.h:100-121`, `src/ipset6.h:96-105`), which in turn
+//! decides the `Loaded non-optimized` and `Optimizing` bookkeeping
+//! (`src/ipset_load.c:418`, `src/ipset_optimize.c:47`).
+//!
 //! C model differences that are unobservable in the output:
-//! - C processes the queue LIFO and stacks replies; the ipset is an
-//!   ordered set, so the per-host address order does not survive.
-//!   This port keeps the getaddrinfo result order and deduplicates
-//!   per host (first occurrence), as the C ipset deduplicates.
 //! - C spawns workers lazily as the pending count grows (`pending >
 //!   threads && threads < max`) and its load phase never blocks on
 //!   replies, so multi-host files routinely reach the maximum; this
@@ -36,7 +49,6 @@
 //!   the `-v` summary aggregates the whole run.
 
 use super::family::{Family, FamilyImpl};
-use std::collections::HashSet;
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::{Arc, Condvar, Mutex};
 
@@ -89,15 +101,64 @@ struct Job {
     reply: Sender<Result<Vec<u128>, DnsError>>,
 }
 
-/// One completed reply, kept in submission order for the per-file
-/// drain (the C processes replies as they arrive; the ipset is an
-/// ordered set, so the entry set is identical, and the diagnostics
-/// are printed in file order here).
+/// One completed reply: exactly one address of one host, which is one
+/// C `DNSREP` node (`src/ipset_dns.c`), or one failed request (the C
+/// prints one failure line per request, not per address).
+///
+/// The caller adds one ipset entry per reply, so handing out one
+/// record per address is what makes the C's per-reply
+/// `ipset_add_ip_range()` and its `lines` increment observable
+/// (`src/ipset_dns.c:264-271`, `src/ipset.h:89`, `src/ipset6.h:72`).
+#[derive(Debug)]
 pub struct ReplyRecord {
-    /// Submission order (C load order).
+    /// Submission order of the host this reply belongs to (C load
+    /// order). Several records share one `seq` when that host returned
+    /// several addresses; their relative order is the C reply-stack
+    /// order (reverse of the resolver's answer order).
     pub seq: usize,
-    /// The resolution outcome for the per-file drain to render.
+    /// `Ok` with the single address to add, or the request's failure.
     pub result: Result<Vec<u128>, DnsError>,
+}
+
+/// The replies of one file batch and the `-v` line that C `dns_done()`
+/// prints after its last `dns_process_replies()` call.
+///
+/// The caller (the parse worker) adds the replies to the ipset, and an
+/// out-of-order add prints `NON-OPTIMIZED ...`
+/// (`src/ipset.h:100-121`, `src/ipset6.h:96-105`).  C prints the
+/// summary after those additions (`src/ipset_dns.c:368-375`), so the
+/// summary is emitted when this batch is dropped rather than inside
+/// [`Resolver::drain`].
+#[must_use = "consume the batch: its replies are the addresses to add and dropping it prints the C summary"]
+pub struct Batch {
+    records: std::vec::IntoIter<ReplyRecord>,
+    summary: Option<String>,
+}
+
+impl Iterator for Batch {
+    type Item = ReplyRecord;
+
+    fn next(&mut self) -> Option<ReplyRecord> {
+        self.records.next()
+    }
+}
+
+impl Drop for Batch {
+    fn drop(&mut self) {
+        if let Some(line) = self.summary.take() {
+            eprintln!("{line}");
+        }
+    }
+}
+
+/// The C reply list of the current file batch, plus the number of
+/// requests that terminated. The drain waits on `jobs_done` because
+/// the number of reply addresses is not the number of requests; this is
+/// C `dns_requests_pending` reaching zero (`src/ipset_dns.c:341-345`).
+#[derive(Default)]
+struct Pending {
+    records: Vec<ReplyRecord>,
+    jobs_done: usize,
 }
 
 /// Shared pool state: the C globals (`dns_requests_made`,
@@ -112,9 +173,10 @@ struct Shared {
     jobs: Mutex<Receiver<Job>>,
     jobs_cond: Condvar,
     /// Completed replies in completion order (sorted by seq at
-    /// drain time); workers append under the lock and notify
-    /// `replies_cond` so the drain can wait for the batch.
-    replies: Mutex<Vec<ReplyRecord>>,
+    /// drain time) and the count of requests that terminated;
+    /// workers update both under one lock and notify `replies_cond`
+    /// so the drain can wait for the batch.
+    pending: Mutex<Pending>,
     replies_cond: Condvar,
 }
 
@@ -172,7 +234,7 @@ impl Resolver {
             stats: Mutex::new(Stats::default()),
             jobs: Mutex::new(receiver),
             jobs_cond: Condvar::new(),
-            replies: Mutex::new(Vec::new()),
+            pending: Mutex::new(Pending::default()),
             replies_cond: Condvar::new(),
         });
         Resolver {
@@ -205,6 +267,13 @@ impl Resolver {
         reply
             .recv()
             .expect("iprange: internal error: DNS worker died while resolving")
+    }
+
+    /// Replies of one file batch as a plain vector, for the unit tests
+    /// that assert batch behaviour rather than the streaming contract.
+    #[cfg(test)]
+    fn drain_records(&mut self) -> Vec<ReplyRecord> {
+        self.drain().collect()
     }
 
     /// Queue one hostname for resolution and return immediately. The
@@ -331,22 +400,18 @@ impl Resolver {
     /// renders the per-host C failure lines and decides whether the
     /// run fails (C prints each line when the worker finishes and
     /// then dns_done() reports the failed count).
-    pub fn drain(&mut self) -> Vec<ReplyRecord> {
-        let (shared, made, batch_start, batch_len) = {
+    pub fn drain(&mut self) -> Batch {
+        let (shared, made, batch_jobs) = {
             let shared = self.shared.clone();
-            let stats = shared.stats.lock().unwrap();
-            let made = stats.made;
-            drop(stats);
-            (
-                shared,
-                made,
-                self.batch_start,
-                self.next_seq - self.batch_start,
-            )
+            let made = shared.stats.lock().unwrap().made;
+            (shared, made, self.next_seq - self.batch_start)
         };
-        if made == 0 || batch_len == 0 {
+        if made == 0 || batch_jobs == 0 {
             self.batch_start = self.next_seq;
-            return Vec::new();
+            return Batch {
+                records: Vec::new().into_iter(),
+                summary: None,
+            };
         }
 
         // C dns_done() wait loop: while requests are pending it
@@ -365,48 +430,64 @@ impl Resolver {
             }
         }
 
-        // Wait for every job of the batch to record its reply. The
-        // stats reset below makes `made` per-file, so the wait
-        // condition is length-based instead (seqs are contiguous).
-        {
-            let mut replies = shared.replies.lock().unwrap();
-            while replies.len() < batch_start + batch_len {
-                replies = shared.replies_cond.wait(replies).unwrap();
-            }
-        }
-
+        // Wait until every request of the batch terminated, which is
+        // C `dns_done()`'s `while (pending)` condition. The count is
+        // requests, not reply addresses, and both are updated under
+        // one lock by the workers, so a partial host can never be
+        // observed. Resetting the batch here (rather than indexing it
+        // by absolute sequence numbers) is what makes consecutive
+        // files independent, as each C file load calls dns_done().
         let threads_used = self.workers.len() as u32;
-        let mut batch: Vec<ReplyRecord> = Vec::with_capacity(batch_len);
-        {
-            let mut replies = shared.replies.lock().unwrap();
-            batch.extend(replies.drain(batch_start..batch_start + batch_len));
-        }
-        batch.sort_by_key(|r| r.seq);
-
-        let stats = shared.stats.lock().unwrap();
-        let (made, failed, retries, found) = (stats.made, stats.failed, stats.retries, stats.found);
-        if shared.family == Family::V4 {
-            // C dns_done(): debug wins over the progress bar.
-            if shared.debug {
-                eprintln!(
-                    "{}",
-                    summary_line(made, failed, retries, found, threads_used, self.threads_max)
-                );
-            } else if shared.progress {
-                eprintln!("{}", progress_bar());
+        let mut records = {
+            let mut pending = shared.pending.lock().unwrap();
+            while pending.jobs_done < batch_jobs {
+                pending = shared.replies_cond.wait(pending).unwrap();
             }
-        }
-        drop(stats);
+            pending.jobs_done = 0;
+            std::mem::take(&mut pending.records)
+        };
+        // Stable: records of one host keep the reply-stack order, and
+        // the hosts keep the load order of the file.
+        records.sort_by_key(|r| r.seq);
 
-        // C dns_reset_stats() after dns_done(); the pool stays alive
-        // for the next file.
+        let summary = {
+            let stats = shared.stats.lock().unwrap();
+            let (made, failed, retries, found) =
+                (stats.made, stats.failed, stats.retries, stats.found);
+            // C dns_done(): debug wins over the progress bar; the IPv6
+            // pool prints no summary at all (src/ipset6_dns.c dns6_done).
+            if shared.family == Family::V4 {
+                if shared.debug {
+                    Some(summary_line(
+                        made,
+                        failed,
+                        retries,
+                        found,
+                        threads_used,
+                        self.threads_max,
+                    ))
+                } else if shared.progress {
+                    Some(progress_bar())
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+            // C dns_reset_stats() runs after dns_done() printed; the
+            // counters are reset with the batch, so the next file is
+            // independent. The pool stays alive.
+        };
         {
             let mut stats = shared.stats.lock().unwrap();
             *stats = Stats::default();
         }
         self.batch_start = self.next_seq;
 
-        batch
+        Batch {
+            records: records.into_iter(),
+            summary,
+        }
     }
 
     /// Wait for all in-flight work and print the C summary/progress
@@ -417,10 +498,14 @@ impl Resolver {
     /// replies and texts; this final call only drains any remaining
     /// batch, closes the job queue, and joins the workers.
     pub fn finish(&mut self) -> Result<(), ()> {
-        let batch = self.drain();
         // C dns_done(): a failed IPv4 reply fails the run; the IPv6
-        // side never fails.
-        let failed = self.shared.family == Family::V4 && batch.iter().any(|r| r.result.is_err());
+        // side never fails. Consuming the batch adds nothing to the
+        // ipset here (the loader already drained its own file) and
+        // dropping it prints the summary line, exactly where C prints
+        // it after the final reply drain.
+        let records: Vec<ReplyRecord> = self.drain().collect();
+        let any_failed = records.iter().any(|record| record.result.is_err());
+        let failed = self.shared.family == Family::V4 && any_failed;
         let shared = self.shared.clone();
         {
             let _jobs = shared.jobs.lock().unwrap();
@@ -476,17 +561,34 @@ fn progress_bar() -> String {
 /// One worker: take jobs from the queue until it is closed, resolve
 /// each host exactly like the C worker thread, answer the caller of
 /// that host (`dns_thread_resolve` / `dns6_thread_resolve`), and
-/// record the reply for the per-file drain.
+/// record one reply per returned address for the per-file drain, like
+/// the C reply stack.
 fn worker_loop(shared: Arc<Shared>) {
     while let Some(job) = next_job(&shared) {
         let result = resolve_host(&shared, &job.host);
         let _ = job.reply.send(result.clone());
         {
-            let mut replies = shared.replies.lock().unwrap();
-            replies.push(ReplyRecord {
-                seq: job.seq,
-                result,
-            });
+            let mut pending = shared.pending.lock().unwrap();
+            match result {
+                // C dns_thread_resolve(): one DNSREP per address, so
+                // every address of one host is stacked together and
+                // other hosts can only be interleaved between hosts.
+                Ok(addrs) => {
+                    for addr in addrs {
+                        pending.records.push(ReplyRecord {
+                            seq: job.seq,
+                            result: Ok(vec![addr]),
+                        });
+                    }
+                }
+                // C dns_request_failed(): a failed request produces no
+                // address and one diagnostic line.
+                Err(error) => pending.records.push(ReplyRecord {
+                    seq: job.seq,
+                    result: Err(error),
+                }),
+            }
+            pending.jobs_done += 1;
             shared.replies_cond.notify_all();
         }
     }
@@ -535,16 +637,17 @@ fn resolve_host(shared: &Shared, host: &str) -> Result<Vec<u128>, DnsError> {
         let rc = unsafe { libc::getaddrinfo(host_c.as_ptr(), service, &hints, &mut result) };
 
         if rc == 0 {
-            let (addrs, raw) = collect_addrs(shared, host, result);
+            let addrs = collect_addrs(shared, host, result);
             unsafe { libc::freeaddrinfo(result) };
             let mut stats = shared.stats.lock().unwrap();
             stats.finished += 1;
-            // C dns_request_done(): zero addresses counts as a
+            // C dns_request_done(added): added is the number of reply
+            // nodes the worker stacked, and zero added counts as a
             // failure even when getaddrinfo succeeded.
-            if raw == 0 {
+            if addrs.is_empty() {
                 stats.failed += 1;
             } else {
-                stats.found += raw;
+                stats.found += addrs.len() as u64;
             }
             return Ok(addrs);
         }
@@ -601,9 +704,10 @@ fn resolve_host(shared: &Shared, host: &str) -> Result<Vec<u128>, DnsError> {
 
 /// `src/ipset_dns.c` getnameinfo/str2netaddr replacement: walk the
 /// addrinfo list, convert each family-appropriate address, and feed
-/// the sink (debug lines, dedup, raw count). Returns `(Vec, raw)`.
+/// the sink (debug lines in answer order, the reply list). Returns the
+/// reply list in C insertion order.
 #[cfg(unix)]
-fn collect_addrs(shared: &Shared, host: &str, result: *mut libc::addrinfo) -> (Vec<u128>, u64) {
+fn collect_addrs(shared: &Shared, host: &str, result: *mut libc::addrinfo) -> Vec<u128> {
     let mut sink = AddrSink::new(shared, host);
     let mut rp = result;
     while !rp.is_null() {
@@ -663,13 +767,13 @@ fn resolve_host(shared: &Shared, host: &str) -> Result<Vec<u128>, DnsError> {
     loop {
         match (host, 80u16).to_socket_addrs() {
             Ok(iter) => {
-                let (addrs, raw) = collect_socket_addrs(shared, host, iter);
+                let addrs = collect_socket_addrs(shared, host, iter);
                 let mut stats = shared.stats.lock().unwrap();
                 stats.finished += 1;
-                if raw == 0 {
+                if addrs.is_empty() {
                     stats.failed += 1;
                 } else {
-                    stats.found += raw;
+                    stats.found += addrs.len() as u64;
                 }
                 return Ok(addrs);
             }
@@ -703,7 +807,7 @@ fn collect_socket_addrs(
     shared: &Shared,
     host: &str,
     sockets: impl Iterator<Item = std::net::SocketAddr>,
-) -> (Vec<u128>, u64) {
+) -> Vec<u128> {
     let mut sink = AddrSink::new(shared, host);
     for socket in sockets {
         let value: Option<u128> = match (shared.family, socket) {
@@ -725,15 +829,17 @@ fn collect_socket_addrs(
     sink.finish()
 }
 
-/// Address collection shared by both platforms: C per-address debug
-/// line (IPv4 only), first-occurrence dedup of the returned Vec, and
-/// the raw address count (C `added`, includes per-host duplicates).
+/// Address collection shared by both platforms: the C per-address
+/// debug line (IPv4 only, printed while the worker walks the answer
+/// list) and the reply list itself, which the C stacks and drains
+/// head-first, so the addresses come back in the reverse of the
+/// resolver's answer order and none of them is dropped.
 struct AddrSink<'a> {
     shared: &'a Shared,
     host: &'a str,
+    /// Answers in resolver order; `finish` reverses it into the C
+    /// reply-stack (insertion) order.
     addrs: Vec<u128>,
-    seen: HashSet<u128>,
-    raw: u64,
 }
 
 impl<'a> AddrSink<'a> {
@@ -742,29 +848,25 @@ impl<'a> AddrSink<'a> {
             shared,
             host,
             addrs: Vec::new(),
-            seen: HashSet::new(),
-            raw: 0,
         }
     }
 
-    /// One address from the reply list. Returns true when it is a new
-    /// address (pushed into the returned Vec).
-    fn push(&mut self, value: u128) -> bool {
-        self.raw += 1;
+    /// One answer of the resolver, in answer order. Every answer is
+    /// kept: the C adds a range per reply node and counts a `lines`
+    /// unit per added entry, duplicates included.
+    fn push(&mut self, value: u128) {
         if self.shared.debug && self.shared.family == Family::V4 {
-            // C ipset_dns.c per-address line (no IPv6 equivalent).
+            // C ipset_dns.c:246-249 (no IPv6 equivalent).
             eprintln!("iprange: DNS: '{}' = {}", self.host, fmt_v4(value as u32));
         }
-        if self.seen.insert(value) {
-            self.addrs.push(value);
-            true
-        } else {
-            false
-        }
+        self.addrs.push(value);
     }
 
-    fn finish(self) -> (Vec<u128>, u64) {
-        (self.addrs, self.raw)
+    /// The reply list in C insertion order (last answer first).
+    fn finish(self) -> Vec<u128> {
+        let mut addrs = self.addrs;
+        addrs.reverse();
+        addrs
     }
 }
 
@@ -839,35 +941,112 @@ mod tests {
             stats: Mutex::new(Stats::default()),
             jobs: Mutex::new(rx),
             jobs_cond: Condvar::new(),
-            replies: Mutex::new(Vec::new()),
+            pending: Mutex::new(Pending::default()),
             replies_cond: Condvar::new(),
         }
     }
 
+    /// `dns_process_replies()` adds a range per reply node and
+    /// `ipset_added_entry()` counts a `lines` unit per added entry
+    /// (`src/ipset.h:89`, `src/ipset6.h:72`), so the sink must keep
+    /// every answer, in the C reply-stack order (the list is a stack,
+    /// `src/ipset_dns.c:245-247`).
     #[test]
-    fn sink_dedups_preserving_first_occurrence_and_counts_raw() {
+    fn sink_keeps_every_answer_in_reply_stack_order() {
         let shared = test_shared(Family::V6, false);
         let mut sink = AddrSink::new(&shared, "host");
         let a = 0x2001_0db8_0000_0000_0000_0000_0000_0001u128;
         let b = mapped6(0x0a00_0001);
-        assert!(sink.push(a));
-        assert!(sink.push(b));
-        assert!(!sink.push(a), "duplicate must be dropped");
-        assert!(!sink.push(b), "mapped-A duplicate must be dropped");
-        let (addrs, raw) = sink.finish();
-        assert_eq!(addrs, vec![a, b], "first occurrence order");
-        assert_eq!(raw, 4, "C `added` counts duplicates");
+        sink.push(a);
+        sink.push(b);
+        sink.push(a);
+        sink.push(b);
+        assert_eq!(
+            sink.finish(),
+            vec![b, a, b, a],
+            "no dedup, and reversed into insertion order"
+        );
     }
 
     #[test]
-    fn sink_v4_dedup() {
+    fn sink_v4_keeps_duplicate_answers() {
         let shared = test_shared(Family::V4, false);
         let mut sink = AddrSink::new(&shared, "host");
-        assert!(sink.push(0x7f00_0001));
-        assert!(!sink.push(0x7f00_0001));
-        let (addrs, raw) = sink.finish();
-        assert_eq!(addrs, vec![0x7f00_0001]);
-        assert_eq!(raw, 2);
+        sink.push(0x7f00_0001);
+        sink.push(0x7f00_0001);
+        assert_eq!(
+            sink.finish(),
+            vec![0x7f00_0001, 0x7f00_0001],
+            "the C adds both, which makes the set non-optimized"
+        );
+    }
+
+    /// One reply record per address, and every address of the host is
+    /// handed out: dropping either half loses the C `lines` accounting.
+    #[test]
+    fn drain_hands_out_one_record_per_reply_address() {
+        let mut r = Resolver::new(2, true, false, Family::V4, false);
+        let addrs = r.resolve("localhost").expect("localhost must resolve");
+        assert!(!addrs.is_empty(), "the resolver must answer localhost");
+        assert!(
+            addrs.iter().all(|&a| a == 0x7f00_0001),
+            "localhost v4 must answer 127.0.0.1 only, got {addrs:?}"
+        );
+        let records = r.drain_records();
+        assert_eq!(
+            records.len(),
+            addrs.len(),
+            "one reply per address, duplicates included"
+        );
+        for record in &records {
+            let addrs = record
+                .result
+                .as_ref()
+                .expect("every reply of a resolved host carries addresses");
+            assert_eq!(
+                addrs.len(),
+                1,
+                "one reply per address means one address per reply: {records:?}"
+            );
+        }
+        let added: Vec<u128> = records
+            .iter()
+            .flat_map(|rec| rec.result.clone().unwrap_or_default())
+            .collect();
+        assert_eq!(added, addrs, "the drain must not drop or reorder replies");
+        assert_eq!(r.finish(), Ok(()));
+    }
+
+    /// C calls `dns_done()` per file and resets the counters there, so
+    /// each file's batch is independent. Indexing the reply list by
+    /// absolute sequence numbers hangs the second DNS-using file.
+    ///
+    /// The host is the numeric-form name `0x7f000001`: glibc answers it
+    /// locally with exactly one address (no resolver traffic), so one
+    /// request yields exactly one reply and the batch sizes are the
+    /// point of the test rather than a property of the host.
+    #[test]
+    fn multi_file_batches_drain_independently() {
+        let mut r = Resolver::new(3, true, false, Family::V4, false);
+        for _ in 0..4 {
+            r.request("0x7f000001").expect("queue file 1");
+        }
+        let first = r.drain_records();
+        assert_eq!(first.len(), 4, "file 1: one reply per request");
+        for (i, rec) in first.iter().enumerate() {
+            assert_eq!(rec.seq, i, "file 1 reply {i} keeps the load order");
+            assert_eq!(rec.result.as_deref().unwrap(), &[0x7f00_0001]);
+        }
+        for _ in 0..2 {
+            r.request("0x7f000001").expect("queue file 2");
+        }
+        let second = r.drain_records();
+        assert_eq!(second.len(), 2, "file 2 must not wait for file 1");
+        for (i, rec) in second.iter().enumerate() {
+            assert_eq!(rec.seq, 4 + i, "file 2 reply {i} continues the load order");
+            assert_eq!(rec.result.as_deref().unwrap(), &[0x7f00_0001]);
+        }
+        assert_eq!(r.finish(), Ok(()));
     }
 
     #[test]
@@ -918,16 +1097,17 @@ mod tests {
 
     #[test]
     fn localhost_resolves_to_127_0_0_1_in_v4() {
-        // Uses only /etc/hosts (no DNS needed); glibc returns the A
-        // record twice, which pins the per-host dedup.
+        // Uses only /etc/hosts and the myhostname NSS module (no DNS
+        // needed). How many 127.0.0.1 answers the resolver returns is
+        // the environment's own answer (glibc can return the same
+        // address twice here); the port must hand every one of them to
+        // the ipset, because the C counts a `lines` unit per added
+        // entry. The reply count is pinned against the drain instead
+        // of a hard-coded number.
         let mut r = Resolver::new(2, true, false, Family::V4, false);
         let addrs = r.resolve("localhost").expect("localhost must resolve");
         assert!(addrs.contains(&0x7f00_0001));
-        assert_eq!(
-            addrs.iter().filter(|&&a| a == 0x7f00_0001).count(),
-            1,
-            "per-host duplicates must be deduplicated"
-        );
+        assert_eq!(r.drain_records().len(), addrs.len());
         assert_eq!(r.finish(), Ok(()));
     }
 
@@ -938,11 +1118,7 @@ mod tests {
         assert!(addrs.contains(&1), "::1 missing");
         let mapped = mapped6(0x7f00_0001);
         assert!(addrs.contains(&mapped), "::ffff:127.0.0.1 missing");
-        assert_eq!(
-            addrs.iter().filter(|&&a| a == mapped).count(),
-            1,
-            "mapped-A duplicates must be deduplicated"
-        );
+        assert_eq!(r.drain_records().len(), addrs.len());
         assert_eq!(r.finish(), Ok(()));
     }
 
@@ -1001,8 +1177,17 @@ mod tests {
             r.workers.len(),
             DNS_POOL_HARD_MAX
         );
-        let replies = r.drain();
-        assert_eq!(replies.len(), DNS_POOL_HARD_MAX * 4, "every job must reply");
+        let replies = r.drain_records();
+        let mut seqs: Vec<usize> = replies.iter().map(|rec| rec.seq).collect();
+        seqs.sort_unstable();
+        seqs.dedup();
+        assert_eq!(
+            seqs.len(),
+            DNS_POOL_HARD_MAX * 4,
+            "every job must reply ({} replies for {} jobs)",
+            replies.len(),
+            DNS_POOL_HARD_MAX * 4
+        );
         assert!(
             replies.iter().all(|r| r.result.is_ok()),
             "localhost replies must all resolve"

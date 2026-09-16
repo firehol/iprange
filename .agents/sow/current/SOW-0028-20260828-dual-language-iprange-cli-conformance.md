@@ -16538,12 +16538,19 @@ sequence recorded above; no verdict in this section claims them.
   a saturated value. Aligning Go to Rust's three-tuple is tracked as a
   hygiene follow-up for this SOW's close; it is not a behavior defect
   today.
-- `legacy/ops.rs` `-v` verbose diagnostics diverge from C in 5 measured
-  spots and keep `to_string_lossy()` renderings in 17 name sites, and
-  `legacy/binary.rs` keeps lossy names for binary-format validation
-  messages (a different message family). Evidence:
-  `.local/w7/EVIDENCE-minus-v-findings.txt`. Reported to the user as a
-  scope question rather than deferred silently.
+- The `-v` verbose message family, the filename renderings in operation
+  diagnostics and the binary-input validation diagnostics were ruled by the
+  user (on external-review adjudication) to be existing compatibility
+  requirements to repair in this wave, not follow-ups: the normative
+  legacy contract includes diagnostics
+  (`.agents/sow/specs/iprange-jsonrpc-v1.md:1077`). Worker W13 closed all
+  three classes in both engines (see "Diagnostic parity against the C
+  oracle" below). Two residual classes that measurement exposed are being
+  repaired in this wave by named workers rather than deferred: the `-v`
+  DNS-hostname bookkeeping family (W14a: `legacy/dns.rs`, `legacy/dns.go`,
+  new `tests.d/120`) and interior-NUL bytes in text records changing C's
+  line classification (W14b: the text-line classification path of
+  `legacy/parse.rs`/`legacy/parse.go`, new `tests.d/121`).
 
 **Disclosure — rustfmt child-module scope:** the formatting pass intended
 for `legacy/mod.rs` and `legacy/parse.rs` followed Rust child modules, so
@@ -16554,3 +16561,309 @@ iprange-cli` re-run green afterwards). The drift cleanup inside the files
 this wave rewrote landed in the integration commit; the drift-only change
 to `legacy/dns.rs`, which this wave did not otherwise touch, is its own
 commit so the audit trail can tell the two apart.
+
+### 1B history cleanup — executed (2026-09-16)
+
+- Scope honored: only the two reported evidence paths were changed, and
+  only in the three commits of the affected range. Each commit's copies of
+  `v4/cli/evidence/windows-guard.json` and
+  `v4/cli/evidence/windows-housekeeping.json` were replaced with their
+  pre-rotation parent blobs (`2c788b8e` contents, blob ids
+  `48eb3341…` and `a929674f…`, verified byte-identical). Commit messages,
+  authors, committers and dates were preserved; no other file or commit
+  changed.
+- Rewritten chain: `ed7d34ca→d0dcf7ed`, `cedd3b1d→5914b046`,
+  `412e5077→88505e2e`. Published `master` is `88505e2e`.
+- Push: `--force-with-lease` against the exact expected remote commit.
+  Branch protection on `master` was changed by exactly one field
+  (`allowsForcePushes` false→true→false, single GraphQL
+  `updateBranchProtectionRule`), never by a blanket setting change. After
+  restoration the full protection resource is byte-identical to the
+  pre-operation snapshot (SHA-256 `b5761c02…` both before and after). The
+  pre-rewrite tip is kept as the local-only ref
+  `refs/backup/master-pre-1B` and was not published.
+- Post-push verification: every commit in the published history that ever
+  touched either evidence file (66 commits) was scanned for the personal
+  profile-path pattern — zero matches.
+- Working-copy state: the two evidence files on disk still hold their
+  pre-rewrite (stale) content until the Windows re-stamp regenerates them;
+  their index entries were unstaged immediately after the rewrite so no
+  pending commit can reintroduce them, and the evidence-rotation pre-commit
+  gate re-checks the staged diff for the path pattern before every
+  evidence commit.
+- Honest limitation, recorded as required: existing clones, forks and
+  GitHub's cached or unreachable-object views may still serve the old
+  commit identities. The cleanup claim covers the published branch history
+  only.
+
+### Diagnostic parity against the C oracle (W13) and the two DNS/NUL residuals (W14a/W14b)
+
+Worker W13 measured and closed the three diagnostic classes the legacy
+compatibility contract requires, in both engines, against the released C
+binary (139 cases, exit status + stdout + stderr byte-compared):
+
+| class | Rust before → after | Go before → after |
+|---|---|---|
+| `-v` verbose messages | 67 → 0 | 67 → 0 |
+| filename bytes in operation diagnostics | 13 → 0 | 9 → 0 |
+| binary-input validation diagnostics | 23 → 0 | 23 → 0 |
+| total | 103 → 2 | 99 → 2 |
+
+The two residual divergences are C-side nondeterminism: the ORDER of
+concurrent DNS reply-failure lines varies across runs of C itself (eight
+identical runs produce 2 variants on IPv4 and 4-5 on IPv6; stripping the
+`iprange: DNS:` lines leaves exactly one stream), and each engine's output
+is always one of C's own variants. That ordering is therefore excluded
+from `tests.d` pinning and documented, not normalized.
+
+C's final `completed in ... seconds (read ... + think ... + speak ...)`
+line is the single allowed comparison exception (a wall clock cannot match
+byte-for-byte); it is pinned by three independent whole-line matchers of
+its exact shape (Rust `parity_support::wallclock_shape`, Go
+`isWallclockLine` + shape test, `tests.d` mask of the same shape applied
+symmetrically to engine and reference), so a missing, duplicated or
+misplaced line still fails. No broad normalization exists.
+
+C-truth anchors (measured first-hand, table in
+`.local/w13-diagnostics/C_MESSAGE_SOURCES.md`): the `Loaded FLAG NAME`
+bookkeeping exists only in IPv4 (`src/ipset_load.c:418`, no IPv6 twin);
+`Is already optimized` is IPv4-only (`src/ipset_optimize.c:41-44` vs
+`src/ipset6_optimize.c:21`); `ipset_print()` optimizes before the
+`PRINT_BINARY` return (`src/ipset_print.c:142-148`); `--common` prints one
+`Finding common IPs in A and B` (`src/ipset_common.c:23`); `--except`
+names the result after group A (`src/ipset_exclude.c:23`); `Enabling
+prefix N` carries no `iprange: ` prefix and is IPv4-only
+(`src/iprange.c:549`); the `Cannot understand line ...` record echo stops
+at the first NUL (`src/ipset_load.c:343`, `src/ipset6_load.c:250`).
+
+Pinned by 96 C-comparing cases in Rust (`tests/legacy_verbose_diagnostics.rs`)
+and Go (`c_verbose_parity_test.go`) plus `tests.d/117-119`, with an 18-row
+mutation matrix (every row fails both the engine test and the `tests.d`
+detector). W13 validation: cargo workspace 1023 passed / 0 failed,
+`go test ./...` green, `tests.d` 119/119 with C, Rust and Go binaries,
+source-graph rc 0, zero rustfmt or clippy findings on its own lines.
+
+The `-v` parity claim stays explicitly scoped until W14a (DNS-bookkeeping
+family) and W14b (NUL-in-record classification) land: hostname-resolution
+bookkeeping and interior-NUL classification are measured to still diverge
+from C (W14a: 6/6 Rust, 5/6 Go cases; W14b probe cases) and are being
+repaired in this wave. The integration commit for the whole diagnostics
+wave is deliberately deferred until both workers land so the single commit
+is verified as a whole.
+
+Battery-preparation warning recorded from W13: the repo-root `iprange`
+symlink points at a stale foreign build (`/tmp/w1925-A/bin/iprange`,
+2026-09-15, sha `fddbb0d4…`); without `IPRANGE_BIN` exported to a current
+build, `run-tests.sh` fails 14/119 cases (including cases 105-116). The
+battery must point the engine at its own build step output; the default
+link must not be trusted.
+
+### W14a closure: the DNS `-v` residual was over-pinned tests, not an engine defect
+
+Measured against the C oracle first-hand (`ips->lines` counts ADDED entries:
+`src/ipset.h:89`, `src/ipset6.h:72`, printed by `src/ipset_print.c:223`,
+`src/ipset6_print.c:210`; one hostname with two replies prints two
+`DNS: 'name' = addr` lines and `totals: 2 lines read`), both engines
+already implement the bookkeeping correctly — `dns.rs`/`dns.go` engine
+sources are byte-unchanged by this worker, verified by SHA. What was
+broken was the qualification: the inherited test file did not compile
+(a corrupted prior edit, repaired and preserved as
+`snap/legacy_dns_bookkeeping.rs.corrupted`), and four checks pinned
+behaviors C itself does not fix (the `DNS: waiting` clock line, the
+optimization-trace branch for multi-hostname files — C flips that branch
+in 3-4 of 60 runs of identical input — worker-pool counts read outside
+C's own lock, and host-decided `localhost` answer sets). Two provably
+unreachable checks were removed with load-bearing replacement proofs, so
+the retained pins can actually fail. `tests.d/120` is 19/19 on C, Rust
+and Go with byte-identical expected output; the full `tests.d` gate is
+121/121 on all three engines; Rust mutation matrix 4/4 detected.
+
+Decisions on W14a's residuals: C's DNS request-stack order is
+nondeterministic output of a race, so the engines keep the deterministic
+FIFO job queue and the SOW records C's printed set as non-reproducible —
+matching a race is not a contract. The one deterministic ordering
+divergence W14a measured (Go emits `DNS: made ...` summary lines before
+the address additions they follow, 10 cases, root cause in the text
+pipeline) is assigned to the NUL/name-semantics worker as a follow-on
+fix together with its N1/N2 residuals, and W14a's temporary deliberately
+failing pin will be replaced by a C-pinned expectation when that lands.
+The Go resolver-vs-glibc NSS answer-set divergence (`localhost` count,
+`ip6-localhost` failure; 4 cases) is escalated to the user as a product
+decision, not silently pinned.
+
+### W15 closure: composition NUL cuts and Go DNS summary ordering (2026-09-16)
+
+Worker W15 delivered the three follow-on fixes assigned by W14a/W14b and
+verified them against the released C oracle (SHA-256 `393c501c…7ceb26`,
+re-verified). Full worker record lives in `.local/w15-final/` (gitignored:
+`C_TRUTH.md`, mutation logs, proof trees, pre-change snapshots).
+
+- FIX 1 — `@list` entry names are cut at the first NUL before the open,
+  matching C (`src/iprange.c:863-880` → `src/ipset_load.c:243-255`): a
+  truncated name that exists opens with the real `errno`, and one that is
+  missing reports `No such file or directory`. Sites: Rust
+  `v4/rust/iprange-cli/src/legacy/parse.rs:349` (`cstr(skip_ws(rec))`),
+  Go `v4/go/internal/cli/legacy/parse.go:307` (`nulPrefix(skipWs(rec))`).
+  W15 also found and corrected a real qualification defect: the inherited
+  "composition" cases never composed (fixture renames exercised the
+  missing-file path); twelve genuine composition cases now cover the
+  `@list`-name-NUL × record-NUL cross, 3× stable in C, and the misleading
+  labels were relabelled honestly.
+- FIX 2 — Go v1/v2 binary-header validator echoes cut at the first NUL
+  while scanning raw bytes, matching C's `fgets`-plus-`%s` combination
+  (`src/ipset_binary.c:149-225`): `binary.go:81` `lineText()` and the
+  echoes at `:92`/`:117`. Rust already matched C here.
+- FIX 3 — the Go DNS summary line now follows the additions it summarizes,
+  in C's order (final reply drain → `NON-OPTIMIZED` → summary → `Loaded`,
+  `src/ipset_dns.c:363-375`, `src/ipset_load.c:401-418`). The print lived
+  in `Resolver.Drain()`; the fix adds `pendingDiag`/`FlushSummary()` in
+  `dns.go` and flushes after the reply loop at `parse.go:456-459`.
+  W14a's deliberately-failing pin was replaced by a C-pinned byte-exact
+  expectation plus a batch-bounded `assertDNSLineOrder` (engine and
+  C-reference) in `tests.d/120`, which the pre-fix suite could not detect.
+- Disclosed write-set extension: `dns.go` was outside the assigned set and
+  was touched because that is where the summary was printed; revert path
+  `.local/w15-final/revert_fix3.sh` + `snap/*.pre-fix3`.
+- Divergence movement (18-case ordered DNS matrix): Go 10 cases/39 lines →
+  4/18; Rust 4/20 → 4/8. The remaining Rust divergences are C-side
+  nondeterminism (`hn.txt`, `desc2.txt`, `asc2.txt`: C itself produces 2+
+  distinct streams for identical input) and stay multiset-compared, as
+  recorded for W14a. The remaining Go divergences are **not** all C-side
+  nondeterminism: one class is a deterministic resolver-behaviour
+  difference between the pure-Go resolver and glibc (duplicate-reply
+  counts, measured and scoped in "DNS parity scope" below).
+- Mutation proofs M1/M2/M3/M3b each fail their intended detector (largest:
+  47/173 `tests.d/121` checks + 50 Go subtests; M3b produces exactly the
+  single ordering failure the old suite could not see), with byte-identical
+  restores.
+
+Lead re-verification of the full wave (W13+W14a+W14b+W15) at the
+pre-integration tree, all under `nice`, engine binaries built from the
+merged working tree (Go binary verified statically linked, pure resolver):
+
+- `TEST_DIRS=tests.d ./run-tests.sh`: **121 groups / 0 failed with each of
+  C, Rust and Go** (independent rerun in an isolated copy).
+- `cargo test --workspace --all-features --all-targets` rc 0 — 1036 passed,
+  0 failed, 0 warnings; `termination_signals` 12/12 with no flake.
+- `env CGO_ENABLED=0 go test -count=1 ./...` rc 0 — 25 packages ok.
+- `v4/rust/check-source-graph.sh` rc 0 (520 sources, 4 targets).
+- `gofmt -l` and `go vet` clean on the wave surface.
+
+**Build-configuration dependency (measured, disclosed, decision pending):**
+the DNS byte-exact pins hold under the canonical pure-Go build
+(`CGO_ENABLED=0`, which the battery's recorded Go build recipe already
+pins). With a cgo/glibc build, `-6 -v l1.txt` diverges because glibc's
+answer ordering yields `::ffff:127.0.0.1` before `::1`, producing an extra
+`Loaded non-optimized` line (pre-existing, not caused by this wave). This
+is the concrete resolution point for the `localhost`/`ip6-localhost`
+resolver answer-set divergence W14a escalated as a product decision; the
+user decision on scoping DNS parity to the pure-Go resolver is recorded
+below once returned.
+
+Follow-up mapping (new): the W14b test generator
+`.local/w14b-nul/gen_tests2.py` emits the NUL tables from its own case list
+and would drop W15's twelve composition cases on regeneration; W15's
+`emit_engine_nul_cases.py` imports the shipped `tests.d/121` table instead.
+Generator consolidation is tracked as a records-hygiene follow-up for this
+SOW's close; the committed test files are the authority, not the generator.
+
+### DNS parity scope — decisions and exact exceptions (2026-09-16)
+
+Two separate decisions, kept apart deliberately:
+
+1. **Canonical Go build (approved).** The Go product and all qualification
+   builds use `CGO_ENABLED=0`: a statically linked binary with the pure-Go
+   resolver. This is already the battery's recorded build recipe
+   (`CGO_ENABLED=0 go build -trimpath -buildvcs=false`, battery step at
+   `battery-w1926.sh:471`), the delivered binary is statically linked
+   (verified with `file`/`ldd`), and the README's build example now states
+   the canonical configuration and its consequence
+   (`v4/cli/README.md`, "Run either binary" block). A blanket DNS-parity
+   waiver for other builds was **rejected**: the difference below is real
+   under `CGO_ENABLED=0` and affects binary output, not only diagnostics.
+
+2. **DNS reply multiplicity is a defined compatibility exception, not a
+   silent one.** Measured first-hand on the qualification host with the
+   canonical pure-Go binary, the current Rust binary, and the C oracle
+   (`/usr/bin/iprange`, input file containing the single line
+   `localhost`):
+
+   | observable | C | Rust | pure Go |
+   |---|---|---|---|
+   | `DNS: 'localhost' = 127.0.0.1` lines | 2 | 2 | 1 |
+   | `IPs got` (summary) | 2 | 2 | 1 |
+   | `Loaded non-optimized` + `Optimizing` trace | yes | yes | no (`Loaded optimized`) |
+   | `totals: N lines read` | 2 | 2 | 1 |
+   | legacy binary header `lines` (`--print-binary`) | 2 | 2 | 1 |
+   | final address content | `127.0.0.1` | `127.0.0.1` | `127.0.0.1` |
+
+   Mechanism: this host's glibc `files`+`myhostname` chain answers the
+   IPv4 A lookup with the same address twice (one answer is the
+   v4-mapped form, which the C prints as `127.0.0.1`); the pure-Go netgo
+   resolver answers it once. Because the legacy `lines` counter feeds the
+   `iprange binary format v1.0` header, accepting a different duplicate
+   count also accepts **different DNS-derived legacy binary metadata**:
+   bytes 12 and records 1 are unchanged, only `lines` differs. That is the
+   user-visible effect and it is stated here explicitly.
+
+   The parity exception is therefore exactly three classes, and it applies
+   only to differences **demonstrably attributable to the resolver
+   boundary** (the engine's own handling of whatever answers it received
+   remains fully contractual):
+   - **different resolved addresses** for names whose resolution depends
+     on OS-specific name services: the pure-Go resolver cannot load every
+     glibc NSS module, so the address set — not just its order or count —
+     can differ, and a name can resolve on the C side and fail on the Go
+     side (or vice versa), which changes the resulting address content;
+   - **duplicate-answer counts** as measured above (affects the
+     bookkeeping streams and the legacy binary `lines` header);
+   - **resolver-dependent ordering** of multi-answer results: Go's
+     `net.Resolver.LookupIP` documentation makes no ordering guarantee,
+     so answer order must not be assumed stable across builds, hosts, or
+     resolver implementations, and no test or contract may depend on it.
+   - nothing else: **iprange processing, accounting and deterministic
+     diagnostic behaviour stay pinned and testable**, including address
+     handling of given answers, duplicate accounting, binary-header
+     counts under controlled single-answer resolution (already byte-pinned
+     in `tests.d/120`: `dns one host v4 binary` header `lines 1`,
+     `dns one host v6 binary header` header `lines 2`), and "DNS
+     additions before the summary line" (FIX 3's `assertDNSLineOrder`
+     and the byte-exact pins remain in force and must not be weakened).
+     Numeric-IP processing and v4 database correctness are outside this
+     exception: a dropped address, a wrong counter, or a misordered
+     diagnostic produced by iprange itself remains a defect.
+
+   Scope across engines: Rust's legacy resolver calls libc `getaddrinfo`
+   on Unix (`v4/rust/iprange-cli/src/legacy/dns.rs:1-13`), so Rust follows
+   the host's NSS stack exactly as C does; the non-Unix port uses the
+   platform resolver API through the standard library. The measured
+   multiplicity exception is specific to Go's pure resolver versus the
+   host stack. A cgo-linked Go build uses the host stack (glibc) and adds
+   ordering differences (`::ffff:127.0.0.1` before `::1` on this host),
+   which is another reason the canonical build is `CGO_ENABLED=0`.
+
+   Corrected records and code comments (this round): the
+   `dnsOutcome.full` comment in `v4/go/internal/cli/legacy/dns.go` no
+   longer generalizes the qualification host's answer-order observation
+   into a portable claim; the
+   `TestDNSBookkeepingLocalhostReplyCountsAreSelfConsistent` doc comment
+   states the exception and its binary-header effect with the measured
+   values; the SOW sentence that attributed all remaining DNS
+   divergences to C nondeterminism was corrected above. Go's standard
+   resolver-selection controls (`netgo`, `Resolver.PreferGo`) select a
+   resolver; they do not promise equality with C's host name-service
+   behaviour, so "support cgo builds by emulating glibc" is out of scope
+   and was not adopted.
+
+**Decision record (2026-09-16):** the user approved the canonical
+`CGO_ENABLED=0` build and the limited exception above (delivered through
+the external advisor's bounded recommendation: "2A, limited to
+demonstrated resolver-origin differences and their documented
+consequences, including address content and legacy metadata. No blanket
+DNS waiver: iprange processing, accounting and deterministic diagnostic
+ordering remain tested."). The normative legacy contract in
+`.agents/sow/specs/iprange-jsonrpc-v1.md` and the public build
+documentation (`v4/cli/README.md`) were updated with this exception in
+the same wave; the ~65-minute qualification battery and the integration
+commit proceed under that scope. This decision is not milestone
+acceptance.

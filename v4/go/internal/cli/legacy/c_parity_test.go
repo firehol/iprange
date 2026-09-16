@@ -51,7 +51,7 @@ func TestPrefixesRejectsZeroAndReportsCValues(t *testing.T) {
 		{"4294967299", []int{3}, ""},
 	}
 	for _, tc := range cases {
-		got, err := parsePrefixList(tc.value, V4)
+		got, err := parsePrefixList(tc.value, V4, false)
 		if tc.want == nil {
 			if err == nil {
 				t.Fatalf("--prefixes %q accepted as %v, want rejection", tc.value, got)
@@ -73,17 +73,17 @@ func TestPrefixesRejectsZeroAndReportsCValues(t *testing.T) {
 // G1: the IPv6 twin of --prefixes has its own bound (1..128) and its own
 // C message, which omits the "(32 is always enabled)" clause.
 func TestPrefixesV6BoundAndMessage(t *testing.T) {
-	if _, err := parsePrefixList("0", V6); err == nil {
+	if _, err := parsePrefixList("0", V6, false); err == nil {
 		t.Fatal("--prefixes 0 accepted in IPv6 mode, want rejection")
 	} else if want := "iprange: Only prefixes from 1 to 128 can be set. 0 is invalid."; err.Error() != want {
 		t.Fatalf("error\n got %q\nwant %q", err.Error(), want)
 	}
-	if _, err := parsePrefixList("129", V6); err == nil {
+	if _, err := parsePrefixList("129", V6, false); err == nil {
 		t.Fatal("--prefixes 129 accepted in IPv6 mode, want rejection")
 	} else if want := "iprange: Only prefixes from 1 to 128 can be set. 129 is invalid."; err.Error() != want {
 		t.Fatalf("error\n got %q\nwant %q", err.Error(), want)
 	}
-	got, err := parsePrefixList("128", V6)
+	got, err := parsePrefixList("128", V6, false)
 	if err != nil || fmt.Sprint(got) != fmt.Sprint([]int{128}) {
 		t.Fatalf("--prefixes 128 (IPv6) = %v, %v; want [128], nil", got, err)
 	}

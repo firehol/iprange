@@ -115,6 +115,13 @@ pub fn run_bounded(program: &Path, argv: &[&OsStr], stdin: &[u8]) -> Run {
     run_bounded_with_limit(program, argv, stdin, MEM_LIMIT_KIB, TIME_BOUND)
 }
 
+/// `run_bounded` with the working directory pinned to `cwd`, so a case
+/// can name its fixtures by relative path and keep the pinned
+/// expectation free of the scratch-directory name.
+pub fn run_bounded_in(program: &Path, cwd: &Path, argv: &[&OsStr], stdin: &[u8]) -> Run {
+    run_bounded_at(program, Some(cwd), argv, stdin, MEM_LIMIT_KIB, TIME_BOUND)
+}
+
 /// `run_bounded` with an explicit cap and bound (used by the harness
 /// self-test, which proves the bounds actually fire).
 pub fn run_bounded_with_limit(
@@ -124,7 +131,21 @@ pub fn run_bounded_with_limit(
     mem_limit_kib: u64,
     bound: Duration,
 ) -> Run {
+    run_bounded_at(program, None, argv, stdin, mem_limit_kib, bound)
+}
+
+fn run_bounded_at(
+    program: &Path,
+    cwd: Option<&Path>,
+    argv: &[&OsStr],
+    stdin: &[u8],
+    mem_limit_kib: u64,
+    bound: Duration,
+) -> Run {
     let mut cmd = Command::new(program);
+    if let Some(cwd) = cwd {
+        cmd.current_dir(cwd);
+    }
     cmd.args(argv)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -183,6 +204,147 @@ pub fn run_bounded_with_limit(
         stdout: output.stdout,
         stderr: output.stderr,
     }
+}
+
+/// The single line the C `-v` run prints at exit
+/// (`src/iprange.c:1216`): `completed in %0.5f seconds (read %0.5f +
+/// think %0.5f + speak %0.5f)`. Its four durations are wall-clock
+/// measurements of this process, so no engine can reproduce them.
+///
+/// The pattern is deliberately exact - the literal prefix, the literal
+/// separators, and one unsigned decimal with exactly five fraction
+/// digits at each of the four positions (`%0.5f` always emits five) -
+/// and it is anchored to the whole line. Nothing else can match it, so
+/// this is a per-line exception, not an output normalization: a
+/// missing, duplicated, misplaced, or differently shaped timing line
+/// still fails the comparison.
+pub fn is_wallclock_line(line: &[u8]) -> bool {
+    wallclock_shape(line).is_ok()
+}
+
+fn wallclock_shape(line: &[u8]) -> Result<(), ()> {
+    fn decimal(s: &[u8]) -> Option<(&[u8], usize)> {
+        let digits = s.iter().take_while(|b| b.is_ascii_digit()).count();
+        if digits == 0 {
+            return None;
+        }
+        let rest = &s[digits..];
+        let rest = rest.strip_prefix(b".")?;
+        let frac = rest.iter().take_while(|b| b.is_ascii_digit()).count();
+        if frac != 5 {
+            return None;
+        }
+        Some((&rest[frac..], digits + 1 + frac))
+    }
+    let mut s = line.strip_prefix(b"completed in ").ok_or(())?;
+    for sep in [
+        b" seconds (read ".as_slice(),
+        b" + think ".as_slice(),
+        b" + speak ".as_slice(),
+    ] {
+        s = decimal(s).ok_or(())?.0;
+        s = s.strip_prefix(sep).ok_or(())?;
+    }
+    s = decimal(s).ok_or(())?.0;
+    match s.strip_prefix(b")") {
+        Some(b"") => Ok(()),
+        _ => Err(()),
+    }
+}
+
+/// Replace every wall-clock line by the literal `<WALLCLOCK>` marker.
+/// The comparison is otherwise byte for byte, so a case states where
+/// the timing line belongs and how many there are.
+pub fn mask_wallclock(bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(bytes.len());
+    for (i, line) in bytes.split(|b| *b == b'\n').enumerate() {
+        if i > 0 {
+            out.push(b'\n');
+        }
+        if is_wallclock_line(line) {
+            out.extend_from_slice(b"<WALLCLOCK>");
+        } else {
+            out.extend_from_slice(line);
+        }
+    }
+    out
+}
+
+/// Assert the contract of a `-v` run: exit code and stdout byte for
+/// byte, and stderr byte for byte once the single wall-clock line is
+/// masked. `expect.2` carries the literal `<WALLCLOCK>` line where the
+/// C prints its timing line (the IPv6 twin prints none). The C
+/// reference, when installed, must agree with the same masked bytes.
+pub fn assert_verbose_parity(
+    label: &str,
+    cwd: &Path,
+    argv: &[&OsStr],
+    stdin: &[u8],
+    expect: (i32, &[u8], &[u8]),
+) {
+    assert_parity_masked(label, cwd, argv, stdin, expect, &mask_wallclock);
+}
+
+/// The same contract with an extra line-level mask owned by the caller.
+///
+/// `mask` is applied to the engine stderr, to the C stderr, and to the pinned
+/// expectation, so a caller can retire a line the C itself does not reproduce
+/// (a line derived from elapsed time) while every other line stays byte-exact.
+/// `mask_wallclock` is always applied first; `expect.2` therefore still carries
+/// the literal `<WALLCLOCK>` line.
+pub fn assert_parity_masked(
+    label: &str,
+    cwd: &Path,
+    argv: &[&OsStr],
+    stdin: &[u8],
+    expect: (i32, &[u8], &[u8]),
+    mask: &dyn Fn(&[u8]) -> Vec<u8>,
+) {
+    let engine = PathBuf::from(PROGRAM);
+    let run = run_bounded_in(&engine, cwd, argv, stdin);
+    assert!(
+        !run.timed_out,
+        "{label}: the run exceeded {} s: argv={argv:?}",
+        TIME_BOUND.as_secs()
+    );
+    assert_eq!(
+        (run.code, run.signal),
+        (Some(expect.0), None),
+        "{label}: wrong process contract ({}); expected rc {} with no signal",
+        run.describe(),
+        expect.0
+    );
+    assert_eq!(run.stdout, expect.1, "{label}: wrong stdout bytes");
+    let masked = mask(&mask_wallclock(&run.stderr));
+    let expected = mask(expect.2);
+    assert_eq!(
+        masked,
+        expected,
+        "{label}: wrong stderr bytes (raw {:?})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let Some(reference) = reference() else {
+        return;
+    };
+    let oracle = run_bounded_in(&reference, cwd, argv, stdin);
+    assert!(
+        !oracle.timed_out,
+        "{label}: the C reference exceeded {} s (argv={argv:?})",
+        TIME_BOUND.as_secs()
+    );
+    assert_eq!(
+        (oracle.code, oracle.stdout.clone()),
+        (Some(expect.0), expect.1.to_vec()),
+        "{label}: the C reference disagrees on rc/stdout"
+    );
+    assert_eq!(
+        mask(&mask_wallclock(&oracle.stderr)),
+        expected,
+        "{label}: the pinned expectation drifted from {} (raw C stderr {:?})",
+        reference.display(),
+        String::from_utf8_lossy(&oracle.stderr)
+    );
 }
 
 /// The C reference binary, when one is installed. `IPRANGE_REFERENCE`

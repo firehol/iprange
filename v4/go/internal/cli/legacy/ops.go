@@ -311,6 +311,33 @@ func mergeGroup(o *Options, a []LoadedSet, target string) *IpSet {
 	return merged
 }
 
+// comparePair computes one --compare/--compare-next/--compare-first
+// pair and prints its diagnostic.
+//
+// The released build defines COMPARE_WITH_COMMON (CMakeLists.txt:76,
+// configure.ac:99), so the IPv4 twin calls ipset_common()
+// (src/iprange.c:1053,1096,1138) and prints the single `Finding common
+// IPs in A and B` line of src/ipset_common.c:23. The IPv6 twin has no
+// such switch: src/iprange6_main.c calls ipset6_combine() followed by
+// ipset6_optimize(), which print `Combining A and B (IPv6)` and
+// `Optimizing combined (IPv6)`. Both report the same two CSV columns:
+// the union count and the intersection count.
+func comparePair(o *Options, x, y *LoadedSet) (combinedIPs, commonIPs IP128) {
+	if o.Family == V4 {
+		if o.Debug {
+			fmt.Fprintf(os.Stderr, "iprange: Finding common IPs in %s and %s\n", x.Name, y.Name)
+		}
+		common := intersectOp(x.Set, y.Set)
+		return Sub128(u128Add(x.Set.Unique, y.Set.Unique), common.Unique), common.Unique
+	}
+	if o.Debug {
+		fmt.Fprintf(os.Stderr, "iprange: Combining %s and %s%s\n", x.Name, y.Name, familySuffix(o.Family))
+	}
+	combined := combineOp(x.Set, y.Set)
+	optimizeDirect(o, combined, "combined")
+	return combined.Unique, Sub128(u128Add(x.Set.Unique, y.Set.Unique), combined.Unique)
+}
+
 // intersectOp is the C ipset_common walk (src/ipset_common.c,
 // src/ipset6_common.c): one sorted sweep over both optimized inputs;
 // overlapping pieces are appended in ascending order. The result is
@@ -853,7 +880,10 @@ func execute(o *Options, loaded *Loaded) int {
 			}
 			excluded = subtractOp(excluded, set.Set)
 		}
-		return printViaSet(o, excluded, "exclude")
+		// C ipset_exclude(ips1, ips2) creates the result with
+		// ipset_create(ips1->filename, 0), so the printer labels it
+		// with the group-A name, not "exclude".
+		return printViaSet(o, excluded, excludedName)
 
 	case ModeDiff:
 		if len(a) == 0 || len(b) == 0 {
@@ -906,15 +936,8 @@ func execute(o *Options, loaded *Loaded) int {
 			}
 			for i := 0; i < len(a); i++ {
 				for j := i + 1; j < len(a); j++ {
-					if o.Debug {
-						fmt.Fprintf(os.Stderr, "iprange: Combining %s and %s%s\n", a[i].Name, a[j].Name, familySuffix(o.Family))
-					}
-					combined := combineOp(a[i].Set, a[j].Set)
-					optimizeDirect(o, combined, "combined")
-					unique1 := a[i].Set.Unique
-					unique2 := a[j].Set.Unique
-					combinedIPs := combined.Unique
-					if err := writeCompareRow(w, a[i].Name, a[j].Name, a[i].Set.Entries, a[j].Set.Entries, unique1, unique2, combinedIPs, Sub128(u128Add(unique1, unique2), combinedIPs)); err != nil {
+					combinedIPs, commonIPs := comparePair(o, &a[i], &a[j])
+					if err := writeCompareRow(w, a[i].Name, a[j].Name, a[i].Set.Entries, a[j].Set.Entries, a[i].Set.Unique, a[j].Set.Unique, combinedIPs, commonIPs); err != nil {
 						return err
 					}
 				}
@@ -939,17 +962,10 @@ func execute(o *Options, loaded *Loaded) int {
 			for _, set := range b {
 				optimizeDirect(o, set.Set, set.Name)
 			}
-			for _, x := range a {
-				for _, y := range b {
-					if o.Debug {
-						fmt.Fprintf(os.Stderr, "iprange: Combining %s and %s%s\n", x.Name, y.Name, familySuffix(o.Family))
-					}
-					combined := combineOp(x.Set, y.Set)
-					optimizeDirect(o, combined, "combined")
-					unique1 := x.Set.Unique
-					unique2 := y.Set.Unique
-					combinedIPs := combined.Unique
-					if err := writeCompareRow(w, x.Name, y.Name, x.Set.Entries, y.Set.Entries, unique1, unique2, combinedIPs, Sub128(u128Add(unique1, unique2), combinedIPs)); err != nil {
+			for i := range a {
+				for j := range b {
+					combinedIPs, commonIPs := comparePair(o, &a[i], &b[j])
+					if err := writeCompareRow(w, a[i].Name, b[j].Name, a[i].Set.Entries, b[j].Set.Entries, a[i].Set.Unique, b[j].Set.Unique, combinedIPs, commonIPs); err != nil {
 						return err
 					}
 				}
@@ -972,14 +988,10 @@ func execute(o *Options, loaded *Loaded) int {
 				optimizeDirect(o, set.Set, set.Name)
 			}
 			for i := 1; i < len(a); i++ {
-				if o.Debug {
-					fmt.Fprintf(os.Stderr, "iprange: Combining %s and %s%s\n", a[i].Name, a[0].Name, familySuffix(o.Family))
-				}
-				combined := combineOp(a[i].Set, a[0].Set)
-				optimizeDirect(o, combined, "combined")
-				uniqueIPs := a[i].Set.Unique
-				commonIPs := Sub128(u128Add(uniqueIPs, a[0].Set.Unique), combined.Unique)
-				if err := writeCountRow(w, a[i].Name, a[i].Set.Entries, uniqueIPs, commonIPs); err != nil {
+				// C ipset_common(ips, first) reports the intersection as
+				// the row's common_ips column.
+				_, commonIPs := comparePair(o, &a[i], &a[0])
+				if err := writeCountRow(w, a[i].Name, a[i].Set.Entries, a[i].Set.Unique, commonIPs); err != nil {
 					return err
 				}
 			}
@@ -988,7 +1000,10 @@ func execute(o *Options, loaded *Loaded) int {
 
 	case ModeCountUnique:
 		merged := mergeGroup(o, a, "combined ipset")
-		optimizeDirect(o, merged, "combined ipset")
+		// C ipset_report_unique_ips() -> ipset_unique_ips() optimizes
+		// through `if(!(flags & OPTIMIZED))`, so an already-optimized
+		// merge prints nothing at all.
+		optimizeOperand(o, merged, "combined ipset")
 		return emit(func(w *bufio.Writer) error {
 			if o.Header {
 				if _, err := w.WriteString("entries,unique_ips\n"); err != nil {

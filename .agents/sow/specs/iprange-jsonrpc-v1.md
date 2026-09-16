@@ -1078,6 +1078,20 @@ beside the running binary.
   diagnostics, feature probes, binary formats, and exit codes apply.
 - Neither Rust nor Go invokes or links the C executable at runtime. The C
   executable remains the qualification oracle.
+- Host name resolution is the only legacy input channel not reproduced
+  byte-for-byte, and only at the resolver boundary: C and the Rust engine
+  resolve through the platform `getaddrinfo`, while the canonical Go
+  engine resolves through Go's pure resolver (`CGO_ENABLED=0` static
+  build). Where the host answers a name differently for these two paths —
+  different address sets, different failure modes, different duplicate
+  answer counts, or different answer order — the resulting difference is
+  attributable to the resolver, not to the CLI, and is permitted: it may
+  change the `-v` DNS bookkeeping lines, `IPs got N`,
+  `totals: N lines read`, and the `lines` metadata field of the legacy
+  binary v1/v2 header (which is derived from those counters). Everything
+  downstream of the answers iprange receives is bound by the legacy
+  contract unchanged: address handling, duplicate accounting, diagnostic
+  and summary ordering, numeric-IP parsing, and v4 correctness.
 
 ## Compatibility and evolution
 

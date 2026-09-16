@@ -222,6 +222,14 @@ func printSet(w io.Writer, o *Options, set *IpSet, name string) error {
 	// this point already optimized.
 	var owned IpSet
 	if !set.Optimized {
+		// C ipset_print()/ipset6_print() call ipset_optimize() through
+		// `if(!(flags & OPTIMIZED))`, so a dirty set prints exactly one
+		// `Optimizing` line (never `Is already optimized`, which only
+		// the unguarded callers can reach) and it is printed before the
+		// binary early return.
+		if o.Debug {
+			fmt.Fprintf(os.Stderr, "iprange: Optimizing %s%s\n", name, familySuffix(o.Family))
+		}
 		owned = *set
 		owned.Ranges = append([]Range(nil), set.Ranges...)
 		owned.Optimize()

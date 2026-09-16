@@ -199,7 +199,7 @@ pub fn run(prog: &OsStr, args: &[OsString]) -> i32 {
                 // (with the IPv6 1..128 bound at that phase). The
                 // tokenizer is strtol-exact: whitespace, signs and
                 // empty tokens behave like the C loop.
-                match parse_prefix_list(&value, options.family) {
+                match parse_prefix_list(&value, options.family, options.debug) {
                     Ok(list) => {
                         for slot in 0..33 {
                             if slot < 32 && !list.contains(&slot) {
@@ -592,9 +592,13 @@ fn input_source(family: Family, arg: &OsStr) -> Option<SourceSpec> {
 /// saturates at `LONG_MAX`/`LONG_MIN` is reported as -1/0. `ERANGE` is
 /// not checked by this branch, so it only shows up through the cast.
 ///
+/// `debug` is the state of `-v` at this argv position: the C parses
+/// the option inside its sequential scan, so a `-v` that comes after
+/// `--prefixes` announces nothing.
+///
 /// Returns the allowed prefixes, or the complete C diagnostic for the
 /// first token the cast left outside 1..=max.
-fn parse_prefix_list(text: &OsStr, family: Family) -> Result<Vec<usize>, String> {
+fn parse_prefix_list(text: &OsStr, family: Family, debug: bool) -> Result<Vec<usize>, String> {
     let (max, invalid_text) = match family {
         Family::V4 => (
             32i64,
@@ -611,6 +615,12 @@ fn parse_prefix_list(text: &OsStr, family: Family) -> Result<Vec<usize>, String>
         let truncated = value as i32;
         if truncated <= 0 || i64::from(truncated) > max {
             return Err(format!("iprange: {invalid_text} {truncated} is invalid."));
+        }
+        // The IPv4 argv scan announces each accepted token, with no
+        // `iprange: ` prefix (`src/iprange.c:549`); `iprange6_run()`
+        // parses the option without any debug output.
+        if debug && family == Family::V4 {
+            eprintln!("Enabling prefix {truncated}");
         }
         allowed.push(truncated as usize);
         pos += consumed;
