@@ -7,6 +7,7 @@ package legacy
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strings"
 	"time"
@@ -41,6 +42,15 @@ func Run(prog string, args []string) int {
 	}
 	for i < len(args) {
 		arg := args[i]
+		// C guards every value-taking option with `i+1 < argc`, so a
+		// trailing option token is not an option at all: it falls
+		// through to the input path (and is skipped there in IPv6
+		// mode, exactly as the C IPv6 re-scan skips it).
+		if i+1 >= len(args) && optionTakesValue(arg) {
+			addInputArg(o, arg)
+			i++
+			continue
+		}
 		switch arg {
 		case "-h", "--help":
 			fmt.Print(Usage(prog, o.DNSThreads))
@@ -140,10 +150,14 @@ func Run(prog string, args []string) int {
 			}
 		case "--default-prefix", "-p":
 			if o.Family == V6 {
-				// C: IPv6 always uses /128; the value is consumed
-				// and not validated.
+				// C: IPv6 always uses /128, so main() skips the
+				// option and its value unvalidated
+				// (src/iprange.c:563) and iprange6_run() skips the
+				// pair again (src/iprange6_main.c:152-157). Both
+				// advance past the value, so it never becomes an
+				// input.
 				nextValue()
-				continue
+				break
 			}
 			o.DefaultPrefix = uint32(parseNumber(arg, nextValue(), "It must be between 0 and 32.", 0, 32))
 		case "--dont-fix-network":
@@ -194,16 +208,7 @@ func Run(prog string, args []string) int {
 				o.Sources[len(o.Sources)-1].Label = nextValue()
 			}
 		default:
-			// Everything else is an input path: a file, "-" for
-			// stdin, "@file" list, or "@dir" directory (the @
-			// destination is classified on load).
-			spec := SourceSpec{Kind: SourcePath, Arg: arg}
-			if arg == "-" {
-				spec.Arg = ""
-			} else if rest, ok := strings.CutPrefix(arg, "@"); ok {
-				spec = SourceSpec{Kind: SourceFileList, Arg: rest}
-			}
-			o.Sources = append(o.Sources, spec)
+			addInputArg(o, arg)
 		}
 		i++
 	}
@@ -219,11 +224,58 @@ func Run(prog string, args []string) int {
 	return dispatch(o, started)
 }
 
-// requirePriorFile is the C "you must define an ipset before this"
-// error for the positional operators.
+// optionTakesValue lists the options whose C branch is guarded by
+// `i+1 < argc` and therefore consumes the next argv element. A trailing
+// occurrence is not an option: C leaves the branch unentered and the
+// token is handled as an input.
+func optionTakesValue(arg string) bool {
+	switch arg {
+	case "--min-prefix", "--prefixes", "--default-prefix", "-p",
+		"--ipset-reduce", "--reduce-factor",
+		"--ipset-reduce-entries", "--reduce-entries",
+		"--print-prefix", "--print-prefix-ips", "--print-prefix-nets",
+		"--print-suffix", "--print-suffix-ips", "--print-suffix-nets",
+		"--dns-threads":
+		return true
+	}
+	return false
+}
+
+// addInputArg records one argv element that the C option scanner did not
+// consume: a file, "-" for stdin, "@file" list, or "@dir" directory (the
+// @ destination is classified on load).
+//
+// In IPv6 mode C runs a second scan over the whole argv
+// (src/iprange6_main.c:176) and skips every dash-prefixed element other
+// than "-", so an unrecognized option is neither an input nor an error
+// there. The IPv4 main has no such skip: the token is opened as a file.
+func addInputArg(o *Options, arg string) {
+	if o.Family == V6 && len(arg) > 1 && arg[0] == '-' {
+		return
+	}
+	spec := SourceSpec{Kind: SourcePath, Arg: arg}
+	if arg == "-" {
+		spec.Arg = ""
+	} else if rest, ok := strings.CutPrefix(arg, "@"); ok {
+		spec = SourceSpec{Kind: SourceFileList, Arg: rest}
+	}
+	o.Sources = append(o.Sources, spec)
+}
+
+// requirePriorFile is the C positional-operator guard: --except, --diff
+// and --compare-next need an already-loaded ipset, and C names the
+// canonical option in the diagnostic regardless of the alias used
+// (src/iprange.c:616,624,641).
 func requirePriorFile(o *Options, option string) {
+	// C gates this on `active_family != 6` (src/iprange.c:615,623,640):
+	// in IPv6 mode main() defers every load to iprange6_run(), which
+	// re-derives the two groups itself, so the guard does not apply and
+	// the run fails later with "No valid ipsets to process."
+	if o.Family == V6 {
+		return
+	}
 	if len(o.Sources) == 0 {
-		fmt.Fprintf(os.Stderr, "iprange: %s requires an ipset to be defined before it.\n", option)
+		fmt.Fprintf(os.Stderr, "iprange: An ipset is needed before %s\n", option)
 		os.Exit(1)
 	}
 }
@@ -275,25 +327,20 @@ func invalidOptionValue(option, value, expected string) {
 	os.Exit(1)
 }
 
-// parseNumber is the strict full-string decimal parse with i64
-// bounds (C strtol semantics: empty and trailing junk rejected).
+// parseNumber is C parse_long_option_or_die (src/iprange.c:452-463) and
+// the single owner of the signed numeric legacy options (--min-prefix,
+// --default-prefix/-p, --dns-threads). strtol(3) accepts leading
+// whitespace and an optional sign, so a value is valid only when it is
+// fully consumed and lies inside [min, max]; the bounds stay per-option.
+// The unsigned reduce options use parseSize instead, which per
+// src/iprange.c:465-479 must not accept a sign.
+//
+// strtol10 saturates at the long bounds rather than reporting ERANGE.
+// Every caller bounds max below LONG_MAX and min above LONG_MIN, so an
+// out-of-long value reaches C's diagnostic through the range test.
 func parseNumber(option, value, expected string, min, max int64) int64 {
-	if value == "" || value[0] < '0' || value[0] > '9' {
-		invalidOptionValue(option, value, expected)
-	}
-	var parsed int64
-	for i := 0; i < len(value); i++ {
-		b := value[i]
-		if b < '0' || b > '9' {
-			invalidOptionValue(option, value, expected)
-		}
-		d := int64(b - '0')
-		if parsed > (1<<63-1-d)/10 {
-			invalidOptionValue(option, value, expected)
-		}
-		parsed = parsed*10 + d
-	}
-	if parsed < min || parsed > max {
+	parsed, consumed := strtol10(value)
+	if consumed == 0 || consumed != len(value) || parsed < min || parsed > max {
 		invalidOptionValue(option, value, expected)
 	}
 	return parsed
@@ -323,57 +370,77 @@ func parseSize(option, value, expected string, max uint64) uint64 {
 	return parsed
 }
 
-// parsePrefixList parses the --prefixes value with strtol-exact
-// comma/space tokenization (whitespace, signs and empty tokens
-// behave like the C loop).
+// parsePrefixList parses a --prefixes value with the C strtol loop
+// (src/iprange.c:534-559 for IPv4, src/iprange6_main.c:127-146 for IPv6):
+// comma- or space-separated tokens, each parsed with strtol(3) base 10 and
+// truncated to int before the bound test, so 0 and negatives are rejected
+// and an overflow reports the truncated value. limit is 32 for IPv4 and 128
+// for IPv6; the diagnostic text differs per family, as in C.
 func parsePrefixList(value string, fam Family) ([]int, error) {
-	fields := strings.FieldsFunc(value, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\t'
-	})
-	list := make([]int, 0, len(fields))
-	for _, f := range fields {
-		// C strtol: sign allowed, full-string, bound per family.
-		p, err := parsePrefixToken(f, fam)
-		if err != nil {
-			return nil, err
+	limit, diag := int64(32), "iprange: Only prefixes from 1 to 32 can be set (32 is always enabled). %d is invalid."
+	if fam == V6 {
+		limit, diag = int64(128), "iprange: Only prefixes from 1 to 128 can be set. %d is invalid."
+	}
+	var list []int
+	s := -1 // C's previous token start (NULL before the first iteration)
+	e := 0
+	for e < len(value) && e != s {
+		s = e
+		parsed, next := strtol10(value[e:])
+		j := int32(parsed) // C casts the long to int before testing it
+		if j <= 0 || int64(j) > limit {
+			return nil, fmt.Errorf(diag, j)
 		}
-		list = append(list, p)
+		list = append(list, int(j))
+		if e+next < len(value) && (value[e+next] == ',' || value[e+next] == ' ') {
+			next++
+		}
+		e += next
 	}
 	return list, nil
 }
 
-func parsePrefixToken(text string, fam Family) (int, error) {
-	bytes := []byte(text)
+// strtol10 mirrors C strtol(s, &end, 10): leading whitespace, an optional
+// sign, decimal digits, and saturation at the long bounds. It returns the
+// value and the number of bytes consumed; with no digits it returns (0, 0),
+// matching the C endptr == nb case.
+func strtol10(s string) (int64, int) {
 	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' ||
+		s[i] == '\v' || s[i] == '\f' || s[i] == '\r') {
+		i++
+	}
 	negative := false
-	if i < len(bytes) && (bytes[i] == '-' || bytes[i] == '+') {
-		negative = bytes[i] == '-'
+	if i < len(s) && (s[i] == '+' || s[i] == '-') {
+		negative = s[i] == '-'
 		i++
 	}
 	start := i
-	var value int64
-	for i < len(bytes) && bytes[i] >= '0' && bytes[i] <= '9' {
-		d := int64(bytes[i] - '0')
-		if value > (1<<63-1-d)/10 {
-			return 0, fmt.Errorf("iprange: Invalid prefix list value '%s'.", text)
+	var mag uint64
+	overflow := false
+	for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+		d := uint64(s[i] - '0')
+		if mag > (^uint64(0)-d)/10 {
+			overflow = true
 		}
-		value = value*10 + d
+		if !overflow {
+			mag = mag*10 + d
+		}
 		i++
 	}
-	if negative {
-		value = -value
+	if i == start {
+		return 0, 0
 	}
-	if i != len(bytes) || i == start {
-		return 0, fmt.Errorf("iprange: Invalid prefix list value '%s'.", text)
-	}
-	if fam == V6 {
-		if value < 0 || value > 128 {
-			return 0, fmt.Errorf("iprange: Invalid prefix list value '%s'.", text)
+	const maxLong = int64(^uint64(0) >> 1)
+	if overflow || mag > uint64(maxLong) {
+		if negative {
+			return math.MinInt64, i
 		}
-		return int(value), nil
+		return math.MaxInt64, i
 	}
-	if value < 0 || value > 32 {
-		return 0, fmt.Errorf("iprange: Invalid prefix list value '%s'.", text)
+	v := int64(mag)
+	if negative {
+		v = -v
 	}
-	return int(value), nil
+	return v, i
 }

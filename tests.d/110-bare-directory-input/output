@@ -1,0 +1,12 @@
+# OK: empty directory as input (exit 0)
+# OK: directory with files as input (exit 0)
+# OK: directory beside a real file (exit 0)
+# OK: directory first, file second (exit 0)
+# OK: IPv6 mode, directory as input (exit 0)
+# OK: directory entry inside @list (exit 0)
+# OK: @list whose only entry is a dir (exit 0)
+# OK: unreadable directory keeps the C diagnostic (exit 1)
+# OK: missing file still fails (exit 1)
+# OK: @empty directory still fails (exit 1)
+# OK: @directory with files loads (exit 0)
+# OK: 11 directory-input cases match the C reference

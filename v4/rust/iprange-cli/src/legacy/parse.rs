@@ -9,9 +9,13 @@
 //! (C `fprintf(stderr, ...)` semantics, including the embedded
 //! newline the C line buffer carries into `%s`).
 
+use std::ffi::{OsStr, OsString};
 use std::io::Read;
+use std::path::{Path, PathBuf};
 
+use super::argv;
 use super::binary;
+use super::diag::Diag;
 use super::dns::{DnsError, Resolver};
 use super::family::{Family, FamilyImpl};
 use super::options::{Options, SourceKind};
@@ -20,9 +24,12 @@ use super::range::{IpNum, IpSet, Range};
 /// One loaded ipset with its CSV name. The name is the C
 /// `ips->filename`: the source path verbatim, `stdin`, or the `as
 /// NAME` label (the C code never strips directories or extensions).
+/// It is an `OsString` because a POSIX name may hold bytes that are
+/// not valid UTF-8, and the released tool prints those bytes verbatim
+/// in the CSV name column.
 #[derive(Debug)]
 pub struct Loaded<F: FamilyImpl> {
-    pub name: String,
+    pub name: OsString,
     pub set: IpSet<F>,
 }
 
@@ -60,7 +67,7 @@ const BINARY_HEADER_V20: &[u8] = b"iprange binary format v2.0\n";
 /// `--except`/`--diff`/`--compare-next` group-B split at
 /// `LoadedAll::group_b`, which counts *loaded sets*, not argv
 /// sources.
-pub fn load_all<F: FamilyImpl>(options: &Options) -> Result<LoadedAll<F>, String> {
+pub fn load_all<F: FamilyImpl>(options: &Options) -> Result<LoadedAll<F>, Diag> {
     let mut stdin = std::io::stdin().lock();
     load_all_impl::<F>(options, &mut stdin)
 }
@@ -69,7 +76,7 @@ pub fn load_all<F: FamilyImpl>(options: &Options) -> Result<LoadedAll<F>, String
 fn load_all_impl<F: FamilyImpl>(
     options: &Options,
     stdin: &mut dyn Read,
-) -> Result<LoadedAll<F>, String> {
+) -> Result<LoadedAll<F>, Diag> {
     // One DNS resolver per run (C keeps one global pool for the
     // whole invocation; each file drains its own names via dns_done).
     let mut resolver = Resolver::new(
@@ -85,7 +92,7 @@ fn load_all_impl<F: FamilyImpl>(
     let mut loaded: Vec<Loaded<F>> = Vec::new();
     // C main() prints a contextual "Cannot load ..." line after every
     // ipset_load() failure; used when only the DNS finish() survives.
-    let mut last_context = String::new();
+    let mut last_context = Diag::default();
 
     // Loaded-set boundary at the C positional operator: every set
     // added on or after the operator's source index belongs to group
@@ -94,28 +101,46 @@ fn load_all_impl<F: FamilyImpl>(
     let mut boundary = 0usize;
 
     for (source_index, spec) in options.sources.iter().enumerate() {
-        let mut sets: Vec<(String, IpSet<F>)> = match spec.kind {
+        let mut sets: Vec<(OsString, IpSet<F>)> = match spec.kind {
             SourceKind::Path => {
-                let arg = spec.arg.as_deref().unwrap_or("");
-                if arg.is_empty() {
+                let arg = spec.arg.as_deref().unwrap_or(Path::new(""));
+                if arg.as_os_str().is_empty() {
                     // `-` (or an empty argument) reads stdin. The C
                     // code consumes stdin once; a second `-` sees EOF
                     // and produces an empty set.
                     let data = read_stdin_once(stdin, &mut stdin_data);
-                    let context = "iprange: Cannot load ipset from stdin".to_owned();
+                    let context = Diag::from("iprange: Cannot load ipset from stdin");
                     last_context = context.clone();
-                    let (set, dns) =
-                        load_one::<F>("stdin", &data, options, &mut resolver, &context)?;
+                    let (set, dns) = load_one::<F>(
+                        OsStr::new("stdin"),
+                        &data,
+                        options,
+                        &mut resolver,
+                        &context,
+                    )?;
                     dns_used |= dns;
-                    vec![("stdin".to_owned(), set)]
+                    vec![(OsString::from("stdin"), set)]
                 } else {
-                    let context = format!("iprange: Cannot load ipset: {arg}");
+                    // The name is the argv bytes: the open, the CSV
+                    // name and both diagnostic lines use them verbatim,
+                    // as C's fopen() and `fprintf(stderr, "%s")` do.
+                    let arg_name = argv::bytes(arg.as_os_str());
+                    let context = Diag::from_parts(&[b"iprange: Cannot load ipset: ", &arg_name]);
                     last_context = context.clone();
-                    let data = std::fs::read(arg)
-                        .map_err(|e| format!("iprange: {arg} - {}\n{context}", strerror(&e)))?;
-                    let (set, dns) = load_one::<F>(arg, &data, options, &mut resolver, &context)?;
+                    let data = read_legacy_input(arg).map_err(|e| {
+                        Diag::from_parts(&[
+                            b"iprange: ",
+                            &arg_name,
+                            b" - ",
+                            strerror(&e).as_bytes(),
+                            b"\n",
+                            context.bytes(),
+                        ])
+                    })?;
+                    let (set, dns) =
+                        load_one::<F>(arg.as_os_str(), &data, options, &mut resolver, &context)?;
                     dns_used |= dns;
-                    vec![(arg.to_owned(), set)]
+                    vec![(arg.to_path_buf().into_os_string(), set)]
                 }
             }
             SourceKind::FileList => {
@@ -183,27 +208,42 @@ fn read_stdin_once(stdin: &mut dyn Read, cache: &mut Option<Vec<u8>>) -> Vec<u8>
 /// name (C `qsort` + `strcmp` byte order on the full path); a plain
 /// file is a file list of paths, one per line.
 fn expand_at<F: FamilyImpl>(
-    list: &str,
+    list: &Path,
     options: &Options,
     resolver: &mut Resolver,
-    last_context: &mut String,
+    last_context: &mut Diag,
     dns_used: &mut bool,
-) -> Result<Vec<(String, IpSet<F>)>, String> {
+) -> Result<Vec<(OsString, IpSet<F>)>, Diag> {
+    // The `@` destination is named by bytes: every open, CSV name and
+    // diagnostic uses them verbatim.
+    let list_name = argv::bytes(list.as_os_str());
     match std::fs::metadata(list) {
         Ok(md) if md.is_dir() => {
             if options.debug {
-                eprintln!("iprange: Loading files from directory {list}");
+                Diag::from_parts(&[b"iprange: Loading files from directory ", &list_name]).emit();
             }
 
-            let mut files: Vec<String> = Vec::new();
-            let rd = std::fs::read_dir(list)
-                .map_err(|e| format!("iprange: Cannot access {list}: {}", strerror(&e)))?;
+            let mut files: Vec<PathBuf> = Vec::new();
+            let rd = std::fs::read_dir(list).map_err(|e| {
+                Diag::from_parts(&[
+                    b"iprange: Cannot access ",
+                    &list_name,
+                    b": ",
+                    strerror(&e).as_bytes(),
+                ])
+            })?;
             for entry in rd {
                 // C skips entries whose stat() fails; "." and ".."
                 // are not produced by read_dir.
-                let entry = entry
-                    .map_err(|e| format!("iprange: Cannot access {list}: {}", strerror(&e)))?;
-                let path = format!("{list}/{}", entry.file_name().to_string_lossy());
+                let entry = entry.map_err(|e| {
+                    Diag::from_parts(&[
+                        b"iprange: Cannot access ",
+                        &list_name,
+                        b": ",
+                        strerror(&e).as_bytes(),
+                    ])
+                })?;
+                let path = list.join(entry.file_name());
                 if std::fs::metadata(&path)
                     .map(|m| m.is_file())
                     .unwrap_or(false)
@@ -215,28 +255,55 @@ fn expand_at<F: FamilyImpl>(
 
             if files.is_empty() {
                 if options.debug {
-                    eprintln!("iprange: Directory {list} is empty or contains no valid files");
+                    Diag::from_parts(&[
+                        b"iprange: Directory ",
+                        &list_name,
+                        b" is empty or contains no valid files",
+                    ])
+                    .emit();
                 }
-                return Err(format!(
-                    "iprange: No valid files found in directory: {list}"
-                ));
+                return Err(Diag::from_parts(&[
+                    b"iprange: No valid files found in directory: ",
+                    &list_name,
+                ]));
             }
 
             let mut sets = Vec::with_capacity(files.len());
             for path in &files {
+                let path_name = argv::bytes(path.as_os_str());
                 if options.debug {
-                    eprintln!("iprange: Loading file {path} from directory {list}");
+                    Diag::from_parts(&[
+                        b"iprange: Loading file ",
+                        &path_name,
+                        b" from directory ",
+                        &list_name,
+                    ])
+                    .emit();
                 }
                 let context = match F::FAMILY {
-                    Family::V4 => format!("iprange: Cannot load file {path} from directory {list}"),
-                    Family::V6 => format!("iprange: Cannot load file {path}"),
+                    Family::V4 => Diag::from_parts(&[
+                        b"iprange: Cannot load file ",
+                        &path_name,
+                        b" from directory ",
+                        &list_name,
+                    ]),
+                    Family::V6 => Diag::from_parts(&[b"iprange: Cannot load file ", &path_name]),
                 };
                 *last_context = context.clone();
-                let data = std::fs::read(path)
-                    .map_err(|e| format!("iprange: {path} - {}\n{context}", strerror(&e)))?;
-                let (set, dns) = load_one::<F>(path, &data, options, resolver, &context)?;
+                let data = std::fs::read(path).map_err(|e| {
+                    Diag::from_parts(&[
+                        b"iprange: ",
+                        &path_name,
+                        b" - ",
+                        strerror(&e).as_bytes(),
+                        b"\n",
+                        context.bytes(),
+                    ])
+                })?;
+                let (set, dns) =
+                    load_one::<F>(path.as_os_str(), &data, options, resolver, &context)?;
                 *dns_used |= dns;
-                sets.push((path.clone(), set));
+                sets.push((path.clone().into_os_string(), set));
             }
             Ok(sets)
         }
@@ -244,13 +311,18 @@ fn expand_at<F: FamilyImpl>(
             // A non-directory @ target is a file list (C opendir()
             // fails with ENOTDIR and falls into the list branch).
             if options.debug {
-                eprintln!("iprange: Loading files from list {list}");
+                Diag::from_parts(&[b"iprange: Loading files from list ", &list_name]).emit();
             }
             let content = std::fs::read(list).map_err(|e| {
-                format!("iprange: Cannot open file list: {list} - {}", strerror(&e))
+                Diag::from_parts(&[
+                    b"iprange: Cannot open file list: ",
+                    &list_name,
+                    b" - ",
+                    strerror(&e).as_bytes(),
+                ])
             })?;
 
-            let mut sets: Vec<(String, IpSet<F>)> = Vec::new();
+            let mut sets: Vec<(OsString, IpSet<F>)> = Vec::new();
             let mut lineid = 0usize;
             for rec in Records::new(&content) {
                 lineid += 1;
@@ -261,31 +333,70 @@ fn expand_at<F: FamilyImpl>(
                 ) {
                     continue;
                 }
-                let path = String::from_utf8_lossy(trim_trailing_ws(s)).into_owned();
+                // The record names the file by its bytes (C `fopen`
+                // over the line verbatim), so the open, the CSV name
+                // and the diagnostics all carry the same bytes.
+                let path = argv::path_from_bytes(trim_trailing_ws(s));
+                let path_name = argv::bytes(path.as_os_str());
+                let lineid_text = lineid.to_string();
                 if options.debug {
-                    eprintln!("iprange: Loading file {path} from list (line {lineid})");
+                    Diag::from_parts(&[
+                        b"iprange: Loading file ",
+                        &path_name,
+                        b" from list (line ",
+                        lineid_text.as_bytes(),
+                        b")",
+                    ])
+                    .emit();
                 }
-                let context =
-                    format!("iprange: Cannot load file {path} from list {list} (line {lineid})");
+                let context = Diag::from_parts(&[
+                    b"iprange: Cannot load file ",
+                    &path_name,
+                    b" from list ",
+                    &list_name,
+                    b" (line ",
+                    lineid_text.as_bytes(),
+                    b")",
+                ]);
                 *last_context = context.clone();
-                let data = std::fs::read(&path)
-                    .map_err(|e| format!("iprange: {path} - {}\n{context}", strerror(&e)))?;
-                let (set, dns) = load_one::<F>(&path, &data, options, resolver, &context)?;
+                let data = read_legacy_input(&path).map_err(|e| {
+                    Diag::from_parts(&[
+                        b"iprange: ",
+                        &path_name,
+                        b" - ",
+                        strerror(&e).as_bytes(),
+                        b"\n",
+                        context.bytes(),
+                    ])
+                })?;
+                let (set, dns) =
+                    load_one::<F>(path.as_os_str(), &data, options, resolver, &context)?;
                 *dns_used |= dns;
-                sets.push((path, set));
+                sets.push((path.into_os_string(), set));
             }
 
             if sets.is_empty() {
                 if options.debug {
-                    eprintln!("iprange: File list {list} is empty or contains no valid entries");
+                    Diag::from_parts(&[
+                        b"iprange: File list ",
+                        &list_name,
+                        b" is empty or contains no valid entries",
+                    ])
+                    .emit();
                 }
-                return Err(format!(
-                    "iprange: No valid files found in file list: {list}"
-                ));
+                return Err(Diag::from_parts(&[
+                    b"iprange: No valid files found in file list: ",
+                    &list_name,
+                ]));
             }
             Ok(sets)
         }
-        Err(e) => Err(format!("iprange: Cannot access {list}: {}", strerror(&e))),
+        Err(e) => Err(Diag::from_parts(&[
+            b"iprange: Cannot access ",
+            &list_name,
+            b": ",
+            strerror(&e).as_bytes(),
+        ])),
     }
 }
 
@@ -312,21 +423,25 @@ struct FileIssues {
 /// is the C main()-level error line printed by the caller when the
 /// load fails (the load itself prints the specific diagnostics).
 fn load_one<F: FamilyImpl>(
-    name: &str,
+    name: &OsStr,
     data: &[u8],
     options: &Options,
     resolver: &mut Resolver,
-    context: &str,
-) -> Result<(IpSet<F>, bool), String> {
+    context: &Diag,
+) -> Result<(IpSet<F>, bool), Diag> {
+    // `name` reaches the caller as the CSV name of the set, byte for
+    // byte, and it labels these diagnostics; C prints it through `%s`,
+    // so its bytes go out verbatim.
+    let name = argv::bytes(name);
     match F::FAMILY {
         Family::V4 => {
             if options.debug {
-                eprintln!("iprange: Loading from {name}");
+                Diag::from_parts(&[b"iprange: Loading from ", &name]).emit();
             }
         }
         Family::V6 => {
             if options.debug {
-                eprintln!("iprange: Loading from {name} (IPv6 mode)");
+                Diag::from_parts(&[b"iprange: Loading from ", &name, b" (IPv6 mode)"]).emit();
             }
         }
     }
@@ -335,7 +450,7 @@ fn load_one<F: FamilyImpl>(
     let Some(first) = records.next() else {
         // C: the first fgets() returns NULL: valid empty set.
         if options.debug {
-            eprintln!("iprange: {name} is empty");
+            Diag::from_parts(&[b"iprange: ", &name, b" is empty"]).emit();
         }
         return Ok((IpSet::default(), false));
     };
@@ -349,37 +464,55 @@ fn load_one<F: FamilyImpl>(
     // Binary detection: the whole first record must equal the header
     // line (newline included); the rest of the file is binary.
     if first == BINARY_HEADER_V10 || first == BINARY_HEADER_V20 {
+        // The binary-format validator reports its own diagnostics as
+        // text, so its `source` label is the lossy view of the name.
+        // That message family is the binary format, not the open/load
+        // path whose currency carries the name bytes.
+        let source_text = String::from_utf8_lossy(&name).into_owned();
         let set = match F::FAMILY {
             Family::V4 if first == BINARY_HEADER_V10 => {
-                let set = binary::load_v1(data, name)
-                    .map_err(|inner| format!("{inner}\niprange: Cannot fast load {name}"))?;
+                let set = binary::load_v1(data, &source_text).map_err(|inner| {
+                    Diag::from_parts(&[inner.as_bytes(), b"\niprange: Cannot fast load ", &name])
+                })?;
                 convert_set::<u32, F>(set)
             }
             Family::V6 if first == BINARY_HEADER_V20 => {
-                let set = binary::load_v2(data, name)
-                    .map_err(|inner| format!("{inner}\niprange: Cannot load binary v2 {name}"))?;
+                let set = binary::load_v2(data, &source_text).map_err(|inner| {
+                    Diag::from_parts(&[
+                        inner.as_bytes(),
+                        b"\niprange: Cannot load binary v2 ",
+                        &name,
+                    ])
+                })?;
                 convert_set::<u128, F>(set)
             }
             Family::V4 => {
-                return Err(format!(
-                    "iprange: {name}: IPv6 binary file cannot be loaded in IPv4 mode (use -6)"
-                ));
+                return Err(Diag::from_parts(&[
+                    b"iprange: ",
+                    &name,
+                    b": IPv6 binary file cannot be loaded in IPv4 mode (use -6)",
+                ]));
             }
             Family::V6 => {
-                return Err(format!(
-                    "iprange: {name}: IPv4 binary file cannot be loaded in IPv6 mode"
-                ));
+                return Err(Diag::from_parts(&[
+                    b"iprange: ",
+                    &name,
+                    b": IPv4 binary file cannot be loaded in IPv6 mode",
+                ]));
             }
         };
         if options.debug {
-            eprintln!(
-                "iprange: Binary loaded {} {name}",
+            Diag::from_parts(&[
+                b"iprange: Binary loaded ",
                 if set.optimized {
-                    "optimized"
+                    b"optimized"
                 } else {
-                    "non-optimized"
-                }
-            );
+                    b"non-optimized"
+                },
+                b" ",
+                &name,
+            ])
+            .emit();
         }
         return Ok((set, false));
     }
@@ -400,7 +533,7 @@ fn load_one<F: FamilyImpl>(
     process_record::<F>(
         first,
         lineid,
-        name,
+        &name,
         options,
         resolver,
         &mut set,
@@ -408,7 +541,7 @@ fn load_one<F: FamilyImpl>(
     );
     for rec in records {
         lineid += 1;
-        process_record::<F>(rec, lineid, name, options, resolver, &mut set, &mut issues);
+        process_record::<F>(rec, lineid, &name, options, resolver, &mut set, &mut issues);
     }
 
     // C ipset_load() order: dns_done() drains the file's batch,
@@ -453,23 +586,26 @@ fn load_one<F: FamilyImpl>(
         }
     }
     if (issues.dns_failed && F::FAMILY == Family::V4) || issues.request_failed {
-        return Err(context.to_owned());
+        return Err(context.clone());
     }
     if issues.parse_failed {
-        return Err(context.to_owned());
+        return Err(context.clone());
     }
     if issues.dropped_v6 > 0 {
-        eprintln!("{}", fmt_drop_warning(name, issues.dropped_v6));
+        fmt_drop_warning(&name, issues.dropped_v6).emit();
     }
     if options.debug {
-        eprintln!(
-            "iprange: Loaded {} {name}",
+        Diag::from_parts(&[
+            b"iprange: Loaded ",
             if set.optimized {
-                "optimized"
+                b"optimized"
             } else {
-                "non-optimized"
-            }
-        );
+                b"non-optimized"
+            },
+            b" ",
+            &name,
+        ])
+        .emit();
     }
 
     Ok((set, issues.dns_used))
@@ -481,7 +617,7 @@ fn load_one<F: FamilyImpl>(
 fn process_record<F: FamilyImpl>(
     rec: &[u8],
     lineid: usize,
-    name: &str,
+    name: &[u8],
     options: &Options,
     resolver: &mut Resolver,
     set: &mut IpSet<F>,
@@ -498,7 +634,7 @@ fn process_record<F: FamilyImpl>(
         LineOutcome::OneIp(tok) => {
             if let Err(inner) = add_token::<F>(&tok, options, set) {
                 eprintln!("{inner}");
-                eprintln!("{}", fmt_cannot_understand(lineid, name, rec));
+                fmt_cannot_understand(lineid, name, rec).emit();
                 issues.parse_failed = true;
             }
         }
@@ -508,7 +644,7 @@ fn process_record<F: FamilyImpl>(
                 Ok(r) => r,
                 Err(inner) => {
                     eprintln!("{inner}");
-                    eprintln!("{}", fmt_cannot_understand(lineid, name, rec));
+                    fmt_cannot_understand(lineid, name, rec).emit();
                     issues.parse_failed = true;
                     return;
                 }
@@ -517,7 +653,7 @@ fn process_record<F: FamilyImpl>(
                 Ok(r) => r,
                 Err(inner) => {
                     eprintln!("{inner}");
-                    eprintln!("{}", fmt_cannot_understand(lineid, name, rec));
+                    fmt_cannot_understand(lineid, name, rec).emit();
                     issues.parse_failed = true;
                     return;
                 }
@@ -542,7 +678,7 @@ fn process_record<F: FamilyImpl>(
             eprintln!("{warning}");
             if let Err(inner) = add_token::<F>(&first, options, set) {
                 eprintln!("{inner}");
-                eprintln!("{}", fmt_cannot_understand(lineid, name, rec));
+                fmt_cannot_understand(lineid, name, rec).emit();
                 issues.parse_failed = true;
             }
         }
@@ -551,12 +687,26 @@ fn process_record<F: FamilyImpl>(
             issues.dns_used = true;
             if options.debug {
                 match F::FAMILY {
-                    Family::V4 => eprintln!(
-                        "iprange: DNS resolution for hostname '{host}' from line {lineid} of file {name}."
-                    ),
-                    Family::V6 => eprintln!(
-                        "iprange: DNS resolution for hostname '{host}' from line {lineid} of file {name} (IPv6 mode)."
-                    ),
+                    Family::V4 => Diag::from_parts(&[
+                        b"iprange: DNS resolution for hostname '",
+                        host.as_bytes(),
+                        b"' from line ",
+                        lineid.to_string().as_bytes(),
+                        b" of file ",
+                        name,
+                        b".",
+                    ])
+                    .emit(),
+                    Family::V6 => Diag::from_parts(&[
+                        b"iprange: DNS resolution for hostname '",
+                        host.as_bytes(),
+                        b"' from line ",
+                        lineid.to_string().as_bytes(),
+                        b" of file ",
+                        name,
+                        b" (IPv6 mode).",
+                    ])
+                    .emit(),
                 }
             }
             // Queue the host; C dns_request()/dns6_request() returns
@@ -583,7 +733,7 @@ fn process_record<F: FamilyImpl>(
                     None => issues.dropped_v6 += 1,
                 }
             } else {
-                eprintln!("{}", fmt_cannot_understand(lineid, name, rec));
+                fmt_cannot_understand(lineid, name, rec).emit();
                 issues.parse_failed = true;
             }
         }
@@ -982,11 +1132,19 @@ impl<'a> Iterator for Records<'a> {
 /// `iprange: Cannot understand line No N from NAME: LINE` - the raw
 /// record is embedded verbatim, including its trailing newline (the
 /// C buffer printed by %s), so the caller adds only the closing \n.
-fn fmt_cannot_understand(lineid: usize, name: &str, raw: &[u8]) -> String {
-    format!(
-        "iprange: Cannot understand line No {lineid} from {name}: {}",
-        String::from_utf8_lossy(raw)
-    )
+fn fmt_cannot_understand(lineid: usize, name: &[u8], raw: &[u8]) -> Diag {
+    // C prints the line buffer with `%s`: the record's own bytes,
+    // trailing newline included (which is why the C output can show an
+    // apparent blank line after the echoed record). The name and the
+    // record are both written as bytes.
+    Diag::from_parts(&[
+        b"iprange: Cannot understand line No ",
+        lineid.to_string().as_bytes(),
+        b" from ",
+        name,
+        b": ",
+        raw,
+    ])
 }
 
 fn fmt_ignore_text(lineid: usize, found: &str) -> String {
@@ -1009,8 +1167,47 @@ fn fmt_mixed_family(lineid: usize, a: &str, b: &str) -> String {
     format!("iprange: Mixed-family range on line {lineid}: {a} - {b}")
 }
 
-fn fmt_drop_warning(name: &str, count: u64) -> String {
-    format!("iprange: {name}: {count} IPv6 entries dropped (use -6 for IPv6 mode)")
+fn fmt_drop_warning(name: &[u8], count: u64) -> Diag {
+    Diag::from_parts(&[
+        b"iprange: ",
+        name,
+        b": ",
+        count.to_string().as_bytes(),
+        b" IPv6 entries dropped (use -6 for IPv6 mode)",
+    ])
+}
+
+#[cfg(unix)]
+fn is_directory_read_error(e: &std::io::Error) -> bool {
+    // glibc reports the failed `fgets()` on an open directory as
+    // `EISDIR` from `read(2)`.
+    e.raw_os_error() == Some(libc::EISDIR)
+}
+
+#[cfg(not(unix))]
+fn is_directory_read_error(_e: &std::io::Error) -> bool {
+    false
+}
+
+/// Read one legacy input file the way the released tool reads it.
+///
+/// glibc `fopen(path, "r")` succeeds for a directory and the first
+/// `fgets()` then fails, so `ipset_load()` reports no error and returns
+/// an empty ipset (`src/ipset_load.c:270-280`, `src/ipset6_load.c:200-218`).
+/// A directory named on argv or by an `@file` list is therefore an empty
+/// set with exit 0, and its content is never read.
+///
+/// Only `EISDIR` is empty. The C error path is a failed `fopen()`, and
+/// that call reports `EACCES`, `ENOENT` and every other failure before
+/// any read happens, so those keep their C diagnostic. This is
+/// deliberately stricter than C, which cannot tell a read error other
+/// than `EISDIR` apart from a directory either: a failed read that is
+/// not a directory must stay an error here.
+fn read_legacy_input(path: &Path) -> std::io::Result<Vec<u8>> {
+    match std::fs::read(path) {
+        Err(e) if is_directory_read_error(&e) => Ok(Vec::new()),
+        other => other,
+    }
 }
 
 /// C strerror(errno) text, without the Rust " (os error N)" suffix.
@@ -1028,6 +1225,8 @@ fn strerror(e: &std::io::Error) -> String {
 mod tests {
     use super::*;
     use crate::legacy::options::SourceSpec;
+    use std::ffi::{OsStr, OsString};
+    use std::path::PathBuf;
 
     // ------------------------------------------------------------------
     // Test families: tiny IPv4/IPv6 twins so load decisions are
@@ -1195,6 +1394,13 @@ mod tests {
         }
     }
 
+    /// The load-path error as text, for assertions that compare only
+    /// ASCII diagnostics. Tests that pin non-UTF-8 bytes compare
+    /// `Diag::bytes()` against the expected byte string.
+    fn diag_text(d: &Diag) -> String {
+        String::from_utf8_lossy(d.bytes()).into_owned()
+    }
+
     fn opts() -> Options {
         Options::default()
     }
@@ -1202,7 +1408,7 @@ mod tests {
     fn path_spec(arg: &str) -> SourceSpec {
         SourceSpec {
             kind: SourceKind::Path,
-            arg: Some(arg.to_owned()),
+            arg: Some(PathBuf::from(arg)),
             label: None,
         }
     }
@@ -1292,11 +1498,7 @@ mod tests {
             "the loader returned before the producer wrote the fifo"
         );
         assert_eq!(loaded.len(), 1, "one fifo source loads one set");
-        assert_eq!(
-            loaded[0].0,
-            fifo.to_string_lossy(),
-            "named by the argv path"
-        );
+        assert_eq!(loaded[0].0, OsStr::new(&fifo), "named by the argv path");
         assert_eq!(loaded[0].1, EXPECTED.to_vec(), "the fifo payload loaded");
     }
 
@@ -1580,13 +1782,13 @@ mod tests {
         let mut o = opts();
         o.sources.push(SourceSpec {
             kind: SourceKind::FileList,
-            arg: Some(list.clone()),
+            arg: Some(PathBuf::from(list.clone())),
             label: None,
         });
         let loaded = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap();
         assert_eq!(loaded.sets.len(), 2);
-        assert_eq!(loaded.sets[0].name, a);
-        assert_eq!(loaded.sets[1].name, b);
+        assert_eq!(loaded.sets[0].name, OsStr::new(&a));
+        assert_eq!(loaded.sets[1].name, OsStr::new(&b));
         assert_eq!(
             loaded.sets[0].set.ranges,
             vec![Range {
@@ -1615,14 +1817,14 @@ mod tests {
         let mut o = opts();
         o.sources.push(SourceSpec {
             kind: SourceKind::FileList,
-            arg: Some(dir.clone()),
+            arg: Some(PathBuf::from(dir.clone())),
             label: None,
         });
         let loaded = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap();
         assert_eq!(loaded.sets.len(), 3, "subdirectory must be skipped");
-        assert_eq!(loaded.sets[0].name, format!("{dir}/.hidden"));
-        assert_eq!(loaded.sets[1].name, format!("{dir}/a.txt"));
-        assert_eq!(loaded.sets[2].name, format!("{dir}/z.txt"));
+        assert_eq!(loaded.sets[0].name, OsStr::new(&format!("{dir}/.hidden")));
+        assert_eq!(loaded.sets[1].name, OsStr::new(&format!("{dir}/a.txt")));
+        assert_eq!(loaded.sets[2].name, OsStr::new(&format!("{dir}/z.txt")));
         assert_eq!(loaded.sets[0].set.ranges[0].lo, F4(0x01010101));
     }
 
@@ -1635,12 +1837,12 @@ mod tests {
         let mut o = opts();
         o.sources.push(SourceSpec {
             kind: SourceKind::FileList,
-            arg: Some(list),
-            label: Some("LABEL".to_owned()),
+            arg: Some(PathBuf::from(list)),
+            label: Some(OsString::from("LABEL")),
         });
         let loaded = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap();
         assert_eq!(loaded.sets.len(), 2);
-        assert_eq!(loaded.sets[0].name, a);
+        assert_eq!(loaded.sets[0].name, OsStr::new(&a));
         assert_eq!(loaded.sets[1].name, "LABEL");
     }
 
@@ -1673,8 +1875,8 @@ mod tests {
         let mut o = opts();
         o.sources.push(SourceSpec {
             kind: SourceKind::Path,
-            arg: Some(String::new()),
-            label: Some("RENAMED".to_owned()),
+            arg: Some(PathBuf::new()),
+            label: Some(OsString::from("RENAMED")),
         });
         let loaded =
             load_all_impl::<F4>(&o, &mut std::io::Cursor::new(b"9.9.9.9\n".to_vec())).unwrap();
@@ -1695,7 +1897,11 @@ mod tests {
         o.sources.push(path_spec(&c));
         o.group_b = Some(2); // ops splits A/B; parse must not reorder
         let loaded = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap();
-        let names: Vec<&str> = loaded.sets.iter().map(|l| l.name.as_str()).collect();
+        let names: Vec<String> = loaded
+            .sets
+            .iter()
+            .map(|l| l.name.to_string_lossy().into_owned())
+            .collect();
         assert_eq!(names, vec![a.as_str(), b.as_str(), c.as_str()]);
     }
 
@@ -1761,7 +1967,7 @@ mod tests {
         o.sources.push(path_spec(missing));
         let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
         assert_eq!(
-            err,
+            diag_text(&err),
             format!(
                 "iprange: {missing} - No such file or directory\niprange: Cannot load ipset: {missing}"
             )
@@ -1770,12 +1976,12 @@ mod tests {
         let mut o = opts();
         o.sources.push(SourceSpec {
             kind: SourceKind::FileList,
-            arg: Some("/nonexistent/iprange-parse-test-list".to_owned()),
+            arg: Some(PathBuf::from("/nonexistent/iprange-parse-test-list")),
             label: None,
         });
         let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
         assert_eq!(
-            err,
+            diag_text(&err),
             "iprange: Cannot access /nonexistent/iprange-parse-test-list: No such file or directory"
         );
     }
@@ -1789,26 +1995,37 @@ mod tests {
         let missing = "/nonexistent/iprange-parse-test-file";
         let mut o = opts();
         o.sources.push(path_spec(missing));
-        let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
-        assert!(err.contains(missing), "missing file error names the path: {err}");
+        let err =
+            diag_text(&load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err());
+        assert!(
+            err.contains(missing),
+            "missing file error names the path: {err}"
+        );
         assert!(
             err.contains("os error"),
             "missing file carries the system error code: {err}"
         );
-        assert!(err.contains("Cannot load ipset"), "missing file keeps the C context: {err}");
+        assert!(
+            err.contains("Cannot load ipset"),
+            "missing file keeps the C context: {err}"
+        );
 
         let mut o = opts();
         o.sources.push(SourceSpec {
             kind: SourceKind::FileList,
-            arg: Some("/nonexistent/iprange-parse-test-list".to_owned()),
+            arg: Some(PathBuf::from("/nonexistent/iprange-parse-test-list")),
             label: None,
         });
-        let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
+        let err =
+            diag_text(&load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err());
         assert!(
             err.contains("/nonexistent/iprange-parse-test-list"),
             "missing list names the path: {err}"
         );
-        assert!(err.contains("Cannot access"), "missing list keeps the C context: {err}");
+        assert!(
+            err.contains("Cannot access"),
+            "missing list keeps the C context: {err}"
+        );
     }
 
     #[test]
@@ -1818,12 +2035,12 @@ mod tests {
         let mut o = opts();
         o.sources.push(SourceSpec {
             kind: SourceKind::FileList,
-            arg: Some(dir.clone()),
+            arg: Some(PathBuf::from(dir.clone())),
             label: None,
         });
         let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
         assert_eq!(
-            err,
+            diag_text(&err),
             format!("iprange: No valid files found in directory: {dir}")
         );
 
@@ -1831,12 +2048,12 @@ mod tests {
         let mut o = opts();
         o.sources.push(SourceSpec {
             kind: SourceKind::FileList,
-            arg: Some(list.clone()),
+            arg: Some(PathBuf::from(list.clone())),
             label: None,
         });
         let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
         assert_eq!(
-            err,
+            diag_text(&err),
             format!("iprange: No valid files found in file list: {list}")
         );
     }
@@ -1848,7 +2065,7 @@ mod tests {
         let mut o = opts();
         o.sources.push(path_spec(&f));
         let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
-        assert_eq!(err, format!("iprange: Cannot load ipset: {f}"));
+        assert_eq!(diag_text(&err), format!("iprange: Cannot load ipset: {f}"));
     }
 
     #[test]
@@ -1860,7 +2077,7 @@ mod tests {
         o.sources.push(path_spec(&f));
         let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
         assert_eq!(
-            err,
+            diag_text(&err),
             format!("iprange: {f}: IPv6 binary file cannot be loaded in IPv4 mode (use -6)")
         );
 
@@ -1871,7 +2088,7 @@ mod tests {
         o.sources.push(path_spec(&g));
         let err = load_all_impl::<F6>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
         assert_eq!(
-            err,
+            diag_text(&err),
             format!("iprange: {g}: IPv4 binary file cannot be loaded in IPv6 mode")
         );
     }
@@ -1883,7 +2100,7 @@ mod tests {
         let mut o = opts();
         o.sources.push(path_spec(&f));
         let loaded = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap();
-        assert_eq!(loaded.sets[0].name, f);
+        assert_eq!(loaded.sets[0].name, OsStr::new(&f));
         assert!(loaded.sets[0].set.ranges.is_empty());
         assert_eq!(loaded.sets[0].set.lines, 0);
     }
@@ -1897,11 +2114,11 @@ mod tests {
         // The raw record keeps its newline, so the C output ends with
         // the embedded newline plus the format's closing newline.
         assert_eq!(
-            fmt_cannot_understand(3, "f.txt", b"bad line\n"),
+            diag_text(&fmt_cannot_understand(3, b"f.txt", b"bad line\n")),
             "iprange: Cannot understand line No 3 from f.txt: bad line\n"
         );
         assert_eq!(
-            fmt_cannot_understand(1, "f.txt", b"last"),
+            diag_text(&fmt_cannot_understand(1, b"f.txt", b"last")),
             "iprange: Cannot understand line No 1 from f.txt: last"
         );
         assert_eq!(
@@ -1921,8 +2138,149 @@ mod tests {
             "iprange: Mixed-family range on line 2: ::1 - 1.2.3.4"
         );
         assert_eq!(
-            fmt_drop_warning("f.txt", 3),
+            diag_text(&fmt_drop_warning(b"f.txt", 3)),
             "iprange: f.txt: 3 IPv6 entries dropped (use -6 for IPv6 mode)"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_diagnostics_keep_the_name_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        // A POSIX name may hold bytes that are not valid UTF-8. C opens
+        // those bytes and writes them to stderr verbatim (`fprintf
+        // (stderr, "%s")` over the name), so the open-failure
+        // diagnostic must carry them, not a U+FFFD rendering.
+        let t = TempDir::new("namebytes");
+        let mut raw = Vec::from(t.path.as_os_str().as_bytes());
+        raw.extend_from_slice(b"/f\xff.txt");
+        let missing = std::path::Path::new(OsStr::from_bytes(&raw));
+
+        let mut o = opts();
+        o.sources.push(SourceSpec {
+            kind: SourceKind::Path,
+            arg: Some(missing.to_path_buf()),
+            label: None,
+        });
+        let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
+
+        let mut want = Vec::from(b"iprange: ");
+        want.extend_from_slice(&raw);
+        want.extend_from_slice(b" - No such file or directory\niprange: Cannot load ipset: ");
+        want.extend_from_slice(&raw);
+        assert_eq!(err.bytes(), want.as_slice());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_line_diagnostics_keep_the_name_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        // The same currency applies to the two channels an `@list` can
+        // fail on: the name taken from the list record and the name of
+        // the list itself.
+        let t = TempDir::new("listbytes");
+        let entry = Vec::from(b"nope\xffx.iprange");
+        let list_raw = {
+            let mut v = Vec::from(t.path.as_os_str().as_bytes());
+            v.extend_from_slice(b"/badlist\xff.txt");
+            v
+        };
+        let list = std::path::Path::new(OsStr::from_bytes(&list_raw));
+        std::fs::write(list, b"nope\xffx.iprange\n").unwrap();
+
+        let mut o = opts();
+        o.sources.push(SourceSpec {
+            kind: SourceKind::FileList,
+            arg: Some(list.to_path_buf()),
+            label: None,
+        });
+        let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
+
+        let mut want = Vec::from(b"iprange: ");
+        want.extend_from_slice(&entry);
+        want.extend_from_slice(b" - No such file or directory\niprange: Cannot load file ");
+        want.extend_from_slice(&entry);
+        want.extend_from_slice(b" from list ");
+        want.extend_from_slice(&list_raw);
+        want.extend_from_slice(b" (line 1)");
+        assert_eq!(err.bytes(), want.as_slice());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn directory_entry_diagnostics_keep_the_name_bytes() {
+        use std::os::unix::ffi::OsStrExt;
+        // An `@dir` whose name is not valid UTF-8 fails with the raw
+        // bytes in `Cannot access ...`.
+        let mut raw = Vec::from(std::env::temp_dir().as_os_str().as_bytes());
+        raw.extend_from_slice(b"/iprange-parse-missing-dir-\xff");
+        let dir = std::path::Path::new(OsStr::from_bytes(&raw));
+
+        let mut o = opts();
+        o.sources.push(SourceSpec {
+            kind: SourceKind::FileList,
+            arg: Some(dir.to_path_buf()),
+            label: None,
+        });
+        let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap_err();
+
+        let mut want = Vec::from(b"iprange: Cannot access ");
+        want.extend_from_slice(&raw);
+        want.extend_from_slice(b": No such file or directory");
+        assert_eq!(err.bytes(), want.as_slice());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_lines_open_the_exact_bytes_of_the_name() {
+        use std::os::unix::ffi::OsStrExt;
+        // A file list names its files by bytes (C `fopen(line, "r")`
+        // over the record verbatim). Decoding the line to build the
+        // path opens a *different* file: the U+FFFD name does not
+        // exist, so the load fails with rc 1 where C merges and exits
+        // 0, and the CSV name column would carry the decoded name.
+        let t = TempDir::new("listopen");
+        let name = Vec::from(b"bad\xffname.iprange");
+        let full = {
+            let mut v = Vec::from(t.path.as_os_str().as_bytes());
+            v.push(b'/');
+            v.extend_from_slice(&name);
+            v
+        };
+        std::fs::write(std::path::Path::new(OsStr::from_bytes(&full)), b"4.4.4.4\n").unwrap();
+        let list = t.path.join("list.txt");
+        {
+            let mut rec = Vec::from(&full[..]);
+            rec.push(b'\n');
+            std::fs::write(&list, &rec).unwrap();
+        }
+
+        let mut o = opts();
+        o.sources.push(SourceSpec {
+            kind: SourceKind::FileList,
+            arg: Some(list),
+            label: None,
+        });
+        let loaded = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new()))
+            .expect("the list line names an existing file by its bytes");
+        assert_eq!(loaded.sets.len(), 1);
+        assert_eq!(
+            loaded.sets[0].name.as_os_str().as_bytes(),
+            full.as_slice(),
+            "the CSV name is the list record bytes"
+        );
+        assert_eq!(loaded.sets[0].set.ranges.len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cannot_understand_keeps_the_raw_record_bytes() {
+        // The C line buffer is echoed with `%s`, so a record holding a
+        // non-UTF-8 byte reaches stderr as those bytes.
+        let d = fmt_cannot_understand(2, b"f.txt", b"1.2.3.4/9\xff\n");
+        assert_eq!(
+            d.bytes(),
+            b"iprange: Cannot understand line No 2 from f.txt: 1.2.3.4/9\xff\n"
         );
     }
 }

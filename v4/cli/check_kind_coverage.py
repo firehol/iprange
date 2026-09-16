@@ -2950,6 +2950,11 @@ def throughput_evidence(path, report, implementation_of, ledger, problems,
 REFUSAL_PARITY_SCHEMA = "iprange-cli-refusal-class-parity-report-v1"
 GO_COVERAGE_SCHEMA = "iprange-cli-coverage-go-report-v1"
 WINDOWS_HOUSEKEEPING_SCHEMA = "iprange-cli-windows-housekeeping-report-v3"
+WINDOWS_GUARD_SCHEMA = "iprange-cli-windows-guard-report-v1"
+RESOURCE_REPORT_SCHEMA = "iprange-cli-resource-report-v1"
+GOLDEN_REPORT_SCHEMA = "iprange-cli-golden-report-v1"
+SENSITIVITY_REPORT_SCHEMA = "iprange-cli-sensitivity-report-v1"
+RACE_BATTERY_SCHEMA = "iprange-cli-race-battery-report-v1"
 CRASH_REPORT_SCHEMA = "iprange-cli-crash-report-v1"
 BATTERY_MANIFEST_SCHEMA = "iprange-cli-battery-manifest-v1"
 BATTERY_MANIFEST_FILE_NAME = "battery-manifest.json"
@@ -2959,7 +2964,8 @@ BATTERY_MANIFEST_FILE_NAME = "battery-manifest.json"
 # nor discovered is a missing role rather than a skipped check.
 CONSUMED_ROLES = ("matrix", "crash", "crash-negative", "fifo-surface",
                   "throughput", "refusal-class-parity", "coverage-go",
-                  "windows-housekeeping")
+                  "windows-housekeeping", "windows-guard", "resource",
+                  "golden", "sensitivity", "guard-posix", "race-battery")
 
 # Standard file names, used when a class is discovered beside the supplied
 # battery instead of being named on the command line.
@@ -2968,11 +2974,24 @@ CONSUMED_FILE_NAMES = {
     "coverage-go": ("coverage-go.json",),
     "crash-negative": ("crash-negative.json",),
     "windows-housekeeping": ("windows-housekeeping.json",),
+    "windows-guard": ("windows-guard.json",),
+    "resource": ("resource.json",),
+    "golden": ("golden.json",),
+    "sensitivity": ("sensitivity.json",),
+    "guard-posix": ("guard-posix.json",),
+    "race-battery": ("race-battery.json",),
 }
 
 # A negative control is one report per faked role, so a battery keeps more
 # than one file for the role; they are found by name prefix.
 CONSUMED_FILE_PREFIXES = {"crash-negative": ("crash-negative",)}
+
+# The classes with exactly one committed file name and no prefix discovery.
+# For these the manifest entry's ``name`` is checkable against the file the
+# gate consumed; ``crash-negative`` is excluded because a battery legitimately
+# carries one control per faked role under names of its own choosing.
+SINGULAR_CONSUMED_ROLES = tuple(
+    sorted(set(CONSUMED_FILE_NAMES) - set(CONSUMED_FILE_PREFIXES)))
 
 # The durability stages that run after the destination name exists.  A
 # publication fact block may claim the destination is visible only from one
@@ -3541,6 +3560,7 @@ def coverage_evidence(path, report, attested_digests, problems):
                          ("function_percent", "covered_functions",
                           ("functions",)),
                          ("block_percent", "blocks_covered", ("blocks",))))
+        _coverage_decomposition_problems(where, report, problems)
     policy = report.get("policy")
     if not isinstance(policy, dict) \
             or not isinstance(policy.get("performance_use"), str) \
@@ -3586,6 +3606,110 @@ def _rederive_percentages(where, label, measured, percent, problems,
                 f"{where}: {label} {percent_key} records {recorded!r} but "
                 f"{covered} of {total} is {implied}; a coverage percentage "
                 f"must be the arithmetic of the counts it ships with")
+
+
+def _coverage_decomposition_problems(where, report, problems):
+    """Require the coverage aggregate to be the sum of its own decomposition.
+
+    Each percentage in a coverage report is already checked against the counts
+    that sit beside it, so an aggregate can only lie by disagreeing with the
+    per-package table the same report publishes.  A merged block claiming every
+    statement covered while its 30 package rows account for 60% of them is
+    internally consistent block-by-block and impossible as a whole: the merged
+    profile of a Go coverage run *is* the union of its package profiles, so
+    the three counter pairs must sum exactly.
+
+    The per-package table is the decomposition of the merged profile, not of
+    the unit or integration profiles (a run's own counters are not partitioned
+    by package in this report), so the sum rule binds merged only.  Two
+    further rules keep the merged profile from being shrunk to dodge the sum:
+    it cannot hold fewer counters than either run it merges, and the package
+    table cannot be empty or all-zero.
+    """
+
+    packages = report.get("per_package")
+    if not isinstance(packages, dict) or not packages:
+        return
+    merged = report.get("merged")
+    if not isinstance(merged, dict) or not isinstance(merged.get("measured"),
+                                                     dict):
+        return
+    pairs = (("statements", "covered_statements",
+              ("statements_total", "statements")),
+             ("functions", "covered_functions", ("functions",)),
+             ("blocks", "blocks_covered", ("blocks",)))
+    totals = {}
+    for total_key, covered_key, total_keys in pairs:
+        total = covered = 0
+        seen = False
+        for name in sorted(packages):
+            entry = packages[name]
+            if not isinstance(entry, dict):
+                continue
+            component = next(
+                (entry[key] for key in total_keys
+                 if isinstance(entry.get(key), int)), None)
+            component_covered = entry.get(covered_key)
+            if not isinstance(component, int) \
+                    or not isinstance(component_covered, int):
+                problems.append(
+                    f"{where}: per_package {name!r} has no integer "
+                    f"{covered_key}/{total_key} counters, so the merged "
+                    f"{total_key} aggregate cannot be re-derived from the "
+                    f"table the report ships with")
+                return
+            if len(total_keys) > 1 \
+                    and isinstance(entry.get(total_keys[1]), int) \
+                    and entry[total_keys[1]] != component:
+                problems.append(
+                    f"{where}: per_package {name!r} records "
+                    f"statements_total={entry[total_keys[0]]} against "
+                    f"statements={entry[total_keys[1]]} for the same profile; "
+                    f"one of the two is not the package it names")
+                return
+            if component < 0 or component_covered < 0 \
+                    or component_covered > component:
+                problems.append(
+                    f"{where}: per_package {name!r} records "
+                    f"{component_covered} covered of {component} total for "
+                    f"{total_key}")
+                return
+            total += component
+            covered += component_covered
+            seen = True
+        if not seen:
+            return
+        totals[total_key] = (total, covered)
+        for key, recorded in ((total_key, merged["measured"].get(total_key)),
+                              (covered_key, merged["measured"].get(covered_key))):
+            if recorded != (total if key == total_key else covered):
+                problems.append(
+                    f"{where}: merged {key} records {recorded!r} but the "
+                    f"report's own {len(packages)} package rows sum to "
+                    f"{total if key == total_key else covered}; the merged "
+                    f"profile is the union of those rows, so an aggregate "
+                    f"that is not their sum was not produced by this "
+                    f"measurement")
+    if not any(total for total, _covered in totals.values()):
+        problems.append(
+            f"{where}: the per_package table sums to zero counters; a "
+            f"coverage report that measured nothing cannot attest coverage")
+    for section in ("unit", "integration"):
+        block = report.get(section)
+        if not isinstance(block, dict) or not isinstance(block.get("measured"),
+                                                         dict):
+            continue
+        measured = block["measured"]
+        for total_key, covered_key, _total_keys in pairs:
+            for key in (total_key, covered_key):
+                value = measured.get(key)
+                recorded = merged["measured"].get(key)
+                if isinstance(value, int) and isinstance(recorded, int) \
+                        and recorded < value:
+                    problems.append(
+                        f"{where}: merged {key} is {recorded} but the {section} "
+                        f"profile it merges recorded {value}; a merged profile "
+                        f"cannot hold fewer counters than a run that feeds it")
 
 
 def crash_negative_evidence(path, report, implementation_of, problems):
@@ -3876,6 +4000,747 @@ def _clip_record(text):
     return collapsed if len(collapsed) <= 120 else collapsed[:120] + "..."
 
 
+def windows_guard_evidence(path, report, ledger, problems,
+                          linux_digests=(), sha256_ledger=None):
+    """Consume the same-source-guard report inside the kind gate.
+
+    The guard battery runs on the authorized Windows host and its report is
+    the only record that every Windows spelling of an absent reader sidecar was
+    refused at the product interface.  The guard harness owns what a guard
+    report must say, so this function does not restate its rules: it runs the
+    harness's own ``verify_report`` over the committed artifact -- the same
+    verifier ``--verify-report`` exposes to a reviewer -- and adds the two
+    anchors only the gate can see:
+
+    * the Windows product digests must not be the binaries the Linux battery
+      executed, so a guard verdict cannot borrow the Linux build;
+    * each digest must be staged as a ``win`` artifact in the ledger the
+      battery staged, so the report cannot name an unrelated file that happens
+      to be listed.
+
+    Without both, a report whose 94 case records were rewritten to read as a
+    green guard run -- the forgery this rule exists to refuse -- would be
+    consumed as qualification evidence.
+    """
+
+    where = f"windows-guard {path}"
+    if report.get("schema") != WINDOWS_GUARD_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    guard = _table_module("windows_guard_harness",
+                          ("verify_report", "REPORT_SCHEMA",
+                           "required_case_names", "PRODUCT_LABELS"),
+                          where, problems)
+    if guard is None:
+        return
+    try:
+        if _accepts_keyword(guard.verify_report, "ledger_path"):
+            generator_problems = guard.verify_report(
+                report, ledger_path=sha256_ledger, where=where)
+        else:
+            generator_problems = guard.verify_report(report, where=where)
+    except Exception as exc:  # noqa: BLE001 - a verifier must not crash the gate
+        problems.append(f"{where}: the guard harness's own verifier raised "
+                        f"{type(exc).__name__}: {exc}")
+        return
+    for problem in generator_problems or []:
+        text = f"{where}: guard gate: {problem}"
+        if text not in problems:
+            problems.append(text)
+    products = report.get("products")
+    if not isinstance(products, dict):
+        return
+    for engine in guard.PRODUCT_LABELS:
+        record = products.get(engine)
+        if not isinstance(record, dict):
+            continue
+        digest = (record.get("binary") or {}).get("sha256")
+        if not _is_sha256(digest):
+            continue
+        if digest in linux_digests:
+            problems.append(
+                f"{where}: the {engine} guard binary is a binary the Linux "
+                f"battery executed ({digest}); the Windows product has its own "
+                f"artifact, and a guard sweep that ran the other one says "
+                f"nothing about Windows")
+            continue
+        if ledger is None:
+            continue
+        staged = ledger.get(digest) or set()
+        wanted = os.path.basename(str((record.get("binary") or {})
+                                      .get("path") or ""))
+        if report.get("platform") == "windows":
+            if not any(entry.startswith("win/") for entry in staged):
+                problems.append(
+                    f"{where}: {engine} guard binary {digest} is staged as "
+                    f"{sorted(staged) or ['<not staged>']}, not as a win "
+                    f"entry; the guard verdict is a Windows claim")
+            elif wanted and not any(entry.endswith(wanted)
+                                     for entry in staged):
+                problems.append(
+                    f"{where}: {engine} guard binary {digest} is not staged "
+                    f"under the name the report records ({wanted})")
+        elif not any(entry.startswith(f"{engine}/") for entry in staged):
+            problems.append(
+                f"{where}: {engine} guard binary {digest} is staged as "
+                f"{sorted(staged) or ['<not staged>']}, not under {engine!r}; "
+                f"the POSIX negative control runs the engine's own Linux "
+                f"artifact")
+
+
+def resource_evidence(path, report, implementation_of, ledger, problems):
+    """Consume the resource-proof report inside the kind gate.
+
+    ``resource_harness.py`` is the only evidence that the connection-queue
+    bound, the over-limit frame path, the reservation removal and the
+    cancellation dispatcher were exercised against the shipped binaries, and
+    nothing outside this gate reads the artifact once the harness wrote it.
+    The report publishes one verdict per proof per engine, so the gate
+    re-derives the expectations the harness measures against -- imported from
+    the harness that owns them, never copied -- and refuses a report whose
+    recorded measurements cannot produce the pass it claims:
+
+    * all four proofs, both engines, exactly once, every one passing with no
+      failure recorded, and ``failed`` at zero with no leftover processes;
+    * each proof's binary is the report's own record for its engine, and that
+      digest is an identity the battery's executed actors prove and the ledger
+      stages under that engine;
+    * proof a -- the queue bound -- must show the exact 16-admit/3-busy split
+      the queue design implies, over the request ids the harness pipelined,
+      with the in-flight export cancelled and the process exiting 0 on its
+      own;
+    * proofs b, c and d must show the single -32001 close, the removed
+      reservation, and the responsive post-cancel describe respectively.
+
+    A report whose ``pass`` flags were set by hand fails here, because the
+    measurements behind each flag are the thing being checked.
+    """
+
+    where = f"resource {path}"
+    if report.get("schema") != RESOURCE_REPORT_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    harness = _table_module(
+        "resource_harness",
+        ("PROOF_A_DESCRIBES", "PROOF_A_BUSY_EXPECTED", "PROOF_A_OK_EXPECTED",
+         "PROOF_A_FEED_LINES"), where, problems)
+    if harness is None:
+        return
+    if report.get("failed") != 0:
+        problems.append(f"{where}: report records failed="
+                        f"{report.get('failed')!r}; a resource report is "
+                        f"consumed as an all-pass attestation")
+    leftover = report.get("leftover_processes")
+    if leftover != []:
+        problems.append(f"{where}: leftover_processes {leftover!r}; a product "
+                        f"process surviving the battery is the leak this "
+                        f"report exists to catch")
+
+    binaries = report.get("binaries")
+    if not isinstance(binaries, dict):
+        problems.append(f"{where}: no binaries table to bind the proofs to")
+        return
+    digests = {}
+    for engine in ("go", "rust"):
+        record = binaries.get(engine)
+        if not isinstance(record, dict):
+            problems.append(f"{where}: no {engine} binary record")
+            continue
+        digest = record.get("sha256")
+        if not _is_sha256(digest):
+            problems.append(f"{where}: {engine} sha256 {digest!r} is not a "
+                            f"measured digest")
+            continue
+        digests[engine] = digest
+        proven = implementation_of.get(digest)
+        if proven is None:
+            problems.append(
+                f"{where}: {engine} sha256 {digest} is not an identity the "
+                f"battery's matrix or crash reports record as executed; the "
+                f"resource proofs ran something the battery cannot account "
+                f"for")
+        elif proven != engine:
+            problems.append(
+                f"{where}: {engine} sha256 {digest} is proven {proven} by the "
+                f"executed actor records of this battery; relabeling it "
+                f"{engine} is a report defect")
+        if ledger is not None and digest not in ledger:
+            problems.append(f"{where}: {engine} sha256 {digest} is absent "
+                            f"from the supplied SHASUMS ledger; the artifact "
+                            f"the resource proofs measured is not one the "
+                            f"battery staged")
+    if len(digests) == 2 and digests["go"] == digests["rust"]:
+        problems.append(f"{where}: the go and rust records name the same "
+                        f"binary {digests['go']}; four proofs run twice "
+                        f"against one executable are not two-engine "
+                        f"evidence")
+
+    proofs = report.get("proofs")
+    if not isinstance(proofs, list) or not proofs:
+        problems.append(f"{where}: no proofs; the resource battery ran "
+                        f"nothing")
+        return
+    seen = {}
+    for index, record in enumerate(proofs):
+        if not isinstance(record, dict):
+            problems.append(f"{where}: proofs[{index}] is not an object")
+            continue
+        key = (record.get("proof"), record.get("binary"))
+        if key in seen:
+            problems.append(
+                f"{where}: proofs[{index}] repeats proof {key[0]!r} of "
+                f"{key[1]!r}; the later record would outrank the first")
+            continue
+        seen[key] = record
+    expected_keys = {(proof, engine) for proof in ("a", "b", "c", "d")
+                     for engine in ("go", "rust")}
+    absent = sorted(expected_keys - set(seen))
+    if absent:
+        problems.append(
+            f"{where}: {len(absent)} of {len(expected_keys)} proofs are "
+            f"missing ({absent[:4]}); the four proofs and both engines are "
+            f"the attestation, and a report with a proof removed is not the "
+            f"battery that ran")
+    for key in sorted(set(seen) - expected_keys):
+        problems.append(f"{where}: proof {key[0]!r} of {key[1]!r} is not a "
+                        f"proof this harness produces; an invented row is not "
+                        f"evidence")
+    for key in sorted(expected_keys & set(seen)):
+        _resource_proof_problems(where, key[0], key[1], seen[key], binaries,
+                                 harness, problems)
+
+
+def golden_evidence(path, report, problems):
+    """Consume the golden-corpus report inside the kind gate.
+
+    ``check_golden.py`` is the only record that every published method has a
+    wire-format golden exchange and every case file in the corpus validates;
+    before this function existed nothing consumed the artifact, so hollowing
+    its counts left the gate green while its claim went unexamined.  The gate
+    re-runs the corpus walk that the producer itself uses -- ``scan_corpus``,
+    imported from the owner of the rule, never copied -- over this checkout
+    and requires the report to say exactly what the walk says about the
+    corpus it reviewed.  A corpus edited without rotating the report is a
+    rotation the gate reports, the same way the parity tables are.
+    """
+
+    where = f"golden {path}"
+    if report.get("schema") != GOLDEN_REPORT_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    golden = _table_module("check_golden", ("scan_corpus",), where, problems)
+    if golden is None:
+        return
+    if report.get("result") != "PASS":
+        problems.append(f"{where}: result {report.get('result')!r}; a golden "
+                        f"sweep that did not pass cannot be consumed as "
+                        f"corpus evidence")
+    recorded_problems = report.get("problems")
+    if recorded_problems != []:
+        problems.append(
+            f"{where}: the report carries {len(recorded_problems or [])} "
+            f"corpus problem(s); a consumed golden verdict cannot have any")
+    try:
+        scan = golden.scan_corpus(os.path.dirname(os.path.abspath(__file__)))
+    except Exception as exc:  # noqa: BLE001 - a verifier must not crash the gate
+        problems.append(f"{where}: the corpus walk raised "
+                        f"{type(exc).__name__}: {exc}")
+        return
+    for field in ("golden_files", "golden_exchanges", "case_files",
+                  "case_files_seen"):
+        if report.get(field) != scan[field]:
+            problems.append(
+                f"{where}: records {field} {report.get(field)!r} where the "
+                f"corpus under this checkout says {scan[field]!r}; the "
+                f"golden verdict must be the walk, not a number written "
+                f"beside it")
+    if report.get("covered_methods") != scan["covered_methods"]:
+        problems.append(
+            f"{where}: the covered-method list contradicts the corpus walk "
+            f"under this checkout; the method census is the measurement this "
+            f"report exists to record")
+
+
+def sensitivity_evidence(path, report, problems):
+    """Consume the runner-sensitivity report inside the kind gate.
+
+    ``sensitivity_gate.py`` owns the mode table -- one deliberate-brokenness
+    mode per expectation the external runner must refuse -- and the report
+    records one outcome per mode.  The obligation is re-derived from the
+    gate's own table rather than trusted from the report: the mode sequence,
+    each mode's expected outcome and marker, and an ok that every mode must
+    carry for a PASS, with no failure recorded and none missing.
+    """
+
+    where = f"sensitivity {path}"
+    if report.get("schema") != SENSITIVITY_REPORT_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    gate = _table_module("sensitivity_gate", ("MODES",), where, problems)
+    if gate is None:
+        return
+    if report.get("result") != "PASS":
+        problems.append(f"{where}: result {report.get('result')!r}; a "
+                        f"sensitivity sweep that did not pass cannot be "
+                        f"consumed as runner evidence")
+    recorded_failures = report.get("failures")
+    if recorded_failures != []:
+        problems.append(
+            f"{where}: records {len(recorded_failures or [])} failure(s) "
+            f"while claiming a consumed PASS")
+    modes = report.get("modes")
+    if not isinstance(modes, list):
+        problems.append(f"{where}: modes is {type(modes).__name__}, not the "
+                        f"per-mode records the gate produces")
+        return
+    if report.get("mode_count") != len(modes):
+        problems.append(
+            f"{where}: mode_count {report.get('mode_count')!r} contradicts "
+            f"the {len(modes)} mode records in the report")
+    obligation = gate.MODES
+    if [entry.get("mode") for entry in modes if isinstance(entry, dict)] \
+            != [entry[0] for entry in obligation]:
+        problems.append(
+            f"{where}: the mode sequence is not the gate's own table of "
+            f"{len(obligation)} deliberate-brokenness expectations "
+            f"({[entry[0] for entry in obligation]}); a report that drops, "
+            f"adds, or reorders a mode is not the sweep that ran")
+        return
+    for entry, (name, _steps, want, marker) in zip(modes, obligation):
+        if entry.get("want") != want \
+                or entry.get("expected_marker") != marker:
+            problems.append(
+                f"{where}: mode {name!r} records want="
+                f"{entry.get('want')!r} marker={entry.get('expected_marker')!r}"
+                f" where the gate's table obliges want={want!r} "
+                f"marker={marker!r}; rewriting an expectation is how a wrong "
+                f"answer is made to look right")
+        if entry.get("ok") is not True:
+            problems.append(
+                f"{where}: mode {name!r} records ok="
+                f"{entry.get('ok')!r}; every expectation must hold for the "
+                f"runner's sensitivity claim to stand")
+        got = entry.get("got")
+        if not (isinstance(got, str) and got.startswith(want)):
+            problems.append(
+                f"{where}: mode {name!r} records measured verdict {got!r} "
+                f"beside an expectation of {want!r} and ok=True; the producer "
+                f"writes the verdict it observed as the first word of the "
+                f"record, so a mode that did not reach its expectation cannot "
+                f"be filed as holding")
+
+
+def posix_guard_evidence(path, report, ledger, problems, attested_digests=(),
+                         sha256_ledger=None):
+    """Consume the POSIX same-source-guard control inside the kind gate.
+
+    The guard harness owns what a guard report must say, so this function
+    runs the harness's own ``verify_report`` over the artifact -- the same
+    verifier ``--verify-report`` exposes to a reviewer -- and adds the two
+    anchors only the gate can see.  Their polarity is the mirror of the
+    Windows guard's: the POSIX negative control is the same battery run on
+    the Linux artifacts the battery itself executed, so each product digest
+    must be an identity the battery's executed actors prove (a foreign
+    binary would make the control a sweep of something else), and, when a
+    ledger is supplied, it must be staged under its own engine.
+    """
+
+    where = f"guard-posix {path}"
+    if report.get("schema") != WINDOWS_GUARD_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    guard = _table_module("windows_guard_harness",
+                          ("verify_report", "REPORT_SCHEMA",
+                           "PRODUCT_LABELS"),
+                          where, problems)
+    if guard is None:
+        return
+    try:
+        if _accepts_keyword(guard.verify_report, "ledger_path"):
+            generator_problems = guard.verify_report(
+                report, ledger_path=sha256_ledger, where=where)
+        else:
+            generator_problems = guard.verify_report(report, where=where)
+    except Exception as exc:  # noqa: BLE001 - a verifier must not crash the gate
+        problems.append(f"{where}: the guard harness's own verifier raised "
+                        f"{type(exc).__name__}: {exc}")
+        return
+    for problem in generator_problems or []:
+        text = f"{where}: guard gate: {problem}"
+        if text not in problems:
+            problems.append(text)
+    if report.get("platform") != "posix":
+        problems.append(
+            f"{where}: platform {report.get('platform')!r}; the guard-posix "
+            f"role consumes the POSIX negative control, and the Windows "
+            f"sweep is attested by the windows-guard class")
+    if report.get("all_ok") is not True:
+        problems.append(f"{where}: all_ok {report.get('all_ok')!r}; a "
+                        f"consumed control must report its own pass")
+    products = report.get("products")
+    if not isinstance(products, dict):
+        return
+    for engine in guard.PRODUCT_LABELS:
+        record = products.get(engine)
+        if not isinstance(record, dict):
+            continue
+        digest = (record.get("binary") or {}).get("sha256")
+        if not _is_sha256(digest):
+            continue
+        if digest not in attested_digests:
+            problems.append(
+                f"{where}: the {engine} posix guard binary {digest} is not a "
+                f"binary the Linux battery executed; the POSIX control "
+                f"qualifies the same artifact the battery qualified, and "
+                f"another binary says nothing about it")
+            continue
+        if ledger is None:
+            continue
+        staged = ledger.get(digest) or set()
+        if not any(entry.startswith(f"{engine}/") for entry in staged):
+            problems.append(
+                f"{where}: {engine} posix guard binary {digest} is staged as "
+                f"{sorted(staged) or ['<not staged>']}, not under "
+                f"{engine!r}; the ledger says which implementation a digest "
+                f"is, and the control must name the same one")
+
+
+def race_battery_evidence(path, report, ledger, problems, attested_digests=(),
+                          fixture_shas=None):
+    """Consume the swap-race battery report inside the kind gate.
+
+    ``races/aggregate.py`` is the only record of the stat->open window being
+    raced on the shipped binaries, and until now nothing consumed the
+    artifact once it was written.  Consumption here is the producer's own
+    judgment, imported and re-run, never restated:
+
+    * the verdict and the collected failures are one fact -- a consumed
+      report says PASS and carries no failure, and the report's own record
+      contract (``committed_artifact_problems``) must still hold;
+    * every arm in the battery's committed arm table, on both engines, plus
+      the hang detector, exactly once -- a subject dropped from the report
+      is an arm that silently stopped being raced;
+    * every arm and detector record re-graded through ``judge_arm`` /
+      ``judge_detector`` against the recorded attempt count, so a PASS whose
+      measurements cannot produce it fails here;
+    * the raced binaries are the battery's own engines, staged under their
+      engine names, and the fixture is the battery's fixture.
+    """
+
+    where = f"race-battery {path}"
+    if report.get("schema") != RACE_BATTERY_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{report.get('schema')!r}")
+    agg = _table_module("races.aggregate",
+                        ("committed_artifact_problems", "judge_arm",
+                         "judge_detector", "Battery", "REPORT_SCHEMA"),
+                        where, problems)
+    arms_table = _table_module("races.arms", ("ARM_NAMES",), where, problems)
+    if agg is None or arms_table is None:
+        return
+    verdict = report.get("verdict")
+    if verdict != "PASS":
+        problems.append(f"{where}: verdict {verdict!r}; a race battery that "
+                        f"did not pass cannot be consumed as qualification "
+                        f"evidence")
+    failures = report.get("failures")
+    if not isinstance(failures, list) or failures:
+        problems.append(
+            f"{where}: records {len(failures) if isinstance(failures, list) else failures!r}"
+            f" aggregate failure(s); the battery derives its exit code from "
+            f"them, so a verdict beside a failure -- or without the failure "
+            f"list -- is a report written after the fact")
+    problems.extend(agg.committed_artifact_problems(report, where=where))
+    options = report.get("options")
+    attempts = options.get("attempts") if isinstance(options, dict) else None
+    if not (isinstance(attempts, int) and not isinstance(attempts, bool)
+            and attempts > 0):
+        problems.append(f"{where}: options.attempts {attempts!r} is not a "
+                        f"positive attempt count; every arm is judged "
+                        f"against it")
+        attempts = None
+    entries = report.get("entries")
+    if not isinstance(entries, list):
+        problems.append(f"{where}: entries is {type(entries).__name__}; the "
+                        f"report records no raced subjects")
+        return
+    observed = {}
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            problems.append(f"{where}: entries[{index}] is not an object")
+            continue
+        subject = entry.get("subject") or entry.get("subject_label")
+        if subject in observed:
+            problems.append(f"{where}: subject {subject!r} is reported "
+                            f"twice; the later record would outrank the "
+                            f"first")
+            continue
+        observed[subject] = entry
+    expected = {f"{engine}/{arm}"
+                for engine in ("go", "rust")
+                for arm in arms_table.ARM_NAMES} | {"detector/sentinel"}
+    absent = sorted(expected - set(observed))
+    if absent:
+        problems.append(
+            f"{where}: {len(absent)} of {len(expected)} raced subjects are "
+            f"missing ({absent[:4]}); every arm of the committed arm table "
+            f"on both engines plus the hang detector is the battery, and a "
+            f"report with a subject removed is not the battery that ran")
+    extra = sorted(set(observed) - expected)
+    if extra:
+        problems.append(
+            f"{where}: subjects {extra[:4]} are not subjects this battery "
+            f"produces; an invented row is not evidence")
+    graded = agg.Battery()
+    for subject in sorted(expected & set(observed)):
+        try:
+            if subject == "detector/sentinel":
+                agg.judge_detector(graded, subject, observed[subject])
+            else:
+                agg.judge_arm(graded, subject, observed[subject],
+                              attempts=attempts)
+        except Exception as exc:  # noqa: BLE001 - a hollow record is a failure
+            problems.append(
+                f"{where}: {subject} cannot be graded by the battery's own "
+                f"judgment ({type(exc).__name__}: {exc}); a record the "
+                f"producer cannot judge is not a measured race")
+    for failure in graded.failures:
+        problems.append(f"{where}: {failure}")
+    binaries = report.get("binaries")
+    if not isinstance(binaries, dict):
+        problems.append(f"{where}: no binaries table to bind the verdict to")
+    else:
+        for engine in ("go", "rust"):
+            record = binaries.get(engine)
+            digest = (record or {}).get("sha256") \
+                if isinstance(record, dict) else None
+            if not _is_sha256(digest):
+                problems.append(
+                    f"{where}: the {engine} raced binary has no measured "
+                    f"identity; the window that was raced belongs to no "
+                    f"artifact the reviewer can name")
+                continue
+            if digest not in attested_digests:
+                problems.append(
+                    f"{where}: the raced {engine} binary {digest} is not a "
+                    f"binary the battery executed; the stat->open window "
+                    f"must be raced on the artifact being qualified")
+                continue
+            if ledger is None:
+                continue
+            staged = ledger.get(digest) or set()
+            if not any(entry.startswith(f"{engine}/") for entry in staged):
+                problems.append(
+                    f"{where}: raced {engine} binary {digest} is staged as "
+                    f"{sorted(staged) or ['<not staged>']}, not under "
+                    f"{engine!r}; the ledger says which implementation a "
+                    f"digest is, and the verdict must name the same one")
+    fixture = report.get("fixture_tool")
+    digest = (fixture or {}).get("sha256") \
+        if isinstance(fixture, dict) else None
+    if not _is_sha256(digest):
+        problems.append(f"{where}: the race fixture has no measured "
+                        f"identity; every raced target was seeded from it")
+    elif fixture_shas and digest not in fixture_shas:
+        problems.append(
+            f"{where}: fixture sha256 {digest} is not the fixture identity "
+            f"the battery's crash report records; the raced targets were "
+            f"built from material the battery cannot account for")
+
+
+def _resource_proof_problems(where, proof, engine, record, binaries, harness,
+                             problems):
+    """Require one resource proof record to carry the measurements it claims.
+
+    ``pass`` is the harness's verdict, and the harness raises rather than
+    recording a failure, so a passing proof must show the exact observable
+    outcome of the contract it tests -- not merely say it passed.
+    """
+
+    label = f"{where} proof {proof}.{engine}"
+    if record.get("pass") is not True:
+        problems.append(f"{label}: pass is {record.get('pass')!r}; the "
+                        f"resource report is consumed as an attestation that "
+                        f"every proof passed")
+    failures = record.get("failures")
+    if failures != []:
+        problems.append(f"{label}: records failures {failures!r} while "
+                        f"claiming pass={record.get('pass')!r}; a proof that "
+                        f"failed and a proof that passed are different "
+                        f"records of the same run")
+    if not isinstance(record.get("elapsed_ms"), (int, float)):
+        problems.append(f"{label}: no measured elapsed_ms; a proof with no "
+                        f"duration did not run")
+    if record.get("binary_path") != (binaries.get(engine) or {}).get("path"):
+        problems.append(
+            f"{label}: binary_path {record.get('binary_path')!r} is not the "
+            f"path the report records for {engine!r}; the proof block and the "
+            f"binary table describe different artifacts")
+    if proof in ("a", "d"):
+        if record.get("feed_lines") != harness.PROOF_A_FEED_LINES:
+            problems.append(
+                f"{label}: feed_lines {record.get('feed_lines')!r} is not the "
+                f"{harness.PROOF_A_FEED_LINES} lines the harness writes, so "
+                f"the queue was not occupied the way the proof requires")
+        if not _is_sha256(record.get("source_sha256")):
+            problems.append(f"{label}: source_sha256 "
+                            f"{record.get('source_sha256')!r} is not a "
+                            f"measured digest")
+        if record.get("killed") is not False:
+            problems.append(f"{label}: killed is "
+                            f"{record.get('killed')!r}; a process the harness "
+                            f"had to kill did not shut down on its own")
+        if record.get("exit_code") != 0:
+            problems.append(f"{label}: exit code "
+                            f"{record.get('exit_code')!r}, expected 0 after "
+                            f"EOF shutdown")
+    if proof == "a":
+        _proof_a_invariant_problems(label, record, harness, problems)
+    elif proof == "b":
+        if record.get("response_lines") != 1:
+            problems.append(f"{label}: response_lines "
+                            f"{record.get('response_lines')!r}, expected the "
+                            f"single answer to the over-limit frame")
+        response = record.get("response")
+        error = response.get("error") if isinstance(response, dict) else None
+        if not isinstance(error, dict) or error.get("code") != -32001:
+            problems.append(f"{label}: the over-limit frame was not answered "
+                            f"with -32001 (response {response!r})")
+        elif response.get("id") is not None:
+            problems.append(f"{label}: a frame error must carry a null id, "
+                            f"got {response.get('id')!r}")
+        if record.get("drained_bytes") != 0 or record.get("stdout_eof") is not True:
+            problems.append(
+                f"{label}: stdout drained "
+                f"{record.get('drained_bytes')!r} byte(s) with eof="
+                f"{record.get('stdout_eof')!r}; bytes after the limit must "
+                f"never be parsed as another frame")
+        if isinstance(record.get("exit_code"), int) \
+                and record["exit_code"] == 0:
+            problems.append(f"{label}: exited 0 after the over-limit close; "
+                            f"a framing failure must exit non-zero")
+    elif proof == "c":
+        if record.get("listed_rows") != 1:
+            problems.append(f"{label}: listed_rows "
+                            f"{record.get('listed_rows')!r}; the killed "
+                            f"producer must leave exactly one listable "
+                            f"reservation")
+        if record.get("reservation_after") != []:
+            problems.append(f"{label}: reservation_after "
+                            f"{record.get('reservation_after')!r}; the "
+                            f"reservation is still present after removal")
+        if record.get("remove") != "ok":
+            problems.append(f"{label}: remove is {record.get('remove')!r}")
+        if record.get("row_passed_unchanged") is not True:
+            problems.append(
+                f"{label}: row_passed_unchanged is "
+                f"{record.get('row_passed_unchanged')!r}; the opaque-entry "
+                f"contract is that the listed row is handed to "
+                f"maintenance.remove unchanged")
+        if not isinstance(record.get("listed_row"), dict) \
+                or record.get("row_used") != record.get("listed_row"):
+            problems.append(f"{label}: row_used is not the listed row, so "
+                            f"what was removed is not what was listed")
+        reports = record.get("reports")
+        kinds = [entry.get("kind") for entry in (reports or [])
+                 if isinstance(entry, dict)]
+        if "reservation" not in kinds:
+            problems.append(f"{label}: maintenance.list reported no "
+                            f"reservation kind ({reports!r})")
+    elif proof == "d":
+        if record.get("describe_answered") is not True:
+            problems.append(f"{label}: the describe after the cancellation "
+                            f"did not answer, so the dispatcher stopped "
+                            f"serving")
+        answered = record.get("export_answered")
+        if answered is True:
+            if record.get("export_code") != -32010:
+                problems.append(
+                    f"{label}: the cancelled export answered with code "
+                    f"{record.get('export_code')!r}, not -32010 cancelled; a "
+                    f"cancelled unit must never answer with a result")
+        elif answered is not False:
+            problems.append(f"{label}: export_answered is {answered!r}; the "
+                            f"terminal of the cancelled unit is recorded as a "
+                            f"fact, not left out")
+        want_responses = 1 + (1 if answered is True else 0)
+        if record.get("responses") != want_responses:
+            problems.append(
+                f"{label}: responses is {record.get('responses')!r}, expected "
+                f"{want_responses} for export_answered={answered!r}")
+
+
+def _proof_a_invariant_problems(label, record, harness, problems):
+    """Pin the queue-bound invariant of resource proof a.
+
+    The queue admits one active unit plus ``PROOF_A_OK_EXPECTED`` queued, so
+    pipelining ``PROOF_A_DESCRIBES`` describes behind one occupying export
+    means exactly ``PROOF_A_BUSY_EXPECTED`` answer ``server_busy`` and the
+    rest answer with results, each request id covered exactly once.  That
+    split *is* the claim the proof attests; a report that says it passed
+    without recording it is not evidence of the bound.
+    """
+
+    described = [str(index) for index
+                 in range(2, 2 + harness.PROOF_A_DESCRIBES)]
+    if record.get("responses") != 1 + harness.PROOF_A_DESCRIBES:
+        problems.append(
+            f"{label}: responses is {record.get('responses')!r}, expected "
+            f"{1 + harness.PROOF_A_DESCRIBES} (one export and "
+            f"{harness.PROOF_A_DESCRIBES} describes)")
+    busy, ok = record.get("busy_ids"), record.get("ok_ids")
+    if not isinstance(busy, list) or not isinstance(ok, list):
+        problems.append(f"{label}: busy_ids/ok_ids are not lists "
+                        f"({busy!r}, {ok!r}); the 16-admit/3-busy split is "
+                        f"the measurement this proof exists to record")
+        return
+    if len(busy) != harness.PROOF_A_BUSY_EXPECTED \
+            or len(ok) != harness.PROOF_A_OK_EXPECTED:
+        problems.append(
+            f"{label}: records {len(ok)} admitted and {len(busy)} busy "
+            f"describes, expected {harness.PROOF_A_OK_EXPECTED} admitted and "
+            f"{harness.PROOF_A_BUSY_EXPECTED} busy; the queue bound is "
+            f"one active unit plus {harness.PROOF_A_OK_EXPECTED} queued, so "
+            f"any other split is a different system")
+    answered = [str(value) for value in busy] + [str(value) for value in ok]
+    if len(answered) != len(set(answered)) or set(answered) != set(described):
+        problems.append(
+            f"{label}: the describe ids are not covered exactly once "
+            f"({len(answered)} entries over {len(set(answered))} distinct "
+            f"ids, expected {len(described)})")
+    for name, ids in (("busy_ids", busy), ("ok_ids", ok)):
+        numeric = [int(value) for value in ids if str(value).isdigit()]
+        if len(numeric) != len(ids) or numeric != sorted(numeric):
+            problems.append(f"{label}: {name} is not the sorted numeric id "
+                            f"set the harness records ({ids!r})")
+    if busy and set(map(str, busy)) & set(map(str, ok)):
+        problems.append(f"{label}: a describe request is recorded as both "
+                        f"admitted and busy ({busy!r} against {ok!r})")
+    if not isinstance(record.get("export_start_marker_ms"), (int, float)):
+        problems.append(
+            f"{label}: no export_start_marker_ms; the 16/3 split is "
+            f"deterministic only because the describes were pipelined after "
+            f"the export's private temp appeared, and a report without the "
+            f"marker did not establish it")
+    exports = record.get("export_ids")
+    if not isinstance(exports, list) or len(exports) != 1 \
+            or not isinstance(exports[0], dict) \
+            or exports[0].get("id") != "1":
+        problems.append(f"{label}: export_ids {exports!r} does not hold the "
+                        f"one answer to request id 1")
+        return
+    if record.get("export_code") != -32010:
+        problems.append(f"{label}: the in-flight export answered "
+                        f"{record.get('export_code')!r}, expected -32010 "
+                        f"cancelled at EOF shutdown")
+    data = (exports[0].get("error") or {}).get("data") or {}
+    if data.get("code") != "cancelled" or data.get("outcome") != "not_started":
+        problems.append(
+            f"{label}: the -32010 answer carries {data!r}, not the cancelled/"
+            f"not_started domain facts; another failure dressed as a "
+            f"cancellation is not this proof")
+
+
 def build_battery_manifest(consumed_by_role, ledger_path=None,
                            generated_by=None):
     """Assemble the battery manifest for one consumed report set.
@@ -4043,6 +4908,48 @@ def battery_manifest_evidence(path, manifest, consumed_by_role, problems,
                           if item.get("content_sha256") == digest), None)
             if entry is None:
                 continue
+            # The manifest records the byte length of the file it digested.
+            # The content digest binds what the report says; the length binds
+            # the artifact that was reviewed, so a report re-serialized,
+            # truncated, or padded in a way the digest happens to survive is
+            # still not the file the battery committed.
+            recorded_bytes = entry.get("bytes")
+            try:
+                actual_bytes = os.path.getsize(report_path)
+            except OSError as exc:
+                actual_bytes = None
+                problems.append(f"{where}: the {role} entry "
+                                f"{entry.get('name')!r} cannot be measured on "
+                                f"disk ({exc})")
+            if actual_bytes is None:
+                continue
+            if not isinstance(recorded_bytes, int) \
+                    or isinstance(recorded_bytes, bool):
+                problems.append(
+                    f"{where}: the {role} entry {entry.get('name')!r} "
+                    f"records no byte length (bytes="
+                    f"{recorded_bytes!r}); a manifest that stops binding the "
+                    f"artifact it digests leaves the digest attached to "
+                    f"nothing on disk")
+            elif recorded_bytes != actual_bytes:
+                problems.append(
+                    f"{where}: the {role} entry {entry.get('name')!r} binds "
+                    f"{recorded_bytes} bytes but {report_path} is "
+                    f"{actual_bytes} bytes; the manifest was written against a "
+                    f"different rendering of this content, so the artifact the "
+                    f"battery committed is not the artifact the manifest "
+                    f"attests")
+            # For a class the gate finds by its file name, the entry must name
+            # the file the gate actually read.  A manifest attesting one path
+            # while the gate consumes an identically-named-content file
+            # elsewhere binds the verdict to a report nobody read.
+            if role in SINGULAR_CONSUMED_ROLES \
+                    and entry.get("name") != os.path.basename(report_path):
+                problems.append(
+                    f"{where}: the {role} entry attests {entry.get('name')!r} "
+                    f"but the gate consumed {os.path.basename(report_path)}; "
+                    f"for a class discovered by file name, the attested name "
+                    f"and the consumed name must be one name")
             if entry.get("git_head") != revision:
                 problems.append(
                     f"{where}: the {role} entry "
@@ -4280,6 +5187,8 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
             verify_cases=False, fifo_paths=(), throughput_paths=(),
             sha256_ledger=None, parity_paths=None, coverage_paths=None,
             crash_negative_paths=None, windows_paths=None,
+            guard_paths=None, resource_paths=None, golden_paths=None,
+            sensitivity_paths=None, posix_guard_paths=None, race_paths=None,
             battery_manifest=None, require_consumed=True):
     """Evaluate one evidence revision; testable without the CLI.
 
@@ -4302,7 +5211,12 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
     already trusts: ``parity_paths`` the refusal-class parity verdict,
     ``coverage_paths`` the Go coverage measurement, ``crash_negative_paths``
     the ``/bin/false`` crash controls, ``windows_paths`` the native Windows
-    qualification, and ``battery_manifest`` the report-set binding (a path
+    qualification, ``guard_paths`` the same-source-guard sweep,
+    ``resource_paths`` the queue/frame/reservation/cancellation proofs,
+    ``golden_paths`` the golden-corpus counts, ``sensitivity_paths`` the
+    runner-sensitivity outcomes, ``posix_guard_paths`` the POSIX negative
+    control of the same-source guard, ``race_paths`` the swap-race battery,
+    and ``battery_manifest`` the report-set binding (a path
     or a decoded document).  ``require_consumed`` (default) makes an absent
     class a gate problem instead of a skipped check: a verdict that can be
     left out of the battery is a verdict that does not gate anything.  The
@@ -4330,6 +5244,12 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
     coverage_paths = list(coverage_paths or [])
     crash_negative_paths = list(crash_negative_paths or [])
     windows_paths = list(windows_paths or [])
+    guard_paths = list(guard_paths or [])
+    resource_paths = list(resource_paths or [])
+    golden_paths = list(golden_paths or [])
+    sensitivity_paths = list(sensitivity_paths or [])
+    posix_guard_paths = list(posix_guard_paths or [])
+    race_paths = list(race_paths or [])
     anchors = list(matrix_paths) + list(crash_paths) + list(fifo_paths) \
         + list(throughput_paths)
     if require_consumed:
@@ -4342,6 +5262,18 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
         windows_paths = _resolve_consumed(windows_paths,
                                          "windows-housekeeping", anchors,
                                          problems)
+        guard_paths = _resolve_consumed(guard_paths, "windows-guard", anchors,
+                                        problems)
+        resource_paths = _resolve_consumed(resource_paths, "resource", anchors,
+                                           problems)
+        golden_paths = _resolve_consumed(golden_paths, "golden", anchors,
+                                         problems)
+        sensitivity_paths = _resolve_consumed(sensitivity_paths,
+                                              "sensitivity", anchors, problems)
+        posix_guard_paths = _resolve_consumed(posix_guard_paths,
+                                              "guard-posix", anchors, problems)
+        race_paths = _resolve_consumed(race_paths, "race-battery", anchors,
+                                       problems)
     consumed_by_role = {
         "matrix": list(matrix_paths), "crash": list(crash_paths),
         "crash-negative": crash_negative_paths,
@@ -4350,6 +5282,12 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
         "refusal-class-parity": parity_paths,
         "coverage-go": coverage_paths,
         "windows-housekeeping": windows_paths,
+        "windows-guard": guard_paths,
+        "resource": resource_paths,
+        "golden": golden_paths,
+        "sensitivity": sensitivity_paths,
+        "guard-posix": posix_guard_paths,
+        "race-battery": race_paths,
     }
     _shared_git_head({
         "matrix": list(matrix_paths), "crash": list(crash_paths),
@@ -4358,7 +5296,13 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
         "throughput": list(throughput_paths),
         "refusal-class-parity": parity_paths,
         "coverage-go": coverage_paths,
-        "windows-housekeeping": windows_paths}, problems)
+        "windows-housekeeping": windows_paths,
+        "windows-guard": guard_paths,
+        "resource": resource_paths,
+        "golden": golden_paths,
+        "sensitivity": sensitivity_paths,
+        "guard-posix": posix_guard_paths,
+        "race-battery": race_paths}, problems)
     # Fixture identity of the battery: the crash report root binaries
     # table is the only record of the v4-fixture tool every report's
     # command names, so it is the authority for the matrix commands'
@@ -4738,6 +5682,68 @@ def assess(matrix_paths, crash_paths, verify_binaries=False,
         outcomes = report.get("outcomes") or []
         sources.append(f"windows {path} ({len(outcomes)} native outcomes)")
 
+    for path in guard_paths:
+        report = _load_report(path, problems)
+        if not isinstance(report, dict):
+            continue
+        windows_guard_evidence(path, report, ledger, problems,
+                               linux_digests=attested_digests,
+                               sha256_ledger=sha256_ledger)
+        products = report.get("products") or {}
+        records = sum(len((product or {}).get("cases") or {})
+                      for product in products.values()
+                      if isinstance(product, dict))
+        sources.append(f"windows-guard {path} ({records} guard records)")
+
+    for path in resource_paths:
+        report = _load_report(path, problems)
+        if not isinstance(report, dict):
+            continue
+        resource_evidence(path, report, implementation_of, ledger, problems)
+        sources.append(f"resource {path} "
+                       f"({len(report.get('proofs') or [])} proofs)")
+
+    for path in golden_paths:
+        report = _load_report(path, problems)
+        if not isinstance(report, dict):
+            continue
+        golden_evidence(path, report, problems)
+        sources.append(f"golden {path} "
+                       f"({report.get('golden_files')} golden files, "
+                       f"{report.get('case_files')} case files, "
+                       f"{len(report.get('covered_methods') or [])} methods)")
+
+    for path in sensitivity_paths:
+        report = _load_report(path, problems)
+        if not isinstance(report, dict):
+            continue
+        sensitivity_evidence(path, report, problems)
+        sources.append(f"sensitivity {path} "
+                       f"({report.get('mode_count')} modes)")
+
+    for path in posix_guard_paths:
+        report = _load_report(path, problems)
+        if not isinstance(report, dict):
+            continue
+        posix_guard_evidence(path, report, ledger, problems,
+                             attested_digests=attested_digests,
+                             sha256_ledger=sha256_ledger)
+        products = report.get("products") or {}
+        records = sum(len((product or {}).get("cases") or {})
+                      for product in products.values()
+                      if isinstance(product, dict))
+        sources.append(f"guard-posix {path} ({records} posix guard records)")
+
+    for path in race_paths:
+        report = _load_report(path, problems)
+        if not isinstance(report, dict):
+            continue
+        race_battery_evidence(path, report, ledger, problems,
+                              attested_digests=attested_digests,
+                              fixture_shas=set(fixture_shas.values()))
+        sources.append(f"race-battery {path} "
+                       f"({len(report.get('entries') or [])} raced subjects)")
+
     manifest_path = battery_manifest
     manifest = battery_manifest
     if isinstance(manifest, dict):
@@ -4883,6 +5889,36 @@ def main():
                         help="the native Windows qualification report of the "
                              "same revision; discovered beside the battery "
                              "when omitted")
+    parser.add_argument("--windows-guard", action="append", default=[],
+                        metavar="PATH",
+                        help="the same-source-guard report of the same "
+                             "revision; discovered beside the battery when "
+                             "omitted, and a missing report is a gate problem")
+    parser.add_argument("--resource", action="append", default=[],
+                        metavar="PATH",
+                        help="the resource-proof report of the same revision; "
+                             "discovered beside the battery when omitted, and "
+                             "a missing report is a gate problem")
+    parser.add_argument("--golden", action="append", default=[],
+                        metavar="PATH",
+                        help="the golden-corpus report of the same revision; "
+                             "discovered beside the battery when omitted, and "
+                             "a missing report is a gate problem")
+    parser.add_argument("--sensitivity", action="append", default=[],
+                        metavar="PATH",
+                        help="the runner-sensitivity report of the same "
+                             "revision; discovered beside the battery when "
+                             "omitted, and a missing report is a gate problem")
+    parser.add_argument("--guard-posix", action="append", default=[],
+                        metavar="PATH",
+                        help="the POSIX same-source-guard control of the same "
+                             "revision; discovered beside the battery when "
+                             "omitted, and a missing report is a gate problem")
+    parser.add_argument("--race-battery", action="append", default=[],
+                        metavar="PATH",
+                        help="the swap-race battery report of the same "
+                             "revision; discovered beside the battery when "
+                             "omitted, and a missing report is a gate problem")
     parser.add_argument("--battery-manifest", default=None, metavar="PATH",
                         help="the manifest that binds the consumed reports' "
                              "content to a revision and a ledger; defaults to "
@@ -4929,6 +5965,12 @@ def main():
         coverage_paths=args.coverage_go,
         crash_negative_paths=args.crash_negative,
         windows_paths=args.windows_housekeeping,
+        guard_paths=args.windows_guard,
+        resource_paths=args.resource,
+        golden_paths=args.golden,
+        sensitivity_paths=args.sensitivity,
+        posix_guard_paths=args.guard_posix,
+        race_paths=args.race_battery,
         battery_manifest=args.battery_manifest)
     print("Artifact-kind coverage gate")
     print("Sources: " + "; ".join(sources))
@@ -4971,7 +6013,13 @@ def consumed_report_set(args):
             ("refusal-class-parity", args.refusal_class_parity),
             ("coverage-go", args.coverage_go),
             ("crash-negative", args.crash_negative),
-            ("windows-housekeeping", args.windows_housekeeping)):
+            ("windows-housekeeping", args.windows_housekeeping),
+            ("windows-guard", args.windows_guard),
+            ("resource", args.resource),
+            ("golden", args.golden),
+            ("sensitivity", args.sensitivity),
+            ("guard-posix", args.guard_posix),
+            ("race-battery", args.race_battery)):
         resolution[role] = _resolve_consumed(list(flag_value), role, anchors,
                                             problems)
     return resolution, problems
@@ -5424,6 +6472,14 @@ def _self_test():
                         "hangs": 0, "flaky": 0,
                         "pins_expected": len(_parity.PINNED_REFUSALS),
                         "pins_satisfied": len(_parity.PINNED_REFUSALS)},
+            # The descriptor-pressure axis is an obligation of the verdict,
+            # not an optional block: a report that drops it is refused, so the
+            # harness carries it.  It is the generator's own fabricator over
+            # the routine profile set -- one authoritative statement of what a
+            # conforming axis says -- rather than a section written beside the
+            # tables it has to agree with.
+            "pressure": _parity.fabricated_pressure_section(
+                _parity.ROUTINE_PRESSURE_PROFILES),
         }
 
     COVERAGE_MEASURE = {
@@ -5466,6 +6522,9 @@ def _self_test():
             "command": ["v4/cli/coverage_harness.py"],
             "platform": {"system": "Linux"}, "module": "iprange",
             "unit": unit, "integration": integration, "merged": merged,
+            # The per-package table is the decomposition of the merged
+            # profile, so the rows must sum to it: the gate refuses an
+            # aggregate that is not the union of its own rows.
             "per_package": {
                 "github.com/firehol/iprange/v4/go/internal/cli": {
                     "statements": 3197, "covered_statements": 2310,
@@ -5473,7 +6532,14 @@ def _self_test():
                     "covered_functions": 419, "blocks": 2636,
                     "blocks_covered": 1813,
                     "statement_percent": 72.26, "function_percent": 91.89,
-                    "block_percent": 68.78}},
+                    "block_percent": 68.78},
+                "github.com/firehol/iprange/v4/go/internal/live": {
+                    "statements": 53975, "covered_statements": 31730,
+                    "statements_total": 53975, "functions": 5462,
+                    "covered_functions": 4328, "blocks": 39247,
+                    "blocks_covered": 21167,
+                    "statement_percent": 58.79, "function_percent": 79.24,
+                    "block_percent": 53.93}},
             "instrumented_binaries": {
                 "iprange": {"covermode": "atomic", "instrumented": True,
                             "path": "/tmp/kind-coverage-work/bin/iprange",
@@ -5582,6 +6648,275 @@ def _self_test():
                                   "rc=0: 23 packages ok, 0 failing packages.",
                 "native_cargo_test": "GREEN. 'cargo test -p iprange-cli' "
                                      "returned rc=0: 334 passed / 0 failed."}}
+
+    def guard_report():
+        """A same-source-guard sweep over every spelling the harness derives.
+
+        The report is built from the guard harness's own tables -- the case
+        names, the refusal facts, and the allowed controls -- so the self-test
+        and the producer cannot disagree about what a complete sweep is, and
+        the case identities are digests the battery controls can attack.
+        """
+
+        import windows_guard_harness as guard
+        work = {"go": "C:/kind/win/work/go", "rust": "C:/kind/win/work/rust"}
+        digests = {"go": "f" * 63 + "9", "rust": "e" * 63 + "7"}
+        fixture_sha = "d" * 63 + "5"
+        products = {}
+        for label in guard.PRODUCT_LABELS:
+            cases = {}
+            for name in sorted(guard.required_case_names("windows")):
+                allowed = name in guard.ALLOWED_DESTINATION_CASES
+                if allowed:
+                    cases[name] = {
+                        "destination": work[label] + "/meta.txt",
+                        "refused": False, "error_code": None,
+                        "error_message": "", "error_outcome": None,
+                        "expected_refused": False, "ok": True}
+                else:
+                    cases[name] = {
+                        "destination": work[label] + "/db.iprange.readers",
+                        "refused": True, "error_code": "invalid_argument",
+                        "error_message": guard.ACCEPTED_MESSAGE,
+                        "error_outcome": "not_started",
+                        "expected_refused": True, "ok": True}
+            cases.update({"source_unchanged": True,
+                          "sidecar_absent_after": True,
+                          "reopen_allowed": True})
+            products[label] = {
+                "implementation": label,
+                "binary": {"path": "C:/kind/win/%s/iprange.exe" % label,
+                           "sha256": digests[label], "size": 14071808,
+                           "mtime": 1789468364.9},
+                "sources_before": {
+                    work[label] + "/db.iprange": {
+                        "sha256_before": fixture_sha,
+                        "sidecar_absent_before": True}},
+                "cases": cases, "all_ok": True}
+        provenance = {"revision": revision, "tree_clean": True}
+        return {
+            "schema": WINDOWS_GUARD_SCHEMA, "git_head": revision,
+            "checkout_root": None,
+            "command": ["v4/cli/windows_guard_harness.py"],
+            "platform": "windows",
+            "fixture": {"path": "C:/kind/win/fixture.iprange",
+                        "sha256": fixture_sha, "size": 16384,
+                        "mtime": 1789468365.6},
+            "products": products, "all_ok": True,
+            "build_provenance": provenance,
+            "privacy": {
+                "sanitizer": "command_sanitize.write_committed_report",
+                "personal_path_in_report": None,
+                "checked_inputs": ["--fixture", "--go", "--out",
+                                   "--provenance", "--rust", "--work"]}}
+
+    def resource_report():
+        """A resource-proof report whose every pass flag follows its record.
+
+        The measurements are the ones ``resource_harness.py`` pins: the
+        16-admit/3-busy queue split the connection bound implies, the single
+        -32001 over-limit close, the removed reservation, and the responsive
+        post-cancellation describe, each on both engines.
+        """
+
+        import resource_harness as harness
+        digests = {"go": "2" * 64, "rust": "1" * 64}
+        described = [str(index)
+                     for index in range(2, 2 + harness.PROOF_A_DESCRIBES)]
+        busy = described[-harness.PROOF_A_BUSY_EXPECTED:]
+        admitted = described[:-harness.PROOF_A_BUSY_EXPECTED]
+        proofs = []
+        for engine in ("go", "rust"):
+            base = {"binary": engine,
+                    "binary_path": BINARY_PATHS[engine], "pass": True,
+                    "failures": [], "elapsed_ms": 100.0}
+            proofs.append(dict(
+                base, proof="a",
+                feed_lines=harness.PROOF_A_FEED_LINES,
+                source_sha256="b" * 63 + "1", responses=1 + harness.PROOF_A_DESCRIBES,
+                busy_ids=list(busy), ok_ids=list(admitted),
+                export_ids=[{"id": "1", "jsonrpc": "2.0",
+                            "error": {"code": -32010,
+                                      "message": "export was cancelled",
+                                      "data": {"code": "cancelled",
+                                               "outcome": "not_started"}}}],
+                export_code=-32010, export_start_marker_ms=20.1,
+                killed=False, exit_code=0))
+            proofs.append(dict(
+                base, proof="b", response_lines=1,
+                response={"id": None, "jsonrpc": "2.0",
+                          "error": {"code": -32001,
+                                    "message": "frame over input limit"}},
+                drained_bytes=0, stdout_eof=True, exit_code=1))
+            listed = {"kind": "reservation", "entries": "1",
+                      "artifact_identity": {"file": "230593838",
+                                            "volume": "66307"}}
+            proofs.append(dict(
+                base, proof="c", listed_rows=1, reservation_after=[],
+                remove="ok", row_passed_unchanged=True,
+                listed_row=listed, row_used=dict(listed),
+                reports=[{"kind": "reservation", "entries": "1"}],
+                evidence_phase="prepared", policy="fail_if_exists"))
+            proofs.append(dict(
+                base, proof="d",
+                feed_lines=harness.PROOF_A_FEED_LINES,
+                source_sha256="b" * 63 + "2", responses=1,
+                describe_answered=True, export_answered=False,
+                export_code=None, killed=False, exit_code=0))
+        return {
+            "schema": RESOURCE_REPORT_SCHEMA, "git_head": revision,
+            "checkout_root": None,
+            "command": ["v4/cli/resource_harness.py"],
+            "platform": {"system": "Linux", "release": "6.0",
+                         "machine": "x86_64", "python": "3.14.0"},
+            "binaries": {engine: {"path": BINARY_PATHS[engine],
+                                  "sha256": digests[engine]}
+                         for engine in ("go", "rust")},
+            "proofs": proofs, "leftover_processes": [], "failed": 0}
+
+    def golden_report():
+        """A golden-corpus verdict taken from the corpus under this checkout.
+
+        The counts come from ``check_golden.scan_corpus`` -- the walk the
+        consumer re-runs -- rather than from numbers copied into the harness,
+        so the self-test proves the consumer against the owner of the rule
+        instead of against the harness's own guess.
+        """
+
+        import check_golden
+        scan = check_golden.scan_corpus(
+            os.path.dirname(os.path.abspath(__file__)))
+        return {
+            "schema": GOLDEN_REPORT_SCHEMA, "git_head": revision,
+            "checkout_root": None,
+            "command": ["v4/cli/check_golden.py", "--json-report",
+                        "/kind/reports/golden.json"],
+            "golden_files": scan["golden_files"],
+            "golden_exchanges": scan["golden_exchanges"],
+            "case_files": scan["case_files"],
+            "case_files_seen": scan["case_files_seen"],
+            "covered_methods": scan["covered_methods"],
+            "problems": [], "result": "PASS",
+            "privacy": {
+                "sanitizer": "command_sanitize.write_committed_report",
+                "personal_path_in_report": None,
+                "checked_inputs": ["--json-report", "--tree"]}}
+
+    def sensitivity_report():
+        """A sensitivity sweep in which every mode answered as its table says.
+
+        The mode records are built positionally from ``sensitivity_gate.MODES``
+        -- the gate's own table of deliberate brokenness -- so the self-test
+        cannot drift from the producer's expectations, and a control that drops
+        or rewrites one mode attacks a record the consumer is obliged to
+        demand.
+        """
+
+        import sensitivity_gate
+        modes = [{"mode": name, "want": want, "got": want,
+                  "expected_marker": marker, "ok": True}
+                 for name, _steps, want, marker in sensitivity_gate.MODES]
+        return {
+            "schema": SENSITIVITY_REPORT_SCHEMA, "git_head": revision,
+            "checkout_root": None,
+            "command": ["v4/cli/sensitivity_gate.py", "--json-report",
+                        "/kind/reports/sensitivity.json"],
+            "mode_count": len(modes), "modes": modes, "failures": [],
+            "result": "PASS",
+            "privacy": {
+                "sanitizer": "command_sanitize.write_committed_report",
+                "personal_path_in_report": None,
+                "checked_inputs": ["--json-report"]}}
+
+    def posix_guard_report():
+        """The POSIX negative control of the same-source guard.
+
+        This is ``guard_report()`` with the polarity a POSIX host has: the
+        sidecar spellings are not refused there, so every case records a
+        published destination and the control's claim is that the guard
+        declined to decide anything the product had not already done.  The two
+        digests are the battery's own engines, because the POSIX control
+        qualifies the artifacts the Linux battery executed -- which is exactly
+        what the consumer binds.
+        """
+
+        import windows_guard_harness as guard
+        work = {label: "/kind/posix/work/%s" % label
+                for label in guard.PRODUCT_LABELS}
+        digests = {"go": "2" * 64, "rust": "1" * 64}
+        fixture_sha = "d" * 63 + "6"
+        products = {}
+        for label in guard.PRODUCT_LABELS:
+            cases = {}
+            for name in sorted(guard.required_case_names("posix")):
+                cases[name] = {
+                    "destination": work[label] + "/db.iprange.readers",
+                    "refused": False, "error_code": None,
+                    "error_message": "", "error_outcome": None,
+                    "expected_refused": False, "ok": True}
+            cases.update({"source_unchanged": True,
+                          "sidecar_absent_after": True,
+                          "reopen_allowed": True})
+            products[label] = {
+                "implementation": label,
+                "binary": {"path": BINARY_PATHS[label],
+                           "sha256": digests[label], "size": 14377310,
+                           "mtime": 1789469639.6},
+                "sources_before": {
+                    work[label] + "/db.iprange": {
+                        "sha256_before": fixture_sha,
+                        "sidecar_absent_before": True}},
+                "cases": cases, "all_ok": True}
+        return {
+            "schema": WINDOWS_GUARD_SCHEMA, "git_head": revision,
+            "checkout_root": None,
+            "command": ["v4/cli/windows_guard_harness.py", "--platform",
+                        "posix", "--work", "/kind/posix/work"],
+            "platform": "posix",
+            "fixture": {"path": "/kind/posix/fixture.iprange",
+                        "sha256": fixture_sha, "size": 16384,
+                        "mtime": 1789470392.2},
+            "products": products, "all_ok": True,
+            "build_provenance": {"revision": revision, "tree_clean": True},
+            "privacy": {
+                "sanitizer": "command_sanitize.write_committed_report",
+                "personal_path_in_report": None,
+                "checked_inputs": ["--fixture", "--go", "--out",
+                                   "--provenance", "--rust", "--work"]}}
+
+    def race_battery_report():
+        """The swap-race battery re-staged onto the synthetic engines.
+
+        A race report's value is its measurements -- the shape of every
+        attempt, the host load around every wait, each confirmed wedge -- and
+        a self-test that invented those would certify the harness's
+        imagination.  So this builder takes the committed battery's records
+        verbatim and rebinds only what re-staging a battery onto other engines
+        must rebind: the revision, the two engines, and the fixture tool the
+        raced targets were seeded from.  Controls over this class therefore
+        attack the records, and the consumer re-grades them with the
+        battery's own judgment.
+        """
+
+        with open(genuine_race, encoding="utf-8") as stream:
+            report = _json.load(stream)
+        digests = {"go": "2" * 64, "rust": "1" * 64}
+        report["git_head"] = revision
+        report["binaries"] = {
+            engine: {"path": BINARY_PATHS[engine], "sha256": digests[engine]}
+            for engine in ("go", "rust")}
+        report["fixture_tool"] = {
+            "path": CRASH_BINARIES["fixture_tool"],
+            "sha256": CRASH_BINARIES["fixture_tool_sha256"]}
+        command = report.get("command")
+        if isinstance(command, list):
+            for flag, value in (("--rust", BINARY_PATHS["rust"]),
+                                ("--go", BINARY_PATHS["go"]),
+                                ("--fixture-tool",
+                                 CRASH_BINARIES["fixture_tool"])):
+                if flag in command:
+                    command[command.index(flag) + 1] = value
+        return report
 
     GREEN_EXPORT_SHA = "a" * 64
 
@@ -5750,6 +7085,12 @@ def _self_test():
     genuine_parity = os.path.join(evidence_dir, "refusal-class-parity.json")
     genuine_coverage = os.path.join(evidence_dir, "coverage-go.json")
     genuine_windows = os.path.join(evidence_dir, "windows-housekeeping.json")
+    genuine_guard = os.path.join(evidence_dir, "windows-guard.json")
+    genuine_resource = os.path.join(evidence_dir, "resource.json")
+    genuine_golden = os.path.join(evidence_dir, "golden.json")
+    genuine_sensitivity = os.path.join(evidence_dir, "sensitivity.json")
+    genuine_guard_posix = os.path.join(evidence_dir, "guard-posix.json")
+    genuine_race = os.path.join(evidence_dir, "race-battery.json")
     genuine_negative = sorted(
         os.path.join(evidence_dir, name)
         for name in os.listdir(evidence_dir)
@@ -5780,17 +7121,31 @@ def _self_test():
         battery_coverage = [os.path.join(work, "coverage-go.json")]
         battery_negative = [os.path.join(work, "crash-negative.json")]
         battery_windows = [os.path.join(work, "windows-housekeeping.json")]
+        battery_guard = [os.path.join(work, "windows-guard.json")]
+        battery_resource = [os.path.join(work, "resource.json")]
+        battery_golden = [os.path.join(work, "golden.json")]
+        battery_sensitivity = [os.path.join(work, "sensitivity.json")]
+        battery_guard_posix = [os.path.join(work, "guard-posix.json")]
+        battery_race = [os.path.join(work, "race-battery.json")]
         assign(battery_fifo[0], fifo_surface_report())
         assign(battery_throughput[0], throughput_report())
         assign(battery_parity[0], parity_report())
         assign(battery_coverage[0], coverage_report())
         assign(battery_negative[0], crash_negative_report())
         assign(battery_windows[0], windows_report())
+        assign(battery_guard[0], guard_report())
+        assign(battery_resource[0], resource_report())
+        assign(battery_golden[0], golden_report())
+        assign(battery_sensitivity[0], sensitivity_report())
+        assign(battery_guard_posix[0], posix_guard_report())
+        assign(battery_race[0], race_battery_report())
 
         manifest_serial = [0]
 
         def manifest_over(matrices, crashes, fifo, throughput, parity,
-                          coverage, negative, windows, ledger=None):
+                          coverage, negative, windows, ledger=None,
+                          guard=None, resource=None, golden=None,
+                          sensitivity=None, posix_guard=None, race=None):
             """Manifest one report set, so a control tests only its defect.
 
             The CLI always reads the committed manifest; here each control
@@ -5804,12 +7159,17 @@ def _self_test():
             path = os.path.join(work, f"battery-manifest-{manifest_serial[0]}.json")
             write_battery_manifest(
                 path, consumed_set(matrices, crashes, fifo, throughput,
-                                   parity, coverage, negative, windows),
+                                   parity, coverage, negative, windows,
+                                   guard=guard, resource=resource,
+                                   golden=golden, sensitivity=sensitivity,
+                                   posix_guard=posix_guard, race=race),
                 ledger_path=ledger)
             return path
 
         def consumed_set(matrices, crashes, fifo, throughput, parity,
-                         coverage, negative, windows):
+                         coverage, negative, windows, guard=None,
+                         resource=None, golden=None, sensitivity=None,
+                         posix_guard=None, race=None):
             """The role map of one battery, as the manifest records it."""
 
             return {"matrix": list(matrices), "crash": list(crashes),
@@ -5817,7 +7177,19 @@ def _self_test():
                     "throughput": list(throughput),
                     "refusal-class-parity": list(parity),
                     "coverage-go": list(coverage),
-                    "windows-housekeeping": list(windows)}
+                    "windows-housekeeping": list(windows),
+                    "windows-guard": list(guard if guard is not None
+                                           else battery_guard),
+                    "resource": list(resource if resource is not None
+                                      else battery_resource),
+                    "golden": list(golden if golden is not None
+                                   else battery_golden),
+                    "sensitivity": list(sensitivity if sensitivity is not None
+                                        else battery_sensitivity),
+                    "guard-posix": list(posix_guard if posix_guard is not None
+                                        else battery_guard_posix),
+                    "race-battery": list(race if race is not None
+                                         else battery_race)}
         battery_manifest_path = os.path.join(work, "battery-manifest.json")
         write_battery_manifest(
             battery_manifest_path,
@@ -5879,8 +7251,8 @@ def _self_test():
         # an assertion deleted from one helper must not turn a refused
         # authentic capture into a passing self-test.
         accepted_controls: list = []
-        min_controls = 110
-        min_acceptance_controls = 4
+        min_controls = 133
+        min_acceptance_controls = 5
 
         def assess(matrix_paths, crash_paths, **kwargs):
             head = None
@@ -5899,6 +7271,12 @@ def _self_test():
                 kwargs.setdefault("crash_negative_paths",
                                   list(genuine_negative))
                 kwargs.setdefault("windows_paths", [genuine_windows])
+                kwargs.setdefault("guard_paths", [genuine_guard])
+                kwargs.setdefault("resource_paths", [genuine_resource])
+                kwargs.setdefault("golden_paths", [genuine_golden])
+                kwargs.setdefault("sensitivity_paths", [genuine_sensitivity])
+                kwargs.setdefault("posix_guard_paths", [genuine_guard_posix])
+                kwargs.setdefault("race_paths", [genuine_race])
             else:
                 kwargs.setdefault("fifo_paths", battery_fifo)
                 kwargs.setdefault("throughput_paths", battery_throughput)
@@ -5906,6 +7284,12 @@ def _self_test():
                 kwargs.setdefault("coverage_paths", battery_coverage)
                 kwargs.setdefault("crash_negative_paths", battery_negative)
                 kwargs.setdefault("windows_paths", battery_windows)
+                kwargs.setdefault("guard_paths", battery_guard)
+                kwargs.setdefault("resource_paths", battery_resource)
+                kwargs.setdefault("golden_paths", battery_golden)
+                kwargs.setdefault("sensitivity_paths", battery_sensitivity)
+                kwargs.setdefault("posix_guard_paths", battery_guard_posix)
+                kwargs.setdefault("race_paths", battery_race)
             if "battery_manifest" not in kwargs:
                 # The binding is regenerated over the reports actually handed
                 # in, so a control is rejected for the defect it introduces and
@@ -5915,7 +7299,13 @@ def _self_test():
                     matrix_paths, crash_paths, kwargs["fifo_paths"],
                     kwargs["throughput_paths"], kwargs["parity_paths"],
                     kwargs["coverage_paths"], kwargs["crash_negative_paths"],
-                    kwargs["windows_paths"])
+                    kwargs["windows_paths"],
+                    guard=kwargs.get("guard_paths"),
+                    resource=kwargs.get("resource_paths"),
+                    golden=kwargs.get("golden_paths"),
+                    sensitivity=kwargs.get("sensitivity_paths"),
+                    posix_guard=kwargs.get("posix_guard_paths"),
+                    race=kwargs.get("race_paths"))
             return outer_assess(matrix_paths, crash_paths, **kwargs)
 
         # 0a. The surface reports on their own pass the consumed-report rules.
@@ -6633,9 +8023,52 @@ def _self_test():
                 crash = _json.load(stream)
             return matrices, crash
 
+        # The three genuine-evidence anchors below carry their own binding
+        # document instead of reading the committed manifest from disk.  The
+        # committed manifest was emitted before golden, sensitivity,
+        # guard-posix and race-battery became consumed classes, so it lists no
+        # entry for them; reading it here would report that rotation rather
+        # than the rule each anchor exists to prove.  The binding is built over
+        # exactly the paths the anchor consumes, so the anchor still proves
+        # content-against-binding agreement for every class it reads.  The
+        # committed manifest itself is re-emitted by the battery's manifest
+        # step, and the CLI gate run -- not the self-test -- is what judges it.
+        def committed_binding(matrices, crashes, fifo, throughput, parity,
+                              coverage, negative, windows, guard, resource,
+                              golden, sensitivity, posix_guard, race):
+            """One manifest document over the reports an anchor consumes."""
+
+            return build_battery_manifest(
+                {"matrix": list(matrices), "crash": list(crashes),
+                 "crash-negative": list(negative),
+                 "fifo-surface": list(fifo), "throughput": list(throughput),
+                 "refusal-class-parity": list(parity),
+                 "coverage-go": list(coverage),
+                 "windows-housekeeping": list(windows),
+                 "windows-guard": list(guard), "resource": list(resource),
+                 "golden": list(golden), "sensitivity": list(sensitivity),
+                 "guard-posix": list(posix_guard),
+                 "race-battery": list(race)},
+                ledger_path=_wave_ledger_path())
+
         problems, _c, _s = outer_assess(
             genuine_matrix_paths, genuine_crash_reports, fifo_paths=genuine_fifo,
             throughput_paths=genuine_throughput,
+            parity_paths=[genuine_parity],
+            coverage_paths=[genuine_coverage],
+            crash_negative_paths=list(genuine_negative),
+            windows_paths=[genuine_windows], guard_paths=[genuine_guard],
+            resource_paths=[genuine_resource],
+            golden_paths=[genuine_golden],
+            sensitivity_paths=[genuine_sensitivity],
+            posix_guard_paths=[genuine_guard_posix],
+            race_paths=[genuine_race],
+            battery_manifest=committed_binding(
+                genuine_matrix_paths, genuine_crash_reports, genuine_fifo,
+                genuine_throughput, [genuine_parity], [genuine_coverage],
+                list(genuine_negative), [genuine_windows], [genuine_guard],
+                [genuine_resource], [genuine_golden], [genuine_sensitivity],
+                [genuine_guard_posix], [genuine_race]),
             sha256_ledger=_wave_ledger_path())
         blocking = outside_parity_rotation(problems)
         assert not blocking, (
@@ -6690,13 +8123,26 @@ def _self_test():
             coverage_reports = []
             negative_reports = []
             windows_reports = []
+            guard_reports = []
+            resource_reports = []
+            golden_reports = []
+            sensitivity_reports = []
+            posix_guard_reports = []
+            race_reports = []
             for name, bucket, paths in (
                     ("fifo", fifo_reports, genuine_fifo),
                     ("throughput", throughput_reports, genuine_throughput),
                     ("parity", parity_reports, genuine_conforming_parity),
                     ("coverage", coverage_reports, [genuine_coverage]),
                     ("negative", negative_reports, genuine_negative),
-                    ("windows", windows_reports, [genuine_windows])):
+                    ("windows", windows_reports, [genuine_windows]),
+                    ("guard", guard_reports, [genuine_guard]),
+                    ("resource", resource_reports, [genuine_resource]),
+                    ("golden", golden_reports, [genuine_golden]),
+                    ("sensitivity", sensitivity_reports, [genuine_sensitivity]),
+                    ("posix_guard", posix_guard_reports,
+                     [genuine_guard_posix]),
+                    ("race", race_reports, [genuine_race])):
                 for path in paths:
                     with open(path, encoding="utf-8") as stream:
                         bucket.append(_json.load(stream))
@@ -6705,7 +8151,13 @@ def _self_test():
                       "refusal-class-parity": parity_reports,
                       "coverage-go": coverage_reports,
                       "crash-negative": negative_reports,
-                      "windows-housekeeping": windows_reports}
+                      "windows-housekeeping": windows_reports,
+                      "windows-guard": guard_reports,
+                      "resource": resource_reports,
+                      "golden": golden_reports,
+                      "sensitivity": sensitivity_reports,
+                      "guard-posix": posix_guard_reports,
+                      "race-battery": race_reports}
             if mutator_kind in chosen:
                 mutator(chosen[mutator_kind])
             else:
@@ -6752,6 +8204,24 @@ def _self_test():
             windows_paths = assess_kwargs.pop("windows_paths", None) or [
                 os.path.join(work, f"genuine-{label}-windows.json")]
             assign(windows_paths[0], windows_reports[0])
+            guard_paths = assess_kwargs.pop("guard_paths", None) or [
+                os.path.join(work, f"genuine-{label}-guard.json")]
+            assign(guard_paths[0], guard_reports[0])
+            resource_paths = assess_kwargs.pop("resource_paths", None) or [
+                os.path.join(work, f"genuine-{label}-resource.json")]
+            assign(resource_paths[0], resource_reports[0])
+            golden_paths = assess_kwargs.pop("golden_paths", None) or [
+                os.path.join(work, f"genuine-{label}-golden.json")]
+            assign(golden_paths[0], golden_reports[0])
+            sensitivity_paths = assess_kwargs.pop("sensitivity_paths", None) \
+                or [os.path.join(work, f"genuine-{label}-sensitivity.json")]
+            assign(sensitivity_paths[0], sensitivity_reports[0])
+            posix_guard_paths = assess_kwargs.pop("posix_guard_paths", None) \
+                or [os.path.join(work, f"genuine-{label}-guard-posix.json")]
+            assign(posix_guard_paths[0], posix_guard_reports[0])
+            race_paths = assess_kwargs.pop("race_paths", None) or [
+                os.path.join(work, f"genuine-{label}-race-battery.json")]
+            assign(race_paths[0], race_reports[0])
             if "battery_manifest" not in assess_kwargs:
                 # The manifest is normally regenerated over the reports
                 # actually handed in, so a control is rejected for the defect
@@ -6763,7 +8233,10 @@ def _self_test():
                 assess_kwargs["battery_manifest"] = manifest_over(
                     paths, [crash_mutated], fifo_paths, throughput_paths,
                     parity_paths, coverage_paths, negative_paths,
-                    windows_paths, ledger=bound)
+                    windows_paths, ledger=bound, guard=guard_paths,
+                    resource=resource_paths, golden=golden_paths,
+                    sensitivity=sensitivity_paths,
+                    posix_guard=posix_guard_paths, race=race_paths)
             if ledger is not None:
                 assess_kwargs.setdefault("sha256_ledger", ledger)
             else:
@@ -6775,7 +8248,12 @@ def _self_test():
                 throughput_paths=throughput_paths,
                 parity_paths=parity_paths, coverage_paths=coverage_paths,
                 crash_negative_paths=negative_paths,
-                windows_paths=windows_paths, **assess_kwargs)
+                windows_paths=windows_paths, guard_paths=guard_paths,
+                resource_paths=resource_paths,
+                golden_paths=golden_paths,
+                sensitivity_paths=sensitivity_paths,
+                posix_guard_paths=posix_guard_paths,
+                race_paths=race_paths, **assess_kwargs)
             if register:
                 results.append((label, bool(problems), problems))
             return problems
@@ -7819,6 +9297,49 @@ def _self_test():
                     reports[path] = _json.load(stream)
             return reports
 
+        def stage_genuine_battery(label):
+            """Stage an untouched copy of the committed battery in scratch.
+
+            Returns the paths and the per-class extras a control hands to the
+            gate.  A control that attacks one field of the binding needs every
+            other field to be right, so it stages here and builds its manifest
+            over these same paths.
+            """
+
+            matrices, crash = load_genuine()
+            surfaces = load_surface()
+            paths = []
+            for index, report in enumerate(matrices):
+                path = os.path.join(work, f"mf-{label}-{index}.json")
+                assign(path, report)
+                paths.append(path)
+            crash_path_local = os.path.join(work, f"mf-{label}-crash.json")
+            assign(crash_path_local, crash)
+            def staged(name, sources, overrides=None):
+                targets = []
+                for index, source in enumerate(sources):
+                    target = os.path.join(work, f"mf-{label}-{name}-{index}.json")
+                    assign(target, (overrides or {}).get(index)
+                           or _json.load(open(source, encoding="utf-8")))
+                    targets.append(target)
+                return targets
+
+            extras = {
+                "fifo": staged("fifo", genuine_fifo),
+                "throughput": staged("throughput", genuine_throughput),
+                "parity": staged("parity", genuine_conforming_parity),
+                "coverage": staged("coverage", [genuine_coverage]),
+                "negative": staged("negative", genuine_negative),
+                "windows": staged("windows", [genuine_windows]),
+                "guard": staged("guard", [genuine_guard]),
+                "resource": staged("resource", [genuine_resource]),
+                "golden": staged("golden", [genuine_golden]),
+                "sensitivity": staged("sensitivity", [genuine_sensitivity]),
+                "posix_guard": staged("posix_guard", [genuine_guard_posix]),
+                "race": staged("race", [genuine_race]),
+            }
+            return paths, crash_path_local, extras
+
         def assess_with_surfaces(label, mutate_matrices, mutate_surfaces,
                                  mutate_surfaces_extra=None, ledger=None):
             matrices, crash = load_genuine()
@@ -7878,16 +9399,50 @@ def _self_test():
                              or os.path.join(work, f"w24-{label}-windows.json")]
             assign(windows_paths[0], extra.get("windows_report")
                    or _json.load(open(genuine_windows, encoding="utf-8")))
+            guard_paths = [extra.get("windows_guard")
+                           or os.path.join(work, f"w24-{label}-guard.json")]
+            assign(guard_paths[0], extra.get("windows_guard_report")
+                   or _json.load(open(genuine_guard, encoding="utf-8")))
+            resource_paths = [extra.get("resource")
+                              or os.path.join(work, f"w24-{label}-resource.json")]
+            assign(resource_paths[0], extra.get("resource_report")
+                   or _json.load(open(genuine_resource, encoding="utf-8")))
+            golden_paths = [extra.get("golden")
+                            or os.path.join(work, f"w24-{label}-golden.json")]
+            assign(golden_paths[0], extra.get("golden_report")
+                   or _json.load(open(genuine_golden, encoding="utf-8")))
+            sensitivity_paths = [extra.get("sensitivity")
+                                 or os.path.join(
+                                     work, f"w24-{label}-sensitivity.json")]
+            assign(sensitivity_paths[0], extra.get("sensitivity_report")
+                   or _json.load(open(genuine_sensitivity, encoding="utf-8")))
+            posix_guard_paths = [extra.get("posix_guard")
+                                 or os.path.join(
+                                     work, f"w24-{label}-guard-posix.json")]
+            assign(posix_guard_paths[0], extra.get("posix_guard_report")
+                   or _json.load(open(genuine_guard_posix, encoding="utf-8")))
+            race_paths = [extra.get("race")
+                          or os.path.join(work,
+                                          f"w24-{label}-race-battery.json")]
+            assign(race_paths[0], extra.get("race_report")
+                   or _json.load(open(genuine_race, encoding="utf-8")))
             manifest = extra.get("battery_manifest") or manifest_over(
                 paths, [crash_path_local], fifo_paths, throughput_paths,
                 parity_paths, coverage_paths, negative_paths, windows_paths,
-                ledger=ledger)
+                ledger=ledger, guard=guard_paths, resource=resource_paths,
+                golden=golden_paths, sensitivity=sensitivity_paths,
+                posix_guard=posix_guard_paths, race=race_paths)
             problems, _c, _s = outer_assess(
                 paths, [crash_path_local], fifo_paths=fifo_paths,
                 throughput_paths=throughput_paths,
                 parity_paths=parity_paths, coverage_paths=coverage_paths,
                 crash_negative_paths=negative_paths,
-                windows_paths=windows_paths, battery_manifest=manifest,
+                windows_paths=windows_paths, guard_paths=guard_paths,
+                resource_paths=resource_paths,
+                golden_paths=golden_paths,
+                sensitivity_paths=sensitivity_paths,
+                posix_guard_paths=posix_guard_paths,
+                race_paths=race_paths, battery_manifest=manifest,
                 sha256_ledger=ledger,
                 verify_binaries=True, verify_cases=True)
             # Recorded, not asserted here: the verdict is taken once at the
@@ -8618,7 +10173,13 @@ def _self_test():
                  "throughput": list(genuine_throughput),
                  "refusal-class-parity": list(genuine_conforming_parity),
                  "coverage-go": [genuine_coverage],
-                 "windows-housekeeping": [genuine_windows]},
+                 "windows-housekeeping": [genuine_windows],
+                 "windows-guard": [genuine_guard],
+                 "resource": [genuine_resource],
+                 "golden": [genuine_golden],
+                 "sensitivity": [genuine_sensitivity],
+                 "guard-posix": [genuine_guard_posix],
+                 "race-battery": [genuine_race]},
                 ledger_path=ledger)
 
         def _restamped_windows(value):
@@ -8755,6 +10316,294 @@ def _self_test():
                     [dropped_negative_path])},
             ledger=_wave_ledger_path())
 
+        # --- wave-19.26 gate-gap controls (W4-gating).  Each of these four
+        # classes was demonstrated by two independent reviewers to be ACCEPTED
+        # by the pre-fix gate: a guard report whose 94 refusal codes, messages
+        # and outcomes had all been replaced; a resource report whose proof
+        # flags had all been set to pass against a contradicted queue split; a
+        # merged coverage aggregate claiming 100% over packages summing to
+        # 60%; and a manifest whose recorded byte length nothing ever read
+        # back.  Each control below reproduces one of those forgeries over the
+        # genuine committed evidence and must now be refused.
+        def forge_guard_refusal_facts(reports):
+            for report in reports:
+                for product in report["products"].values():
+                    for case in product["cases"].values():
+                        if isinstance(case, dict) \
+                                and case.get("expected_refused"):
+                            case["error_code"] = "io"
+                            case["error_message"] = "permission denied"
+                            case["error_outcome"] = "started"
+
+        genuine_mutation_fails("guard-refusal-facts-replaced-under-green-ok",
+                               forge_guard_refusal_facts,
+                               mutator_kind="windows-guard")
+
+        def drop_guard_spellings(reports):
+            for report in reports:
+                for product in report["products"].values():
+                    for name in ("verbatim_sidecar", "ntfs_sigma",
+                                 "absolute_upper"):
+                        product["cases"].pop(name, None)
+
+        genuine_mutation_fails("guard-hard-spellings-dropped-from-the-battery",
+                               drop_guard_spellings,
+                               mutator_kind="windows-guard")
+
+        # --- the battery manifest's own fields, each with a control of its
+        # own.  A manifest built over the reports actually handed in is
+        # correct in every field, so exactly one field is doctored per control
+        # and the control can only trip the rule it stands for.  Handing in a
+        # manifest built over the committed paths instead would add a byte-
+        # length finding for every re-serialized copy and let a control pass
+        # for a reason that is not its own defect.
+        def manifest_field_control(label, mutate, needle):
+            """Doctor one field of an otherwise correct binding."""
+
+            paths, crash_path_local, extras = stage_genuine_battery(label)
+            document = build_battery_manifest(
+                consumed_set(paths, [crash_path_local], extras["fifo"],
+                             extras["throughput"], extras["parity"],
+                             extras["coverage"], extras["negative"],
+                             extras["windows"], guard=extras["guard"],
+                             resource=extras["resource"],
+                             golden=extras["golden"],
+                             sensitivity=extras["sensitivity"],
+                             posix_guard=extras["posix_guard"],
+                             race=extras["race"]),
+                ledger_path=_wave_ledger_path())
+            before = [dict(entry) for entry in document["reports"]]
+            mutate(document)
+            changed = [entry["role"] for entry, was
+                       in zip(document["reports"], before)
+                       if entry != was]
+            assert changed, f"{label}: the control changed no manifest entry"
+            path = os.path.join(work, f"manifest-field-{label}.json")
+            with open(path, "w", encoding="utf-8") as stream:
+                _json.dump(document, stream, sort_keys=True, indent=1)
+            problems, _c, _s = outer_assess(
+                paths, [crash_path_local], fifo_paths=extras["fifo"],
+                throughput_paths=extras["throughput"],
+                parity_paths=extras["parity"],
+                coverage_paths=extras["coverage"],
+                crash_negative_paths=extras["negative"],
+                windows_paths=extras["windows"],
+                guard_paths=extras["guard"],
+                resource_paths=extras["resource"],
+                golden_paths=extras["golden"],
+                sensitivity_paths=extras["sensitivity"],
+                posix_guard_paths=extras["posix_guard"],
+                race_paths=extras["race"],
+                battery_manifest=path, sha256_ledger=_wave_ledger_path(),
+                verify_binaries=True, verify_cases=True)
+            matched = [problem for problem in problems if needle in problem]
+            results.append((label, bool(matched), problems))
+            assert matched, (
+                f"{label}: the doctored binding was not refused for "
+                f"{needle!r}: {problems[:3]}")
+            others = [problem for problem in problems if problem not in matched]
+            assert not others, (
+                f"{label}: the control tripped rules besides its own, which "
+                f"makes it unable to tell its defect from any other: "
+                f"{others[:3]}")
+
+        def drop_role(role):
+            def mutate(document):
+                document["reports"] = [
+                    entry for entry in document["reports"]
+                    if entry["role"] != role]
+            return mutate
+
+        def bump_bytes(role):
+            def mutate(document):
+                for entry in document["reports"]:
+                    if entry["role"] == role:
+                        entry["bytes"] = entry["bytes"] + 1
+            return mutate
+
+        def rename_entry(role, name):
+            def mutate(document):
+                for entry in document["reports"]:
+                    if entry["role"] == role:
+                        entry["name"] = name
+            return mutate
+
+        # The pre-repair state of windows-guard and resource: nothing consumed
+        # the class, so it could be missing from the battery and from the
+        # binding with no gate noticing.
+        manifest_field_control(
+            "manifest-consumed-class-not-attested", drop_role("windows-guard"),
+            "lists no report for the consumed role")
+        manifest_field_control(
+            "manifest-resource-class-not-attested", drop_role("resource"),
+            "lists no report for the consumed role")
+        # The byte length the manifest records was never read back before this
+        # control existed: an entry that attests one byte more than the file it
+        # digests binds the verdict to an artifact that is not on disk.
+        manifest_field_control(
+            "manifest-entry-byte-length-wrong", bump_bytes("coverage-go"),
+            "was written against a different rendering")
+        manifest_field_control(
+            "manifest-entry-bytes-absent",
+            lambda document: [entry.pop("bytes")
+                              for entry in document["reports"]
+                              if entry["role"] == "coverage-go"],
+            "records no byte length")
+        # A class the gate discovers by file name must be attested under that
+        # name, or the binding describes a different report than the verdict
+        # consumed.
+        manifest_field_control(
+            "manifest-attests-another-file",
+            rename_entry("coverage-go", "coverage-go-from-another-run.json"),
+            "attests 'coverage-go-from-another-run.json'")
+        manifest_field_control(
+            "manifest-guard-attests-another-file",
+            rename_entry("windows-guard", "guard-posix.json"),
+            "attests 'guard-posix.json'")
+
+        def mutation_control_fails(label, needle, mutator, **kwargs):
+            """Require a report-content control to be refused for its own defect.
+
+            ``genuine_mutation_fails`` asks only that the gate reject; a control
+            rejected by an unrelated rule proves nothing about the rule it is
+            named for, the same way ``manifest_field_control`` argues for the
+            binding.  The needle is the phrase only the intended rule writes.
+            """
+
+            problems = genuine_mutation_fails(label, mutator, **kwargs)
+            own = [problem for problem in problems if needle in str(problem)]
+            assert own, (
+                f"{label}: the mutated report was not refused for "
+                f"{needle!r}: {problems[:3]}")
+            others = [problem for problem in problems if problem not in own]
+            assert not others, (
+                f"{label}: the control tripped rules besides its own, which "
+                f"makes it unable to tell its defect from any other: "
+                f"{others[:3]}")
+
+        # The classes that were write-only: golden, sensitivity, guard-posix
+        # and race-battery were each written by a battery step into the
+        # evidence directory and read by nothing, so hollowing one left the
+        # gate green while the run still named the class as attested.  Every
+        # control below takes one measurement out of one such report and
+        # requires the consumer that the claim now depends on to notice.
+        mutation_control_fails(
+            "golden-counts-hollowed",
+            "where the corpus under this checkout says",
+            lambda reports: [reports[0].pop(member, None) for member in (
+                "golden_files", "golden_exchanges", "case_files",
+                "case_files_seen")],
+            mutator_kind="golden")
+        mutation_control_fails(
+            "golden-case-count-contradicts-the-corpus",
+            "records case_files",
+            lambda reports: reports[0].__setitem__(
+                "case_files", reports[0]["case_files"] + 1),
+            mutator_kind="golden")
+        mutation_control_fails(
+            "golden-covered-methods-emptied",
+            "covered-method list contradicts the corpus walk",
+            lambda reports: reports[0].__setitem__("covered_methods", []),
+            mutator_kind="golden")
+        mutation_control_fails(
+            "sensitivity-mode-dropped-from-the-battery",
+            "is not the gate's own table",
+            lambda reports: [reports[0]["modes"].pop(3),
+                             reports[0].__setitem__(
+                                 "mode_count", len(reports[0]["modes"]))],
+            mutator_kind="sensitivity")
+        mutation_control_fails(
+            "sensitivity-expectation-rewritten",
+            "records want=",
+            lambda reports: reports[0]["modes"][0].__setitem__(
+                "want", "FAIL"),
+            mutator_kind="sensitivity")
+        mutation_control_fails(
+            "sensitivity-verdict-contradicts-its-expectation",
+            "records measured verdict",
+            lambda reports: reports[0]["modes"][0].__setitem__(
+                "got", "FAIL the runner accepted a malformed describe"),
+            mutator_kind="sensitivity")
+        mutation_control_fails(
+            "race-battery-arm-dropped-from-the-report",
+            "raced subjects are missing",
+            lambda reports: reports[0].__setitem__(
+                "entries", [entry for entry in reports[0]["entries"]
+                            if entry.get("subject") != "go/meta"]),
+            mutator_kind="race-battery")
+        mutation_control_fails(
+            "race-battery-pass-without-attempts",
+            "attempts-incomplete",
+            lambda reports: [entry.__setitem__("attempts_completed", 0)
+                             for entry in reports[0]["entries"]
+                             if entry.get("subject") == "go/meta"],
+            mutator_kind="race-battery")
+        mutation_control_fails(
+            "guard-posix-spellings-dropped-from-the-control",
+            " omits ",
+            lambda reports: [product["cases"].pop("ntfs_sigma", None)
+                             for product in reports[0]["products"].values()],
+            mutator_kind="guard-posix")
+        mutation_control_fails(
+            "guard-posix-ran-a-binary-the-battery-did-not",
+            "is not a binary the Linux battery executed",
+            lambda reports: reports[0]["products"]["go"]["binary"].__setitem__(
+                "sha256", "c" * 64),
+            mutator_kind="guard-posix")
+        manifest_field_control(
+            "manifest-golden-class-not-attested", drop_role("golden"),
+            "lists no report for the consumed role")
+        # The binding rules are generic over the consumed roles, so they have
+        # to be shown to bite on a class this wave added to the consumed set,
+        # not only on the two classes that were added before it.
+        manifest_field_control(
+            "manifest-race-entry-byte-length-wrong",
+            bump_bytes("race-battery"),
+            "was written against a different rendering")
+        manifest_field_control(
+            "manifest-guard-posix-attests-another-file",
+            rename_entry("guard-posix",
+                         "guard-posix-from-another-run.json"),
+            "attests 'guard-posix-from-another-run.json'")
+
+        # The third parity axis, attacked through the kind gate: the same
+        # deletion the external reviewer used to walk the verdict back to a
+        # two-axis claim, and the rollup that has to disagree with its own
+        # executed cells.
+        mutation_control_fails(
+            "parity-pressure-section-deleted",
+            "parity gate: report carries no pressure member",
+            lambda reports: reports[0].pop("pressure", None),
+            mutator_kind="refusal-class-parity")
+        mutation_control_fails(
+            "parity-pressure-rollup-contradicts-its-cells",
+            "parity gate: pressure rollup cells_executed",
+            lambda reports: reports[0]["pressure"].__setitem__(
+                "cells_executed",
+                reports[0]["pressure"]["cells_executed"] - 1),
+            mutator_kind="refusal-class-parity")
+
+        # Positive anchors for the same rules: each must be ACCEPTED, so a
+        # rejection rule that really is "refuse everything" cannot hide behind
+        # the controls above.
+        def add_a_discovered_spelling(reports):
+            import windows_guard_harness as guard
+            for report in reports:
+                for product in report["products"].values():
+                    name = "volume_guid_sidecar"
+                    destination = str(product["binary"]["path"]) + ".readers"
+                    product["cases"][name] = {
+                        "destination": destination, "refused": True,
+                        "error_code": "invalid_argument",
+                        "error_message": guard.ACCEPTED_MESSAGE,
+                        "error_outcome": "not_started",
+                        "expected_refused": True, "ok": True}
+
+        genuine_mutation_is_accepted(
+            "guard-spelling-only-a-native-host-can-discover",
+            add_a_discovered_spelling, "omits",
+            mutator_kind="windows-guard")
+
         # Positive anchor for the consumed classes: the committed battery with
         # the ledger and both CLI verifications on.  A rule that only ever
         # rejects cannot tell a forgery from the real evidence, so this is the
@@ -8770,6 +10619,17 @@ def _self_test():
             coverage_paths=[genuine_coverage],
             crash_negative_paths=list(genuine_negative),
             windows_paths=[genuine_windows],
+            guard_paths=[genuine_guard], resource_paths=[genuine_resource],
+            golden_paths=[genuine_golden],
+            sensitivity_paths=[genuine_sensitivity],
+            posix_guard_paths=[genuine_guard_posix],
+            race_paths=[genuine_race],
+            battery_manifest=committed_binding(
+                genuine_matrix_paths, genuine_crash_reports, genuine_fifo,
+                genuine_throughput, [genuine_parity], [genuine_coverage],
+                list(genuine_negative), [genuine_windows], [genuine_guard],
+                [genuine_resource], [genuine_golden], [genuine_sensitivity],
+                [genuine_guard_posix], [genuine_race]),
             sha256_ledger=_wave_ledger_path(), verify_binaries=True,
             verify_cases=True)
         blocking = outside_parity_rotation(problems)
@@ -8782,6 +10642,21 @@ def _self_test():
             genuine_matrix_paths, genuine_crash_reports, verify_binaries=True,
             verify_cases=True, fifo_paths=genuine_fifo,
             throughput_paths=genuine_throughput,
+            parity_paths=[genuine_parity],
+            coverage_paths=[genuine_coverage],
+            crash_negative_paths=list(genuine_negative),
+            windows_paths=[genuine_windows], guard_paths=[genuine_guard],
+            resource_paths=[genuine_resource],
+            golden_paths=[genuine_golden],
+            sensitivity_paths=[genuine_sensitivity],
+            posix_guard_paths=[genuine_guard_posix],
+            race_paths=[genuine_race],
+            battery_manifest=committed_binding(
+                genuine_matrix_paths, genuine_crash_reports, genuine_fifo,
+                genuine_throughput, [genuine_parity], [genuine_coverage],
+                list(genuine_negative), [genuine_windows], [genuine_guard],
+                [genuine_resource], [genuine_golden], [genuine_sensitivity],
+                [genuine_guard_posix], [genuine_race]),
             sha256_ledger=_wave_ledger_path())
         blocking = outside_parity_rotation(problems)
         assert not blocking, (

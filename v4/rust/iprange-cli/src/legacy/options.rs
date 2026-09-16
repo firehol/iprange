@@ -1,6 +1,9 @@
 //! Legacy CLI options: the exact option grammar and defaults of the
 //! released `iprange` command line (SOW-0028 delivery step 3).
 
+use std::ffi::OsString;
+use std::path::PathBuf;
+
 use crate::legacy::family::Family;
 
 /// How a group of input paths turns into ipsets.
@@ -14,13 +17,17 @@ pub enum SourceKind {
 }
 
 /// One input argument and its optional `as NAME` label.
+///
+/// Both fields keep the argv bytes verbatim: a POSIX name may hold
+/// bytes that are not valid UTF-8, and the released tool uses the path
+/// as the CSV name of the set it loads.
 #[derive(Clone, Debug)]
 pub struct SourceSpec {
     pub kind: SourceKind,
     /// The path argument as given, or None for stdin (`-`).
-    pub arg: Option<String>,
+    pub arg: Option<PathBuf>,
     /// `as NAME` rename for CSV output; None keeps the default name.
-    pub label: Option<String>,
+    pub label: Option<OsString>,
 }
 
 /// The mode-selecting options (C `mode` enum); the last mode flag in
@@ -64,10 +71,12 @@ pub struct Print {
     /// The selected shape (last flag wins).
     pub mode: PrintMode,
     /// Prefix/suffix wrappers; the family splits ips and nets sets.
-    pub prefix_ips: String,
-    pub suffix_ips: String,
-    pub prefix_nets: String,
-    pub suffix_nets: String,
+    /// They come from argv and are printed verbatim, so they are byte
+    /// strings rather than `String`.
+    pub prefix_ips: OsString,
+    pub suffix_ips: OsString,
+    pub prefix_nets: OsString,
+    pub suffix_nets: OsString,
 }
 
 /// Everything the released CLI parses out of argv.

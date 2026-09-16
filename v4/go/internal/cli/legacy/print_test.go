@@ -206,12 +206,40 @@ func TestPrintBinaryEmptySetWritesNothing(t *testing.T) {
 	}
 }
 
-func TestPrintQuietSuppressesAllOutput(t *testing.T) {
+// C's --quiet gates exactly one call site: the DIFF result
+// (src/iprange.c:1026, src/iprange6_main.c:414). Its help text says it
+// "Can only be used in DIFF mode" (src/iprange.c:307). Ordinary merge
+// output is unaffected, verified against the C binary:
+// `iprange --quiet file` prints the merged set.
+func TestPrintQuietDoesNotSuppressOrdinaryPrinting(t *testing.T) {
 	o := DefaultOptions()
 	o.Quiet = true
 	set := buildSet4([2]uint32{0, 255})
-	if got := render(o, set); got != "" {
-		t.Fatalf("quiet printed %q", got)
+	wantOut(t, render(o, set), "0.0.0.0/24\n")
+}
+
+// The DIFF suppression itself lives in the ops layer, which mirrors the
+// single C `if(!quiet) ipset_print(...)`; it must not be moved into
+// printSet, or every mode would go silent.
+func TestOpsDiffQuietSuppressesOnlyDiffOutput(t *testing.T) {
+	a := loaded4("A", v4r{0x0a00_0000, 0x0a00_0003})
+	b := loaded4("B", v4r{0x0a00_0002, 0x0a00_0003})
+	o := DefaultOptions()
+	o.Mode, o.GroupB, o.Quiet = ModeDiff, 1, true
+	got := redirect(t, &os.Stdout, func() {
+		if code := execute(o, &Loaded{Sets: []LoadedSet{a, b}, GroupB: 1}); code != 1 {
+			t.Errorf("diff exit code = %d, want 1 (the diff is non-empty)", code)
+		}
+	})
+	if got != "" {
+		t.Fatalf("quiet diff printed %q, want no output", got)
+	}
+	// Without --quiet the same diff prints, so the assertion above
+	// cannot pass because the diff is empty.
+	o.Quiet = false
+	printed := redirect(t, &os.Stdout, func() { execute(o, &Loaded{Sets: []LoadedSet{a, b}, GroupB: 1}) })
+	if printed != "10.0.0.0/31\n" {
+		t.Fatalf("non-quiet diff printed %q", printed)
 	}
 }
 

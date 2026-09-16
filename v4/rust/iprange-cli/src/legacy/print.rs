@@ -15,9 +15,14 @@
 //! The count/compare CSV rows never carry prefix/suffix wrappers in
 //! the C (the `iprange_csv_write_*` helpers are bare); only the
 //! print modes wrap, so this module is the only wrapper owner.
+//!
+//! Wrappers come from argv and are emitted as bytes: an option value
+//! may hold bytes that are not valid UTF-8, and C writes them to
+//! stdout unchanged.
 
 use std::io;
 
+use super::argv::bytes as wrapper_bytes;
 use super::binary;
 use super::family::{Family, FamilyImpl};
 use super::options::{Options, PrintMode};
@@ -27,7 +32,6 @@ use super::range::IpSet;
 /// mode: a range strictly larger than 16,777,216 addresses is
 /// eliminated (with a stderr warning) instead of expanded.
 const SINGLE_IPS_CAP: u128 = 256 * 256 * 256;
-
 
 /// Broadcast address of `addr` at `prefix` (C `broadcast()` /
 /// `broadcast6()`): `addr | ((1 << (BITS - prefix)) - 1)`, with the
@@ -52,23 +56,14 @@ fn write_cidr_line<F: FamilyImpl, W: io::Write>(
     addr: F,
     prefix: u32,
 ) -> io::Result<()> {
-    if prefix < F::BITS {
-        write!(
-            w,
-            "{}{}{}",
-            options.print.prefix_nets,
-            F::fmt_cidr(addr, prefix),
-            options.print.suffix_nets
-        )?;
+    let (wrapper_prefix, wrapper_suffix) = if prefix < F::BITS {
+        (&options.print.prefix_nets, &options.print.suffix_nets)
     } else {
-        write!(
-            w,
-            "{}{}{}",
-            options.print.prefix_ips,
-            F::fmt_cidr(addr, prefix),
-            options.print.suffix_ips
-        )?;
-    }
+        (&options.print.prefix_ips, &options.print.suffix_ips)
+    };
+    w.write_all(&wrapper_bytes(wrapper_prefix))?;
+    w.write_all(F::fmt_cidr(addr, prefix).as_bytes())?;
+    w.write_all(&wrapper_bytes(wrapper_suffix))?;
     w.write_all(b"\n")
 }
 
@@ -81,25 +76,16 @@ fn write_range_line<F: FamilyImpl, W: io::Write>(
     lo: F,
     hi: F,
 ) -> io::Result<()> {
-    if lo == hi {
-        write!(
-            w,
-            "{}{}-{}{}",
-            options.print.prefix_ips,
-            F::fmt_addr(lo),
-            F::fmt_addr(hi),
-            options.print.suffix_ips
-        )?;
+    let (wrapper_prefix, wrapper_suffix) = if lo == hi {
+        (&options.print.prefix_ips, &options.print.suffix_ips)
     } else {
-        write!(
-            w,
-            "{}{}-{}{}",
-            options.print.prefix_nets,
-            F::fmt_addr(lo),
-            F::fmt_addr(hi),
-            options.print.suffix_nets
-        )?;
-    }
+        (&options.print.prefix_nets, &options.print.suffix_nets)
+    };
+    w.write_all(&wrapper_bytes(wrapper_prefix))?;
+    w.write_all(F::fmt_addr(lo).as_bytes())?;
+    w.write_all(b"-")?;
+    w.write_all(F::fmt_addr(hi).as_bytes())?;
+    w.write_all(&wrapper_bytes(wrapper_suffix))?;
     w.write_all(b"\n")
 }
 
@@ -110,13 +96,9 @@ fn write_single_line<F: FamilyImpl, W: io::Write>(
     options: &Options,
     addr: F,
 ) -> io::Result<()> {
-    write!(
-        w,
-        "{}{}{}",
-        options.print.prefix_ips,
-        F::fmt_addr(addr),
-        options.print.suffix_ips
-    )?;
+    w.write_all(&wrapper_bytes(&options.print.prefix_ips))?;
+    w.write_all(F::fmt_addr(addr).as_bytes())?;
+    w.write_all(&wrapper_bytes(&options.print.suffix_ips))?;
     w.write_all(b"\n")
 }
 
@@ -166,7 +148,9 @@ fn split_range<F: FamilyImpl, W: io::Write>(
         enabled,
         counters.as_deref_mut(),
     )?;
-    split_range(w, options, upper_half, prefix, upper_half, hi, enabled, counters)
+    split_range(
+        w, options, upper_half, prefix, upper_half, hi, enabled, counters,
+    )
 }
 
 /// Render one optimized set with the selected print shape
@@ -176,19 +160,20 @@ fn split_range<F: FamilyImpl, W: io::Write>(
 /// set is optimized first (the caller may hand a merged-but-dirty
 /// set, exactly like the C mode walks), then the single `PrintMode`
 /// shape selected by the last `--print-*` flag. The optional `name`
-/// feeds the C `-v` "Printing ..." diagnostic. `--quiet` suppresses
-/// output (the C honors it only for diff; the caller also guards
-/// there).
+/// feeds the C `-v` "Printing ..." diagnostic.
+///
+/// `--quiet` is deliberately not consulted here. C reads the quiet
+/// flag at one call site only - `if(!quiet) ipset_print(ips, print)`
+/// in the diff branch (src/iprange.c:1026, src/iprange6_main.c:414) -
+/// so every other mode prints with `--quiet` set; suppressing here
+/// would silence modes that the released tool still prints. The diff
+/// caller owns that guard (`legacy::ops`).
 pub fn print_set<F: FamilyImpl, W: io::Write>(
     w: &mut W,
     options: &Options,
     name: &str,
     set: &IpSet<F>,
 ) -> io::Result<()> {
-    if options.quiet {
-        return Ok(());
-    }
-
     // C ipset_print()/ipset6_print(): `if(!(flags & OPTIMIZED)) optimize`.
     let mut owned;
     let set = if set.optimized {
@@ -496,11 +481,19 @@ mod tests {
     }
 
     #[test]
-    fn quiet_suppresses_all_output() {
+    fn quiet_does_not_suppress_the_print_shape() {
+        // C gates `--quiet` at the diff call site only (see
+        // `print_set`), so the renderer itself must print whatever
+        // mode the caller handed it. The merge-with-quiet behavior is
+        // pinned end to end by tests.d/106-quiet-keeps-merge-output.
         let mut options = Options::default();
         options.quiet = true;
         let set = set4(&[(0, 255)]);
-        assert!(render4(&options, &set).is_empty());
+        assert_eq!(
+            render4(&options, &set),
+            render4(&Options::default(), &set),
+            "--quiet must not change the rendered shape"
+        );
     }
 
     #[test]

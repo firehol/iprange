@@ -91,9 +91,12 @@ type Options struct {
 	DNSSilent   bool
 	DNSProgress bool // IPv4 only; inert in IPv6 mode
 	Debug       bool // -v
-	Quiet       bool // --quiet (diff only): suppress output, keep exit code
-	Header      bool // --header: CSV header line in count/compare modes
-	Print       Print
+	// Quiet is --quiet. C gates exactly one call site with it: the
+	// DIFF result print (src/iprange.c:1026, src/iprange6_main.c:414).
+	// Every other mode prints normally and the exit code is unchanged.
+	Quiet  bool
+	Header bool // --header: CSV header line in count/compare modes
+	Print  Print
 }
 
 // DefaultOptions returns the released defaults.

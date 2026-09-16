@@ -1,0 +1,11 @@
+# OK: input named a\377b.iprange loads (exit 0)
+# OK: missing input named with \377 reports its bytes (exit 1)
+# OK: parse failure inside a file named with \377 (exit 1)
+# OK: missing @directory named with \377 (exit 1)
+# OK: empty @directory named with \377 (exit 1)
+# OK: @directory holding a name with \377 (exit 0)
+# OK: missing @file list named with \377 (exit 1)
+# OK: @file list line naming a missing file with \377 (exit 1)
+# OK: @file list line naming an existing file with \377 (exit 0)
+# OK: @file list line naming a relative file with \377 (exit 0)
+# OK: every load-path diagnostic above matched /usr/bin/iprange byte for byte

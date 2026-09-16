@@ -17,6 +17,8 @@ use super::family::{Family, FamilyImpl};
 use super::options::{Mode, Options};
 use super::parse::{self, Loaded};
 use super::print;
+use std::ffi::{OsStr, OsString};
+
 use super::range::{IpNum, IpSet, Range};
 
 /// C debug suffix for the IPv6 twins (" (IPv6)").
@@ -33,7 +35,11 @@ fn family_suffix<F: FamilyImpl>() -> &'static str {
 /// compare modes' `ipset_optimize(comips)`): the IPv4 twin prints
 /// "Is already optimized" when the flag is already set; the IPv6
 /// twin stays silent in that case.
-fn optimize_direct<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, name: &str) {
+fn optimize_direct<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, name: impl AsRef<OsStr>) {
+    // A set name is argv-derived and may hold bytes that are not valid
+    // UTF-8; only the `-v` line needs text, the CSV name column uses
+    // the bytes.
+    let name = name.as_ref().to_string_lossy();
     if set.optimized {
         if options.debug && F::FAMILY == Family::V4 {
             eprintln!("iprange: Is already optimized {name}");
@@ -50,7 +56,8 @@ fn optimize_direct<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, name: &
 /// `ipset_common`/`ipset_exclude`/`ipset_diff` only call
 /// `ipset_optimize` when the flag is clear, so an already-optimized
 /// operand produces no line at all).
-fn optimize_operand<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, name: &str) {
+fn optimize_operand<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, name: impl AsRef<OsStr>) {
+    let name = name.as_ref().to_string_lossy();
     if !set.optimized {
         if options.debug {
             eprintln!("iprange: Optimizing {name}{}", family_suffix::<F>());
@@ -70,7 +77,9 @@ fn optimize_operand<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, name: 
 /// the C-style stderr message and exit code 1 (SIGPIPE terminates the
 /// process first, exactly like the C binary). The concrete locked
 /// stdout type keeps `print_set`'s `W: io::Write` (Sized) bound.
-fn emit(body: impl FnOnce(&mut std::io::BufWriter<std::io::StdoutLock<'static>>) -> std::io::Result<()>) -> i32 {
+fn emit(
+    body: impl FnOnce(&mut std::io::BufWriter<std::io::StdoutLock<'static>>) -> std::io::Result<()>,
+) -> i32 {
     // Rust's stdout is a line-buffered LineWriter (one write syscall
     // per newline); the C binary emits through stdio's 4 KB pipe
     // buffering. Wrap the locked stdout so bulk text and binary
@@ -96,16 +105,18 @@ fn emit(body: impl FnOnce(&mut std::io::BufWriter<std::io::StdoutLock<'static>>)
 
 /// C `iprange_csv_write_field` (src/iprange.h): quote only when the
 /// field contains `,`, `"`, `\n` or `\r`; double embedded quotes.
-fn csv_field(w: &mut dyn Write, field: &str) -> std::io::Result<()> {
-    let bytes = field.as_bytes();
+fn csv_field(w: &mut dyn Write, field: impl AsRef<OsStr>) -> std::io::Result<()> {
+    // The field bytes go out verbatim, as C `fwrite`s them: a name may
+    // hold bytes that are not valid UTF-8.
+    let bytes = super::argv::bytes(field.as_ref());
     let quote = bytes
         .iter()
         .any(|&b| matches!(b, b',' | b'"' | b'\n' | b'\r'));
     if !quote {
-        return w.write_all(bytes);
+        return w.write_all(&bytes);
     }
     w.write_all(b"\"")?;
-    for &b in bytes {
+    for &b in &*bytes {
         if b == b'"' {
             w.write_all(b"\"\"")?;
         } else {
@@ -138,8 +149,8 @@ fn write_uint(w: &mut dyn Write, mut v: u128) -> std::io::Result<()> {
 /// row (C `iprange_csv_write_compare_row`, src/iprange.c:52).
 fn write_compare_row(
     w: &mut dyn Write,
-    name1: &str,
-    name2: &str,
+    name1: impl AsRef<OsStr>,
+    name2: impl AsRef<OsStr>,
     entries1: usize,
     entries2: usize,
     unique1: u128,
@@ -169,7 +180,7 @@ fn write_compare_row(
 /// `iprange_csv_write_count_row`, src/iprange.c:64).
 fn write_count_row(
     w: &mut dyn Write,
-    name: &str,
+    name: impl AsRef<OsStr>,
     entries: usize,
     unique_ips: u128,
     common_ips: u128,
@@ -188,7 +199,7 @@ fn write_count_row(
 /// `iprange_csv_write_unique_row`, src/iprange.c:76).
 fn write_unique_row(
     w: &mut dyn Write,
-    name: &str,
+    name: impl AsRef<OsStr>,
     entries: usize,
     unique_ips: u128,
 ) -> std::io::Result<()> {
@@ -209,16 +220,16 @@ fn write_unique_row(
 fn merge_group<F: FamilyImpl>(
     options: &Options,
     a: &[Loaded<F>],
-    rename_to: Option<&str>,
+    rename_to: Option<&OsStr>,
 ) -> IpSet<F> {
-    let target = rename_to.unwrap_or(&a[0].name);
+    let target = rename_to.unwrap_or(a[0].name.as_os_str());
     let mut merged = a[0].set.clone();
     for set in &a[1..] {
         if options.debug {
             eprintln!(
                 "iprange: Merging {} to {}{}",
-                set.name,
-                target,
+                set.name.to_string_lossy(),
+                target.to_string_lossy(),
                 family_suffix::<F>()
             );
         }
@@ -744,13 +755,13 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
 
     match options.mode {
         Mode::Merge => {
-            let merged = merge_group(options, a, Some("combined ipset"));
+            let merged = merge_group(options, a, Some(OsStr::new("combined ipset")));
             let set = merged;
             emit(|w| print::print_set::<F, _>(w, options, "combined ipset", &set))
         }
 
         Mode::Reduce => {
-            let mut merged = merge_group(options, a, Some("combined ipset"));
+            let mut merged = merge_group(options, a, Some(OsStr::new("combined ipset")));
             if F::FAMILY == Family::V6 {
                 eprintln!("iprange: --ipset-reduce is not supported in IPv6 mode");
                 return 1;
@@ -781,8 +792,8 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
             if options.debug {
                 eprintln!(
                     "iprange: Finding common IPs in {} and {}{}",
-                    a[0].name,
-                    a[1].name,
+                    a[0].name.to_string_lossy(),
+                    a[1].name.to_string_lossy(),
                     family_suffix::<F>()
                 );
             }
@@ -792,7 +803,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
                 if options.debug {
                     eprintln!(
                         "iprange: Finding common IPs in common and {}{}",
-                        set.name,
+                        set.name.to_string_lossy(),
                         family_suffix::<F>()
                     );
                 }
@@ -815,8 +826,8 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
                 if options.debug {
                     eprintln!(
                         "iprange: Removing IPs in {} from {}{}",
-                        set.name,
-                        excluded_name,
+                        set.name.to_string_lossy(),
+                        excluded_name.to_string_lossy(),
                         family_suffix::<F>()
                     );
                 }
@@ -836,12 +847,12 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
             // C renames the merged chains for the diff diagnostics
             // only when more than one set was merged.
             let name_a = if a.len() > 1 {
-                "ipset A".to_owned()
+                OsString::from("ipset A")
             } else {
                 a[0].name.clone()
             };
             let name_b = if b.len() > 1 {
-                "ipset B".to_owned()
+                OsString::from("ipset B")
             } else {
                 b[0].name.clone()
             };
@@ -850,8 +861,8 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
             if options.debug {
                 eprintln!(
                     "iprange: Finding diff IPs in {} and {}{}",
-                    name_a,
-                    name_b,
+                    name_a.to_string_lossy(),
+                    name_b.to_string_lossy(),
                     family_suffix::<F>()
                 );
             }
@@ -885,8 +896,8 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
                         if options.debug {
                             eprintln!(
                                 "iprange: Combining {} and {}{}",
-                                a[i].name,
-                                a[j].name,
+                                a[i].name.to_string_lossy(),
+                                a[j].name.to_string_lossy(),
                                 family_suffix::<F>()
                             );
                         }
@@ -935,8 +946,8 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
                         if options.debug {
                             eprintln!(
                                 "iprange: Combining {} and {}{}",
-                                x.name,
-                                y.name,
+                                x.name.to_string_lossy(),
+                                y.name.to_string_lossy(),
                                 family_suffix::<F>()
                             );
                         }
@@ -978,8 +989,8 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
                     if options.debug {
                         eprintln!(
                             "iprange: Combining {} and {}{}",
-                            a[i].name,
-                            a[0].name,
+                            a[i].name.to_string_lossy(),
+                            a[0].name.to_string_lossy(),
                             family_suffix::<F>()
                         );
                     }
@@ -994,7 +1005,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
         }
 
         Mode::CountUnique => {
-            let mut merged = merge_group(options, a, Some("combined ipset"));
+            let mut merged = merge_group(options, a, Some(OsStr::new("combined ipset")));
             optimize_direct(options, &mut merged, "combined ipset");
             emit(|w| {
                 if options.header {
@@ -1038,7 +1049,7 @@ mod tests {
 
     fn loaded4(name: &str, ranges: &[(u32, u32)]) -> Loaded<u32> {
         Loaded {
-            name: name.to_owned(),
+            name: OsString::from(name),
             set: set4(ranges),
         }
     }
@@ -1059,7 +1070,7 @@ mod tests {
             loaded4("b", &[(5, 7)]),
             loaded4("c", &[(10, 12)]),
         ];
-        let merged = merge_group(&opts, &a, Some("combined ipset"));
+        let merged = merge_group(&opts, &a, Some(OsStr::new("combined ipset")));
         // The C merge leaves the result unoptimized; the printer
         // optimizes. Verify the optimized outcome.
         let mut merged = merged;
@@ -1072,7 +1083,7 @@ mod tests {
     fn merge_merges_adjacent_after_optimize() {
         let opts = Options::default();
         let a = vec![loaded4("a", &[(1, 3)]), loaded4("b", &[(4, 7)])];
-        let mut merged = merge_group(&opts, &a, Some("combined ipset"));
+        let mut merged = merge_group(&opts, &a, Some(OsStr::new("combined ipset")));
         merged.optimize();
         assert_eq!(ranges_of(&merged), vec![(1, 7)]);
         assert_eq!(merged.entries, 1);
@@ -1240,7 +1251,7 @@ mod tests {
         });
         let mut loaded = parse::LoadedAll {
             sets: vec![Loaded {
-                name: "all".to_owned(),
+                name: OsString::from("all"),
                 set,
             }],
             group_b: 1,
@@ -1296,7 +1307,7 @@ mod tests {
         let a = vec![loaded4("first", &[(1, 3)]), loaded4("second", &[(5, 7)])];
         // Capture stderr by running in a thread with a piped stderr is
         // complex; verify the value the debug line would print instead.
-        let merged = merge_group(&opts, &a, Some("combined ipset"));
+        let merged = merge_group(&opts, &a, Some(OsStr::new("combined ipset")));
         assert_eq!(merged.entries, 2);
     }
 }

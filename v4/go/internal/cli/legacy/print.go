@@ -203,16 +203,19 @@ func splitRange(w io.Writer, o *Options, addr IP128, prefix uint32, lo, hi IP128
 }
 
 // printSet renders one set with the selected print shape to w. The
-// dispatch order is the C ipset_print/ipset6_print sequence: quiet
-// first, an optimize-if-needed pass (on a copy, so the caller's set
-// is never mutated), the binary early return, the -v "Printing"
-// line, then the single PrintMode shape selected by the last
-// --print-* flag. name feeds the -v diagnostic.
+// dispatch order is the C ipset_print/ipset6_print sequence: an
+// optimize-if-needed pass (on a copy, so the caller's set is never
+// mutated), the binary early return, the -v "Printing" line, then the
+// single PrintMode shape selected by the last --print-* flag. name
+// feeds the -v diagnostic.
+//
+// --quiet is deliberately not honoured here. In C it gates exactly one
+// call site, the DIFF result (src/iprange.c:1026 and
+// src/iprange6_main.c:414); every other mode prints normally with
+// --quiet set. The DIFF branch of execute() owns that suppression,
+// and C's help text states --quiet "Can only be used in DIFF mode"
+// (src/iprange.c:307).
 func printSet(w io.Writer, o *Options, set *IpSet, name string) error {
-	if o.Quiet {
-		return nil
-	}
-
 	// C ipset_print()/ipset6_print(): `if(!(flags & OPTIMIZED))
 	// optimize`. The copy keeps the caller's set untouched (Rust
 	// clone+optimize); the ops layer decides whether a set reaches

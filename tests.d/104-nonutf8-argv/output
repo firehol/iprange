@@ -1,0 +1,12 @@
+# OK: input named a\377b.iprange (exit 0)
+# OK: missing input named with \377 (exit 1)
+# OK: one bad name beside a good one (exit 0)
+# OK: as NAME with \377 in the CSV name (exit 0)
+# OK: --print-prefix with \377 (exit 0)
+# OK: --print-suffix-ips with \377 (exit 0)
+# OK: unrecognized --optimize\377 is a path (exit 1)
+# OK: --min-prefix with \377 (exit 1, diagnostic echoes the argv bytes)
+# OK: --jsonrpc plus a name with \377 (exit 1)
+# OK: @directory holding a name with \377 (exit 0)
+# OK: argv[0] with \377 (exit 0, usage echoes the name bytes)
+# OK: 11 non-UTF-8 argv cases matched the pinned exit codes and stdout

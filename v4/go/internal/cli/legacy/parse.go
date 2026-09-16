@@ -42,6 +42,20 @@ func readWholeFile(path string) ([]byte, error) {
 	return io.ReadAll(file)
 }
 
+// readLegacyInput reads one legacy CLI input the way the released tool
+// opens it. glibc fopen(path, "r") succeeds for a directory and the first
+// fgets() then fails, so ipset_load() reports no error and yields an empty
+// ipset for a directory given as an input file or as a "@list" entry
+// (src/ipset_load.c:270-280). Only that case is empty: every other open or
+// read error is returned unchanged so the caller keeps the C diagnostic.
+func readLegacyInput(path string) ([]byte, error) {
+	data, err := readWholeFile(path)
+	if err != nil && errors.Is(err, syscall.EISDIR) {
+		return nil, nil
+	}
+	return data, err
+}
+
 // C MAX_LINE (fgets buffer): one line record is at most 1023 bytes
 // plus the trailing newline slot.
 const maxLine = 1024
@@ -123,7 +137,7 @@ func loadAllImpl(o *Options, stdin io.Reader) (*Loaded, error) {
 				context := "iprange: Cannot load ipset: " + arg
 				lastSource = context
 				var data []byte
-				data, err = readWholeFile(arg)
+				data, err = readLegacyInput(arg)
 				if err != nil {
 					err = fmt.Errorf("iprange: %s - %s\n%s", arg, strerror(err), context)
 				} else {
@@ -286,7 +300,7 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 		}
 		context := fmt.Sprintf("iprange: Cannot load file %s from list %s (line %d)", path, list, lineid)
 		*lastSource = context
-		data, err := readWholeFile(path)
+		data, err := readLegacyInput(path)
 		if err != nil {
 			return nil, fmt.Errorf("iprange: %s - %s\n%s", path, strerror(err), context)
 		}

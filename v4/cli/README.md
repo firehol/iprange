@@ -277,12 +277,18 @@ when it claims the gap, a cell the table does support must FAIL when it
 denies the gap, a rollup that scores the reported gaps as divergences must
 FAIL, and the conforming pair must report them with a divergence count of
 zero.  `SELF_TEST_CASES_TOTAL`
-pins the count at 61 controls (`--self-test` reported "PASSED: 61 cases (committed total
-61)"), so a control deleted from the gate is a self-test failure rather
+pins the count at 66 controls (`--self-test` reported "PASSED: 66 cases (committed total
+66)"), so a control deleted from the gate is a self-test failure rather
 than a silent shrink.
-The full battery runs in well under a minute (measured 34.4 s for
-483 cells on both engines: 23 arms x 21 path kinds, plus 108 cells of the
-routine pressure axis).
+Timing, stated by scope. This parity gate's own committed run is the
+sub-minute step: `evidence/refusal-class-parity.json` records
+`elapsed_seconds` 34.237 for 483 main-grid cells on both engines (23 arms
+x 21 path kinds) plus the 108 cells of the `--pressure routine` axis.
+That figure is not a battery cost. The `--pressure full` axis is a
+separate, worker-run step whose cost is minutes rather than seconds at
+this host load, and the whole qualification battery is recorded as an
+hour-class step (see the named-cost disclosure in the active SOW), so
+neither may be described as running in under a minute.
 
 The committed artifact is `evidence/refusal-class-parity.json`. It records
 the SHA-256 and `system.describe` implementation label of each binary it
@@ -373,10 +379,12 @@ blocker people learn to ignore. The measured rates are recorded instead.
 They are recorded as host-load-dependent observations, not as a reference
 band: the rate window starts when the child is spawned and so includes
 process start, interpreter/runtime init, and the first frame, and the
-figures move with system load, core count, and governor. Two waves on the
-same machine under different load produced Go medians 38,350.3 and
-35,464.7 replies/s and Rust medians 62,524.5 and 50,535.9 replies/s for
-identical binaries. No ratio between the two engines is therefore implied
+figures move with system load, core count, and governor. The spread is
+visible inside a single committed report: for one pair of binaries on one
+host, the three rounds of `evidence/throughput.json` give Go 18,026.3 /
+17,689.4 / 17,683.7 and Rust 55,471.5 / 58,367.0 / 53,618.9 replies/s, so
+the Rust rate varies by about 8.8% round to round with nothing but load
+changing. No ratio between the two engines is therefore implied
 by these numbers, and they are explicitly **not** usable as evidence for
 the 1.3x relative-rate contract planned for milestone 5 — that contract
 needs a load-isolated measurement protocol of its own (pinned cores, idle

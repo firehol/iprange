@@ -12,11 +12,20 @@ mod io;
 mod legacy;
 mod rpc;
 
+use std::ffi::{OsStr, OsString};
+
 fn main() {
-    let mut argv = std::env::args();
-    let prog = argv.next().unwrap_or_else(|| "iprange".to_string());
-    let args: Vec<String> = argv.collect();
-    if args.first().map(String::as_str) == Some("--jsonrpc") {
+    // Command-line arguments are byte strings: a POSIX file name may
+    // hold bytes that are not valid UTF-8. `std::env::args()` panics
+    // on such an argument, which would abort before mode selection and
+    // so break both surfaces, while the released C tool and the Go port
+    // classify the same name as an ordinary input. `args_os` keeps the
+    // exact bytes for the whole run; the SDK worker reads its argv
+    // with `args_os` for the same reason.
+    let mut argv = std::env::args_os();
+    let prog = argv.next().unwrap_or_else(|| OsString::from("iprange"));
+    let args: Vec<OsString> = argv.collect();
+    if args.first().map(OsString::as_os_str) == Some(OsStr::new("--jsonrpc")) {
         if args.len() != 1 {
             // `--jsonrpc` is exclusive: mixing it with legacy options
             // or inputs is invalid JSON-RPC startup (spec, Legacy

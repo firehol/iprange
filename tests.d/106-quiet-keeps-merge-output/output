@@ -1,0 +1,13 @@
+# OK: merge without --quiet (exit 0)
+# OK: merge with --quiet keeps its output (exit 0)
+# OK: common with --quiet keeps its output (exit 0)
+# OK: except with --quiet keeps its output (exit 0)
+# OK: count-unique-all with --quiet keeps its rows (exit 0)
+# OK: compare with --quiet keeps its row (exit 0)
+# OK: diff without --quiet prints the difference (exit 1)
+# OK: diff with --quiet is silent and still reports the difference (exit 1)
+# OK: equal diff with --quiet is silent and reports 0 (exit 0)
+# OK: -6 merge with --quiet keeps its output (exit 0)
+# OK: -6 diff without --quiet prints (exit 1)
+# OK: -6 diff with --quiet is silent and keeps rc 1 (exit 1)
+# OK: every case above also matched /usr/bin/iprange byte for byte

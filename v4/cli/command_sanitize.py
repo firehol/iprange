@@ -251,6 +251,34 @@ def _normcase(path):
     return norm
 
 
+# msys2/Cygwin spell a Windows volume as one letter under the POSIX
+# root: ``/c/users/alice`` *is* ``C:\\users\\alice``.  An msys shell
+# reports every Windows directory that way, so a build command captured
+# there names the operator's profile in the alias form, and a comparison
+# that reads it as an ordinary rooted path calls the profile a stranger.
+# The same shape arrives with backslashes once a candidate goes through
+# the Windows separator rewrite, so both separators are recognized.
+_MOUNT_ALIAS_RE = re.compile(r"^([\\/])([a-zA-Z])(?=[\\/]|$)")
+
+
+def _mount_alias_root(path):
+    """The drive spelling of one msys2/Cygwin mount alias, or None.
+
+    ``/c/users/alice`` and ``\\c\\users\\alice`` name ``C:\\users\\alice``.
+    The rule is a leading separator, exactly one letter, and another
+    separator or the end of the string, so an ordinary rooted spelling
+    (``/home/alice``, ``\\Windows\\System32``) keeps POSIX and native
+    Windows semantics: only a single-character first component is an
+    alias, and a bare ``/c`` folds to the volume root ``C:\\``.
+    """
+    match = _MOUNT_ALIAS_RE.match(path)
+    if match is None:
+        return None
+    remainder = path[match.end():].lstrip("/" + _WIN_SEP)
+    return (match.group(2) + ":"
+            + (_WIN_SEP + remainder if remainder else ""))
+
+
 def _fold_windows(path):
     """Windows case fold for the privacy comparison layer.
 
@@ -261,14 +289,27 @@ def _fold_windows(path):
     forward slashes; the device/verbatim prefix rules are spelled in
     backslashes, so the privacy candidates must be canonical
     backslashes or a mixed-separator device spelling escapes every
-    comparison."""
+    comparison.
+
+    The msys mount alias is resolved before the separator rewrite: the
+    rewrite turns ``/c/users/alice`` into ``\\c\\users\\alice``, which
+    Windows reads as rooted on the *current* drive rather than on ``C:``,
+    so the alias has to become the drive spelling while it is still
+    recognizable.  The fold is applied to both sides of every privacy
+    comparison, so it stays monotone: spellings that named one directory
+    keep naming it, and a widening can only ever add a refusal."""
+    alias = _mount_alias_root(path)
+    if alias is not None:
+        path = alias
     return path.replace("/", _WIN_SEP).lower()
 
 
 def _is_windows_spelling(path):
     """True when one path spelling can only be read with Windows
-    semantics: a drive prefix (``C:``) or a leading double backslash
-    (the UNC and device/verbatim roots).
+    semantics: a drive prefix (``C:``), a leading double backslash
+    (the UNC and device/verbatim roots), or an msys2 mount alias
+    (``/c/...``), which names a volume and so has no POSIX reading
+    the comparison may prefer.
 
     The privacy comparisons pick their fold from the shape of the
     strings, not from ``os.name``, the way ``_profile_comparisons``
@@ -277,6 +318,8 @@ def _is_windows_spelling(path):
     host, so a control -- or any caller -- can pin both separator
     spellings without waiting for a Windows runner."""
     if path.startswith(_WIN_SEP + _WIN_SEP):
+        return True
+    if _mount_alias_root(path) is not None:
         return True
     return (len(path) >= 2 and path[1] == ":"
             and "a" <= path[0].lower() <= "z")
@@ -499,38 +542,48 @@ def _privacy_spellings(value):
     spelling (``C:Users\\...``) is expanded by
     ``drive_relative_spellings`` against a pinned context, never
     against the process working directory.
+
+    An msys2 mount alias is carried twice: as written, which is the
+    only spelling with a POSIX reading, and as the drive it names,
+    because the separator rewrite below turns ``/c/users/alice`` into
+    ``\\c\\users\\alice`` and that shape no longer says which volume
+    the authoring shell meant.  Adding a candidate can only ever add a
+    refusal, so the literal form is never replaced by the alias.
     """
-    if _IS_WINDOWS:
-        norm = value.replace("/", _WIN_SEP)
-    else:
-        norm = value.replace("/", os.sep).replace("\\", os.sep)
-    if "%" in norm or "$" in norm:
-        norm = _expand_env_vars(norm)
-    if _IS_WINDOWS:
-        norm = _strip_device_prefix(norm)
-        fold = _fold_windows
-    else:
-        fold = _normcase
-    out = [fold(norm)]
-    resolved = fold(os.path.normpath(norm)) if norm else norm
-    if not _IS_WINDOWS and resolved.startswith("//"):
-        resolved = "/" + resolved.lstrip("/")
-    if resolved != out[0]:
-        out.append(resolved)
-    if _IS_WINDOWS and _is_drive_relative(norm):
-        for spelling in drive_relative_spellings(norm):
+    alias = _mount_alias_root(value)
+    out = []
+    for base in [value, alias] if alias is not None else [value]:
+        if _IS_WINDOWS:
+            norm = base.replace("/", _WIN_SEP)
+        else:
+            norm = base.replace("/", os.sep).replace("\\", os.sep)
+        if "%" in norm or "$" in norm:
+            norm = _expand_env_vars(norm)
+        if _IS_WINDOWS:
+            norm = _strip_device_prefix(norm)
+            fold = _fold_windows
+        else:
+            fold = _normcase
+        for spelling in [fold(norm),
+                         fold(os.path.normpath(norm)) if norm else norm]:
+            if not _IS_WINDOWS and spelling.startswith("//"):
+                spelling = "/" + spelling.lstrip("/")
             if spelling not in out:
                 out.append(spelling)
-    if _IS_WINDOWS:
-        # re.sub interprets backslashes in a string replacement as
-        # escapes, so the two-separator root is supplied through a
-        # function replacement.
-        inline = _DEVICE_INLINE_UNC_RE.sub(
-            lambda _match: _WIN_SEP + _WIN_SEP, norm)
-        inline = _DEVICE_INLINE_RE.sub("", inline)
-        inline = fold(inline)
-        if inline not in out:
-            out.append(inline)
+        if _IS_WINDOWS and _is_drive_relative(norm):
+            for spelling in drive_relative_spellings(norm):
+                if spelling not in out:
+                    out.append(spelling)
+        if _IS_WINDOWS:
+            # re.sub interprets backslashes in a string replacement as
+            # escapes, so the two-separator root is supplied through a
+            # function replacement.
+            inline = _DEVICE_INLINE_UNC_RE.sub(
+                lambda _match: _WIN_SEP + _WIN_SEP, norm)
+            inline = _DEVICE_INLINE_RE.sub("", inline)
+            inline = fold(inline)
+            if inline not in out:
+                out.append(inline)
     return out
 
 
@@ -543,16 +596,30 @@ def _profile_comparisons(profile):
     current directory, which native Windows resolution consults and a
     comparison must not.
 
-    The second form is derived from the shape of the profile string rather
-    than from ``os.name``.  A POSIX profile is never drive-shaped, so this is
-    a no-op there, and the Windows comparison becomes checkable from any host
-    -- which is what lets the shared privacy controls pin the drive-relative
-    behaviour without waiting for a Windows runner.
+    A third and fourth form cover the msys2/Cygwin mount alias: an msys
+    shell reports ``C:\\users\\alice`` as ``/c/users/alice``, and a build
+    command captured there embeds that spelling *inside* a shell line,
+    where no whole-path fold may rewrite it (a mid-string rewrite of every
+    single-letter component would corrupt ordinary POSIX spellings such as
+    ``/home/alice/d/tmp``).  Matching it as a profile form keeps the fold
+    per-character and monotone.  Both separator styles are listed because
+    the candidates a scan compares are separator-normalized for the host
+    that runs the scan, not for the host that authored the report.
+
+    Every form is derived from the shape of the profile string rather
+    than from ``os.name``.  A POSIX profile is never drive-shaped, so this
+    is a no-op there, and the Windows comparison becomes checkable from any
+    host -- which is what lets the shared privacy controls pin the
+    drive-relative and mount-alias behaviour without a Windows runner.
     """
     forms = [profile]
     if (len(profile) >= 3 and profile[1] == ":"
             and profile[2] in (_WIN_SEP, "/")):
         forms.append(profile[:2] + profile[3:])
+        remainder = profile[2:].lstrip(_WIN_SEP + "/")
+        forms.append("/" + profile[0] + "/" + remainder.replace(_WIN_SEP, "/"))
+        forms.append(_WIN_SEP + profile[0] + _WIN_SEP
+                     + remainder.replace("/", _WIN_SEP))
     return forms
 
 
@@ -721,7 +788,23 @@ def personal_path_in_report(report):
         return None
     hit = []
 
-    profile_forms = _profile_comparisons(profile)
+    # Both sides of the mid-string scan go through the comparison fold,
+    # the way ``_matches_profile`` does.  The needles used to be built
+    # from the profile as ``profile_path()`` returned it, so a profile
+    # handed to the scan in a different separator or case spelling than
+    # the candidates carry matched nothing mid-string: on an msys NT
+    # interpreter (candidates folded to lower-case backslashes) an
+    # unfolded ``C:/Users/alice`` profile escaped every embedded build
+    # command, and the mirror case escaped a POSIX-folded candidate.
+    profile_forms = _profile_comparisons(_comparison_fold(profile))
+    # A Windows volume is case- and separator-insensitive by definition, so
+    # a report that embeds a Windows profile mid-string has to be found
+    # whatever separators and case the authoring shell used.  The candidate
+    # arrives folded for the host that runs the scan, so on a POSIX host the
+    # Windows fold is applied as an extra reading of the same value.  A POSIX
+    # profile keeps the host fold alone, so a case-sensitive POSIX home is
+    # never folded into a sibling directory that differs only by case.
+    profile_is_windows = _is_windows_spelling(profile)
 
     def _is_path_sep(ch):
         return ch in ("/", chr(92))
@@ -811,9 +894,13 @@ def personal_path_in_report(report):
             # false-positive, and the right boundary excludes
             # continuation characters so sibling names stay clean.
             for spelling in _privacy_spellings(value):
-                if _occurrence(spelling):
-                    hit.append(value)
-                    return
+                variants = [_comparison_fold(spelling)]
+                if profile_is_windows:
+                    variants.append(_fold_windows(spelling))
+                for variant in variants:
+                    if _occurrence(variant):
+                        hit.append(value)
+                        return
         elif isinstance(value, dict):
             for item in value.items():
                 visit(item[0])
@@ -1207,7 +1294,19 @@ COMMITTED_REPORT_WRITERS = {
         "owner": "gate-c",
     },
     "check_refusal_class_parity.py": {
-        "artifacts": ("refusal-class-parity.json",),
+        # The parity gate sweeps its descriptor-pressure axis at two coverages:
+        # the routine 12-profile subset and, at a milestone, the full 42-profile
+        # product.  Both are the same measurement on the same launcher against
+        # the same committed pin table, written by the same ``--json-report``
+        # call, so the full axis is this writer's second artifact rather than a
+        # second writer: naming it here is what lets the 378-cell sweep be filed
+        # as evidence instead of living in a scratch directory, and the audit
+        # then refuses a hand-edited or copied-forward copy of it like any other
+        # committed report.  Registering the name also obliges the artifact to be
+        # present (``audit_committed_reports``), so the registry entry and the
+        # rotated ``refusal-class-parity-full.json`` must land together.
+        "artifacts": ("refusal-class-parity.json",
+                      "refusal-class-parity-full.json"),
         "screened": ("--go", "--rust", "--fixture", "--work", "--json-report"),
         "tier": SHARED_TIER,
         "owner": "lead",
@@ -2435,15 +2534,24 @@ def _provenance_self_test():
         WIN_OTHER_DRIVE = "D:/db/iprange.readers"
 
         def all_spellings(value):
-            """Every separator and case spelling of one Windows spelling."""
+            """Every separator, case, and mount-alias spelling of one
+            Windows spelling.
+
+            The alias is what an msys2 shell prints for the same directory
+            (``/c/users/operator`` for ``C:\\users\\operator``), and a
+            build command captured there carries it into a report, so it is
+            one more spelling the comparison must not read as a stranger."""
+            alias = "/" + value[0].lower() + value[2:]
             return (value, value.replace("/", _WIN_SEP), value.upper(),
-                    value.replace("/", _WIN_SEP).upper())
+                    value.replace("/", _WIN_SEP).upper(),
+                    alias, alias.upper())
 
         # Each list collects one (entry point, fold, path, profile) case that
         # decided wrongly, so a failure names the spelling that escaped the
         # fold instead of only the verdict that differs.
         matcher_misses, matcher_leaks = [], []
         screening_misses, screening_leaks = [], []
+        scan_misses, scan_leaks = [], []
         restore_is_windows = _IS_WINDOWS
         restore_profile_path = profile_path
         try:
@@ -2480,6 +2588,35 @@ def _provenance_self_test():
                         if under_profile(child):
                             screening_leaks.append(("under_profile", fold_nt,
                                                     child, authoring))
+                    # ``personal_path_in_report`` is the third entry point and
+                    # the only defence a free-text member has: the committed
+                    # Windows evidence carried the profile inside a recorded
+                    # build command, where no whole-path fold can rewrite a
+                    # mount alias, so the embedded shape and the whole-value
+                    # shape are driven apart -- a failure names which of the
+                    # two, on which fold, with which authorization spelling.
+                    for shape in ("embedded", "whole"):
+                        for child in all_spellings(WIN_CHILD):
+                            document = {
+                                "schema": "s",
+                                "build_provenance": {"build_commands": [
+                                    ("go-vet [scored attempt 1, rc=0]: (cd "
+                                     + child + " && nice go vet ./...)"
+                                     if shape == "embedded" else child)]}}
+                            if personal_path_in_report(document) is None:
+                                scan_misses.append(("report-" + shape,
+                                                    fold_nt, child, authoring))
+                        for child in (all_spellings(WIN_SIBLING)
+                                      + all_spellings(WIN_OTHER_DRIVE)):
+                            document = {
+                                "schema": "s",
+                                "build_provenance": {"build_commands": [
+                                    ("go-vet [scored attempt 1, rc=0]: (cd "
+                                     + child + " && nice go vet ./...)"
+                                     if shape == "embedded" else child)]}}
+                            if personal_path_in_report(document) is not None:
+                                scan_leaks.append(("report-" + shape,
+                                                   fold_nt, child, authoring))
         finally:
             _IS_WINDOWS = restore_is_windows
             profile_path = restore_profile_path
@@ -2496,6 +2633,14 @@ def _provenance_self_test():
         expect("input screening accepts a non-personal path whichever "
                "separator spelling profile and path were authored with",
                not screening_leaks, str(screening_leaks[:4]))
+        expect("the report scan refuses a personal path whichever separator, "
+               "case and mount-alias spelling profile and path were authored "
+               "with",
+               not scan_misses, str(scan_misses[:4]))
+        expect("the report scan accepts a sibling or other-drive path "
+               "whichever separator, case and mount-alias spelling profile "
+               "and path were authored with",
+               not scan_leaks, str(scan_leaks[:4]))
     finally:
         shutil.rmtree(root, ignore_errors=True)
     return checks
@@ -2504,15 +2649,16 @@ def _provenance_self_test():
 # Executed-control count of ``_provenance_self_test``.  A harness self-test
 # that only prints "0 failures" cannot tell a passed run from a run in which
 # nothing executed, so the count is asserted here and by every harness that
-# calls into this module.  51 = the 40 controls that pin the sanctioned commit
+# calls into this module.  53 = the 40 controls that pin the sanctioned commit
 # path, the provenance and privacy block, the source audit, and the pinned
 # drive-relative anchor; the seven controls of numbered group 11, which pin
 # that a committed report never carries a checkout directory and that the
-# resolution helper keeps its non-committed consumers; and the four controls
+# resolution helper keeps its non-committed consumers; and the six controls
 # of numbered group 12, which pin that the profile comparison is decided by
-# the directory a path names and not by the separator or case spelling its
-# caller wrote.
-PROVENANCE_SELF_TEST_CHECKS = 51
+# the directory a path names and not by the separator, case, or msys2
+# mount-alias spelling its caller wrote, for each of the three profile entry
+# points: the matcher, input screening, and the report scan.
+PROVENANCE_SELF_TEST_CHECKS = 53
 
 
 def _self_test():

@@ -77,9 +77,11 @@ BURST = 30
 # how many replies it served.  The discriminating test is that the count is
 # CONSTANT when the request count doubles (below); this absolute band only
 # catches a session that spawns threads per request or per connection.  It
-# is deliberately far above the measured constants (Rust 4, Go 17) because
-# the two runtimes differ in housekeeping threads, and a band tuned to one
-# engine would fail the other without meaning anything.
+# is deliberately far above the measured constants (Rust 4 clone calls and
+# 4 distinct task ids; Go 18 clone calls with 6 and 9 distinct task ids at
+# 3,000 and 6,000 requests, per `evidence/throughput.json`) because the two
+# runtimes differ in housekeeping threads, and a band tuned to one engine
+# would fail the other without meaning anything.
 THREAD_BASELINE_MAX = 64
 # Slack on the clone count between the small and the doubled pass.  A
 # runtime creates housekeeping threads opportunistically, so a couple of
@@ -340,10 +342,13 @@ def structural_problems(product, engines):
                 # The request-count-invariant quantity is the number of
                 # clone syscalls.  Distinct task ids are not a reliable
                 # statistic: strace detaches under -qq on busy sessions, so
-                # the same Go binary reports anywhere between 7 and 13 task
-                # ids at any request count, uncorrelated with the load,
-                # while its clone count stays at 16-17 from 1500 to 12000
-                # requests.  Gating on task ids would make the attestation
+                # the same Go binary reports task ids that move with
+                # sampling rather than with load (the committed report shows
+                # 6 at 3,000 requests and 9 at 6,000; exploratory passes
+                # outside the committed record set saw a wider 7-13 spread,
+                # and that range is not carried by any artifact here), while
+                # its clone count stays put at 18 across both probes.
+                # Gating on task ids would make the attestation
                 # flaky without adding detecting power: a thread-per-reply
                 # regression shows up in the clone count too, at roughly
                 # +3000 rather than +2.
@@ -533,9 +538,11 @@ def _self_test():
                   _mutate(good(), zero_census), True))
 
     def rust_shapes(product):
-        # The reference shape performance review measured: Rust 4 fixed
-        # session threads, Go 17 runtime threads.  Both must pass, so a
-        # band tuned to one engine cannot survive here.
+        # In-band fixtures, not measurements: both engines must be accepted
+        # by the same band, so a value near each engine's own measured shape
+        # is used (committed `evidence/throughput.json`: Rust 4 clone calls
+        # and 4 task ids; Go 18 clone calls with 6 and 9 task ids).  A band
+        # tuned to one engine cannot survive here.
         for side in (product["go"]["thread_structure"]["small"],
                      product["go"]["thread_structure"]["large"]):
             side["unique_child_tids"] = 17

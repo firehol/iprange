@@ -49,6 +49,13 @@ the pair from ``PINNED_PRESSURE_CLASSES`` and the recorded answers instead of
 trusting the flag the sweep wrote, so neither the sweep nor a doctored report
 can relabel a real class divergence as a gap.
 
+Which axis a run swept is recorded as ``pressure.mode``, named by the
+``--pressure`` option and checked against the swept profile set and the recorded
+command line.  The milestone's full sweep is a separate committed artifact,
+``refusal-class-parity-full.json``, filed beside the routine
+``refusal-class-parity.json``: 378 cells over 42 profiles is an evidence file,
+not a console log.
+
 Authority
 ---------
 Rust observable behavior is the semantic authority for refusal classes where
@@ -75,8 +82,13 @@ Usage
 -----
     nice python3 v4/cli/check_refusal_class_parity.py \
         --go BIN --rust BIN --fixture BIN --work EMPTY_DIR \
+        --pressure routine \
         [--json-report FILE] [--sha256-ledger PATH] [--deadline 4.0] \
         [--retries 2] [--budget-seconds 55]
+
+The verdict owes all three axes: a report is accepted only with a
+well-formed ``pressure`` member, so a run without ``--pressure`` executes
+the two target axes for inspection and then reports its own refusal.
 
     nice python3 v4/cli/check_refusal_class_parity.py --self-test
 
@@ -836,6 +848,18 @@ ROUTINE_PRESSURE_PROFILES = (
     "b08h0-after-normal", "b64h0-before-fifo", "b64h0-before-absent",
 )
 
+# The axis a pressure sweep executed, recorded in its report.  The routine gate
+# sweeps a 12-profile subset and a milestone sweeps all 42, so the report has to
+# say which of the two it is: the committed pin table covers the whole product,
+# and a record that does not name its own coverage cannot be read as evidence of
+# the one it does not hold.  ``PRESSURE_FABRICATED_MODE`` labels the offline
+# section ``--self-test`` builds from the tables without executing anything; a
+# live sweep cannot produce it.
+PRESSURE_MODE_ROUTINE = "routine"
+PRESSURE_MODE_FULL = "full"
+PRESSURE_FABRICATED_MODE = "fabricated"
+PRESSURE_AXIS_MODES = (PRESSURE_MODE_ROUTINE, PRESSURE_MODE_FULL)
+
 # The poller-free promise binds the Go engine, which owns a runtime network
 # poller whose creation has no failure path: every arm except the resolver must
 # answer with neither anon_inode:[eventpoll] nor anon_inode:[eventfd] in its
@@ -1131,7 +1155,8 @@ def pressure_cell_from_records(arm, profile, records, attempts):
     return cell
 
 
-def run_pressure_sweep(go, rust, fixture, work, profiles, runs=2, jobs=1):
+def run_pressure_sweep(go, rust, fixture, work, profiles, mode, runs=2,
+                       jobs=1):
     """Execute the pressure axis with the launcher of design section 10.
 
     One fresh process per cell per engine, soft and hard RLIMIT_NOFILE set by
@@ -1143,7 +1168,19 @@ def run_pressure_sweep(go, rust, fixture, work, profiles, runs=2, jobs=1):
     that lives in v4/cli/fd_pressure_harness.py, which owns the launcher; this
     import is deferred because that module imports this one for its own
     materialization helpers, and neither side may duplicate the other.
+
+    ``mode`` is the name of the axis the caller asked the operator to pay for
+    (``routine`` or ``full``) and is recorded verbatim in the report.  It is a
+    required positional argument because a section that cannot say which of the
+    two it swept is the defect this closes, and refusing before the first cell
+    costs nothing against the 1,071 s the full axis measured on this host.
     """
+
+    if mode not in PRESSURE_AXIS_MODES:
+        raise SystemExit(
+            f"--pressure must sweep the axis named "
+            f"{' or '.join(repr(name) for name in PRESSURE_AXIS_MODES)}, "
+            f"not {mode!r}")
 
     import fd_pressure_harness  # noqa: PLC0415  (deferred: circular by design)
 
@@ -1168,6 +1205,11 @@ def run_pressure_sweep(go, rust, fixture, work, profiles, runs=2, jobs=1):
                                                              slots=max(1, jobs))
     cells, failures = [], 0
     slot = 0
+    # The main grid's elapsed_seconds never covers this axis, so the section
+    # times itself: measured on this host, the full product is 1,071 s of
+    # pressured processes against a 34 s grid, and a record that hides that
+    # difference makes a milestone step look like a routine one.
+    started = time.monotonic()
     for arm in PRESSURE_ARMS:
         for profile in profiles:
             record = PRESSURE_PROFILE_BY_NAME[profile]
@@ -1204,9 +1246,11 @@ def run_pressure_sweep(go, rust, fixture, work, profiles, runs=2, jobs=1):
                     failures += 1
                     cell.setdefault("problems", []).extend(problems)
                     break
+    elapsed = round(time.monotonic() - started, 3)
     rollup = pressure_rollup(cells, profiles)
     rollup["failed"] = failures
-    return {"mode": None, "cells": cells, "runs": max(2, runs), **rollup}
+    return {"mode": mode, "cells": cells, "runs": max(2, runs),
+            "elapsed_seconds": elapsed, **rollup}
 
 
 def expected_pressure_cells(profiles=None):
@@ -1607,14 +1651,38 @@ def pressure_rollup(cells, profiles=None):
     }
 
 
+def _pressure_mode_in_command(report):
+    """The ``--pressure`` mode the recorded command line asked for, or None.
+
+    ``command`` is stamped by ``command_sanitize.write_committed_report`` from
+    the operator's own argv, so in a committed report it is not a field the
+    author of the record chose.  Returns None when the command does not name the
+    option (a report built offline, or one produced before the option existed),
+    which leaves the check to the swept profile set alone.
+    """
+
+    command = report.get("command")
+    if not isinstance(command, list):
+        return None
+    items = [str(item) for item in command]
+    for index, item in enumerate(items):
+        if item == "--pressure":
+            value = items[index + 1] if index + 1 < len(items) else ""
+        elif item.startswith("--pressure="):
+            value = item.split("=", 1)[1]
+        else:
+            continue
+        return value if value in PRESSURE_AXIS_MODES else None
+    return None
+
+
 def verify_pressure_report(report):
     """Verify one pressure sweep against the committed tables and pins.
 
-    Present-only enforcement: a report without the section is an ordinary
-    parity sweep and is judged by the two original axes, and a report that
-    claims the axis must satisfy all of it. The grid is re-derived here,
-    independently of the report, so the executed cell set is an obligation
-    rather than a choice.
+    assess_report requires the section; this function judges what the
+    section claims against the committed profile and pin tables. The grid is
+    re-derived here, independently of the report, so the executed cell set is
+    an obligation rather than a choice.
     """
 
     # Table-level integrity is assessed by table_integrity_problems(), on every
@@ -1628,11 +1696,11 @@ def verify_pressure_report(report):
     cells = pressure.get("cells")
     if not isinstance(cells, list):
         return problems + ["pressure section has no cell list"]
-    for name in ("arms", "profiles", "mandatory_profiles", "cells_expected",
-                 "cells_executed", "cells_missing", "pinned_table_count",
-                 "pinned_table_sha256", "agreements", "divergences",
-                 "band_gap", "hangs", "flaky", "vacuous", "blocked",
-                 "host_state"):
+    for name in ("mode", "arms", "profiles", "mandatory_profiles",
+                 "cells_expected", "cells_executed", "cells_missing",
+                 "pinned_table_count", "pinned_table_sha256", "agreements",
+                 "divergences", "band_gap", "hangs", "flaky", "vacuous",
+                 "blocked", "host_state"):
         if name not in pressure:
             problems.append(f"pressure rollup is missing {name!r}")
     executed = {}
@@ -1704,6 +1772,39 @@ def verify_pressure_report(report):
     if pressure.get("pinned_table_count") != len(PINNED_PRESSURE_CLASSES):
         problems.append("pressure rollup counts the pinned table differently "
                         "than the committed table does")
+    # The axis label is a claim about what was paid for.  A label that is
+    # present must agree with the profile set it swept and with the option the
+    # shared writer recorded in the command line, so a 108-cell routine sweep
+    # cannot be filed as the milestone's 378-cell coverage.  A report produced
+    # before the member existed carries null and is judged by the cell set
+    # alone, exactly as it was before the label existed; the produced artifact
+    # is what rotates that hole shut, not a check that could be satisfied by
+    # writing any of three words.
+    mode = pressure.get("mode")
+    if mode is not None and mode != PRESSURE_FABRICATED_MODE:
+        swept = list(pressure.get("profiles") or ())
+        if swept == list(ROUTINE_PRESSURE_PROFILES):
+            expected_mode = PRESSURE_MODE_ROUTINE
+        elif swept == list(MANDATORY_PRESSURE_PROFILES):
+            expected_mode = PRESSURE_MODE_FULL
+        else:
+            expected_mode = None
+        if expected_mode is None:
+            problems.append(
+                f"pressure axis records mode={mode!r} over a profile set that "
+                f"is neither the routine subset nor the full product, so no "
+                f"axis this gate knows was swept")
+        elif mode != expected_mode:
+            problems.append(
+                f"pressure axis records mode={mode!r} but the swept profiles "
+                f"are the {expected_mode!r} set; the label must name the axis "
+                f"that was executed")
+        declared = _pressure_mode_in_command(report)
+        if declared is not None and mode != declared:
+            problems.append(
+                f"pressure axis records mode={mode!r} where the recorded "
+                f"command line asked for --pressure {declared!r}; the label "
+                f"and the option the shared writer stamped cannot disagree")
     return problems
 
 
@@ -2559,12 +2660,21 @@ def assess_report(report, deadline=ATTEMPT_DEADLINE_SECONDS,
     problems.extend(table_integrity_problems())
     if not isinstance(report, dict):
         return [f"report is {type(report).__name__}, not an object"]
-    # The third axis is optional per report and total when present: a sweep
-    # that claims descriptor-pressure coverage is judged against the committed
-    # profile and pin tables here, and one that omits the section is an
-    # ordinary two-axis parity sweep (the routine gate keeps its cost budget,
-    # and the milestone gate turns the axis on).
-    if report.get("pressure") is not None:
+    # The third axis is an obligation of the verdict, not a block a report
+    # may drop: the pressure member must be present and well-formed, and it
+    # is judged against the committed profile and pin tables -- executed-cell
+    # coverage, the pinned class of every cell, the rollup counts, and the
+    # axis label against the swept profile set and the recorded command line.
+    # Deleting the section from a report swept with --pressure is a forgery,
+    # not a smaller claim: a gate that can be passed by deleting one of the
+    # axes it attests gates nothing.
+    pressure = report.get("pressure")
+    if not isinstance(pressure, dict):
+        problems.append(
+            "report carries no pressure member; the descriptor-pressure axis "
+            "is an obligation of this gate's verdict, so a passing sweep "
+            "records it -- run with --pressure routine")
+    else:
         problems.extend(verify_pressure_report(report))
     if report.get("schema") != REPORT_SCHEMA:
         problems.append(f"unexpected schema {report.get('schema')!r}")
@@ -2638,11 +2748,37 @@ def assess_report(report, deadline=ATTEMPT_DEADLINE_SECONDS,
             if record.get("arm") != cell.get("arm") \
                     or record.get("path_kind") != cell.get("path_kind"):
                 problems.append(f"{key}: {engine} record names a different cell")
-            if not isinstance(record.get("request"), str) \
-                    or '"method"' not in record["request"]:
+            frame = None
+            if isinstance(record.get("request"), str):
+                try:
+                    frame = json.loads(record["request"])
+                except ValueError:
+                    frame = None
+            if not isinstance(frame, dict):
                 problems.append(
-                    f"{key}: {engine} record has no request bytes; a class "
-                    f"claim must carry the frame that produced it")
+                    f"{key}: {engine} record has no parsable request frame; "
+                    f"a class claim must carry the JSON-RPC bytes that "
+                    f"produced it")
+            else:
+                claimed = ARM_BY_NAME[cell.get("arm")][1]
+                if frame.get("jsonrpc") != "2.0":
+                    problems.append(
+                        f"{key}: {engine} request frame is not a JSON-RPC "
+                        f"2.0 request ({frame.get('jsonrpc')!r}); the class "
+                        f"claim must be attributable to the protocol the "
+                        f"product answers")
+                if frame.get("method") != claimed:
+                    problems.append(
+                        f"{key}: {engine} request frame asks method "
+                        f"{frame.get('method')!r} but the cell's arm asks "
+                        f"{claimed!r}; a class recorded against one method "
+                        f"cannot certify another method's refusal class")
+                if "method" in record and record["method"] != claimed:
+                    problems.append(
+                        f"{key}: {engine} record names method "
+                        f"{record['method']!r} where the committed arm "
+                        f"table asks {claimed!r}; the record's own claim "
+                        f"and the grid's obligation are one fact")
             if not isinstance(record.get("elapsed_ms"), (int, float)):
                 problems.append(f"{key}: {engine} record has no elapsed time")
             elif record["elapsed_ms"] >= deadline * 1000 \
@@ -2912,7 +3048,7 @@ def live_run(args):
         print(f"sweeping the descriptor-pressure axis: {len(PRESSURE_ARMS)} arms "
               f"x {len(profiles)} profiles x 2 engines x >=2 runs, under nice")
         report["pressure"] = run_pressure_sweep(
-            args.go, args.rust, args.fixture, work, profiles,
+            args.go, args.rust, args.fixture, work, profiles, args.pressure,
             runs=args.pressure_runs, jobs=args.pressure_jobs)
         print(f"pressure: {report['pressure']['cells_executed']} of "
               f"{report['pressure']['cells_expected']} cells, "
@@ -3000,6 +3136,18 @@ def _fabricated_pressure_engine_record(pin, engine, profile):
             "verdict": "pass", "why": "fabricated"}
 
 
+def fabricated_pressure_section(profiles=None):
+    """Public entry to the fabricated pressure axis.
+
+    The kind gate's self-test battery consumes the same table-derived axis
+    section this module's own controls attack, so the fabricator is exported
+    once rather than copied: one authoritative implementation of what a
+    conforming, executed-nothing pressure section says.
+    """
+
+    return _fabricated_pressure_section(profiles)
+
+
 def _fabricated_pressure_section(profiles=None):
     """A pressure section derived from the committed tables, executing nothing.
 
@@ -3033,7 +3181,8 @@ def _fabricated_pressure_section(profiles=None):
             cells.append(cell)
     rollup = pressure_rollup(cells, chosen)
     rollup["failed"] = 0
-    section = {"mode": "fabricated", "cells": cells, "runs": 2}
+    section = {"mode": PRESSURE_FABRICATED_MODE,
+               "cells": cells, "runs": 2}
     section.update(rollup)
     return section
 
@@ -3187,7 +3336,7 @@ def _sync_summary(report):
 # doctored-report cases and every control that assesses a report or mutates the
 # tables directly; adding or removing one changes this constant in the same
 # change, and a run whose total drifts from it fails.
-SELF_TEST_CASES_TOTAL = 61
+SELF_TEST_CASES_TOTAL = 66
 
 
 def _self_test():
@@ -3824,6 +3973,60 @@ def _self_test():
                         if arm != "recovery.inspect(worker)"))],
                 "deleting a pressure arm must FAIL",
                 "is not a swept arm")
+
+    def relabel_the_routine_axis(report):
+        # The 12-profile subset, claimed as the milestone's full product: the
+        # cells stay honest, only the coverage sentence about them lies.
+        report["pressure"]["mode"] = PRESSURE_MODE_FULL
+
+    with_pressure_report(relabel_the_routine_axis,
+                         "a routine sweep labelled full must FAIL",
+                         "are the 'routine' set")
+
+    def drop_the_axis_label(report):
+        report["pressure"].pop("mode", None)
+
+    with_pressure_report(drop_the_axis_label,
+                         "a pressure section with no axis label must FAIL",
+                         "is missing 'mode'")
+
+    def label_the_command_line_denies(report):
+        # ``command`` is written by the shared committed-report writer from the
+        # operator's argv, so it is the record's own account of the run.
+        report["pressure"]["mode"] = PRESSURE_MODE_ROUTINE
+        report["command"] = ["v4/cli/check_refusal_class_parity.py",
+                             "--pressure", "full"]
+
+    with_pressure_report(label_the_command_line_denies,
+                         "an axis label the command line contradicts must FAIL",
+                         "asked for --pressure 'full'")
+
+    def delete_the_pressure_axis(report):
+        # The demonstrated forgery: a sweep whose own command line says
+        # --pressure routine, filed with the block removed. The axis is an
+        # obligation of the verdict, so its absence is the problem -- the
+        # grid below is not a lesser claim the report may retreat to.
+        report.pop("pressure", None)
+
+    one_clean(delete_the_pressure_axis,
+              "a deleted pressure section must FAIL on the axis alone",
+              "carries no pressure member")
+
+    def frame_asks_another_method(report):
+        # The cell claims one arm and carries the request frame of another:
+        # the recorded bytes must be the request that produced the answer,
+        # not any string that mentions a method.
+        for cell in report["cells"]:
+            if cell["arm"] == "reader.open" and cell["path_kind"] == "junk":
+                cell["go"]["request"] = json.dumps(
+                    {"jsonrpc": "2.0", "id": 1,
+                     "method": "iprange.v1.system.describe", "params": {}},
+                    separators=(",", ":"))
+                return
+
+    one_clean(frame_asks_another_method,
+              "a frame whose method contradicts the cell must FAIL",
+              "cannot certify another method's refusal class")
 
     def claim_vacuous_as_coverage(report):
         cell = pressure_cell_in(report, PRESSURE_SAMPLE_CELL)

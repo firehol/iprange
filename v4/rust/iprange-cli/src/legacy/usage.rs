@@ -291,3 +291,45 @@ Input files:
 		Any number of files can be given.
 
 "#;
+
+/// Print the `-h`/`--help` text.
+///
+/// C `usage()` runs `fprintf(stdout, format, argv[0], dns_threads)`:
+/// one left-to-right pass in which `%s` is the full invocation name and
+/// `%d` the current dns-threads maximum. The name comes from argv and
+/// may hold bytes that are not valid UTF-8, so the text is written as
+/// bytes and a substituted name is never rescanned for directives.
+/// C ignores a failed `fprintf`, so write errors are not reported here
+/// either (a closed stdout already terminated the process through
+/// SIGPIPE, which `run()` restored to its default disposition).
+pub fn print(prog: &std::ffi::OsStr, dns_threads: u32) {
+    use std::io::Write;
+
+    let prog = super::argv::bytes(prog);
+    let prog: &[u8] = &prog;
+    let threads = dns_threads.to_string();
+    let threads = threads.as_bytes();
+
+    let stdout = std::io::stdout();
+    let mut stdout = stdout.lock();
+    let mut rest = USAGE.as_bytes();
+    while let Some(at) = find_directive(rest) {
+        let _ = stdout.write_all(&rest[..at]);
+        let replacement = if rest[at + 1] == b's' { prog } else { threads };
+        let _ = stdout.write_all(replacement);
+        rest = &rest[at + 2..];
+    }
+    let _ = stdout.write_all(rest);
+}
+
+/// The offset of the next `%s` or `%d` directive in `text`.
+fn find_directive(text: &[u8]) -> Option<usize> {
+    let mut at = 0usize;
+    while at + 1 < text.len() {
+        if text[at] == b'%' && (text[at + 1] == b's' || text[at + 1] == b'd') {
+            return Some(at);
+        }
+        at += 1;
+    }
+    None
+}

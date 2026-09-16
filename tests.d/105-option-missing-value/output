@@ -1,0 +1,63 @@
+# OK: --min-prefix without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --min-prefix without a value is skipped and stdin loads (exit 0)
+# OK: --min-prefix with its value still works (exit 0)
+# OK: --min-prefix matches /usr/bin/iprange on the trailing and valued forms
+# OK: --prefixes without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --prefixes without a value is skipped and stdin loads (exit 0)
+# OK: --prefixes with its value still works (exit 0)
+# OK: --prefixes matches /usr/bin/iprange on the trailing and valued forms
+# OK: --default-prefix without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --default-prefix without a value is skipped and stdin loads (exit 0)
+# OK: --default-prefix with its value still works (exit 0)
+# OK: --default-prefix matches /usr/bin/iprange on the trailing and valued forms
+# OK: -p without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 -p without a value is skipped and stdin loads (exit 0)
+# OK: -p with its value still works (exit 0)
+# OK: -p matches /usr/bin/iprange on the trailing and valued forms
+# OK: --ipset-reduce without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --ipset-reduce without a value is skipped and stdin loads (exit 0)
+# OK: --ipset-reduce with its value still works (exit 0)
+# OK: --ipset-reduce matches /usr/bin/iprange on the trailing and valued forms
+# OK: --reduce-factor without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --reduce-factor without a value is skipped and stdin loads (exit 0)
+# OK: --reduce-factor with its value still works (exit 0)
+# OK: --reduce-factor matches /usr/bin/iprange on the trailing and valued forms
+# OK: --ipset-reduce-entries without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --ipset-reduce-entries without a value is skipped and stdin loads (exit 0)
+# OK: --ipset-reduce-entries with its value still works (exit 0)
+# OK: --ipset-reduce-entries matches /usr/bin/iprange on the trailing and valued forms
+# OK: --reduce-entries without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --reduce-entries without a value is skipped and stdin loads (exit 0)
+# OK: --reduce-entries with its value still works (exit 0)
+# OK: --reduce-entries matches /usr/bin/iprange on the trailing and valued forms
+# OK: --print-prefix without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --print-prefix without a value is skipped and stdin loads (exit 0)
+# OK: --print-prefix with its value still works (exit 0)
+# OK: --print-prefix matches /usr/bin/iprange on the trailing and valued forms
+# OK: --print-prefix-ips without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --print-prefix-ips without a value is skipped and stdin loads (exit 0)
+# OK: --print-prefix-ips with its value still works (exit 0)
+# OK: --print-prefix-ips matches /usr/bin/iprange on the trailing and valued forms
+# OK: --print-prefix-nets without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --print-prefix-nets without a value is skipped and stdin loads (exit 0)
+# OK: --print-prefix-nets with its value still works (exit 0)
+# OK: --print-prefix-nets matches /usr/bin/iprange on the trailing and valued forms
+# OK: --print-suffix without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --print-suffix without a value is skipped and stdin loads (exit 0)
+# OK: --print-suffix with its value still works (exit 0)
+# OK: --print-suffix matches /usr/bin/iprange on the trailing and valued forms
+# OK: --print-suffix-ips without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --print-suffix-ips without a value is skipped and stdin loads (exit 0)
+# OK: --print-suffix-ips with its value still works (exit 0)
+# OK: --print-suffix-ips matches /usr/bin/iprange on the trailing and valued forms
+# OK: --print-suffix-nets without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --print-suffix-nets without a value is skipped and stdin loads (exit 0)
+# OK: --print-suffix-nets with its value still works (exit 0)
+# OK: --print-suffix-nets matches /usr/bin/iprange on the trailing and valued forms
+# OK: --dns-threads without a value exits 1 (IPv4, bounded by ulimit -v and timeout)
+# OK: -6 --dns-threads without a value is skipped and stdin loads (exit 0)
+# OK: --dns-threads with its value still works (exit 0)
+# OK: --dns-threads matches /usr/bin/iprange on the trailing and valued forms
+# OK: trailing 'as' is an input path (exit 1)
+# OK: trailing 'as' after -6 is an input path (exit 1)
+# OK: 15 value-taking options and 'as' terminate cleanly without a value

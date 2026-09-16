@@ -371,6 +371,67 @@ def _controls():
                   refused and not os.path.exists(leaked),
                   "the scan runs whatever channel the path arrived through")
 
+        # --- 8: the spellings a report authored on another host arrives in -
+        # The Windows harnesses record every build command as the msys2 shell
+        # printed it, so the operator's profile reaches a report as
+        # ``/c/Users/<operator>/...``: an msys2 mount alias for the ``C:``
+        # volume, embedded inside a shell command line rather than standing
+        # alone as a path value.  Two committed Windows reports carried it
+        # while their own derived privacy block attested
+        # ``personal_path_in_report: null``, so both directions are attacked
+        # here: the artifact-side audit must name such a report, and the
+        # writer must refuse it before the file exists.  The profile is
+        # injected the way each authoring host produces it -- the msys NT fold
+        # and the normcase-only fold -- because which of the two the scan saw
+        # is exactly what decided the old verdict.
+        win_profile = "C:" + chr(92) + "Users" + chr(92) + "operator"
+        msys_home = "/c/Users/operator/src/iprange"
+        leaked_provenance = {
+            "schema": "iprange-cli-report-v3",
+            "build_provenance": {"build_commands": [
+                "go-vet [scored attempt 1, rc=0]: (cd "
+                + msys_home + "/v4/go && nice go vet ./...)"]}}
+        saved_host = (cs._IS_WINDOWS, cs._IS_POSIX, cs.profile_path)
+        try:
+            cs._IS_WINDOWS, cs._IS_POSIX = True, False
+            for authoring in (cs._fold_windows(os.path.normpath(win_profile)),
+                              cs._normcase(os.path.normpath(win_profile))):
+                cs.profile_path = lambda root=authoring: root
+                problems = cs.committed_report_problems(
+                    copy.deepcopy(leaked_provenance),
+                    where="evidence/windows-guard.json")
+                check("foreign-host", "the committed audit names a build "
+                        "command embedding the profile in the msys2 mount "
+                        "alias",
+                      any("carries a personal path" in problem
+                          for problem in problems), str(problems))
+                leaked_target = os.path.join(root, "msys-leak.json")
+                try:
+                    cs.write_committed_report(
+                        leaked_target,
+                        copy.deepcopy(leaked_provenance),
+                        argv=["v4/cli/windows_guard_harness.py"])
+                except SystemExit:
+                    pass
+                check("foreign-host", "the shared writer refuses that report "
+                        "and creates no artifact",
+                      not os.path.exists(leaked_target),
+                      "the harness would have committed the leak")
+        finally:
+            (cs._IS_WINDOWS, cs._IS_POSIX,
+             cs.profile_path) = saved_host
+        clean_provenance = {
+            "schema": "iprange-cli-report-v3",
+            "build_provenance": {"build_commands": [
+                "go-vet [scored attempt 1, rc=0]: (cd "
+                "C:/msys64/tmp/qualsvc-W/v4/go && nice go vet ./...)"]}}
+        problems = cs.committed_report_problems(
+            clean_provenance, where="evidence/windows-guard.json")
+        check("foreign-host", "a report whose only drive path is the "
+                "authorized Windows scratch root is accepted",
+              not any("personal path" in problem for problem in problems),
+              str(problems))
+
         # --- 7: the completeness rule over an evidence directory ----------
         # Outside a git tree the audits judge every present report, which is
         # the same code path a committed tree reaches once the file is tracked.
@@ -393,7 +454,7 @@ def _controls():
     return executed, failures
 
 
-SELF_TEST_CONTROLS = 32
+SELF_TEST_CONTROLS = 37
 
 
 def main():

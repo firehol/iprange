@@ -6,6 +6,7 @@
 //! are fixed. SDK identity fields remain randomly generated as required by the
 //! v4 format; fixture assertions therefore use public semantics, not file IDs.
 
+use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
 use iprange_livedb::{
@@ -18,7 +19,10 @@ use iprange_livedb::{
 };
 
 fn main() {
-    let mut args = std::env::args().skip(1);
+    // `args_os`: a fixture path is a POSIX name and may hold bytes that
+    // are not valid UTF-8, which `std::env::args()` would panic on. Only
+    // the kind token is compared as text; paths keep their bytes.
+    let mut args = std::env::args_os().skip(1);
     let Some(kind) = args.next() else {
         fail("usage: v4-fixture KIND OUTPUT");
     };
@@ -29,60 +33,69 @@ fn main() {
     if args.next().is_some() {
         fail("usage: v4-fixture KIND OUTPUT [CSV]");
     }
-    let needs_csv = matches!(kind.as_str(), "direct-csv" | "membership-csv");
+    let needs_csv = kind == "direct-csv" || kind == "membership-csv";
     if needs_csv != source_csv.is_some() {
         fail("direct-csv and membership-csv require exactly one CSV input path");
     }
     let output = PathBuf::from(output);
-    let live = output.with_file_name(format!(
-        ".{}.live",
-        output
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-    ));
-    let immutable_source = live.with_file_name(format!(
-        ".{}.source",
-        output
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or_default()
-    ));
+    // The scratch names are derived from the requested output name byte
+    // for byte. Formatting them into a String would collapse every name
+    // that is not valid UTF-8 onto one pair of files (`.live`,
+    // `.source`), so two fixtures would overwrite each other's scratch
+    // state. `sidecar()` below uses the same OsString idiom.
+    let output_name = output.file_name().unwrap_or_default().to_os_string();
+    let mut live_name = OsString::from(".");
+    live_name.push(&output_name);
+    live_name.push(".live");
+    let live = output.with_file_name(live_name);
+    let mut source_name = OsString::from(".");
+    source_name.push(&output_name);
+    source_name.push(".source");
+    let immutable_source = live.with_file_name(source_name);
     remove_temporaries(&live);
     if let Err(error) = run(&kind, &output, &live, &immutable_source, &source_csv) {
         let _ = std::fs::remove_file(&live);
         let _ = std::fs::remove_file(sidecar(&live));
         let _ = std::fs::remove_file(&immutable_source);
-        eprintln!("v4-fixture: {kind} failed: {error}");
+        eprintln!("v4-fixture: {} failed: {error}", kind.to_string_lossy());
         std::process::exit(1);
     }
 }
 
 fn run(
-    kind: &str,
+    kind: &OsStr,
     output: &Path,
     live: &Path,
     immutable_source: &Path,
     source_csv: &Option<std::path::PathBuf>,
 ) -> Result<(), String> {
-    match kind {
-        "direct-v4" => direct_v4(live, output),
-        "direct-csv" => direct_csv(
+    if kind == "direct-v4" {
+        return direct_v4(live, output);
+    }
+    if kind == "direct-csv" {
+        return direct_csv(
             live,
             source_csv.as_ref().expect("direct-csv requires CSV"),
             output,
-        ),
-        "membership-csv" => membership_csv(
+        );
+    }
+    if kind == "membership-csv" {
+        return membership_csv(
             live,
             source_csv.as_ref().expect("membership-csv requires CSV"),
             output,
-        ),
-        "membership-v4" => membership_v4(live, immutable_source, output),
-        "structured-v4" => structured_v4(live, output),
-        _ => Err(format!(
-            "unknown kind {kind:?}; expected direct-v4, direct-csv, membership-v4, or structured-v4"
-        )),
+        );
     }
+    if kind == "membership-v4" {
+        return membership_v4(live, immutable_source, output);
+    }
+    if kind == "structured-v4" {
+        return structured_v4(live, output);
+    }
+    Err(format!(
+        "unknown kind {}; expected direct-v4, direct-csv, membership-v4, or structured-v4",
+        kind.to_string_lossy()
+    ))
 }
 
 fn direct_v4(live: &Path, output: &Path) -> Result<(), String> {

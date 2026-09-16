@@ -50,6 +50,13 @@ absolute path, its SHA-256, and one ``system.describe`` call whose
 ``implementation`` member must claim the expected language.
 
 Report schema: ``iprange-cli-windows-guard-report-v1``.
+
+``--verify-report PATH`` re-grades a committed report of either platform
+without re-running the battery: the shared committed-report identity and
+privacy rules, the schema, the build-ledger digests, every guard spelling the
+battery produces, the refusal facts behind every recorded ``ok``, and the
+source-integrity invariants.  ``--self-test`` executes its own accepted
+baseline plus nine refused mutations of it, so the verifier is gated too.
 """
 
 import argparse
@@ -66,13 +73,24 @@ if _HERE not in sys.path:
 
 import command_sanitize  # noqa: E402  (side-effect free)
 from command_sanitize import (  # noqa: E402  (side-effect free)
+    COMMITTED_REPORT_WRITERS,
     audit_report_writers,
+    committed_report_problems,
+    owned_temp_dir,
     personal_path_in_report,
+    report_provenance,
     require_paths_outside_profile,
     run_shared_self_test,
     write_committed_report,
 )
 from crash_harness import HarnessJsonRpcService  # noqa: E402
+# The report-verification machinery is shared, not copied.  The sha256sum
+# ledger parser and the staging-path folding rule are owned by the Windows
+# housekeeping harness; importing them here means one forged Windows report
+# cannot pass one verifier and fail the other because the two disagree about
+# what a ledger line is.  The import is one-directional (housekeeping never
+# imports this module), and importing it costs 0.04 s on either host.
+from windows_housekeeping_harness import _read_sha256_ledger, _tail  # noqa: E402
 from schema.results import validate_result  # noqa: E402
 
 REPORT_SCHEMA = "iprange-cli-windows-guard-report-v1"
@@ -752,10 +770,7 @@ def run_product(binary, label, work, fixture, provenance):
                 # Every spelling of the absent sidecar is refused; the
                 # distinct-destination controls (meta.txt, the drive
                 # root) stay allowed (wave 19 round 19.14).
-                expected = name not in (
-                    "control_allowed", "drive_root_allowed",
-                    "relative_source_control_allowed",
-                )
+                expected = name not in ALLOWED_DESTINATION_CASES
             else:
                 # POSIX negative control: every spelling denotes a
                 # distinct path and must stay allowed.
@@ -852,6 +867,606 @@ def run_product(binary, label, work, fixture, provenance):
     return product
 
 
+# ---------------------------------------------------------------------------
+# Report verification (--verify-report)
+# ---------------------------------------------------------------------------
+#
+# The guard report is produced on the authorized Windows host (and, as the
+# negative control, on POSIX) and reaches ``evidence/`` as a copy, so once the
+# harness exits nothing reads the artifact again.  A report nobody can re-grade
+# is self-attesting: every refusal code, message and outcome in it could be
+# replaced and no downstream gate would notice.  ``--verify-report`` is that
+# reader, and the kind gate calls the same function over the committed file.
+#
+# Every rule below is about content the producer itself wrote, so a report is
+# refused only for disagreeing with its own record or with the build ledger --
+# never for a choice the harness is free to make.
+
+PRODUCT_LABELS = ("go", "rust")
+REPORT_PLATFORMS = ("posix", "windows")
+# The distinct-destination controls that must be published, not refused.  One
+# constant for the producer (run_product) and the verifier: a fourth control
+# that only one of the two knows about is a case the guard silently stops
+# proving.
+ALLOWED_DESTINATION_CASES = ("control_allowed", "drive_root_allowed",
+                             "relative_source_control_allowed")
+# The invariants recorded inside the per-product ``cases`` map next to the
+# cases themselves (see product_all_ok).
+INVARIANT_FLAGS = ("reopen_allowed", "sidecar_absent_after",
+                   "source_unchanged")
+CASE_FIELDS = ("destination", "error_code", "error_message",
+               "error_outcome", "expected_refused", "ok", "refused")
+# Case names whose presence depends on what the native host could discover
+# (the volume-GUID and GLOBALROOT device heads).  They cannot be required of a
+# report: guard_cases() can only produce them where the device namespace
+# answers, and a host without such a device writes a truthful report without
+# them.
+DISCOVERY_DEPENDENT_CASE_PREFIXES = ("globalroot", "volume_guid")
+
+
+def _is_digest(value):
+    """True when ``value`` has the wire form of a measured sha256 digest."""
+
+    return (isinstance(value, str) and len(value) == 64
+            and all(character in "0123456789abcdef" for character in value))
+
+
+def _ledger_tail(path):
+    """The build-ledger spelling of one recorded path.
+
+    The report records the staging path the operator chose
+    (``C:/msys64/tmp/<run>/win/go/iprange.exe``) while the ledger records its
+    own layout (``win/go/iprange.exe``).  ``_tail`` folds the trailing
+    components both sides agree on; it expects forward separators, so the
+    backslash spelling a Windows interpreter may produce is folded first.
+    """
+
+    return _tail(str(path or "").replace("\\", "/"))
+
+
+def required_case_names(report_platform):
+    """Every case name a guard report of one platform must carry.
+
+    Derived from ``guard_cases`` -- the producer's own table -- rather than
+    from a second list kept here: a spelling added to the battery is required
+    of the evidence the next time it is read, and a spelling removed from the
+    battery stops being required, in one change.  The discovery-dependent names
+    are excluded for the reason given at DISCOVERY_DEPENDENT_CASE_PREFIXES.
+    """
+
+    if report_platform not in REPORT_PLATFORMS:
+        return set()
+    probe = ("C:\\guardwork\\probe" if report_platform == "windows"
+             else "/guardwork/probe")
+    return {name for name, _source, _destination in guard_cases(probe)
+            if not name.startswith(DISCOVERY_DEPENDENT_CASE_PREFIXES)}
+
+
+def case_facts_problems(where, label, name, case, report_platform, problems):
+    """Require one recorded guard case to describe a real guard decision.
+
+    The three facts that make a guard refusal a refusal are the error code,
+    the domain outcome, and the message; together with ``refused`` and
+    ``expected_refused`` they are what the harness compared to decide ``ok``.
+    Re-deriving ``ok`` from them here is the whole point: a report that
+    flipped the verdict without flipping the facts -- or the other way round --
+    contradicts itself and is refused.
+    """
+
+    missing = sorted(set(CASE_FIELDS) - set(case))
+    extra = sorted(set(case) - set(CASE_FIELDS) - set(INVARIANT_FLAGS))
+    if missing:
+        problems.append(f"{where}: {label} case {name!r} records no "
+                        f"{', '.join(missing)}; a guard case without its "
+                        f"recorded facts cannot be re-graded")
+        return
+    if extra:
+        problems.append(f"{where}: {label} case {name!r} carries "
+                        f"{', '.join(extra)}, which this harness never "
+                        f"records")
+        return
+    if report_platform == "windows":
+        want_expected = name not in ALLOWED_DESTINATION_CASES
+    elif report_platform == "posix":
+        want_expected = False
+    else:
+        want_expected = bool(case.get("expected_refused"))
+    expected = case.get("expected_refused")
+    if expected is not want_expected:
+        problems.append(
+            f"{where}: {label} case {name!r} records expected_refused="
+            f"{expected!r} on a {report_platform!r} run; the guard refuses "
+            f"every sidecar spelling on Windows and nothing on POSIX, so the "
+            f"expectation is a function of the platform and the case name")
+        return
+    refused = case.get("refused")
+    if refused is not expected:
+        problems.append(
+            f"{where}: {label} case {name!r} expected a refusal and records "
+            f"refused={refused!r}; a guard case that did not do what the "
+            f"battery expected is a failure, not an ok")
+        return
+    if expected:
+        for field, want in (("error_code", "invalid_argument"),
+                            ("error_outcome", "not_started"),
+                            ("error_message", ACCEPTED_MESSAGE)):
+            if case.get(field) != want:
+                problems.append(
+                    f"{where}: {label} case {name!r} was refused with "
+                    f"{field}={case.get(field)!r}, not {want!r}; the same-source "
+                    f"guard answers with one canonical invalid_argument / "
+                    f"not_started refusal, and another error is a different "
+                    f"failure dressed up as the guard")
+    else:
+        if case.get("error_code") is not None \
+                or case.get("error_outcome") is not None \
+                or case.get("error_message") not in ("", None):
+            problems.append(
+                f"{where}: {label} case {name!r} was not refused but records "
+                f"error facts code={case.get('error_code')!r} "
+                f"outcome={case.get('error_outcome')!r} "
+                f"message={_clip(case.get('error_message'))!r}")
+    recomputed = (refused == expected and (not expected or (
+        case.get("error_code") == "invalid_argument"
+        and case.get("error_outcome") == "not_started"
+        and case.get("error_message") == ACCEPTED_MESSAGE)))
+    if case.get("ok") is not recomputed:
+        problems.append(
+            f"{where}: {label} case {name!r} records ok="
+            f"{case.get('ok')!r} but its own recorded facts give "
+            f"{recomputed}; the verdict is derived from the facts, so the two "
+            f"cannot disagree")
+
+
+def _clip(text, limit=70):
+    collapsed = " ".join(str(text or "").split())
+    return collapsed if len(collapsed) <= limit else collapsed[:limit] + "..."
+
+
+def _verify_product(where, label, product, report_platform, fixture, ledger):
+    """Grade one product record of a guard report."""
+
+    problems = []
+    if not isinstance(product, dict):
+        return [f"{where}: products.{label} is not an object"]
+    if product.get("implementation") != label:
+        problems.append(
+            f"{where}: products.{label}.implementation "
+            f"{product.get('implementation')!r} does not name {label!r}; the "
+            f"harness asked that binary who it is through system.describe, "
+            f"and the answer is part of the evidence")
+    binary = product.get("binary")
+    if not isinstance(binary, dict):
+        problems.append(f"{where}: products.{label} records no binary "
+                        f"identity")
+    else:
+        digest = binary.get("sha256")
+        if not _is_digest(digest):
+            problems.append(f"{where}: products.{label}.binary.sha256 "
+                            f"{digest!r} is not a measured digest")
+        elif not isinstance(binary.get("path"), str) or not binary["path"]:
+            problems.append(f"{where}: products.{label}.binary.path is "
+                            f"missing, so the digest cannot be certified")
+        elif not isinstance(binary.get("size"), int) or binary["size"] <= 0:
+            problems.append(f"{where}: products.{label}.binary.size "
+                            f"{binary.get('size')!r} is not a positive byte "
+                            f"count of a real executable")
+        elif ledger is not None:
+            tail = _ledger_tail(binary.get("path"))
+            if tail not in ledger:
+                problems.append(
+                    f"{where}: products.{label} ({binary.get('path')!r}) is "
+                    f"not attested by the sha256 ledger")
+            elif digest != ledger[tail]:
+                problems.append(
+                    f"{where}: products.{label}.sha256 does not match the "
+                    f"ledger entry for {tail} (report {digest!r}, ledger "
+                    f"{ledger[tail]!r})")
+    sources = product.get("sources_before")
+    if not isinstance(sources, dict) or not sources:
+        problems.append(f"{where}: products.{label} records no sources_before; "
+                        f"the guard is proved against a real source database, "
+                        f"and its identity is the first fact of the run")
+    else:
+        for path in sorted(sources):
+            record = sources[path]
+            if not isinstance(record, dict):
+                problems.append(f"{where}: products.{label} source {path!r} "
+                                f"is not an object")
+                continue
+            if record.get("sha256_before") != fixture:
+                problems.append(
+                    f"{where}: products.{label} source {path!r} records "
+                    f"sha256_before {record.get('sha256_before')!r}, not the "
+                    f"fixture digest {fixture!r}; the run copies the fixture "
+                    f"into place, so a source that is not the fixture is a "
+                    f"different measurement")
+            if record.get("sidecar_absent_before") is not True:
+                problems.append(
+                    f"{where}: products.{label} source {path!r} did not start "
+                    f"with its reader sidecar absent; a refusal over an "
+                    f"already-present sidecar is not the guard being proved")
+    cases = product.get("cases")
+    if not isinstance(cases, dict) or not cases:
+        problems.append(f"{where}: products.{label} records no cases; the "
+                        f"guard was exercised on nothing")
+        return problems
+    names = {name for name in cases if name not in INVARIANT_FLAGS}
+    required = required_case_names(report_platform)
+    absent = sorted(required - names)
+    if absent:
+        problems.append(
+            f"{where}: products.{label} omits {len(absent)} of the "
+            f"{len(required)} guard spellings this harness produces (for "
+            f"example {absent[:4]}); a battery with the hard rows removed is "
+            f"not the battery that was run")
+    universe = required | {name for name in names
+                           if name.startswith(DISCOVERY_DEPENDENT_CASE_PREFIXES)}
+    invented = sorted(names - universe)
+    if invented:
+        problems.append(
+            f"{where}: products.{label} records {len(invented)} case(s) no "
+            f"guard battery produces ({invented[:4]}); an invented row is not "
+            f"evidence of a refusal")
+    for name in sorted(names):
+        case = cases[name]
+        if not isinstance(case, dict):
+            problems.append(f"{where}: products.{label} case {name!r} is not "
+                            f"an object")
+            continue
+        case_facts_problems(where, label, name, case, report_platform,
+                            problems)
+    for flag in INVARIANT_FLAGS:
+        if flag not in cases:
+            problems.append(
+                f"{where}: products.{label} records no {flag}; the guard is "
+                f"only proved when the refusal left the source untouched, its "
+                f"sidecar still absent, and a later delivery still works")
+        elif cases[flag] is not True:
+            problems.append(f"{where}: products.{label} {flag} is "
+                            f"{cases[flag]!r}; the battery raises instead of "
+                            f"recording a failure, so a false flag here is a "
+                            f"report written after the fact")
+    if product.get("all_ok") is not True:
+        problems.append(f"{where}: products.{label}.all_ok is "
+                        f"{product.get('all_ok')!r}")
+    elif product.get("all_ok") != product_all_ok(product):
+        problems.append(f"{where}: products.{label}.all_ok disagrees with the "
+                        f"cases it carries")
+    return problems
+
+
+def verify_report(report, ledger_path=None, where="windows-guard.json"):
+    """Re-validate one committed same-source-guard report.
+
+    Re-applies the shared committed-report identity and privacy rules, this
+    harness's own schema expectations, the build-ledger digests, and the
+    cross-field identities a guard report must satisfy: every refusal case
+    must carry the canonical refusal facts and an ``ok`` that follows from
+    them, every allowed case must carry no error facts, every spelling the
+    guard battery produces must be present, the source must be the fixture the
+    ledger attests, and the per-product and report aggregates must equal what
+    their own records say.  Every rule is a problem string; an empty list is
+    a pass.
+
+    ``ledger_path`` names a ``sha256sum``-format file.  Without it the
+    digests are checked for shape only, and the caller says so out loud:
+    an uncertified digest is a weaker verdict, not a passing one.
+    """
+
+    if not isinstance(report, dict):
+        return [f"{where}: report is not an object"]
+    entry = COMMITTED_REPORT_WRITERS.get("windows_guard_harness.py", {})
+    problems = list(committed_report_problems(
+        report, where=where, require_privacy=True,
+        screened=entry.get("screened")))
+    if report.get("schema") != REPORT_SCHEMA:
+        problems.append(f"{where}: unexpected schema "
+                        f"{report.get('schema')!r}")
+        return problems
+    report_platform = report.get("platform")
+    if report_platform not in REPORT_PLATFORMS:
+        problems.append(f"{where}: platform {report_platform!r} is neither "
+                        f"'windows' nor the POSIX negative control 'posix'")
+    provenance = report.get("build_provenance")
+    if report.get("provenance") is not None \
+            and report.get("provenance") != provenance:
+        problems.append(
+            f"{where}: 'provenance' and 'build_provenance' hold different "
+            f"objects; the producer records the same provenance under both "
+            f"names, so the two disagreeing is a hand edit")
+    if isinstance(provenance, dict) \
+            and isinstance(provenance.get("revision"), str) \
+            and provenance["revision"] != report.get("git_head"):
+        problems.append(
+            f"{where}: build_provenance.revision "
+            f"{provenance['revision'][:12]!r} is not the revision the report "
+            f"itself names ({str(report.get('git_head'))[:12]!r}); the "
+            f"qualification and the source it qualified are one thing or "
+            f"nothing")
+    fixture = (report.get("fixture") or {}).get("sha256") \
+        if isinstance(report.get("fixture"), dict) else None
+    if not _is_digest(fixture):
+        problems.append(f"{where}: fixture.sha256 {fixture!r} is not a "
+                        f"measured digest; every refused spelling is the "
+                        f"sidecar of a copy of this file")
+    ledger = None
+    if ledger_path:
+        ledger, ledger_problems = _read_sha256_ledger(ledger_path)
+        problems.extend(ledger_problems)
+        # The Windows run qualifies the fixture the battery staged under
+        # ``win/``, so its digest is certifiable.  The POSIX negative control
+        # is invoked against a per-run private copy of that fixture, which no
+        # build ledger can name; requiring it there would reject a truthful
+        # control, so the fixture is certified only where it is a staged
+        # artifact.  The sources-vs-fixture identity below still binds every
+        # refusal to the file the run actually copied into place.
+        if (ledger and report_platform == "windows"
+                and isinstance(report.get("fixture"), dict)):
+            tail = _ledger_tail(report["fixture"].get("path"))
+            if tail not in ledger:
+                problems.append(f"{where}: the fixture "
+                                f"{report['fixture'].get('path')!r} is not "
+                                f"attested by the sha256 ledger")
+            elif fixture != ledger[tail]:
+                problems.append(
+                    f"{where}: fixture.sha256 does not match the ledger entry "
+                    f"for {tail} (report {fixture!r}, ledger "
+                    f"{ledger[tail]!r})")
+    products = report.get("products")
+    if not isinstance(products, dict) or set(products) != set(PRODUCT_LABELS):
+        recorded = (sorted(products) if isinstance(products, dict)
+                    else products)
+        problems.append(
+            f"{where}: products must hold exactly go and rust, not "
+            f"{recorded!r}; the guard verdict is a both-engine claim")
+        return problems
+    digests = {}
+    for label in PRODUCT_LABELS:
+        problems.extend(_verify_product(where, label, products[label],
+                                        report_platform, fixture, ledger))
+        record = (products[label].get("binary") or {}) \
+            if isinstance(products[label], dict) else {}
+        if _is_digest(record.get("sha256")):
+            digests[label] = record["sha256"]
+    if len(digests) == 2 and digests["go"] == digests["rust"]:
+        problems.append(
+            f"{where}: the go and rust records name the same binary "
+            f"{digests['go']}; a guard battery that ran one executable twice "
+            f"is not a two-engine observation")
+    if products["go"].get("cases") == products["rust"].get("cases"):
+        problems.append(
+            f"{where}: the two products record identical case blocks; each "
+            f"product runs in its own working directory, so one block was "
+            f"copied onto the other")
+    aggregate = all((products[label].get("all_ok") is True)
+                    for label in PRODUCT_LABELS)
+    if report.get("all_ok") is not True:
+        problems.append(f"{where}: all_ok is {report.get('all_ok')!r}; the "
+                        f"guard report is consumed as a pass verdict or not "
+                        f"at all")
+    elif report.get("all_ok") != aggregate:
+        problems.append(f"{where}: all_ok disagrees with the per-product "
+                        f"verdicts it carries")
+    return problems
+
+
+# ``--verify-report`` needs its own controls, pinned as a count for the same
+# reason the kind gate pins its battery: a control that stops running is the
+# failure mode this verifier exists to close.
+VERIFY_SELF_TEST_CONTROLS = {"accept": 1, "reject": 9}
+
+
+def _control_case(name, destination, expected_refused):
+    if expected_refused:
+        return {"destination": destination, "refused": True,
+                "error_code": "invalid_argument",
+                "error_message": ACCEPTED_MESSAGE,
+                "error_outcome": "not_started",
+                "expected_refused": True, "ok": True}
+    return {"destination": destination, "refused": False,
+            "error_code": None, "error_message": "",
+            "error_outcome": None, "expected_refused": False, "ok": True}
+
+
+def _control_product(label, binary_path, digest, work, fixture_digest):
+    cases = {}
+    for name in sorted(required_case_names("windows")):
+        allowed = name in ALLOWED_DESTINATION_CASES
+        cases[name] = _control_case(
+            name, work + ("/meta.txt" if allowed
+                          else "/db.iprange.readers"), not allowed)
+    cases.update({"source_unchanged": True, "sidecar_absent_after": True,
+                  "reopen_allowed": True})
+    return {"implementation": label,
+            "binary": {"path": binary_path, "sha256": digest,
+                       "size": 14071808, "mtime": 1789468364.9},
+            "sources_before": {
+                work + "/db.iprange": {
+                    "sha256_before": fixture_digest,
+                    "sidecar_absent_before": True}},
+            "cases": cases, "all_ok": True}
+
+
+def _verification_self_test():
+    """Drive ``verify_report`` over an accepted report and its mutations.
+
+    Offline: the baseline report and the build ledger are synthesized in owned
+    scratch and the report goes through the shared committed-report writer, so
+    its provenance and privacy blocks are the real thing and every control
+    names the defect it must catch.
+    """
+
+    problems = []
+    executed = {"accept": 0, "reject": 0}
+    room = owned_temp_dir("wg-verify-")
+    try:
+        go_path = "C:/stage/win/go/iprange.exe"
+        rust_path = "C:/stage/win/rust/iprange.exe"
+        fixture_path = "C:/stage/win/fixture.iprange"
+        go_sha = "1" * 63 + "a"
+        rust_sha = "2" * 63 + "b"
+        fixture_sha = "3" * 63 + "c"
+        ledger = os.path.join(room, "SHASUMS.txt")
+        with open(ledger, "w", encoding="utf-8") as stream:
+            stream.write(f"{go_sha}  win/go/iprange.exe\n")
+            stream.write(f"{rust_sha}  win/rust/iprange.exe\n")
+            stream.write(f"{fixture_sha}  win/fixture.iprange\n")
+        head = report_provenance()["git_head"]
+
+        def baseline():
+            return {
+                "schema": REPORT_SCHEMA, "platform": "windows",
+                "fixture": {"path": fixture_path, "sha256": fixture_sha,
+                            "size": 16384, "mtime": 1789468365.6},
+                "products": {
+                    "go": _control_product("go", go_path, go_sha,
+                                           "C:/stage/work/go", fixture_sha),
+                    "rust": _control_product("rust", rust_path, rust_sha,
+                                             "C:/stage/work/rust",
+                                             fixture_sha)},
+                "all_ok": True,
+                "build_provenance": {"revision": head, "tree_clean": True},
+            }
+
+        def written(extra=None):
+            report = baseline()
+            if extra:
+                extra(report)
+            if report.get("build_provenance") is not None:
+                report["provenance"] = report["build_provenance"]
+            dest = os.path.join(room, "report.json")
+            write_committed_report(
+                dest, report,
+                argv=[os.path.basename(__file__), "--verify-report-control"],
+                caller_paths=[("--rust", rust_path), ("--go", go_path),
+                              ("--fixture", fixture_path),
+                              ("--work", "C:/stage/work"),
+                              ("--out", dest),
+                              ("--provenance", os.path.join(room, "p.json"))])
+            with open(dest, encoding="utf-8") as stream:
+                return json.load(stream)
+
+        def expect(label, report, must_name):
+            executed["reject" if must_name else "accept"] += 1
+            found = verify_report(report, ledger_path=ledger, where=label)
+            if must_name:
+                if not any(must_name in problem for problem in found):
+                    problems.append(f"P3 {label}: not refused ({found[:2]})")
+                else:
+                    print(f"[P3] {label} refused")
+            elif found:
+                problems.append(f"P3 {label}: accepted baseline refused "
+                                f"{found[:2]}")
+            else:
+                print(f"[P3] {label} accepted")
+
+        expect("baseline guard report", written(), None)
+
+        def forge_all_refusal_facts(report):
+            # The reviewer repro: replace every refusal code, message and
+            # outcome in the report while leaving the verdicts green.
+            for product in report["products"].values():
+                for name, case in product["cases"].items():
+                    if isinstance(case, dict) \
+                            and case.get("expected_refused"):
+                        case["error_code"] = "io"
+                        case["error_outcome"] = "started"
+                        case["error_message"] = "unrelated failure"
+
+        expect("every refusal fact replaced under a green ok",
+               written(forge_all_refusal_facts),
+               "was refused with error_code")
+
+        def drop_a_hard_case(report):
+            for product in report["products"].values():
+                del product["cases"]["verbatim_sidecar"]
+
+        expect("guard spellings removed from the battery",
+               written(drop_a_hard_case), "omits")
+
+        def claim_a_refusal_that_was_allowed(report):
+            product = report["products"]["go"]
+            case = product["cases"]["absolute_upper"]
+            case["refused"] = False
+            case["expected_refused"] = False
+
+        expect("a sidecar spelling recorded as allowed",
+               written(claim_a_refusal_that_was_allowed),
+               "expected_refused=False on a 'windows' run")
+
+        def ok_disagrees_with_facts(report):
+            product = report["products"]["go"]
+            product["cases"]["ntfs_sigma"]["error_message"] = "something else"
+
+        expect("ok kept green over contradicting facts",
+               written(ok_disagrees_with_facts), "its own recorded facts give")
+
+        def source_is_not_the_fixture(report):
+            for product in report["products"].values():
+                for record in product["sources_before"].values():
+                    record["sha256_before"] = "9" * 64
+
+        expect("sources that are not the attested fixture",
+               written(source_is_not_the_fixture), "not the fixture digest")
+
+        def binary_not_in_the_ledger(report):
+            report["products"]["go"]["binary"]["sha256"] = "7" * 64
+
+        expect("binary digest the ledger does not name",
+               written(binary_not_in_the_ledger), "does not match the ledger")
+
+        def one_binary_for_both_products(report):
+            report["products"]["rust"]["binary"] = dict(
+                report["products"]["go"]["binary"])
+            report["products"]["rust"]["cases"] = dict(
+                report["products"]["go"]["cases"])
+
+        expect("both products ran the same executable",
+               written(one_binary_for_both_products), "one executable twice")
+
+        def provenance_names_another_revision(report):
+            report["build_provenance"]["revision"] = "ab" * 20
+
+        expect("provenance revision contradicts the report revision",
+               written(provenance_names_another_revision),
+               "is not the revision the report itself names")
+
+        def reopen_never_happened(report):
+            for product in report["products"].values():
+                product["cases"]["reopen_allowed"] = False
+
+        expect("reopen invariant dropped", written(reopen_never_happened),
+               "reopen_allowed")
+    finally:
+        shutil.rmtree(room, ignore_errors=True)
+    return problems, executed
+
+
+def _verify_main(path, ledger_path):
+    """``--verify-report`` entry point: re-check one committed guard report."""
+
+    try:
+        with open(path, encoding="utf-8") as stream:
+            report = json.load(stream)
+    except (OSError, ValueError) as exc:
+        print(f"VERIFY {path}: unreadable ({exc})")
+        return 1
+    problems = verify_report(report, ledger_path=ledger_path,
+                            where=os.path.basename(path))
+    for problem in problems:
+        print(f"VERIFY {problem}")
+    if problems:
+        print(f"windows-guard report REJECTED: {len(problems)} problem(s) in "
+              f"{path}")
+        return 1
+    print(f"windows-guard report VERIFIED: {path}"
+          + ("" if ledger_path else " (no --sha256-ledger supplied; digests "
+                                    "were not certified)"))
+    return 0
+
+
+
 def _self_test_entry():
     """``--self-test``: the validators, the shared provenance controls, and this
     writer's own commit discipline judged from this file's source.
@@ -877,10 +1492,27 @@ def _self_test_entry():
     except SystemExit as exc:
         print("SELFTEST FAIL: shared provenance controls: %s" % exc)
         ok = False
+
+    # The verifier is gated by its own controls: a verify_report that stopped
+    # refusing anything must fail here, not merely fail to be noticed by
+    # whoever reads the committed artifact next.
+    verify_problems, verify_executed = _verification_self_test()
+    for problem in verify_problems:
+        print("SELFTEST FAIL: %s" % problem)
+    if verify_problems:
+        ok = False
+    if verify_executed != VERIFY_SELF_TEST_CONTROLS:
+        print("SELFTEST FAIL: verify-report control counts %s, expected %s"
+              % (verify_executed, VERIFY_SELF_TEST_CONTROLS))
+        ok = False
     print("guard self-test %s: %d controls executed (native-only controls "
-          "unreachable on this host: %d)"
+          "unreachable on this host: %d), %d report-verification controls "
+          "(%d accepted, %d refused)"
           % ("PASSED" if ok else "FAILED", executed,
-             0 if IS_WINDOWS else GUARD_SELF_TEST_NATIVE_ONLY))
+             0 if IS_WINDOWS else GUARD_SELF_TEST_NATIVE_ONLY,
+             sum(VERIFY_SELF_TEST_CONTROLS.values()),
+             VERIFY_SELF_TEST_CONTROLS["accept"],
+             VERIFY_SELF_TEST_CONTROLS["reject"]))
     return 0 if ok else 1
 
 
@@ -888,17 +1520,35 @@ def main():
     if "--self-test" in sys.argv or "--selftest" in sys.argv:
         return _self_test_entry()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--rust", required=True, help="Rust iprange binary")
-    parser.add_argument("--go", required=True, help="Go iprange binary")
-    parser.add_argument("--fixture", required=True,
+    parser.add_argument("--rust", help="Rust iprange binary")
+    parser.add_argument("--go", help="Go iprange binary")
+    parser.add_argument("--fixture",
                         help="immutable v4 database copied into the work dir")
-    parser.add_argument("--work", required=True,
+    parser.add_argument("--work",
                         help="fresh working directory (one per product)")
-    parser.add_argument("--out", required=True,
-                        help="evidence JSON path")
+    parser.add_argument("--out", help="evidence JSON path")
     parser.add_argument("--provenance", default=None,
                         help="build provenance JSON recorded verbatim")
+    parser.add_argument("--verify-report", metavar="PATH", default=None,
+                        help="re-validate a committed windows-guard report "
+                             "(shared identity and privacy rules, schema, "
+                             "binary and fixture digests against "
+                             "--sha256-ledger, every guard spelling, the "
+                             "refusal facts behind every ok, and the source "
+                             "invariants) and exit")
+    parser.add_argument("--sha256-ledger", metavar="PATH", default=None,
+                        help="sha256sum-format ledger the staged binaries "
+                             "were certified with, used by --verify-report")
     args = parser.parse_args()
+
+    if args.verify_report:
+        # Reading an artifact back is not a measurement: none of the
+        # run-only inputs apply, and requiring them would push a reviewer to
+        # pass dummy paths that then land in the report the next run writes.
+        return _verify_main(args.verify_report, args.sha256_ledger)
+    for option in ("--rust", "--go", "--fixture", "--work", "--out"):
+        if getattr(args, option[2:].replace("-", "_")) is None:
+            parser.error("%s is required (unless --verify-report)" % option)
 
     # Durable-artifact policy, applied before any product starts: the report
     # records the measured fixture/binary paths and the work directory, so a

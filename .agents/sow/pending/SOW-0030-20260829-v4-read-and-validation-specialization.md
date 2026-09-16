@@ -284,6 +284,80 @@ Pending.
 
 - This SOW's own residuals are recorded here at its close.
 
+## Follow-up items from the SOW-0028 milestone-4 record review (2026-09-15)
+
+One item is retained here. Two further items raised in the same review
+were moved to SOW-0028 on 2026-09-16 by advisor ruling, because they are
+CLI measurement and CLI evidence-consistency work and SOW-0028 owns CLI
+measurement plus adapter overhead ("Performance scope", SOW-0028 `:1110`
+- `:1116`); the move changes ownership only, not scope, and milestone 5
+stays unstarted. None of these items is implemented, and none is a claim
+about the shipped product. The source
+the measurements below ran is
+`2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1`; the rotated evidence set that
+carries the reports they cite was filed by
+`ed7d34caff1957205fa27f32e0c7268a95c3dd1f`, which changes no source file.
+Each entry gives the check that reproduces the finding and the condition
+that closes it. They enter this SOW's scope only if the user starts it; if
+the measured-performance decision closes this SOW as rejected, each entry
+must move to a real SOW or be rejected with evidence, per the project's
+follow-up discipline.
+
+### 1. The fault-worker availability probe runs on every `system.describe`
+
+- Behavior, both engines: Go answers `fault_worker.available` by calling
+  `os.Executable()` (a `/proc/self/exe` readlink) plus `os.Stat` of the
+  candidate worker name on every request
+  (`v4/go/internal/cli/handlers/system.go:65`, `:95-117`); Rust calls
+  `validation::worker_availability()` inside `describe`
+  (`v4/rust/iprange-cli/src/rpc/handlers/system.rs:18`,
+  `v4/rust/iprange-livedb/src/validation.rs:54-56`,
+  `v4/rust/iprange-livedb/src/worker.rs:36`). The probe never spawns the
+  worker; it is two filesystem calls per reply.
+- Measured census (this host, the staged Linux builds, `strace -f -qq`
+  over 5,000 `system.describe` frames written in 30-frame bursts): Go
+  records 4,755 `readlinkat` and 4,755 `newfstatat` lines out of 26,476
+  traced syscalls, so those two probes are 36% of everything the session
+  asked the kernel for; Rust records 3,704 `readlink` and 3,704 `statx`
+  out of 25,908, 29%. Both censuses fall short of one probe pair per frame
+  because `strace` drops lines on a busy session under `-qq`, the same
+  limitation `v4/cli/throughput_harness.py:340-349` records for its thread
+  census. An independent census taken at review time recorded 4,605 pairs
+  for Go, 31% of syscalls per request: same class, same magnitude.
+- Measured value of removing it: caching the probe once per process (a
+  `sync.Once` around the unchanged body) in a throwaway copy of the tree,
+  then measuring with the committed burst mechanics -- 10,000
+  `system.describe` requests per round, 8 rounds alternating the two
+  binaries, `nice -n 19` -- moved Go's median from 17,805.1 to 18,335.0
+  replies/s, +2.98%. The review that raised this item reported +2.24% for
+  the same hoist. Both are single-host load observations and neither is in
+  a committed artifact, so they are leads, not results.
+- Design question to settle before any code changes, recorded as an
+  advisor ruling on 2026-09-16: **caching worker availability is not
+  automatically a valid optimization.** A hoisted probe answers for the
+  life of the process, so it can report stale availability -- a worker
+  installed or removed beside the running binary after start is not
+  reflected until restart. The existing per-request meaning must be
+  preserved unless a freshness contract is separately and explicitly
+  approved. The contract pins only that `available` is true when a
+  candidate worker exists beside the running binary, not when that was
+  checked (`specs/iprange-jsonrpc-v1.md:1069-1070`), so silence about
+  freshness is not permission to cache: hoisting changes observable
+  behavior, and any such change must be taken for both engines at once to
+  keep parity. The +2.24%/+2.98% figures above are leads for *whether* a
+  freshness contract is worth negotiating, not evidence that the hoist is
+  admissible.
+- Close condition: an interleaved A/B at the final identity under this
+  SOW's retain-only-if-win rule, with the freshness decision recorded, or a
+  recorded decision that the probe stays per-request.
+
+### 2 and 3: moved to SOW-0028
+
+Both moved on 2026-09-16 by advisor ruling; the text now lives in the
+SOW-0028 follow-up section under "CLI benchmark methodology has no
+committed harness" and "CLI throughput attestation cannot detect a
+fabricated rate".
+
 ## Accepted Exceptions Tracked Here (2026-09-11)
 
 The milestone-4 closure recorded one agreed carve-out whose follow-up
@@ -302,8 +376,8 @@ decision 2, 2026-09-11).
   parity.
 - Acceptance/completion criteria for closing this exception: the Go
   create path accepts and round-trips the same non-Latin-1 main-name
-  set as Rust on the Windows validation host (native session test on
-  `costa-win11`), with identical wire errors for the rejected
+  set as Rust on the authorized Windows validation host (native session
+  test there), with identical wire errors for the rejected
   remainder, OR the user explicitly accepts the restriction as a
   documented limitation at a decision point, closing this entry as
   accepted.

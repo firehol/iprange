@@ -126,7 +126,7 @@ executed, 0 divergences, 0 hangs, 0 flaky, 36/36 pinned refusals
 satisfied, verdict PASS, plus 108/108 routine pressure cells with 0
 blocked, 0 missing, and 0 vacuous.  The 418-cell/29-pin state recorded in
 earlier waves is closed by this rotation.  `--self-test`
-(61 controls, pinned by `SELF_TEST_CASES_TOTAL`, offline)
+(66 controls, pinned by `SELF_TEST_CASES_TOTAL`, offline)
 includes the three anchors this gate exists to provide: an injected
 synthetic divergence must FAIL, a report with zero executed cells must
 FAIL, and deleting the fixture that pins the `validate.live`
@@ -135,7 +135,7 @@ The mid-wave 42-divergence state those product workers were created for
 is closed: the writer-symlink, recovery-order, feeds-outcome, zero-length,
 procfs/sysfs, and unix-socket classes all agree cell-for-cell now.
 
-Kind-coverage gate (hardened).  Its `--self-test` runs 110 rejection controls plus 4 acceptance controls
+Kind-coverage gate (hardened).  Its `--self-test` runs 133 rejection controls plus 5 acceptance controls
 offline; each records its outcome and the battery judges the run once at
 the end, so an assertion removed from a single helper cannot turn an
 accepted forgery into a passing self-test, and the control count is
@@ -288,7 +288,7 @@ individually and as a filtered group, including
 `character_device_is_refused_as_not_regular` — the zero-access
 `CreateFileW` + `GetFileAttributesW` classifier is proven natively — and
 the reader-sidecar pins pass.  All three shared self-tests print
-`executed=51 expected=51` natively, closing the mingw64 fold defect the
+`executed=53 expected=53` natively, closing the mingw64 fold defect the
 previous wave found and this revision fixed: on that interpreter
 `os.name == 'nt'` while `os.sep == '/'` and `ntpath.normcase` folds case
 only, and the profile matcher had been comparing two spellings of one
@@ -313,7 +313,9 @@ the previously staged pair byte-for-byte: `-trimpath -buildvcs=false`
 plus zero `v4/go` source changes make the Windows Go build reproducible,
 so the repeat is the expected result, not a stale file.  Both reports
 are sanitized: no host login name, no personal home path (every drive
-path begins under the host's `C:/msys64/tmp/` scratch), the nodename is
+path in either report is under the host's `C:/msys64/tmp/` scratch,
+except the mingw64 interpreter named in the recorded toolchain line,
+`C:/msys64/mingw64/bin/python.exe`), the nodename is
 redacted from the toolchain strings, and `checkout_root` is `null`.
 
 Which reports name which revision.  Twenty measurement reports and
@@ -459,10 +461,10 @@ unsupported by the installed Go toolchain) plus
 rust_to_go 25 PASS + 24 skips, go_to_rust 25 PASS + 24 skips; crash
 16/16 scenarios in both directions with both `/bin/false` negatives
 rejected (0 passed, 16 failed each); resource proofs 8/8 with the
-harness self-test PASS; throughput PASS (busy-reply median 38,350.3
-replies/s for go with 16-17 clone calls and 11 unique child tids,
-62,524.5 for rust with 4 clone calls and 4 unique child tids;
-attestation, not a threshold); golden 55 exchanges / 49 case files;
+harness self-test PASS; throughput PASS (busy-reply median 17,689.4
+replies/s for go with 18 clone calls and 6/9 unique child tids at
+3,000/6,000 requests, 55,471.5 for rust with 4 clone calls and 4 unique
+child tids; attestation, not a threshold); golden 55 exchanges / 49 case files;
 sensitivity gate 14/14; guard POSIX negative control PASS for both
 products; kind-coverage gate PASS on the fresh reports; FIFO
 surface gate PASS (17 arms x 2 engines) with its self-test PASS
@@ -2146,12 +2148,15 @@ the binding that field provides.
   `strace`, per product. Rate is attested, not gated — an absolute floor is
   not host portable — so what the gate enforces is that every reply is
   served, the child exits cleanly, and the thread-creation count does not
-  grow with the request count (measured: Go 16-17 clones and Rust 4, both
-  independent of request count).  Committed medians at this revision: Go
-  35,464.7 and Rust 50,535.9 replies/s.  Those are host-load observations,
-  and the rate window starts at child spawn so it includes process start;
-  the same binaries produced Go 38,350.3 and Rust 62,524.5 under a quieter
-  host.  No Go/Rust ratio from these figures is evidence for the 1.3x
+  grow with the request count (measured at this revision: Go 18 `clone`
+  calls and Rust 4, each identical at the 3,000 and 6,000 request probes;
+  Go unique child tids 6 at 3,000 and 9 at 6,000, Rust 4 at both).
+  Committed medians at this revision: Go 17,689.4 and Rust 55,471.5
+  replies/s.  Those are host-load observations, and the rate window starts
+  at child spawn so it includes process start.  The report carries one
+  median per product, so no second quieter-host figure can be cited from
+  it; the 35,464.7/50,535.9 and 38,350.3/62,524.5 pairs that appeared here
+  earlier match no member of the committed artifact.  No Go/Rust ratio from these figures is evidence for the 1.3x
   relative-rate contract planned for milestone 5, which needs a load-isolated
   measurement protocol this harness does not implement.  The report is
   identity-bound (binary SHA-256 plus the `system.describe` implementation
@@ -2246,17 +2251,35 @@ nice python3 v4/cli/check_kind_coverage.py \
   --matrix v4/cli/evidence/matrix-rust_to_go.json \
   --matrix v4/cli/evidence/matrix-go_to_rust.json \
   --crash v4/cli/evidence/crash.json \
+  --crash v4/cli/evidence/crash-go_to_rust.json \
+  --crash-negative v4/cli/evidence/crash-negative-producer-false.json \
+  --crash-negative v4/cli/evidence/crash-negative.json \
   --fifo-surface v4/cli/evidence/fifo-surface.json \
   --throughput v4/cli/evidence/throughput.json \
+  --refusal-class-parity v4/cli/evidence/refusal-class-parity.json \
+  --refusal-class-parity v4/cli/evidence/refusal-class-parity-full.json \
+  --coverage-go v4/cli/evidence/coverage-go.json \
+  --windows-housekeeping v4/cli/evidence/windows-housekeeping.json \
+  --windows-guard v4/cli/evidence/windows-guard.json \
+  --resource v4/cli/evidence/resource.json \
+  --golden v4/cli/evidence/golden.json \
+  --sensitivity v4/cli/evidence/sensitivity.json \
+  --guard-posix v4/cli/evidence/guard-posix.json \
+  --race-battery v4/cli/evidence/race-battery.json \
   --sha256-ledger /tmp/qualsvc/SHASUMS.txt
 
 # Which arguments are required: at least one --matrix or --crash report,
 # and both --fifo-surface and --throughput (an omitted flag is as cheap as a
 # deleted git_head field, so the gate refuses to run without them).
-# --refusal-class-parity, --coverage-go, --crash-negative and
-# --windows-housekeeping are repeatable and, when omitted, are discovered
-# beside the reports already named; a report that cannot be found is a gate
-# problem, not a skipped check.  --sha256-ledger takes a sha256sum-format
+# --refusal-class-parity, --coverage-go, --crash-negative,
+# --windows-housekeeping, --windows-guard, --resource, --golden,
+# --sensitivity, --guard-posix and --race-battery are repeatable and, when
+# omitted, are discovered beside the reports already named; a report that
+# cannot be found is a gate problem, not a skipped check.  Every consumed
+# class must also be attested by the battery manifest, so an artifact the
+# gate never consumes cannot be hollowed out unnoticed.  The milestone's
+# full-axis sweep is a second --refusal-class-parity value of the same
+# class, appended when `refusal-class-parity-full.json` exists.  --sha256-ledger takes a sha256sum-format
 # ledger produced by the battery's own build step over the staged binaries,
 # and when supplied every binary digest recorded in a consumed report must
 # appear in it.  The committed `battery-manifest.json` is the durable form
@@ -2350,11 +2373,11 @@ the derived `privacy` block, screens the inputs the caller declares, and
 refuses the write when any screened input or any finished string value
 names an operator profile path.  Splitting the write from the provenance
 would let a harness keep the artifact and drop the audit, so the registry
-is audited as a set: `command_sanitize.py --self-test` executes 51
+is audited as a set: `command_sanitize.py --self-test` executes 53
 controls over the whole registry, and every harness self-test must report
-`shared command_sanitize controls executed=51 expected=51` before its own
+`shared command_sanitize controls executed=53 expected=53` before its own
 result counts.  `check_producer_privacy.py` attacks the three
-lead-owned writers from the outside with 32 committed controls, so
+lead-owned writers from the outside with 37 committed controls, so
 neither a writer that screens nothing, nor one that serializes its own
 JSON, nor an artifact with no `privacy` block, survives.
 
@@ -2363,9 +2386,9 @@ control is a failure and not a smaller run:
 
 ```bash
 # Gate and harness self-tests (offline, no products needed).
-nice python3 v4/cli/check_refusal_class_parity.py --self-test   # 61 controls
-nice python3 v4/cli/check_kind_coverage.py --self-test          # 110 controls + 4 acceptance
-nice python3 v4/cli/forgery_battery.py                           # 18 classes
+nice python3 v4/cli/check_refusal_class_parity.py --self-test   # 66 controls
+nice python3 v4/cli/check_kind_coverage.py --self-test          # 133 controls + 5 acceptance
+nice python3 v4/cli/forgery_battery.py                           # 21 classes
 nice python3 v4/cli/check_fifo_surface.py --self-test   # 18 + 5 structural, 17 arms x 2 engines
 nice python3 v4/cli/check_golden.py --self-test          # 7 walk + 17 reject + 1 structural
 nice python3 v4/cli/coverage_harness.py --self-test      # 19 controls
@@ -2374,8 +2397,8 @@ nice python3 v4/cli/throughput_harness.py --self-test   # 12 cases + 4 structura
 nice python3 v4/cli/resource_harness.py --self-test      # 25 control groups
 nice python3 v4/cli/crash_harness.py --self-test         # 26 controls, eight groups
 nice python3 v4/cli/windows_guard_harness.py --self-test # 38 controls + 1 native-only
-nice python3 v4/cli/command_sanitize.py --self-test      # 51 registry controls
-nice python3 v4/cli/check_producer_privacy.py --self-test # 32 producer controls
+nice python3 v4/cli/command_sanitize.py --self-test      # 53 registry controls
+nice python3 v4/cli/check_producer_privacy.py --self-test # 37 producer controls
 nice python3 v4/cli/windows_housekeeping_harness.py --self-test  # incl. 9 report-verification controls
 nice python3 v4/cli/races/runner.py --self-test          # 22 mutation (15 arm, 7 detector) + 6 committed-report writer controls
                                                          # + clean-arm/clean-detector/report-location

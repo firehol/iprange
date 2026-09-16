@@ -73,9 +73,12 @@ fn record_unreadable_page(
 const SPAWN_DESCRIPTOR_DEMAND: usize = 3;
 
 /// Bound on the pre-fork headroom retry (design section 9.3). Owned by the
-/// spawn as a named constant and deliberately far below START_LIMIT, so
-/// headroom wait + spawn + the handshake's own START_LIMIT stay inside the
-/// specification's 30 s worker-start bound.
+/// spawn as a named constant and deliberately far below START_LIMIT. No
+/// worker-start bound is imposed by the wire specification:
+/// iprange-jsonrpc-v1.md bounds drain waits only (Go 1 s, Rust 2 s). The
+/// retry runs once per worker candidate, so the composed worst case of the
+/// start path is 2 x SPAWN_DESCRIPTOR_WAIT + START_LIMIT = 2 x 5 s + 30 s =
+/// 40 s; the Go peer waits once and composes to 35 s.
 #[cfg(unix)]
 const SPAWN_DESCRIPTOR_WAIT: Duration = Duration::from_secs(5);
 
@@ -199,6 +202,10 @@ fn spawn_child(
         .spawn()
 }
 
+/// Unix-only: the callers are in the unix owned-stdio spawn path, the only
+/// one that can abandon a spawn before its worker is armed. The not(unix)
+/// resourcing step cannot fail, so on Windows this function has no caller.
+#[cfg(unix)]
 fn abandon_spawn(control: &Control) {
     // Best-effort unlink of the private control file so an identical
     // request afterwards starts cleanly (spec: a worker arm that could

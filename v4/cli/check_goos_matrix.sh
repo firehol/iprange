@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Cross-compile gate for the Go v4 product on the BSD family and Windows.
+# Cross-compile gate for the Go v4 product on macOS, the BSD family and
+# Windows.
 #
 # Three legs, all with CGO_ENABLED=0:
 #
-# 1. Cross-builds all three release binaries for GOOS in {freebsd,
+# 1. Cross-builds all three release binaries for GOOS in {darwin, freebsd,
 #    openbsd, netbsd, dragonfly} x GOARCH in {amd64,arm64}:
 #      ./cmd/iprange            (the iprange product)
 #      ./cmd/iprange-v4-worker
@@ -23,11 +24,20 @@
 #    Linux and breaks the Windows build of the package, so that gap is a
 #    shipping defect no Linux-side test run observes.
 #
-# Why this gate exists: the BSD targets are not built by CI today, and
-# this class of breakage (OS-specific syscall constants, per-OS dirent
+# Why this gate exists: the BSD and macOS targets are not built by CI today,
+# and this class of breakage (OS-specific syscall constants, per-OS dirent
 # layout, missing per-platform helpers, untaged test files) is silent on
 # linux. The gates must be cheap (well under a minute) so it can run with
 # the routine Go validation set.
+#
+# darwin is in scope because the source treats it as a shipping target:
+# cmd/iprange-v4-worker/main.go gates the worker binary on
+# (linux || darwin || freebsd || windows) && (amd64 || arm64),
+# internal/calleropen/wait_darwin.go is gated `darwin || ios`, and the
+# qualification records a darwin build id (BUILD_IDS_HOSTS in
+# v4/cli/command_sanitize.py, expected_build_id.darwin in
+# v4/cli/evidence/build-ids.json). Omitting darwin leaves those files
+# type-checked by no leg of this matrix.
 #
 # GOOS/GOARCH pairs the installed Go toolchain does not support (e.g.
 # dragonfly/arm64) are skipped with a note, not failed: that is a
@@ -70,7 +80,7 @@ supported() {
     printf '%s\n' "$dist_list" | grep -qx "$1/$2"
 }
 
-for goos in freebsd openbsd netbsd dragonfly; do
+for goos in darwin freebsd openbsd netbsd dragonfly; do
     for goarch in amd64 arm64; do
         if ! supported "$goos" "$goarch"; then
             printf '%b SKIP %s/%s %b(unsupported by the installed Go toolchain)\n' "$YELLOW" "$goos" "$goarch" "$NC"

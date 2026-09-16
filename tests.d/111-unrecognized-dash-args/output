@@ -1,0 +1,13 @@
+# OK: --bogus is a file (exit 1)
+# OK: -c is a file (exit 1)
+# OK: -- is a file (exit 1)
+# OK: -4 --bogus is a file (exit 1)
+# OK: --bogus before a real file (exit 1)
+# OK: --bogus after a real file (exit 1)
+# OK: -6 -c reads stdin (exit 0)
+# OK: -6 --bogus - reads stdin (exit 0)
+# OK: -6 -- - reads stdin (exit 0)
+# OK: -6 --bogus --merge - (exit 0)
+# OK: -6 -c then an IPv4 file (exit 0)
+# OK: -c before -6 is a file (exit 1)
+# OK: 11 unrecognized-dash-argument cases match the C reference

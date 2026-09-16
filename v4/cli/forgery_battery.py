@@ -21,6 +21,9 @@ Covered classes (kind-gate finding 7, wave-19.18 closure review):
 - F10 matrix relabel
 - F7a/F7b result-level implementation relabel
 - F11 recorded binary path bound to a nonexistent file
+- X1 the descriptor-pressure axis deleted from the parity verdict
+- X2 a pressure rollup that contradicts its own executed cells
+- X3 a cell whose recorded request frame belongs to another method
 
 The gate is invoked as a subprocess, with the canonical flag set recorded
 in ``v4/cli/evidence/README.md``:
@@ -28,7 +31,16 @@ in ``v4/cli/evidence/README.md``:
     python3 check_kind_coverage.py --matrix <one per matrix, x4>
         --crash evidence/crash.json
         --fifo-surface evidence/fifo-surface.json
-        --throughput evidence/throughput.json [--sha256-ledger PATH]
+        --throughput evidence/throughput.json
+        --refusal-class-parity evidence/refusal-class-parity.json
+        --coverage-go evidence/coverage-go.json
+        --windows-housekeeping evidence/windows-housekeeping.json
+        --windows-guard evidence/windows-guard.json
+        --resource evidence/resource.json
+        --golden evidence/golden.json
+        --sensitivity evidence/sensitivity.json
+        --guard-posix evidence/guard-posix.json
+        --race-battery evidence/race-battery.json [--sha256-ledger PATH]
 
 ``crash.json`` is the only crash report handed over: its scenarios are
 the accepted crash evidence the gate consumes, and
@@ -108,6 +120,12 @@ THROUGHPUT_FILE = os.path.join(EVIDENCE, "throughput.json")
 PARITY_FILE = os.path.join(EVIDENCE, "refusal-class-parity.json")
 COVERAGE_FILE = os.path.join(EVIDENCE, "coverage-go.json")
 WINDOWS_FILE = os.path.join(EVIDENCE, "windows-housekeeping.json")
+WINDOWS_GUARD_FILE = os.path.join(EVIDENCE, "windows-guard.json")
+RESOURCE_FILE = os.path.join(EVIDENCE, "resource.json")
+GOLDEN_FILE = os.path.join(EVIDENCE, "golden.json")
+SENSITIVITY_FILE = os.path.join(EVIDENCE, "sensitivity.json")
+GUARD_POSIX_FILE = os.path.join(EVIDENCE, "guard-posix.json")
+RACE_FILE = os.path.join(EVIDENCE, "race-battery.json")
 MANIFEST_FILE = os.path.join(EVIDENCE, "battery-manifest.json")
 # A negative control is one report per faked role, so the battery carries
 # every crash-negative* file the evidence directory holds.
@@ -122,7 +140,13 @@ CRASH_NEGATIVE_FILES = sorted(
 # against the untouched original.
 BATTERY_FLAGS = (("parity", "--refusal-class-parity"),
                  ("coverage", "--coverage-go"),
-                 ("windows", "--windows-housekeeping"))
+                 ("windows", "--windows-housekeeping"),
+                 ("guard", "--windows-guard"),
+                 ("resource", "--resource"),
+                 ("golden", "--golden"),
+                 ("sensitivity", "--sensitivity"),
+                 ("posix_guard", "--guard-posix"),
+                 ("race", "--race-battery"))
 
 from check_kind_coverage import build_battery_manifest  # noqa: E402
 
@@ -130,16 +154,17 @@ from check_kind_coverage import build_battery_manifest  # noqa: E402
 class Bundle:
     """Every report one gate invocation consumes, as a class mutates it.
 
-    The gate's verdict covers eight report classes, so the battery's
+    The gate's verdict covers fourteen report classes, so the battery's
     comparison of a forged set against the genuine set -- and the command it
-    hands the gate -- has to cover the same eight.  ``manifest`` is the report
+    hands the gate -- has to cover the same fourteen.  ``manifest`` is the report
     set's content binding; it stays ``None`` for every class except the one
     that attacks the binding itself, which points the gate at the committed
     manifest while it rewrites the reports.
     """
 
     __slots__ = ("matrices", "crash", "fifo", "throughput", "parity",
-                 "coverage", "negatives", "windows", "manifest")
+                 "coverage", "negatives", "windows", "guard", "resource",
+                 "golden", "sensitivity", "posix_guard", "race", "manifest")
 
     def __init__(self, **fields):
         for name in self.__slots__:
@@ -149,7 +174,8 @@ class Bundle:
         """What the G2 no-op guard compares between runs."""
         return (self.matrices, self.crash, self.fifo, self.throughput,
                 self.parity, self.coverage, self.negatives, self.windows,
-                self.manifest)
+                self.guard, self.resource, self.golden, self.sensitivity,
+                self.posix_guard, self.race, self.manifest)
 
 
 def _read(path):
@@ -166,7 +192,13 @@ def _load_bundle():
         parity=_read(PARITY_FILE),
         coverage=_read(COVERAGE_FILE),
         negatives=[_read(path) for path in CRASH_NEGATIVE_FILES],
-        windows=_read(WINDOWS_FILE))
+        windows=_read(WINDOWS_FILE),
+        guard=_read(WINDOWS_GUARD_FILE),
+        resource=_read(RESOURCE_FILE),
+        golden=_read(GOLDEN_FILE),
+        sensitivity=_read(SENSITIVITY_FILE),
+        posix_guard=_read(GUARD_POSIX_FILE),
+        race=_read(RACE_FILE))
 
 # What the gate prints when it actually evaluated a report set.  Their
 # presence is what separates a gate verdict from an argparse error or an
@@ -202,8 +234,11 @@ FORGERIES = []
 # written for; seven more, one per consumed-artifact item, cover the parity
 # verdict, the coverage measurement, the negative crash controls, the FIFO
 # inventory, the thread census, the Windows provenance, and the manifest that
-# binds the report set to a revision.
-EXPECTED_CLASSES = 18
+# binds the report set to a revision.  Three further classes attack the two
+# parity holes the external review closed: a verdict whose third (pressure)
+# axis was deleted, a pressure rollup that disagrees with its own executed
+# cells, and a cell whose recorded request frame is another method's.
+EXPECTED_CLASSES = 21
 
 
 def _forgery(label, whole_bundle=False):
@@ -407,15 +442,45 @@ def w6(bundle):
         "330 passed, 4 FAILED (path-separator cases)")
 
 
+@_forgery("X1-parity-pressure-member-deleted", whole_bundle=True)
+def x1(bundle):
+    # The third axis is an obligation of the parity verdict.  Deleting the
+    # block used to shrink the claim instead of contradicting it: the two
+    # surviving axes still said 483 cells x 2 engines, and the gate agreed.
+    bundle.parity.pop("pressure", None)
+
+
+@_forgery("X2-parity-pressure-count-contradiction", whole_bundle=True)
+def x2(bundle):
+    # The axis stays, and its counters stop following its own cells: a
+    # pressure section that reports fewer executed cells than it carries is
+    # the same claim written after the fact.
+    bundle.parity["pressure"]["cells_executed"] -= 1
+
+
+@_forgery("X3-parity-request-frame-method-swapped", whole_bundle=True)
+def x3(bundle):
+    # A cell certifies the refusal class of the frame it says it sent.  Handing
+    # the reader.open cell another method's request keeps the cell's own label,
+    # the pinned class, and the agreement verdict, and is visible only against
+    # the frame inside the record.
+    describe = ('{"jsonrpc":"2.0","id":1,"method":'
+                '"iprange.v1.system.describe","params":{}}')
+    cell = next(entry for entry in bundle.parity["cells"]
+                if entry.get("arm") == "reader.open")
+    cell["go"]["request"] = describe
+
+
 @_forgery("W7-uniform-git-head-rewrite", whole_bundle=True)
 def w7(bundle):
     # Every report re-stamped to one fresh revision satisfies the rule that
     # compares reports with each other, and is only visible against the
     # committed binding of this report set to the revision it was produced on.
     forged = "ab" * 20
-    for report in list(bundle.matrices) + [bundle.crash, bundle.fifo,
-                                           bundle.throughput, bundle.parity,
-                                           bundle.coverage, bundle.windows]:
+    for report in list(bundle.matrices) + [
+        bundle.crash, bundle.fifo, bundle.throughput, bundle.parity,
+        bundle.coverage, bundle.windows, bundle.guard, bundle.resource,
+        bundle.golden, bundle.sensitivity, bundle.posix_guard, bundle.race]:
         report["git_head"] = forged
     for report in bundle.negatives:
         report["git_head"] = forged
@@ -559,7 +624,13 @@ def _run_gate(work_dir, bundle, tag, ledger):
                            ("throughput", bundle.throughput),
                            ("parity", bundle.parity),
                            ("coverage", bundle.coverage),
-                           ("windows", bundle.windows)):
+                           ("windows", bundle.windows),
+                           ("guard", bundle.guard),
+                           ("resource", bundle.resource),
+                           ("golden", bundle.golden),
+                           ("sensitivity", bundle.sensitivity),
+                           ("posix_guard", bundle.posix_guard),
+                           ("race", bundle.race)):
         paths[name] = [_write(work_dir, tag, name, document)]
         tokens.append((paths[name][0], f"{name}#0"))
     paths["crash-negative"] = []
@@ -579,7 +650,13 @@ def _run_gate(work_dir, bundle, tag, ledger):
              "throughput": paths["throughput"],
              "refusal-class-parity": paths["parity"],
              "coverage-go": paths["coverage"],
-             "windows-housekeeping": paths["windows"]},
+             "windows-housekeeping": paths["windows"],
+             "windows-guard": paths["guard"],
+             "resource": paths["resource"],
+             "golden": paths["golden"],
+             "sensitivity": paths["sensitivity"],
+             "guard-posix": paths["posix_guard"],
+             "race-battery": paths["race"]},
             ledger_path=ledger)
         manifest_path = os.path.join(work_dir, f"{tag}-manifest.json")
         with open(manifest_path, "w", encoding="utf-8") as stream:
@@ -698,6 +775,12 @@ def _run_battery(ledger):
          "parity": ["<refusal-class-parity.json>"],
          "coverage": ["<coverage-go.json>"],
          "windows": ["<windows-housekeeping.json>"],
+         "guard": ["<windows-guard.json>"],
+         "resource": ["<resource.json>"],
+         "golden": ["<golden.json>"],
+         "sensitivity": ["<sensitivity.json>"],
+         "posix_guard": ["<guard-posix.json>"],
+         "race": ["<race-battery.json>"],
          "crash-negative": ["<crash-negative.json>"],
          "battery-manifest": ["<battery-manifest.json>"]}, ledger)
     print("  gate invocation: python3 " + " ".join(preview))
@@ -766,6 +849,12 @@ def _self_test():
          "fifo": [FIFO_SURFACE_FILE], "throughput": [THROUGHPUT_FILE],
          "parity": [PARITY_FILE], "coverage": [COVERAGE_FILE],
          "windows": [WINDOWS_FILE],
+         "guard": [WINDOWS_GUARD_FILE],
+         "resource": [RESOURCE_FILE],
+         "golden": [GOLDEN_FILE],
+         "sensitivity": [SENSITIVITY_FILE],
+         "posix_guard": [GUARD_POSIX_FILE],
+         "race": [RACE_FILE],
          "crash-negative": list(CRASH_NEGATIVE_FILES),
          "battery-manifest": [MANIFEST_FILE]}, None)
     for flag in ("--fifo-surface", "--throughput"):

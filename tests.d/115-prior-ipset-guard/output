@@ -1,0 +1,13 @@
+# OK: --diff with no prior ipset (exit 1)
+# OK: --except with no prior ipset (exit 1)
+# OK: --compare-next with no prior ipset (exit 1)
+# OK: --complement reports --except (exit 1)
+# OK: --diff-next reports --diff (exit 1)
+# OK: --common with no prior ipset (exit 1)
+# OK: -6 --diff reports no valid ipsets (exit 1)
+# OK: -6 --except reports no valid ipsets (exit 1)
+# OK: -6 --compare-next reports no valid ipsets (exit 1)
+# OK: -6 --complement reports no valid ipsets (exit 1)
+# OK: --diff seen before -6 uses the IPv4 guard (exit 1)
+# OK: --diff with a prior ipset works (exit 1)
+# OK: 12 prior-ipset guard cases match the C reference

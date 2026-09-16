@@ -26,9 +26,12 @@ const spawnDescriptorDemand = 4
 
 // spawnDescriptorWait bounds the headroom retry (design section 9.3).
 // It is a named constant owned by the spawn and is deliberately far
-// below startLimit, so the whole start path (headroom wait, spawn, and
-// the handshake's own startLimit) stays inside the specification's 30 s
-// worker-start bound.
+// below startLimit. No worker-start bound is imposed by the wire
+// specification: iprange-jsonrpc-v1.md bounds drain waits only (Go 1 s,
+// Rust 2 s). The composed worst case of this start path is this wait
+// plus the handshake's own startLimit, so 5 s + 30 s = 35 s; the Rust
+// peer repeats its equivalent wait once per worker candidate, so its
+// composed worst case is 2 x 5 s + 30 s = 40 s.
 const spawnDescriptorWait = 5 * time.Second
 
 // spawnNullStdio opens the descriptor the worker child receives as its

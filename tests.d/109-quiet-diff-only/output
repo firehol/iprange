@@ -1,0 +1,13 @@
+# OK: merge prints with --quiet (exit 0)
+# OK: --print-ranges prints with --quiet (exit 0)
+# OK: --print-single-ips prints with --quiet (exit 0)
+# OK: common prints with --quiet (exit 0)
+# OK: exclude prints with --quiet (exit 0)
+# OK: compare CSV prints with --quiet (exit 0)
+# OK: count-unique prints with --quiet (exit 0)
+# OK: IPv6 merge prints with --quiet (exit 0)
+# OK: diff without --quiet prints and exits 1 (exit 1)
+# OK: diff with --quiet is silent but exits 1 (exit 1)
+# OK: empty diff with --quiet exits 0 (exit 0)
+# OK: IPv6 diff with --quiet is silent (exit 1)
+# OK: 12 --quiet cases match the C reference: only DIFF output is suppressed

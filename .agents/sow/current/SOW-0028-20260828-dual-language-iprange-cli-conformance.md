@@ -187,10 +187,15 @@ x >=2 runs, all mandatory profiles present, the 378-class pinned table
 matched by digest, 0 divergences, 0 blocked, 0 missing, 0 vacuous, 0
 hangs.  Open validation items 1-4 are therefore closed (details in the
 "Wave 19 round 19.25c" section).  Remaining before the closure decision:
-the eight-role re-anchor round and the glm whole-milestone round at this
-exact revision, then the persistent external control review.  The
-<=1.3x performance gate remains FAILED, not waived (pending SOW-0030
-owns engine residuals); SOW-0017 stays paused; milestone 5 is unstarted.
+the eight-role re-anchor round and the glm whole-milestone round at the
+evidence-filing commit `ed7d34caff1957205fa27f32e0c7268a95c3dd1f` (this
+SOW, the evidence `README.md`, the 20 rotated measurement reports and the
+battery manifest; it changes no source file, so the source under review
+is the executed code revision
+`2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1`), then the persistent external
+control review.  The <=1.3x performance gate remains FAILED, not waived
+(pending SOW-0030 owns engine residuals); SOW-0017 stays paused; milestone
+5 is unstarted.
 
 Wave-19.23 state (2026-09-14): the eight-role adversarial round
 reviewed the wave-19.22 final revision `cfbee7887fb71de67df35ea913d6f7ae70c5c011`
@@ -2787,6 +2792,70 @@ Pending implementation and final review.
 - SOW-0027 closed 2026-09-01; this SOW is the sole current SOW.
 - Implement WebSocket daemon separately in SOW-0029 after this API is accepted.
 - Keep authenticated publication in SOW-0017.
+
+### CLI benchmark methodology has no committed harness
+
+Moved here from SOW-0030 on 2026-09-16 by advisor ruling: CLI measurement
+is SOW-0028 scope ("Performance scope", `:1110`-`:1116`; the role index at
+`:46` already assigns "benchmark methodology for milestone 5" to this SOW).
+Ownership moved; scope did not. Milestone 5 stays unstarted and decision
+2A does not authorize starting it.
+
+- `v4/cli/benchmarks/` contains one empty `.gitkeep` and nothing else, so
+  the CLI surface has no benchmark in the tree.
+- The only peak-RSS code is engine-side and samples its own process:
+  `v4/go/cmd/iprange-v4-bench/measure.go:126-128` reads `VmRSS:` and
+  `VmHWM:` from `/proc/self/status`, and
+  `v4/rust/iprange-livedb/benches/update_ipsets/measure.rs:77` and `:83-86`
+  read `VmHWM:` and `getrusage(RUSAGE_SELF)`. No code under `v4/cli/`
+  samples RSS at all, and `resource_harness.py` accounts for file
+  descriptors and bytes rather than memory.
+- The one CLI-side memory number in the tree is attributed to the wrong
+  process: `v4/cli/resource-record.md:31-40` records peak RSS 25,924 kB and
+  26,044 kB taken with `/usr/bin/time -v` around a matrix run, and the
+  record itself states that this measures the Python runner and the product
+  child together and cannot support the child-only ceiling. That same
+  record defers latency/throughput and engine RSS ceilings to the benchmark
+  step and notes the deliberate ~25 ms per-session grace wait that any
+  latency floor must account for (`v4/cli/resource-record.md:3-6`,
+  `:181-185`).
+- Consequence: no committed harness produces product-child-only peak RSS or
+  a paired latency measurement, so a child-only peak-RSS comparison cannot
+  be evaluated from the CLI surface, and a child-process measurement
+  (`RUSAGE_CHILDREN`, or reading the child's `VmHWM` before it exits) does
+  not exist. The engine-side `<=1.3x` elapsed and peak-RSS bindings remain
+  SOW-0030's; what is missing here is the CLI measurement that could
+  support a comparative claim. This becomes load-bearing at milestone 5,
+  where rate and RSS comparisons are the deliverable.
+- Close condition: a committed benchmark methodology -- what is timed,
+  which process's RSS is sampled and when, how samples are paired and
+  reported, and the release-build requirement -- written before milestone 5
+  makes any rate or RSS claim.
+
+### CLI throughput attestation cannot detect a fabricated rate
+
+Moved here from SOW-0030 on the same ruling: this is consistency of a
+committed CLI evidence artifact, which this SOW owns.
+
+- What the gate checks: every reply served, clean child exit, the
+  product-declared implementation label, a positive median, and a
+  request-count-invariant thread count
+  (`v4/cli/throughput_harness.py:269-361`, `:413-416`). Rate itself is
+  attested and not gated, and no bound is placed on the magnitude of
+  `median_replies_per_s`.
+- Measured gap: passing `structural_problems` a self-consistent fabricated
+  product block that claims 1,000,000 replies/s in every round reports no
+  problems, and a block whose `median_replies_per_s` contradicts its own
+  `rounds` is accepted as well -- nothing recomputes the median from the
+  rounds it summarizes. So a fabricated throughput record passes today;
+  the attestation's real content is the structural facts it pins.
+- Why it belongs here: milestone 5 turns reply rate into a comparative
+  claim, at which point an unbounded rate field stops being decoration and
+  starts being evidence. This entry pairs with the methodology entry above.
+- Close condition: committed controls in `throughput_harness.py
+  --self-test` that reject a rate inconsistent with its own `seconds` and
+  `replies` and a median that is not its rounds' median, or a recorded
+  decision that rate stays attested-only and is never used comparatively.
 
 ## Regression Log
 
@@ -13668,10 +13737,11 @@ parity 5; closure F2/F5/F6; performance 4).  New committed
 harness assets: `v4/cli/check_fifo_surface.py` (17 arms x 2
 engines never-block gate, `--self-test` 18 cases),
 `v4/cli/throughput_harness.py` (busy-reply rate + thread
-structure; go 16-17 clone calls / <=11 unique child tids, rust 4/4;
-median 38,350.3 vs 62,524.5 replies/s; attestation, not a
-threshold; `--self-test` 10 cases), 11 new cases (see A/D/B),
-`evidence/known-defects.json` ledger (bidirectional, empty),
+structure; the committed `evidence/throughput.json` records go 18 clone
+calls at both 3,000 and 6,000 requests with 6 and 9 unique child tids,
+rust 4/4, and medians of 17,689.4 (go) and 55,471.5 (rust) replies/s;
+attestation, not a threshold; `--self-test` 12 cases), 11 new cases
+(see A/D/B), `evidence/known-defects.json` ledger (bidirectional, empty),
 `git_head` embedded in every harness report
 (`command_sanitize.recorded_git_identity()`), kind gate iterating
 the full `REQUIRED_OPENED_KINDS` (adapter_output and
@@ -14489,8 +14559,10 @@ The same arms with `/dev/null` **absent** rather than a FIFO:
 `startLimit` (`internal/worker/client.go:31-35`, 30 s, applied by `Handshake`
 at `:348` and by `client.go:571`) cannot bound this: the block is inside the
 spawn's own blocking `open("/dev/null")`, before the handshake clock starts, so
-the specification's 30 s start bound is exceeded by both engines on both arms.
-Required design:
+both engines blocked on both worker arms with no clock running at all.
+`iprange-jsonrpc-v1.md` imposes no worker-start bound — it bounds drain waits
+only (Go 1 s; Rust 2 s, `:118`) — so the defect here is an unbounded wait, not
+an exceeded limit. Required design:
 
 1. The spawn asks for the descriptors the child and the parent need **before**
    forking, through the descriptor-table read of §6 — never through an open of a
@@ -14502,8 +14574,11 @@ Required design:
    of waiting for a writer that never comes.
 3. The wait for descriptors is explicitly bounded, shorter than `startLimit`,
    and the bound is a named constant owned by the spawn rather than an ambient
-   deadline, so the whole start path stays inside the 30 s the specification
-   allows.
+   deadline. The composed worst case of the start path is that wait plus the
+   handshake's own `startLimit`: 5 s + 30 s = 35 s in Go, and 2 x 5 s + 30 s =
+   40 s in Rust, where the wait is repeated once per worker candidate. No
+   specification bound covers this path; see "Composed worker-start bound" in
+   the follow-up mapping.
 4. When descriptors are not available within that bound, the arm answers the
    class the reference answers for a worker that cannot be resourced
    (`io` with outcome `read_only_failure`), removes its control file, and never
@@ -15634,8 +15709,12 @@ evidence, or carried by a real SOW or a recorded decision.
   arms (the classes are equal, the bands are not, and the cause is
   named), and any claim that the two unobservable Rust checks are
   defenses.
-- Tracked by a real SOW: engine performance residuals and the
-  diagnostic-text alignment above → pending `SOW-0030`; the JSON-RPC
+- Tracked by a real SOW: engine performance residuals → pending
+  `SOW-0030`. The diagnostic-text alignment that this line also pointed at
+  `SOW-0030` was corrected back to this SOW on 2026-09-16 by advisor ruling
+  (see "Wave 19 round 19.26 claims corrections"): load-path diagnostic bytes
+  and the legacy `@list` lossy decode are CLI legacy-surface behavior work,
+  which is SOW-0028 scope, and neither is deferred. The JSON-RPC
   WebSocket transport → pending `SOW-0029`; the projection-report output
   path → pending `SOW-0031`; snapshot authentication and publication →
   `SOW-0017` (status `paused`, in `current/`); the pure-Go port chunks
@@ -15659,8 +15738,14 @@ evidence, or carried by a real SOW or a recorded decision.
 
 ### Closure procedure
 
-The eight roles re-anchor against this wave's integration commit.  Each
-role's report is retained in its sandbox and its verdict is delivered
+The eight roles re-anchor against the evidence-filing commit
+`ed7d34caff1957205fa27f32e0c7268a95c3dd1f`, which carries this SOW, the
+evidence `README.md`, the 20 rotated measurement reports and the battery
+manifest and changes no source file; the source they review is therefore
+the executed code revision
+`2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1`, the last commit that changes
+any product, harness or gate source.  Each role's report is retained in
+its sandbox and its verdict is delivered
 out-of-band; no repository commit follows an accepted round, so the
 reviewed revision remains HEAD at closure.  The external cross-model
 control session remains the last check.
@@ -15901,7 +15986,8 @@ normalizer (`_comparison_fold`), and every profile fixture authorizes
 through `_profile_spelling()`; the fold is monotone, so it can only ever add
 a refusal. Four new cross-spelling equivalence controls replay the whole
 comparison under the emulated nt fold on any host (shared control count
-47 -> 51; group-11's checkout-record controls stay host-shaped and are
+47 -> 51 at revision `2c788b8e`, the round-19.25c target; group-11's
+checkout-record controls stay host-shaped and are
 covered by the emulated-fold replay). Reverted-fix mutations reproduce
 exactly the single failing control natively under emulation, and the new
 pins turn the same mutation red on Linux. The product gate itself was sound
@@ -15929,7 +16015,7 @@ spelling`), which closes the mingw64 profile-fold defect the previous
 native leg found: `_matches_profile` now folds both sides through one
 shape-selected normalizer, profile fixtures authorize through the same
 fold, and four emulated-nt cross-spelling controls pin the decision on
-any host (shared command_sanitize controls 47 -> 51, mutation-proven in
+any host (shared command_sanitize controls 47 -> 51 at revision `2c788b8e`, mutation-proven in
 both directions).  Relative to the previously qualified revision this
 commit changes only `v4/cli/command_sanitize.py`,
 `v4/cli/evidence/README.md`, and this SOW: no `v4/rust` or `v4/go`
@@ -16004,30 +16090,457 @@ revision against the staged ledger binaries: 9 arms x 42 profiles x 2
 engines x >=2 runs = 378/378 cells, `mandatory_profiles` complete at
 42, the 378-class pinned table satisfied with SHA-256
 `314d8be5618e9775...`, 0 divergences, 0 hangs, 0 flaky, 0 vacuous, 0
-blocked, 0 missing cells, and the main grid 483/483 cells in 34.2 s;
+blocked, 0 missing cells, and the main grid 483/483 cells in 34.425 s;
 verdict PASS (`--pressure full`, report at
 `/tmp/iprange-w1925/reports/refusal-class-parity-full.json`, log
-`/tmp/iprange-w1925/reports/log-parity-full.txt`).  The two
-band-gap-class cell groups the pressure sweep names are the recorded
-recovery-inspect worker band gaps, not divergences: the gate's own
-verdict treats them as agreements-by-policy and they are listed in the
-report.
+`/tmp/iprange-w1925/reports/log-parity-full.txt`).  That 34.425 s belongs
+to the full axis; the committed `--pressure routine` sweep at the same
+revision (`v4/cli/evidence/refusal-class-parity.json`) records the same
+483/483-cell main grid in 34.237 s, and the two timings are not
+interchangeable.  The full axis reports 44 band-gap cells spread over six
+arms (`reader-open-close-live` 4, `direct.replace` 8, `current.publish` 8,
+`current.publish.hostname` 8, `validate(worker)` 8,
+`recovery.inspect(worker)` 8), every one of them carrying `agreed: false`:
+32 are cells where the Rust reference completed while Go answered its own
+pinned below-minimum class, and 12 are cells where both engines refused
+with the different classes the pinned table allows each of them in that
+band.  The arms and bands behind them are recorded by "Configurations that
+cannot meet the contract (measured register)" and by the table in
+"Measured descriptor-pressure grid".  Gate policy is unchanged: a band gap
+is reported and never scored as a divergence, the axis counts these 44
+apart from its 334 agreements, and a cell is admitted as a gap only
+because the pinned classes of both engines' own replies support it, so a
+real class divergence cannot be relabelled as a gap
+(`v4/cli/check_refusal_class_parity.py:37-50`, `:1584-1599`).
 
 Records maintained with the rotation: this wave's Status paragraph; the
 evidence `README.md` head block, battery-outcome, matrices, parity,
 coverage, identity, Windows-status, and revision-attribution paragraphs
 rewritten as the present-state record of the rotated set (20 measurement reports + manifest, one revision); control-count pins 47 ->
-51.  Sensitive-data gate re-run on the installed Windows reports: no
+51 at revision `2c788b8e`.  Sensitive-data gate re-run on the installed Windows reports: no
 login name, no personal home path, nodename redacted, `checkout_root`
 null, audit 0 problems.  Named-cost disclosure per project rule: the
-milestone-gate pressure sweep is the ~30-minute-class step (measured
-wall including engine starts; battery ~65 min total), everything else
-this section ran inside the pre-registered battery and Windows-leg cost
+milestone-gate pressure sweep is the long step of this section. Its two
+timings are not interchangeable and must be quoted separately: the
+main-grid sweep ran 483/483 cells in 34.425 s on the `--pressure full`
+axis, while the committed `--pressure routine` report at the same
+revision records the same grid in 34.237 s. The whole wall of the
+`--pressure full` run is host-load dependent and is not carried by any
+artifact in `v4/cli/evidence/` at this revision: the ~30-minute-class
+figure recorded here earlier, and the ~18-minute-class figure
+(1,071.441 s) reported for the full axis by the round-19.26 claims work,
+are both review-time statements without a committed report behind them,
+so neither may be cited as measured until the full-axis report is filed
+with the evidence set. Battery ~65 min total. Everything else this
+section ran inside the pre-registered battery and Windows-leg cost
 budget already recorded above.
 
-Remaining sequence: eight-role re-anchor round at this exact final
-revision; `glm-5.3-responses` whole-milestone round; the persistent
-external astra control review; then the milestone-4 closure decision,
-which stays with the user.  No further commits may follow the review
-target without re-anchoring the rounds (record-only commits invalidate
-verdicts per the standing rule).
+Cost of the profile-match fold, stated by scope because no durable record
+carried one before: the fold that decides mingw64 profile matching
+(`_comparison_fold`, applied to both sides of every profile comparison at
+`v4/cli/command_sanitize.py:573-574` as of revision `2c788b8e`), which is
+work of the whole committed-report scan and not of the input-screening
+path alone.  A measurement taken outside the committed record set put it
+at +26.5% of that scan (84.2 ms to 106.5 ms); no artifact in
+`v4/cli/evidence/` carries those numbers, so they are quoted as a review
+measurement.  Reproduced at `2c788b8e` on this host, stubbing
+`_comparison_fold` to identity takes `audit_committed_reports()` over
+`v4/cli/evidence` from a 115.4 ms and 115.5 ms median to 91.3 ms
+(medians of 9 runs on each side, every command under `nice`, the audit
+verdict identical with and without the fold), so the fold costs +26.3% to
++26.4% of the scan -- the same share the review recorded, on a host whose
+absolute times run about 8% above that measurement.  The scope follows
+from the measurement itself: the cost sits inside the scan that walks
+every committed report, so a future cost claim about this fold must name
+the scan it measured.
+
+Remaining sequence: the eight-role re-anchor round and the
+`glm-5.3-responses` whole-milestone round at the evidence-filing commit
+`ed7d34caff1957205fa27f32e0c7268a95c3dd1f` — the commit carrying this SOW,
+the evidence `README.md`, the 20 rotated measurement reports and the
+battery manifest, with no source-file change, so the source under review
+is exactly the executed code revision
+`2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1`; then the persistent external
+astra control review; then the milestone-4 closure decision, which stays
+with the user.  No further commits may follow the review target without
+re-anchoring the rounds (record-only commits invalidate verdicts per the
+standing rule).
+
+## Wave 19 round 19.26 — claims corrections to records and comments (2026-09-16)
+
+Scope of this round: record truth only. No behavior, no API, no gate logic
+changed. Reviewed revision: `ed7d34caff1957205fa27f32e0c7268a95c3dd1f`
+(the evidence-filing commit; source under review stays
+`2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1`). Repairs in this round are made
+against the **working tree** of that revision, which carries uncommitted
+parallel gate and legacy-parser edits, so several figures below are
+working-tree figures and are flagged as such.
+
+### Corrected: fabricated worker-start bound
+
+`v4/go/internal/worker/spawn_unix.go` and
+`v4/rust/iprange-livedb/src/worker/client.rs` each described the pre-fork
+descriptor headroom wait as keeping the start path "inside the
+specification's 30 s worker-start bound". **No such specification bound
+exists.** `specs/iprange-jsonrpc-v1.md:118` bounds drain waits only
+(Go 1 s, Rust 2 s); the 30 s figures in both engines are the engines' own
+named constants (`startLimit` at `v4/go/internal/worker/client.go:36`,
+`START_LIMIT` at `v4/rust/iprange-livedb/src/worker/client.rs:28`), each of
+which is applied once to the version handshake and once, separately, to the
+cleanup release — they are not two bounds that stack inside the start path.
+
+Composed worst case of the start path, measured against the code at this
+tree state:
+
+- Go: one headroom wait of `spawnDescriptorWait` (5 s) plus the handshake's
+  `startLimit` (30 s) = **35 s**.
+- Rust: `wait_for_spawn_headroom()` runs inside `spawn_resourced_null_stdio()`
+  once per worker candidate, and `worker_candidates()` yields at most two
+  candidates, so 2 x 5 s plus `START_LIMIT` = **40 s**. A candidate whose
+  wait expires returns immediately through `?`, so 40 s requires both waits
+  to succeed after retrying.
+
+The same false attribution was corrected in two places in this SOW's worker-
+spawn design section, which now states the composed bounds and cites the
+spec's actual drain bounds.
+
+**Follow-up (decision pending, not waived): if a composed worker-start bound
+is a requirement, it belongs in `specs/iprange-jsonrpc-v1.md`, which today
+bounds only drain waits.** Until that decision is taken, the 35 s / 40 s
+figures are engine facts, not contract guarantees, and no record may cite
+them as a specification limit.
+
+### Corrected: stale control-count pins
+
+Counts below were produced by running each self-test under `nice` at this
+working tree, and match each gate's own committed pin constant:
+
+| gate | record said | verified now | pin in code |
+|---|---|---|---|
+| `command_sanitize.py --self-test` | 51 | **53** | `PROVENANCE_SELF_TEST_CHECKS` (`v4/cli/command_sanitize.py:2661`) |
+| `check_producer_privacy.py --self-test` | 32 | **37** | `SELF_TEST_CONTROLS` (`v4/cli/check_producer_privacy.py:457`) |
+| `check_refusal_class_parity.py --self-test` | 61 | **64** | `SELF_TEST_CASES_TOTAL` (`v4/cli/check_refusal_class_parity.py:3288`) |
+
+Updated in `v4/cli/README.md` and `v4/cli/evidence/README.md` (head block,
+the shared-registry paragraph, and the self-test command list). The three
+`47 -> 51` statements in the round-19.25c records are **historical and were
+left true**: each is now stamped "at revision `2c788b8e`, the round-19.25c
+target" so a reader does not take 51 as the current pin.
+
+**Drift risk for the lead (must be resolved at integration):** committed
+`HEAD` still carries the old constants (`command_sanitize` 51, producer
+privacy 32, parity 61) while these records now state 53 / 37 / 64. The
+records are only consistent if the gate files and these READMEs land in the
+same commit. If the gate edits are dropped or change again, these three
+numbers are wrong.
+
+**Deliberately left unpinned (two lines, for the integration pass):**
+
+- `v4/cli/evidence/README.md:2372` kind-coverage line still reads "110
+  rejection + 4 acceptance". The gate is being extended in the same working
+  tree; pinning a mid-edit number would create the exact defect this round
+  is removing. Pin it once at the final tree, from a run.
+- `v4/cli/evidence/README.md:2381` guard-harness line still reads "38
+  controls + 1 native-only". The working-tree harness declares
+  `GUARD_SELF_TEST_CONTROLS = 39` plus `GUARD_SELF_TEST_NATIVE_ONLY = 1`
+  (`v4/cli/windows_guard_harness.py:240`, `:244`) and a separate
+  `VERIFY_SELF_TEST_CONTROLS = {"accept": 1, "reject": 9}` (`:1257`), so the
+  honest current figure is 39 + 1 native-only with 10 report-verification
+  controls — but that file is also dirty, so it is left for the same final
+  pass. Its `--verify-report` reader path is already documented
+  (`v4/cli/evidence/README.md:2386-2391`), so no wording gap remains there.
+
+### Corrected: throughput figures that matched no artifact
+
+`v4/cli/evidence/throughput.json` (`iprange-cli-throughput-report-v1`,
+`git_head` `2c788b8e`) is the authority. It records Go median
+**17,689.4** replies/s and Rust median **55,471.5** replies/s; Go
+`clone_syscalls` **18** at both the 3,000 and 6,000 request probes with
+`unique_child_tids` **6** and **9**; Rust `clone_syscalls` **4** and
+`unique_child_tids` **4** at both. Corrected in
+`v4/cli/evidence/README.md` (battery-outcome paragraph and the
+`throughput.json` artifact description), which quoted 16-17 clones, 11
+unique child tids, and the pairs 38,350.3/62,524.5 and 35,464.7/50,535.9.
+None of those four values exists in the committed report, and the report
+carries one median per product, so no quieter-host alternative pair can be
+cited from it either. The same stale figures in the comments of
+`v4/cli/throughput_harness.py` (the `THREAD_BASELINE_MAX` band rationale,
+the task-id reliability note, and the `rust_shapes` fixture note) were
+corrected to the artifact; **comments only** — the harness self-test still
+reports "PASSED: 12 cases + 4 structural" after the edit.
+
+The same-failure search found a second live copy of those four values in
+`v4/cli/README.md`, which attributed them to "two waves on the same machine
+under different load" for identical binaries. No artifact carries them and the
+evidence set rotates, so that attribution was not checkable. It is replaced by
+a spread taken from the committed report itself: the three rounds of one pair
+of binaries give Go 18,026.3 / 17,689.4 / 17,683.7 and Rust 55,471.5 /
+58,367.0 / 53,618.9 replies/s, so the Rust rate varies about 8.8% round to
+round under load alone. The conclusion the paragraph defends — no Go/Rust
+ratio may be drawn from these figures, and they are not evidence for the
+1.3x relative-rate contract — is unchanged, and is now supported by a number
+a reader can recompute from `v4/cli/evidence/throughput.json`.
+
+### Corrected: cost class of the parity and pressure runs
+
+`v4/cli/README.md` claimed "the full battery runs in well under a minute
+(measured 34.4 s ...)". That conflated one gate with the whole battery. The
+34 s figure is this parity gate's own run: the committed
+`evidence/refusal-class-parity.json` records `elapsed_seconds` **34.237**
+for 483 main-grid cells on both engines plus the 108 `--pressure routine`
+cells, and the round-19.25c `--pressure full` axis recorded the same grid in
+**34.425** s. The full axis as a whole and the battery are longer steps:
+the battery is recorded above as ~65 min.
+
+The named-cost disclosure for round 19.25c is corrected in the same
+direction. The whole-wall figure of the `--pressure full` run is **not**
+carried by any committed artifact: neither the earlier "~30-minute-class"
+statement nor the 1,071.441 s (~17.9 min) figure reported for it in this
+round's tasking could be confirmed at this tree state — `/tmp` paths are not
+evidence and the pressure logs that would hold them were empty — so both are
+recorded as review-time statements awaiting a committed report. The W5
+re-measurement of the routine sweep at 360 s is likewise a different-host-
+load observation and is not interchangeable with the committed 34.237 s.
+
+### Decision log — legacy filename and diagnostic-byte residuals (advisor ruling, 2026-09-16)
+
+Recorded for integration by the lead; **nothing here claims implementation**.
+
+1. The Rust legacy `@list` lossy decode and the load-path diagnostic-byte
+   differences are **SOW-0028 scope and are not deferred**. An earlier
+   mapping in this SOW pointed the diagnostic-text alignment at pending
+   SOW-0030; that line is corrected above.
+2. Evidence for the two residuals, as reported by the argv round:
+   `v4/rust/iprange-cli/src/legacy/parse.rs:289` builds each list path with
+   `String::from_utf8_lossy(trim_trailing_ws(s))`, so a list naming a path
+   containing a non-UTF-8 byte opens the U+FFFD-substituted name and the run
+   exits 1 where C and Go exit 0 with content; and the legacy error currency
+   is `String` across `parse.rs`, `family.rs`, `ipv4.rs`, `ipv6.rs`, so
+   `Cannot load ipset: <path>` renders an invalid byte as U+FFFD (rc and
+   stdout are exact there).
+3. Ownership: the Rust fix is being carried in the legacy-parser work under
+   `v4/rust/iprange-cli/src/legacy/**` and the Go fix in
+   `v4/go/internal/cli/legacy/**`, both in this SOW's wave. Neither may be
+   moved to SOW-0030: SOW-0030 owns engine-level performance residuals, not
+   CLI legacy-surface behavior.
+4. Reporting hygiene, applied to this round and required going forward: every
+   claims statement in this SOW must name the specific review round it
+   describes, so a statement about one round's reviewer tally cannot be read
+   as another round's verdict. The specific contradictory pair flagged by the
+   external review ("all eight reviewers FAIL" against "two reports pending")
+   could not be located in this SOW at revision
+   `ed7d34caff1957205fa27f32e0c7268a95c3dd1f`; the rule is recorded here and
+   the search is left to the lead's integration pass.
+
+### Decision log — 2A legacy parity, as corrected by the external review
+
+Recorded verbatim-in-substance as decision **2A: match actual C behavior**,
+with three corrections to the earlier record:
+
+1. `--quiet` reproduces C's **DIFF-only** behavior. C documents it as "Do not
+   print the actual ipset. Can only be used in DIFF mode."
+   (`src/iprange.c:307`) and consults the flag only at the DIFF print site
+   (`src/iprange.c:1026`) and the IPv6 print site
+   (`src/iprange6_main.c:414`); an ordinary merge therefore still prints with
+   `--quiet` given.
+2. Bare-directory input reproduces the **narrow observed C behavior** (on
+   Linux: `fopen` succeeds on the directory, the first `fgets` fails, and
+   `ipset6_load` returns the empty set with exit 0 —
+   `src/ipset6_load.c:215-218`). It is **not** a general read-error
+   swallow, and it is distinct from `@directory` expansion, which is a
+   separate `opendir` loop (`src/iprange6_main.c:206-245`).
+3. The `-6 -c` finding is corrected: lowercase `-c` is **not** the counting
+   option — uppercase `-C` is (`src/iprange.c:213`, `:643`), and no
+   lowercase `-c` is parsed anywhere under `src/`. C's IPv6 parser skips
+   unrecognized dash-prefixed arguments
+   (`src/iprange6_main.c:176`, "all other flags: skip"), so `-6 -c` with
+   stdin succeeds and the literal `iprange -6 -c ::/0` treats `::/0` as a
+   filename. The record must describe the **option-handling behavior class**
+   (unrecognized dash-prefixed arguments are skipped, not treated as
+   operands), not that special spelling.
+
+Decision 2A does **not** authorize starting milestone 5, which stays
+unstarted.
+
+### Decision log — 1B history cleanup conditions
+
+Recorded for the lead; conditions on how the cleanup may be described:
+
+1. Push the lease / protection state before rewriting, so the rewrite cannot
+   race a concurrent publication.
+2. Restrict the rewrite to explicitly scoped paths, not a whole-ref sweep.
+3. Qualification after the rewrite must use **freshly identified binaries**
+   (new SHA-256 and `system.describe` identity), not the identities recorded
+   before the rewrite, otherwise the requalification proves nothing about the
+   rewritten state.
+4. Final reviews must run against a **frozen tree** at the rewritten
+   revision; a record-only commit after the review target invalidates the
+   verdicts per the standing rule.
+5. The honest claim is only that the content is **removed from published
+   branch history**. Existing clones, forks, and unreachable objects may
+   retain it, and GitHub cache and object-GC timing must not be represented
+   as prompt or guaranteed.
+
+### SOW ownership corrections applied this round
+
+Per advisor ruling, two follow-ups that the SOW-0030 tracker had accepted
+were moved back to this SOW, because they are CLI measurement and CLI
+evidence-consistency work and this SOW owns CLI measurement plus
+adapter-level overhead ("Performance scope", `:1110`-`:1116`; the role index
+at `:46` already assigns benchmark methodology for milestone 5 to this SOW):
+
+- "CLI benchmark methodology has no committed harness" (was SOW-0030 entry
+  "Benchmark methodology has no committed harness").
+- "CLI throughput attestation cannot detect a fabricated rate" (was SOW-0030
+  entry "The throughput attestation cannot detect a fabricated rate").
+
+The move changes ownership only; scope, evidence, and close conditions are
+preserved. Milestone 5 stays unstarted. The remaining SOW-0030 entry (the
+fault-worker availability probe) stays there, with its freshness ruling
+strengthened: caching availability is not automatically valid and the
+existing per-request meaning must be preserved unless a freshness contract
+is separately approved.
+
+The 2A and 1B decision entries above are also carried, in the same wording,
+in the round's lead-facing draft packet at
+`.local/w1926-claims2/DRAFTS.md`, together with a third requested entry
+("W5 approvals 1A/2A") that could **not** be drafted because the option text
+it refers to does not exist in this tree; that item is left for the lead to
+supply or dismiss. The lead should reconcile the two copies so they cannot
+drift.
+
+### Repair wave 19.26 (W7–W12): legacy CLI parity closure, gate hardening, and identities
+
+The wave-19.25 review round at `ed7d34ca` returned FAIL from all eight
+role reviewers. Twelve scoped workers repaired every accepted finding. This
+section records the decisions, the design facts, the identities the promoted
+battery will run under, and the validation state at the integration commit.
+
+**Decision lines the records owed (approved by the user):**
+
+- W5 approvals (launcher and pressure promotion):
+  - 1A — the battery launcher owns the console log; the battery stopped
+    `tee`-truncating it, so the retained raw log contains the launcher's
+    first-line ownership header, and step `[0h]` fails the run when that
+    header is absent.
+  - 2A — the full descriptor-pressure axis is a promoted, filed artifact:
+    running with `IPRANGE_PRESSURE_FULL=1` writes
+    `refusal-class-parity-full.json`, the battery promotes it at `[16g]`,
+    and the manifest re-emits so the full-axis report is attested beside
+    the routine one. The parity gate now requires a well-formed `pressure`
+    member in every consumed report (`check_refusal_class_parity.py:2663`),
+    so deleting the axis is a gate failure, not a smaller run.
+- 2A (legacy parity): the released C binary is the oracle; `--quiet` is
+  DIFF-only, bare-directory input yields the empty set with exit 0, and the
+  unrecognized-dash-argument class follows each family's actual parser.
+  Recorded in full above (advisor-corrected wording).
+- 1B (history cleanup): approved with the safeguards recorded above; this
+  round adds the advisor's two clarifications — post-rewrite qualification
+  uses freshly identified binaries, and final reviews run against a frozen
+  tree. The honest claim remains "removed from published branch history".
+
+**Numeric-option parser design (measured against the C oracle; future work
+must not re-merge these classes):**
+
+- `--prefixes` is cast-then-bound: C parses `long` and casts to `int`
+  before the bound test (`src/iprange.c:544-546`, IPv6 bound 128 at
+  `src/iprange6_main.c:136-138`), so `2147483648` reports `-2147483648`
+  and `4294967299` is accepted as 3. Implemented in both engines.
+- `--min-prefix`, `--default-prefix`/`-p`, and `--dns-threads` go through
+  C `parse_long_option_or_die` (`src/iprange.c:452-463`): `strtol`
+  grammar (leading whitespace and sign accepted), whole value consumed,
+  `long` bounds, `ERANGE` rejected. They must NOT adopt the `--prefixes`
+  int-truncation. Implemented in both engines.
+- `--ipset-reduce`/`--reduce-factor`/`--ipset-reduce-entries`/
+  `--reduce-entries` go through `parse_size_option_or_die`
+  (`src/iprange.c:465-479`), which rejects a non-digit first byte: signs
+  and spaces stay rejected. Pinned, not widened.
+- In IPv6 mode `--default-prefix`/`-p` skips option and value entirely
+  (`src/iprange.c:563`, `src/iprange6_main.c:152-157`); Go previously
+  re-read the consumed value as an input file (fixed, `run.go:151-160`).
+- Bare-directory input: C's `ipset_load` treats a directory as an empty
+  set because `fopen` succeeds and the first `fgets` fails
+  (`src/ipset_load.c:253-278`, `src/ipset6_load.c:200-217`). Both engines
+  map **EISDIR only** to the empty result (Rust `legacy/parse.rs`
+  `is_directory_read_error`/`read_legacy_input`, Go `legacy/parse.go:51`);
+  other read errors (EIO/EACCES/ENOENT) still fail, which is an
+  intentional, recorded deviation that is stricter than C's
+  first-read-failed equivalence.
+
+**Legacy load-path byte fidelity (kept in this SOW, not deferred):** `@list`
+records open the exact bytes of the named file (the previous
+`from_utf8_lossy` at `legacy/parse.rs` could open a different path), and
+the whole open-failure diagnostic family carries raw bytes through a new
+byte-carrying error currency (`legacy/diag.rs`), byte-identical to C on
+argv, `@dir`, and `@list` channels.
+
+**Tests.d is now 116 cases.** New this wave: `104` non-UTF-8 argv,
+`105` option-missing-value, `106`/`109` quiet-is-DIFF-only, `107`/`111`
+unrecognized-dash-args, `108` non-UTF-8 load path, `110` bare-directory
+input, `112` trailing-value option, `113` inet-aton forms, `114`
+`--prefixes` bound, `115` prior-ipset guard, `116` sibling numeric options.
+All 116 pass against the C reference, the rebuilt Rust binary, and the
+fixed Go binary; cases 105-116 were authored against measured C truth.
+
+**Qualification-gate closure (forgery resistance):** the parity gate
+requires the pressure axis and matches every recorded request frame to the
+cell's arm method; golden, sensitivity, guard-posix and race-battery
+reports became truly consumed (obligations re-derived, records re-graded),
+and the forgery battery grew to 21 classes with every class rejected on
+its own reason. Gate self-test control counts were re-measured on this
+tree and re-pinned: `command_sanitize` 53, `check_producer_privacy` 37,
+`check_refusal_class_parity` 66, `check_kind_coverage` 133 rejection +
+5 acceptance, `windows_guard_harness` 38 executed + 1 native-only +
+10 report-verification controls, `throughput_harness` 12 + 4.
+
+**Clippy and rustfmt attribution (per the non-gate adjudication at
+`:2256`-`:2262`):** the workspace clippy output contains no warning on any
+line introduced by this wave — each warning in a wave-touched file was
+verified pre-existing by diff-hunk attribution (e.g.
+`iprange-livedb/src/worker/client.rs:322` and `legacy/ops.rs:74` are
+outside the wave hunks), so the "clippy clean on new code" standard holds.
+`cargo fmt --check` continues to fail on the pre-existing baseline drift
+in files this wave did not rewrite (258 deviations, concentrated in
+`iprange-cli/src/rpc/*`); the drift the wave itself introduced (17 in its
+new test files plus call-site wraps in `legacy/mod.rs` and
+`legacy/parse.rs`) was formatted away, so every file this wave added or
+rewrote is rustfmt-clean, and the post-format `cargo test -p iprange-cli`
+re-run is green.
+
+**Battery identity and step costs (recorded before the battery run, per
+the resource budget):** the promoted battery copy is
+`.local/w1926-durability/battery-w1926.sh`, SHA-256
+`7563d49e4563dae836c2da9c68ca8ca5a9c98a32e921f0a1d233dc3f33672da1`,
+84,616 bytes (superseding `4aa43418a0f1…`); it consumes the 14-role
+consumed set explicitly and promotes the full-axis report before the
+manifest emit. Named costs: the `refusal-class-parity` 483-cell grid
+measured 34.4 s; the promoted `[16g]` full 42-profile pressure axis
+measured 1,071 s (17.9 wall-minutes) under `nice`; the full battery is the
+~65-minute class; the kind-gate self-test rose from 16.5 s to ~30 s with
+the new controls. All other validation steps ran inside the routine
+budget.
+
+**Validation state at the integration commit (sources unchanged after the
+final worker except repository docs/records, which no engine build reads):**
+Rust workspace tests green (W11: `cargo test --workspace --all-features
+--all-targets` rc 0, 0 warnings); Go suite green (`go test ./...` 25
+packages, `go vet` clean, `gofmt` clean); `tests.d` 116/116 on C, Rust and
+Go (W12); `v4/rust/check-source-graph.sh` rc 0 (517 sources, 4 targets);
+all gate self-tests green with the counts pinned above; the forgery battery
+is green (21/21). The full battery, the pressure-full promotion, the
+Windows re-stamp, and the evidence rotation follow this commit under the
+sequence recorded above; no verdict in this section claims them.
+
+**Follow-up mapping (new items this round):**
+- Go `strtol10` saturates and returns no `ERANGE` flag; equivalent for
+  every current bound (all strictly inside `long` range, pinned by
+  LONG_MAX rows), but an option bound at `LONG_MAX` would silently accept
+  a saturated value. Aligning Go to Rust's three-tuple is tracked as a
+  hygiene follow-up for this SOW's close; it is not a behavior defect
+  today.
+- `legacy/ops.rs` `-v` verbose diagnostics diverge from C in 5 measured
+  spots and keep `to_string_lossy()` renderings in 17 name sites, and
+  `legacy/binary.rs` keeps lossy names for binary-format validation
+  messages (a different message family). Evidence:
+  `.local/w7/EVIDENCE-minus-v-findings.txt`. Reported to the user as a
+  scope question rather than deferred silently.
