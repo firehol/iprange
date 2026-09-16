@@ -16510,8 +16510,14 @@ re-run is green.
 **Battery identity and step costs (recorded before the battery run, per
 the resource budget):** the promoted battery copy is
 `.local/w1926-durability/battery-w1926.sh`, SHA-256
-`7563d49e4563dae836c2da9c68ca8ca5a9c98a32e921f0a1d233dc3f33672da1`,
-84,616 bytes (superseding `4aa43418a0f1…`); it consumes the 14-role
+`19da2f25bba75102f7027d281d18aa0936e17a4108191195b20c81242922813f`,
+85,040 bytes (superseding `7563d49e…`, which superseded
+`4aa43418a0f1…`). Step `[2]` (full Go module tests) now pins
+`CGO_ENABLED=0`, the canonical build config under the DNS parity scope
+decision: the first run of `7563d49e…` executed step `[2]` with the
+default cgo build and the legacy package's four resolver-sensitive DNS
+byte-exact tests failed — a step defect (wrong build config), not a
+product defect; the step comment in the script records this. It consumes the 14-role
 consumed set explicitly and promotes the full-axis report before the
 manifest emit. Named costs: the `refusal-class-parity` 483-cell grid
 measured 34.4 s; the promoted `[16g]` full 42-profile pressure axis

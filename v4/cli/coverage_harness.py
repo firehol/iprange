@@ -78,6 +78,14 @@ DEFAULT_MATRICES = ("go", "rust_to_go", "go_to_rust")
 # produces no files is an error rather than a zero-coverage pass.
 MIN_COVER_FILES_PER_RUN = 1
 
+# Canonical build configuration for every Go tool run by this harness.
+# The qualified Go product is the static CGO_ENABLED=0 build (pure-Go
+# resolver); the legacy DNS byte-exact pins are qualified against that
+# configuration and diverge under a cgo/glibc build (SOW-0028, DNS parity
+# scope), so instrumented builds and the unit suite must compile with the
+# same setting the product is qualified under.
+CANONICAL_CGO_ENABLED = "0"
+
 # One counter mode for both halves of the measurement.  ``go build -cover``
 # defaults to ``set`` while ``go test -cover`` was run with ``atomic`` here,
 # and ``go tool covdata`` refuses to merge a ``set`` profile with an
@@ -477,10 +485,12 @@ def build_covered(module_dir, staging, go):
     for target, package in (("iprange", "./cmd/iprange"),
                             ("iprange-v4-worker", "./cmd/iprange-v4-worker")):
         destination = os.path.join(staging, target)
+        env = dict(os.environ)
+        env["CGO_ENABLED"] = CANONICAL_CGO_ENABLED
         rc, out, err = run([go, "build", "-cover",
                            f"-covermode={COVERMODE}", "-trimpath",
                            "-buildvcs=false", "-o", destination, package],
-                           cwd=module_dir)
+                           cwd=module_dir, env=env)
         if rc != 0:
             raise SystemExit(f"go build -cover {package} failed: "
                              f"{err.strip()[:400]}")
@@ -496,6 +506,7 @@ def measure_unit(module_dir, coverdir, go):
     os.makedirs(coverdir, exist_ok=True)
     env = dict(os.environ)
     env["GOCOVERDIR"] = coverdir
+    env["CGO_ENABLED"] = CANONICAL_CGO_ENABLED
     # ``GOCOVERDIR`` alone is not enough for ``go test -cover``: the
     # test binary only writes its counter block when the coverage flag is
     # passed through to it, so the environment variable on its own yields a
