@@ -16544,3 +16544,13 @@ sequence recorded above; no verdict in this section claims them.
   messages (a different message family). Evidence:
   `.local/w7/EVIDENCE-minus-v-findings.txt`. Reported to the user as a
   scope question rather than deferred silently.
+
+**Disclosure — rustfmt child-module scope:** the formatting pass intended
+for `legacy/mod.rs` and `legacy/parse.rs` followed Rust child modules, so
+pre-existing baseline drift inside `legacy/print.rs`, `legacy/options.rs`,
+`legacy/usage.rs`, `legacy/ops.rs` and `legacy/dns.rs` was cleaned in the
+same action (formatting only, no behavior change; `cargo test -p
+iprange-cli` re-run green afterwards). The drift cleanup inside the files
+this wave rewrote landed in the integration commit; the drift-only change
+to `legacy/dns.rs`, which this wave did not otherwise touch, is its own
+commit so the audit trail can tell the two apart.

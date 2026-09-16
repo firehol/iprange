@@ -218,10 +218,7 @@ impl Resolver {
     /// Validate, count, and queue one hostname; return the per-job
     /// reply channel. Logs the C "Creating new DNS thread" debug
     /// line when the pending count forces pool growth.
-    fn submit(
-        &mut self,
-        _host: &str,
-    ) -> Result<Receiver<Result<Vec<u128>, DnsError>>, DnsError> {
+    fn submit(&mut self, _host: &str) -> Result<Receiver<Result<Vec<u128>, DnsError>>, DnsError> {
         // C iprange_cstrnlen(): the hostname is a C string, so any
         // interior NUL truncates it (fgets can deliver NUL bytes).
         let host = match _host.split('\0').next() {
@@ -340,7 +337,12 @@ impl Resolver {
             let stats = shared.stats.lock().unwrap();
             let made = stats.made;
             drop(stats);
-            (shared, made, self.batch_start, self.next_seq - self.batch_start)
+            (
+                shared,
+                made,
+                self.batch_start,
+                self.next_seq - self.batch_start,
+            )
         };
         if made == 0 || batch_len == 0 {
             self.batch_start = self.next_seq;
@@ -382,8 +384,7 @@ impl Resolver {
         batch.sort_by_key(|r| r.seq);
 
         let stats = shared.stats.lock().unwrap();
-        let (made, failed, retries, found) =
-            (stats.made, stats.failed, stats.retries, stats.found);
+        let (made, failed, retries, found) = (stats.made, stats.failed, stats.retries, stats.found);
         if shared.family == Family::V4 {
             // C dns_done(): debug wins over the progress bar.
             if shared.debug {
@@ -419,8 +420,7 @@ impl Resolver {
         let batch = self.drain();
         // C dns_done(): a failed IPv4 reply fails the run; the IPv6
         // side never fails.
-        let failed = self.shared.family == Family::V4
-            && batch.iter().any(|r| r.result.is_err());
+        let failed = self.shared.family == Family::V4 && batch.iter().any(|r| r.result.is_err());
         let shared = self.shared.clone();
         {
             let _jobs = shared.jobs.lock().unwrap();
