@@ -55,14 +55,20 @@ repository. The user does not want to repeat them.
   mmap, two hunt file I/O on persistent content outside the mmap (fresh
   context, lead's model, run at milestone gates). No scanner-run mutation corpora: this is a small SDK, and CI-grade checks must finish in
   well under a minute to at most a couple of minutes.
-- **Resource budget** — no wasted compute: every build/test/scan runs under
-  `nice`; any step expected to exceed ~2 wall-minutes or ~10 core-minutes must be
-  named with its expected cost in the report and recorded in the active SOW
-  validation plan before it runs; never test a tiny aspect by repeating a
-  whole-program analysis — full-module static analysis runs at most once per
-  gate on the real tree (per OS config), and tripwire/sensitivity cases must be
-  verified at unit scale or inside that single scan; if a gate design needs
-  heavy per-case re-analysis, redesign the gate so the routine check is cheap.
+- **Review and implementation process** — the single authority for HOW work
+  is planned, implemented, reviewed, gated, committed, and pushed is
+  **`REVIEWS.md`** (repo root). It defines: the plan-time astra gate for new
+  SOWs, the per-step implementation loop, the seven standing adversarial
+  reviewer roles (`tester`, `operations`, `parity`, `portability`,
+  `security`, `performance`, `fit-for-purpose`; roles in
+  `.agents/review-roles/`), the evidence-first review kit (`.local/shared/`,
+  gitignored), the persistent astra external control, and the full battery /
+  autonomous per-milestone push rule. Load and follow `REVIEWS.md` before
+  starting any non-trivial implementation or any review round.
+- **Resource budget** — no wasted compute; the binding test-execution policy
+  (targeted tests per step, full battery once per milestone, `nice` always,
+  ~60 s standard suite, 15 s per-test limit, cost disclosure) is in
+  `REVIEWS.md` § Test execution policy.
 
 When a design question arises, the answer must satisfy ALL of these
 simultaneously. If two options both satisfy them, prefer the one that matches
@@ -164,6 +170,10 @@ Before non-trivial work:
 3. Inspect `.agents/skills/project-*/SKILL.md` and load every runtime project skill whose trigger matches the work.
 4. Inspect code/docs/data as ground truth.
 5. Ask the user only for irreducible product/design/risk decisions.
+6. For any implementation or review round, follow the process in
+   **`REVIEWS.md`** (repo root): plan gate, per-step loop, seven persistent
+   adversarial roles, evidence-first review kit, astra control, battery and
+   push rules.
 
 ### Git Worktrees
 

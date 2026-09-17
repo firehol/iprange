@@ -2,76 +2,29 @@
 
 ## Standing Review Rules (user-mandated, read after every compaction)
 
-0. When the user asks to use the swarm, read and follow the user's
-   swarm rules file in whole (`~/.codex/SWARM.md`); never skim it.
-1. Prefer workers and reviewers in the lead assistant's own model.
-2. Use `glm-5.3-responses` for the final review of the whole milestone.
-3. Parallelize with the lead's own model as much as possible (the more
-   the better); never block on a single worker.
-4. Spawn multiple reviewers of the lead's own model, each with a
-   different focus, then run one `glm-5.3-responses` reviewer to
-   validate the entire milestone before closure.
-5. Running workers are never stopped by these rules; spawn in parallel
-   instead.
+**Superseded 2026-09-17 by user decision.** The review and implementation
+protocol for this repository — including this SOW's remaining rounds (the
+Windows-leg repairs, the role re-anchor round, and the milestone-4 closure
+gate) — is maintained in repo-root **`REVIEWS.md`**, with durable role
+definitions under `.agents/review-roles/` and the process recorded by
+SOW-0032. Key changes binding from the next round: the seven-role roster is
+`tester, operations, parity, portability, security, performance,
+fit-for-purpose` (the internal `glm` and `closure` roles are retired);
+roles are spawned once and continued, never restarted; roles review the
+lead's staged evidence instead of rerunning suites (targeted probes in
+their own `.local/<role>/` sandbox only); roles review chunks smaller than
+a milestone; the external control is the persistent astra session per lead
+session and per SOW, invoked by the lead itself.
 
-### Role-based review protocol (user-approved 2026-09-06; overrides
-the generic swarm template for SOW-0028 rounds)
+Historical wave records above this line that reference `.local/*/ROLE.md`,
+the eight-role round, or the glm role describe past rounds and remain
+accurate as history; they are not the protocol for future rounds.
 
-Seven standing reviewer roles, each with a permanent sandbox under
-`.local/<role>/` (gitignored) and a `ROLE.md` containing its mission,
-responsibilities, way of working (adversarial audit), and instructions.
-The lead writes each ROLE.md once and reminds the role to read it in
-whole on every invocation:
-
-- `.local/tester/ROLE.md` — tester: milestone acceptance criteria and
-  core claims; every claimed contract needs a test that would fail if
-  the claim were false (missing detecting test = P1); mutation battery
-  of the gates/harnesses; coverage floor measured and reported.
-- `.local/operations/ROLE.md` — operations: what can go wrong that is
-  not handled; transport failure composition, process lifecycle and
-  crash windows, deadlines and stalls, boundary and
-  resource-exhaustion conditions.
-- `.local/parity/ROLE.md` — parity: Go/Rust wire-format and semantic
-  equivalence; queue/cancellation/exit-code parity; spec authority.
-- `.local/portability/ROLE.md` — portability: native-language idioms
-  (Go goroutines/mutexes, Rust ownership, no unsafe beyond approved
-  boundaries), cross-OS behavior (Windows host, FreeBSD, macOS), the
-  mmap-only/zero-copy/test-only-observability policies.
-- `.local/security/ROLE.md` — security: untrusted-input handling,
-  temp-file and identity races, fault containment, secrets in durable
-  artifacts; records: evidence/SOW/README truthfulness, SHAs,
-  verification of exact-revision verdicts, documentation completeness.
-- `.local/performance/ROLE.md` — performance: allocations, copies,
-  mmap policy, adapter-level overhead (SOW-0028 scope), benchmark
-  methodology for milestone 5; engine residuals are SOW-0030-owned.
-- `.local/glm/ROLE.md` — glm-5.3-responses final whole-milestone
-  validator: redundant adversarial validation of the entire milestone
-  at the exact revision after the six roles report; same sandbox
-  rights.
-
-Shared, read-only review material lives under `.local/shared/`
-(`binaries/` with SHASUMS, `probes/` with the accumulated failure
-reproducers, `README.md`).  The tree is read-only for every role;
-roles run probes, stub products, and mutate evidence only inside their
-own sandbox.  All eight role agents, including `.local/glm/`, inherit the
-lead assistant's current model (user instruction 2026-09-14:
-internal reviewers use the lead's model exclusively).  The
-cross-model independent control is the persistent external
-astra/sol session invoked through the external-reviewers skill.
-
-Binding severity convention for all roles (from the user): P0 = data
-corruption/crash/security; P1 = wrong behavior on valid input, OR a
-contract the milestone explicitly claims with no test that would
-detect its violation (weak assertions that accept invalid input count);
-P2 = contract/records/measurable-performance defects or bypassable
-gates; P3 = cosmetic.  The static-only clause of older reviewer
-briefs is repealed: every role may run anything inside its sandbox.
-
-Every role's verdict and numbered findings are recorded in the SOW
-wave section (lead verifies each finding independently before fixing,
-as before).  glm's verdict closes or reopens the milestone gate; a
-sol/astra-style external control review may still be requested by the
-user as an independent check.
+Still-binding operational rules (unchanged): workers and reviewers use the
+lead assistant's own model; parallelize as much as possible; never stop
+running workers — spawn in parallel instead; when the user asks to use the
+swarm, read and follow the user's swarm rules file (`~/.codex/SWARM.md`) in
+whole.
 
 ## Status
 
@@ -16873,3 +16826,123 @@ documentation (`v4/cli/README.md`) were updated with this exception in
 the same wave; the ~65-minute qualification battery and the integration
 commit proceed under that scope. This decision is not milestone
 acceptance.
+
+## Test suite execution policy (user decision 2026-09-16, advisor-corrected)
+
+**Problem (measured).** The wave battery takes ~65 wall-minutes. Its real cost
+is not the tests: unit suites are fast (Rust 61 test binaries, largest 10.1 s;
+Go 25 packages in 34 s wall; `tests.d` groups 0.2–1.5 s each; matrices 7–61 s;
+crash scenarios ~5–8 s each). The hour is one full descriptor-pressure sweep
+(1,117 s) plus a routine sweep that is a strict subset of it (~390 s of pure
+duplication), serial orchestration, coverage re-runs of the unit suite, and
+gate bookkeeping. A fresh full toolchain compile is only 19 s (release,
+24 cores, measured) — the battery's Rust steps additionally claim "FRESH
+CARGO_TARGET_DIR" while reusing directories last cleaned on Sep 15, which the
+next battery iteration must make true (clean the target dirs; cost ≈ 1 min).
+
+**User decision: 4A with corrections; 5A for duplicate executions only.**
+Requirements:
+
+1. The ≤60 s standard suite is the DEFAULT entry; exceptional checks require
+   explicit selection. Targeted execution reuses the existing `--filter`
+   (`v4/cli/run.py:2516`); no second selection mechanism, no new framework.
+2. The 15 s limit applies to identifiable tests including their setup and
+   cleanup. Grouping/sharding may not hide an individual slow test. Per-test
+   durations must be measured, not inferred from package totals (the Go log
+   shows three packages over 15 s: root SDK 25.3 s, legacy 20.9 s, RPC
+   32.8 s — package totals establish nothing about individual tests).
+3. One overall concurrency budget across all tracks, with isolated writable
+   state. `run-tests.sh` mutates the repo-root `iprange` symlink per run
+   (`run-tests.sh:54`), so concurrent engine runs must use per-run sandbox
+   roots (the pattern the battery already uses for its `W-testsd-<eng>`
+   copies). Wrapping existing invocations in `xargs -P` without isolation is
+   insufficient.
+4. The remaining slow standard entries must be resolved, not labelled
+   compliant: the 483-cell parity grid (34 s serial) and the ~30 s self-test
+   groups (kind gate 133 controls, coverage self-test 66 s) schedule their
+   independently runnable cases in parallel, or the genuinely slow
+   individual tests are explicitly excluded.
+5. Remove repetition, not assertions: the full pressure invocation replaces
+   the overlapping routine sweep in that same invocation (never both); the
+   forgery battery's retry-on-failure (`battery-w1926.sh:1364`) is removed —
+   the first failure is preserved and diagnosed; C-derived expected results
+   and targeted C comparisons stay available (the C-oracle `tests.d` pass
+   simply stops running automatically in the standard set — it stays
+   explicitly invocable).
+6. No nightly timer is authorized. Expensive checks need a stated purpose and
+   an explicit invocation; a milestone may justify particular expensive
+   checks, not an automatic rerun of everything.
+7. This lands before the final closure review of milestone 4, with measured
+   evidence: the standard suite's real wall time, a per-unit duration table,
+   and a targeted-run demonstration. The 30–40 s projection is an estimate
+   and must be replaced by measurement.
+
+Battery identity for the wave-19.26 close is `19da2f25bba75102…` (85,040
+bytes); its Linux leg completed with **78 steps checked, 0 mismatches,
+5 deferred** (all five deferred items belong to the native Windows leg).
+The deferred `termination_signals` flake found under CPU load
+(`graceful_fatal_full_stderr_exits_nonzero`, signal-vs-completion race) is
+repaired in this change: timing-sensitive tests must use deterministic
+synchronization, not scheduler luck.
+
+## Native-Windows portability defects from the legacy-parity wave — decisions (2026-09-17)
+
+The native Windows leg at `7c2d2cf7` found 8 red checks, all introduced by
+`5914b046` and `271be2d9`; the same leg was fully green at `2c788b8e`. The
+provenance author refused to cite a red step, so no Windows reports were
+authored and the two stale evidence files remain unregenerated. Verified
+source locations: `v4/rust/iprange-cli/src/legacy/ops.rs:1065` (set names
+are public CSV output under `--count-unique --header`, not merely
+diagnostics), `v4/rust/iprange-cli/src/legacy/dns.rs:1029` (batch test
+requests a glibc-only hex hostname through the live resolver),
+`v4/cli/command_sanitize.py:786` + `v4/cli/check_producer_privacy.py:394`
+(the personal-path check reads the *auditing* host's profile, and its
+"foreign-host" self-test substitutes the author profile as the checker's
+own profile — the true cross-host condition was never exercised, so
+"0 problems" on the stale files is a blind checker, not a clean report).
+
+User decisions (advisor-corrected, recorded before implementation):
+
+1. **1A — platform-native set-name joining, with CSV agreement proven.**
+   Set names are public CSV output, so the fix is in the test pins, not
+   the engine; the repair must additionally verify Rust and Go emit
+   byte-identical CSV `name,entries,unique_ips` rows on the same tree per
+   platform.
+2. **2A — scope only genuinely platform-dependent checks; keep portable
+   assertions running everywhere.** The DNS batching test must stop
+   depending on a glibc hex-hostname quirk: use a dotted-numeric loopback
+   or controlled replies and retain its batch-count and ordering
+   assertions on Windows. Hex-input compatibility remains its own
+   platform-scoped test. Where the C oracle cannot exist, the report
+   marks the comparison explicitly *unavailable* — the engine's own
+   assertions still execute. No Windows C port is required for this
+   repair.
+3. **3A — accessible-directory parity without a permission waiver.** The
+   recorded decision at "Bare-directory input" preserves failures for
+   EACCES/EIO/ENOENT; a directory whose *open itself fails* must keep
+   failing on every platform (concealing a failed update is a defect
+   class). Directory→empty-set parity on Windows applies only when the
+   open succeeded and the read failed as a directory; both cases are
+   verified natively. **3B — narrow OS-bound wording only:** error
+   meaning, exit status, and ordinary Unicode path handling remain
+   contractual; OS-generated message text may vary by OS *and locale*
+   (per-platform pinned messages via the platform's own message-format
+   contract — never "any error"). The raw non-UTF-8 byte echo through
+   Windows' UTF-16 path layer is recorded as an explicit, scoped
+   difference.
+4. **Privacy checker repaired in this SOW, not deferred.** The shared
+   checker must refuse foreign-host profile roots and the operator login
+   name regardless of which host audits; synthetic self-tests with
+   *different* author and auditor profiles pin the repair; the two
+   Windows reports regenerate afterwards. The staged-diff scan stays as
+   an additional check, never a replacement.
+5. **Ownership:** the Windows-portability worker owns the engine/test
+   repairs above plus the checker repair and the two evidence reports;
+   the fast-suite worker's surface (`v4/cli/run.py`, `coverage_harness.py`,
+   battery scripts, `termination_signals.rs`) is excluded; SOW and README
+   wording updates stay with the lead (the worker reports new pinned
+   control counts instead).
+
+Sequence: targeted short checks per repair, then the affected native
+Windows checks and report authoring — not a full battery restart. The
+final closure battery still runs once at the exact final revision.
