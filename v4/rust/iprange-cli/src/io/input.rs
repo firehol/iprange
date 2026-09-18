@@ -127,7 +127,10 @@ pub struct TextInputSource<K> {
     /// answers from a single hostname group used to fail the whole
     /// feed with "range does not fit the bounded parser batch/family"
     /// even though the batched publication contract only requires
-    /// bounded batches, not bounded resolution groups.
+    /// bounded batches, not bounded resolution groups. The queue holds
+    /// at most one group's surplus (the drain runs before any new
+    /// input read); the ring may keep its capacity after a drain --
+    /// bounded amortization by design, not accumulation across groups.
     pending: VecDeque<ParsedRange>,
     finished: bool,
     last_error: Option<&'static str>,

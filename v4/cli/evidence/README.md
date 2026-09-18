@@ -166,7 +166,7 @@ full axis as the regular artifact (astra gate finding P2-6 retired the
 second committed name and the duplicate sweep that justified it).  The
 418-cell/29-pin state recorded in earlier waves is closed by this
 rotation.  `--self-test`
-(69 controls, pinned by `SELF_TEST_CASES_TOTAL`, offline)
+(70 controls, pinned by `SELF_TEST_CASES_TOTAL`, offline)
 includes the three anchors this gate exists to provide: an injected
 synthetic divergence must FAIL, a report with zero executed cells must
 FAIL, and deleting the fixture that pins the `validate.live`

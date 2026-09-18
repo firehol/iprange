@@ -168,7 +168,11 @@ type textInputCore[K any] struct {
 	// failed the whole feed with "range does not fit the bounded
 	// parser batch/family" even though the batched publication
 	// contract only requires bounded batches, not bounded resolution
-	// groups.
+	// groups. The queue holds at most one group's surplus (the drain
+	// runs before any new input read), and a drained slice header may
+	// keep that group's backing array reachable until the next append
+	// reallocs or the source drops -- bounded amortization by design,
+	// not an accumulation across groups.
 	pending     []parsedRange
 	finished    bool
 	lastCode    string
