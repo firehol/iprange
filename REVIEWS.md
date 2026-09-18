@@ -254,6 +254,22 @@ Binding details recorded from user decisions 2026-09-16:
   PIDs). No whole-tree copies with build targets — use a symlink farm plus
   the materialized mutated file(s), and shared binaries
   (see § Kit hygiene); the sandbox must be ≤ 1 GB when your round ends.
+- **Deliberation budget (binding):** roles have no ambient clock or turn
+  counter, so the dispatch brief must carry the protocol and the role must
+  self-administer it: `date +%s` once at start (T0) and before every
+  numbered probe, printing elapsed in the probe line; a per-probe budget
+  (default 4 min) with **at most two re-attempts** — a third attempt is
+  prohibited, the probe is recorded `INCONCLUSIVE: <named obstacle>`,
+  which is a valid, reportable terminal outcome and lead-adjudication
+  input; a total wall budget, and at 70 % of it the role stops probing and
+  writes the report with what it has. A probe whose intent repeats a
+  previously executed probe's intent is a stop-and-report condition, not a
+  re-derivation invitation (re-deriving at greater depth is the documented
+  overthinking failure mode). The role appends one heartbeat line per
+  probe boundary (`[probe k/N attempt m elapsed Ts verdict]`) to
+  `.local/<role>/HEARTBEAT` in its sandbox so the lead can see progress or
+  silence from outside. Time/thinking budgets belong in every dispatch
+  brief, not in ad-hoc instructions.
 - Severity conventions (binding): **P0** corruption/crash/breach; **P1**
   wrong behavior on valid input, or an explicitly claimed contract with no
   detecting test; **P2** contract/records/measurable-performance defects,
