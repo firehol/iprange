@@ -7100,22 +7100,28 @@ def _self_test():
     # ABOVE the corpus, or an actor mismatch still blocks: rotation
     # tolerance never forgives a report that claims more than the tree
     # can back.
+    #
+    # Each shape is a start-anchored regex over the rule's full message
+    # (operations round-9: bare substring needles let a case NAME
+    # embedding "has no row..." silence an unrelated problem -- e.g. the
+    # invented-row message quotes the name, so a crafted name would
+    # classify a forgery as drift).  Case names are schema-constrained
+    # [A-Za-z0-9_.-] with no quotes, which the patterns rely on.
     _MATRIX_DRIFT = re.compile(
         r"^matrix \S+: report has (\d+) rows but the committed corpus "
-        r"defines (\d+) cases for this matrix")
+        r"defines (\d+) cases for this matrix$")
+    _MATRIX_DRIFT_MISSING = re.compile(
+        r"^matrix \S+: case '[A-Za-z0-9_.\-]+' has no row\. A case defined "
+        r"under v4/cli/cases/ must appear in every matrix report\b")
+    _MATRIX_DRIFT_MIXED = re.compile(
+        r"^matrix \S+: single-actor case '[A-Za-z0-9_.\-]+' has no row\. "
+        r"Mixed matrices record their skips\b")
 
     def _matrix_rotation_drift(problem):
-        """True for a matrix problem that is exactly this tree lagging.
+        """True for a matrix problem that is exactly this tree lagging."""
 
-        The two "has no row" shapes are worded so only a case the tree
-        defines can produce them (an invented row says "row for case
-        ... which no committed case ... defines" instead, and stays a
-        blocker).  The count message is matched exactly and only in the
-        lagging direction: a report claiming MORE rows than the corpus
-        defines is a forgery, not staleness."""
-
-        if ("has no row. A case defined under" in problem
-                or "has no row. Mixed matrices" in problem):
+        if (_MATRIX_DRIFT_MISSING.match(problem)
+                or _MATRIX_DRIFT_MIXED.match(problem)):
             return True
         match = _MATRIX_DRIFT.match(problem)
         if match is None:

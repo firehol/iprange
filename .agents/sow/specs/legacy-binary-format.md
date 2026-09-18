@@ -81,6 +81,31 @@ Each record is an inclusive `[addr, broadcast]` range (start, end).
   `bytes == record_size*records + 4`.
 - per record `addr ≤ broadcast`.
 - no trailing bytes after the last record.
-- `unique ips ≥ records` and `lines ≥ records`.
-- if `optimized`, records are sorted + disjoint and `Σ(broadcast−addr+1) == unique ips`
-  (we recompute and check). `non-optimized` files are parsed without the sort/sum check.
+- `unique ips ≥ records` and `lines ≥ records`, with one exception the
+  released loaders carry for IPv6 only: a v2 header may state
+  `unique ips 0` (the full-universe record `::/0` wraps to 0 under C's
+  u128 sum — `src/ipset6_binary.c:233` guards the comparison with
+  `!u128_is_zero(unique_ips)`). v1 carries no such exception.
+- `optimized` claims are enforced: the records must be sorted + disjoint
+  and `Σ(broadcast−addr+1) == unique ips`, recomputed and checked.
+- the unique-ips sum check on a `non-optimized` payload is **family-specific**,
+  not uniform:
+  - **v1 (IPv4): always checked** (`src/ipset_binary.c:41-140`). C derives
+    the count for the actual payload order — a direct sum when the payload
+    turns out ordered/disjoint, a sort-and-merge sweep otherwise — and
+    compares it to the header in both cases. A header over an unordered
+    payload is refused. An empty payload must state `unique ips 0`
+    (`src/ipset_binary.c:49-53`).
+  - **v2 (IPv6): skipped when the payload is non-optimized**
+    (`src/ipset6_binary.c:56-60`, whose comment states the trust: the set is
+    re-optimized after loading). Only an optimized-ordered v2 payload gets
+    the recomputed comparison.
+- Streaming adapters that cannot hold the whole payload cannot reproduce
+  C's sort-and-merge, so a v1 unordered payload is bounded rather than
+  counted: the adapter's running sum and largest single record bracket C's
+  merged count from above and below, and a header outside that bracket is
+  refused (both directions C also rejects). Inside the bracket the adapter
+  loads the payload as C would, and the published set is exactly the record
+  union — the difference cannot inflate the published address set, which is
+  the direction that matters for a threat-intel feed. v2 follows C's split
+  rule exactly, so no residual exists there.

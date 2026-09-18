@@ -103,8 +103,38 @@ enum ActiveInput {
         reader: BufReader<File>,
         remaining: u64,
         optimized: bool,
+        /// C's DERIVED `payload_is_optimized` (src/ipset_binary.c:65-76,
+        /// src/ipset6_binary.c:35-46): false once a record broke strict
+        /// ascending, disjoint, non-adjacent order against its
+        /// predecessor. It is NOT the header flag. C's v2 loader
+        /// recomputes and compares the unique count while this holds
+        /// (src/ipset6_binary.c:54-65) -- so a header spelling
+        /// "non-optimized" over records that happen to be strictly
+        /// ordered IS compared, exactly as C compares it -- and C
+        /// trusts the header once it clears (adjacent records: disjoint,
+        /// yet C stops recomputing). C also refuses a header claiming
+        /// optimized over a payload whose derived flag cleared.
+        payload_optimized: bool,
+        /// False once any record started at or inside the envelope
+        /// (maximum record end so far), i.e. the records seen are no
+        /// longer pairwise disjoint. While true, C's merged unique
+        /// count equals the running sum (adjacency and gaps do not
+        /// change a disjoint union's cardinality), so the v1
+        /// comparison is exact; once false, only the interval bound
+        /// remains. Distinct from `payload_optimized`: adjacency
+        /// clears that flag without making the sum inexact.
+        count_exact: bool,
         expected_unique: u128,
         actual_unique: u128,
+        /// Running maximum of record ends: the disjointness envelope.
+        envelope: Option<u128>,
+        /// Largest single-record cardinality seen so far. C's merged
+        /// count is at least one record's size regardless of order or
+        /// overlap and at most the running sum; when `count_exact` is
+        /// false these two bounds bracket C's in-memory sort-merge,
+        /// making both contradiction directions outside the interval
+        /// decidable (see the end-of-payload comparison).
+        max_unique: u128,
         previous: Option<(u128, u128)>,
     },
 }
@@ -359,6 +389,14 @@ impl<K: InputKey> TextInputSource<K> {
         if lines < u128::from(records) {
             return Err(self.format_error("binary line count is below record count"));
         }
+        // C validates an empty payload's header in both loaders
+        // (src/ipset_binary.c:49-53, src/ipset6_binary.c:22-26): zero
+        // records with a nonzero "unique ips" is a mismatch, never a
+        // vacuous pass. The comparison half below derives from the
+        // streamed records; this one needs nothing but the header.
+        if records == 0 && expected_unique != 0 {
+            return Err(self.format_error("binary unique count does not match payload"));
+        }
         if expected_unique < u128::from(records) && !(ipv6 && expected_unique == 0) {
             return Err(self.format_error("binary unique count is below record count"));
         }
@@ -373,8 +411,12 @@ impl<K: InputKey> TextInputSource<K> {
             reader,
             remaining: records,
             optimized,
+            payload_optimized: true,
+            count_exact: true,
+            envelope: None,
             expected_unique,
             actual_unique: 0,
+            max_unique: 0,
             previous: None,
         });
         Ok(())
@@ -585,10 +627,15 @@ impl<K: InputKey> TextInputSource<K> {
                 reader,
                 remaining,
                 optimized,
+                payload_optimized,
+                count_exact,
+                envelope,
                 expected_unique,
                 actual_unique,
+                max_unique,
                 previous,
             }) => {
+                let ipv6 = self.options.family == AddressFamilyInput::Ipv6;
                 if *remaining == 0 {
                     let mut trailing = [0u8; 1];
                     let count = reader
@@ -597,14 +644,53 @@ impl<K: InputKey> TextInputSource<K> {
                     if count != 0 {
                         return Err(InputError::format("trailing data after binary payload"));
                     }
-                    if *optimized && *actual_unique != *expected_unique {
+                    // The unique-count comparison per family, mirroring
+                    // the authoritative readers exactly (parity
+                    // round-9 F2; astra P1-3 for the v2 wrap).
+                    //
+                    // v1 (C src/ipset_binary.c:41-140, legacy/binary.rs
+                    // validate_payload_v1): EVERY payload is compared,
+                    // sort-merged when unordered. A clean (strictly
+                    // ascending, disjoint, non-adjacent) payload's
+                    // running sum is exactly C's merged count, so it
+                    // is compared in full -- including a
+                    // non-optimized header C would also check (the
+                    // case the old `optimized &&` guard skipped). For
+                    // an unordered payload the sum over-counts
+                    // overlaps, so only the derivable direction is
+                    // refused: merged <= sum, hence a header ABOVE the
+                    // sum contradicts C's own comparison and is
+                    // rejected here exactly as C rejects it. A header
+                    // at-or-below the sum of a contradictory payload
+                    // cannot be counted by a bounded stream; that
+                    // residual is one-sided (it can only believe
+                    // FEWER addresses than C's merged count, never
+                    // more) and is stated here rather than hidden.
+                    //
+                    // v2 (C src/ipset6_binary.c:13-70): only an
+                    // optimized header is recomputed; a non-optimized
+                    // v2 header is trusted verbatim (C's own comment),
+                    // so no comparison runs for it -- refusing one
+                    // would reject input both legacy readers load.
+                    let mismatch = if ipv6 {
+                        // v2: C recomputes and compares while its
+                        // DERIVED flag holds (src/ipset6_binary.c:54-65),
+                        // and trusts the header once it clears -- so
+                        // this keys on `payload_optimized`, not on the
+                        // header claim and not on `count_exact`.
+                        *payload_optimized && *actual_unique != *expected_unique
+                    } else if *count_exact {
+                        *actual_unique != *expected_unique
+                    } else {
+                        *expected_unique > *actual_unique || *expected_unique < *max_unique
+                    };
+                    if mismatch {
                         return Err(InputError::format(
                             "binary unique count does not match payload",
                         ));
                     }
                     return Ok(Step::BinaryEnd);
                 }
-                let ipv6 = self.options.family == AddressFamilyInput::Ipv6;
                 let size = if ipv6 { 32 } else { 8 };
                 let mut bytes = [0u8; 32];
                 reader
@@ -644,17 +730,58 @@ impl<K: InputKey> TextInputSource<K> {
                         .checked_add(unique)
                         .ok_or_else(|| InputError::format("binary unique count overflows"))?
                 };
-                if *optimized {
-                    if let Some((_, previous_to)) = *previous {
-                        if record.from <= previous_to
-                            || previous_to.checked_add(1) == Some(record.from)
-                        {
+                // Order/adjacency is tracked for EVERY payload (astra
+                // parity round-9 F2): C validates the header's unique
+                // count against every v1 payload, deriving the true
+                // count by sort-merge for unordered ones
+                // (src/ipset_binary.c:41-140). A bounded stream cannot
+                // sort-merge, so what it can decide it must: a
+                // strictly ascending, disjoint, non-adjacent payload's
+                // running sum IS C's merged count, so that case is
+                // compared below; a payload whose records break that
+                // order cannot be counted at all by v1 rules, and
+                // quietly skipping C's integrity check (accepting any
+                // header number, as the previous code did for
+                // non-optimized v1) is the failure being closed. A
+                // header that CLAIMS optimized over a broken-order
+                // payload was already refused, and still is.
+                // Derived-optimized walk, mirroring C
+                // (src/ipset_binary.c:65-76, src/ipset6_binary.c:35-46):
+                // a record at/below the previous end, adjacent to it,
+                // or out of order clears the derived flag; a header
+                // that claimed optimized over such a payload is C's
+                // "claims to be optimized" refusal (still keyed on the
+                // header claim, so a non-optimized header over the
+                // same payload stays loadable exactly as both legacy
+                // readers load it).
+                if let Some((_, previous_to)) = *previous {
+                    if record.from <= previous_to
+                        || previous_to.checked_add(1) == Some(record.from)
+                    {
+                        // C refuses a header that claims optimized over
+                        // a payload that is not (src/ipset_binary.c:143-146,
+                        // src/ipset6_binary.c:66-69, legacy/binary.rs:277-282).
+                        if *optimized {
                             return Err(InputError::format(
                                 "optimized binary payload is unordered, overlapping, or adjacent",
                             ));
                         }
+                        *payload_optimized = false;
                     }
                 }
+                // Pairwise-disjointness envelope: while every record
+                // starts strictly after the maximum end so far, the
+                // records are disjoint, so C's merged count equals
+                // the running sum even when the header is not
+                // optimized-ordered (gaps and adjacency do not change
+                // a disjoint union).
+                if let Some(top) = *envelope {
+                    if record.from <= top {
+                        *count_exact = false;
+                    }
+                }
+                *envelope = Some(envelope.map_or(record.to, |top| top.max(record.to)));
+                *max_unique = (*max_unique).max(unique);
                 *actual_unique = next_unique;
                 *previous = Some((record.from, record.to));
                 Ok(Step::BinaryRecord(record))
@@ -1896,6 +2023,173 @@ mod tests {
         assert_eq!((ranges[0].to.hi, ranges[0].to.lo), (u64::MAX, u64::MAX));
         assert!(source.next_batch().unwrap().is_none());
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn binary_v6_record_reads_lo_then_hi() {
+        // Parity round-9 F1: the v2 record fields are lo (bytes 0-7)
+        // then hi (bytes 8-15) -- the spec layout, C src/uint128.h,
+        // this reader's u128::from_ne_bytes, and Go's own legacy
+        // reader all agree; a hi/lo swap in either engine corrupts
+        // every limb-asymmetric range silently (same record count,
+        // different addresses). Distinct quads expose the order.
+        let mut bytes = [0u8; 32];
+        bytes[0] = 5; // from.lo
+        bytes[16] = 9;
+        bytes[24] = 1; // to.hi
+        let record = binary_record(true, &bytes).expect("decode");
+        assert_eq!(
+            (record.from, record.to),
+            (u128::from(5u32), (u128::from(1u64) << 64) | 9)
+        );
+    }
+
+    #[test]
+    fn binary_unique_count_follows_c_validation() {
+        // Parity round-9 F2: C validates the header's unique count
+        // for EVERY v1 payload (src/ipset_binary.c:41-140, sort-merge
+        // for unordered) and for v2 while its derived optimized flag
+        // holds (src/ipset6_binary.c:35-65); the streaming reader must
+        // not skip the comparison because the header spells
+        // "non-optimized". The payloads are the canonical base64 the
+        // Go mirror test decodes (fixture bytes are shared between
+        // the engines) and match what the released C oracle loads or
+        // refuses on this workstation.
+        fn payload(b64: &str) -> Vec<u8> {
+            // Standard base64, decoded without a crate: the fixtures
+            // are short and every byte is verified against the C run.
+            const TABLE: &[u8; 64] =
+                b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+            let mut out = Vec::new();
+            let mut acc: u32 = 0;
+            let mut bits = 0u32;
+            for byte in b64.bytes() {
+                if byte == b'=' {
+                    break;
+                }
+                let value = TABLE
+                    .iter()
+                    .position(|candidate| *candidate == byte)
+                    .expect("fixture is base64") as u32;
+                acc = (acc << 6) | value;
+                bits += 6;
+                if bits >= 8 {
+                    bits -= 8;
+                    out.push((acc >> bits) as u8);
+                }
+            }
+            out
+        }
+        fn load(bytes: &[u8], family: AddressFamilyInput) -> Result<(), String> {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!(
+                "iprange-input-count-{}-{stamp}",
+                std::process::id()
+            ));
+            std::fs::write(&path, bytes).unwrap();
+            let result = match family {
+                AddressFamilyInput::Ipv4 => {
+                    let mut source = TextInputSource::<Ipv4Key>::new(
+                        vec![path.display().to_string()],
+                        options(AddressFamilyInput::Ipv4, 32, true),
+                        true,
+                        10,
+                    )
+                    .map_err(|e| e.message().to_owned())?;
+                    let mut drain = Ok(());
+                    loop {
+                        match source.next_batch() {
+                            Ok(Some(_)) => {}
+                            Ok(None) => break,
+                            Err(_) => {
+                                drain = Err(source
+                                    .last_input_message()
+                                    .unwrap_or("sdk error")
+                                    .to_owned());
+                                break;
+                            }
+                        }
+                    }
+                    drain
+                }
+                AddressFamilyInput::Ipv6 => {
+                    let mut source = TextInputSource::<Ipv6Key>::new(
+                        vec![path.display().to_string()],
+                        options(AddressFamilyInput::Ipv6, 128, true),
+                        true,
+                        10,
+                    )
+                    .map_err(|e| e.message().to_owned())?;
+                    let mut drain = Ok(());
+                    loop {
+                        match source.next_batch() {
+                            Ok(Some(_)) => {}
+                            Ok(None) => break,
+                            Err(_) => {
+                                drain = Err(source
+                                    .last_input_message()
+                                    .unwrap_or("sdk error")
+                                    .to_owned());
+                                break;
+                            }
+                        }
+                    }
+                    drain
+                }
+            };
+            std::fs::remove_file(path).unwrap();
+            result
+        }
+        // v1 non-optimized, disjoint records (1..2, 5..5): sum 3.
+        // A header claiming 99 contradicts C's comparison (the case
+        // the old `optimized &&` guard skipped); the honest 3 loads.
+        assert!(load(
+            &payload("aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYxLjAKbm9uLW9wdGltaXplZApyZWNvcmQgc2l6ZSA4CnJlY29yZHMgMgpieXRlcyAyMApsaW5lcyAyCnVuaXF1ZSBpcHMgOTkKTTwrGgEAAAACAAAABQAAAAUAAAA="),
+            AddressFamilyInput::Ipv4,
+        )
+        .is_err());
+        assert!(load(
+            &payload("aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYxLjAKbm9uLW9wdGltaXplZApyZWNvcmQgc2l6ZSA4CnJlY29yZHMgMgpieXRlcyAyMApsaW5lcyAyCnVuaXF1ZSBpcHMgMwpNPCsaAQAAAAIAAAAFAAAABQAAAA=="),
+            AddressFamilyInput::Ipv4,
+        )
+        .is_ok());
+        // v1 overlapping records (1..3, 3..5): sum 6, merged 5, max
+        // record 3. Headers outside [3, 6] contradict C's merge in
+        // one of the two derivable directions and must fail both
+        // times; a header inside the bracket is C-loadable only
+        // through the sort-merge the stream cannot do -- see the
+        // documented residual in read_step.
+        assert!(load(
+            &payload("aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYxLjAKbm9uLW9wdGltaXplZApyZWNvcmQgc2l6ZSA4CnJlY29yZHMgMgpieXRlcyAyMApsaW5lcyAyCnVuaXF1ZSBpcHMgMTAKTTwrGgEAAAADAAAAAwAAAAUAAAA="),
+            AddressFamilyInput::Ipv4,
+        )
+        .is_err());
+        assert!(load(
+            &payload("aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYxLjAKbm9uLW9wdGltaXplZApyZWNvcmQgc2l6ZSA4CnJlY29yZHMgMgpieXRlcyAyMApsaW5lcyAyCnVuaXF1ZSBpcHMgMQpNPCsaAQAAAAMAAAADAAAABQAAAA=="),
+            AddressFamilyInput::Ipv4,
+        )
+        .is_err());
+        // C refuses an empty payload whose header counts anything
+        // (src/ipset_binary.c:49-53, and the v2 loader's mirror).
+        assert!(load(
+            &payload("aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYxLjAKb3B0aW1pemVkCnJlY29yZCBzaXplIDgKcmVjb3JkcyAwCmJ5dGVzIDQKbGluZXMgMAp1bmlxdWUgaXBzIDQKTTwrGg=="),
+            AddressFamilyInput::Ipv4,
+        )
+        .is_err());
+        // v2 non-optimized with an ADJACENT pair (0..9, 10..19): the
+        // adjacency clears C's derived flag, and C then trusts the
+        // header (src/ipset6_binary.c:57-60) -- header 7 matches
+        // neither sum nor merge and is still loadable input. A reader
+        // that compared anyway would reject what both legacy readers
+        // load.
+        assert!(load(
+            &payload("aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYyLjAKaXB2Ngpub24tb3B0aW1pemVkCnJlY29yZCBzaXplIDMyCnJlY29yZHMgMgpieXRlcyA2OApsaW5lcyAyCnVuaXF1ZSBpcHMgNwpNPCsaAAAAAAAAAAAAAAAAAAAAAAkAAAAAAAAAAAAAAAAAAAAKAAAAAAAAAAAAAAAAAAAAEwAAAAAAAAAAAAAAAAAAAA=="),
+            AddressFamilyInput::Ipv6,
+        )
+        .is_ok());
     }
 
     #[test]

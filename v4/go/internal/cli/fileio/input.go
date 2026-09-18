@@ -135,13 +135,33 @@ type activeText struct {
 }
 
 type activeBinary struct {
-	reader         *bufio.Reader
-	remaining      uint64
-	optimized      bool
+	reader    *bufio.Reader
+	remaining uint64
+	optimized bool
+	// payloadOptimized is C's DERIVED payload_is_optimized
+	// (src/ipset_binary.c:65-76, src/ipset6_binary.c:35-46): false once
+	// a record broke strict ascending, disjoint, non-adjacent order
+	// against its predecessor. The header line is only a claim. C gates
+	// the "claims to be optimized" refusal, the v2 comparison (compare
+	// when derived-true, trust the header when derived-false), and the
+	// v1 count path on it. Mirrors the Rust source (parity round-9 F2).
+	payloadOptimized bool
+	// countExact turns false once any record started at or inside the
+	// envelope (max record end so far): while every record starts
+	// strictly after that maximum, records are pairwise disjoint, so
+	// C's merged unique count equals the running sum even when the
+	// header is not optimized-ordered.
+	countExact     bool
+	envelope       uint128
+	hasEnvelope    bool
 	expectedUnique uint128
 	actualUnique   uint128
-	previousTo     uint128
-	hasPrevious    bool
+	// maxUnique is the largest single-record cardinality: C's merged
+	// count is at least one record's size regardless of order/overlap
+	// and at most the running sum, bracketing the inescapable interval.
+	maxUnique   uint128
+	previousTo  uint128
+	hasPrevious bool
 }
 
 type activeInput struct {
@@ -455,18 +475,39 @@ func (c *textInputCore[K]) readStepInner() (*step, error) {
 		return &step{kind: stepTextFinished}, nil
 	}
 	binary := c.active.binary
+	ipv6 := c.options.Family == AddressFamilyInputIPv6
 	if binary.remaining == 0 {
 		var trailing [1]byte
 		count, _ := binary.reader.Read(trailing[:])
 		if count != 0 {
 			return nil, c.formatError("trailing data after binary payload")
 		}
-		if binary.optimized && binary.actualUnique != binary.expectedUnique {
+		// The unique-count comparison per family, mirroring the
+		// authoritative readers exactly (Rust source carries the full
+		// commentary; parity round-9 F2; astra P1-3 for the v2 wrap).
+		// v1 compares in full while records are pairwise disjoint
+		// (C's sort-merge equals the running sum), and bounds the
+		// header by [max record size, running sum] otherwise -- both
+		// directions C also rejects outside that interval. v2
+		// recomputes only while its derived flag holds and trusts the
+		// header once it clears.
+		var mismatch bool
+		if ipv6 {
+			mismatch = binary.payloadOptimized &&
+				binary.actualUnique != binary.expectedUnique
+		} else if binary.countExact {
+			mismatch = binary.actualUnique != binary.expectedUnique
+		} else {
+			mismatch = compareU128(binary.expectedUnique.hi, binary.expectedUnique.lo,
+				binary.actualUnique.hi, binary.actualUnique.lo) > 0 ||
+				compareU128(binary.expectedUnique.hi, binary.expectedUnique.lo,
+					binary.maxUnique.hi, binary.maxUnique.lo) < 0
+		}
+		if mismatch {
 			return nil, c.formatError("binary unique count does not match payload")
 		}
 		return &step{kind: stepBinaryEnd}, nil
 	}
-	ipv6 := c.options.Family == AddressFamilyInputIPv6
 	size := 8
 	if ipv6 {
 		size = 32
@@ -501,16 +542,42 @@ func (c *textInputCore[K]) readStepInner() (*step, error) {
 	if nextOverflow && !ipv6 {
 		return nil, c.formatError("binary unique count overflows")
 	}
-	if binary.optimized && binary.hasPrevious {
-		// A released "optimized" payload is strictly ascending with
-		// gaps; equal, overlapping, or adjacent records are invalid.
+	// Derived-optimized walk, mirroring C (src/ipset_binary.c:65-76,
+	// src/ipset6_binary.c:35-46, Rust read_step): a record at/below the
+	// previous end, adjacent to it, or out of order clears the derived
+	// flag, and a header claiming optimized over such a payload is C's
+	// "claims to be optimized" refusal.
+	if binary.hasPrevious {
 		if compareU128(value.fromHi, value.fromLo, binary.previousTo.hi, binary.previousTo.lo) <= 0 {
-			return nil, c.formatError("optimized binary payload is unordered, overlapping, or adjacent")
+			if binary.optimized {
+				return nil, c.formatError("optimized binary payload is unordered, overlapping, or adjacent")
+			}
+			binary.payloadOptimized = false
+		} else {
+			nextFrom, overflow := addU128(binary.previousTo.hi, binary.previousTo.lo, 0, 1)
+			if !overflow && nextFrom.hi == value.fromHi && nextFrom.lo == value.fromLo {
+				if binary.optimized {
+					return nil, c.formatError("optimized binary payload is unordered, overlapping, or adjacent")
+				}
+				binary.payloadOptimized = false
+			}
 		}
-		nextFrom, overflow := addU128(binary.previousTo.hi, binary.previousTo.lo, 0, 1)
-		if !overflow && nextFrom.hi == value.fromHi && nextFrom.lo == value.fromLo {
-			return nil, c.formatError("optimized binary payload is unordered, overlapping, or adjacent")
-		}
+	}
+	// Pairwise-disjointness envelope: while every record starts strictly
+	// after the maximum end so far, records are disjoint, so C's merged
+	// count equals the running sum even when the header is not
+	// optimized-ordered.
+	if binary.hasEnvelope && compareU128(value.fromHi, value.fromLo,
+		binary.envelope.hi, binary.envelope.lo) <= 0 {
+		binary.countExact = false
+	}
+	if !binary.hasEnvelope || compareU128(value.toHi, value.toLo,
+		binary.envelope.hi, binary.envelope.lo) > 0 {
+		binary.envelope = value.to()
+		binary.hasEnvelope = true
+	}
+	if compareU128(unique.hi, unique.lo, binary.maxUnique.hi, binary.maxUnique.lo) > 0 {
+		binary.maxUnique = unique
 	}
 	binary.actualUnique = next
 	binary.previousTo = value.to()
@@ -713,6 +780,15 @@ func (c *textInputCore[K]) openBinary(reader *bufio.Reader, file *os.File, ipv6 
 	if compareU128(lines.hi, lines.lo, records.hi, records.lo) < 0 {
 		return c.formatError("binary line count is below record count")
 	}
+	// C validates an empty payload's header in both loaders
+	// (src/ipset_binary.c:49-53, src/ipset6_binary.c:22-26): zero
+	// records with a nonzero "unique ips" is a mismatch, never a
+	// vacuous pass. The comparison half in readStepInner derives from
+	// the streamed records; this one needs nothing but the header.
+	if records.hi == 0 && records.lo == 0 &&
+		(expectedUnique.hi != 0 || expectedUnique.lo != 0) {
+		return c.formatError("binary unique count does not match payload")
+	}
 	if compareU128(expectedUnique.hi, expectedUnique.lo, records.hi, records.lo) < 0 &&
 		!(ipv6 && expectedUnique.hi == 0 && expectedUnique.lo == 0) {
 		return c.formatError("binary unique count is below record count")
@@ -725,10 +801,12 @@ func (c *textInputCore[K]) openBinary(reader *bufio.Reader, file *os.File, ipv6 
 		return c.formatError("binary endianness is incompatible")
 	}
 	c.active = &activeInput{binary: &activeBinary{
-		reader:         reader,
-		remaining:      remaining,
-		optimized:      optimized,
-		expectedUnique: *expectedUnique,
+		reader:           reader,
+		remaining:        remaining,
+		optimized:        optimized,
+		payloadOptimized: true,
+		countExact:       true,
+		expectedUnique:   *expectedUnique,
 	}, file: file}
 	return nil
 }
@@ -1791,17 +1869,26 @@ func hasPrefixBytes(line, prefix []byte) bool {
 }
 
 // binaryRecord decodes one released payload record in native byte
-// order (Rust binary_record).
+// order (Rust binary_record). The v2 record fields are stored as
+// `lo` (bytes 0-7) then `hi` (bytes 8-15) -- the on-disk layout of
+// .agents/sow/specs/legacy-binary-format.md ("lo (bytes 0-7) then
+// hi (bytes 8-15)"), C src/uint128.h, the Rust streaming reader
+// (u128::from_ne_bytes over the 16 bytes), and this module's own
+// legacy reader (internal/cli/legacy/binary.go:
+// `Lo: ...Uint64(raw[0:8])`). Reading the first quadword as the HIGH
+// limb silently corrupts every limb-asymmetric IPv6 range (parity
+// round-9 F1): a record meant to cover 5..2^64+9 instead covered
+// 5*2^64..9*2^64+1 with the same report scalars.
 func binaryRecord(ipv6 bool, bytes []byte) (parsedRange, bool) {
 	if ipv6 {
 		if len(bytes) < 32 {
 			return parsedRange{}, false
 		}
 		return parsedRange{
-			fromHi: binary.NativeEndian.Uint64(bytes[0:8]),
-			fromLo: binary.NativeEndian.Uint64(bytes[8:16]),
-			toHi:   binary.NativeEndian.Uint64(bytes[16:24]),
-			toLo:   binary.NativeEndian.Uint64(bytes[24:32]),
+			fromLo: binary.NativeEndian.Uint64(bytes[0:8]),
+			fromHi: binary.NativeEndian.Uint64(bytes[8:16]),
+			toLo:   binary.NativeEndian.Uint64(bytes[16:24]),
+			toHi:   binary.NativeEndian.Uint64(bytes[24:32]),
 			ipv4:   false,
 		}, true
 	}

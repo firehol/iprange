@@ -1,0 +1,100 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "publish.binary_v6_asymmetric_limb",
+ "requires": "iprange.v1.current.publish",
+ "fixtures": [
+  {
+   "path": "asym.bin",
+   "source": {
+    "base64": "aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYyLjAKaXB2NgpvcHRpbWl6ZWQKcmVjb3JkIHNpemUgMzIKcmVjb3JkcyAxCmJ5dGVzIDM2CmxpbmVzIDEKdW5pcXVlIGlwcyAxODQ0Njc0NDA3MzcwOTU1MTYyMQpNPCsaBQAAAAAAAAAAAAAAAAAAAAkAAAAAAAAAAQAAAAAAAAA="
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/asym.bin"
+     ],
+     "family": "ipv6",
+     "fix_network": false,
+     "default_prefix": 128,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
+    },
+    "feed": "asym",
+    "value_tag": {
+     "text": "asym"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "asymmetric-limb"
+    },
+    "destination": "$WORK/asym.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "expect_result": {
+    "report": {
+     "input_record_count": "1",
+     "normalized_interval_count": "1",
+     "addresses": "18446744073709551621"
+    },
+    "publication": {
+     "$ignore": true
+    }
+   }
+  },
+  {
+   "kind": "rpc",
+   "actor": "consumer",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/asym.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "feed",
+     "feed": "asym"
+    },
+    "format": "netset",
+    "destination": "$WORK/asym.netset",
+    "publication_policy": "fail_if_exists",
+    "result_budget": {
+     "max_rows": "1000",
+     "max_output_bytes": "1048576",
+     "max_open_files": 8
+    }
+   },
+   "digest_group": "asym-netset",
+   "expect_result": {
+    "format": "netset",
+    "rows": "65",
+    "addresses": "18446744073709551621",
+    "bytes": "783",
+    "sha256": "7851ad3b494b80a6a3e08121390526eaaee9848b0ba2dd6b06bfaadb186f103b",
+    "path": {
+     "$ignore": true
+    },
+    "identity": {
+     "$ignore": true
+    }
+   }
+  }
+ ]
+}

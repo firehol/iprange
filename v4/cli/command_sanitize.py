@@ -778,20 +778,6 @@ def under_profile(path):
     return _matches_profile(real, profile)
 
 
-# The profile root of each host shape this project's evidence is authored
-# on, as a template over the login name.  ``/home`` is Linux and also the
-# msys2/Cygwin POSIX home; ``/Users`` is macOS; ``/usr/home`` is FreeBSD;
-# ``/export/home`` is illumos/SmartOS; ``C:\Users`` is native Windows and,
-# through the mount alias, the msys2 view of the same directory.
-_PROFILE_ROOT_TEMPLATES = (
-    "/home/{}",
-    "/Users/{}",
-    "/usr/home/{}",
-    "/export/home/{}",
-    "C:" + _WIN_SEP + "Users" + _WIN_SEP + "{}",
-)
-
-
 def operator_login(profile=None):
     """The login name whose profile must never reach a report.
 

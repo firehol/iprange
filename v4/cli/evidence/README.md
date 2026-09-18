@@ -19,13 +19,24 @@ committed-report writer — is what makes relabelling detectable without
 trusting the producing machine: it binds every report by role, byte
 length, content SHA-256, and revision, plus the eleven-entry staged
 binary ledger by digest.  Both kind-gate passes (fresh and committed,
-after rotation) returned rc 0, and the manifest lists exactly one
-`refusal-class-parity` digest: the chosen axis — at the milestone tier
-the 378-cell full sweep, which replaces the routine subset — executes
-once per gate under one committed name (astra gate finding P2-6; an
-earlier wave paid for the same axis twice under two names, which is
-exactly the rule "an expensive axis runs at most once per gate and
-replaces its overlapping subset" forbids).
+after rotation) returned rc 0 at the revision they name.  The parity
+class now carries ONE committed artifact: the chosen axis — at the
+milestone tier the 378-cell full sweep, which replaces the routine
+subset — executes once per gate under one committed name (astra gate
+finding P2-6; an earlier wave paid for the same axis twice under two
+names, which is exactly the rule "an expensive axis runs at most once
+per gate and replaces its overlapping subset" forbids).  The manifest
+committed here is the one that battery emitted, and it is therefore
+true of its own revision `38aea8fc`: it lists two `refusal-class-parity`
+entries, because that tree still carried
+`refusal-class-parity-full.json`.  That file is deleted at this
+revision and the next battery emits a one-entry binding; editing a
+committed manifest to describe a tree it never measured would be the
+forgery the audit exists to refuse, so the two-entry state is a
+designed pre-rotation lag — the same condition this directory's corpus
+paragraph documents for the matrix reports, and the kind gate's
+rotation tolerance classifies.  The post-rotation pass is what attests
+the single-name set.
 Against the previously fully-qualified revision `2c788b8e`, this set's
 revisions DO change engine sources — the legacy parse/DNS paths of
 `v4/rust/iprange-cli` and `v4/go/internal/cli/legacy` (the
@@ -87,14 +98,19 @@ against the rotated files, not repairs.  The race probes execute from
 their own scratch directories, so the battery creates no
 repository-root scratch.
 
-Matrices and corpus.  `v4/cli/cases/` holds 74 case files: the 71 the
+Matrices and corpus.  `v4/cli/cases/` holds 75 case files: the 71 the
 committed matrix reports were generated over at the revision under test
-(closing the 63-versus-71 disclosure of earlier waves), plus the three
-publication cases this gate-fix wave adds
-(`publish.dns_overflow_batch`, `publish.legacy_lexical_forms`,
-`publish.binary_v6_full_range`); the rotation battery regenerates the
-matrix reports over all 74, and the kind gate treats that lag as the
-designed pre-rotation condition (report behind tree only).  The eight
+(closing the 63-versus-71 disclosure of earlier waves), plus the four
+publication cases this gate-fix wave adds —
+`publish.dns_overflow_batch` and `publish.legacy_lexical_forms` (astra
+P1-1/P1-2), `publish.binary_v6_full_range` (astra P1-3, the wrapping
+full-universe payload) and `publish.binary_v6_asymmetric_limb`
+(parity round-9 F1: a cross-producer v2 payload whose record carries
+distinct lo/hi limbs, pinned through the export's netset rows and
+sha256 so a limb-order swap in either engine is caught on content, not
+just on the reply); the rotation battery regenerates the matrix reports
+over all 75, and the kind gate treats that lag as the designed
+pre-rotation condition (report behind tree only).  The eight
 cases added after the first 63 are the two feed outcome cases, the four
 `maintenance.roundtrip.*` cases, and the two `params.negative.budget_*`
 cases named below.  Expectations are written
@@ -131,7 +147,11 @@ cross-consumer step, which those matrices cannot exercise by design.
 The `known-defects.json` ledger is committed empty, and the kind gate
 enforces it in both directions — an unlisted FAIL fails the gate, and a
 listed defect that passes fails
-it.  `check_golden.py` reports 55 golden exchanges PASS over the 74 case files; `sensitivity_gate.py` reports 14 modes PASS.
+it.  `check_golden.py` reports 55 golden exchanges PASS; the committed
+`golden.json` records 71 case files for its own revision, and the tree
+here holds 75 — the four publication cases this wave adds — which the
+rotation re-walks (the kind gate's corpus-drift tolerance covers the
+lag).  `sensitivity_gate.py` reports 14 modes PASS.
 
 Refusal-class parity gate (committed).
 `v4/cli/check_refusal_class_parity.py` drives both binaries over a

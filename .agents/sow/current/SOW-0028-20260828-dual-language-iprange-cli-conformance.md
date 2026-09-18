@@ -17599,10 +17599,15 @@ bundle hygiene — no reopened class).
   bundle rc/run-shape recorded.
 - tester: **FAIL on F1 (P1)** — the P1-1 drain half had no detecting
   test anywhere: the push-side pins asserted only parked contents, and
-  `publish.dns_overflow_batch` cannot detect a discarding drain
-  (300 `localhost` lines answer far under 256 addresses on this host,
-  so the overflow branch is never taken, and every numeric member is
-  `$ignore`d — a truncated publish reads identical). Reproduced with
+  `publish.dns_overflow_batch` cannot detect a discarding drain. The
+  overflow branch IS taken on this host (300 `localhost` lines answer
+  300 A-records, so 44 ranges park); what makes the case blind is that
+  every answer is the SAME address, the builder deduplicates the
+  published feed to one interval either way, and every numeric member
+  of the expectation is `$ignore`d — a truncated publish reads
+  identical. (The tester's and my first wording said the branch was
+  never taken; fit-for-purpose corrected it. The detector is the pin,
+  not the case.) Reproduced with
   mutation D1 (pop-and-discard in the drain): the pin suite and the
   corpus case both pass on the mutated binary. **F1 CLOSED the same
   session**: the Rust and Go push-side pins now assert the drain half
@@ -17643,6 +17648,57 @@ bundle hygiene — no reopened class).
   scope comment on both engines states that resolver fan-out is
   uncapped per name exactly as C and that max_heap_bytes guards the
   livedb heap, not the adapter.
+- parity: **FAIL — F1 (P0) + F2 (P1)**, both on the streaming binary
+  reader versus the authoritative legacy readers.
+  F1 (P0): Go's `binaryRecord` read the v2 record fields hi-first
+  (`fromHi` from bytes 0-7), contradicting the format spec
+  ("lo (bytes 0-7) then hi (bytes 8-15)"), C `src/uint128.h`, the Rust
+  streaming reader (`from_ne_bytes` over the 16 bytes), and **Go's own
+  legacy reader** (`internal/cli/legacy/binary.go`: `Lo: raw[0:8]`).
+  Any limb-asymmetric IPv6 binary payload therefore published corrupt
+  content through Go while the report scalars matched. Closed: the
+  decode reads lo-first, with a unit pin asserting the decoded limbs
+  and the published interval of an asymmetric record in BOTH engines,
+  plus the cross-producer corpus case
+  `publish.binary_v6_asymmetric_limb` whose consumer export step pins
+  rows=65 / bytes=783 / sha256 of the netset — so a swap is caught on
+  content, not on counts (the single-record scalars are
+  swap-invariant; the role's own trigger proved it). The mutation that
+  used to stay green (swap the reads) now FAILS the pin and the case
+  in both engines.
+  F2 (P1): the streaming readers compared the header's unique count
+  only when the header claimed "optimized", so a NON-optimized v1
+  payload with a lying header (`unique ips 99` over two records) was
+  accepted by both engines where C (`src/ipset_binary.c:41-140`),
+  the Rust legacy reader (`legacy/binary.rs:validate_payload_v1`) and
+  the Go legacy reader all refuse it. Closed to the soundest shape a
+  bounded stream can carry, with C's split kept family-specific: v1
+  compares exactly while the records are pairwise disjoint (the
+  running sum IS C's merged count), and otherwise bounds the header by
+  [largest record, running sum] — both directions outside that bracket
+  are refused, which is what C's exact merge also rejects; v2 keys the
+  comparison on C's DERIVED payload_is_optimized (an ordered-but-adjacent
+  payload clears the flag and C trusts the header, so the reader must
+  too) — refusing such a payload would reject input both legacy
+  readers load. The one documented residual (a header strictly inside
+  the bracket on a contradictory v1 payload) cannot inflate the
+  published set below C's merged count and is stated in the code and
+  in `legacy-binary-format.md`, whose blanket "non-optimized files are
+  parsed without the sort/sum check" sentence was false for v1 and is
+  now family-specific. Pins: `binary_unique_count_follows_c_validation`
+  (Rust) / `TestScratchBinaryUniqueCountRules` (Go) encode all seven
+  directions — lie-above-sum, honest, overlap-above-sum,
+  overlap-below-max-record, zero-records-nonzero-header, and the v2
+  trusted-adjacent-pair case — over fixtures byte-verified identical
+  between the engines and against the released C oracle (`iprange -4
+  <f>` / `-6 <f>`: 7/7 directions match). Reverting the guard (restoring
+  the `optimized &&` skip) FAILS the named pin in both engines.
+  Both roles' fixtures, the C oracle runs, and the full unfiltered
+  matrices at the current tree: rust 75/75 PASS, go 75/75 PASS, so the
+  tightening costs no corpus coverage.
+  P3s: status line names the designed matrix-level FAILs; the three
+  usage-error residue logs were deleted; the builder-header item stands
+  from round 7.
 - portability: **FAIL on F1 (P1)** — the kit's bundle corpus.log had
   run against F-era `/tmp/opencode/wsbin` binaries (digests were not
   bound; the role rebuilt from the G tree to prove the passes are

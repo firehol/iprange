@@ -2,6 +2,7 @@ package fileio
 
 import (
 	"bufio"
+	"encoding/binary"
 	"errors"
 	"net/netip"
 	"os"
@@ -428,4 +429,165 @@ func TestScratchBinaryV6FullUniverse(t *testing.T) {
 	if batch, err := source.NextBatch(); err != nil || batch != nil {
 		t.Fatalf("end: %v %v", batch, err)
 	}
+}
+
+func TestScratchBinaryV6AsymmetricLimbs(t *testing.T) {
+	// Parity round-9 F1: the v2 record fields are lo (bytes 0-7) then
+	// hi (bytes 8-15), like the spec, C uint128.h, the Rust streaming
+	// reader, and this module's own legacy reader. A record with
+	// distinct quads (5 .. 2^64+9) exposes a hi/lo swap: the swapped
+	// decode is a different range with the same per-record count, so
+	// only asserting the decoded limbs (and publishing the merged
+	// count below) detects it.
+	rec := make([]byte, 32)
+	rec[0] = 5 // from.lo
+	rec[16] = 9
+	rec[24] = 1 // to.hi
+	value, ok := binaryRecord(true, rec)
+	if !ok {
+		t.Fatal("decode rejected")
+	}
+	if value.fromLo != 5 || value.fromHi != 0 || value.toLo != 9 || value.toHi != 1 {
+		t.Fatalf("limb order swapped: from=%d:%d to=%d:%d",
+			value.fromHi, value.fromLo, value.toHi, value.toLo)
+	}
+	var payload []byte
+	payload = append(payload, []byte("iprange binary format v2.0\nipv6\noptimized\nrecord size 32\nrecords 1\nbytes 36\nlines 1\nunique ips 18446744073709551621\n")...)
+	payload = append(payload, 0x4d, 0x3c, 0x2b, 0x1a)
+	payload = append(payload, rec...)
+	path := filepath.Join(t.TempDir(), "asym.bin")
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source, err := NewTextInputSource6([]string{path}, opt6(128, true), true, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := source.NextBatch()
+	if err != nil {
+		// A swapped decode lands the header comparison mismatch;
+		// either way the pin must not publish corrupt content.
+		t.Fatalf("asymmetric record must load: %v", err)
+	}
+	if len(batch) != 1 || batch[0].FromHi != 0 || batch[0].FromLo != 5 ||
+		batch[0].ToHi != 1 || batch[0].ToLo != 9 {
+		t.Fatalf("published content corrupted by limb order: %+v", batch)
+	}
+}
+
+func TestScratchBinaryUniqueCountRules(t *testing.T) {
+	// Parity round-9 F2: C validates the header's unique count for
+	// EVERY v1 payload (src/ipset_binary.c:41-140) and for v2 while
+	// its derived optimized flag holds (src/ipset6_binary.c:54-65);
+	// the streaming readers must not skip the comparison just because
+	// the header spells "non-optimized".
+	dir := t.TempDir()
+	type probe struct {
+		name    string
+		kind    string
+		header  string
+		records []byte
+		wantErr bool
+	}
+	probes := []probe{
+		{"v1-nonopt-header-lie", "v4",
+			"iprange binary format v1.0\nnon-optimized\nrecord size 8\nrecords 2\nbytes 20\nlines 2\nunique ips 99\n",
+			[]byte{1, 0, 0, 0, 2, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0}, true},
+		{"v1-nonopt-honest", "v4",
+			"iprange binary format v1.0\nnon-optimized\nrecord size 8\nrecords 2\nbytes 20\nlines 2\nunique ips 3\n",
+			[]byte{1, 0, 0, 0, 2, 0, 0, 0, 5, 0, 0, 0, 5, 0, 0, 0}, false},
+		{"v1-overlap-above-sum", "v4",
+			"iprange binary format v1.0\nnon-optimized\nrecord size 8\nrecords 2\nbytes 20\nlines 2\nunique ips 10\n",
+			[]byte{1, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 5, 0, 0, 0}, true},
+		{"v1-overlap-below-max-record", "v4",
+			"iprange binary format v1.0\nnon-optimized\nrecord size 8\nrecords 2\nbytes 20\nlines 2\nunique ips 1\n",
+			[]byte{1, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 5, 0, 0, 0}, true},
+		{"v1-zero-records-header-4", "v4",
+			"iprange binary format v1.0\noptimized\nrecord size 8\nrecords 0\nbytes 4\nlines 0\nunique ips 4\n",
+			nil, true},
+		// C's v2 loader TRUSTS a non-optimized header once its derived
+		// flag clears (src/ipset6_binary.c:54-65): the adjacent pair
+		// below (0..9, 10..19) breaks the strict-gap shape, so neither
+		// C nor the reader recomputes -- a header (7) that matches
+		// neither the sum (20) nor the merge is loadable input.
+		{"v2-nonopt-header-trusted", "v6",
+			"iprange binary format v2.0\nipv6\nnon-optimized\nrecord size 32\nrecords 2\nbytes 68\nlines 2\nunique ips 7\n",
+			append(v6record(0, 0, 9, 0), v6record(10, 0, 19, 0)...), false},
+	}
+	for _, p := range probes {
+		t.Run(p.name, func(t *testing.T) {
+			var payload []byte
+			payload = append(payload, []byte(p.header)...)
+			payload = append(payload, 0x4d, 0x3c, 0x2b, 0x1a)
+			payload = append(payload, p.records...)
+			path := filepath.Join(dir, p.name+".bin")
+			if err := os.WriteFile(path, payload, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := drainBinarySource(t, p.kind, path)
+			if p.wantErr && err == nil {
+				t.Fatalf("%s: header-contradicting payload accepted", p.name)
+			}
+			if !p.wantErr && err != nil {
+				t.Fatalf("%s: C-loadable payload refused: %v", p.name, err)
+			}
+			if err != nil {
+				var inputErr *InputError
+				if !errors.As(err, &inputErr) || inputErr.Code() != "input_format" {
+					t.Fatalf("%s: wrong class: %v", p.name, err)
+				}
+			}
+		})
+	}
+}
+
+// drainBinarySource pulls batches from either typed source until the
+// payload ends or an error answers, so the end-of-payload unique-count
+// comparison runs. kind is "v4" or "v6".
+func drainBinarySource(t *testing.T, kind string, path string) error {
+	t.Helper()
+	opt := TextInputOptions{FixNetwork: false, DNSThreads: 1, DNSSilent: true, MaxLineBytes: 1_048_576}
+	if kind == "v4" {
+		opt.Family = AddressFamilyInputIPv4
+		opt.DefaultPrefix = 32
+		source, err := NewTextInputSource4([]string{path}, opt, true, 10)
+		if err != nil {
+			return err
+		}
+		for {
+			batch, err := source.NextBatch()
+			if err != nil {
+				return err
+			}
+			if batch == nil {
+				return nil
+			}
+		}
+	}
+	opt.Family = AddressFamilyInputIPv6
+	opt.DefaultPrefix = 128
+	source, err := NewTextInputSource6([]string{path}, opt, true, 10)
+	if err != nil {
+		return err
+	}
+	for {
+		batch, err := source.NextBatch()
+		if err != nil {
+			return err
+		}
+		if batch == nil {
+			return nil
+		}
+	}
+}
+
+// v6record writes one released v2 record: lo (bytes 0-7) then hi
+// (bytes 8-15) per field, native byte order.
+func v6record(fromLo, fromHi, toLo, toHi uint64) []byte {
+	raw := make([]byte, 32)
+	binary.LittleEndian.PutUint64(raw[0:8], fromLo)
+	binary.LittleEndian.PutUint64(raw[8:16], fromHi)
+	binary.LittleEndian.PutUint64(raw[16:24], toLo)
+	binary.LittleEndian.PutUint64(raw[24:32], toHi)
+	return raw
 }
