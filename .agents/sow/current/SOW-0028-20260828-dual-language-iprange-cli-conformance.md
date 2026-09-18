@@ -18731,11 +18731,16 @@ than a hidden hole.
      happened regardless of the file-only sandbox's own decision.
 - Repairs at this revision (suite + records only; reporter code
   unchanged — astra verified no implementation defect remains):
-  * section D ages the sandbox directory AND the whole target side to
-    2020, then stamps only the link itself with `touch -h`; the
-    assertion requires the unit's measured `newest_mtime` to equal the
-    link's own mtime within one second — exact equality, so zeroing or
-    ignoring the link fails the assertion; the dead `or True` is gone;
+  * section D was CLAIMED repaired here: "ages the sandbox directory
+    AND the whole target side to 2020, then stamps only the link itself
+    with `touch -h`... the dead `or True` is gone". That claim was
+    FALSE AS WRITTEN — the scripted edit targeted text that had already
+    shifted and silently matched nothing, so the file was unchanged
+    while the commit message, this section and the manifest asserted the
+    repair. Astra gate turn 10 caught it against the bound script. The
+    actual repair (with the fixture mutation-tested) is recorded in the
+    Round-22 section below; this paragraph stands as the historical
+    record of a claim the lead must not have made.
   * section B2 rebuilt as a three-stage causal proof: B1 residue removed
     and baseline asserted exit 0, then ONLY the file-only sandbox is
     allowed to cross the cap, and exactly one OVER-CAP line must exist
@@ -18748,3 +18753,54 @@ than a hidden hole.
   runner self-test passes. The manifest rebinds the suite log/script and
   binds the turn-9 result, with `head` naming the commit that carries
   this section.
+
+### Round 22 — astra turn 10 (1 P2): the turn-9 recency repair had never landed; fixtures now mutation-tested (2026-09-19)
+
+- Astra gate turn 10 over 407794fa: NEEDS CHANGES — the same single P2
+  `reporter_regression_checks_still_overstate_coverage`, unresolved for
+  its directory-symlink half (staged verbatim at
+  `.local/shared/evidence/round16/astra-turn10-result.txt`; the file-only
+  half was confirmed repaired). Verified by the lead against the file
+  before acting: the reviewer is correct, and the failure is the lead's
+  process, not the tool.
+- **What actually happened in round 21:** the scripted edit that was
+  supposed to rewrite section D matched nothing (its search text had
+  already shifted) and rewrote the file unchanged. No error was raised
+  because the edit was written as a best-effort `str.replace` without an
+  assertion. The lead then asserted the repair in the commit message, in
+  the SOW Round-21 section and in the evidence manifest — a claim that
+  contradicted the bound script. A second, cheaper signal was also
+  ignored: the section's `ok` line still printed the pre-fix wording.
+  This is the same defect class the gate has been punishing for four
+  turns (a claim exceeding what the artifact owns), now caught in the
+  lead's own tooling rather than the reviewer's.
+- Repairs at this revision (fixture + records only; reporter source
+  unchanged since d3e8f8a2):
+  * section D is now genuinely isolated: `big.bin` and the target
+    directory are aged to 2020-01-01, the sandbox directory is aged to
+    2020-01-01 after the link is created, and only the link is stamped
+    (`touch -h -d 2021-06-01`). The unit's `newest_mtime` must equal the
+    link's own mtime within one second; the `or True` bypass is removed.
+    Nothing else in that unit can supply a recent timestamp, so the
+    assertion fails if the link's mtime is ignored or zeroed.
+  * the scripted edit is now assertion-guarded (a mismatch raises
+    instead of silently no-opping), and the staged copy is diff-checked
+    against the live script before binding.
+  * **the two fixtures were mutation-tested, because "17/17 green" is
+    not evidence of coverage:** deleting the reporter's
+    directory-symlink measurement branch makes the suite exit 1 with
+    `FAIL dir-symlink measurement`; making a file-only sandbox skip its
+    cap decision (the pre-fix shape) makes it exit 1 with
+    `FAIL file-only sandbox bypasses cap`, `FAIL B2 rc=0`,
+    `FAIL B1 rc=0` and `FAIL direct-file aggregation`. Both fixtures are
+    therefore discriminating, not decorative. (An earlier mutant attempt
+    scored "red" for the wrong reason — a missing exec bit produced
+    rc=126 across every section; that run proves nothing and is recorded
+    so nobody mistakes it for evidence.)
+  * Round-21's false claim is marked false-as-written in place above,
+    rather than deleted, so the sequence of claims is auditable.
+- Validation: suite 17/17 with the corrected fixture (staged log line
+  count matches the manifest), real-tree run unchanged (scan INCOMPLETE
+  exit 2, two chmod-000 privacy fixtures, 8 of 36 role sandboxes over
+  the 1 GB aggregate cap). `v4/cli/run.py` remains byte-identical to
+  3e75cfec (guard region `abacfa59…`); the runner self-test passes.
