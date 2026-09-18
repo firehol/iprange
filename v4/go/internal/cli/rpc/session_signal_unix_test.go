@@ -251,22 +251,58 @@ func runSignalTrials(t *testing.T, mode string, sig syscall.Signal, wantExit int
 }
 
 func TestTerminationSignalIdleExitsNonZero(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
 		runSignalTrials(t, "idle", sig, 1)
 	}
 }
 
 func TestTerminationSignalWedgedSessionForcesNonZeroExit(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	for _, sig := range []syscall.Signal{syscall.SIGINT, syscall.SIGTERM} {
 		runSignalTrials(t, "wedged", sig, 1)
 	}
 }
 
 func TestTerminationSignalDuringDrainWinsOverEOF(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	runSignalTrials(t, "mid-drain", syscall.SIGTERM, 1)
 }
 
 func TestTerminationSignalPartialWedgeForcesNonZeroExit(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// Role-round finding: partially-filled events channel + wedged
 	// main loop.  Delivered Fatal events are never processed; only
 	// the process-lifetime watchdog can serve the signal.
@@ -275,6 +311,15 @@ func TestTerminationSignalPartialWedgeForcesNonZeroExit(t *testing.T) {
 }
 
 func TestTerminationSignalDrainWedgeForcesNonZeroExit(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// Role-round finding: worker blocked mid-write during the EOF
 	// drain join.  The events channel is empty; only the
 	// process-lifetime watchdog can serve the signal.
@@ -313,6 +358,15 @@ func bigBatchFrameIDLen(idLen int) []byte {
 	return append(b, '\n')
 }
 func TestEOFDrainWedgeSelfExitsZero(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// Operations P2 (wave-19.18): EOF shutdown must terminate by
 	// itself with exit 0 within the bounded final drain even when the
 	// session writer is blocked on an undrained full stdout pipe.
@@ -340,6 +394,15 @@ func TestEOFDrainWedgeSelfExitsZero(t *testing.T) {
 }
 
 func TestEOFFullPipeWedgeSelfExitsZero(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// Same contract over a real pipe (the production shape): the
 	// parent gives the helper a stdout pipe it never drains and a
 	// batch frame whose ~961 KB response cannot fit the pipe buffer;
@@ -390,6 +453,15 @@ func TestEOFFullPipeWedgeSelfExitsZero(t *testing.T) {
 }
 
 func TestOversizeFullpipeWedgeSelfExitsNonZero(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// Session P2 (wave-19.18 integration review): an oversized input
 	// frame arriving while the session writer is blocked on a full
 	// undrained stdout pipe must not wedge the -32001 reply write.
@@ -464,6 +536,15 @@ func TestOversizeFullpipeWedgeSelfExitsNonZero(t *testing.T) {
 }
 
 func TestOversizeFullpipeFreeLockSelfExitsNonZero(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// Wave-19.19 integration review: an oversized input frame
 	// arriving when the writer lock is free but the stdout pipe is
 	// full must not wedge the -32001 reply write.  The batch
@@ -542,6 +623,15 @@ func TestOversizeFullpipeFreeLockSelfExitsNonZero(t *testing.T) {
 }
 
 func TestOversizedEOFExitsNonZero(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// Role-round finding (round 2): a final unterminated frame of
 	// exactly LIMIT+1 bytes at EOF is over the ceiling, so it is a
 	// framing failure: one -32001 (id null) and a non-zero exit
@@ -642,6 +732,15 @@ func TestOversizedEOFExitsNonZero(t *testing.T) {
 }
 
 func TestGracefulFatalFullStderrForcedExit(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// Role-round finding: the graceful fatal path (rpc.Run's
 	// diagnostic on a session error) must never depend on a blocking
 	// stderr write.  The helper runs the real Run() with a stdout
@@ -715,6 +814,15 @@ func TestGracefulFatalFullStderrForcedExit(t *testing.T) {
 }
 
 func TestGracefulFatalDiagnosticStillReported(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// Control for the graceful-fatal fix: with a drained stderr the
 	// best-effort diagnostic must still land before the process exits
 	// (only the blocked write is abandoned, not the message).
@@ -756,6 +864,15 @@ func TestGracefulFatalDiagnosticStillReported(t *testing.T) {
 }
 
 func TestOversizedUnterminatedFrameAnswersAndExits(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// Role-round finding: an over-limit frame that never receives a
 	// terminator must still produce the -32001 response (id null) and
 	// a non-zero exit (spec iprange-jsonrpc-v1.md framing section);
@@ -853,6 +970,15 @@ func TestOversizedUnterminatedFrameAnswersAndExits(t *testing.T) {
 }
 
 func TestOversizedHeldNonCRFrameAnswersAndExits(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// External review finding: a held-open frame of exactly LIMIT+1
 	// bytes whose last byte is not the CR of a CRLF terminator can
 	// never become legal -- even a following LF would leave the
@@ -952,6 +1078,15 @@ func TestOversizedHeldNonCRFrameAnswersAndExits(t *testing.T) {
 }
 
 func TestTerminationSignalFullStderrForcedExit(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// External review finding: the watchdog's forced exit must never
 	// depend on a blocking diagnostic write.  A full, undrained
 	// stderr pipe must not prevent the forced non-zero exit within
@@ -1027,6 +1162,15 @@ func TestTerminationSignalFullStderrForcedExit(t *testing.T) {
 }
 
 func TestTerminationSignalEOFFirstWinsOverExitZero(t *testing.T) {
+	// Each trial here owns a helper subprocess, its own stdin/stdout
+	// pipes and its own descriptor table, and this test touches no
+	// package-level state, so the suite runs these concurrently
+	// instead of end-to-end.  Measured: the package needed 32.8 s
+	// serially and the slowest single test 5.41 s, so the limit on
+	// an identifiable test was never the problem -- serialization
+	// was.
+	t.Parallel()
+
 	// Third role-round finding: stdin closes right after one request
 	// and the termination signal lands while the process is inside
 	// the EOF tail (the parent signals as soon as the response line

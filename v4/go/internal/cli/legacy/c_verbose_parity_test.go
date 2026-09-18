@@ -183,6 +183,25 @@ func TestLegacyChildRunsOneCase(t *testing.T) {
 	os.Exit(Run("iprange", argv))
 }
 
+// cOracleUnavailable states, in the case's own log, that the comparison
+// against the released C tool cannot run here, and reports whether that is
+// so.
+//
+// The C CLI has no native Windows build, so on that host the reference leg
+// of every parity case is unavailable rather than passed. The case is not
+// skipped: the engine's own pinned bytes above it are what decide it, and
+// they were already compared before this point. The marker is a fixed
+// prefix so a report can count the unavailable legs on a host instead of
+// having to infer them from the absence of failures.
+func cOracleUnavailable(t *testing.T) bool {
+	t.Helper()
+	if _, err := os.Stat(cReference); err == nil {
+		return false
+	}
+	t.Logf("C-ORACLE-UNAVAILABLE %s", cOracleStatus())
+	return true
+}
+
 // runCChild runs the released C tool with cwd pinned to the fixture
 // directory, so the names in its diagnostics are the relative ones the
 // expectations pin.
@@ -238,7 +257,7 @@ func assertCParity(t *testing.T, dir string, c cCase) {
 	if masked != c.stderr {
 		t.Errorf("%s: stderr = %q, want %q", c.label, masked, c.stderr)
 	}
-	if _, err := os.Stat(cReference); err != nil {
+	if cOracleUnavailable(t) {
 		return
 	}
 	crc, cout, cerrs := runCChild(t, dir, c.argv)
@@ -440,7 +459,7 @@ var cCasesVerboseIpv4 = []cCase{
 	{
 		label: "dir expansion",
 		argv:  []string{"-v", "@dir"},
-		rc:    0, stdout: "8.8.8.8\n9.9.9.9\n", stderr: "iprange: Loading files from directory dir\niprange: Loading file dir/a.txt from directory dir\niprange: Loading from dir/a.txt\niprange: Loaded optimized dir/a.txt\niprange: Loading file dir/z\xffy.txt from directory dir\niprange: Loading from dir/z\xffy.txt\niprange: Loaded optimized dir/z\xffy.txt\niprange: Merging dir/z\xffy.txt to combined ipset\niprange: Optimizing combined ipset\niprange: Printing combined ipset with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n<WALLCLOCK>\n",
+		rc:    0, stdout: "8.8.8.8\n9.9.9.9\n", stderr: platformPin("iprange: Loading files from directory dir\niprange: Loading file dir/a.txt from directory dir\niprange: Loading from dir/a.txt\niprange: Loaded optimized dir/a.txt\niprange: Loading file dir/z\xffy.txt from directory dir\niprange: Loading from dir/z\xffy.txt\niprange: Loaded optimized dir/z\xffy.txt\niprange: Merging dir/z\xffy.txt to combined ipset\niprange: Optimizing combined ipset\niprange: Printing combined ipset with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n<WALLCLOCK>\n"),
 	},
 	{
 		label: "list expansion",
@@ -558,7 +577,7 @@ var cCasesVerboseIpv6 = []cCase{
 	{
 		label: "v6 dir expansion silent",
 		argv:  []string{"-6", "-v", "@dir6"},
-		rc:    0, stdout: "2001:db8::/126\n", stderr: "iprange: Loading from dir6/a.txt (IPv6 mode)\niprange: Printing combined ipset (IPv6) with 1 ranges, 4 unique IPs\n\n1 printed CIDRs, break down by prefix:\n\t- prefix /126 counts 1 entries\n\ntotals: 1 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 1 CIDRs printed, 4 unique IPs\n",
+		rc:    0, stdout: "2001:db8::/126\n", stderr: platformPin("iprange: Loading from dir6/a.txt (IPv6 mode)\niprange: Printing combined ipset (IPv6) with 1 ranges, 4 unique IPs\n\n1 printed CIDRs, break down by prefix:\n\t- prefix /126 counts 1 entries\n\ntotals: 1 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 1 CIDRs printed, 4 unique IPs\n"),
 	},
 	{
 		label: "v6 list expansion silent",

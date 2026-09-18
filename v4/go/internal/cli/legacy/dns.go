@@ -510,22 +510,34 @@ func nextJob(shared *dnsShared) (dnsJob, bool) {
 	}
 }
 
-// lookupLegacyHost reproduces the numeric short-circuit inside glibc
+// lookupLegacyHost resolves one host with the platform's authority: the
+// glibc numeric short-circuit where this build's authority has one
+// (legacyNumericAnswer, dns_numeric_answer.go / dns_numeric_refuse.go),
+// then the standard resolver.
+//
+// The short-circuit reproduces the numeric answer inside glibc
 // getaddrinfo(): a name whose bytes are a valid address in one of the
-// inet_aton(3) forms is answered locally, with no resolver traffic, before
-// any lookup is attempted. C's legacy CLI reaches this code for every input
-// line whose first token is not pure [0-9./], so hex and mixed-radix forms
-// such as "0x0A000001", "0x7f.1" or "0x1.0x2.0x3.0x4" resolve instead of
-// being looked up as hostnames. Go's resolver parses only strict dotted
-// quads, so without this step the same input fails with a DNS error that C
-// does not produce. The IPv6 family passes its hints as AF_UNSPEC, where
-// glibc accepts the same IPv4 numeric forms and returns them mapped, so the
-// short-circuit applies to both families.
+// inet_aton(3) forms ("0x0A000001", "0x7f.1", "0x1.0x2.0x3.0x4") is
+// answered locally, with no resolver traffic, before any lookup is
+// attempted. C's legacy CLI reaches that code for every input line whose
+// first token is not pure [0-9./], so those forms resolve instead of
+// being looked up as hostnames; Go's resolver parses only strict dotted
+// quads, so without the step the same input fails with a DNS error that
+// C does not produce. The emulation therefore belongs exactly where the
+// platform resolver the Rust authority delegates to answers those forms
+// (the per-platform basis is in dns_numeric_answer.go); answering them
+// where Winsock or OpenBSD refuses would make the Go engine diverge from
+// the authority on valid input — exit status and output are contractual
+// (decision 3B), not message text. The IPv6 family passes its hints as
+// AF_UNSPEC, where the answering resolvers accept the same IPv4 numeric
+// forms and return them mapped, so the short-circuit applies to both
+// families. Both halves are pinned from one shared table in
+// c_parity_test.go: TestDNSNumericFormsMatchC answers where the
+// authority answers, TestDNSNumericFormsAreNotAnsweredHere pins refusal
+// everywhere else.
 func lookupLegacyHost(network, host string) ([]net.IP, error) {
-	if v4, err := inetAton(host); err == nil {
-		// net.IPv4 yields the IPv4-in-IPv6 form; collectAddrs applies
-		// the C family policy (plain v4, or ::ffff: mapped in v6).
-		return []net.IP{net.IPv4(byte(v4>>24), byte(v4>>16), byte(v4>>8), byte(v4))}, nil
+	if ips, ok := legacyNumericAnswer(host); ok {
+		return ips, nil
 	}
 	return net.DefaultResolver.LookupIP(context.Background(), network, host)
 }

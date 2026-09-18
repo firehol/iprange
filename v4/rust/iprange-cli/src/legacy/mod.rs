@@ -24,6 +24,8 @@ mod options;
 mod parse;
 mod print;
 mod range;
+#[cfg(test)]
+mod tests;
 mod usage;
 
 use std::ffi::{OsStr, OsString};

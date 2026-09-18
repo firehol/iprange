@@ -28,9 +28,18 @@
 //   * `dns_done()` prints its summary AFTER the last `dns_process_replies()`
 //     call (`src/ipset_dns.c:363-375`).
 //
-// Every hostname here is answered from `/etc/hosts` or by the numeric short
-// circuit inside `getaddrinfo(3)` (reproduced by lookupLegacyHost), so no case
-// needs resolver traffic. rc and stdout are always byte for byte. Stderr is
+// The numeric-form hostnames are answered by the short circuit inside
+// `getaddrinfo(3)` (reproduced by lookupLegacyHost) and so need no resolver
+// traffic and no host configuration. The names that are NOT numeric
+// (`localhost`, `ip6-allnodes`) are answered by the host, and several cases
+// pin bytes that depend on which addresses the host returns and in which
+// order, because the order decides whether the loader's optimization trace
+// appears. Those cases state the answer they were measured against through
+// dnsCase.resolverNeeds and report themselves as scoped when this host
+// answers differently; nothing is asserted about a name whose answer the
+// platform owns.
+//
+// rc and stdout are always byte for byte. Stderr is
 // byte for byte except for the two lines the C derives from its own clock: the
 // exit-time timing line (`src/iprange.c:1216-1222`, maskWallclock) and
 // `DNS: waiting %lu DNS resolutions to finish...` (`src/ipset_dns.c:348`,
@@ -59,6 +68,36 @@ type dnsCase struct {
 	rc     int
 	stdout string
 	stderr string // masked: <WALLCLOCK>, and <N> for the DNS waiting count
+
+	// resolverNeeds states the host-provided answer each pinned byte below
+	// was measured against, in the order the reply list carries it. The
+	// answer set and its order decide stdout, `totals: N lines read`, and
+	// whether `NON-OPTIMIZED`/`Optimizing` appear, so a case with needs is
+	// only comparable on a host that answers the same way; requireDNSAnswers
+	// measures that first and reports the case as scoped otherwise.
+	resolverNeeds []dnsAnswer
+
+	// numericForms marks a case whose hostnames are answered only by the
+	// glibc numeric short-circuit ("0x7f000001", "0x0A000001"). That answer
+	// is a property of the platform's resolver, not of the engines: the
+	// platforms whose libc getaddrinfo calls inet_aton() for AF_INET
+	// (linux/glibc, freebsd, netbsd, dragonfly-by-lineage) answer those
+	// forms and the Rust authority — which delegates to the platform
+	// resolver — answers them there too, while Windows and OpenBSD
+	// refuse them and darwin is an unverified conservative default (see
+	// the two dns_numeric_*.go files), so the Go emulation is scoped to the answering set
+	// (dns_numeric_answer.go / dns_numeric_refuse.go) and these cases'
+	// pinned bytes exist only on a platform that answers them.
+	// requireDNSAnswers reports such a case as scoped on every other
+	// platform rather than silently comparing bytes no engine can
+	// produce there.
+	numericForms bool
+}
+
+// dnsAnswer is one name whose addresses a case's pinned bytes depend on.
+type dnsAnswer struct {
+	host  string
+	addrs []string // in reply order, the order the loader adds them
 }
 
 // dnsFixtures recreates the directory the C was measured over. A numeric-form
@@ -99,53 +138,63 @@ func writeDNSFixtures(t *testing.T, dir string) {
 // dnsInterleaveDependent.
 var dnsBookkeepingByte = []dnsCase{
 	{
-		label:  "dns one host v4",
-		argv:   []string{"-v", "h1.txt"},
-		rc:     0,
-		stdout: "127.0.0.1\n",
-		stderr: "iprange: Loading from h1.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file h1.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized h1.txt\niprange: Printing combined ipset with 1 ranges, 1 unique IPs\n\n1 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 1 entries\n\ntotals: 1 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 1 CIDRs printed, 1 unique IPs\n<WALLCLOCK>\n",
+		label:        "dns one host v4",
+		numericForms: true,
+		argv:         []string{"-v", "h1.txt"},
+		rc:           0,
+		stdout:       "127.0.0.1\n",
+		stderr:       "iprange: Loading from h1.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file h1.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized h1.txt\niprange: Printing combined ipset with 1 ranges, 1 unique IPs\n\n1 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 1 entries\n\ntotals: 1 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 1 CIDRs printed, 1 unique IPs\n<WALLCLOCK>\n",
 	},
 	{
-		label:  "dns two files one host each",
-		argv:   []string{"-v", "hA.txt", "hB.txt"},
-		rc:     0,
-		stdout: "10.0.0.1\n127.0.0.1\n",
-		stderr: "iprange: Loading from hA.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file hA.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized hA.txt\niprange: Loading from hB.txt\niprange: DNS resolution for hostname '0x0A000001' from line 1 of file hB.txt.\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x0A000001' = 10.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized hB.txt\niprange: Merging hB.txt to combined ipset\niprange: Optimizing combined ipset\niprange: Printing combined ipset with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n<WALLCLOCK>\n",
+		label:        "dns two files one host each",
+		numericForms: true,
+		argv:         []string{"-v", "hA.txt", "hB.txt"},
+		rc:           0,
+		stdout:       "10.0.0.1\n127.0.0.1\n",
+		stderr:       "iprange: Loading from hA.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file hA.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized hA.txt\niprange: Loading from hB.txt\niprange: DNS resolution for hostname '0x0A000001' from line 1 of file hB.txt.\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x0A000001' = 10.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized hB.txt\niprange: Merging hB.txt to combined ipset\niprange: Optimizing combined ipset\niprange: Printing combined ipset with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n<WALLCLOCK>\n",
 	},
 	{
-		label:  "dns one host v6 localhost",
+		label: "dns one host v6 localhost",
+		resolverNeeds: []dnsAnswer{{host: "localhost",
+			addrs: []string{"::1", "::ffff:127.0.0.1"}}},
 		argv:   []string{"-6", "-v", "l1.txt"},
 		rc:     0,
 		stdout: "::1\n::ffff:127.0.0.1\n",
 		stderr: "iprange: Loading from l1.txt (IPv6 mode)\niprange: DNS resolution for hostname 'localhost' from line 1 of file l1.txt (IPv6 mode).\niprange: Printing combined ipset (IPv6) with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /128 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n",
 	},
 	{
-		label:  "dns one host v6 allnodes",
+		label: "dns one host v6 allnodes",
+		resolverNeeds: []dnsAnswer{{host: "ip6-allnodes",
+			addrs: []string{"ff02::1"}}},
 		argv:   []string{"-6", "-v", "n1.txt"},
 		rc:     0,
 		stdout: "ff02::1\n",
 		stderr: "iprange: Loading from n1.txt (IPv6 mode)\niprange: DNS resolution for hostname 'ip6-allnodes' from line 1 of file n1.txt (IPv6 mode).\niprange: Printing combined ipset (IPv6) with 1 ranges, 1 unique IPs\n\n1 printed CIDRs, break down by prefix:\n\t- prefix /128 counts 1 entries\n\ntotals: 1 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 1 CIDRs printed, 1 unique IPs\n",
 	},
 	{
-		label:  "dns one host v4 binary",
-		argv:   []string{"-v", "--print-binary", "h1.txt"},
-		rc:     0,
-		stdout: "iprange binary format v1.0\noptimized\nrecord size 8\nrecords 1\nbytes 12\nlines 1\nunique ips 1\nM<+\x1a\x01\x00\x00\x7f\x01\x00\x00\x7f",
-		stderr: "iprange: Loading from h1.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file h1.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized h1.txt\n<WALLCLOCK>\n",
+		label:        "dns one host v4 binary",
+		numericForms: true,
+		argv:         []string{"-v", "--print-binary", "h1.txt"},
+		rc:           0,
+		stdout:       "iprange binary format v1.0\noptimized\nrecord size 8\nrecords 1\nbytes 12\nlines 1\nunique ips 1\nM<+\x1a\x01\x00\x00\x7f\x01\x00\x00\x7f",
+		stderr:       "iprange: Loading from h1.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file h1.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: made 1 DNS requests, failed 0, retries: 0, IPs got 1, threads used 1 of 5\niprange: Loaded optimized h1.txt\n<WALLCLOCK>\n",
 	},
 	{
-		label:  "dns one host v6 binary header",
+		label: "dns one host v6 binary header",
+		resolverNeeds: []dnsAnswer{{host: "localhost",
+			addrs: []string{"::1", "::ffff:127.0.0.1"}}},
 		argv:   []string{"-6", "-v", "--print-binary", "l1.txt"},
 		rc:     0,
 		stdout: "iprange binary format v2.0\nipv6\noptimized\nrecord size 32\nrecords 2\nbytes 68\nlines 2\nunique ips 2\nM<+\x1a\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x7f\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x7f\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
 		stderr: "iprange: Loading from l1.txt (IPv6 mode)\niprange: DNS resolution for hostname 'localhost' from line 1 of file l1.txt (IPv6 mode).\n",
 	},
 	{
-		label:  "dns same host twice v4",
-		argv:   []string{"-v", "h2.txt"},
-		rc:     0,
-		stdout: "127.0.0.1\n",
-		stderr: "iprange: Loading from h2.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file h2.txt.\niprange: Creating new DNS thread\niprange: DNS resolution for hostname '0x7f000001' from line 2 of file h2.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: NON-OPTIMIZED h2.txt at line 2, entry 1, last was 127.0.0.1 (2130706433) - 127.0.0.1 (2130706433), new is 127.0.0.1 (2130706433) - 127.0.0.1 (2130706433)\niprange: DNS: made 2 DNS requests, failed 0, retries: 0, IPs got 2, threads used 2 of 5\niprange: Loaded non-optimized h2.txt\niprange: Optimizing combined ipset\niprange: Printing combined ipset with 1 ranges, 1 unique IPs\n\n1 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 1 entries\n\ntotals: 2 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 1 CIDRs printed, 1 unique IPs\n<WALLCLOCK>\n",
+		label:        "dns same host twice v4",
+		numericForms: true,
+		argv:         []string{"-v", "h2.txt"},
+		rc:           0,
+		stdout:       "127.0.0.1\n",
+		stderr:       "iprange: Loading from h2.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file h2.txt.\niprange: Creating new DNS thread\niprange: DNS resolution for hostname '0x7f000001' from line 2 of file h2.txt.\niprange: Creating new DNS thread\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: NON-OPTIMIZED h2.txt at line 2, entry 1, last was 127.0.0.1 (2130706433) - 127.0.0.1 (2130706433), new is 127.0.0.1 (2130706433) - 127.0.0.1 (2130706433)\niprange: DNS: made 2 DNS requests, failed 0, retries: 0, IPs got 2, threads used 2 of 5\niprange: Loaded non-optimized h2.txt\niprange: Optimizing combined ipset\niprange: Printing combined ipset with 1 ranges, 1 unique IPs\n\n1 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 1 entries\n\ntotals: 2 lines read, 1 distinct IP ranges found, 1 CIDR prefixes, 1 CIDRs printed, 1 unique IPs\n<WALLCLOCK>\n",
 	},
 }
 
@@ -167,18 +216,21 @@ var dnsBookkeepingByte = []dnsCase{
 // count stays identical.
 var dnsInterleaveDependent = []dnsCase{
 	{
-		label:  "dns same host twice v6",
+		label: "dns same host twice v6",
+		resolverNeeds: []dnsAnswer{{host: "localhost",
+			addrs: []string{"::1", "::ffff:127.0.0.1"}}},
 		argv:   []string{"-6", "-v", "l2.txt"},
 		rc:     0,
 		stdout: "::1\n::ffff:127.0.0.1\n",
 		stderr: "iprange: Loading from l2.txt (IPv6 mode)\niprange: DNS resolution for hostname 'localhost' from line 1 of file l2.txt (IPv6 mode).\niprange: DNS resolution for hostname 'localhost' from line 2 of file l2.txt (IPv6 mode).\niprange: NON-OPTIMIZED l2.txt at line 3, entry 2, last was ::ffff:127.0.0.1 - ::ffff:127.0.0.1, new is ::1 - ::1\niprange: Optimizing combined ipset (IPv6)\niprange: Printing combined ipset (IPv6) with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /128 counts 2 entries\n\ntotals: 4 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n",
 	},
 	{
-		label:  "dns two names one thread",
-		argv:   []string{"-v", "--dns-threads", "1", "hn.txt"},
-		rc:     0,
-		stdout: "10.0.0.1\n127.0.0.1\n",
-		stderr: "iprange: Loading from hn.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file hn.txt.\niprange: Creating new DNS thread\niprange: DNS resolution for hostname '0x0A000001' from line 2 of file hn.txt.\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x0A000001' = 10.0.0.1\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: NON-OPTIMIZED hn.txt at line 2, entry 1, last was 127.0.0.1 (2130706433) - 127.0.0.1 (2130706433), new is 10.0.0.1 (167772161) - 10.0.0.1 (167772161)\niprange: DNS: made 2 DNS requests, failed 0, retries: 0, IPs got 2, threads used 1 of 1\niprange: Loaded non-optimized hn.txt\niprange: Optimizing combined ipset\niprange: Printing combined ipset with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n<WALLCLOCK>\n",
+		label:        "dns two names one thread",
+		numericForms: true,
+		argv:         []string{"-v", "--dns-threads", "1", "hn.txt"},
+		rc:           0,
+		stdout:       "10.0.0.1\n127.0.0.1\n",
+		stderr:       "iprange: Loading from hn.txt\niprange: DNS resolution for hostname '0x7f000001' from line 1 of file hn.txt.\niprange: Creating new DNS thread\niprange: DNS resolution for hostname '0x0A000001' from line 2 of file hn.txt.\niprange: DNS: waiting <N> DNS resolutions to finish...\niprange: DNS: '0x0A000001' = 10.0.0.1\niprange: DNS: '0x7f000001' = 127.0.0.1\niprange: NON-OPTIMIZED hn.txt at line 2, entry 1, last was 127.0.0.1 (2130706433) - 127.0.0.1 (2130706433), new is 10.0.0.1 (167772161) - 10.0.0.1 (167772161)\niprange: DNS: made 2 DNS requests, failed 0, retries: 0, IPs got 2, threads used 1 of 1\niprange: Loaded non-optimized hn.txt\niprange: Optimizing combined ipset\niprange: Printing combined ipset with 2 ranges, 2 unique IPs\n\n2 printed CIDRs, break down by prefix:\n\t- prefix /32 counts 2 entries\n\ntotals: 2 lines read, 2 distinct IP ranges found, 1 CIDR prefixes, 2 CIDRs printed, 2 unique IPs\n<WALLCLOCK>\n",
 	},
 }
 
@@ -513,6 +565,68 @@ func assertDNSCounts(t *testing.T, label, masked string) {
 	}
 }
 
+// cOracleStatus returns why the released C tool cannot be consulted here,
+// or the empty string when it can.
+//
+// The C CLI has no native Windows build, so on that host every comparison
+// against the reference is unavailable rather than passed: the case states
+// that explicitly and the engine's own pinned bytes still decide it. The
+// status is a fact about the host, not a verdict, so it never converts a
+// divergence into a pass.
+func cOracleStatus() string {
+	if _, err := os.Stat(cReference); err != nil {
+		return fmt.Sprintf("at %s: this platform has no native build of the released tool, so the "+
+			"comparison against C is unavailable and only the engine's own pinned bytes decided "+
+			"this case (%v)", cReference, err)
+	}
+	return ""
+}
+
+// requireDNSAnswers measures the host answers a case's pinned bytes were
+// built from and reports the case as scoped when this host differs.
+//
+// The measurement goes through the product's own resolver so the
+// precondition checks the same code path the case will run, and the
+// measured list is printed in the skip text: a reader can see which answer
+// set the case is missing rather than being told a case did not run.
+func requireDNSAnswers(t *testing.T, c dnsCase) {
+	t.Helper()
+	if c.numericForms && !numericFormsAnswerHere {
+		t.Skipf("%s: scoped, not run: the pinned bytes require the glibc numeric "+
+			"short-circuit, which this platform's resolver does not answer and the Rust "+
+			"authority therefore does not answer either; the failure shape here is "+
+			"pinned by TestDNSNumericFormsAreNotAnsweredHere",
+			c.label)
+	}
+	if len(c.resolverNeeds) == 0 {
+		return
+	}
+	family := V4
+	for _, arg := range c.argv {
+		if arg == "-6" {
+			family = V6
+		}
+	}
+	for _, need := range c.resolverNeeds {
+		probe := NewResolver(1, true, false, family, false)
+		addrs, err := probe.resolve(need.host)
+		if err != nil {
+			probe.Finish()
+			t.Skipf("%s: scoped, not run: this host cannot answer %q (%v), which the pinned bytes of "+
+				"this case require as %v", c.label, need.host, err, need.addrs)
+		}
+		render := &Options{Family: family}
+		got := make([]string, 0, len(addrs))
+		for _, a := range addrs {
+			got = append(got, fmtAddr(render, a))
+		}
+		if strings.Join(got, ",") != strings.Join(need.addrs, ",") {
+			t.Skipf("%s: scoped, not run: the pinned bytes were measured against %q answering %v in that "+
+				"order; this host answers %v", c.label, need.host, need.addrs, got)
+		}
+	}
+}
+
 // runDNSCase runs the engine in the fixture directory and masks the two
 // free shapes.
 func runDNSCase(t *testing.T, dir string, c dnsCase) (int, string, string) {
@@ -531,11 +645,15 @@ func TestDNSBookkeepingMatchesCByteForByte(t *testing.T) {
 	for _, c := range dnsBookkeepingByte {
 		c := c
 		t.Run(c.label, func(t *testing.T) {
+			requireDNSAnswers(t, c)
 			rc, out, masked := runDNSCase(t, dir, c)
 			if rc != c.rc || out != c.stdout || masked != canonicalDNSStderr(c.stderr) {
 				t.Errorf("%s: engine rc %d out %q stderr %q, want rc %d out %q stderr %q", c.label, rc, out, masked, c.rc, c.stdout, canonicalDNSStderr(c.stderr))
 			}
 			assertDNSCounts(t, c.label, masked)
+			if cOracleUnavailable(t) {
+				return
+			}
 			crc, cout, cerrs := runCChild(t, dir, c.argv)
 			assertDNSWaitingShape(t, c.label+" (the C reference)", cerrs)
 			assertDNSThreadAccounting(t, c.label+" (the C reference)", cerrs)
@@ -761,6 +879,7 @@ func TestDNSBookkeepingInterleavedBatch(t *testing.T) {
 	for _, c := range dnsInterleaveDependent {
 		c := c
 		t.Run(c.label, func(t *testing.T) {
+			requireDNSAnswers(t, c)
 			rc, out, raw := runLegacyChild(t, dir, c.argv)
 			if rc != c.rc || out != c.stdout {
 				t.Fatalf("%s: rc %d out %q, want rc %d out %q", c.label, rc, out, c.rc, c.stdout)
@@ -787,6 +906,9 @@ func TestDNSBookkeepingInterleavedBatch(t *testing.T) {
 			if !dnsLinesEqual(engine, dnsLineCounts(stripInterleaveTrace(canonicalDNSStderr(c.stderr)))) {
 				t.Errorf("%s: stable stderr multiset differs from the pin\n engine: %s\n    pin: %s",
 					c.label, sortedLines(stripInterleaveTrace(canonicalDNSStderr(c.stderr))), sortedLines(stripInterleaveTrace(canonicalDNSStderr(raw))))
+			}
+			if cOracleUnavailable(t) {
+				return
 			}
 			_, _, craw := runCChild(t, dir, c.argv)
 			assertDNSWaitingShape(t, c.label+" (the C reference)", craw)

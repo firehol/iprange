@@ -210,26 +210,75 @@ fn full_stderr_signal_forces_nonzero_exit() {
 
 #[test]
 fn graceful_fatal_full_stderr_exits_nonzero() {
-    // Role-round finding: the graceful fatal path (rpc::run's
-    // diagnostic on a session error) must be as independent of a
-    // blocked stderr write as the forced signal exit.  A response
-    // write that fails (stdout closed) fails the session; with stderr
-    // a full, undrained pipe the process must still exit 1 within the
-    // bounded grace window, with no signal at all.
+    // Role-round finding: the graceful fatal path (rpc::run's diagnostic
+    // on a session error) must be as independent of a blocked stderr
+    // write as the forced signal exit.  The session must fail because a
+    // response write fails, and with stderr a full, never-drained pipe
+    // the process must still exit 1 with no signal at all.
+    //
+    // The failure is provoked on the reader thread, and that choice is
+    // the synchronization.  An over-limit frame is rejected while it is
+    // being read (framing.rs), so the reader itself writes the -32001
+    // reply, sees it fail against the broken stdout, and returns the
+    // error that rpc::run turns into the fatal diagnostic and exit 1.
+    // Nothing waits on another thread, so there is no ordering left for
+    // the scheduler to decide.
+    //
+    // The shape this replaces asked a describe frame to fail in the
+    // session worker instead, and closed stdin right after the request.
+    // Two paths then raced: the worker writing the response (which fails
+    // and records the transport failure) and the reader acting on EOF
+    // (which begins the shutdown drain and cancels queued units).  The
+    // worker's failure report goes into a bounded event channel that the
+    // main loop only drains while it is not reading stdin, so a session
+    // error cannot be served from EOF alone; and if the drain set its
+    // cancel flag before the worker dequeued the unit, no write was ever
+    // attempted, nothing was recorded, and the process exited 0 through
+    // the clean EOF path -- which is the documented outcome for a
+    // cancelled unit, not a defect.  The old assertion therefore held
+    // only while the scheduler happened to run the worker first: it
+    // passed on an idle box and failed under a loaded one (wave-19.26,
+    // deferred flake).  A test cannot prove a contract by winning a race.
+    //
+    // The worker-side report of a recorded transport failure is a
+    // different contract, owned by session.rs's shutdown drain; it is
+    // exercised by the wedge shapes in this file, which keep the events
+    // channel or the stdout pipe full so the process-lifetime bound is
+    // the only exit.  It is not exercisable against a plain EOF, for the
+    // reason above.
+    //
+    // The bound here is a process-lifetime bound rather than the
+    // product's grace window: the 50 ms diagnostic grace is measured
+    // inside rpc::run and cannot be observed from here, while process
+    // spawn and the first scheduler slice belong to this test's own cost
+    // and are what a saturated machine stretches.
     for _ in 0..2 {
         let (mut child, _read_end) = spawn_product_graceful_fatal_full_stderr();
         let mut stdin = child.stdin.take().expect("stdin");
-        stdin
-            .write_all(
-                b"{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"iprange.v1.system.describe\",\"params\":{}}\n",
-            )
-            .expect("write describe");
-        drop(stdin);
-        let code = wait_nonzero(&mut child, Duration::from_secs(3));
+        // 1,048,576 is INPUT_FRAME_LIMIT: LIMIT+2 bytes with no LF, and
+        // stdin deliberately stays open.  The frame is already invalid
+        // once the accumulated bytes pass the ceiling, so the reader does
+        // not wait for a terminator or for EOF to answer it -- and with
+        // the reply write failing, that answer is what ends the process.
+        let limit = 1_048_576usize;
+        let chunk = vec![b'x'; 65_536];
+        let mut written = 0usize;
+        while written < limit + 2 {
+            let take = chunk.len().min(limit + 2 - written);
+            written += stdin.write(&chunk[..take]).expect("write oversize bytes");
+        }
+        stdin.flush().expect("flush oversize bytes");
+        // Deliberately no drop(stdin): the reader must not reach EOF, so
+        // that the only way this process can end is the fatal path the
+        // test is about.  If that path ever stops reporting, the child
+        // cannot exit at all and the bounded wait below fails with the
+        // exit code it observed.
+        let code = wait_nonzero(&mut child, Duration::from_secs(20));
         assert_eq!(
             code, 1,
             "graceful fatal, full stderr: exit code {code}, want 1"
         );
+        drop(stdin);
     }
 }
 

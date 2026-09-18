@@ -778,11 +778,83 @@ def under_profile(path):
     return _matches_profile(real, profile)
 
 
+# The profile root of each host shape this project's evidence is authored
+# on, as a template over the login name.  ``/home`` is Linux and also the
+# msys2/Cygwin POSIX home; ``/Users`` is macOS; ``/usr/home`` is FreeBSD;
+# ``/export/home`` is illumos/SmartOS; ``C:\Users`` is native Windows and,
+# through the mount alias, the msys2 view of the same directory.
+_PROFILE_ROOT_TEMPLATES = (
+    "/home/{}",
+    "/Users/{}",
+    "/usr/home/{}",
+    "/export/home/{}",
+    "C:" + _WIN_SEP + "Users" + _WIN_SEP + "{}",
+)
+
+
+def operator_login(profile=None):
+    """The login name whose profile must never reach a report.
+
+    Taken from the profile root the platform reports rather than from a
+    user database: every supported host layout ends the profile in the
+    login (``/home/anne``, ``/Users/anne``, ``/usr/home/anne``,
+    ``/export/home/anne``, ``C:\\Users\\anne``), and the derivation has to
+    agree with ``profile_path()`` so a control that authorizes a profile
+    authorizes exactly the same person's roots on the other host shapes.
+    An empty profile gives an empty login, and an empty login matches
+    nothing.
+    """
+    root = profile_path() if profile is None else profile
+    if not root:
+        return ""
+    trimmed = root.rstrip("/" + _WIN_SEP)
+    if not trimmed:
+        return ""
+    return trimmed.replace(_WIN_SEP, "/").rsplit("/", 1)[-1]
+
+
+def foreign_profile_forms(login=None):
+    """Folded profile roots the operator owns on hosts other than this one.
+
+    ``personal_path_in_report`` has to consult these because a report is
+    authored on the host that produced the evidence and audited on
+    whichever host reads it.  Comparing only against ``profile_path()`` --
+    the *auditing* host's home -- is blind across hosts: a Windows harness
+    records its own profile as ``/c/Users/<login>/...``, and an audit run
+    from a Linux home of ``/home/<login>`` matches none of those spellings,
+    which is how two committed Windows reports carried the operator's
+    profile while their own privacy block attested it as null.
+
+    Every form goes through ``_comparison_fold``, so the same person's root
+    is one form whatever separator or case the authoring shell used, and
+    the mount alias needs no entry of its own because folding ``/c`` names
+    the volume it stands for.
+    """
+    name = operator_login() if login is None else login
+    if not name:
+        return []
+    forms = []
+    for template in _PROFILE_ROOT_TEMPLATES:
+        folded = _comparison_fold(template.format(name))
+        if folded not in forms:
+            forms.append(folded)
+    return forms
+
+
 def personal_path_in_report(report):
-    """Return one string field that is or starts with the operator's
-    profile path, or None.  Structural scan over every string value so
-    a future report field cannot silently re-introduce a personal
-    path."""
+    """Return one string field that carries the operator's profile path,
+    or None.  Structural scan over every string value so a future report
+    field cannot silently re-introduce a personal path.
+
+    The scan compares against the auditing host's profile *and* against
+    the same operator's profile root on every other supported host shape
+    (``foreign_profile_forms``), because the report's bytes come from the
+    authoring host and the audit runs on the reading host.  A foreign root
+    naming some *other* login is out of scope here: this gate protects the
+    operator's own personal area, and it cannot know other people's login
+    names.  ``under_profile`` remains the input-side net and is unchanged,
+    since a path rooted on another platform cannot name a local directory
+    to be screened in the first place."""
     profile = profile_path()
     if not profile:
         return None
@@ -797,14 +869,45 @@ def personal_path_in_report(report):
     # unfolded ``C:/Users/alice`` profile escaped every embedded build
     # command, and the mirror case escaped a POSIX-folded candidate.
     profile_forms = _profile_comparisons(_comparison_fold(profile))
+    profile_roots = [profile] + foreign_profile_forms(operator_login(profile))
+    scan_forms = list(profile_forms)
+    for root in profile_roots[1:]:
+        # A foreign root is a needle the auditing host can never resolve, so
+        # it has to be searched in every spelling the authoring host could
+        # have written it in -- the same expansion ``_profile_comparisons``
+        # gives the local profile, which is what carries the msys2 mount
+        # alias form a shell line embeds mid-string.
+        for form in _profile_comparisons(root):
+            if form not in scan_forms:
+                scan_forms.append(form)
     # A Windows volume is case- and separator-insensitive by definition, so
     # a report that embeds a Windows profile mid-string has to be found
     # whatever separators and case the authoring shell used.  The candidate
-    # arrives folded for the host that runs the scan, so on a POSIX host the
-    # Windows fold is applied as an extra reading of the same value.  A POSIX
-    # profile keeps the host fold alone, so a case-sensitive POSIX home is
-    # never folded into a sibling directory that differs only by case.
-    profile_is_windows = _is_windows_spelling(profile)
+    # arrives folded for the host that runs the scan, so the Windows fold is
+    # always offered as a second reading of the same value: the profile that
+    # needs it may be the local one, or the operator's root on the host that
+    # authored the report.  Reading a candidate twice can only ever add a
+    # refusal, because the needles are unchanged.  The one class it widens
+    # is stated rather than hidden: ``_fold_windows`` lowercases the
+    # candidate, so a POSIX path that differs from a POSIX profile only in
+    # case now matches, although a case-sensitive POSIX home would call it a
+    # different directory.  Such a spelling does not occur in this project's
+    # evidence, and the trade is asymmetric -- a false refusal costs one
+    # rerun, a missed profile puts a personal path in a committed artifact.
+    #
+    # This is the msys2 case the old scan could not see: an msys2 ``~`` is
+    # /home/<login>, while the same operator's Windows profile is
+    # C:\Users\<login> and reaches a captured shell line as
+    # /c/Users/<login>/...  Neither spelling of the auditing host's own home
+    # names the other directory, so a scan limited to ``profile_path()``
+    # reported "0 problems" over a report that carried the profile.
+    def _candidate_readings(spelling):
+        readings = [_comparison_fold(spelling), _fold_windows(spelling)]
+        out = []
+        for reading in readings:
+            if reading not in out:
+                out.append(reading)
+        return out
 
     def _is_path_sep(ch):
         return ch in ("/", chr(92))
@@ -847,7 +950,7 @@ def personal_path_in_report(report):
         # segment, so sibling names on localized hosts stay clean.
         return not unicodedata.category(ch).startswith(("P", "C"))
 
-    def _occurrence(spelling):
+    def _occurrence(spelling, forms=None):
         """True when any profile comparison form appears in spelling
         with a word boundary on the left and a segment end on the
         right.
@@ -860,7 +963,7 @@ def personal_path_in_report(report):
         (``--cases=/home/alice/x``), or a non-continuation character
         (``cd /home/alice && make``, ``HOME=C:Users\\alice
         make``); sibling names (``/home/alice-notes``) stay clean."""
-        for form in profile_forms:
+        for form in profile_forms if forms is None else forms:
             idx = spelling.find(form)
             while idx != -1:
                 left_ok = idx == 0 or (
@@ -878,10 +981,11 @@ def personal_path_in_report(report):
 
     def visit(value):
         if isinstance(value, str):
-            for spelling in _privacy_spellings(value):
-                if _matches_profile(spelling, profile):
-                    hit.append(value)
-                    return
+            for root in profile_roots:
+                for spelling in _privacy_spellings(value):
+                    if _matches_profile(spelling, root):
+                        hit.append(value)
+                        return
             # Mid-string occurrences: a build command or an option
             # value that embeds any profile comparison form (``--cases=
             # /home/alice/x``, ``cd /home/alice && make``, Windows
@@ -894,11 +998,8 @@ def personal_path_in_report(report):
             # false-positive, and the right boundary excludes
             # continuation characters so sibling names stay clean.
             for spelling in _privacy_spellings(value):
-                variants = [_comparison_fold(spelling)]
-                if profile_is_windows:
-                    variants.append(_fold_windows(spelling))
-                for variant in variants:
-                    if _occurrence(variant):
+                for variant in _candidate_readings(spelling):
+                    if _occurrence(variant, scan_forms):
                         hit.append(value)
                         return
         elif isinstance(value, dict):
@@ -2554,6 +2655,12 @@ def _provenance_self_test():
         scan_misses, scan_leaks = [], []
         restore_is_windows = _IS_WINDOWS
         restore_profile_path = profile_path
+        # ``root`` names the self-test scratch tree and is rebound by the
+        # profile-spelling loops below, so it is saved here and restored with
+        # the host flags: without the restore the cleanup at the end of this
+        # function removes the last profile spelling instead of the scratch
+        # tree, and the tree survives every self-test run.
+        restore_root = root
         try:
             for fold_nt in (restore_is_windows, True):
                 _IS_WINDOWS = fold_nt
@@ -2620,6 +2727,7 @@ def _provenance_self_test():
         finally:
             _IS_WINDOWS = restore_is_windows
             profile_path = restore_profile_path
+            root = restore_root
         expect("the profile matcher matches a profile-rooted path in every "
                "separator and case spelling the caller can write",
                not matcher_misses, str(matcher_misses[:4]))
@@ -2641,6 +2749,96 @@ def _provenance_self_test():
                "whichever separator, case and mount-alias spelling profile "
                "and path were authored with",
                not scan_leaks, str(scan_leaks[:4]))
+
+        # 13: the report scan sees the operator's profile on a host that is
+        # not the host running the scan.  Every control in numbered group 12
+        # authorizes one profile and injects that same profile as the
+        # auditing host's own home, which is the same-host case.  The defect
+        # that reached committed evidence was the cross-host case: a Windows
+        # harness recorded its operator's profile as /c/Users/<login>/...
+        # inside a captured shell line while the audit -- on msys2 or on the
+        # Linux qualification workstation -- determined the operator's home
+        # to be /home/<login>, a different directory.  A scan limited to
+        # ``profile_path()`` then reported "0 problems" over a report that
+        # carried the profile.  So the auditing profile here is fixed to a
+        # POSIX home and the report content carries the same login's root on
+        # each other supported host shape, which is the condition the old
+        # controls could not express.
+        AUDIT_HOME = "/home/operator"
+        FOREIGN_ROOTS = [
+            "/c/Users/operator",        # msys2 / Cygwin mount alias
+            "C:" + _WIN_SEP + "Users" + _WIN_SEP + "operator",
+            "C:/Users/operator",        # the same volume, POSIX separators
+            "/Users/operator",          # macOS
+            "/usr/home/operator",       # FreeBSD
+            "/export/home/operator",    # illumos
+        ]
+        saved_profile = profile_path
+        cross_misses, cross_leaks, writer_leaks = [], [], []
+        try:
+            def auditing_home():
+                return AUDIT_HOME
+            profile_path = auditing_home
+            for froot in FOREIGN_ROOTS:
+                # The embedded shape is the one the leaked reports carried:
+                # the profile sits inside a recorded shell line, where no
+                # whole-path fold may rewrite a mid-string mount alias.
+                for shape, value in (
+                        ("embedded", "go-vet [scored attempt 1, rc=0]: (cd "
+                                     + froot + "/src/iprange/v4/go"
+                                     " && nice go vet ./...)"),
+                        ("whole", froot + "/staged/win/rust/iprange.exe")):
+                    document = {"schema": "s", "build_provenance":
+                                {"build_commands": [value]}}
+                    if personal_path_in_report(document) is None:
+                        cross_misses.append((shape, froot))
+            # The rule is scoped to the operator's own login: a foreign root
+            # that names somebody else is not this gate's business, and a
+            # sibling of the operator's foreign root is not the root.
+            for froot in FOREIGN_ROOTS:
+                parent = froot[:froot.rindex(_WIN_SEP if _WIN_SEP in froot else "/")]
+                for value in (parent + "/someone-else/staged.bin",
+                              froot + "-notes/staged.bin"):
+                    document = {"schema": "s", "build_provenance":
+                                {"build_commands": [value]}}
+                    if personal_path_in_report(document) is not None:
+                        cross_leaks.append(value)
+            # The writer is the channel that matters: refusing at the scan
+            # but installing anyway would leave the same artifact on disk.
+            refused_target = os.path.join(root, "cross-host-leak.json")  # root is the self-test temp dir
+            try:
+                write(refused_target,
+                      {"schema": "s", "build_provenance": {"build_commands": [
+                          "cargo-build-bins [scored attempt 1, rc=0]: (cd "
+                          + FOREIGN_ROOTS[1] + "/src/iprange"
+                          " && nice cargo build --release)"]}},
+                      argv=["v4/cli/windows_guard_harness.py"])
+            except SystemExit:
+                pass
+            if os.path.exists(refused_target):
+                writer_leaks.append(refused_target)
+        finally:
+            profile_path = saved_profile
+        expect("the report scan names the operator's profile authored on a "
+               "foreign host, embedded in a command line or standing alone, "
+               "however that host spells its profile root",
+               not cross_misses, str(cross_misses[:4]))
+        expect("the foreign-host rule stays scoped to the operator's own "
+               "login and to the root itself",
+               not cross_leaks, str(cross_leaks[:4]))
+        expect("the shared writer refuses a report whose only personal path "
+               "arrived through a foreign host's profile root",
+               not writer_leaks, str(writer_leaks[:4]))
+        expect("the operator login the foreign roots are built from is the "
+               "auditing host's own, so a report cannot dodge them by being "
+               "audited on a different platform",
+               operator_login(AUDIT_HOME) == "operator"
+               and foreign_profile_forms("operator") == [
+                   _comparison_fold(template.format("operator"))
+                   for template in dict.fromkeys(
+                       template.format("operator")
+                       for template in _PROFILE_ROOT_TEMPLATES)],
+               str(foreign_profile_forms("operator")))
     finally:
         shutil.rmtree(root, ignore_errors=True)
     return checks
@@ -2649,16 +2847,21 @@ def _provenance_self_test():
 # Executed-control count of ``_provenance_self_test``.  A harness self-test
 # that only prints "0 failures" cannot tell a passed run from a run in which
 # nothing executed, so the count is asserted here and by every harness that
-# calls into this module.  53 = the 40 controls that pin the sanctioned commit
+# calls into this module.  57 = the 40 controls that pin the sanctioned commit
 # path, the provenance and privacy block, the source audit, and the pinned
 # drive-relative anchor; the seven controls of numbered group 11, which pin
 # that a committed report never carries a checkout directory and that the
-# resolution helper keeps its non-committed consumers; and the six controls
-# of numbered group 12, which pin that the profile comparison is decided by
-# the directory a path names and not by the separator, case, or msys2
-# mount-alias spelling its caller wrote, for each of the three profile entry
-# points: the matcher, input screening, and the report scan.
-PROVENANCE_SELF_TEST_CHECKS = 53
+# resolution helper keeps its non-committed consumers; the six controls of
+# numbered group 12, which pin that the profile comparison is decided by the
+# directory a path names and not by the separator, case, or msys2 mount-alias
+# spelling its caller wrote, for each of the three profile entry points: the
+# matcher, input screening, and the report scan; and the four controls of
+# numbered group 13, which pin the cross-host case that group 12 cannot
+# express -- an audit running under a POSIX home must still name the
+# operator's profile when the report authored it under another host's
+# profile root, in each root spelling the supported platforms produce, and
+# the shared writer must refuse to install such a report.
+PROVENANCE_SELF_TEST_CHECKS = 57
 
 
 def _self_test():

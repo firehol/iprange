@@ -420,6 +420,71 @@ def _controls():
         finally:
             (cs._IS_WINDOWS, cs._IS_POSIX,
              cs.profile_path) = saved_host
+
+        # --- 8b: author and auditor are different hosts -----------------
+        # The block above injects the authoring profile as the auditing
+        # host's own home, so it pins the fold but not the cross-host case:
+        # both sides name one directory.  What actually happened to the two
+        # committed Windows reports is that the authoring host's profile was
+        # ``C:\Users\<operator>`` (recorded by its msys2 shell as
+        # ``/c/Users/<operator>/...``) while the auditing host -- msys2 on the
+        # same machine, or the Linux qualification workstation -- reports the
+        # operator's home as ``/home/<operator>``.  Those are two different
+        # directories, so a scan that consults ``profile_path()`` alone found
+        # nothing to report and the pair attested
+        # ``personal_path_in_report: null``.  Here the auditor stays on a
+        # POSIX home and only the report content carries the Windows profile,
+        # which is the condition the repair has to satisfy.
+        posix_auditor_home = "/home/operator"
+        foreign_profiles = [
+            "/c/Users/operator",                       # msys2 mount alias
+            "C:" + chr(92) + "Users" + chr(92) + "operator",
+            "C:/Users/operator",                       # same volume, / separators
+        ]
+        cross_misses, cross_writer_leaks = [], []
+        saved_auditor = cs.profile_path
+        try:
+            cs.profile_path = lambda: posix_auditor_home
+            for foreign in foreign_profiles:
+                document = copy.deepcopy(leaked_provenance)
+                document["build_provenance"]["build_commands"] = [
+                    "cargo-build-bins [scored attempt 1, rc=0]: (cd "
+                    + foreign + "/src/iprange && nice cargo build --release)"]
+                problems = cs.committed_report_problems(
+                    document, where="evidence/windows-guard.json")
+                if not any("personal path" in problem for problem in problems):
+                    cross_misses.append((foreign, problems[:1]))
+                staged_leak = os.path.join(root, "cross-host-"
+                                           + str(len(cross_misses)) + ".json")
+                try:
+                    cs.write_committed_report(
+                        staged_leak, document,
+                        argv=["v4/cli/windows_guard_harness.py"])
+                except SystemExit:
+                    pass
+                if os.path.exists(staged_leak):
+                    cross_writer_leaks.append(staged_leak)
+        finally:
+            cs.profile_path = saved_auditor
+        check("cross-host", "the audit names the author's profile while the "
+                            "auditor runs under a different host's home",
+              not cross_misses,
+              str(cross_misses) + " (author profile is not the auditor's)")
+        check("cross-host", "the shared writer refuses that cross-host report "
+                            "and creates no artifact",
+              not cross_writer_leaks, str(cross_writer_leaks))
+        check("cross-host", "a foreign profile path naming some other login is "
+                            "out of this gate's scope, and saying so is part "
+                            "of the pin",
+              not any("personal path" in problem
+                      for problem in cs.committed_report_problems(
+                          {"schema": "iprange-cli-report-v3",
+                           "build_provenance": {"build_commands": [
+                               "go-vet [scored attempt 1, rc=0]: (cd "
+                               "/c/Users/someone-else/src/iprange/v4/go"
+                               " && nice go vet ./...)"]}},
+                          where="evidence/windows-guard.json")),
+              "the gate protects the operator's own personal area only")
         clean_provenance = {
             "schema": "iprange-cli-report-v3",
             "build_provenance": {"build_commands": [
@@ -454,7 +519,12 @@ def _controls():
     return executed, failures
 
 
-SELF_TEST_CONTROLS = 37
+# 37 = the controls of groups 1-7 plus the three foreign-host controls of
+# group 8; 40 adds the three cross-host controls of group 8b, which pin the
+# condition group 8 cannot express: an audit whose own home is a POSIX profile
+# has to name the author's Windows profile for the same login, in each spelling
+# that host produces, and the shared writer has to refuse to install it.
+SELF_TEST_CONTROLS = 40
 
 
 def main():

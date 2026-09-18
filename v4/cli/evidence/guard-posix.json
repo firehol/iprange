@@ -9,19 +9,19 @@
     "--go",
     "/tmp/iprange-w1925/bin/go/iprange",
     "--fixture",
-    "/tmp/iprange-w1925/fixture-1411289.iprange",
+    "/tmp/iprange-w1925/fixture-2552470.iprange",
     "--work",
     "/tmp/iprange-w1925/W-guard",
     "--out",
     "/tmp/iprange-w1925/reports/guard-posix.json"
   ],
   "fixture": {
-    "mtime": 1789470392.245306,
-    "path": "/tmp/iprange-w1925/fixture-1411289.iprange",
-    "sha256": "7bde73f3ccddf284163ae2e57c64f81c2b2a3143f4b19261507e8d6322eae5d2",
+    "mtime": 1789581385.429641,
+    "path": "/tmp/iprange-w1925/fixture-2552470.iprange",
+    "sha256": "80ee91b0b3c9d9d2a23d8edc42f2f8197b4ab5f96c6b93193f35e0b9084e8926",
     "size": 16384
   },
-  "git_head": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
+  "git_head": "7c2d2cf710db4a29661317ad1b1ffc8fdd823320",
   "platform": "posix",
   "privacy": {
     "checked_inputs": [
@@ -39,10 +39,10 @@
     "go": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789469639.6276672,
+        "mtime": 1789579495.920559,
         "path": "/tmp/iprange-w1925/bin/go/iprange",
-        "sha256": "bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787",
-        "size": 14377310
+        "sha256": "c315b71ba9253d697284e23ad63dbebc8ab9d153ee711ebe130aa20b9c159c5a",
+        "size": 14394437
       },
       "cases": {
         "absolute_trailing_dot": {
@@ -124,15 +124,15 @@
       "implementation": "go",
       "sources_before": {
         "/tmp/iprange-w1925/W-guard/go/A\u03a31.iprange": {
-          "sha256_before": "7bde73f3ccddf284163ae2e57c64f81c2b2a3143f4b19261507e8d6322eae5d2",
+          "sha256_before": "80ee91b0b3c9d9d2a23d8edc42f2f8197b4ab5f96c6b93193f35e0b9084e8926",
           "sidecar_absent_before": true
         },
         "/tmp/iprange-w1925/W-guard/go/db.iprange": {
-          "sha256_before": "7bde73f3ccddf284163ae2e57c64f81c2b2a3143f4b19261507e8d6322eae5d2",
+          "sha256_before": "80ee91b0b3c9d9d2a23d8edc42f2f8197b4ab5f96c6b93193f35e0b9084e8926",
           "sidecar_absent_before": true
         },
         "/tmp/iprange-w1925/W-guard/go/db_\u00e4.iprange": {
-          "sha256_before": "7bde73f3ccddf284163ae2e57c64f81c2b2a3143f4b19261507e8d6322eae5d2",
+          "sha256_before": "80ee91b0b3c9d9d2a23d8edc42f2f8197b4ab5f96c6b93193f35e0b9084e8926",
           "sidecar_absent_before": true
         }
       }
@@ -140,10 +140,10 @@
     "rust": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789469639.6386678,
+        "mtime": 1789579495.9375598,
         "path": "/tmp/iprange-w1925/bin/rust/iprange",
-        "sha256": "8ea6aab30753b071d4f21c4669b44f5ac0ac9539d6a409f7f0659b6b0c2d51ac",
-        "size": 6947568
+        "sha256": "e57ebc06cfc69b3eaa114acde38cb5bb23d20a77fbcd0cd562b57288841a3b17",
+        "size": 6969424
       },
       "cases": {
         "absolute_trailing_dot": {
@@ -225,15 +225,15 @@
       "implementation": "rust",
       "sources_before": {
         "/tmp/iprange-w1925/W-guard/rust/A\u03a31.iprange": {
-          "sha256_before": "7bde73f3ccddf284163ae2e57c64f81c2b2a3143f4b19261507e8d6322eae5d2",
+          "sha256_before": "80ee91b0b3c9d9d2a23d8edc42f2f8197b4ab5f96c6b93193f35e0b9084e8926",
           "sidecar_absent_before": true
         },
         "/tmp/iprange-w1925/W-guard/rust/db.iprange": {
-          "sha256_before": "7bde73f3ccddf284163ae2e57c64f81c2b2a3143f4b19261507e8d6322eae5d2",
+          "sha256_before": "80ee91b0b3c9d9d2a23d8edc42f2f8197b4ab5f96c6b93193f35e0b9084e8926",
           "sidecar_absent_before": true
         },
         "/tmp/iprange-w1925/W-guard/rust/db_\u00e4.iprange": {
-          "sha256_before": "7bde73f3ccddf284163ae2e57c64f81c2b2a3143f4b19261507e8d6322eae5d2",
+          "sha256_before": "80ee91b0b3c9d9d2a23d8edc42f2f8197b4ab5f96c6b93193f35e0b9084e8926",
           "sidecar_absent_before": true
         }
       }

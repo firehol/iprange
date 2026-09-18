@@ -1,20 +1,35 @@
 Every measurement report in this directory records its own provenance,
 and reading that provenance is the only way to know what a committed
-artifact measures.  As of this writing each report's `git_head` member carries
-`2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1` — the revision under test,
-built by the Linux qualification battery from a clean staging copy and by
-the native Windows re-qualification leg from a clean detached checkout on
-the authorized Windows validation host.  The two Windows reports embed a
-`build_provenance` record naming that revision, the toolchain lines, the
-per-step attempt history, and the native test tallies.  All twenty
-measurement reports and `battery-manifest.json` agree on this one
-revision, and the manifest binds every report's content digest, the
-staged binary ledger, and the revision together — that binding is what
-the kind gate consumes.  The revision under test differs from the
-previously qualified revision only in `v4/cli/command_sanitize.py`,
-this README, and the SOW, so no `v4/rust` or `v4/go` source file
-changed and the host-invariant engine build identity carries over
-unchanged (see the identity block below).
+artifact measures.  As of this writing the set is mid-rotation for the
+milestone-4 close-out: the twenty Linux-side artifacts (measurement
+reports, `coverage-go.json`, `build-ids.json`, and the manifest) carry
+`git_head` `7c2d2cf710db4a29661317ad1b1ffc8fdd823320`, and the two Windows reports
+carry `e1f326df56631e6b9d84a617c6584b59c7e50f0a`, the throwaway
+qualification-content snapshot (chunk sources + working-tree repairs, not
+a project commit) that the native leg built from a clean detached
+checkout on the authorized Windows validation host.  The two Windows
+reports embed a `build_provenance` record naming that revision, the
+toolchain lines, the per-step attempt history, and the native test
+tallies.  The committed `battery-manifest.json` carries
+`git_head 7c2d2cf7…` but its ledger digests bind the earlier rotation's
+bytes (its two Windows entries match the pre-repair leaky reports, and it
+names `crash-rust_to_go.json`/`crash-negative-consumer-false.json` which
+do not exist on disk); it is a known-stale artifact that the closure
+battery rebuilds from disk at the final revision F, and
+the kind gate (`check_kind_coverage.py`) refuses any set whose reports do
+not agree on one revision — the interim mixed state is the designed
+intermediate, never a committable final.  That binding is what
+the kind gate consumes.  Against the previously fully-qualified revision
+`2c788b8e`, this set's revisions DO change engine sources — the legacy
+parse/DNS paths of `v4/rust/iprange-cli` and `v4/go/internal/cli/legacy`
+(the Windows-portability repairs and the round-1 DNS numeric-form
+scoping), plus the `v4/cli` gates and records.  What carries over is the
+**worker-handshake build identity only**: `build-ids.json` covers
+`iprange-livedb/src` inputs, and no file under that directory changed
+between `7c2d2cf7` and `e1f326df` (nor in the round-1 fixes, which touch
+only `iprange-cli` test code, Go, and gates), so the identity block below
+still describes every artifact in the set.  The closure battery at the
+final revision re-derives all of it from one tree.
 
 Rotation contract.  No report here is authored by hand and none is
 expected to be edited in place.  The qualification battery builds the
@@ -240,14 +255,17 @@ go worker `f4a81b62774772d60c63712c9aa14041fd742986ecada81d7384a23bdb92b070`,
 rust `iprange` `8ea6aab30753b071d4f21c4669b44f5ac0ac9539d6a409f7f0659b6b0c2d51ac`,
 rust worker `269f56b911440794b4a9c4b091fc0cc4af9ba36eb74ce30153b4b0e1eb4d08e0`,
 v4-fixture `50f7465ca5f71fcebce85ff6b9ed32957bcb6a259489830c2b86ff93991b94bf`.
-The host-invariant engine build identity is
-`a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94`
+The host-invariant engine build identity for this set's revisions is
+`66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d`
 (computed by `v4/rust/iprange-livedb/build.rs` over the package manifest
 and 357 source files with the host-invariant logical-name algorithm, so
-one source state has one identity across hosts); `command_sanitize.py
---emit-build-ids` recomputes it and finds it verbatim in the bytes of
-both built Rust products, and the four platform entries in
-`build-ids.json` are equal by that measurement.  The staged ledger
+one source state has one identity across hosts; the native leg verified
+it verbatim in the bytes of both built Rust products and equal across
+the four `build-ids.json` platform entries).  It differs from the
+previously qualified `a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555d
+dedd94ee67efa94` because the rotation's revisions changed `v4/rust` and
+`v4/go` sources; the identity re-derives at the final revision.  The
+staged ledger
 `.local/shared/binaries/SHASUMS.txt` lists 11 members (5 Linux, 6
 Windows: `win/go/*.{2 exes}`, `win/rust/*.{2 exes}`,
 `win/v4-fixture.exe`, `win/fixture-w1924b.iprange`) and verified 11/11
@@ -288,7 +306,7 @@ individually and as a filtered group, including
 `character_device_is_refused_as_not_regular` — the zero-access
 `CreateFileW` + `GetFileAttributesW` classifier is proven natively — and
 the reader-sidecar pins pass.  All three shared self-tests print
-`executed=53 expected=53` natively, closing the mingw64 fold defect the
+`executed=57 expected=57` natively, closing the mingw64 fold defect the
 previous wave found and this revision fixed: on that interpreter
 `os.name == 'nt'` while `os.sep == '/'` and `ntpath.normcase` folds case
 only, and the profile matcher had been comparing two spellings of one
@@ -2373,11 +2391,11 @@ the derived `privacy` block, screens the inputs the caller declares, and
 refuses the write when any screened input or any finished string value
 names an operator profile path.  Splitting the write from the provenance
 would let a harness keep the artifact and drop the audit, so the registry
-is audited as a set: `command_sanitize.py --self-test` executes 53
+is audited as a set: `command_sanitize.py --self-test` executes 57
 controls over the whole registry, and every harness self-test must report
-`shared command_sanitize controls executed=53 expected=53` before its own
+`shared command_sanitize controls executed=57 expected=57` before its own
 result counts.  `check_producer_privacy.py` attacks the three
-lead-owned writers from the outside with 37 committed controls, so
+lead-owned writers from the outside with 40 committed controls, so
 neither a writer that screens nothing, nor one that serializes its own
 JSON, nor an artifact with no `privacy` block, survives.
 
@@ -2396,9 +2414,9 @@ nice python3 v4/cli/sensitivity_gate.py --self-test      # 14 modes + 2 inversio
 nice python3 v4/cli/throughput_harness.py --self-test   # 12 cases + 4 structural
 nice python3 v4/cli/resource_harness.py --self-test      # 25 control groups
 nice python3 v4/cli/crash_harness.py --self-test         # 26 controls, eight groups
-nice python3 v4/cli/windows_guard_harness.py --self-test # 38 controls + 1 native-only
-nice python3 v4/cli/command_sanitize.py --self-test      # 53 registry controls
-nice python3 v4/cli/check_producer_privacy.py --self-test # 37 producer controls
+nice python3 v4/cli/windows_guard_harness.py --self-test # 39 total (38 on POSIX + 1 native-only) + 10 verify
+nice python3 v4/cli/command_sanitize.py --self-test      # 57 registry controls
+nice python3 v4/cli/check_producer_privacy.py --self-test # 40 producer controls
 nice python3 v4/cli/windows_housekeeping_harness.py --self-test  # incl. 9 report-verification controls
 nice python3 v4/cli/races/runner.py --self-test          # 22 mutation (15 arm, 7 detector) + 6 committed-report writer controls
                                                          # + clean-arm/clean-detector/report-location

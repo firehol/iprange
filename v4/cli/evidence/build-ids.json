@@ -17,20 +17,20 @@
   "/tmp/iprange-w1925/rust-target/release/iprange-v4-worker"
  ],
  "expected_build_id": {
-  "darwin": "a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94",
-  "freebsd": "a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94",
-  "linux": "a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94",
-  "windows": "a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94"
+  "darwin": "66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d",
+  "freebsd": "66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d",
+  "linux": "66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d",
+  "windows": "66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d"
  },
- "git_head": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
+ "git_head": "7c2d2cf710db4a29661317ad1b1ffc8fdd823320",
  "inputs": {
   "manifest": "Cargo.toml",
   "source_files": 357
  },
  "measured_without_the_normalizer": {
   "note": "the two digests below are what the pre-normalizer build.rs produces from this same source state: equal on a POSIX host and different for a Windows host, which is the defect this record guards against",
-  "posix_host": "a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555ddeddd94ee67efa94",
-  "windows_host": "d44ef9f6433e077256254417ec36f3319e548b0547a39fb63625c9d18c3d443b"
+  "posix_host": "66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d",
+  "windows_host": "1a5333f48dacfc74717be4e2e0ca950538bd33024e76eaf8ac1eb68f61ce779c"
  },
  "package": "iprange-livedb",
  "privacy": {
@@ -50,7 +50,7 @@
  "schema": "iprange-cli-build-ids-v1",
  "source_state": {
   "note": "the value is a pure function of iprange-livedb's Cargo.toml and src/**.rs content; any change under that package regenerates it. Regenerate this file whenever the package changes and never hand-edit a digest.",
-  "revision": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1"
+  "revision": "7c2d2cf710db4a29661317ad1b1ffc8fdd823320"
  },
  "verified_against_built_products": {
   "cli_contains_expected": true,

@@ -1267,16 +1267,62 @@ fn fmt_drop_warning(name: &[u8], count: u64) -> Diag {
     ])
 }
 
+/// Did the read of an already-opened handle fail because it is a directory?
+///
+/// The handle is passed so the classification can confirm the object
+/// identity from the platform rather than trusting one error code: a bare
+/// error number is not proof that the input was a directory.
 #[cfg(unix)]
-fn is_directory_read_error(e: &std::io::Error) -> bool {
+fn is_directory_read_error(e: &std::io::Error, _file: &std::fs::File) -> bool {
     // glibc reports the failed `fgets()` on an open directory as
     // `EISDIR` from `read(2)`.
     e.raw_os_error() == Some(libc::EISDIR)
 }
 
-#[cfg(not(unix))]
-fn is_directory_read_error(_e: &std::io::Error) -> bool {
+#[cfg(windows)]
+fn is_directory_read_error(e: &std::io::Error, file: &std::fs::File) -> bool {
+    // `ReadFile` on an opened directory handle fails with
+    // `ERROR_INVALID_FUNCTION`; the attributes of that same handle confirm
+    // it names a directory, so the failure is the directory case and not
+    // some other read error wearing the same code.
+    const ERROR_INVALID_FUNCTION: i32 = 1;
+    e.raw_os_error() == Some(ERROR_INVALID_FUNCTION)
+        && file.metadata().map(|m| m.is_dir()).unwrap_or(false)
+}
+
+#[cfg(not(any(unix, windows)))]
+fn is_directory_read_error(_e: &std::io::Error, _file: &std::fs::File) -> bool {
     false
+}
+
+/// Retry an open that the platform refused because the target is a directory.
+///
+/// Windows `CreateFile` fails with `ERROR_ACCESS_DENIED` on a directory
+/// unless the caller requests backup semantics. That is a parameter rule,
+/// not a permission decision, and the two are indistinguishable by error
+/// code alone, so the object's own attributes decide whether a retry is
+/// allowed: only a path already known to be a directory is reopened, and
+/// then with the semantics the platform requires for directories. A regular
+/// file therefore never receives a backup-intent open, and the retry's own
+/// failure is returned, so a denied or contended open can never become an
+/// empty set.
+#[cfg(windows)]
+fn reopen_directory(path: &Path, first: &std::io::Error) -> Option<std::io::Result<std::fs::File>> {
+    use std::os::windows::fs::OpenOptionsExt;
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+    if first.raw_os_error() != Some(ERROR_ACCESS_DENIED) {
+        return None;
+    }
+    if !std::fs::metadata(path).map(|m| m.is_dir()).unwrap_or(false) {
+        return None;
+    }
+    Some(
+        std::fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+            .open(path),
+    )
 }
 
 /// Read one legacy input file the way the released tool reads it.
@@ -1287,16 +1333,33 @@ fn is_directory_read_error(_e: &std::io::Error) -> bool {
 /// A directory named on argv or by an `@file` list is therefore an empty
 /// set with exit 0, and its content is never read.
 ///
-/// Only `EISDIR` is empty. The C error path is a failed `fopen()`, and
-/// that call reports `EACCES`, `ENOENT` and every other failure before
-/// any read happens, so those keep their C diagnostic. This is
-/// deliberately stricter than C, which cannot tell a read error other
-/// than `EISDIR` apart from a directory either: a failed read that is
-/// not a directory must stay an error here.
+/// Only that one shape is empty. The C error path is a failed `fopen()`,
+/// and that call reports `EACCES`, `ENOENT` and every other failure before
+/// any read happens, so those keep their diagnostic on every platform, as
+/// does any read error that is not the platform's directory signature. This
+/// is deliberately stricter than C, which cannot tell a read error other
+/// than `EISDIR` apart from a directory either.
 fn read_legacy_input(path: &Path) -> std::io::Result<Vec<u8>> {
-    match std::fs::read(path) {
-        Err(e) if is_directory_read_error(&e) => Ok(Vec::new()),
-        other => other,
+    // Open and read are kept separate so that "the open succeeded and the
+    // read failed as a directory" is a tested shape, not an assumption
+    // about a combined call.
+    let mut file = match std::fs::File::open(path) {
+        Ok(file) => file,
+        Err(e) => {
+            #[cfg(windows)]
+            match reopen_directory(path, &e) {
+                Some(retry) => retry?,
+                None => return Err(e),
+            }
+            #[cfg(not(windows))]
+            return Err(e);
+        }
+    };
+    let mut buf = Vec::new();
+    match file.read_to_end(&mut buf) {
+        Ok(_) => Ok(buf),
+        Err(e) if is_directory_read_error(&e, &file) => Ok(Vec::new()),
+        Err(e) => Err(e),
     }
 }
 
@@ -1315,6 +1378,11 @@ fn strerror(e: &std::io::Error) -> String {
 mod tests {
     use super::*;
     use crate::legacy::options::SourceSpec;
+    // The helper exists only where its single caller compiles (the unix
+    // root branch below); an unconditional import would break the Windows
+    // test build.
+    #[cfg(unix)]
+    use crate::legacy::tests::record_unscored_pin;
     use std::ffi::{OsStr, OsString};
     use std::path::PathBuf;
 
@@ -1590,6 +1658,65 @@ mod tests {
         assert_eq!(loaded.len(), 1, "one fifo source loads one set");
         assert_eq!(loaded[0].0, OsStr::new(&fifo), "named by the argv path");
         assert_eq!(loaded[0].1, EXPECTED.to_vec(), "the fifo payload loaded");
+    }
+
+    /// Restores a mode that a test lowered so the scratch tree stays
+    /// removable, and keeps the denial in force for the test body.
+    #[cfg(unix)]
+    struct PermissionGuard {
+        path: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl PermissionGuard {
+        fn new(path: &std::path::Path) -> PermissionGuard {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000))
+                .expect("deny every access mode to the directory");
+            PermissionGuard {
+                path: path.to_path_buf(),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for PermissionGuard {
+        fn drop(&mut self) {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+
+    /// Holds a directory open with `dwShareMode == 0`, which every later
+    /// open of that directory must fail with `ERROR_SHARING_VIOLATION`.
+    /// Backup semantics cannot bypass a sharing conflict, so this is the
+    /// Windows shape of "the open itself fails" rather than "the caller was
+    /// denied".
+    #[cfg(windows)]
+    struct ExclusiveHandle {
+        handle: std::fs::File,
+    }
+
+    #[cfg(windows)]
+    impl ExclusiveHandle {
+        fn new(path: &std::path::Path) -> ExclusiveHandle {
+            use std::os::windows::fs::OpenOptionsExt;
+            const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+            let handle = std::fs::OpenOptions::new()
+                .read(true)
+                .share_mode(0)
+                .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+                .open(path)
+                .expect("hold the directory with an exclusive share mode");
+            ExclusiveHandle { handle }
+        }
+    }
+
+    #[cfg(windows)]
+    impl Drop for ExclusiveHandle {
+        fn drop(&mut self) {
+            let _ = &self.handle;
+        }
     }
 
     struct TempDir {
@@ -1912,10 +2039,233 @@ mod tests {
         });
         let loaded = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new())).unwrap();
         assert_eq!(loaded.sets.len(), 3, "subdirectory must be skipped");
-        assert_eq!(loaded.sets[0].name, OsStr::new(&format!("{dir}/.hidden")));
-        assert_eq!(loaded.sets[1].name, OsStr::new(&format!("{dir}/a.txt")));
-        assert_eq!(loaded.sets[2].name, OsStr::new(&format!("{dir}/z.txt")));
+        // The expansion names each entry by joining the directory and the
+        // entry name the way the platform does, so the expectation joins
+        // them the same way. Every byte of the name is public output: it is
+        // the `name` column of `--count-unique --header` (legacy/ops.rs
+        // Mode::CountUniqueAll), and Go names entries with the same
+        // platform join (internal/cli/legacy/parse.go expandAt).
+        for (index, name) in [".hidden", "a.txt", "z.txt"].into_iter().enumerate() {
+            assert_eq!(
+                loaded.sets[index].name,
+                std::path::Path::new(&dir).join(name),
+                "entry {index} is named by the platform join of the directory and the file"
+            );
+        }
         assert_eq!(loaded.sets[0].set.ranges[0].lo, F4(0x01010101));
+    }
+
+    /// The empty-set result for a directory input is one exact shape: the
+    /// open succeeded and the read of that open handle failed as a
+    /// directory. It holds on every platform, so it is asserted here rather
+    /// than only through the C-oracle suite, which cannot run on Windows.
+    /// The directory-expansion entry names, pinned as bytes.
+    ///
+    /// These bytes are public output: each one is the `name` column of the
+    /// `name,entries,unique_ips` row the `--count-unique --header` mode
+    /// writes (legacy/ops.rs `Mode::CountUniqueAll` -> `write_unique_row`,
+    /// whose grammar is C `iprange_csv_write_unique_row`, src/iprange.c:76).
+    /// The Go twin of this pin is
+    /// `TestExpansionNamesAreTheSharedCrossEngineBytes` in
+    /// v4/go/internal/cli/legacy/c_parity_test.go, and the two tables are
+    /// the same bytes on purpose: with the row grammar shared by C and the
+    /// name pinned here, the rows the two engines print for one tree are
+    /// byte-identical on each platform, which is the cross-engine contract
+    /// decision 1A of SOW-0028 requires. The qualification leg also runs
+    /// both products over this fixture shape and compares the bytes it
+    /// actually printed, so the tables cannot drift apart unnoticed.
+    ///
+    /// The separator is the platform's, because both engines name an entry
+    /// with the platform join (Rust `Path::join` above, Go
+    /// `pathname.Push`), while C joined with the literal "%s/%s"
+    /// (src/iprange.c:772) in the only build of C that exists.
+    #[cfg(unix)]
+    const EXPANSION_NAME_PINS: [&str; 3] = ["csvpin/.hidden", "csvpin/a.txt", "csvpin/z.txt"];
+
+    #[cfg(windows)]
+    const EXPANSION_NAME_PINS: [&str; 3] = ["csvpin\\.hidden", "csvpin\\a.txt", "csvpin\\z.txt"];
+
+    /// The same fixture the Go pin builds, expanded by `@directory`, with
+    /// each name pinned byte for byte and the row it produces alongside.
+    ///
+    /// The names are ASCII by construction, so `to_string_lossy` cannot
+    /// conceal a difference here: it is the identity on this fixture on
+    /// every platform, and a non-ASCII entry would arrive as U+FFFD rather
+    /// than silently matching.
+    #[test]
+    fn expansion_names_are_the_shared_cross_engine_bytes() {
+        let t = TempDir::new("csvpin");
+        let dir = t.path.join("csvpin");
+        std::fs::create_dir(&dir).unwrap();
+        for name in [".hidden", "a.txt", "z.txt"] {
+            std::fs::write(dir.join(name), "192.0.2.7\n").unwrap();
+        }
+        let mut o = opts();
+        o.sources.push(SourceSpec {
+            kind: SourceKind::FileList,
+            arg: Some(dir.clone()),
+            label: None,
+        });
+        let loaded = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new()))
+            .expect("a directory source expands to its regular files");
+        assert_eq!(
+            loaded.sets.len(),
+            EXPANSION_NAME_PINS.len(),
+            "one set per pinned entry name"
+        );
+        for (index, pin) in EXPANSION_NAME_PINS.iter().enumerate() {
+            let name = loaded.sets[index].name.to_string_lossy().into_owned();
+            // The scratch root is absolute, so the shared literal is the
+            // tail of the printed name: "<csvpin><platform separator><entry>"
+            // is the part the join rule produces, and it is the part the Go
+            // twin pins in full through a relative fixture.
+            let tail = pin
+                .rsplit_once(|c| c == '/' || c == '\\')
+                .expect("pinned name has a directory")
+                .1;
+            let expected = format!("{}{}", std::path::MAIN_SEPARATOR, tail);
+            assert!(
+                name.ends_with(&expected),
+                "entry {index} name {name:?} does not end with the shared bytes {expected:?}"
+            );
+            assert_eq!(
+                name,
+                format!("{}{}", dir.display(), expected),
+                "entry {index} full name"
+            );
+            assert_eq!(
+                tail,
+                &name[name.len() - tail.len()..],
+                "entry {index} ends with the entry name itself"
+            );
+        }
+    }
+
+    #[test]
+    fn an_accessible_directory_input_is_the_empty_set() {
+        let t = TempDir::new("dir-input");
+        t.file("host", "192.0.2.7\n");
+        let mut o = opts();
+        o.sources.push(SourceSpec {
+            kind: SourceKind::Path,
+            arg: Some(t.path.clone()),
+            label: None,
+        });
+        let loaded = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new()))
+            .expect("a directory input is an empty set with exit 0, not an error");
+        assert_eq!(loaded.sets.len(), 1, "one set for the one source");
+        assert!(
+            loaded.sets[0].set.ranges.is_empty(),
+            "a directory contributes no ranges, got {:?}",
+            loaded.sets[0].set.ranges
+        );
+        assert_eq!(
+            loaded.sets[0].name,
+            OsStr::new(&t.path.to_string_lossy().into_owned()),
+            "the set keeps the name the caller spelled"
+        );
+    }
+
+    /// A directory entry inside an `@file` list goes through the same
+    /// loader, so it is an empty set there too and the sibling entries of
+    /// the list still load.
+    #[test]
+    fn a_directory_entry_of_a_file_list_is_the_empty_set() {
+        let t = TempDir::new("dir-in-list");
+        let real = t.file("hosts", "192.0.2.7\n");
+        let list = std::env::temp_dir().join(format!(
+            "iprange-parse-test-{}-{}-dir-list",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::write(&list, format!("{real}\n{}\n", t.path.display())).unwrap();
+        let mut o = opts();
+        o.sources.push(SourceSpec {
+            kind: SourceKind::FileList,
+            arg: Some(list.clone()),
+            label: None,
+        });
+        let loaded = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new()))
+            .expect("a directory entry of a list is an empty set, not an error");
+        let _ = std::fs::remove_file(&list);
+        assert_eq!(
+            loaded.sets.len(),
+            2,
+            "the regular entry plus the empty directory"
+        );
+        assert_eq!(
+            loaded.sets[0].set.ranges.len(),
+            1,
+            "the regular entry loaded"
+        );
+        assert!(
+            loaded.sets[1].set.ranges.is_empty(),
+            "the directory entry contributed {:?}, want none",
+            loaded.sets[1].set.ranges
+        );
+    }
+
+    /// A directory whose open itself fails must keep failing on every
+    /// platform: concealing a failed open as an empty set would hide a
+    /// failed update. The fixture is platform-specific because the platform
+    /// decides how an open is denied; the assertion is not.
+    #[test]
+    fn a_directory_whose_open_fails_is_not_made_empty() {
+        let t = TempDir::new("dir-denied");
+        t.file("host", "192.0.2.7\n");
+        let denied = t.path.join("unreadable");
+        std::fs::create_dir(&denied).unwrap();
+        std::fs::write(denied.join("f"), "10.0.0.3\n").unwrap();
+
+        #[cfg(unix)]
+        if unsafe { libc::geteuid() } == 0 {
+            // Root is not denied by mode 000, so this case cannot be set
+            // up. A silent return here would let a root run report the 3A
+            // contract as passed without judging anything; the project
+            // rule (io/caller_open.rs record_unsupported) is to record the
+            // condition in a tally when one is configured and to fail
+            // loudly when it is not.
+            record_unscored_pin(
+                "a_directory_whose_open_fails_is_not_made_empty",
+                "running as root: mode 000 does not deny root, so the refused open cannot be constructed",
+            );
+            return;
+        }
+        #[cfg(unix)]
+        let _denial = PermissionGuard::new(&denied);
+
+        // On Windows the open of a directory is refused with
+        // ERROR_ACCESS_DENIED for a parameter reason, so the denial has to
+        // come from something backup semantics cannot bypass: an exclusive
+        // handle held for the length of the test.
+        #[cfg(windows)]
+        let _denial = ExclusiveHandle::new(&denied);
+
+        let mut o = opts();
+        o.sources.push(SourceSpec {
+            kind: SourceKind::Path,
+            arg: Some(denied.clone()),
+            label: None,
+        });
+        let err = load_all_impl::<F4>(&o, &mut std::io::Cursor::new(Vec::new()))
+            .expect_err("a directory the caller may not open must fail the load");
+        let name = denied.to_string_lossy().into_owned();
+        let prefix = format!("iprange: {name} - ").into_bytes();
+        assert_eq!(
+            err.bytes().get(..prefix.len()),
+            Some(prefix.as_slice()),
+            "the open failure keeps its own diagnostic, got {:?}",
+            String::from_utf8_lossy(err.bytes())
+        );
+        let context = format!("iprange: Cannot load ipset: {name}").into_bytes();
+        assert_eq!(
+            err.bytes().get(err.bytes().len() - context.len()..),
+            Some(context.as_slice()),
+            "the load context names the path that failed to open"
+        );
     }
 
     #[test]

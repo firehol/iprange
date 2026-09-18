@@ -1021,15 +1021,20 @@ mod tests {
     /// each file's batch is independent. Indexing the reply list by
     /// absolute sequence numbers hangs the second DNS-using file.
     ///
-    /// The host is the numeric-form name `0x7f000001`: glibc answers it
-    /// locally with exactly one address (no resolver traffic), so one
-    /// request yields exactly one reply and the batch sizes are the
-    /// point of the test rather than a property of the host.
+    /// The host is the dotted-numeric loopback `127.0.0.1`, which every
+    /// supported platform's `getaddrinfo` answers locally with exactly one
+    /// address and no resolver traffic, so one request yields exactly one
+    /// reply and the batch sizes are the point of the test rather than a
+    /// property of the host. It deliberately avoids the glibc-only hex
+    /// numeric forms (`0x7f000001`), which Windows answers as an unknown
+    /// host: those forms are pinned by
+    /// [`hex_numeric_hostnames_answer_locally_where_the_authority_answers`] on
+    /// the answering platforms instead.
     #[test]
     fn multi_file_batches_drain_independently() {
         let mut r = Resolver::new(3, true, false, Family::V4, false);
         for _ in 0..4 {
-            r.request("0x7f000001").expect("queue file 1");
+            r.request("127.0.0.1").expect("queue file 1");
         }
         let first = r.drain_records();
         assert_eq!(first.len(), 4, "file 1: one reply per request");
@@ -1038,7 +1043,7 @@ mod tests {
             assert_eq!(rec.result.as_deref().unwrap(), &[0x7f00_0001]);
         }
         for _ in 0..2 {
-            r.request("0x7f000001").expect("queue file 2");
+            r.request("127.0.0.1").expect("queue file 2");
         }
         let second = r.drain_records();
         assert_eq!(second.len(), 2, "file 2 must not wait for file 1");
@@ -1046,6 +1051,47 @@ mod tests {
             assert_eq!(rec.seq, 4 + i, "file 2 reply {i} continues the load order");
             assert_eq!(rec.result.as_deref().unwrap(), &[0x7f00_0001]);
         }
+        assert_eq!(r.finish(), Ok(()));
+    }
+
+    /// The unix resolvers this project qualifies — glibc, musl
+    /// (`__inet_aton` parses with strtoul base 0), the KAME-lineage BSDs
+    /// (freebsd/netbsd/dragonfly `explore_numeric` calls `inet_aton` for
+    /// AF_INET) and Apple's Libinfo resolver (`_gai_numerichost` falls
+    /// back to `_inet_aton_check`, 0x=hex; ios/tvos/watchos share the
+    /// same system library and answer with macos) — accept the
+    /// inet_at-style hex numeric forms and answer them locally, so
+    /// `0x7f000001` resolves to 127.0.0.1 with no resolver traffic. This
+    /// is the authority the Go side mirrors (dns_numeric_answer.go lists
+    /// the same set). Windows has no such form and reports
+    /// `WSAHOST_NOT_FOUND`; android (bionic) refuses too (its live
+    /// AF_INET path is `inet_pton`; the `inet_aton` call sits inside
+    /// `#if 0 /*X/Open spec*/` — dns_numeric_refuse.go cites the tag),
+    /// so the compatibility is pinned on the answering set only; the
+    /// platform-independent batching above runs everywhere. Sources read
+    /// 2026-09-17/18; a native leg must still execute this pin wherever
+    /// it runs.
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "macos",
+        target_os = "ios",
+        target_os = "tvos",
+        target_os = "watchos",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "dragonfly"
+    ))]
+    #[test]
+    fn hex_numeric_hostnames_answer_locally_where_the_authority_answers() {
+        let mut r = Resolver::new(2, true, false, Family::V4, false);
+        for host in ["0x7f000001", "0x0A000001"] {
+            r.request(host)
+                .unwrap_or_else(|e| panic!("{host} must be answered: {e}"));
+        }
+        let replies = r.drain_records();
+        assert_eq!(replies.len(), 2, "one reply per hex request");
+        assert_eq!(replies[0].result.as_deref().unwrap(), &[0x7f00_0001]);
+        assert_eq!(replies[1].result.as_deref().unwrap(), &[0x0a00_0001]);
         assert_eq!(r.finish(), Ok(()));
     }
 

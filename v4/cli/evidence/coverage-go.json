@@ -15,44 +15,44 @@
   "/tmp/iprange-w1925/W-cov/cov-unit",
   "/tmp/iprange-w1925/W-cov/cov-integration"
  ],
- "elapsed_seconds": 57.16,
- "git_head": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
+ "elapsed_seconds": 65.53,
+ "git_head": "7c2d2cf710db4a29661317ad1b1ffc8fdd823320",
  "instrumented_binaries": {
   "iprange": {
    "covermode": "atomic",
    "instrumented": true,
    "path": "/tmp/iprange-w1925/W-cov/bin/iprange",
-   "sha256": "1d916d8a831a7d97435e6f1847807625283e1aaf7d1ff7c3069de3dd1d1a4f42"
+   "sha256": "4fd75d0ec818db41eb27866b31b6bd2070c566007778b2edd9347142c7f6d48c"
   },
   "iprange-v4-worker": {
    "covermode": "atomic",
    "instrumented": true,
    "path": "/tmp/iprange-w1925/W-cov/bin/iprange-v4-worker",
-   "sha256": "c4b813a6e981ecb1501416afb6f04998a315aaf87cd8c0b95841d9b0dc94a733"
+   "sha256": "118b7fd659c198b179976b5d8163f03b20c2470abe5b0d9e07847b58052572c5"
   }
  },
  "integration": {
   "cover_files": 192,
   "measured": {
-   "blocks": 39695,
+   "blocks": 39738,
    "blocks_covered": 14829,
    "covered_functions": 3453,
    "covered_statements": 22287,
-   "functions": 5731,
-   "statements": 53982
+   "functions": 5740,
+   "statements": 54050
   },
   "percent": {
-   "blocks": 37.36,
-   "functions": 60.25,
+   "blocks": 37.32,
+   "functions": 60.16,
    "measured": {
-    "blocks": 39695,
+    "blocks": 39738,
     "blocks_covered": 14829,
     "covered_functions": 3453,
     "covered_statements": 22287,
-    "functions": 5731,
-    "statements": 53982
+    "functions": 5740,
+    "statements": 54050
    },
-   "statements": 41.29
+   "statements": 41.23
   },
   "runs": [
    {
@@ -126,28 +126,28 @@
    }
   ]
  },
- "measured_git_head": "2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1",
+ "measured_git_head": "7c2d2cf710db4a29661317ad1b1ffc8fdd823320",
  "merged": {
   "measured": {
-   "blocks": 42032,
-   "blocks_covered": 23286,
-   "covered_functions": 4797,
-   "covered_statements": 34482,
-   "functions": 5944,
-   "statements": 57413
+   "blocks": 42075,
+   "blocks_covered": 23440,
+   "covered_functions": 4815,
+   "covered_statements": 34750,
+   "functions": 5953,
+   "statements": 57481
   },
   "percent": {
-   "blocks": 55.4,
-   "functions": 80.7,
+   "blocks": 55.71,
+   "functions": 80.88,
    "measured": {
-    "blocks": 42032,
-    "blocks_covered": 23286,
-    "covered_functions": 4797,
-    "covered_statements": 34482,
-    "functions": 5944,
-    "statements": 57413
+    "blocks": 42075,
+    "blocks_covered": 23440,
+    "covered_functions": 4815,
+    "covered_statements": 34750,
+    "functions": 5953,
+    "statements": 57481
    },
-   "statements": 60.06
+   "statements": 60.45
   }
  },
  "module": "github.com/firehol/iprange/v4/go",
@@ -261,16 +261,16 @@
    "statements_total": 8945
   },
   "github.com/firehol/iprange/v4/go/internal/cli/legacy": {
-   "block_percent": 56.73,
-   "blocks": 1657,
-   "blocks_covered": 940,
-   "covered_functions": 138,
-   "covered_statements": 1510,
-   "function_percent": 79.31,
-   "functions": 174,
-   "statement_percent": 61.03,
-   "statements": 2474,
-   "statements_total": 2474
+   "block_percent": 64.35,
+   "blocks": 1700,
+   "blocks_covered": 1094,
+   "covered_functions": 156,
+   "covered_statements": 1778,
+   "function_percent": 85.25,
+   "functions": 183,
+   "statement_percent": 69.94,
+   "statements": 2542,
+   "statements_total": 2542
   },
   "github.com/firehol/iprange/v4/go/internal/cli/rpc": {
    "block_percent": 76.55,
@@ -569,25 +569,25 @@
   "coverdir": "/tmp/iprange-w1925/W-cov/cov-unit",
   "covermode": "atomic",
   "measured": {
-   "blocks": 42025,
-   "blocks_covered": 18960,
-   "covered_functions": 3886,
-   "covered_statements": 27875,
-   "functions": 5943,
-   "statements": 57401
+   "blocks": 42068,
+   "blocks_covered": 19114,
+   "covered_functions": 3904,
+   "covered_statements": 28143,
+   "functions": 5952,
+   "statements": 57469
   },
   "percent": {
-   "blocks": 45.12,
-   "functions": 65.39,
+   "blocks": 45.44,
+   "functions": 65.59,
    "measured": {
-    "blocks": 42025,
-    "blocks_covered": 18960,
-    "covered_functions": 3886,
-    "covered_statements": 27875,
-    "functions": 5943,
-    "statements": 57401
+    "blocks": 42068,
+    "blocks_covered": 19114,
+    "covered_functions": 3904,
+    "covered_statements": 28143,
+    "functions": 5952,
+    "statements": 57469
    },
-   "statements": 48.56
+   "statements": 48.97
   },
   "rc": 0
  }

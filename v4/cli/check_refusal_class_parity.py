@@ -127,6 +127,8 @@ import shutil
 import socket
 import subprocess
 import sys
+import queue
+import threading
 import tempfile
 import time
 
@@ -1203,49 +1205,117 @@ def run_pressure_sweep(go, rust, fixture, work, profiles, mode, runs=2,
     _, contexts, hold_path = fd_pressure_harness.prepare_ctx(_LauncherArgs(),
                                                              bins,
                                                              slots=max(1, jobs))
-    cells, failures = [], 0
-    slot = 0
-    # The main grid's elapsed_seconds never covers this axis, so the section
-    # times itself: measured on this host, the full product is 1,071 s of
-    # pressured processes against a 34 s grid, and a record that hides that
-    # difference makes a milestone step look like a routine one.
-    started = time.monotonic()
-    for arm in PRESSURE_ARMS:
-        for profile in profiles:
-            record = PRESSURE_PROFILE_BY_NAME[profile]
-            attempts = max(2, runs)
-            per_engine = {}
-            for engine in ("go", "rust"):
-                # Host state (design sections 13.1-13.2) is decided by the
-                # launcher inside run_cell, which owns that classification and
-                # answers it without starting a doomed process; the sweep
-                # reads the verdict back rather than duplicating the rule.
-                best = None
-                for _attempt in range(attempts):
-                    candidate = fd_pressure_harness.run_cell(
-                        engine, bins, contexts[slot % len(contexts)],
-                        hold_path, arm, record["limit"], record["held"],
-                        record["runtime_state"], record["null_device_state"])
-                    if best is None or (candidate.get("verdict") == "pass"):
-                        best = candidate
-                    if candidate.get("verdict") != best.get("verdict"):
-                        best["verdict"] = "disagreement"
-                        best["why"] = "cell disagreed across runs"
-                per_engine[engine] = best
-            slot += 1
-            cell = pressure_cell_from_records(arm, profile, per_engine, attempts)
-            cells.append(cell)
-            pin = PINNED_PRESSURE_CLASSES.get((arm, profile))
-            if pin is None:
-                failures += 1
-                continue
+    jobs = max(1, min(int(jobs), len(PRESSURE_ARMS) * len(profiles)))
+    # Each slot is an independent materialization prepared by the launcher
+    # owner for exactly this purpose ("so slots can be swept in parallel
+    # without one cell ever observing another's targets",
+    # fd_pressure_harness.prepare_ctx), and the held-descriptor target is a
+    # read-only file every cell may open concurrently.
+    #
+    # A context is LEASED through a queue, never chosen by `index % len(
+    # contexts)`.  Cell durations here differ by orders of magnitude (a
+    # host-state cell answers in milliseconds; a pressured cell runs to its
+    # 8 s ceiling and then repeats), so an index-derived assignment can hand
+    # the same work directory to two live workers -- the second one then
+    # removes a target the first is still using and the sweep dies inside
+    # materialize_targets() with a FileNotFoundError that looks like a
+    # product defect.  The queue makes exclusivity a property of the
+    # schedule rather than of the arithmetic.
+    cells = [None] * (len(PRESSURE_ARMS) * len(profiles))
+    failures_box = [0]
+    lock = threading.Lock()
+    leases: "queue.Queue" = queue.Queue()
+    for ctx in contexts[:jobs]:
+        leases.put(ctx)
+
+    def one_cell(index, arm, profile):
+        ctx = leases.get()
+        try:
+            _one_pressure_cell(index, arm, profile, ctx)
+        finally:
+            leases.put(ctx)
+
+    def _one_pressure_cell(index, arm, profile, ctx):
+        record = PRESSURE_PROFILE_BY_NAME[profile]
+        attempts = max(2, runs)
+        per_engine = {}
+        for engine in ("go", "rust"):
+            # Host state (design sections 13.1-13.2) is decided by the
+            # launcher inside run_cell, which owns that classification and
+            # answers it without starting a doomed process; the sweep
+            # reads the verdict back rather than duplicating the rule.
+            best = None
+            for _attempt in range(attempts):
+                candidate = fd_pressure_harness.run_cell(
+                    engine, bins, ctx, hold_path, arm, record["limit"],
+                    record["held"], record["runtime_state"],
+                    record["null_device_state"])
+                if best is None or (candidate.get("verdict") == "pass"):
+                    best = candidate
+                if candidate.get("verdict") != best.get("verdict"):
+                    best["verdict"] = "disagreement"
+                    best["why"] = "cell disagreed across runs"
+            per_engine[engine] = best
+        cell = pressure_cell_from_records(arm, profile, per_engine, attempts)
+        pin = PINNED_PRESSURE_CLASSES.get((arm, profile))
+        failed = 0
+        if pin is None:
+            failed = 1
+        else:
             _, cell["band_gap"] = _pressure_cell_divergence(pin, cell)
             for engine in ("go", "rust"):
                 problems = pressure_cell_problems(cell, pin, engine)
                 if problems:
-                    failures += 1
+                    failed = 1
                     cell.setdefault("problems", []).extend(problems)
                     break
+        cells[index] = cell
+        if failed:
+            with lock:
+                failures_box[0] += 1
+
+    jobs_list = [(index, arm, profile)
+                 for index, (arm, profile) in enumerate(
+                     (arm, profile) for arm in PRESSURE_ARMS for profile in profiles)]
+    started = time.monotonic()
+    # The main grid's elapsed_seconds never covers this axis, so the section
+    # times itself: measured on this host, the full product is 1,071 s of
+    # pressured processes against a 34 s grid, and a record that hides that
+    # difference makes a milestone step look like a routine one.
+    if jobs == 1:
+        for index, arm, profile in jobs_list:
+            one_cell(index, arm, profile)
+    else:
+        # A cell owns two pressured child processes and its own
+        # materialization, so the threads spend their time inside wait(2)
+        # and the sweep is process-bound, not interpreter-bound.
+        threads = []
+        pending = list(jobs_list)
+
+        def worker():
+            while True:
+                with lock:
+                    if not pending:
+                        return
+                    index, arm, profile = pending.pop(0)
+                one_cell(index, arm, profile)
+
+        for _ in range(jobs):
+            thread = threading.Thread(target=worker, daemon=True)
+            thread.start()
+            threads.append(thread)
+        for thread in threads:
+            thread.join()
+        missing = [jobs_list[i] for i, cell in enumerate(cells) if cell is None]
+        if missing:
+            # A worker that died with its exception swallowed by Thread would
+            # otherwise be a pressure section with fewer cells than the axis
+            # owes -- which verify_pressure_report reports as a coverage
+            # problem instead of the harness failure it actually is.
+            raise SystemExit(
+                f"pressure workers did not produce {len(missing)} cell(s): "
+                f"{missing[:4]}")
+    failures = failures_box[0]
     elapsed = round(time.monotonic() - started, 3)
     rollup = pressure_rollup(cells, profiles)
     rollup["failed"] = failures
@@ -2436,7 +2506,32 @@ def compare(a, b):
             and a.get("publication_facts") == b.get("publication_facts"))
 
 
-def sweep(go, rust, ctx, deadline, retries):
+def _sweep_cell(go, rust, arm_name, kind_name, ctx, deadline, retries):
+    """One grid cell: both engines, with the flake-vs-divergence retry policy."""
+
+    attempts = 0
+    go_record = rust_record = None
+    agreed = False
+    hung = False
+    while attempts <= retries:
+        attempts += 1
+        go_record = run_cell("go", go, arm_name, kind_name, ctx, deadline)
+        rust_record = run_cell("rust", rust, arm_name, kind_name, ctx, deadline)
+        if go_record["kind"] != "answered" \
+                or rust_record["kind"] != "answered":
+            hung = True
+        agreed = compare(go_record, rust_record)
+        if agreed:
+            break
+    return {
+        "arm": arm_name, "path_kind": kind_name,
+        "attempts": attempts, "flaky": bool(attempts > 1 and agreed),
+        "hung": bool(hung and not agreed),
+        "agreed": bool(agreed),
+        "go": go_record, "rust": rust_record}
+
+
+def sweep(go, rust, ctx, deadline, retries, jobs=1, ctx_factory=None):
     """Execute every grid cell on both engines with a flake-vs-divergence policy.
 
     A first-attempt disagreement is retried with fresh processes up to
@@ -2444,34 +2539,71 @@ def sweep(go, rust, ctx, deadline, retries):
     out of the divergence count; a cell that disagrees on every attempt is a
     divergence.  A reply that never arrives is a hang and is reported as such
     rather than as a class disagreement, because the two have different owners.
+
+    ``jobs`` schedules independently runnable cells concurrently.  A cell owns
+    one request, two engine processes and the target shape it copies from, so
+    two cells share nothing except the sweep's read-only templates -- but they
+    do share the sweep's *work directory* if one context is used, where
+    ``_clean()`` and ``materialize()`` would delete and recreate each other's
+    target.  Each concurrent worker therefore gets its own work directory from
+    ``ctx_factory``, which is ``prepare_work`` on a private subdirectory; the
+    templates it seeds are byte-identical because they are authored by the Rust
+    authority binary either way.
+
+    The returned list stays in (arm, path-kind) order regardless of completion
+    order: the report's cell sequence is part of its shape, and a sweep that
+    reordered cells would make two runs of the same revision incomparable.
     """
 
-    cells = []
-    for arm_name in ARM_NAMES:
-        for kind_name in kind_names():
-            attempts = 0
-            go_record = rust_record = None
-            agreed = False
-            hung = False
-            while attempts <= retries:
-                attempts += 1
-                go_record = run_cell("go", go, arm_name, kind_name, ctx,
-                                     deadline)
-                rust_record = run_cell("rust", rust, arm_name, kind_name, ctx,
-                                       deadline)
-                if go_record["kind"] != "answered" \
-                        or rust_record["kind"] != "answered":
-                    hung = True
-                agreed = compare(go_record, rust_record)
-                if agreed:
-                    break
-            cells.append({
-                "arm": arm_name, "path_kind": kind_name,
-                "attempts": attempts, "flaky": bool(attempts > 1 and agreed),
-                "hung": bool(hung and not agreed),
-                "agreed": bool(agreed),
-                "go": go_record, "rust": rust_record})
-    return cells
+    pairs = [(arm_name, kind_name) for arm_name in ARM_NAMES
+             for kind_name in kind_names()]
+
+    if jobs <= 1 or ctx_factory is None:
+        return [_sweep_cell(go, rust, arm, kind, ctx, deadline, retries)
+                for arm, kind in pairs]
+
+    import queue                 # noqa: PLC0415  (only the concurrent path needs it)
+    import threading             # noqa: PLC0415
+
+    slots = queue.Queue()
+    for index in range(jobs):
+        slots.put(ctx_factory(index))
+
+    results = [None] * len(pairs)
+    lock = threading.Lock()
+    next_index = [0]
+
+    def worker():
+        while True:
+            with lock:
+                index = next_index[0]
+                if index >= len(pairs):
+                    return
+                next_index[0] = index + 1
+            arm, kind = pairs[index]
+            slot = slots.get()
+            try:
+                results[index] = _sweep_cell(go, rust, arm, kind, slot,
+                                             deadline, retries)
+            finally:
+                slots.put(slot)
+
+    threads = [threading.Thread(target=worker, daemon=True)
+               for _ in range(jobs)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    missing = [pairs[i] for i, cell in enumerate(results) if cell is None]
+    if missing:
+        # A worker that died with the exception swallowed by Thread would
+        # otherwise show up as a grid with fewer cells than the table, which
+        # assess_report reports as a coverage problem rather than the harness
+        # failure it is.
+        raise SystemExit(
+            f"grid workers did not produce {len(missing)} cell(s): "
+            f"{missing[:4]}")
+    return results
 
 
 def pin_engine_problems(key, engine, record, expected_class,
@@ -3025,13 +3157,33 @@ def live_run(args):
     os.makedirs(work, exist_ok=True)
     ctx = prepare_work(work, args.fixture, args.rust)
     started = time.monotonic()
-    cells = sweep(args.go, args.rust, ctx, args.deadline, args.retries)
+    # The 483-cell grid is 34 s of serialized process work whose cells are
+    # independent, so the standard suite pays for it once per cell, not once
+    # per sweep.  Each concurrent worker owns a private work subdirectory;
+    # see sweep() for why sharing one would corrupt the measurement.
+    grid_jobs = max(1, int(getattr(args, "grid_jobs", 1) or 1))
+
+    def _grid_slot(index):
+        return prepare_work(os.path.join(work, f"grid-slot-{index}"),
+                            args.fixture, args.rust)
+
+    cells = sweep(args.go, args.rust, ctx, args.deadline, args.retries,
+                  jobs=grid_jobs, ctx_factory=_grid_slot if grid_jobs > 1 else None)
     ended = time.monotonic()
     # Leave the work directory as removable as it was found: the destination
     # cells deliberately create an unreadable parent, and an operator
     # cleaning it up by hand should not need to know which mode to restore.
-    _drop_dir(os.path.join(work, "PROBE-dest-parent-unreadable"))
-    _drop_dir(os.path.join(work, "PROBE-dest-collision"))
+    # The destination cells deliberately create an unreadable parent, and
+    # an operator cleaning the work directory by hand should not need to
+    # know which mode to restore.  With a concurrent grid every worker owns
+    # a subdirectory, so the restore has to visit each one: leaving them
+    # behind makes the next sweep's clean() fail with EACCES on a tree the
+    # harness itself made unremovable.
+    for _root in [work] + [os.path.join(work, name)
+                           for name in sorted(os.listdir(work))
+                           if name.startswith("grid-slot-")]:
+        for _name in ("PROBE-dest-parent-unreadable", "PROBE-dest-collision"):
+            _drop_dir(os.path.join(_root, _name))
     report = build_report(args.go, args.rust, args.fixture, work,
                           args.deadline, args.retries, args.budget_seconds,
                           sys.argv, cells, started, ended,
@@ -4352,6 +4504,10 @@ def main():
                         help="runs per pressure cell; never below 2, because a "
                              "cell that disagrees with itself fails (design "
                              "section 10 determinism)")
+    parser.add_argument("--grid-jobs", type=int, default=1,
+                        help="grid cells to sweep concurrently, each over its "
+                             "own work subdirectory (default 1); this is the "
+                             "suite-wide budget the caller owns")
     parser.add_argument("--pressure-jobs", type=int, default=1,
                         help="pressure cells to sweep concurrently over "
                              "independent work materializations")
@@ -4367,6 +4523,8 @@ def main():
         raise SystemExit("--budget-seconds must stay <= 120 (resource policy)")
     if getattr(args, "pressure_jobs", 1) < 1:
         raise SystemExit("--pressure-jobs must be >= 1")
+    if getattr(args, "grid_jobs", 1) < 1:
+        raise SystemExit("--grid-jobs must be >= 1")
     if len(expected_cells()) > MAX_CELLS:
         raise SystemExit(f"the derived grid is {len(expected_cells())} cells, "
                          f"over the {MAX_CELLS}-cell ceiling")

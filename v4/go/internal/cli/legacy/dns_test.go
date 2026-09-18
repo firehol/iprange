@@ -225,10 +225,17 @@ func TestDNSPoolIsHardCappedWithHugeThreadsMax(t *testing.T) {
 	// --dns-threads value therefore reserves hundreds of GiB of
 	// worker stacks and OOMs the process (the 13:57 OOM regression).
 	// The pool must stop at dnsPoolHardMax so the run stays bounded.
+	//
+	// The hostname is the dotted-numeric loopback, not "localhost":
+	// one request must yield exactly one reply record for the reply
+	// count below to mean what it pins, and "localhost" is answered
+	// from the host's own configuration, which on some hosts names
+	// more than one IPv4 address. The pool ceiling is not a property
+	// of the name, so the case now runs identically on every host.
 	r := NewResolver(1_000_000, false, false, V4, false)
 	for i := 0; i < dnsPoolHardMax*4; i++ {
-		if err := r.Request("localhost"); err != nil {
-			t.Fatalf("queue localhost: %v", err)
+		if err := r.Request("127.0.0.1"); err != nil {
+			t.Fatalf("queue 127.0.0.1: %v", err)
 		}
 	}
 	if len(r.workers) > dnsPoolHardMax {
@@ -240,14 +247,14 @@ func TestDNSPoolIsHardCappedWithHugeThreadsMax(t *testing.T) {
 	}
 	for _, rec := range replies {
 		if rec.Err != nil {
-			t.Fatalf("localhost replies must all resolve: %v", rec.Err)
+			t.Fatalf("127.0.0.1 replies must all resolve: %v", rec.Err)
 		}
 		if rec.Seq < 0 || rec.Seq >= dnsPoolHardMax*4 {
 			t.Fatalf("seq out of range: %d", rec.Seq)
 		}
 	}
 	if r.Finish() {
-		t.Fatal("localhost finish must not fail")
+		t.Fatal("127.0.0.1 finish must not fail")
 	}
 }
 
@@ -290,9 +297,16 @@ func TestDNSMultiFileBatchesDrainIndependently(t *testing.T) {
 	// DNS-using file (its drain waits on absolute sequence indices
 	// although the reply list was drained); this pins the C behavior
 	// in the Go port.
+	//
+	// The hostnames are dotted-numeric loopbacks, not "localhost":
+	// the batch sizes below are the point of the test, and a name the
+	// host answers with more than one address turns four requests
+	// into eight records and makes the batch assertion measure the
+	// host instead of the drain. 127.0.0.1 and 10.0.0.1 are answered
+	// locally with exactly one address on every supported platform.
 	r := NewResolver(3, true, false, V4, false)
 	for i := 0; i < 4; i++ {
-		if err := r.Request("localhost"); err != nil {
+		if err := r.Request("127.0.0.1"); err != nil {
 			t.Fatalf("queue file1: %v", err)
 		}
 	}
@@ -306,7 +320,7 @@ func TestDNSMultiFileBatchesDrainIndependently(t *testing.T) {
 		}
 	}
 	for i := 0; i < 2; i++ {
-		if err := r.Request("localhost"); err != nil {
+		if err := r.Request("10.0.0.1"); err != nil {
 			t.Fatalf("queue file2: %v", err)
 		}
 	}

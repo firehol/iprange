@@ -15,6 +15,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -89,26 +91,40 @@ func TestPrefixesV6BoundAndMessage(t *testing.T) {
 	}
 }
 
-// G2: the C resolver is getaddrinfo(), which answers numeric forms locally
-// instead of querying DNS. The Go resolver only parses strict dotted quads,
-// so without this the same input fails with a DNS error the C binary does
-// not produce. Values are the C binary's own output.
+// numericFormCases are the glibc inet_aton(3) forms the C oracle answers
+// locally, paired with the answer the C binary itself printed. They drive
+// both platform halves: the emulation on the platform whose authority
+// answers them, and the refusal on every other platform, so one table
+// pins the rule and it runs on every supported target.
+var numericFormCases = map[string]string{
+	"0x0A000001":      "10.0.0.1",
+	"0x1.0x2.0x3.0x4": "1.2.3.4",
+	"0x7f000001":      "127.0.0.1",
+	"0x7f.1":          "127.0.0.1",
+	"0xA.1":           "10.0.0.1",
+	"0xA":             "0.0.0.10",
+	"0x0a0b0c0d":      "10.11.12.13",
+	"0X0A000001":      "10.0.0.1",
+	"0xffffffff":      "255.255.255.255",
+	"0x1.0xffffff":    "1.255.255.255",
+	"1.1.0xffff":      "1.1.255.255",
+	"0x1.2":           "1.0.0.2",
+	"010.0x1":         "8.0.0.1",
+}
+
+// G2: the C resolver is glibc getaddrinfo(), which answers numeric forms
+// locally instead of querying DNS. The Go resolver only parses strict
+// dotted quads, so without the emulation the same input fails with a DNS
+// error the C binary does not produce. Values are the C binary's own
+// output, measured on the platform whose authority answers them (the
+// C oracle exists on Linux; see cOracleStatus and dns_numeric_*.go).
 func TestDNSNumericFormsMatchC(t *testing.T) {
-	cases := map[string]string{
-		"0x0A000001":      "10.0.0.1",
-		"0x1.0x2.0x3.0x4": "1.2.3.4",
-		"0x7f000001":      "127.0.0.1",
-		"0x7f.1":          "127.0.0.1",
-		"0xA.1":           "10.0.0.1",
-		"0xA":             "0.0.0.10",
-		"0x0a0b0c0d":      "10.11.12.13",
-		"0X0A000001":      "10.0.0.1",
-		"0xffffffff":      "255.255.255.255",
-		"0x1.0xffffff":    "1.255.255.255",
-		"1.1.0xffff":      "1.1.255.255",
-		"0x1.2":           "1.0.0.2",
-		"010.0x1":         "8.0.0.1",
+	if !numericFormsAnswerHere {
+		t.Skipf("scoped, not run: this platform's resolver does not answer the glibc numeric " +
+			"forms and no C oracle exists here; the refusal shape is pinned by " +
+			"TestDNSNumericFormsAreNotAnsweredHere")
 	}
+	cases := numericFormCases
 	for host, want := range cases {
 		ips, err := lookupLegacyHost("ip4", host)
 		if err != nil {
@@ -120,19 +136,119 @@ func TestDNSNumericFormsMatchC(t *testing.T) {
 	}
 	// Forms the C rejects must not be answered locally, so they still go
 	// to the resolver exactly as C's getaddrinfo does.
-	for _, host := range []string{"0x", "0xzz", "0x1.", "1.0x", "0x100000000",
-		"1.1.0x10000", "0x1.0x1.0x1.0x100", "0x100.1.1.1", "-1", "0x1_2"} {
+	for _, host := range numericFormRejections {
 		if _, err := inetAton(host); err == nil {
 			t.Fatalf("inetAton(%q) accepted, want rejection", host)
 		}
 	}
 }
 
+// TestDNSNumericFormsAreNotAnsweredHere pins the other platform half of
+// the same table: the local emulation must not fire on a platform whose
+// authority refuses the glibc numeric forms — Windows (Winsock
+// WSAHOST_NOT_FOUND, proven natively), OpenBSD (strict dotted-quad/IPv6
+// numeric), and the unqualified default (dns_numeric_refuse.go lists the
+// basis; dns_numeric_answer.go lists the answering platforms). The
+// lookup must reach the resolver and fail, never answer from the numeric
+// form; otherwise Go exits 0 with content where the Rust authority exits
+// 1, a divergence on the contractual dimensions.
+func TestDNSNumericFormsAreNotAnsweredHere(t *testing.T) {
+	if numericFormsAnswerHere {
+		t.Skip("scoped, not run: this platform's authority answers the numeric forms; " +
+			"the matching half is TestDNSNumericFormsMatchC")
+	}
+	for host := range numericFormCases {
+		ips, err := lookupLegacyHost("ip4", host)
+		if err == nil {
+			t.Fatalf("%q answered %v locally on a platform whose authority refuses it; "+
+				"the emulation must not fire here", host, ips)
+		}
+	}
+	// The parser the emulation would use still parses the forms — the
+	// scoping lives in the resolver path, not in the record parser, which
+	// keeps `1.2.3.4/0x10` CIDR parsing intact on every platform.
+	if _, err := inetAton("0x7f000001"); err != nil {
+		t.Fatalf("inetAton must still parse the hex form (record parsing is universal): %v", err)
+	}
+}
+
+// numericFormRejections are forms the C rejects (glibc does not answer
+// them); the resolver must receive them on every platform.
+var numericFormRejections = []string{"0x", "0xzz", "0x1.", "1.0x", "0x100000000",
+	"1.1.0x10000", "0x1.0x1.0x1.0x100", "0x100.1.1.1", "-1", "0x1_2"}
+
 // G2: the numeric short-circuit must not hide a real lookup failure, and
 // must not invent an answer for a name.
 func TestDNSNumericFormsFallThroughToResolver(t *testing.T) {
 	if _, err := lookupLegacyHost("ip4", "invalid.invalid"); err == nil {
 		t.Fatal("lookup of invalid.invalid. succeeded, want a resolver error")
+	}
+}
+
+// TestExpansionNamesAreTheSharedCrossEngineBytes pins the directory
+// expansion entry names byte for byte.
+//
+// These bytes are public output: each one is the `name` column of the
+// `name,entries,unique_ips` row the `--count-unique --header` mode writes
+// (ops.go ModeCountUniqueAll -> writeUniqueRow, whose grammar is C
+// iprange_csv_write_unique_row, src/iprange.c:76). The Rust twin of this
+// table is `expansion_names_are_the_shared_cross_engine_bytes` in
+// v4/rust/iprange-cli/src/legacy/parse.rs, and the two tables are the same
+// bytes on purpose: with the row grammar shared by C and the name pinned
+// here, the rows the two engines print for one tree are byte-identical on
+// each platform, which is the cross-engine contract decision 1A of
+// SOW-0028 requires. The qualification leg also runs both products over
+// this fixture shape and compares the bytes they actually printed, so the
+// tables cannot drift apart unnoticed.
+//
+// The separator is the platform's, because both engines name an entry with
+// the platform join (Go pathname.Push in expandAt, Rust Path::join), while
+// C joined with the literal "%s/%s" (src/iprange.c:772) in the only build
+// of C that exists.
+func TestExpansionNamesAreTheSharedCrossEngineBytes(t *testing.T) {
+	dirNames := []string{".hidden", "a.txt", "z.txt"}
+	pins := []string{"csvpin/.hidden", "csvpin/a.txt", "csvpin/z.txt"}
+	if runtime.GOOS == "windows" {
+		for i := range pins {
+			pins[i] = strings.ReplaceAll(pins[i], "/", `\`)
+		}
+	}
+	base := t.TempDir()
+	dir := filepath.Join(base, "csvpin")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range dirNames {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("192.0.2.7\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	o := DefaultOptions()
+	o.Sources = []SourceSpec{{Kind: SourceFileList, Arg: dir}}
+	loaded, err := loadAllImpl(o, emptyReader{})
+	if err != nil {
+		t.Fatalf("@directory expansion failed: %v", err)
+	}
+	if len(loaded.Sets) != len(pins) {
+		t.Fatalf("expanded %d sets, want %d", len(loaded.Sets), len(pins))
+	}
+	sep := string(os.PathSeparator)
+	for i, pin := range pins {
+		// The fixture root is absolute, so the shared literal is the tail of
+		// the printed name: "<platform separator><entry>" is the part the join
+		// rule produces, and it is the part the Rust twin pins alongside the
+		// same full-name assertion.
+		cut := strings.LastIndexAny(pin, "/"+sep)
+		name := pin[cut+1:]
+		shared := sep + name
+		want := dir + shared
+		got := loaded.Sets[i].Name
+		if got != want {
+			t.Errorf("entry %d name = %q, want %q (the root plus the shared bytes %q)", i, got, want, shared)
+		}
+		if !strings.HasSuffix(got, shared) {
+			t.Errorf("entry %d name %q does not end with the shared bytes %q", i, got, shared)
+		}
 	}
 }
 
@@ -370,6 +486,10 @@ func TestPriorIpsetGuardDiagnostics(t *testing.T) {
 }
 
 func TestLookupLegacyHostKeepsIPv6MappedForm(t *testing.T) {
+	if !numericFormsAnswerHere {
+		t.Skip("scoped, not run: the numeric form is refused on this platform; " +
+			"see TestDNSNumericFormsAreNotAnsweredHere")
+	}
 	ips, err := lookupLegacyHost("ip", "0x0A000001")
 	if err != nil {
 		t.Fatal(err)

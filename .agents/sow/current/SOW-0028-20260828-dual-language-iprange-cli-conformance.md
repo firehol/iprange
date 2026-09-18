@@ -16885,6 +16885,14 @@ The deferred `termination_signals` flake found under CPU load
 repaired in this change: timing-sensitive tests must use deterministic
 synchronization, not scheduler luck.
 
+Named per-test bound (review round 1, performance role): the Rust
+`termination_signals` tests use a 20 s failure-detection ceiling
+(`wait_nonzero`/`recv_timeout`) above the 15 s healthy-case policy bound.
+Healthy exit is milliseconds; the 20 s bound only decides when a wedged
+child is declared failed, and a lower bound would create false failures
+under load (the wedged-EOF floor is ~10 s). This is a named exception of
+type "failure-detection ceiling", not a healthy-case duration.
+
 ## Native-Windows portability defects from the legacy-parity wave — decisions (2026-09-17)
 
 The native Windows leg at `7c2d2cf7` found 8 red checks, all introduced by
@@ -16946,3 +16954,305 @@ User decisions (advisor-corrected, recorded before implementation):
 Sequence: targeted short checks per repair, then the affected native
 Windows checks and report authoring — not a full battery restart. The
 final closure battery still runs once at the exact final revision.
+
+### Decision-4 scope clarification (recorded 2026-09-17 at round-1 review)
+
+The repaired producer-privacy gate protects **the operator's own personal
+area**: the foreign-host forms are constructed from the auditing host's
+profile root plus the operator login it derives from that profile. A path
+naming a *different* login's profile (e.g. `/c/Users/someone-else`) is
+deliberately out of the gate's scope, pinned as a control in
+`check_producer_privacy.py` ("the gate protects the operator's own personal
+area only"). The qualification hosts share the single operator login, so
+this covers the real authoring set; it is narrower than "regardless of
+which host audits" could be read to mean across different logins, and this
+record is the authoritative statement of that scope. Known spellings not in
+the template set (WSL `/mnt/c/Users/…`, Cygwin `/cygdrive/c/…`, macOS
+`/opt/home`): the two leg-hands use none of them; extend the templates if a
+WSL/Cygwin authoring host is ever authorized.
+
+### Scoped cross-engine differences on non-Linux platforms (recorded 2026-09-17, round 1 of the closure review)
+
+The C oracle exists only on Linux (glibc), so on other qualified targets
+the cross-engine contract is "Go matches the Rust authority" on the
+contractual dimensions (rc, stdout, refusal classes); OS/engine-generated
+message text stays a decision-3B per-platform rendering. Two real
+divergences were found in the role round and are resolved as follows:
+
+1. **glibc numeric host forms** (`0x7f000001`, `0x7f.1`, `0xA`).
+   Round-1 finding (portability role): Go's resolver short-circuit
+   emulated glibc's inet_aton answers on *every* platform, while the
+   Rust authority delegates to the platform resolver and fails them on
+   Windows/BSDs — rc 0+content vs rc 1 on valid input, a contractual
+   divergence, undetected by every staged gate. **Resolved as a product
+   change in this chunk** (authority rule, not recorded as a difference):
+   the emulation is scoped to the platforms whose system resolver — and
+   therefore the Rust authority delegating to it — answers the forms.
+   Round-2 review corrected the tag set against upstream sources:
+   `dns_numeric_answer.go` (emulate) covers linux/glibc (proven vs the C
+   oracle here), freebsd and netbsd (their libc `explore_numeric()` calls
+   `inet_aton()` for AF_INET — KAME lineage, sources read 2026-09-17),
+   and dragonfly by lineage (UNVERIFIED against current sources; a
+   native leg must execute the pin). `dns_numeric_refuse.go` (never
+   answer) covers windows (Winsock WSAHOST_NOT_FOUND, proven natively),
+   openbsd (strict dotted-quad/IPv6 numeric; its getaddrinfo.3 defines
+   the numeric form as dotted-decimal/IPv6), and unqualified platforms
+   by default. Darwin moved to the ANSWER half at round 2 on direct
+   source evidence (portability role + lead verification): Apple's
+   resolver is `apple-oss-distributions/Libinfo
+   lookup.subproj/si_getaddrinfo.c`, whose `_gai_numerichost` falls back
+   to `_inet_aton_check(name, a4, 1)` after `inet_pton` (lines 775-779),
+   and `_inet_aton_check` (Libc `net/FreeBSD/inet_addr.c:115`) parses
+   "0x=hex, 0=octal". Musl also answers (`src/network/lookup_ipliteral.c
+   → __inet_aton`, strtoul base 0), so the linux tag covers both libcs
+   — the round-1 "musl/BSDs reject hex forms" premise was FALSE and is
+   corrected in every artifact that carried it. The tag pairing stays
+   self-detecting: a wrong tag on any platform fails exactly one of the
+   two shared-table tests on a native leg, which then decides the tag —
+   that is how the dragonfly and darwin source claims become platform-
+   proven. The five hex-pinned bookkeeping cases declare
+   `numericForms: true` and scope out with a named reason elsewhere;
+   `TestDNSNumericFormsMatchC` and
+   `TestDNSNumericFormsAreNotAnsweredHere` share one case table so the
+   rule itself runs on every platform, and the F Windows leg executes
+   the refusal half natively.
+2. **Load-diagnostic message text on Windows.** Rust renders
+   `FormatMessage` plus its `" (os error N)"` suffix; Go renders the
+   shared glibc-style table where the errno is common and
+   `syscall.Errno.Error()` otherwise (decision 3B: OS-generated text may
+   vary by OS *and locale*; the suffix is a Rust rendering artifact on a
+   platform with no C oracle to pin it). Exit status, path echo, and the
+   `iprange: <name> - <message>` line shape remain contractual on both.
+   This difference is accepted as recorded scope; it is not a defect to
+   reconcile, and no gate may be built to demand byte-equal message text
+   across engines on non-Linux hosts.
+
+## Closure round 1 under REVIEWS.md (2026-09-17)
+
+First full exercise of the REVIEWS.md process. Kit: `.local/shared/`
+(head, status.md, plan/sow-0028/, evidence/w1926b-final/ with manifest);
+chunk W = the Windows-portability repairs above + fast-suite flake repair;
+roles = the seven durable role files, spawned as fresh sessions (this
+lead session's first round), short three-line invocation.
+
+Round-1 verdicts: tester PASS (1 P2, 5 P3); operations FAIL (1 P1, 1 P2);
+parity FAIL (1 P1, 3 P2); security FAIL (1 P1, 2 P2); performance FAIL
+(1 P1, 3 P2); fit-for-purpose FAIL (1 P1, 3 P2); portability FAIL (1 P1,
+4 P2). Convergent P1s (all lead-process, all verified and fixed):
+(a) the staged identity log proved less than its manifest claimed
+(regenerated with a real 22-file cmp loop); (b) the termination log was a
+`tail`-truncated artifact missing the repaired test's own line (re-run
+with full output); (c) the committed battery manifest matched none of the
+on-disk reports it binds (verified entry-by-entry; lead decision: no
+hand-edit — the F closure battery rebuilds it from disk; the evidence
+README head block now states the true mid-rotation set instead of the
+stale all-2c788b8e claim). Substantive round-1 repairs: the guard README
+pin (39 total = 38 + 1 native-only), the DNS C-oracle-leg re-scope under
+the canonical CGO_ENABLED=0 config, the Rust denied-open root branch
+converted from a silent return to the repo's fail-closed UNSCORED policy
+(with a mutation-verified shape test), the Go directory-read admission
+rule gained its missing detecting test (mutation-verified), Rust hex-test
+cfg narrowed to linux+gnu, the decision-4 single-operator scope recorded,
+the 20 s termination ceiling named in the policy, and the cross-engine
+Windows hex-form divergence resolved as a product scoping (see the
+scoped-differences record above). Round-1 lead self-catches beyond the
+role findings: the stale staged Go product binary caused by
+`go build -C` relative `-o` semantics (digest cross-check caught it; the
+F battery's clean-staging rebuild structurally prevents it), and the
+"61→66" parity-count attribution corrected (66 predates this chunk).
+
+Re-staged evidence after the fixes: four corpus matrices at the current
+binaries (digest-bound to SHASUMS), jobs>1 parity smoke (483 cells 5.5 s
++ 108 pressure cells, 0 divergences — closes the operations/performance
+"dead parallel path" P2), full -v legacy suite under CGO_ENABLED=0,
+cross-target compile checks (windows/darwin/freebsd test builds rc 0,
+both engines).
+
+### Review-round execution log — rounds 3 and 4 (chunk W, Windows portability close-out)
+
+Round 3 (delta re-review of the round-2 close-out) — all seven FAIL,
+every in-scope finding on lead kit/records; zero engine defects (three
+roles independently rebuilt both products byte-for-byte from the frozen
+tree). Substantive catch: the round-2 retag used `target_os = "darwin"`
+in the Rust hex pin — not a valid Rust cfg value (rustc's is `macos`;
+the repo's own code uses `macos`), so the pin silently compiled out on
+macOS and rustc's `unexpected_cfgs` warning sat in the staged
+crosstarget logs. Fixed + verified warning-free. Kit-mechanism findings
+(all fixed and re-verified against disk): manifest derived rc by text
+heuristic (tripped on the parity self-test's own "must FAIL" control
+names) instead of the wrapper's captured status; `no_test_files` regex
+could never match; matrix `wall_from` pointed at a nonexistent `.txt`
+key; the manifest was hand-patched after its mechanical build (false
+`log_mtime_utc` column, mid-round churn while the round was running);
+battery env-prefix never reached the `&&`-chained `cargo test` (also a
+pre-existing latent bug for `CARGO_TARGET_DIR`/`CARGO_HOME`);
+`c_parity_test.go` carried the last "BSD/macOS refuse" comment twin;
+`wall.tsv` provenance lived only in `/tmp`; root scratch
+`mine.txt`/`theirs.txt` must not ride into F (removed). Process lessons
+recorded in the kit: verify-after-write on every claim, generators
+refuse the live kit dir without `--live`, freeze = batch all edits →
+single timed pass → single mechanical manifest → declared sha256 →
+chmod 555. Two rebuttals (evidence in kit status.md): the
+`termination_signals.rs` identity-spine omission did not reproduce;
+the README 53→57/37→40 attribution is correct against the committed
+HEAD blob. Round 4 = delta verification of this close-out against the
+frozen kit at declared manifest sha `ffd6addb…`.
+
+Round 4 (delta verification of the round-3 close-out, kit frozen at
+`ffd6addb…`): five reports in — performance and fit-for-purpose PASS;
+operations FAIL (stale status anchor/numbers + ungated warning class),
+parity FAIL (positional guard bypass + non-reproducible hand-added
+manifest fields), portability FAIL (three generator states, pinned !=
+executed). All verified real by the lead against disk before fixing.
+Closures staged for the single final batch: realpath identity guard
+(positional live-path now refused rc 2, proven), generator-emitted
+`self_entries_note`/kind-gate meaning (no surviving hand-inserts),
+crosstarget + battery warning gates (the dead-cfg class detector),
+builder in-kit wall fallback + fail-stop on missing wall source,
+tools-copy = executed-copy invocation, `dns_numeric_refuse.go`
+qualified-set over-claim scoped (bionic/android + ios/tvos revisit
+rule stated), and the new cross-language platform-tag consistency gate
+(`platform_tag_consistency_test.go`, mutation-proven against the exact
+round-2/3 defect shapes). Two status.md write failures were caught by
+roles (Round-4 section missing; "tools 555" false) — same silent-
+replace class as round 3's battery; verify-after-write is now applied
+on every narrative edit, with the two earlier instances recorded rather
+than erased (performance P3-1: the termination-spine claim was REAL at
+the reviewed stamp and is moot in the delivered kit, not "did not
+reproduce").
+
+Round-4 close-out batch (the single promised re-stamp) landed and
+re-froze the kit: pinned tools executed as canonical (md5-identical
+copies), final timed pass 26 steps / 222.6 s, mechanical manifest now
+BYTE-reproducible from the pinned builder against a `cp -p` sandbox
+(derived `prepared_utc`, script-declared `manifest.sha256`,
+`self_entries_note` + both-classes kind-gate `meaning` script-emitted,
+no hand-inserts surviving), realpath guard proven (positional live path
+rc 2; no-arg rc 2; missing wall source rc 3), crosstarget + battery
+warning gates active and warn-free in capture, and the new
+cross-language platform-tag gate committed as the class detector for the
+dead-cfg defect (mutation-proven three ways; Go census now 428/426/2,
+identity 17/7/5; comment-only refuse-file rescoping left the staged Go
+product byte-stable, matrices still bound). New anchor `9691e6e6…`.
+Round 5 launched as the tight delta confirm.
+
+Round 5 (frozen-kit delta verification): performance PASS.
+Fit-for-purpose FAIL on P1 F5-1 — accepted at the higher grade: the
+FINAL-section claim asserted BOTH generators refuse the live dir without
+`--live`, but `gen_identity.sh` lacked the python builder's
+realpath-identity guard (protected only by freeze modes; proven by the
+role to rewrite a writable kit copy rc 0). This was a lineage of my own
+round-4 verification (the "verified live" covered only the no-arg form
+for that script, then generalized past the evidence). Repair per the
+role's prescription: guard staged in the working copy and proven
+(positional live -> rc 2, no-arg -> rc 2, sandbox mode intact), the
+overstated claim sentences corrected everywhere in the kit record, and
+the guard syncs into pinned tools at the next stamp batch.
+
+Round 5 (frozen-kit delta of the round-4 close-out): 7/7 reports —
+performance/portability/operations PASS; security/parity/tester/
+fit-for-purpose FAIL converging on (a) the gen_identity guard existing
+only in /tmp at the anchor (synced into pinned tools at the round-5
+stamp, guard refusal rc 2 proven against a writable layout), and
+(b) security's verified bionic finding. (b) is the milestone's last
+substantive product defect: bionic REFUSES the hex numeric forms
+(platform/bionic tag android-14.0.0_r35, libc/dns/net/getaddrinfo.c:
+inet_aton inside `#if 0 /*X/Open spec*/` at 957-959; live AF_INET path
+inet_pton at 980; header line 42 "disallow classful form for IPv4"),
+and Go's `linux` tag is an umbrella matching GOOS=android — so the
+answer half compiled on android while the Rust authority (distinct
+`target_os = "android"`) refused: rc/output divergence on a platform
+the literal-set gate could not see. Product fix: answer tag now
+`(linux || darwin || ios || tvos || watchos || freebsd || netbsd ||
+dragonfly) && !android`; refuse tag its exact effective complement with
+android explicitly re-added; Rust hex-pin cfg gained ios/tvos/watchos
+(one shared Libinfo system library); the consistency gate rewritten to
+evaluate EFFECTIVE build sets through go/build.MatchFile over Go's 18
+known GOOS plus a documented-evidence table, mutation-proven three
+ways (android umbrella, ios-table drop, dead rust value — each FAILs
+naming the platform; each restored byte-exact). Re-stamped: 430 RUN /
+428 PASS / 2 named SKIPs, identity 17/7/5, warn-free, products
+re-digested (go 2a4d13a1…, rust 436b1e9c…; livedb untouched, build id
+66ddf70b… intact), matrices/parity re-bound, new anchor 6dfb774e…
+(byte-reproducible from pinned tools, decoy /tmp/wall.tsv proven to NOT
+outrank the bound snapshot). Round 6 launched as the delta confirm.
+
+Round 6 (delta of the round-5 close-out): six reports in — all FAIL
+converging on (a) fit-for-purpose/operations P1: the round-5 restage
+silently dropped the canonical `env CGO_ENABLED=0` and staged cgo Go
+products (`go version -m` CGO_ENABLED=1; canonical rebuild
+`8a3a45a8…` != staged `2a4d13a1…`) — which also explains the red parity
+smoke the builder had laundered to rc 0 via a hard-coded JSON-row rc
+(the gate correctly failed the wrong-recipe binary at exit 127); (b)
+operations P2: pinned generators edited mid-round, and a decoy-test
+`mv` left the wall capture read-only so one pass ran without it. All
+closed mechanically: canonical rebuild re-staged (go `8a3a45a8…`), a
+bound `go-cgo-attestation.log` step pins the recipe from now on, parity
+JSON rc derives from `result` with paired-log conflict detection, the
+kind-gate rc is capture-derived with conditional meaning, the pass
+rm-and-hard-fails on wall-table hygiene, ios/android crosstarget steps
+use portability's verified green recipes (both rc 0), pinned==staged
+md5-proven. New anchor `ab3429ed…` (37 runs; 28x0 + designed kind-gate
+1x1; parity smoke green under the canonical build). The android/bionic
+fix itself CLOSED for every reviewer — three roles independently
+verified the bionic citations at upstream. Round 7 launched as the
+delta confirm.
+
+Portability round 7 (first round-7 verdict): PASS, recipes verified
+landed exactly as specified (pinned ios/android steps re-executed green
+in the role's sandbox; the avoided android/amd64 PIE failure confirmed
+real). New F-precondition recorded from their byte-repro caveat: Rust
+canonical rebuilds imply the DEFAULT CARGO_HOME — registry paths embed
+in the binary (cargo has no -trimpath), so an isolated CARGO_HOME (the
+battery's [0b] build uses .local/int-prep/cargo-home) produces
+different-but-valid bytes. Consequence for F: the battery's ledger and
+report digests are self-consistent by construction (both from its own
+staged build), and must NOT be expected to equal the kit-staged digests
+across staging methods; any cross-staging digest comparison is
+invalid-by-construction.
+
+Round 7 (delta of the round-6 close-out): six reports in — portability,
+tester, performance, security, parity PASS; fit-for-purpose FAIL solely
+on R7-1 (the FINAL anchor paragraph still carried round-4-era figures
+as present truth, including `2a4d13a1…`, which is precisely the cgo
+wrong-recipe digest the round-6 close-out names as the F6-1 defect).
+Closed mid-round as a narrative-only correction (status.md FINAL
+paragraph re-derived from disk: 37 runs, 29-row wall census 28x0 +
+1x1, Go `8a3a45a8…`/`c744e02f…`, census 430/428/2, the defect digest
+explicitly labeled "do not compare against it"); the bound kit stayed
+untouched, anchor re-verified after the edit — the prescribed "fix at
+F, no mid-round patch" applied to the BOUND layer, which remains
+unpatched mid-round by rule. Round-7 verification highlights: the
+cgo-detector was proven by a deliberate CGO_ENABLED=1 rebuild
+reproducing the stale `2a4d13a1…` digest and failing the attestation
+step (negative control); the rc-derivation closures proven by
+directional flips in three roles' sandboxes (verdict→FAIL raises rc 1 +
+rc_conflict; capture 1→0 makes the row and conditional meaning
+follow); byte-reproducibility survived hostile decoy /tmp wall tables
+in all six; five staged binaries re-rebuilt byte-exact by three roles
+independently. Parity's exemplars recorded for the F gate: pure-Go
+(netgo, the canonical CGO_ENABLED=0 product) cannot resolve
+`localhost.`, `localhost.localdomain`, `ip6-localhost` where the C
+oracle/cgo Go can — mechanism attributed exactly (no NSS stack in
+netgo), verified INSIDE the user-approved 2026-09-16 resolver-boundary
+exception, not outside it; not a finding, recorded so a later reader
+does not re-file it. Pending F-batch builder items (queued in the kit,
+not edited mid-round to keep pinned==staged true): matrix-row rc to
+mirror run.py's engine_deaths/matrix_verdicts rule with paired-log
+cross-check (security r7 P3-1, verified against run.py:2937), builder
+docstring /tmp-first staleness, parity-rc max-of-pair option
+(adjudicated unnecessary — conflict is loud).
+
+Round 7 final tally: operations PASS completes 6/7 with fit-for-purpose
+FAIL solely on R7-1 (closed mid-round via the narrative re-derivation
+above; bound kit never touched — anchor ab3429ed… re-verified after
+the edit). Fit-for-purpose asked to confirm closure (round 8, records
+delta only). Operations' four-direction mutation matrix on the rc
+derivation (kind-gate capture flip, parity capture flip, laundering-
+direction JSON flip, consistent-FAIL) all correct; "parity smoke is a
+genuine green, not the r6 failure re-labelled" — the 9 host-state cells
+are rust-loader at band 3, zero Go-host. F-queue additions from
+operations r7 P3s (all builder-claim hygiene, pinned==staged preserved
+mid-round): built_from to name default CARGO_HOME; attestation row to
+carry the verbatim sh -c recipe; explicit CGO_ENABLED=0 prefix on the
+rpc-signals step.

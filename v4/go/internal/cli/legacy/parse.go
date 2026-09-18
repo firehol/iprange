@@ -23,6 +23,7 @@ import (
 	"syscall"
 
 	"github.com/firehol/iprange/v4/go/internal/calleropen"
+	"github.com/firehol/iprange/v4/go/internal/pathname"
 )
 
 // readWholeFile is the caller-open replacement for os.ReadFile on the
@@ -46,14 +47,46 @@ func readWholeFile(path string) ([]byte, error) {
 // opens it. glibc fopen(path, "r") succeeds for a directory and the first
 // fgets() then fails, so ipset_load() reports no error and yields an empty
 // ipset for a directory given as an input file or as a "@list" entry
-// (src/ipset_load.c:270-280). Only that case is empty: every other open or
-// read error is returned unchanged so the caller keeps the C diagnostic.
+// (src/ipset_load.c:270-280).
+//
+// Exactly one shape is empty, and it is the same shape on every platform:
+// the open succeeded and the read of that open handle failed as a
+// directory. readWholeFile reports a failed open as a "read"-less
+// *os.PathError with Op "open", so requiring Op "read" is what proves the
+// open succeeded --- an open that the platform refused (permissions,
+// sharing conflict, I/O) keeps failing here instead of quietly becoming
+// the empty set, which would conceal a failed update. Every other error is
+// returned unchanged so the caller keeps its diagnostic.
 func readLegacyInput(path string) ([]byte, error) {
 	data, err := readWholeFile(path)
-	if err != nil && errors.Is(err, syscall.EISDIR) {
+	if err != nil && isDirectoryReadError(path, err) {
 		return nil, nil
 	}
 	return data, err
+}
+
+// isDirectoryReadError reports whether err is the platform's signature of
+// reading an already-opened directory handle, as opposed to a failed open
+// or some other read failure.
+//
+// Two independent facts are required, and neither is redundant: the op
+// half establishes that the open succeeded (a refused open is reported
+// with Op "open"), and the attributes of the named object establish that
+// the failure is the directory case rather than some other read error
+// wearing the same code. The Rust twin reads those attributes from the
+// handle it still holds (legacy/parse.rs is_directory_read_error); this
+// one reads them by path because readWholeFile owns the handle lifetime,
+// and it can only ever narrow the empty-set result, never widen it.
+func isDirectoryReadError(path string, err error) bool {
+	var pathErr *os.PathError
+	if !errors.As(err, &pathErr) || pathErr.Op != "read" {
+		return false
+	}
+	if !errors.Is(pathErr.Err, directoryReadErrno) {
+		return false
+	}
+	info, statErr := os.Stat(path)
+	return statErr == nil && info.IsDir()
 }
 
 // C MAX_LINE (fgets buffer): one line record is at most 1023 bytes
@@ -240,7 +273,16 @@ func expandAt(o *Options, resolver *Resolver, list string, lastSource *string, d
 			// regular file here, and only a non-regular target (fifo,
 			// socket, device, nested directory, or a broken link whose
 			// stat fails) is skipped.
-			path := list + "/" + entry.Name()
+			// The expansion name is public output: it is the `name`
+			// column of `--count-unique --header` (ops.go
+			// ModeCountUniqueAll) and it is echoed by every load
+			// diagnostic. C builds it with "%s/%s" (src/iprange.c:772);
+			// each engine uses the platform join instead, and both use
+			// the same rule so the rows agree byte for byte on any
+			// platform (Rust Path::join, legacy/parse.rs:260).
+			// pathname.Push is the Rust PathBuf::push clone; filepath
+			// .Join would resolve "." and ".." and rename the set.
+			path := pathname.Push(list, entry.Name())
 			info, err := os.Stat(path)
 			if err != nil {
 				continue
@@ -1039,12 +1081,27 @@ func fmtDropWarning(name string, count int) string {
 // parse_strerror_linux.go and the non-linux subset in
 // parse_strerror_other.go (only errnos that exist on every supported
 // target; the rest fall back to Errno.Error()).
+// strerror renders the message half of a load diagnostic.
+//
+// On Linux the pinned table gives the glibc texts the released tool
+// prints, so the comparison against the C oracle stays byte-exact. An
+// errno the target does not share with glibc is rendered by the target's
+// own message-format contract (syscall.Errno.Error, which consults the
+// Go runtime's static errno table — not libc's strerror(3)), never by
+// the *os.PathError rendering: "open <path>: <message>" would put the
+// engine's own syscall wrapper into the message half of the C line
+// "iprange: <name> - <message>", which is contractual on every platform.
+// The name and the line shape stay contractual; only the OS-generated
+// message text may vary by OS and locale (decision 3B), and the two
+// engines may render that text differently on the same OS where no C
+// oracle exists to pin it (recorded scoped difference, SOW-0028).
 func strerror(e error) string {
 	var errno syscall.Errno
 	if errors.As(e, &errno) {
 		if msg, ok := errnoText[errno]; ok {
 			return msg
 		}
+		return errno.Error()
 	}
 	return e.Error()
 }
