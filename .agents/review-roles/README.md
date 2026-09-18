@@ -56,6 +56,15 @@ output, missing command) is a P1 finding against the lead's process.
   `stash`/`reset`. You review the exact HEAD given in `.local/shared/head`.
 - Your sandbox is `.local/<role>/` (gitignored). Every probe, stub product,
   mutated report, temporary build, capture, and your `report.md` live there.
+- **Sandbox budget: ≤ 1 GB at round end** (REVIEWS.md § Kit hygiene). Never
+  copy a whole buildable repo tree into the sandbox — a copied `v4/` with
+  its cargo/go/C `target` is 20–26 GB and is the documented failure mode of
+  the 370 GB incident. Mutated-source probes use a **symlink farm**: symlink
+  every tree entry in and materialize only the file(s) you mutate (the
+  `r13-kit` pattern). Compiled behavior is exercised with the staged
+  binaries in `.local/shared/binaries/`; if you truly must build, set
+  `CARGO_TARGET_DIR`/`GOCACHE` under `.local/<role>/.targets/` (one shared
+  location, never inside a tree copy) and say so in your round report.
 - Read-only shared material: `.local/shared/` (kit: `head`, `status.md`,
   `plan/`, `evidence/`, `probes/`, `binaries/`), `v4/cli/evidence/`
   (committed qualification evidence), and `.agents/sow/specs/` (the

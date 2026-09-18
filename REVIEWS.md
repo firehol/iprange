@@ -104,6 +104,31 @@ Rules for the kit:
 - Binaries under review are staged in `.local/shared/binaries/` with
   SHASUMS (existing pattern) so roles can run probes without building.
 
+### Kit hygiene (binding — the 370 GB incident)
+
+At milestone-4 close-out, `.local/` held 370 GB: eighteen reviewer sandboxes
+each kept a full copy of the repo tree *with its cargo/go/C build target*
+(20–26 GB each) from completed rounds. Prevention, enforced by
+`.local/kit-gc.sh`:
+
+- Roles must **never copy a buildable repo tree into the sandbox**. Probes
+  that need source mutations use a **symlink farm**: symlink every file of
+  the tree into the sandbox and materialize only the mutated file(s)
+  (the `r13-kit` pattern). Probes that need compiled code use the staged
+  binaries in `.local/shared/binaries/` — not a private build.
+- If a role genuinely must build, it sets `CARGO_TARGET_DIR`/`GOCACHE` to
+  one shared per-role location (`.local/<role>/.targets/`), never inside a
+  tree copy, and reports the build in its round notes so the lead can
+  prune it.
+- Every role sandbox must be **≤ 1 GB after a gate closes**. The lead runs
+  `.local/kit-gc.sh` (report) at each milestone-gate close, attics any
+  `*.md` exhibits with `.local/kit-gc.sh --attic <dirs>`, then prunes stale
+  build targets with `--prune-builds --apply`; the live (highest-numbered)
+  kit per role is protected by the script and is handled at the *next*
+  gate's close. Deleting stale round trees is a lead duty, not a reviewer
+  one; reports, manifests, and anything manifest-referenced are never
+  pruned (the script refuses `shared/`, reports, and `--keep` paths).
+
 ## Lead invocation message (exact shape)
 
 ```text
@@ -226,7 +251,9 @@ Binding details recorded from user decisions 2026-09-16:
 - Sandbox: `.local/<role>/` only, plus read access to `.local/shared/` and
   the repo. Small probes there must be under `nice` with explicit timeouts;
   no heavy batteries, no `pkill`/`killall`; kill only own children (track
-  PIDs).
+  PIDs). No whole-tree copies with build targets — use a symlink farm plus
+  the materialized mutated file(s), and shared binaries
+  (see § Kit hygiene); the sandbox must be ≤ 1 GB when your round ends.
 - Severity conventions (binding): **P0** corruption/crash/breach; **P1**
   wrong behavior on valid input, or an explicitly claimed contract with no
   detecting test; **P2** contract/records/measurable-performance defects,
