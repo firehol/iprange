@@ -17587,6 +17587,45 @@ family-specific hostname cap 255/256 with both-engine pins, the
 attempt-fold tamper term + control (self-test 70), retention comments,
 bundle hygiene — no reopened class).
 
+- operations: **FAIL on F1 (P2, records)** — README's head-block claimed
+  the committed manifest lists one parity digest while the committed
+  manifest still binds the deleted `-full` artifact; an independent
+  CLI-gate run reproduced rc 1 ("manifest lists 2 ... 1 consumed").
+  Disposition: the committed manifest is TRUE of revision `38aea8fc`
+  and only the battery's [19a]/[19b] may re-emit a manifest (a
+  hand-promoted one would stamp a revision its reports do not name —
+  the forgery class the audit exists to refuse); the head block now
+  states exactly that designed pre-rotation lag, matching how the
+  corpus paragraph documents the matrix lag. All five assigned focus
+  items executed PASS (single 378-cell sweep by verbatim-slice probe,
+  one name everywhere, registry/rotation/audit agreement with the
+  vanished-artifact refusal proven mechanically in memory, tolerance
+  cannot forgive forged-forward across 22 vectors). P3s closed in
+  e647024e: drift needles hardened to anchored full-message regexes
+  (the substring-injection was proven by the role), [16g]/[16h] label
+  collision, dead NEED_PRESSURE_ROUTINE removed. The known-defects
+  ledger exemption is adjudicated not-a-hole: the ledger is by design
+  hand-maintained (no provenance), and its semantic enforcement runs
+  inside the matrix assessment on every gate invocation including the
+  committed pass — the battery rerun the role already names closes any
+  stale ledger; recorded here so the adjudication is durable.
+- fit-for-purpose: **FAIL on F9-1 (P1, acceptance honesty)** — same
+  records defect as operations F1 (closed as above), plus corrected a
+  false claim in the tester disposition (the overflow branch IS taken
+  — 44 ranges park; the case's blindness is dedup plus $ignored
+  counts), accepted all three design judgments (parking is the only
+  correct minimal mechanism; single-name beats flags; origin-fold
+  table is the smallest form), verified the `-full` deletion needs no
+  shim (guard changed_files pin is blob history, not a live
+  requirement), spot-checked seven README claims exact against the
+  artifacts, and endorsed the kind-gate tolerance as the right call
+  (CLI path unfiltered, direction-limited, not-tolerating would force
+  the P2-6 violation itself). Their P3s: dead `_PROFILE_ROOT_TEMPLATES`
+  removed; the "twenty reports" enumeration counts the files that
+  carry the revision field — nineteen named + the manifest itself, and
+  the enumeration lists 19 names plus build-ids and the manifest under
+  the shared revision, which reads correctly; the 99c5d1b8 rationale
+  correction landed with the operations/f4p text above.
 - performance: **PASS**, no P0-P2. Four instructions executed with
   executable proof: per-line hot-path cost inside noise (paired 1M-line
   publish, median -2.8 ms); parked queue bounded by one group
