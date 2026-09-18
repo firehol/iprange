@@ -2451,44 +2451,95 @@ def _self_test():
         raise AssertionError(
             "expect_error guard shape pin: the guard's body must raise "
             "immediately, not record and continue")
-    # Position arm (tester round-11 F-D): shape and count do not say
-    # what precedes the guard.  A code-pinned early return inserted
-    # before the canonical guard, or a dead canonical decoy planted
-    # after it, survives the pair above while laundering every negative
-    # step outside the mutant's condition.  The unique shape match must
-    # therefore be the statement immediately after the service.call
-    # response assignment.  Residual floor (stated rather than hidden):
-    # an exact-shape decoy sitting at that position itself, with a
-    # laundering real guard behind it, would need a body that raises
-    # unconditionally (so it IS the working guard for the corpus) yet
-    # skips steps -- impossible while body[0] is an unconditional
-    # Raise, which the body arm above pins.
-    positioned = False
-    for node in ast.walk(guard_tree):
-        for field in ("body", "orelse", "finalbody"):
-            stmts = getattr(node, field, None)
-            if not isinstance(stmts, list):
-                continue
-            for index in range(len(stmts) - 1):
-                stmt = stmts[index]
-                if (isinstance(stmt, ast.Assign)
-                        and len(stmt.targets) == 1
-                        and isinstance(stmt.targets[0], ast.Name)
-                        and stmt.targets[0].id == "response"
-                        and isinstance(stmt.value, ast.Call)
-                        and isinstance(stmt.value.func, ast.Attribute)
-                        and stmt.value.func.attr == "call"
-                        and isinstance(stmt.value.func.value, ast.Name)
-                        and stmt.value.func.value.id == "service"
-                        and stmts[index + 1] is guard_shapes[0]):
-                    positioned = True
-    if not positioned:
+    # Position arms (tester round-11 F-D, F-E): shape and count do not
+    # say where the guard executes.  F-D taught that the guard must
+    # follow the service.call response assignment immediately; F-E
+    # taught that the walk-based scan accepted a dead canonical pair
+    # nested inside `if False:` (dead-in-position) and stayed silent on
+    # pre-call suppression (a code-pinned return or an expect_error
+    # erase placed BEFORE the call assignment).  Three fixes:
+    # (1) the call-and-guard adjacency is pinned in the function's own
+    #     top-level statement list only, so a pair nested anywhere
+    #     (including a dead wrapper) can never satisfy position;
+    # (2) no top-level statement before the call may reference
+    #     expect_error in any syntactic role or mutate/rebind `step`
+    #     (pop/clear/update/setdefault, subscript write, del, or
+    #     reassignment), which is the pre-call suppression channel;
+    # (3) residual after (2) is a pre-call exit that never mentions
+    #     expect_error or step -- it fires on the control's own
+    #     reader.close steps and dies on the behavioral pair, so the
+    #     two mechanisms close the class from opposite sides.
+    # The decoy floor, correctly stated this time: an exact-shape decoy
+    # at the pinned position executes (top level, unconditional flow),
+    # so its body arm -- an immediate unconditional Raise on exactly
+    # the guard's condition -- makes it the working guard itself; a
+    # dead decoy is necessarily nested and fails (1).
+    func_def = (guard_tree.body[0] if guard_tree.body
+                and isinstance(guard_tree.body[0], ast.FunctionDef)
+                else None)
+    if func_def is None:
+        raise AssertionError(
+            "expect_error guard shape pin: run_rpc_step source must "
+            "parse to a single function definition")
+    top = func_def.body
+    call_index = None
+    for index, stmt in enumerate(top):
+        if (isinstance(stmt, ast.Assign)
+                and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and stmt.targets[0].id == "response"
+                and isinstance(stmt.value, ast.Call)
+                and isinstance(stmt.value.func, ast.Attribute)
+                and stmt.value.func.attr == "call"
+                and isinstance(stmt.value.func.value, ast.Name)
+                and stmt.value.func.value.id == "service"):
+            call_index = index
+            break
+    if (call_index is None or call_index + 1 >= len(top)
+            or top[call_index + 1] is not guard_shapes[0]):
         raise AssertionError(
             "expect_error guard shape pin: the canonical guard must be "
             "the statement immediately after the service.call response "
-            "assignment; a guard reached only after earlier control "
-            "flow (or shadowed by a decoy) launders the steps that "
-            "flow skips")
+            "assignment in the function's top-level statement list; a "
+            "guard reached only after earlier control flow, or a pair "
+            "nested inside any wrapper, launders the flow it skips")
+    for stmt in top[:call_index]:
+        for node in ast.walk(stmt):
+            references = ((isinstance(node, ast.Constant)
+                           and node.value == "expect_error")
+                          or (isinstance(node, ast.keyword)
+                              and node.arg == "expect_error")
+                          or (isinstance(node, ast.Attribute)
+                              and node.attr == "expect_error"))
+            mutates = False
+            if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+                targets = (node.targets if isinstance(node, ast.Assign)
+                           else [node.target])
+                for target in targets:
+                    if (isinstance(target, ast.Name) and target.id == "step") or (
+                            isinstance(target, ast.Subscript)
+                            and isinstance(target.value, ast.Name)
+                            and target.value.id == "step"):
+                        mutates = True
+            elif isinstance(node, ast.Delete):
+                mutates = any(isinstance(t, ast.Subscript)
+                              and isinstance(t.value, ast.Name)
+                              and t.value.id == "step"
+                              for t in node.targets)
+            elif (isinstance(node, ast.Call)
+                  and isinstance(node.func, ast.Attribute)
+                  and isinstance(node.func.value, ast.Name)
+                  and node.func.value.id == "step"
+                  and node.func.attr in ("pop", "clear", "update",
+                                         "setdefault")):
+                mutates = True
+            if references or mutates:
+                raise AssertionError(
+                    "expect_error guard shape pin: a top-level statement "
+                    "before the service.call response assignment "
+                    "references expect_error or mutates step -- pre-call "
+                    "suppression launders every negative step by never "
+                    "reaching the guard")
 
     # Committed-report provenance.  These run here instead of behind a
     # ``--self-test`` flag the battery could omit, because the runner's helper
