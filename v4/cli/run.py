@@ -2562,88 +2562,120 @@ def _self_test():
     # expect_error token, so purity never sees it).  The arm therefore
     # classifies every statement before the call and rejects any that
     # provably diverts control away: a bare Return/Raise; an If whose
-    # provable truth value (folded through BoolOp/Not/Eq-Compare, so
-    # `if True and True:`, `if not False:`, `if 1 == 1:` count) selects
+    # test folds to a provable truth value -- folding RAW through
+    # ast.literal_eval (constants, constant displays including set/dict
+    # str/bytes) plus tri-state BoolOp short-circuit (`if True or
+    # <unknown>:` is provably true), Not, and Eq on raw values (so
+    # `1 == 2` folds False, not truthiness-of-the-operands) -- selecting
     # a diverting branch; a While/For whose certain first iteration
-    # diverts (while-true, for-over-nonempty-constant); a Match whose
-    # unguarded wildcard case diverts; a Try whose first statement is
-    # an exit (a bare return/raise cannot itself fail).  The shipped
-    # pre-call flow has none of these (its returns live inside the
-    # non-constant notification arm and the known-method raise inside a
-    # non-provable if), so pristine passes.
-    # Proof boundary, stated as the arm's actual reach (F-G): tests
-    # whose truth cannot be folded (Name, Call, non-Eq Compare, and
-    # compound tests mixing them), Try diverts below the first
-    # statement, Match cases with a guard or a pattern narrower than
-    # `_`, and any helper-delegated check (no expect_error token in
-    # this function) are invisible to this static scan -- that residue
-    # is the same declared off-sample class as the (3) floor, and the
-    # adversarial review rounds are its control.
+    # diverts; a Match whose unguarded always-matching case (bare or
+    # named wildcard, or an alternative list containing one) diverts
+    # and no earlier case can capture the subject and continue; a Try
+    # whose first statement is an exit or whose finally block diverts
+    # (a finally cannot complete normally past its own exit).  The
+    # shipped pre-call flow has none of these (its returns live inside
+    # the non-constant notification arm and the known-method raise
+    # inside a non-provable if), so pristine passes.
+    # Proof boundary, stated as the arm's actual reach (F-G/F-H):
+    # residue is (1) tests the fold cannot decide -- Names, Calls,
+    # non-Eq Compare operators, Is/In, and compound tests whose
+    # short-circuit cannot be decided from folded members; (2) Match
+    # cases carrying a guard or a pattern that can fail for some
+    # subject (value/singletons/star/mapping rest, or a wildcard whose
+    # match can be pre-empted by an earlier case that continues); (3)
+    # Try diverts below the first statement (a later statement may be
+    # skipped by an earlier one failing); (4) helper-delegated checks
+    # (no expect_error token in this function).  Those are the declared
+    # static residue; the adversarial review rounds are its control.
     _MATCH = getattr(ast, "Match", None)
     _MATCH_AS = getattr(ast, "MatchAs", None)
+    _MATCH_OR = getattr(ast, "MatchOr", None)
     _TRY_TYPES = (ast.Try,) + tuple(
         t for t in (getattr(ast, "TryStar", None),) if t is not None)
 
     def _const_bool(node):
-        # (True, value) when a control-flow test provably folds to a
-        # truth value; (False, None) otherwise.
-        if isinstance(node, ast.Constant):
-            return True, bool(node.value)
+        # (True, raw value) when a control-flow test provably folds;
+        # (False, None) otherwise.  Raw values (truthiness applied by
+        # If/While/For, Eq compares values), so `1 == 2` folds False
+        # and `"" == 0` folds False while `2591` stays truthy-True and
+        # `{1}` folds a non-empty set.
+        try:
+            return True, ast.literal_eval(node)
+        except (ValueError, SyntaxError, TypeError, MemoryError,
+                RecursionError):
+            pass
         if isinstance(node, ast.BoolOp):
             folded = [_const_bool(value) for value in node.values]
-            if all(known for known, _ in folded):
-                values = [value for _, value in folded]
-                return True, (all(values) if isinstance(node.op, ast.And)
-                              else any(values))
+            if isinstance(node.op, ast.And):
+                if any(known and not bool(value)
+                       for known, value in folded):
+                    return True, False
+                if all(known for known, _ in folded):
+                    return True, True
+            else:
+                if any(known and bool(value) for known, value in folded):
+                    return True, True
+                if all(known for known, _ in folded):
+                    return True, False
             return False, None
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             known, value = _const_bool(node.operand)
-            return (True, not value) if known else (False, None)
+            return (True, not bool(value)) if known else (False, None)
         if (isinstance(node, ast.Compare) and len(node.ops) == 1
                 and isinstance(node.ops[0], ast.Eq)):
             left_k, left_v = _const_bool(node.left)
             right_k, right_v = _const_bool(node.comparators[0])
             return (True, left_v == right_v) if left_k and right_k \
                 else (False, None)
-        if isinstance(node, (ast.Tuple, ast.List)):
-            return True, bool(node.elts)
         return False, None
+
+    def _always_matches(pattern):
+        # True when a match pattern cannot fail for ANY subject: a bare
+        # or named wildcard (MatchAs without an inner pattern), or an
+        # alternative list containing one.  Guarded cases and every
+        # pattern that can fail stay in the declared boundary.
+        if _MATCH_AS is not None and isinstance(pattern, _MATCH_AS):
+            return pattern.pattern is None
+        if _MATCH_OR is not None and isinstance(pattern, _MATCH_OR):
+            return any(_always_matches(alt) for alt in pattern.patterns)
+        return False
 
     def _dead_maker(statements):
         # A statement list diverts control away unconditionally when it
         # holds a bare Return/Raise, a provable-test If whose taken
         # branch is itself a dead-maker, a certain-first-iteration
         # While/For with a diverting body, an always-matching unguarded
-        # wildcard case with a diverting body, or a Try whose first
-        # statement is an exit.
+        # diverting case that no earlier non-diverting case can
+        # pre-empt, or a Try whose first statement is an exit or whose
+        # finally diverts.
         for child in statements:
             if isinstance(child, (ast.Return, ast.Raise)):
                 return True
             if isinstance(child, ast.If):
                 known, value = _const_bool(child.test)
                 if known and _dead_maker(
-                        child.body if value else (child.orelse or [])):
+                        child.body if bool(value) else (child.orelse or [])):
                     return True
             elif isinstance(child, ast.While):
                 known, value = _const_bool(child.test)
-                if known and value and _dead_maker(child.body):
+                if known and bool(value) and _dead_maker(child.body):
                     return True
             elif isinstance(child, ast.For):
                 known, value = _const_bool(child.iter)
-                if known and value and _dead_maker(child.body):
+                if known and bool(value) and _dead_maker(child.body):
                     return True
             elif _MATCH is not None and isinstance(child, _MATCH):
-                for case in child.cases:
-                    if (case.guard is None
-                            and _MATCH_AS is not None
-                            and isinstance(case.pattern, _MATCH_AS)
-                            and case.pattern.name is None
-                            and case.pattern.pattern is None
-                            and _dead_maker(case.body)):
+                for index, case in enumerate(child.cases):
+                    if (case.guard is None and _always_matches(case.pattern)
+                            and _dead_maker(case.body)
+                            and all(_dead_maker(prior.body)
+                                    for prior in child.cases[:index])):
                         return True
             elif isinstance(child, _TRY_TYPES):
                 if (child.body and isinstance(child.body[0],
                                               (ast.Return, ast.Raise))):
+                    return True
+                if child.finalbody and _dead_maker(child.finalbody):
                     return True
         return False
 
