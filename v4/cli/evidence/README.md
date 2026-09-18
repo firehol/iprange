@@ -2239,15 +2239,15 @@ the binding that field provides.
   `strace`, per product. Rate is attested, not gated — an absolute floor is
   not host portable — so what the gate enforces is that every reply is
   served, the child exits cleanly, and the thread-creation count does not
-  grow with the request count (measured at this revision: Go 18 `clone`
+  grow with the request count (measured at this revision: Go 17 `clone`
   calls and Rust 4, each identical at the 3,000 and 6,000 request probes;
-  Go unique child tids 6 at 3,000 and 9 at 6,000, Rust 4 at both).
-  Committed medians at this revision: Go 17,689.4 and Rust 55,471.5
+  Go unique child tids 11 at 3,000 and 13 at 6,000, Rust 4 at both).
+  Committed medians at this revision: Go 15,394.0 and Rust 45,751.7
   replies/s.  Those are host-load observations, and the rate window starts
   at child spawn so it includes process start.  The report carries one
   median per product, so no second quieter-host figure can be cited from
-  it; the 35,464.7/50,535.9 and 38,350.3/62,524.5 pairs that appeared here
-  earlier match no member of the committed artifact.  No Go/Rust ratio from these figures is evidence for the 1.3x
+  it; the 17,689.4/55,471.5 and 35,464.7/50,535.9 pairs that appeared
+  here earlier match no member of the committed artifact.  No Go/Rust ratio from these figures is evidence for the 1.3x
   relative-rate contract planned for milestone 5, which needs a load-isolated
   measurement protocol this harness does not implement.  The report is
   identity-bound (binary SHA-256 plus the `system.describe` implementation
