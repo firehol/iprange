@@ -2393,6 +2393,65 @@ def _self_test():
                     service.proc.kill()
                     service.proc.wait(timeout=2)
 
+    # Guard-shape pin (tester round-11 F-C): the behavioral controls
+    # above sample one point per dimension, so a guard narrowed by any
+    # added conjunction (pinned to this control's method, outcome, or
+    # code set) survives them while laundering every negative step that
+    # differs from the sampled point.  This pin reads the guard's
+    # syntax tree instead: run_rpc_step must contain EXACTLY one `if`
+    # whose test is the two-operand conjunction of the response-has-no-
+    # error test and the expect_error-is-present test, with no extra
+    # conjunct and no replaced operand shape.  Any conjunction a
+    # future edit adds across any dimension fails here, not silently.
+    import ast
+    import inspect
+    import textwrap
+
+    guard_tree = ast.parse(
+        textwrap.dedent(inspect.getsource(CaseRunner.run_rpc_step)))
+    guard_shapes = []
+    for node in ast.walk(guard_tree):
+        if not (isinstance(node, ast.If)
+                and isinstance(node.test, ast.BoolOp)
+                and isinstance(node.test.op, ast.And)
+                and len(node.test.values) == 2):
+            continue
+        no_error, declared = node.test.values
+        if (isinstance(no_error, ast.Compare)
+                and len(no_error.ops) == 1
+                and isinstance(no_error.ops[0], ast.NotIn)
+                and isinstance(no_error.left, ast.Constant)
+                and no_error.left.value == "error"
+                and isinstance(no_error.comparators[0], ast.Name)
+                and no_error.comparators[0].id == "response"
+                and isinstance(declared, ast.Compare)
+                and len(declared.ops) == 1
+                and isinstance(declared.ops[0], ast.IsNot)
+                and isinstance(declared.left, ast.Call)
+                and isinstance(declared.left.func, ast.Attribute)
+                and declared.left.func.attr == "get"
+                and isinstance(declared.left.func.value, ast.Name)
+                and declared.left.func.value.id == "step"
+                and len(declared.left.args) == 1
+                and isinstance(declared.left.args[0], ast.Constant)
+                and declared.left.args[0].value == "expect_error"
+                and isinstance(declared.comparators[0], ast.Constant)
+                and declared.comparators[0].value is None):
+            guard_shapes.append(node)
+    if len(guard_shapes) != 1:
+        raise AssertionError(
+            "expect_error guard shape pin: run_rpc_step must contain "
+            "exactly one unqualified two-operand guard "
+            "(`\"error\" not in response and "
+            "step.get(\"expect_error\") is not None`); found "
+            f"{len(guard_shapes)} — a narrowed or qualified guard "
+            "launderes every negative step outside its qualification")
+    if not (guard_shapes[0].body and
+            isinstance(guard_shapes[0].body[0], ast.Raise)):
+        raise AssertionError(
+            "expect_error guard shape pin: the guard's body must raise "
+            "immediately, not record and continue")
+
     # Committed-report provenance.  These run here instead of behind a
     # ``--self-test`` flag the battery could omit, because the runner's helper
     # pins already run on every invocation: a matrix run that could not commit

@@ -663,9 +663,12 @@ impl<K: InputKey> TextInputSource<K> {
                     // rejected here exactly as C rejects it. A header
                     // at-or-below the sum of a contradictory payload
                     // cannot be counted by a bounded stream; that
-                    // residual is one-sided (it can only believe
-                    // FEWER addresses than C's merged count, never
-                    // more) and is stated here rather than hidden.
+                    // residual is one-sided in the direction that
+                    // matters: the published set is always the record
+                    // union, so an accepted header may misreport the
+                    // count (above or below C's merged count), but the
+                    // header's number never reaches the published
+                    // content. Stated here rather than hidden.
                     //
                     // v2 (C src/ipset6_binary.c:13-70): only an
                     // optimized header is recomputed; a non-optimized
