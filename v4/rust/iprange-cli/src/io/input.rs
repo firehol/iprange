@@ -131,6 +131,12 @@ pub struct TextInputSource<K> {
     /// at most one group's surplus (the drain runs before any new
     /// input read); the ring may keep its capacity after a drain --
     /// bounded amortization by design, not accumulation across groups.
+    /// Scope note (security round-9): the group's answer fan-out is
+    /// uncapped per name (the resolver keeps every address), exactly
+    /// as the released C loader mallocs one reply node per answer; the
+    /// publication max_heap_bytes budget guards the livedb heap, not
+    /// this adapter, so "bounded memory" here means bounded batch and
+    /// bounded queue per group, never a cap on resolver answers.
     pending: VecDeque<ParsedRange>,
     finished: bool,
     last_error: Option<&'static str>,

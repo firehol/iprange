@@ -17624,6 +17624,25 @@ bundle hygiene — no reopened class).
   F1, closed by BUNDLE-PROVENANCE.md + re-capture); the family-cap and
   70th-control addenda (recorded above); temp-file style on assertion
   failure (existing suite convention).
+- security: **PASS** at HEAD. Their Finding 1 (256-byte IPv6 hostname
+  refused where C/both legacy readers accept it — P2 at 4921bb09,
+  records defect on the comment claiming MAX_TOKEN6 parity) is the
+  same divergence the lead addendum b73a20ba closed; the role verified
+  the boundary against the released C oracle independently (255/256
+  accepted in v6, 256 refused in v4, 257 refused in v6 — the pins
+  encode the oracle's real boundary). Privacy P2-5: 13-needle probe
+  extension (0 leaks), 31-probe false-leak hunt (0), two mutations
+  each individually failing the group-13 control (both halves
+  load-bearing), writer refusal on the new class, and a pre-delta-vs-G
+  monotonicity scan over every committed artifact (0 refused->clean
+  flips, 0 verdict flips). NUL/CR/token rules C-oracle-confirmed
+  including the `1.2.3.4\0-5.6.7.8` smuggle probe. P3s dispositioned:
+  the darwin-reading any-drive widening is stated in the
+  declared-trade docstring (direction-safe); BUNDLE-PROVENANCE and the
+  status line name the designed single-actor matrix FAILs; the queue
+  scope comment on both engines states that resolver fan-out is
+  uncapped per name exactly as C and that max_heap_bytes guards the
+  livedb heap, not the adapter.
 - portability: **FAIL on F1 (P1)** — the kit's bundle corpus.log had
   run against F-era `/tmp/opencode/wsbin` binaries (digests were not
   bound; the role rebuilt from the G tree to prove the passes are

@@ -911,13 +911,23 @@ def personal_path_in_report(report):
     # always offered as a second reading of the same value: the profile that
     # needs it may be the local one, or the operator's root on the host that
     # authored the report.  Reading a candidate twice can only ever add a
-    # refusal, because the needles are unchanged.  The one class it widens
-    # is stated rather than hidden: ``_fold_windows`` lowercases the
+    # refusal, because the needles are unchanged.  The classes it widens
+    # are stated rather than hidden.  ``_fold_windows`` lowercases the
     # candidate, so a POSIX path that differs from a POSIX profile only in
     # case now matches, although a case-sensitive POSIX home would call it a
-    # different directory.  Such a spelling does not occur in this project's
-    # evidence, and the trade is asymmetric -- a false refusal costs one
-    # rerun, a missed profile puts a personal path in a committed artifact.
+    # different directory.  ``_fold_darwin`` (the macOS reading) meets the
+    # case-folded foreign macOS root, and because that root keeps its
+    # leading ``/`` while the fold lowercases the whole value, a lowercased
+    # candidate on ANY drive letter whose path segment sequence contains
+    # ``users/<login>`` at a word boundary now matches (e.g.
+    # ``D:/Users/Operator/cache`` on an auditing host whose operator macOS
+    # root is ``/Users/operator``) -- a volume the operator does not own on
+    # the auditing host.  Both widenings add refusals only; neither can
+    # remove one (verified: no committed report's verdict flips under the
+    # pre- and post-delta scanners).  Such spellings do not occur in this
+    # project's evidence, and the trade is asymmetric -- a false refusal
+    # costs one rerun, a missed profile puts a personal path in a committed
+    # artifact.
     #
     # This is the msys2 case the old scan could not see: an msys2 ``~`` is
     # /home/<login>, while the same operator's Windows profile is

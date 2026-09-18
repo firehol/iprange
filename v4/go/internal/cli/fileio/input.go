@@ -172,7 +172,13 @@ type textInputCore[K any] struct {
 	// runs before any new input read), and a drained slice header may
 	// keep that group's backing array reachable until the next append
 	// reallocs or the source drops -- bounded amortization by design,
-	// not an accumulation across groups.
+	// not an accumulation across groups.  Scope note (security round-9):
+	// the group's answer fan-out is uncapped per name (the resolver
+	// keeps every address), exactly as the released C loader mallocs one
+	// reply node per answer; the publication max_heap_bytes budget
+	// guards the livedb heap, not this adapter, so "bounded memory"
+	// here means bounded batch and bounded queue per group, never a cap
+	// on resolver answers.
 	pending     []parsedRange
 	finished    bool
 	lastCode    string
