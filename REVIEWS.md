@@ -258,8 +258,9 @@ Binding details recorded from user decisions 2026-09-16:
   counter, so the dispatch brief must carry the protocol and the role must
   self-administer it: `date +%s` once at start (T0) and before every
   numbered probe, printing elapsed in the probe line; a per-probe budget
-  (default 4 min) with **at most two re-attempts** — a third attempt is
-  prohibited, the probe is recorded `INCONCLUSIVE: <named obstacle>`,
+  (default 4 min) with **at most two re-attempts** — the initial attempt
+  plus two retries, three attempts in total; a fourth attempt is
+  prohibited and the probe is recorded `INCONCLUSIVE: <named obstacle>`,
   which is a valid, reportable terminal outcome and lead-adjudication
   input; a total wall budget, and at 70 % of it the role stops probing and
   writes the report with what it has. A probe whose intent repeats a

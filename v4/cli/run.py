@@ -2157,8 +2157,9 @@ def _self_test():
     controls spawn six stub services (a few tens of milliseconds
     each) to pin the clean-session end contract in both client I/O
     branches, the negative-expectation controls spawn four more
-    (two codes x two directions), and the multi-step control one
-    more (four steps through the real dispatch).
+    (two codes x two directions), the refusal-content pins call the
+    verifier helper directly (subprocess-free), and the multi-step
+    control one more (four steps through the real dispatch).
     """
 
     import tempfile
@@ -2394,13 +2395,96 @@ def _self_test():
                     service.proc.kill()
                     service.proc.wait(timeout=2)
 
+    # Refusal-content pins (astra gate turn 3, refusal_content_controls_
+    # incomplete): the subprocess pair above pins only the guard's two
+    # directions -- a success on a negative step raises, a MATCHING
+    # refusal passes.  What the engine refused WITH is verified by
+    # check_expected_error (transport code, data shape, domain code,
+    # outcome, exact details member set): every comparison there needs a
+    # pin, or relaxing the verifier stays invisible to the self-test while
+    # the corpus's 70 expect_error steps silently accept wrong refusals.
+    # Direct helper calls: subprocess-free, deterministic, no service.
+    _cee_data = {"code": "invalid_argument", "outcome": "not_started",
+                 "details": {"op": "close", "scratch": None}}
+    _cee_step = {"method": "iprange.v1.reader.close", "actor": "consumer",
+                 "params": {"reader": "0" * 32},
+                 "expect_error": {"code": "invalid_argument",
+                                  "outcome": "not_started",
+                                  "details": {"op": "close",
+                                              "scratch": None}}}
+    _cee_positive_step = {"method": "iprange.v1.reader.close",
+                          "actor": "consumer",
+                          "params": {"reader": "0" * 32}}
+
+    def _cee_err(data, transport=frame.PRODUCT_ERROR):
+        return {"code": transport, "message": "stub refusal", "data": data}
+
+    _cee_frags = {
+        "unexpected-refusal-on-positive": "failed unexpectedly",
+        "wrong-transport-code": "transport code must be",
+        "non-object-data": "data must be an object",
+        "wrong-domain-code": "expected data.code",
+        "wrong-outcome": "expected outcome",
+        "missing-details": "expected error details",
+        "non-object-details": "expected error details",
+        "extra-details-member": "details member set mismatch",
+        "missing-details-member": "details member set mismatch",
+        "mismatched-details-value": "error details 'op' mismatch",
+    }
+    for _lbl, _step, _err, _must_raise in (
+            ("matching-refusal", _cee_step,
+             _cee_err(dict(_cee_data)), False),
+            ("unexpected-refusal-on-positive", _cee_positive_step,
+             _cee_err(dict(_cee_data)), True),
+            ("wrong-transport-code", _cee_step,
+             _cee_err(dict(_cee_data), transport=-32000), True),
+            ("non-object-data", _cee_step, _cee_err("not-an-object"), True),
+            ("wrong-domain-code", _cee_step,
+             _cee_err(dict(_cee_data, code="input_format")), True),
+            ("wrong-outcome", _cee_step,
+             _cee_err(dict(_cee_data, outcome="outcome_unknown")), True),
+            ("missing-details", _cee_step,
+             _cee_err({k: v for k, v in _cee_data.items()
+                       if k != "details"}), True),
+            ("non-object-details", _cee_step,
+             _cee_err(dict(_cee_data, details="x")), True),
+            ("extra-details-member", _cee_step,
+             _cee_err(dict(_cee_data, details={"op": "close",
+                                               "scratch": None,
+                                               "extra": 1})), True),
+            ("missing-details-member", _cee_step,
+             _cee_err(dict(_cee_data, details={"op": "close"})), True),
+            ("mismatched-details-value", _cee_step,
+             _cee_err(dict(_cee_data, details={"op": "open",
+                                               "scratch": None})), True),
+    ):
+        try:
+            runner.check_expected_error(_step, _step["method"], _err)
+        except AssertionError as exc:
+            if not _must_raise:
+                raise AssertionError(
+                    f"refusal-content pin {_lbl}: a matching refusal must "
+                    f"pass check_expected_error, got: {exc}") from exc
+            if _cee_frags[_lbl] not in str(exc):
+                raise AssertionError(
+                    f"refusal-content pin {_lbl}: raised for an unrelated "
+                    f"reason: {exc}") from exc
+        else:
+            if _must_raise:
+                raise AssertionError(
+                    f"refusal-content pin {_lbl}: the wrong refusal was "
+                    "accepted silently")
+
     # Multi-step control (tester round-12 G-B, strengthened per round-13
     # H1): the guard is per-call but the runner dispatches many steps per
     # case, so post-guard code -- which the freeze below deliberately does
     # not cover -- can disarm the guard for every LATER step (rebind
     # CaseRunner.run_rpc_step, or poison the case's own step dicts).  A
-    # single-call control cannot see that: both channels need a first step
-    # to arm.  This control runs one case through the real run() dispatch
+    # single-call control cannot see the step-dict channel: poisoning a
+    # dispatched dict only disarms later steps, so it needs a first step to
+    # arm (a module-level rebind executes before any step exists and a
+    # single call WOULD run through it -- the identity arms own rebinds).
+    # This control runs one case through the real run() dispatch
     # -- three innocent warm-up steps, then a negative step against a stub
     # that always succeeds -- and requires the guard to raise on the late
     # step.  The sample is un-PRE-keyable by design (round-13 H1, closed
@@ -2408,8 +2492,10 @@ def _self_test():
     # values generated per invocation -- no fixed prefix or literal a
     # disarm can quote from source (the H3 exhibit pre-exempted the old
     # "pair-control-late-" prefix with zero observation), no hard-coded
-    # reader-id key is possible, and the poison cannot arm on a step
-    # count the control does not reach.  Acceptance requires the raise's
+    # reader-id key is possible.  A step-count key is NOT closed here:
+    # this control dispatches four steps while committed cases run up to
+    # 134, so a poison that arms past step four passes it and joins the
+    # named residue below.  Acceptance requires the raise's
     # frame to carry the pinned function's own code object and the
     # sample's late step dict as its `step` local (round-14 H4): a raise
     # from exec'd code CLAIMING co_name/co_filename, or a guard-message
@@ -2425,10 +2511,12 @@ def _self_test():
     # including an in-frame decoy that mimics the guard message for
     # control-shaped cases while laundering every other step; or keying
     # on properties of REAL corpus steps the sample never reproduces.  The static-description
-    # decoy has no closure here: killing it statically means scanning
-    # post-guard string constants, and split literals evade an
-    # exact-literal scan -- the same undecidability class that sank the
-    # reach classifier, priced rather than re-implemented.  The freeze
+    # decoy is not closed by this arm, and closing it here would mean
+    # scanning post-guard string constants: split literals evade an
+    # exact-literal scan, and constant folding to catch them reopens the
+    # reach-analyzer class this repo retired for having no finite stopping
+    # condition.  That trade -- not a proof of impossibility -- is why
+    # this decoy is named residue owned by review discipline.  The freeze
     # comment below owns only what it pins.
     multi_ok_resp = ("import sys,json\n"
                      "for line in sys.stdin.buffer:\n"
@@ -2637,8 +2725,16 @@ def run_rpc_step(self, step):
             "wrap the pinned def and execute instead of it -- remove it "
             "or re-stamp _FROZEN_RPC_PREFIX deliberately with a review "
             "record")
+    # .returns is part of the signature (astra gate turn 3): comparing
+    # args alone would let a return-annotation edit escape the freeze with
+    # an identical body.  An absent annotation pins as Constant(None),
+    # the same AST a literal `-> None` parses to.
     if (ast.dump(_golden.args, include_attributes=False)
-            != ast.dump(_actual.args, include_attributes=False)):
+            != ast.dump(_actual.args, include_attributes=False)
+            or ast.dump(_golden.returns or ast.Constant(None),
+                        include_attributes=False)
+            != ast.dump(_actual.returns or ast.Constant(None),
+                        include_attributes=False)):
         raise AssertionError(
             _drift + "the run_rpc_step signature is part of the frozen "
             "prefix; restore it or re-stamp _FROZEN_RPC_PREFIX "

@@ -18246,16 +18246,25 @@ than a hidden hole.
   static-description keys (method, step shape, call context — the
   `_self_test`-frame stack key — and the in-frame message decoy),
   off-sample-real-step keys — and states plainly that the static decoy
-  has NO decidable closure at this arm (split literals evade an exact-
-  literal scan; the same undecidability class that sank the reach
-  classifier, priced rather than re-implemented); the freeze comment
+  is NOT closed by this arm: split literals evade an exact-literal scan,
+  and closing the decoy here would mean scanning post-guard string
+  constants, whose constant-folding path reopens the reach-analyzer class
+  this repo retired for having no finite stopping condition. That trade —
+  not a proof of impossibility — is why the decoy is named residue owned
+  by review discipline (astra gate turn 3, bounded_controls_against_
+  described_as_complete, corrected at the round-16 revision); the freeze comment
   cross-references that enumeration; the arms comment enumerates all
   five checks numbered to their channels.
 - Re-verification at the repaired HEAD: `build_r16.py` — r16a and r16b
   die at the control (CTRL-ACCEPTED-SUCCESS: their exemptions no longer
   match the bare-uuid name / their forged frame no longer authenticates);
   r16f/r16g die at CTRL-UNRELATED (frame identity rejects the message
-  spoof); r16d/e/j die at the globals/slot/co-file arms as mapped;
+  spoof); r16d/e/j die at the multi-step control as shipped (their bodies
+  still quote the retired `pair-control-late-` prefix, so they never
+  reach the arms; the arms fire on their named channels only for re-keyed
+  exhibits — `build_r17arms.py`, slot/globals/co-file/decorator 4/4, with
+  the `__wrapped__` arm attested by `g-round12-verify.py`
+  `decorator-neutral` → `G-A-WRAPPED`);
   r16h (uuid-supply hijack) dies at the control only because its
   exemption body still quotes the retired prefixed name; the re-keyed
   variant (hijack sets the values AND exempts them) is the in-process-
@@ -18267,10 +18276,106 @@ than a hidden hole.
   9/9 + `build_t2f.py` + `g-round12-verify.py` ALL-OK 13/13; pristine
   self-test 0.90 s; negative corpus 56/0/1; live.lifecycle 4/0/1; guard
   region `abacfa59…` byte-identical — six roles' guard-site PASSes stand.
-- **Convergence status**: the role's explicit task-4 judgment — H3/H4 are
-  the last NEW decidable classes; with their closures plus the residue
-  sentence naming the static-description/in-process-state class, the
-  arm+control set is AT THE FLOOR and the next round should adjudicate
-  residue, not patch. If it instead opens another new decidable class,
-  the standing escalation (astra gate session `ea962c0a…`, turn 3) fires
-  instead of another same-turn patch.
+- **Convergence status (recorded at 7bc66c8c/86a645e5, superseded by
+  round 15 — see below)**: the role's explicit task-4 judgment was that
+  H3/H4 are the last NEW decidable classes and that with their closures
+  plus the residue sentence, the guard-disarm arm+control set had reached
+  its floor. This was a judgment over the executed sample set, not a
+  proof (astra gate turn 3, bounded_controls_again_described_as_complete:
+  an executed sample set cannot establish a universal "last class"
+  conclusion). Round 15 confirmed the floor for the seven named
+  guard-disarm classes (all seven executed green with no in-arm closure)
+  but opened the un-frozen post-guard refusal-content verifier as a
+  further decidable surface, which the round-14 named list had not
+  covered; the standing escalation (astra gate session `ea962c0a…`,
+  turn 3) fired accordingly, and the bounded guarantee is now stated as:
+  the frozen snapshot protects the compared syntax, the behavioral
+  controls exercise the specified cases, and changes outside those
+  boundaries require review.
+
+## Round 15 — floor adjudication: guard-disarm floor confirmed; refusal-content verifier opened; astra turn 3 (2026-09-18)
+
+- The round-15 tester session ran under the new harness after one
+  died-with-harness re-dispatch and one harness-caused mid-round death
+  (prose-only turn + a lead `gate`/`acceptance` parameter error; recorded
+  in `.local/shared/status.md`, no bearing on the findings). Brief:
+  adjudicate the named residue list (Q1), audit records sentences (Q2),
+  attack shapes outside every named class (Q3).
+- **Q1 result — the guard-disarm floor holds.** All seven named residue
+  classes executed green-self-test laundering with no in-arm static or
+  identity closure found: adaptive observation, uuid-supply hijack
+  (re-keyed), method key, step-shape key, call-context key, in-frame
+  message decoy, off-sample-real-step key. Zero DECIDABLE-UNNAMED from
+  Q1. Exhibits and logs: `.local/tester/r17-kit/` (`build_r17.py`,
+  `probe17.py`, `logs/probe*.log`).
+- **Q3 result — Finding 1 (P2), a decidable class outside the named
+  list.** `check_expected_error` (v4/cli/run.py:862-905) is reached from
+  the frozen guard but sits after it: outside the golden prefix and
+  outside what the identity arms pin. Emptied or relaxed, the self-test
+  stayed green while wrong refusal verdicts were accepted — the corpus's
+  70 `expect_error` steps stopped pinning what the engine refused. The
+  role classified it as the round-14 escalation trigger and did not ask
+  for a same-turn patch; the lead reproduced it independently
+  (`.local/lead-r15/verify_finding1.py`: pristine rejects a wrong domain
+  code, the mutant accepts it with `SELF-TEST-PASSED`) and escalated.
+- **Astra gate turn 3** (session `ea962c0a…`, prompt
+  `.local/shared/astra-turn3-prompt.md`, verdict **NEEDS CHANGES**):
+  Finding 1 valid and widened to the whole refusal contract (transport
+  code, data shape, domain code, outcome, details presence/shape/member
+  set/values, unexpected-refusal-on-positive — all 70 negative steps
+  specify `outcome`); Finding 2 (the r16d/e/j arm attribution) confirmed
+  with an added binding gap — the 13/13 decorator re-verification was
+  not bound in any log; over-claim sentences in code comments and this
+  SOW confirmed (step-count key closed nowhere, scan-evasion priced not
+  undecidable, "last class" not a proof); `.local/kit-gc.sh` opened as
+  P2 — mandated in REVIEWS.md, destructive, not implementing its own
+  protection promises, untracked; two P3s (freeze compares `args` but
+  claims "signature"; REVIEWS.md attempt-count ambiguity).
+- **Repairs at the round-16 revision (this record):**
+  1. Refusal-content pins: eleven direct `check_expected_error` calls in
+     the runner self-test, subprocess-free, exercising the matching
+     refusal plus every relaxation astra named (wrong transport code,
+     non-object data, wrong domain code, wrong outcome, missing/non-object
+     /extra/missing-member details, mismatched value, unexpected refusal
+     on a positive step). Mutation proof
+     `.local/lead-r15/mutation-proof-round16.txt`: pristine ACCEPT; six
+     relaxations die naming a refusal-content pin; the data-shape
+     relaxations die loudly at the pin site (crash at the pin is still a
+     detection; silent laundering is the only failure mode). No shipped
+     verifier line changed — this is coverage, not behavior (astra's own
+     framing).
+  2. Records: the r16d/e/j bullet above restated (control, not arms, for
+     the shipped exhibits; re-keyed exhibits for arm attribution, and the
+     `decorator-neutral` 13/13 now bound by a lead re-run at this
+     revision: `.local/lead-r15/g-round12-at-20df1d4a.txt`, ALL-OK);
+     the "last NEW decidable classes" sentence restated as the bounded
+     guarantee; decoy wording to priced-trade in code comment and SOW;
+     step-count-key sentence in the control comment now states the four-
+     step control does NOT close step-count keys (33 committed cases run
+     >4 steps, max 134).
+  3. `.agents/tools/kit-gc.sh` is the committed authoritative
+     implementation; `.local/kit-gc.sh` is a forwarding wrapper (prior
+     untracked copy preserved at `.local/lead-r15/kit-gc.sh.previous-untracked`).
+     It fixes the enclosing-kit bug (role_dir computed from the candidate
+     path), drops the r1[0-9] literal for a real highest-kit scan, treats
+     any kit touched within `--min-age` days as active, refuses deletion
+     of directories containing protected files (reports, manifests,
+     SHASUMS, sha256 sidecars), and makes `--all` widen only the sweep,
+     never a safety rule. Functional suite:
+     `.local/lead-r15/test_kit_gc.sh`, 15/15 against synthetic trees
+     (never `.local/`).
+  4. Freeze signature comparison includes `FunctionDef.returns` (absent
+     annotation pins as `Constant(None)` — the same AST a literal `->
+     None` parses to).
+  5. REVIEWS.md retry wording now states one unambiguous limit: initial
+     attempt + two re-attempts = three total; a fourth is INCONCLUSIVE.
+- Re-verification at this revision: pristine self-test PASS 0.95 s;
+  negative corpus 56/0/1; live.lifecycle 4/0/1; kind-gate 133+5;
+  `command_sanitize 58/58`; guard region 673-716 `abacfa59…`
+  byte-identical — the six roles' guard-site PASSes and every prior
+  round-12..14 adjudication over that region stand on that identity.
+- **Position:** the guard-disarm arm+control set is at its decidable
+  floor (round-15 Q1, unrefuted); the refusal-content contract is now
+  pinned (round-16); records state the bounded guarantee. What remains
+  outside the frozen syntax and the specified behavioral cases is owned
+  by review discipline, not by an analyzer.
