@@ -17846,3 +17846,68 @@ status.md, bundle at `.local/w1926h-qualification/`. Sequencing after
 7/7: regenerate leg 27 at the final revision, native Windows leg,
 closure battery at the final revision, evidence child commit, astra
 re-review in session `ea962c0a1a874e67bdcce924ec265541`, push.
+
+##### Round 11 (2026-09-18) — the repair-chain review of 8092d7d6 and its closure commits
+
+Scope: round-11 instructions reviewed delta `197b6263..8092d7d6`; the
+tester then re-reviewed each repair commit in the same round
+(11b: `c24348ed`, 11c: `c30bb0b5`, 11d: `65a796fb`). Verdicts:
+performance, operations, security, portability, fit-for-purpose, and
+parity **PASS** on the delta; tester FAIL twice, both repaired and
+independently re-closed. The chain:
+
+- **F-A (P2, tester 11):** the two-arm expect_error control sampled one
+  code only — and that code (`input_format`) occurs in 0/70 committed
+  negative steps, so a guard pinned to it survived control + corpus
+  while resurrecting the round-10 laundering. Closed at `c24348ed`:
+  control loops two codes (`input_format` + `invalid_argument`, the
+  most-used code, 25 steps). Re-closed by the role on their own copies.
+- **F-C (P2, tester 11b):** same-failure search generalized F-A — the
+  control samples one point per dimension, so method-pinned, outcome-
+  pinned, and set-pinned guard conjunctions survived (methodpin
+  re-passed the pre-repair live.lifecycle defect against the real
+  pre-repair binary). Closed at `c30bb0b5` with the role's prescribed
+  mechanism: an AST source-text pin on `run_rpc_step` (the
+  `command_sanitize.py:518-520` `inspect.getsource` idiom — calls the
+  function actually makes, not its text) requiring exactly one
+  unqualified two-operand conjunction raising immediately. Text-proof
+  both directions; conjunct swap, nested restructure, and conditional
+  raise all detected.
+- **F-D (P2, tester 11c):** the pin bound shape + count but not
+  POSITION — `preexit` (canonical guard intact, code-pinned early
+  return inserted before it; 6 committed `cursor_closed` steps lose
+  protection with the self-test fully green) and `decoy` (outcome-
+  narrowed real guard + dead planted exact-shape block; pin counts the
+  decoy, behavioral pair passes) survived. Closed at `65a796fb` with
+  the role's position arm: the unique shape match must be the statement
+  immediately after the `response = service.call(...)` assignment; the
+  residual floor (a decoy satisfying shape+position+body arms IS the
+  working guard, since body[0] must be an unconditional Raise) is
+  stated in the pin. Lead nine-shape farm + the role's independent
+  farm agree; matrix in `.local/w1926h-qualification/mutation-proof-fd.txt`.
+- P3 closures in the same commits: all five self-test stubs answer via
+  `sys.stdout.buffer.write(... + b"\n")` + explicit flush (the flush is
+  load-bearing — proven end-to-end by the role's noflush mutant hitting
+  the bounded read deadline): a native-Windows text-mode `print()`
+  emits CRLF, which `decode_response_line` correctly rejects, so a
+  natively executed runner self-test would have died before its guard
+  ran. Premise correction: NO Windows leg has ever invoked run.py
+  (steps.tsv inventories); leg 27 does not, and the repair makes a
+  future native invocation safe. Records: anchor corrections
+  (commit_resolution.rs:140-148, live.rs:527), "five new probes per
+  engine" (F-B), stale README control counts 66→70 / 57→58, docstring
+  stub counts.
+- Testimony of record: the shipped guard is correct today (all 33
+  success-capable negative steps refuse under it — the role's census);
+  this chain is about the CLAIM that the controls detect a broken
+  guard, which is what REVIEWS.md's missing-test rule prices.
+
+Suite state at 65a796fb: runner self-test rc 0 (0.850 s, 58/58 shared
+controls + guard pins); negative-family corpus 56 PASS / 0 FAIL / 14
+designed skips; live.lifecycle 4/4; full matrix unchanged at 232/0/143
+(no product code since 8092d7d6; 65a796fb/c30bb0b5 touch run.py and one
+Rust comment).
+
+Sequencing after the round closes 7/7: leg 27 at the final revision,
+closure battery at the final revision (single full sweep), evidence
+child commit, astra re-review (session ea962c0a…), push.
