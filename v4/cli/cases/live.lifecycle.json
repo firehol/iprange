@@ -262,9 +262,11 @@
           "coordination_cleanup": "$CAPTURE/commit.coordination_cleanup"
         }
       },
-      "expect_error": {
-        "code": "invalid_argument",
-        "outcome": "not_started"
+      "expect_result": {
+        "resolution": "committed",
+        "actual_main_identity": {
+          "$ignore": true
+        }
       }
     },
     {

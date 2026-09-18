@@ -703,6 +703,16 @@ class CaseRunner:
 
         request_id = f"case-{self.case['name']}"
         response = service.call(request_id, method, params)
+        if "error" not in response and step.get("expect_error") is not None:
+            # A success response on a step that declared expect_error is
+            # a missing refusal, not a pass: the negative expectation
+            # must fail here, before the digest recording and before the
+            # fall-through to the (absent) expect_result assertions that
+            # used to launder the divergence.
+            raise AssertionError(
+                f"case {self.case['name']!r}: method {method} succeeded but "
+                f"the step declared expect_error "
+                f"{step['expect_error'].get('code')!r}")
         if "digest_group" in step:
             self.record_digest(step, method, params)
         if negative is not None:
@@ -2303,6 +2313,65 @@ def _self_test():
             if clean.proc.poll() is None:
                 clean.proc.kill()
                 clean.proc.wait(timeout=2)
+
+    # Negative-expectation control (tester round-10 P3-1): a step that
+    # declares expect_error must FAIL when the service answers with a
+    # success response -- the old fall-through to the absent
+    # expect_result assertions laundered the missing refusal, so a
+    # mutant engine that accepted refused input kept the case green.
+    # The pair below pins both directions with stub services: a success
+    # answer on a negative step raises, and a genuine product-error
+    # answer still passes through check_expected_error untouched.  The
+    # method is reader.close because its strict result schema
+    # (method/closed) is fully satisfiable by the stub, so the
+    # success-laundering arm must trip the guard itself and nothing
+    # else; a weaker guard shape fails this control for the wrong reason.
+    negative_step = {
+        "method": "iprange.v1.reader.close",
+        "actor": "consumer",
+        "params": {"reader": "0" * 32},
+        "expect_error": {"code": "input_format", "outcome": "not_started"},
+    }
+    ok_resp = ("import sys,json;"
+               "r=json.loads(sys.stdin.buffer.readline());"
+               "print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':"
+               "{'method':'iprange.v1.reader.close','closed':True}}),"
+               "flush=True);")
+    err_resp = ("import sys,json;"
+                "r=json.loads(sys.stdin.buffer.readline());"
+                "print(json.dumps({'jsonrpc':'2.0','id':r['id'],'error':"
+                "{'code':-32010,'message':'stub refusal','data':"
+                "{'code':'input_format','outcome':'not_started'}}}),"
+                "flush=True);")
+    for label, stub_src, must_raise in (
+            ("success-laundering", ok_resp, True),
+            ("genuine-refusal", err_resp, False),
+    ):
+        service = JsonRpcService([sys.executable, "-c", stub_src
+                                  + "sys.stdin.buffer.read()"], "stub")
+        runner.service = service
+        try:
+            try:
+                runner.run_rpc_step(negative_step)
+            except AssertionError as exc:
+                if not must_raise:
+                    raise AssertionError(
+                        f"expect_error control {label}: a genuine product "
+                        f"error must pass, got: {exc}") from exc
+                if "succeeded but the step declared expect_error" not in str(exc):
+                    raise AssertionError(
+                        f"expect_error control {label}: failed for an "
+                        f"unrelated reason: {exc}") from exc
+            else:
+                if must_raise:
+                    raise AssertionError(
+                        f"expect_error control {label}: a success response "
+                        "on a step declaring expect_error was accepted")
+        finally:
+            runner.service = None
+            if service.proc.poll() is None:
+                service.proc.kill()
+                service.proc.wait(timeout=2)
 
     # Committed-report provenance.  These run here instead of behind a
     # ``--self-test`` flag the battery could omit, because the runner's helper

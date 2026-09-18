@@ -510,6 +510,36 @@ func TestScratchBinaryUniqueCountRules(t *testing.T) {
 		// below (0..9, 10..19) breaks the strict-gap shape, so neither
 		// C nor the reader recomputes -- a header (7) that matches
 		// neither the sum (20) nor the merge is loadable input.
+		// The three bracket/claim witnesses (tester round-10 F-1). Same
+		// byte payloads the Rust pin base64-decodes (fixtures are shared
+		// between engines); the C oracle's verdicts on these exact bytes
+		// are the anchors.
+		{"v1-lower-bracket", "v4",
+			// header 3 is >= records so the open-time screen passes,
+			// yet below the largest record (100): the lower bracket
+			// violation C refuses, which the earlier probes never
+			// reached.
+			"iprange binary format v1.0\nnon-optimized\nrecord size 8\nrecords 2\nbytes 20\nlines 2\nunique ips 3\n",
+			[]byte{1, 0, 0, 0, 100, 0, 0, 0, 50, 0, 0, 0, 60, 0, 0, 0}, true},
+		{"v1-lower-bracket-honest", "v4",
+			"iprange binary format v1.0\nnon-optimized\nrecord size 8\nrecords 2\nbytes 20\nlines 2\nunique ips 100\n",
+			[]byte{1, 0, 0, 0, 100, 0, 0, 0, 50, 0, 0, 0, 60, 0, 0, 0}, false},
+		{"v2-ordered-nonopt-lie", "v6",
+			// header "non-optimized" over STRICTLY ORDERED non-adjacent
+			// records: C's derived flag is true despite the header, so
+			// C recomputes. Keying the comparison on the header claim
+			// instead of the derived flag loads the corrupt header.
+			"iprange binary format v2.0\nipv6\nnon-optimized\nrecord size 32\nrecords 2\nbytes 68\nlines 2\nunique ips 99\n",
+			append(v6record(10, 0, 19, 0), v6record(40, 0, 49, 0)...), true},
+		{"v2-ordered-nonopt-honest", "v6",
+			"iprange binary format v2.0\nipv6\nnon-optimized\nrecord size 32\nrecords 2\nbytes 68\nlines 2\nunique ips 20\n",
+			append(v6record(10, 0, 19, 0), v6record(40, 0, 49, 0)...), false},
+		{"v1-claims-optimized-overlap", "v4",
+			// header CLAIMS optimized over an overlapping payload whose
+			// count sits inside the bracket: only the claims-optimized
+			// refusal catches it.
+			"iprange binary format v1.0\noptimized\nrecord size 8\nrecords 2\nbytes 20\nlines 2\nunique ips 5\n",
+			[]byte{1, 0, 0, 0, 3, 0, 0, 0, 3, 0, 0, 0, 5, 0, 0, 0}, true},
 		{"v2-nonopt-header-trusted", "v6",
 			"iprange binary format v2.0\nipv6\nnon-optimized\nrecord size 32\nrecords 2\nbytes 68\nlines 2\nunique ips 7\n",
 			append(v6record(0, 0, 9, 0), v6record(10, 0, 19, 0)...), false},

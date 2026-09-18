@@ -2179,6 +2179,48 @@ mod tests {
             AddressFamilyInput::Ipv4,
         )
         .is_err());
+        // The three bracket/claim directions (tester round-10 F-1):
+        // each is a discriminating witness the earlier probes could not
+        // reach. (1) records (1..100),(50..60): sum 111, max record 100,
+        // C's merge 100. A header of 3 is >= records (so the open-time
+        // screen passes) yet below the largest record -- inside the
+        // bracket's lower violation, and C refuses it ("unique IPs (3)
+        // do not match the binary payload (100)"); the honest 100 loads.
+        assert!(load(
+            &payload("aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYxLjAKbm9uLW9wdGltaXplZApyZWNvcmQgc2l6ZSA4CnJlY29yZHMgMgpieXRlcyAyMApsaW5lcyAyCnVuaXF1ZSBpcHMgMwpNPCsaAQAAAGQAAAAyAAAAPAAAAA=="),
+            AddressFamilyInput::Ipv4,
+        )
+        .is_err());
+        assert!(load(
+            &payload("aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYxLjAKbm9uLW9wdGltaXplZApyZWNvcmQgc2l6ZSA4CnJlY29yZHMgMgpieXRlcyAyMApsaW5lcyAyCnVuaXF1ZSBpcHMgMTAwCk08KxoBAAAAZAAAADIAAAA8AAAA"),
+            AddressFamilyInput::Ipv4,
+        )
+        .is_ok());
+        // (2) v2 header "non-optimized" over STRICTLY ORDERED,
+        // non-adjacent records (10..19),(40..49): C's derived flag is
+        // true despite the header, so C RECOMPUTES -- lying header 99
+        // refuses, honest 20 loads. Keying this comparison on the
+        // header claim instead of the derived flag silently loads the
+        // corrupt header.
+        assert!(load(
+            &payload("aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYyLjAKaXB2Ngpub24tb3B0aW1pemVkCnJlY29yZCBzaXplIDMyCnJlY29yZHMgMgpieXRlcyA2OApsaW5lcyAyCnVuaXF1ZSBpcHMgOTkKTTwrGgoAAAAAAAAAAAAAAAAAAAATAAAAAAAAAAAAAAAAAAAAKAAAAAAAAAAAAAAAAAAAADEAAAAAAAAAAAAAAAAAAAA="),
+            AddressFamilyInput::Ipv6,
+        )
+        .is_err());
+        assert!(load(
+            &payload("aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYyLjAKaXB2Ngpub24tb3B0aW1pemVkCnJlY29yZCBzaXplIDMyCnJlY29yZHMgMgpieXRlcyA2OApsaW5lcyAyCnVuaXF1ZSBpcHMgMjAKTTwrGgoAAAAAAAAAAAAAAAAAAAATAAAAAAAAAAAAAAAAAAAAKAAAAAAAAAAAAAAAAAAAADEAAAAAAAAAAAAAAAAAAAA="),
+            AddressFamilyInput::Ipv6,
+        )
+        .is_ok());
+        // (3) header CLAIMS optimized over an overlapping payload whose
+        // count sits INSIDE the bracket ((1..3),(3..5), header 5 ==
+        // merged 5): only the claims-optimized refusal catches this, so
+        // deleting that arm accepts input C refuses.
+        assert!(load(
+            &payload("aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYxLjAKb3B0aW1pemVkCnJlY29yZCBzaXplIDgKcmVjb3JkcyAyCmJ5dGVzIDIwCmxpbmVzIDIKdW5pcXVlIGlwcyA1Ck08KxoBAAAAAwAAAAMAAAAFAAAA"),
+            AddressFamilyInput::Ipv4,
+        )
+        .is_err());
         // v2 non-optimized with an ADJACENT pair (0..9, 10..19): the
         // adjacency clears C's derived flag, and C then trusts the
         // header (src/ipset6_binary.c:57-60) -- header 7 matches
