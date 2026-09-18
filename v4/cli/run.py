@@ -2583,9 +2583,12 @@ def _self_test():
     # cases carrying a guard or a pattern that can fail for some
     # subject (value/singletons/star/mapping rest, or a wildcard whose
     # match can be pre-empted by an earlier case that continues); (3)
-    # Try diverts below the first statement (a later statement may be
-    # skipped by an earlier one failing); (4) helper-delegated checks
-    # (no expect_error token in this function).  Those are the declared
+    # Try diverts below the first statement when the body can fail
+    # (an earlier failure skips a later exit, and it skips an else too
+    # -- only an inert body makes a diverting else unconditional); a
+    # raise in an except/finally that the fold cannot prove runs is
+    # not claimed; (4) helper-delegated checks (no expect_error token
+    # in this function).  Those are the declared
     # static residue; the adversarial review rounds are its control.
     _MATCH = getattr(ast, "Match", None)
     _MATCH_AS = getattr(ast, "MatchAs", None)
@@ -2621,13 +2624,42 @@ def _self_test():
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
             known, value = _const_bool(node.operand)
             return (True, not bool(value)) if known else (False, None)
-        if (isinstance(node, ast.Compare) and len(node.ops) == 1
-                and isinstance(node.ops[0], ast.Eq)):
-            left_k, left_v = _const_bool(node.left)
-            right_k, right_v = _const_bool(node.comparators[0])
-            return (True, left_v == right_v) if left_k and right_k \
-                else (False, None)
+        if (isinstance(node, ast.Compare)
+                and all(isinstance(op, ast.Eq) for op in node.ops)):
+            # Chained equality (a == b == c folds iff every operand
+            # folds; the result is the pairwise conjunction).
+            operands = [node.left] + list(node.comparators)
+            folded = [_const_bool(operand) for operand in operands]
+            if all(known for known, _ in folded):
+                values = [value for _, value in folded]
+                return True, all(values[i] == values[i + 1]
+                                 for i in range(len(values) - 1))
         return False, None
+
+    def _inert(node):
+        # Statements that cannot raise: pass, a constant-valued
+        # expression statement, or an assignment of a literal-evaluable
+        # value to a plain name (attribute/subscript targets could
+        # fail through __setattr__/__setitem__, so they stay inert-
+        # false and the else diverts under them remain residue).
+        if isinstance(node, ast.Pass):
+            return True
+        if isinstance(node, ast.Expr):
+            try:
+                ast.literal_eval(node.value)
+                return True
+            except (ValueError, SyntaxError, TypeError, MemoryError,
+                    RecursionError):
+                return False
+        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
+                and isinstance(node.targets[0], ast.Name):
+            try:
+                ast.literal_eval(node.value)
+                return True
+            except (ValueError, SyntaxError, TypeError, MemoryError,
+                    RecursionError):
+                return False
+        return False
 
     def _always_matches(pattern):
         # True when a match pattern cannot fail for ANY subject: a bare
@@ -2672,10 +2704,34 @@ def _self_test():
                                     for prior in child.cases[:index])):
                         return True
             elif isinstance(child, _TRY_TYPES):
-                if (child.body and isinstance(child.body[0],
-                                              (ast.Return, ast.Raise))):
+                # A first-statement Return cannot be caught; a first-
+                # statement Raise only diverts when the try has no
+                # handler that could catch it (with handlers present,
+                # which type raises is not claimed -- residue).
+                if child.body and isinstance(child.body[0], ast.Return):
+                    return True
+                if (child.body and isinstance(child.body[0], ast.Raise)
+                        and not child.handlers):
+                    return True
+                if (child.body
+                        and isinstance(child.body[-1], ast.Return)
+                        and len(child.body) > 1
+                        and all(_inert(stmt)
+                                for stmt in child.body[:-1])):
+                    # An inert prefix cannot fail and a bare Return
+                    # cannot be caught, so the trailing return runs
+                    # unconditionally -- same proof as the first-
+                    # statement rule, just further down.  (A trailing
+                    # raise is NOT claimed: a handler can catch it.)
                     return True
                 if child.finalbody and _dead_maker(child.finalbody):
+                    return True
+                # else: runs exactly when the body completes without
+                # raising; an inert body (pass, or literal assignments
+                # and constant expressions -- nothing that can fail)
+                # makes the else divert unconditionally.
+                if (child.orelse and _dead_maker(child.orelse)
+                        and all(_inert(stmt) for stmt in child.body)):
                     return True
         return False
 
