@@ -59,8 +59,8 @@ repository. The user does not want to repeat them.
   is planned, implemented, reviewed, gated, committed, and pushed is
   **`REVIEWS.md`** (repo root). It also binds kit hygiene: reviewer
   sandboxes use symlink farms and staged binaries, never whole-tree copies
-  with build targets (the 370 GB incident); the lead runs `.local/kit-gc.sh`
-  (attic + prune) at every milestone-gate close — see `REVIEWS.md`
+  with build targets (the 370 GB incident); the lead runs `.agents/tools/kit-gc.py`
+  (report, then named-path `--prune-builds --apply`) at every milestone-gate close — see `REVIEWS.md`
   § Kit hygiene. It defines: the plan-time astra gate for new
   SOWs, the per-step implementation loop, the seven standing adversarial
   reviewer roles (`tester`, `operations`, `parity`, `portability`,

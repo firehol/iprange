@@ -18391,7 +18391,7 @@ than a hidden hole.
      exits 0 from report mode on healthy small trees, and makes `--all`
      widen only the sweep, never a safety rule. Functional suite
      (`.local/lead-r15/test_kit_gc.sh`, staged at
-     `.local/shared/evidence/round16/kit-gc-suite.sh`): 23/23 against
+     `.local/shared/evidence/round16/kit-gc-suite.sh`): all assertions against
      synthetic trees — never `.local/` — including the four
      astra-turn-4 counterexamples and the report-mode exit.
   4. Freeze signature comparison includes `FunctionDef.returns` (absent
@@ -18412,8 +18412,8 @@ than a hidden hole.
 
 ## Round 17 — astra gate turn 4: cleanup safeguards and record accuracy (2026-09-19)
 
-- Astra gate turn 3 over the round-16 delta: NEEDS CHANGES — 6 P2 + 1 P3.
-  Result: `.local/shared/evidence/round16/astra-turn-4-result.txt`. The
+- Astra gate turn 4 over the round-16 delta: NEEDS CHANGES — 6 P2 + 1 P3.
+  Result: `.local/shared/evidence/round16/astra-turn4-result.txt`. The
   refusal-content controls, r16d/e/j attribution, decorator-neutral
   binding, bounded comments, return-annotation comparison and retry
   wording were verified landed. Open items, each lead-verified against
@@ -18456,7 +18456,7 @@ than a hidden hole.
   mutation-proof instrument now reports the actual failing frame and
   exception and reads the success marker from stdout only.
 - Validation at this revision: self-test PASS 0.93 s; negative 56/0/1;
-  live.lifecycle 4/0/1; kind-gate 133+5; kit-gc functional suite 23/23
+  live.lifecycle 4/0/1; kind-gate 133+5; kit-gc functional suite 21/21 assertions
   on synthetic trees including all four turn-4 counterexamples (never
   `.local/`); guard region `abacfa59…` and run.py byte-identical to
   3e75cfec — the refusal-content pins and the six roles' guard-site
@@ -18464,3 +18464,72 @@ than a hidden hole.
 - What this round does NOT do: no new classifier, no expanded
   guard-mutation campaign (astra's explicit instruction), no engine or
   protocol change.
+
+## Round 18 — astra gate turn 5: fail-closed cleanup redesign, honest evidence binding (2026-09-19)
+
+- Astra gate turn 5 over f3d4c0a6: NEEDS CHANGES — 1 P1 + 5 P2 + 2 P3
+  (result copied verbatim to
+  `.local/shared/evidence/round16/astra-turn5-result.txt`). The P1 was
+  an evidence-integrity failure in the lead's own staging: the manifest
+  described the revised mutation-proof output while the staged log was
+  still the old eight-line file. All eight findings verified by the lead
+  against source before acting.
+- P1 revised_mutation_command_bound_to_previous_log: the corrected
+  output now exists and is staged with a fresh hash binding; the
+  manifest entry describes what the staged bytes actually contain.
+- Cleanup safeguards were rebuilt rather than patched again, because
+  two consecutive rounds found new gaps in the same design
+  (sweep-find-then-guard). The committed tool is now
+  `.agents/tools/kit-gc.py` (the `.sh` implementation is deleted):
+  1. no sweep-delete mode at all: `--prune-builds --apply` deletes ONLY
+     explicitly named PATHs (report mode and the listing stay read-only
+     for a human to review first), and every named path re-passes every
+     guard, including staleness of the target itself;
+  2. the live-kit rule orders numbered kits within a role directory
+     only; top-level `.local/<tree>` directories are workspaces, not
+     kits, so a tree named `w2026-live` can no longer be misclassified,
+     and an unnumbered `work/` or `dr/` can never outrank `r20-kit`;
+  3. activity is checked per kit (any file inside it modified within
+     min-age days) and along the workspace ancestor chain (a top-level
+     `notes.md` touch protects the whole tree);
+  4. the manifest-reference registry scans EVERY `manifest*.json` under
+     `.local/` (including manifests inside otherwise-protected build
+     targets), parses JSON values fully and raw text, resolves each
+     path-like token against the manifest dir, `.local/`, the repo root
+     and cwd, registers the written path AND its resolved target, and
+     covers names without a fixed extension whitelist (spaces, `.exe`,
+     binaries by reference);
+  5. fail-closed: an unreadable or unparseable manifest makes the
+     registry incomplete and blocks ALL deletions (exit with `REFUSED
+     ... registry incomplete` + `BLOCKER` lines) instead of silently
+     pruning unprotected;
+  6. `--keep` is normalized with realpath (absolute, trailing `/`, `.`
+     and `..` resolved against the real filesystem) and compared at
+     directory boundaries; retention is checked before existence so an
+     explicit `--keep` can never be masked by another reason;
+  7. report mode exits 0 on healthy small trees; the help text now
+     matches the implemented commands (`--all` removed; `--attic` is
+     documented as a writing mode, not a dry run).
+  Functional suite 21/21 on synthetic trees, including astra's four
+  turn-5 counterexamples and every turn-4 one; `--apply` is exercised
+  only against temp trees. AGENTS.md and REVIEWS.md now mandate
+  `.agents/tools/kit-gc.py` (turn-5 P3 entry-point inconsistency closed;
+  the `.local/kit-gc.sh` wrapper forwards to the Python tool).
+- Mutation-proof scorer now USES its classification (astra turn-5 P2):
+  a mutant passes only when the expected diagnostic fragment and the
+  expected failing frame are both present; timeout (rc 124) and
+  unrelated crashes score FAIL. The two negative controls astra named
+  were demonstrated: a syntax-error mutant scores FAIL for the missing
+  diagnostic, a sleep-based timeout scores FAIL at rc 124.
+- Records corrected (turn-5 P3): the Round-17 section's verdict
+  attribution now says turn 4; the negative-corpus manifest entries
+  record the real exit code — with `--allow-skips` and zero failures
+  run.py returns 0 (the "rc=1 designed" phrasing belongs to runs
+  WITHOUT `--allow-skips`; corrected in this revision's manifest and
+  status narrative).
+- Validation at this revision: kit-gc suite 21/21; mutation proof 8/8
+  with negative controls; self-test 0.93 s; negative 56/0/1 rc 0;
+  live.lifecycle 4/0/1; kind-gate 133+5; read-only report over the real
+  32 GB `.local/` exits 0 with no stale candidates and no blockers.
+  `v4/cli/run.py` is byte-identical to 3e75cfec (guard region
+  `abacfa59…`): no shipped behavior changed in rounds 17 or 18.
