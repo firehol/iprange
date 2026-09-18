@@ -303,6 +303,19 @@ func TestScratchLegacyLexicalForms(t *testing.T) {
 		parsed.kind != parsedRangeLine || parsed.value.fromLo != 0x01020304 {
 		t.Fatalf("numeric CR: %+v %v", parsed, err)
 	}
+	// Family-specific hostname token cap, mirroring the legacy
+	// buffers (MAX_INPUT_ELEMENT 255, MAX_INPUT_ELEMENT6 256).
+	name256 := []byte(strings.Repeat("a", 256))
+	if parsed, err := parseTextLine(name256, opt6(128, true)); err != nil ||
+		parsed.kind != parsedHostname || len(parsed.hostname) != 256 {
+		t.Fatalf("256-byte v6 name: %+v %v", parsed.kind, err)
+	}
+	if _, err := parseTextLine(name256, opt4(32, true)); err == nil {
+		t.Fatal("256-byte name must refuse in v4 mode (C MAX_INPUT_ELEMENT)")
+	}
+	if _, err := parseTextLine([]byte(strings.Repeat("a", 257)), opt6(128, true)); err == nil {
+		t.Fatal("257-byte name must refuse in v6 mode")
+	}
 }
 
 func TestScratchBatchSurplusParksFIFO(t *testing.T) {

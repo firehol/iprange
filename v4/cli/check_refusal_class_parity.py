@@ -1857,6 +1857,23 @@ def verify_pressure_report(report):
                     f"disagreed across runs (attempt_verdicts "
                     f"{(cell.get(engine) or {}).get('attempt_verdicts')!r}); "
                     f"a nondeterministic cell is not parity evidence")
+            # Tamper-side of the same rule: the fold writes exactly one
+            # shape -- a disagreement verdict iff the recorded attempts
+            # disagree.  A doctored report that keeps mixed
+            # attempt_verdicts while relabeling the verdict "pass" (or
+            # drops the disagreement the attempts prove) is refused
+            # here.  The field's ABSENCE is not judged: an artifact
+            # produced before the fold existed is judged by the rest of
+            # the record, exactly as the axis label's null is.
+            attempts = (cell.get(engine) or {}).get("attempt_verdicts")
+            if isinstance(attempts, list) and len(set(attempts)) > 1 and \
+                    (cell.get(engine) or {}).get("verdict") != "disagreement":
+                problems.append(
+                    f"pressure cell ({arm}, {profile}, {engine}): records "
+                    f"attempt_verdicts {attempts!r} (which disagree) beside "
+                    f"verdict {(cell.get(engine) or {}).get('verdict')!r}; "
+                    f"the fold writes a disagreement verdict exactly when "
+                    f"the attempts disagree")
         divergent, band_gap = _pressure_cell_divergence(pin, cell)
         if bool(cell.get("band_gap")) != band_gap:
             # The per-cell flag is a report about the table, so it is judged
@@ -3539,7 +3556,7 @@ def _sync_summary(report):
 # doctored-report cases and every control that assesses a report or mutates the
 # tables directly; adding or removing one changes this constant in the same
 # change, and a run whose total drifts from it fails.
-SELF_TEST_CASES_TOTAL = 69
+SELF_TEST_CASES_TOTAL = 70
 
 
 def _self_test():
@@ -4507,6 +4524,19 @@ def _self_test():
         truthfully_disagreed_cell,
         "a truthfully disagreed pressure cell must FAIL the verdict",
         "attempts disagreed across runs")
+
+    # Tamper-side of the same rule: mixed attempt_verdicts relabelled
+    # as a passing cell (the fold writes disagreement exactly when the
+    # attempts disagree, so the two cannot coexist by production).
+    def relabelled_disagreement(report):
+        target = pressure_cell_in(report, PRESSURE_SAMPLE_CELL)
+        target["go"]["verdict"] = "pass"
+        target["go"]["attempt_verdicts"] = ["wedge", "pass"]
+
+    with_pressure_report(
+        relabelled_disagreement,
+        "mixed attempt_verdicts relabelled pass must FAIL the verdict",
+        "which disagree")
 
     # The committed-report contract of this writer, measured rather than
     # asserted.  A parity report names the binaries it swept, the work

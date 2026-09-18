@@ -927,7 +927,7 @@ fn parse_text_line(line: &[u8], options: TextInputOptions) -> Result<ParsedLine,
     // finding P1-2). scan_while caps the token exactly like C's
     // MAX_TOKEN/MAX_TOKEN6 scan; the 255-byte bound is kept as the
     // accept test.
-    if let Some(token) = hostname_token(rest) {
+    if let Some(token) = hostname_token(rest, options.family) {
         return Ok(ParsedLine::Hostname(token));
     }
     Err(format!(
@@ -1354,9 +1354,19 @@ fn token_address_family(token: &[u8]) -> Option<bool> {
 /// `hostname_is_complete` predicate checked the shape but the caller
 /// then handed the whole line to the resolver, so a trailing comment
 /// or CR rode along into the lookup.
-fn hostname_token(line: &[u8]) -> Option<Vec<u8>> {
+///
+/// The token cap is family-specific because the legacy buffers are
+/// (MAX_TOKEN = C MAX_INPUT_ELEMENT 255 for IPv4, src/ipset_dns.c:3;
+/// MAX_TOKEN6 = C MAX_INPUT_ELEMENT6 256, src/ipset6_load.h:6): a
+/// 256-byte name is valid IPv6-mode input and must not be refused
+/// here while both legacy readers accept it.
+fn hostname_token(line: &[u8], family: AddressFamilyInput) -> Option<Vec<u8>> {
+    let max = match family {
+        AddressFamilyInput::Ipv4 => 255,
+        AddressFamilyInput::Ipv6 => 256,
+    };
     let (token, rest) = scan_while(line, is_hostname_byte);
-    if token.is_empty() || token.len() > 255 || !complete_after_token(rest) {
+    if token.is_empty() || token.len() > max || !complete_after_token(rest) {
         return None;
     }
     Some(token.to_vec())
@@ -1746,6 +1756,21 @@ mod tests {
             parse_text_line(b"1.2.3.4\r", opts).unwrap(),
             ParsedLine::Range(v4(0x01020304, 0x01020304))
         );
+        // The hostname token cap is family-specific exactly as the
+        // legacy buffers: C MAX_INPUT_ELEMENT 255 (src/ipset_dns.c:3)
+        // and MAX_INPUT_ELEMENT6 256 (src/ipset6_load.h:6), so a
+        // 256-byte name is IPv6-valid input and a 257-byte name is not.
+        let name256 = vec![b'a'; 256];
+        let v6opts = options(AddressFamilyInput::Ipv6, 128, true);
+        assert!(matches!(
+            parse_text_line(&name256, v6opts).unwrap(),
+            ParsedLine::Hostname(t) if t.len() == 256
+        ));
+        assert!(parse_text_line(&name256, opts).is_err(),
+                "256-byte names exceed C MAX_INPUT_ELEMENT: v4 mode refuses");
+        let mut name257 = vec![b'a'; 257];
+        assert!(parse_text_line(&name257, v6opts).is_err());
+        name257.truncate(0);
     }
 
     #[test]

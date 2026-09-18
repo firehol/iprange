@@ -1086,7 +1086,7 @@ func parseTextLine(line []byte, options TextInputOptions) (parsedLine, error) {
 	// resolver. Handing the whole trimmed line to the resolver made
 	// "host # comment" a lookup for "host # comment" (astra gate
 	// finding P1-2).
-	if token := hostnameToken(rest); token != nil {
+	if token := hostnameToken(rest, options.Family); token != nil {
 		return parsedLine{kind: parsedHostname, hostname: token}, nil
 	}
 	return parsedLine{}, fmt.Errorf("invalid input line: %s", string(line))
@@ -1595,9 +1595,18 @@ func tokenAddressFamily(token []byte) (bool, bool) {
 // TOKEN itself. The old hostnameIsComplete predicate checked the shape
 // but the caller then handed the whole line to the resolver, so a
 // trailing comment or CR rode along into the lookup.
-func hostnameToken(line []byte) []byte {
+// The token cap is family-specific because the legacy buffers are
+// (MAX_TOKEN = C MAX_INPUT_ELEMENT 255 for IPv4, src/ipset_dns.c:3;
+// MAX_TOKEN6 = C MAX_INPUT_ELEMENT6 256, src/ipset6_load.h:6): a
+// 256-byte name is valid IPv6-mode input and must not be refused here
+// while both legacy readers accept it.
+func hostnameToken(line []byte, family AddressFamilyInput) []byte {
+	max := 255
+	if family == AddressFamilyInputIPv6 {
+		max = 256
+	}
 	token, rest := scanWhile(line, isHostnameByte)
-	if len(token) == 0 || len(token) > 255 || !completeAfterToken(rest) {
+	if len(token) == 0 || len(token) > max || !completeAfterToken(rest) {
 		return nil
 	}
 	return token

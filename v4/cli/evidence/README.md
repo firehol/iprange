@@ -87,9 +87,14 @@ against the rotated files, not repairs.  The race probes execute from
 their own scratch directories, so the battery creates no
 repository-root scratch.
 
-Matrices and corpus.  `v4/cli/cases/` holds 74 case files, and the
-committed matrix reports were generated over all 71 at the revision under
-test, closing the 63-versus-71 disclosure of earlier waves.  The eight
+Matrices and corpus.  `v4/cli/cases/` holds 74 case files: the 71 the
+committed matrix reports were generated over at the revision under test
+(closing the 63-versus-71 disclosure of earlier waves), plus the three
+publication cases this gate-fix wave adds
+(`publish.dns_overflow_batch`, `publish.legacy_lexical_forms`,
+`publish.binary_v6_full_range`); the rotation battery regenerates the
+matrix reports over all 74, and the kind gate treats that lag as the
+designed pre-rotation condition (report behind tree only).  The eight
 cases added after the first 63 are the two feed outcome cases, the four
 `maintenance.roundtrip.*` cases, and the two `params.negative.budget_*`
 cases named below.  Expectations are written

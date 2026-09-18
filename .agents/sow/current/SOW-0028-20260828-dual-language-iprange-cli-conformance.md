@@ -17477,7 +17477,14 @@ Product (P1-1/P1-2/P1-3), both engines, Rust first, same-shape Go:
   smoke-proven at G). Host-dependent answer counts are `$ignore`d by
   design (the detection is publication success itself; pinning counts
   would encode /etc/hosts — the same reasoning as
-  tests/legacy_dns_bookkeeping.rs).
+  tests/legacy_dns_bookkeeping.rs). Assumption stated (portability
+  round-9): the two hostname-consuming cases require `localhost` to
+  answer at least one IPv4 address on the qualification host; that
+  holds on the Linux battery host (NSS files, /etc/hosts) and is
+  natively attested on the authorized Windows host (leg 26f
+  `localhost_resolves_to_127_0_0_1_in_v4` ok), and an unresolvable
+  name fails identically on both engines through the bounded resolver
+  retry path — never a hang, never a silent pass.
 - Suite state at G: Go `go test ./... -count=1` all green; Rust
   `cargo test --all-features` 1046 passed / 0 failed (1043 + the 3 new
   pins).
@@ -17540,3 +17547,33 @@ consensus, and both harness reports re-execute at the G revision) ->
 closure battery at the G revision (single full sweep, one parity
 name, all evidence rotated together) -> astra re-review in session
 `ea962c0a1a874e67bdcce924ec265541` -> push.
+
+### Lead addenda inside the same review window (round 9)
+
+1. Family-specific hostname token cap (parity of my own finding): the
+   streaming `hostname_token`/`hostnameToken` accepted up to 255 bytes
+   in BOTH families, while the authoritative legacy buffers differ by
+   family — C `MAX_INPUT_ELEMENT` 255 for IPv4 (src/ipset_dns.c:3) and
+   `MAX_INPUT_ELEMENT6` 256 for IPv6 (src/ipset6_load.h:6), mirrored by
+   legacy/parse.rs `MAX_TOKEN`/`MAX_TOKEN6`. A 256-byte name is valid
+   IPv6-mode legacy input, so the streaming adapter now refuses only
+   >255 in v4 mode and >256 in v6 mode; the Rust and Go lexer pins
+   carry the 256-accept/257-refuse boundary in both families.
+2. Tamper-side of the attempt-fold rule (closes performance P3
+   boundary): `verify_pressure_report` now refuses a cell whose
+   `attempt_verdicts` disagree while its folded verdict does not say
+   `disagreement` — the fold writes disagreement exactly when the
+   attempts disagree, so the two cannot coexist by production. Control
+   added; parity self-test 69 -> 70.
+3. Bundle hygiene after portability round-9 F1 (accepted, fixed):
+   `.local/w1926g-qualification/corpus.log` re-captured against
+   canonical-recipe binaries built from the committed tree (digests and
+   recipes in `BUNDLE-PROVENANCE.md`; the earlier capture ran against
+   F-era `/tmp/opencode/wsbin` binaries — a bundle-hygiene defect, not
+   a product one; the role's own rebuild proved the fixes live in the
+   G source). The bundle now records each capture's rc and the designed
+   filtered-matrix FAIL lines. Portability P3s closed: the localhost
+   assumption is stated above; the Go rebuild recipe is stated next to
+   the digests. Performance P3s: drained-array retention documented in
+   the code comments as bounded amortization (not a leak); battery
+   cost prose below names the measurement basis for both figures.
