@@ -17256,3 +17256,126 @@ operations r7 P3s (all builder-claim hygiene, pinned==staged preserved
 mid-round): built_from to name default CARGO_HOME; attestation row to
 carry the verbatim sh -c recipe; explicit CGO_ENABLED=0 prefix on the
 rpc-signals step.
+
+Commit F: 38aea8fc "v4: Windows portability repairs and DNS
+numeric-form platform scoping (chunk W)" — 53 files, working tree
+clean, signed. Pre-F gates: check-source-graph clean (521 sources /
+4 targets / 1 fixture), cargo test 1043 green. F batch applied the
+consolidated builder queue to the pinned generators (pinned==staged
+md5-proven), ran one timed pass (28x0 + designed 1x1), rebuilt the
+manifest mechanically; kit anchor a2ae822d168432bd… supersedes
+ab3429ed…. Round 9 (consistency confirmation of the F stamp) is the
+gate's precondition; then Windows leg, battery, evidence filing, astra,
+push.
+
+## Native Windows leg at F (precondition 2) — complete
+
+Leg 26f executed on the authorized Windows validation host from a fresh
+detached checkout of published commit F (38aea8fc, tree 8f977554… equal
+to the workstation tree, porcelain empty; bundle "records a complete
+history"). Transferred inputs pinned by SHA-256 (snapshot-manifest
+rewritten to hash COMMIT BLOBS — two fixes landed while the leg was
+running: the manifest had used post-commit worktree digests for the SOW
+file, and the verifier's 53 per-file `git cat-file` spawns hit the
+host's DLL-init flake (0xC0000142), so it now hashes everything in one
+batched process; verified locally against the same commit).
+
+Scored invocation: 36 steps, **zero red, zero flakes** — every step
+green on attempt one. The previous invocation recorded the transient
+`go-vet` host flake (rc 0xC0000142 at attempt 1, green at attempt 2)
+with flake=yes and the reason in flake-reasons.tsv; the fail-closed
+contract correctly aborted that report leg, and the re-run was scored.
+Both Windows reports authored natively at 38aea8fc with the 53-file
+changed_files manifest, verified against the win/ ledger on the host,
+and privacy-gated (zero operator-path hits, host-side gate rc 0). The
+`cross-engine-numeric` consensus step ran green (rust rc 1 / go rc 1,
+stdout byte-identical: both refuse the hex form, so the round-5
+dns_numeric scoping holds natively on Windows); the Rust hex pin
+compiled to zero tests by construction (`running 0 tests`, cited in the
+report rather than omitted); windows_judgment 6/6; the pin tally file
+exists and is empty (all scored, unprivileged leg). Reports installed
+to `v4/cli/evidence/`; the six win/ artifacts restaged into the shared
+ledger (11 entries, `sha256sum -c` all OK) so the closure battery's
+Windows-verifier steps attest real bytes.
+
+## Closure battery (precondition 3) — first full-tier run, one real bug found
+
+The wave's full-tier battery ran pooled at 12 jobs: 321 steps checked,
+**206.5 s wall** — the "~65 minute" pre-pool cost estimate is obsolete
+and replaced by this measurement (plus the fix's extra sweep, ~1 min).
+Everything green except two matched kind-gate MISMATCHes, which turned
+out to be a real battery defect, not an evidence defect: at
+--tier full the [9c] step created `refusal-class-parity-full.json` by
+`cp` of the byte-identical regular report, so the manifest carried two
+entries for the same consumed class sharing ONE content digest — and
+the kind gate correctly refused it ("for a class discovered by file
+name, the attested name and the consumed name must be one name"). The
+gate was right: the manifest attested a second file name for bytes it
+had already attested under the first name, so the full-axis artifact
+was not independently produced by anything. Fix (battery,
+lead-owned tooling): [9c] now runs its OWN ledger-bound sweep at
+`--pressure full` into the full name (distinct content: its own
+provenance command path, timing), and the [9b] regular report keeps its
+own sweep. Re-run pending at relaunch; the manifest must then carry two
+distinct refusal-class-parity digests and both kind-gate steps must go
+rc 0 (precondition 1's mechanical proof).
+
+Also confirmed by the run: the revision invariant now holds by
+construction — Windows reports (authored natively at 38aea8fc), the
+rotated Linux reports (harness-recorded HEAD 38aea8fc), and the
+manifest (revision 38aea8fc) agree because the battery ran with the
+work tree exactly at that commit; the two Windows verifier steps went
+rc 0 attesting real staged win/ bytes, and the ledger bound 11/11 with
+0 problems. The earlier 65-min-then-abort cycle taught the sequencing
+rule: the battery must run at HEAD == the revision all reports must
+name, and the report commit is created only after the battery is green.
+
+## Battery re-run at F — green; evidence filing (preconditions 1, 3, 4)
+
+Re-run of the fixed battery (script sha256
+`6c593beb26aa181bc9a29f437d34bc03b42386c0c8d146e353f3a46975ce781f`,
+140,668 B) with the work tree exactly at F: 321 steps checked, **0
+mismatches, 1 deferral** (the two Windows reports — deferred to the
+native leg, which had already installed them at 38aea8fc), 319.9 s
+wall. Both kind-gate passes rc 0: [10f] over the fresh reports with the
+emitted manifest, [10r] over the rotated committed set, self-test 133
+rejection + 5 acceptance controls. The manifest (`eb26933b…`, installed
+as `v4/cli/evidence/battery-manifest.json`) binds 20 reports plus two
+DISTINCT refusal-class-parity digests to git head
+`38aea8fc5777d1cf985ab2e53e7a66e503f59469` — precondition 1's
+mechanical proof. Ledger re-verified 11/11; forgery battery PASS on
+genuine evidence; GOOS matrix 19/1 (dragonfly/arm64 unsupported by the
+installed toolchain); tests.d 121 groups x both engines; coverage green;
+`LINUX_PIN_TALLY unscoped=0`; the [3b] warning gate green.
+
+Evidence-filing commit (the signed child of F carrying this record,
+25 files): the rotated evidence set, the two native Windows reports,
+the re-committed battery manifest, and the `v4/cli/evidence/README.md` rewrite from the
+F artifacts (present-state prose: battery outcome, unit suites,
+coverage, toolchain/staging/identity with the battery-staged Linux
+digests and the six Windows digests, the revision-naming paragraph, the
+two-sweep parity note; historical wave sections keep their then-current
+figures — precondition 4).
+
+Restage disclosure (kit narrative): the battery's clean-staging rebuild
+re-staged `.local/shared/binaries` to environment-bound digests, so the
+frozen kit manifest `a2ae822d…` describes PRE-battery staging; the
+committed `battery-manifest.json` is F's authority. The kit is scratch
+evidence and was not re-stamped.
+
+## Astra milestone-gate control — handoff and gate record (precondition 5)
+
+Handoff note (REVIEWS.md astra identity rule): the prior external
+control session for this SOW was `4ffb1eb136144296b1f60bd7a69d3903`
+(its last recorded turn 5 at `acccd0e9` returned NEEDS CHANGES — five
+findings, all repaired and re-qualified in wave 19.17). This lead
+session is new, so a NEW astra session is started for the milestone-4
+gate; this paragraph is the required handoff record.
+
+Gate at F: the delta presented to astra is commits `7c2d2cf7`,
+`8e354ac9`, `38aea8fc`, `3e7f04df` over `origin/master` `271be2d9`,
+with the F artifacts (`v4/cli/evidence/` at `3e7f04df`, battery
+manifest `eb26933b…` binding revision `38aea8fc…`, SOW records,
+`.local/shared/status.md` round log). Astra verdict recorded in
+`.local/astra-verdicts.md` (outside the commit trail, standing P3
+note); no repository commit follows the gate's PASS.

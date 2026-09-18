@@ -3,15 +3,15 @@
  "command": [
   "v4/cli/throughput_harness.py",
   "--rust",
-  "/tmp/iprange-w1925/bin/rust/iprange",
+  "/tmp/iprange-w1926f2/bin/rust/iprange",
   "--go",
-  "/tmp/iprange-w1925/bin/go/iprange",
+  "/tmp/iprange-w1926f2/bin/go/iprange",
   "--work",
-  "/tmp/iprange-w1925/W-thruput",
+  "/tmp/iprange-w1926f2/W-thruput",
   "--json-report",
-  "/tmp/iprange-w1925/reports/throughput.json"
+  "/tmp/iprange-w1926f2/reports/throughput.json"
  ],
- "git_head": "7c2d2cf710db4a29661317ad1b1ffc8fdd823320",
+ "git_head": "38aea8fc5777d1cf985ab2e53e7a66e503f59469",
  "method": {
   "burst_frames": 30,
   "note": "attestation, not a threshold: absolute rate is host load dependent, so the gate is that all replies are served, the child exits cleanly, and the thread count is constant in the request count",
@@ -31,7 +31,7 @@
   "machine": "x86_64",
   "processor": "",
   "python": "3.14.7",
-  "release": "7.1.9-1-MANJARO",
+  "release": "7.1.13-2-MANJARO",
   "system": "Linux"
  },
  "privacy": {
@@ -48,84 +48,84 @@
  "product": {
   "go": {
    "implementation": "go",
-   "median_replies_per_s": 17356.8,
-   "path": "/tmp/iprange-w1925/bin/go/iprange",
+   "median_replies_per_s": 15394.0,
+   "path": "/tmp/iprange-w1926f2/bin/go/iprange",
    "rounds": [
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 17342.8,
+     "replies_per_s": 10595.5,
      "requests": 10000,
      "round": 0,
-     "seconds": 0.5766
+     "seconds": 0.9438
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 17586.1,
+     "replies_per_s": 15394.0,
      "requests": 10000,
      "round": 1,
-     "seconds": 0.5686
+     "seconds": 0.6496
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 17356.8,
+     "replies_per_s": 17105.2,
      "requests": 10000,
      "round": 2,
-     "seconds": 0.5761
+     "seconds": 0.5846
     }
    ],
-   "sha256": "c315b71ba9253d697284e23ad63dbebc8ab9d153ee711ebe130aa20b9c159c5a",
+   "sha256": "8a3a45a80b9bbafbde24246af71466c2cf93bb6c90c064d93643ad76d7bb12ce",
    "thread_structure": {
     "large": {
      "clone_syscalls": 17,
      "exit_status": 0,
      "replies": 6000,
      "requests": 6000,
-     "unique_child_tids": 12
+     "unique_child_tids": 13
     },
     "small": {
-     "clone_syscalls": 16,
+     "clone_syscalls": 17,
      "exit_status": 0,
      "replies": 3000,
      "requests": 3000,
-     "unique_child_tids": 13
+     "unique_child_tids": 11
     },
     "tool": "/usr/bin/strace"
    }
   },
   "rust": {
    "implementation": "rust",
-   "median_replies_per_s": 53732.3,
-   "path": "/tmp/iprange-w1925/bin/rust/iprange",
+   "median_replies_per_s": 45751.7,
+   "path": "/tmp/iprange-w1926f2/bin/rust/iprange",
    "rounds": [
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 53732.3,
+     "replies_per_s": 44010.1,
      "requests": 10000,
      "round": 0,
-     "seconds": 0.1861
+     "seconds": 0.2272
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 58760.0,
+     "replies_per_s": 45751.7,
      "requests": 10000,
      "round": 1,
-     "seconds": 0.1702
+     "seconds": 0.2186
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 52885.9,
+     "replies_per_s": 53368.4,
      "requests": 10000,
      "round": 2,
-     "seconds": 0.1891
+     "seconds": 0.1874
     }
    ],
-   "sha256": "e57ebc06cfc69b3eaa114acde38cb5bb23d20a77fbcd0cd562b57288841a3b17",
+   "sha256": "0142338a00e6bd32427fec468a9a03e759f214e31fcb3d73e8165b2146db8626",
    "thread_structure": {
     "large": {
      "clone_syscalls": 4,

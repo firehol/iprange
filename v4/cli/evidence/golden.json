@@ -5,7 +5,7 @@
  "command": [
   "v4/cli/check_golden.py",
   "--json-report",
-  "/tmp/iprange-w1925/reports/golden.json"
+  "/tmp/iprange-w1926f2/reports/golden.json"
  ],
  "covered_methods": [
   "iprange.v1.algebra.compare",
@@ -62,7 +62,7 @@
   "iprange.v1.system.describe",
   "iprange.v1.validate"
  ],
- "git_head": "7c2d2cf710db4a29661317ad1b1ffc8fdd823320",
+ "git_head": "38aea8fc5777d1cf985ab2e53e7a66e503f59469",
  "golden_exchanges": 55,
  "golden_files": 10,
  "privacy": {

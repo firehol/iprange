@@ -10,11 +10,11 @@
  "command": [
   "v4/cli/command_sanitize.py",
   "--emit-build-ids",
-  "/tmp/iprange-w1925/reports/build-ids.json",
+  "/tmp/iprange-w1926f2/reports/build-ids.json",
   "--built-cli",
-  "/tmp/iprange-w1925/rust-target/release/iprange",
+  "/tmp/iprange-w1926f2/rust-target/release/iprange",
   "--built-worker",
-  "/tmp/iprange-w1925/rust-target/release/iprange-v4-worker"
+  "/tmp/iprange-w1926f2/rust-target/release/iprange-v4-worker"
  ],
  "expected_build_id": {
   "darwin": "66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d",
@@ -22,7 +22,7 @@
   "linux": "66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d",
   "windows": "66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d"
  },
- "git_head": "7c2d2cf710db4a29661317ad1b1ffc8fdd823320",
+ "git_head": "38aea8fc5777d1cf985ab2e53e7a66e503f59469",
  "inputs": {
   "manifest": "Cargo.toml",
   "source_files": 357
@@ -50,7 +50,7 @@
  "schema": "iprange-cli-build-ids-v1",
  "source_state": {
   "note": "the value is a pure function of iprange-livedb's Cargo.toml and src/**.rs content; any change under that package regenerates it. Regenerate this file whenever the package changes and never hand-edit a digest.",
-  "revision": "7c2d2cf710db4a29661317ad1b1ffc8fdd823320"
+  "revision": "38aea8fc5777d1cf985ab2e53e7a66e503f59469"
  },
  "verified_against_built_products": {
   "cli_contains_expected": true,

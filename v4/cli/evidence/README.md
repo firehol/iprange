@@ -1,35 +1,38 @@
 Every measurement report in this directory records its own provenance,
 and reading that provenance is the only way to know what a committed
-artifact measures.  As of this writing the set is mid-rotation for the
-milestone-4 close-out: the twenty Linux-side artifacts (measurement
-reports, `coverage-go.json`, `build-ids.json`, and the manifest) carry
-`git_head` `7c2d2cf710db4a29661317ad1b1ffc8fdd823320`, and the two Windows reports
-carry `e1f326df56631e6b9d84a617c6584b59c7e50f0a`, the throwaway
-qualification-content snapshot (chunk sources + working-tree repairs, not
-a project commit) that the native leg built from a clean detached
-checkout on the authorized Windows validation host.  The two Windows
-reports embed a `build_provenance` record naming that revision, the
-toolchain lines, the per-step attempt history, and the native test
-tallies.  The committed `battery-manifest.json` carries
-`git_head 7c2d2cf7…` but its ledger digests bind the earlier rotation's
-bytes (its two Windows entries match the pre-repair leaky reports, and it
-names `crash-rust_to_go.json`/`crash-negative-consumer-false.json` which
-do not exist on disk); it is a known-stale artifact that the closure
-battery rebuilds from disk at the final revision F, and
-the kind gate (`check_kind_coverage.py`) refuses any set whose reports do
-not agree on one revision — the interim mixed state is the designed
-intermediate, never a committable final.  That binding is what
-the kind gate consumes.  Against the previously fully-qualified revision
-`2c788b8e`, this set's revisions DO change engine sources — the legacy
-parse/DNS paths of `v4/rust/iprange-cli` and `v4/go/internal/cli/legacy`
-(the Windows-portability repairs and the round-1 DNS numeric-form
-scoping), plus the `v4/cli` gates and records.  What carries over is the
-**worker-handshake build identity only**: `build-ids.json` covers
-`iprange-livedb/src` inputs, and no file under that directory changed
-between `7c2d2cf7` and `e1f326df` (nor in the round-1 fixes, which touch
-only `iprange-cli` test code, Go, and gates), so the identity block below
-still describes every artifact in the set.  The closure battery at the
-final revision re-derives all of it from one tree.
+artifact measures.  The set is now a completed rotation: all twenty
+measurement reports, `build-ids.json`, and `battery-manifest.json` carry
+`git_head` `38aea8fc5777d1cf985ab2e53e7a66e503f59469` — the committed
+chunk-W revision — because the wave-19.26 full-tier closure battery ran
+with the work tree checked out at exactly that commit and the two
+Windows reports were authored natively on the authorized validation host
+from a fresh detached checkout of the same published commit (transferred
+as a complete-history git bundle; tree `8f977554212f952fa8df83f943684e1c606aa9ee`
+equal to the qualification workstation's, `git status --porcelain` empty
+before and after; the fifty-three files the commit changes against its
+parent are pinned in the reports by commit-blob SHA-256).  The earlier
+mid-rotation state (Linux reports at `7c2d2cf7`, Windows reports at the
+throwaway snapshot, a manifest binding zero live files) is what the kind
+gate (`check_kind_coverage.py`) refuses, and the manifest — emitted by
+that same gate over the fresh reports and promoted through the shared
+committed-report writer — is what makes relabelling detectable without
+trusting the producing machine: it binds every report by role, byte
+length, content SHA-256, and revision, plus the eleven-entry staged
+binary ledger by digest.  Both kind-gate passes (fresh and committed,
+after rotation) returned rc 0 at this revision, and the manifest lists
+two distinct `refusal-class-parity` digests: the routine axis and the
+milestone full axis are independent ledger-bound sweeps, not copies —
+identical bytes under two names is exactly what the gate refuses.
+Against the previously fully-qualified revision `2c788b8e`, this set's
+revisions DO change engine sources — the legacy parse/DNS paths of
+`v4/rust/iprange-cli` and `v4/go/internal/cli/legacy` (the
+Windows-portability repairs, the DNS numeric-form platform scoping with
+its cross-language effective-build-set gate, and the android/bionic
+umbrella correction) — plus the `v4/cli` gates and records.  What
+carries over is the **worker-handshake build identity**: `build-ids.json`
+hashes only `iprange-livedb` inputs, and none changed since `7c2d2cf7`,
+so the identity below names the same digest for every artifact in the
+set.
 
 Rotation contract.  No report here is authored by hand and none is
 expected to be edited in place.  The qualification battery builds the
@@ -50,28 +53,34 @@ qualification surface: gates, corpus, evidence identity, toolchain and
 binary provenance.
 
 Battery outcome at the revision the committed reports describe.  Every
-step of the Linux qualification battery
-(`/tmp/qualsvc/battery-w1925.sh`, script SHA-256
-`38830d8633a4fc3f3ab5824f3743cc9e0e659f7c69d26a022de779fa5f2e7b94`,
-78,128 bytes, run under `nice` through the self-identifying launcher,
+step of the wave-19.26 full-tier closure battery
+(`/tmp/qualsvc/battery-w1926.sh`, script SHA-256
+`6c593beb26aa181bc9a29f437d34bc03b42386c0c8d146e353f3a46975ce781f`,
+140,668 bytes, run under `nice` through the self-identifying launcher,
 whose first console-log action is the SHA-256 of the exact bytes about to
-execute) recorded rc 0 on its first attempt: builds, both unit suites,
-the GOOS cross-compilation matrix (15 steps ran, 1 skipped as unsupported
-by the toolchain), the four matrices, the crash battery in both mixed
-directions and its two `/usr/bin/false` negatives, the resource and
-throughput proofs with their self-tests, golden, sensitivity, the
-refusal-class parity gate with its routine pressure axis, the POSIX
-guard, the FIFO surface gate, the committed swap-race battery replay,
-`tests.d` for both engines, the ledger reconciliation, the kind gate on
-fresh and on committed reports, the forgery battery, and the coverage
-harness.  The console recorded 75 checked steps, 0 mismatches, and 1
-deferral: the rotation of the two Windows reports, which the native
-Windows leg owns — it authored them on the same revision, and the Linux
-leg refuses to restate an artifact it did not measure.  The
-`recheck-*` logs present in the battery reports directory are the kind
-gate's deliberate second pass against the rotated files, not repairs.
-The race probes execute from their own scratch directories, so the
-battery creates no repository-root scratch.
+execute) recorded rc 0 on its first attempt: clean-staging builds of
+both engines from the checked-out revision, both unit suites, the Rust
+warning gate, the GOOS cross-compilation matrix (19 steps ran, 1 skipped
+as unsupported by the toolchain), the four matrices, the crash battery
+in both mixed directions and its two `/usr/bin/false` negatives, the
+resource and throughput proofs with their self-tests, golden,
+sensitivity, the refusal-class parity gate on BOTH pressure axes (the
+routine 108-cell subset and the 378-cell milestone sweep, each its own
+ledger-bound run with its own committed name and manifest digest), the
+POSIX guard, the FIFO surface gate, the committed swap-race battery
+replay, `tests.d` for both engines (121 of 121 groups green per engine),
+the ledger reconciliation, the kind gate on fresh and on committed
+reports, the forgery battery, and the coverage harness.  The console
+recorded 321 checked steps, 0 mismatches, and 1 deferral: the rotation
+of the two Windows reports, which the native Windows leg owns — it
+authored them on the same revision, and the Linux leg refuses to restate
+an artifact it did not measure.  Wall time: 319.9 s at pooled 12 jobs
+(the pre-pool serial estimate of ~65 minutes is obsolete; the milestone
+pressure sweep alone is ~100 s of it).  The `recheck-*` logs present in
+the battery reports directory are the kind gate's deliberate second pass
+against the rotated files, not repairs.  The race probes execute from
+their own scratch directories, so the battery creates no
+repository-root scratch.
 
 Matrices and corpus.  `v4/cli/cases/` holds 71 case files, and the
 committed matrix reports were generated over all 71 at the revision under
@@ -127,20 +136,26 @@ Message text is not compared because it is a human diagnostic and the
 machine contract is the code and outcome.  Every attempt runs
 under its own bounded deadline (4 s) and a differing repeat is retried
 (2 retries), so a flake is counted apart from a divergence and a hang
-apart from both.  Budget: 55 s per run; measured 34.2 s for the full
-grid on both engines.  `evidence/refusal-class-parity.json` carries each
+apart from both.  Budget: 55 s per grid; measured 7.9 s with the pooled
+grid runner (12 jobs) — the milestone pressure axis runs beside the
+grid and reports its own `pressure.elapsed_seconds` (101.2 s / 99.9 s
+for the two committed sweeps).  `evidence/refusal-class-parity.json` carries each
 binary's SHA-256 and `system.describe` implementation label plus
 `git_head`.  The verdict is two-layer on purpose: the report must first
 describe its own execution honestly (cell count against the derived
 grid, every disagreeing cell named in the divergences list, no cell
 claiming agreement with differing answers), and the contract term is
 applied on top — zero divergences, no unanswered cell, no flaky cell,
-every pinned refusal satisfied.  Committed result in
-`refusal-class-parity.json` at its recorded `git_head`: 483/483 cells
-executed, 0 divergences, 0 hangs, 0 flaky, 36/36 pinned refusals
-satisfied, verdict PASS, plus 108/108 routine pressure cells with 0
-blocked, 0 missing, and 0 vacuous.  The 418-cell/29-pin state recorded in
-earlier waves is closed by this rotation.  `--self-test`
+every pinned refusal satisfied.  Committed result in both
+`refusal-class-parity.json` and `refusal-class-parity-full.json` at
+their recorded `git_head`: 483/483 cells executed, 0 divergences, 0
+hangs, 0 flaky, 36/36 pinned refusals satisfied, verdict PASS, plus
+378/378 pressure cells (all 42 milestone profiles) with 0 blocked, 0
+missing, and 0 vacuous.  The two artifacts are independent
+ledger-bound sweeps of the same grid at the same revision — each with
+its own content digest in `battery-manifest.json`, because the kind
+gate refuses one digest carried under two names.  The 418-cell/29-pin
+state recorded in earlier waves is closed by this rotation.  `--self-test`
 (66 controls, pinned by `SELF_TEST_CASES_TOTAL`, offline)
 includes the three anchors this gate exists to provide: an injected
 synthetic divergence must FAIL, a report with zero executed cells must
@@ -196,12 +211,12 @@ census 13/10) and rust median 59,014.0 replies/s (rounds 59,014.0 /
 Coverage (measured, not asserted).  `evidence/coverage-go.json`, produced
 by `v4/cli/coverage_harness.py`, records unit and corpus-driven
 integration coverage of the Go module.  At this revision (instrumented
-build of the `2c788b8e` working tree, `go version go1.27.0
-linux/amd64`, covermode `atomic`): unit 27,875/57,401 statements =
-48.56%, 3,886/5,943 functions = 65.39%, 18,960/42,025 blocks = 45.12%;
-corpus-driven integration 22,287/53,982 = 41.29%, 3,453/5,731 = 60.25%,
-14,829/39,695 = 37.36%; merged 34,482/57,413 = 60.06%, 4,797/5,944 =
-80.70%, 23,286/42,032 = 55.40%.  The closure policy this serves is:
+build of the `38aea8fc` working tree, `go version go1.27.0
+linux/amd64`, covermode `atomic`): unit 28,154/57,481 statements =
+48.98%, 3,906/5,954 functions = 65.60%, 19,122/42,077 blocks = 45.45%;
+corpus-driven integration 22,286/54,062 = 41.22%, 3,453/5,742 = 60.14%,
+14,828/39,747 = 37.31%; merged 34,760/57,493 = 60.46%, 4,817/5,955 =
+80.89%, 23,447/42,084 = 55.71%.  The closure policy this serves is:
 committed detecting tests, a mutation/forgery battery that proves the
 gates reject bad evidence, and measured unit AND integration coverage —
 with no arbitrary numeric floor, because a percentage is an input to
@@ -212,7 +227,7 @@ or performance attestation, and killed runs (the crash battery kills its
 children, and a killed Go coverage binary writes no counter block) are
 never merged into the coverage evidence — only complete matrix runs
 contribute (each recorded matrix run shows `rc 0` or the contract's
-`rc 1` with all 34/0/29 tallies intact).  `run.py` forwards
+`rc 1` with its full 71/0/0 or 40/0/31 tallies intact).  `run.py` forwards
 `GOCOVERDIR` to the child only because the harness sets it; the
 allowlist entry adds no child state to an ordinary qualification run.
 The harness self-test (14 cases) includes a source pin requiring every
@@ -220,12 +235,15 @@ recorded `command` field to pass through the shared sanitizer, and the
 committed artifact records `v4/cli/run.py` checkout-relatively — no
 report in this directory records an operator home path.
 
-Unit suites.  `go test ./... -count=1` over `v4/go`: 24 packages ok, 8
-with no test files, 0 failures.  `cargo test` over the Rust workspace:
-961 tests passed across 52 suites, 0 failed, from a fresh
-`CARGO_TARGET_DIR`.  `tests.d` (the legacy-compatible suite, run against
-each staged engine): 102 of 102 tests pass for both engines, including
-the wave's new `102-legacy-fifo-input` case, which proves each of
+Unit suites.  `go test ./... -count=1` over `v4/go` (canonical
+`CGO_ENABLED=0`): 25 packages ok, 7 with no test files, 0 failures.
+`cargo test` over the Rust workspace: 1,043 tests passed across 63
+suites, 0 failed, from a fresh `CARGO_TARGET_DIR` with the warning gate
+rc 0 and the Linux pin tally exported and empty (0 UNSCORED lines: every
+platform-gated pin scored on this host).  `tests.d` (the legacy-compatible suite, run against
+each staged engine): 121 of 121 groups pass for both engines, including
+`121-legacy-fifo-input` (renamed from `102-` when parallel suite groups
+were added), which proves each of
 C, Rust and Go waits for a delayed FIFO producer, consumes its
 addresses, and finishes under a bounded `timeout` — the legacy stream
 input contract is preserved, and the regular-file requirements are
@@ -240,52 +258,72 @@ Toolchain, staging, and binary identities.  Linux:
 host `x86_64-unknown-linux-gnu`, LLVM 21.1.2; harness interpreter
 CPython 3.14.7 on Linux 7.1.9-1-MANJARO x86_64.  The Go products were
 built `CGO_ENABLED=0 -trimpath -buildvcs=false` from a clean staging
-copy at `/tmp/iprange-w1925/go-stage`, so they embed neither local
-paths nor a VCS revision and their digests are layout-independent.  The
-Rust products were built `--release --all-features --bins --examples`
-from the fixed staging path `/tmp/iprange-w1925/rust-stage` with
-`CARGO_TARGET_DIR=/tmp/iprange-w1925/rust-target` and a repository-local
-`CARGO_HOME`, then copied to the qualification paths recorded in each
-report; the two non-worker Rust binaries embed those staging and
-registry source paths, so their digests are environment-bound artifacts
-that are reproducible only with that staging layout, while the Rust
-worker binary carries no such paths.  Linux identities (SHA-256):
-go `iprange` `bb5e30e03d50d65f4b763821a3417b8a58e4a71187404d63b5740d93fd03b787`,
-go worker `f4a81b62774772d60c63712c9aa14041fd742986ecada81d7384a23bdb92b070`,
-rust `iprange` `8ea6aab30753b071d4f21c4669b44f5ac0ac9539d6a409f7f0659b6b0c2d51ac`,
-rust worker `269f56b911440794b4a9c4b091fc0cc4af9ba36eb74ce30153b4b0e1eb4d08e0`,
-v4-fixture `50f7465ca5f71fcebce85ff6b9ed32957bcb6a259489830c2b86ff93991b94bf`.
-The host-invariant engine build identity for this set's revisions is
-`66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d`
+copy at `/tmp/iprange-w1926f2/go-stage`, so they embed neither local
+paths nor a VCS revision and their digests are layout-independent: a
+`CGO_ENABLED=0` rebuild of the source commit reproduces them byte for
+byte on any host.  The Rust products were built `--release
+--all-features --bins --examples` from the fixed staging path
+`/tmp/iprange-w1926f2/rust-stage` with a fresh
+`CARGO_TARGET_DIR=/tmp/iprange-w1926f2/rust-target` and the
+repository-local `CARGO_HOME` under `.local/int-prep`, then copied to
+the qualification paths recorded in each report; the non-worker Rust
+binaries embed staging and registry source paths, so their digests are
+environment-bound artifacts reproducible only with that staging layout
+and that CARGO_HOME, while the Rust worker binary carries no such
+paths.  This is why the Linux identities below differ from the
+round-5 kit-staged pair (`436b1e9c…`): the battery's clean staging is a
+different environment for the path-embedding binaries, not a different
+build — the same source, the same recipe, the same build identity, and
+each artifact is identified by digest in the ledger, never by name
+alone.  Linux identities (SHA-256):
+go `iprange` `8a3a45a80b9bbafbde24246af71466c2cf93bb6c90c064d93643ad76d7bb12ce`,
+go worker `c744e02fd72a8d5dddb5999bfca992e4d72d46b72afed3f7d829b8901e028a84`,
+rust `iprange` `0142338a00e6bd32427fec468a9a03e759f214e31fcb3d73e8165b2146db8626`,
+rust worker `8f81ec8328a195f30b7dabc3771e8d52a4a3deb7390653e231673a93c698d4a8`,
+v4-fixture `77e0970e1e992578aac01d8c522348d79907a2a94e14d98b26fb23849b094ac3`.
+The host-invariant engine build identity for every artifact in this set
+is `66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d`
 (computed by `v4/rust/iprange-livedb/build.rs` over the package manifest
 and 357 source files with the host-invariant logical-name algorithm, so
-one source state has one identity across hosts; the native leg verified
-it verbatim in the bytes of both built Rust products and equal across
-the four `build-ids.json` platform entries).  It differs from the
-previously qualified `a72ae911a0abe0a22f7dbf2adb1380f5d4cebb736bdb555d
-dedd94ee67efa94` because the rotation's revisions changed `v4/rust` and
-`v4/go` sources; the identity re-derives at the final revision.  The
-staged ledger
+one source state has one identity across hosts; `--emit-build-ids`
+recomputed it at the rotation and found it verbatim in the bytes of the
+battery's built Rust products, equal across the four
+`build-ids.json` platform entries; the native Windows leg verified the
+same digest in both of its built products).  `iprange-livedb` has not
+changed since `7c2d2cf7`, which is why the identity survived every
+chunk-W revision; the previously qualified `a72ae911…` changed at that
+point (`worker/client.rs`), not here.  The staged ledger
 `.local/shared/binaries/SHASUMS.txt` lists 11 members (5 Linux, 6
 Windows: `win/go/*.{2 exes}`, `win/rust/*.{2 exes}`,
-`win/v4-fixture.exe`, `win/fixture-w1924b.iprange`) and verified 11/11
-OK, including after the Windows artifacts below were rotated in.
+`win/v4-fixture.exe`, `win/fixture-w1924b.iprange`) and verifies 11/11
+OK, including the Windows artifacts installed from the native leg
+below.
 
 Windows status.  Native Windows re-qualification ran on the authorized
-Windows validation host from a checkout detached at the revision under
-test with `git status --porcelain` empty — advanced from the previously
-qualified revision by a git bundle transfer (rsync and scp/sftp are
-unavailable on that host), and the three files differing between the two
-revisions were verified byte-identical to the qualification
-workstation's copy of the same commit, so the Linux and Windows evidence
-describe one source.  Host toolchains: `go version go1.26.5
+Windows validation host from a fresh clone of a git bundle transferred
+over ssh with `cat` (rsync and scp/sftp are unavailable on that host),
+detached at the published revision under test with `git status
+--porcelain` empty before and after; the bundle verifies as recording a
+complete history, and the checked-out tree object equals the
+qualification workstation's tree for that commit, so tree hashing —
+which covers every tracked file — proves the checkout byte-identical to
+the source the Linux evidence measures.  The 53 files the commit changes
+against its parent (evidence included, by design: the two reports this
+leg authors are its outputs) are each pinned in `build_provenance` by
+the SHA-256 of the COMMIT BLOB, verified in one batched `git cat-file
+--batch` pass — blob digests, so no host checkout configuration can
+break the comparison.  Host toolchains: `go version go1.26.5
 windows/amd64`; `rustc 1.97.1 (8bab26f4f 2026-07-14)` host
 `x86_64-pc-windows-msvc`, LLVM 22.1.6; CPython 3.14.6 (mingw64,
-`os.name=nt`).  The scored driver run recorded 22 steps, each green on
-its first attempt with zero retries; the report's `flake_history`
-discloses the two superseded unscored invocations (one stopped by the
-leg's own missing `./` package-path prefix, one replaced only to correct
-this leg's wording) and isolates their surviving files outside `logs/`.
+`os.name=nt`).  The scored driver run recorded 30 battery steps (36 rows
+total with the report leg) each green on its first attempt, zero red,
+zero retried; `flake_history` and `driver-invocations.log` disclose the
+two unscored invocations that preceded it (one aborted at the
+manifest-verify step when the workstation's manifest carried post-commit
+worktree digests — the manifest now hashes commit blobs; one aborted on
+a transient `go-vet` `STATUS_DLL_INIT_FAILED` whose attempt 2 ran green,
+recorded with flake=yes and the reason in `flake-reasons.tsv`) and
+isolate their surviving files outside the scored `logs/`.
 Native `go test ./... -count=1`: 32 packages — 24 ok, 8 with no test
 files, 0 failures — scored with no concurrent compile, plus the
 maintenance removal round-trip
@@ -293,8 +331,8 @@ maintenance removal round-trip
 separately with `-v`: 4 of 4 PASS rows (the test plus its scratch,
 reservation and publication_temp subtests), and the five wave-19.25
 touched packages each re-run `-v -count=1` rc 0.  Native
-`cargo test -p iprange-cli --no-fail-fast`: 342 passed, 0 failed, 0
-ignored across the three test targets, with the recorded
+`cargo test -p iprange-cli --no-fail-fast`: 350 passed, 0 failed, 0
+ignored across the 13 test targets, with the recorded
 worker-colocation step (copy the release `iprange-v4-worker.exe` into
 `target/debug/deps` after `cargo test --no-run`, which must create that
 directory first — without the colocation the six worker-dependent
@@ -310,40 +348,56 @@ the reader-sidecar pins pass.  All three shared self-tests print
 previous wave found and this revision fixed: on that interpreter
 `os.name == 'nt'` while `os.sep == '/'` and `ntpath.normcase` folds case
 only, and the profile matcher had been comparing two spellings of one
-directory.  `windows-guard.json`: PASS for both products, 50 case keys
-each (44 refusals, 3 allowed controls, 3 facts), `all_ok=true`, fixture
-digest matching the staged database.  `windows-housekeeping.json`: 2
-passed / 0 failed, `windows_qualified=true`, 50 removal-output rows and
-50 removal-log rows per product with a shared log digest
-`96c8ab39679692f3a70afe878681c5217adf75125164d36e9035cd989cb6d328`,
-cross-listing row equality, shared volume identity, zero temp residue.
+directory.  The chunk-W numeric-form scoping is measured natively, not
+carried by tag reading: the `cross-engine-numeric` consensus step fed
+`0x7f000001` to both Windows products and requires rc and stdout to
+agree — both exit 1 with empty stdout, so both refuse the form exactly
+as `dns_numeric_refuse.go` scopes Windows to do; `TestDNSNumericFormsAreNotAnsweredHere`
+executed the refusal half of the shared case table natively green, the
+answering half (`TestDNSNumericFormsMatchC`) and the hex bookkeeping
+cases scoped out with their named reasons (15 recorded SCOPED rows),
+and the Rust hex pin compiled to zero tests by construction — its
+`running 0 tests` line is cited in the report rather than the case
+omitted.  `windows-guard.json`: PASS for both products, 50 case keys
+each (44 refusals, 3 allowed controls, plus the reopen/sidecar/source
+facts), `all_ok=true`, fixture digest matching the staged database.
+`windows-housekeeping.json`: 2 passed / 0 failed, `windows_qualified=true`,
+50 removal-output rows and 50 removal-log rows per product with the
+shared log digest
+`96c8ab39679692f3a70afe878681c5217adf75125164d36e9035cd989cb6d328`
+unchanged across waves, cross-listing row equality, shared volume
+identity, zero temp residue.
 Each report embeds the six Windows artifact digests verified against the
 host builds — go `iprange.exe`
-`bbd37c6341ac30530640d445434e1efb1db6c3cc851808344bc81a034d93d871`,
+`5752f017b675b0611dc9895aae70b7d5faa9609af7981f558bd10c482bca3e5f`,
 go worker `fe961413c803ce89b96b5f1e5ac121f533603af811a79507dcb8eed248b82660`,
-rust `iprange.exe` `535f8e79a64411bd8eac33a6dbce16c5b143fab11639379c2d8a9c5ab2d9eb98`,
-rust worker `eb921b664a0875280c605712f3467a73b4c2d63e234165452d162b00df42a602`,
-fixture tool `cbb07daa9bbc5225c3a7a4026efbc9069e747e100819c3bb229ba927e7c8e2ff`,
-fixture database `22204107eb753c6ae190d37d3927f5306414fdf79cb3047ebb4dc1e48f022d80`
+rust `iprange.exe` `abeecb3b0ad1e92b809be9cd592b16dd71e9e54d6bd480399852df864a8f81b1`,
+rust worker `c9e62a9ce2bc1ec4fe17eec753daa5e369b8fe244e1070267eeabaa653bc2b7a`,
+fixture tool `37819aefc648ceccad221b9e06d8e6bf4f1674fb22e66f098dad0390d3c842c6`,
+fixture database `03da3fde96e014f59d02175fe71702225389817f8cc30f37e2a92b7cc8a38415`
 — plus `build_provenance` with the host toolchain lines, the native
-test tallies, and the build commands.  The two Go Windows digests equal
-the previously staged pair byte-for-byte: `-trimpath -buildvcs=false`
-plus zero `v4/go` source changes make the Windows Go build reproducible,
-so the repeat is the expected result, not a stale file.  Both reports
-are sanitized: no host login name, no personal home path (every drive
-path in either report is under the host's `C:/msys64/tmp/` scratch,
-except the mingw64 interpreter named in the recorded toolchain line,
-`C:/msys64/mingw64/bin/python.exe`), the nodename is
-redacted from the toolchain strings, and `checkout_root` is `null`.
+test tallies, and the build commands.  The Go Windows `iprange.exe`
+digest differs from the previous wave's (`bbd37c63…`) because chunk W
+changed `v4/go` sources (the platform-scoped numeric-form split); the
+worker is unchanged byte-for-byte, and both digests are the ones the
+Linux ledger stages, so the two legs describe one source.  Both reports
+are sanitized: no host login name, no personal home path (the on-host
+privacy gate scans every string in every reading — raw, case-folded,
+separator-folded, MSYS-mount-translated — and refuses any artifact that
+names the operator's profile; its recorded rc 0 step is in the report),
+every drive path is under the host's `C:/msys64/tmp/` scratch except the
+mingw64 interpreter named in the recorded toolchain line, the nodename
+is redacted from the toolchain strings, and `checkout_root` is `null`.
 
-Which reports name which revision.  Twenty measurement reports and
-`battery-manifest.json` in this directory carry
-`git_head=2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1`: the four matrices,
+Which reports name which revision.  Twenty measurement reports,
+`build-ids.json`, and `battery-manifest.json` in this directory carry
+`git_head=38aea8fc5777d1cf985ab2e53e7a66e503f59469`: the four matrices,
 `crash.json`, `crash-go_to_rust.json`, `crash-negative.json`,
 `crash-negative-producer-false.json`, `fifo-surface.json`,
-`throughput.json`, `refusal-class-parity.json`, `coverage-go.json`,
+`throughput.json`, `refusal-class-parity.json`,
+`refusal-class-parity-full.json`, `coverage-go.json`,
 `golden.json`, `sensitivity.json`, `resource.json`, `guard-posix.json`,
-`race-battery.json`, `build-ids.json`, `windows-guard.json`, and
+`race-battery.json`, `windows-guard.json`, and
 `windows-housekeeping.json`.  `known-defects.json` is a ledger rather
 than a measurement and carries no revision field.  One disclosure about
 what `git_head` means in these reports: the harnesses stamp the HEAD
@@ -354,8 +408,9 @@ stamp is one commit behind the file's own commit — the same limitation
 recorded by earlier waves and the reason the binaries are identified by
 SHA-256 in the staged ledger, not by an embedded revision.
 
-Current evidence regenerated by the wave-19.25 Linux battery and the
-native Windows leg at revision `2c788b8e1e6aa4a30151f41ae6b2a6226158a8a1`
+Current evidence regenerated by the wave-19.26 full-tier closure battery
+and the native Windows leg at revision
+`38aea8fc5777d1cf985ab2e53e7a66e503f59469`
 (product identities in the identity block below).  The paragraphs that
 follow record the product defects repaired along the road to this
 revision; each remains true of the current tree:  Wave 19.23 repairs the product defects
@@ -409,7 +464,8 @@ closure):
   `os.Stat` (follows symlinks) as the C reference and Rust do, so a
   symlinked regular file inside an `@directory` is no longer dropped
   from the merge.  Committed case `tests.d/101-directory-symlink-
-  input`; full `tests.d` 101/101 for both engines.
+  input`; the then-full `tests.d` passed 101/101 for both engines
+  (the suite is 121 groups at this writing).
 - Corpus and gate gaps (tester P1/P2, security P2, closure F2/F6):
   eleven new committed cases — `cases/params.negative.*` (five,
   including the writer-budget refusals and grammar),
