@@ -18156,3 +18156,69 @@ than a hidden hole.
   has changed shape twice since — freeze, then G-A/G-B arms); then the
   standing close-out: leg 27, closure battery, evidence child, astra
   re-review in `ea962c0a…`, push.
+
+##### Round 13 (2026-09-18) — tester FAIL on the G-A/G-B repair: H1/H2, repaired same turn
+
+- Tester delta-closure at `917d6baa`: FAIL, two P2s, both verified by the
+  lead with the role's own regenerators (`build_r13.py`, `build_t2f.py`)
+  re-run against the repaired tree. This section supersedes any reading
+  of the round-12 section's "the exposure is owned by the multi-step
+  control" as completeness: the control owns its own un-pre-keyable sample,
+  not the whole cross-call class.
+- **H1 (P2)**: the multi-step control fixed-keyed one sample (name
+  `pair-control-late`, readers `"0"*32`/`"1"*32`, two steps, message
+  substring detection); four executed defeats — reader-id-keyed poison,
+  control-name-exempted poison, a `run()` rebind spoofing the guard
+  message, and a step-count>=3 poison (49/75 corpus cases have >=3
+  steps) — kept the self-test green while laundering real negative
+  steps. Repaired per the role's demonstrated direction: case name and
+  every reader id carry a fresh `uuid4` per invocation (un-pre-keyable
+  sample), three warm-up steps then the late negative, and acceptance
+  requires a `run_rpc_step` frame from this file in the traceback, not
+  the message substring. All four T1 defeats now die at the control.
+- **H2 (P2)**: the three identity arms pinned the *attribute view* of
+  `CaseRunner.run_rpc_step`, not the executed callable: a two-faced data
+  descriptor (`__get__(None, cls)` = pristine fn for the arms,
+  `__get__(obj, cls)` = laundering closure for dispatch) and an exec'd
+  spoof compiled with `filename=__file__` plus a registered stub module
+  (making `getsource` read the real def off disk) passed every arm and
+  both controls. Lead verified `co_code` byte-equality is NOT viable as
+  the single closure (constant-table divergence already at byte 135 of
+  1104 on the pristine golden-vs-real compare — matches the role's
+  finding), so closure is by arms: the class-`__dict__` **slot** must
+  hold a plain function (kills the descriptor), `__globals__ is
+  globals()` (kills the registered-spoof; strictly more robust than the
+  role's `vars(sys.modules[__name__])` spelling — holds whether or not
+  the module is registered), and `co_filename == __file__` (extra
+  belt: kills an exec'd spoof that was handed this module's globals).
+  Verified directly: pristine (True,True,True); descriptor
+  (False,True,True); exec-spoof (True,False,True) with getsource still
+  reading the pristine def. The staticmethod rebind stays a loud-kill
+  (TypeError from the pair) — detection, and the type-arm message no
+  longer claims to catch it (P3); the class-method/partial/wraps-less
+  shapes stay loud-kills as adjudicated by the role.
+- **P3s closed**: `_self_test` docstring spawn count now six+four+one;
+  type-arm parenthetical rewritten to what the arms test; the round-12
+  ownership sentence restated in the freeze comment to
+  sample-ownership + review-discipline residue.
+- Re-verification at the repaired HEAD: all nine T1/T2 defeats and the
+  two exec-spoof variants die (multi-step control at their poison;
+  import-time TypeError for the loud adjudications); `build_patched`-
+  style strengthened-control kills reproduced; lead g-round12 farm
+  ALL-OK 13/13 re-run; pristine self-test 0.92 s (budget <=2 s);
+  negative corpus 56/0/1, live.lifecycle 4/0/1; guard region still
+  byte-identical (`abacfa59…`), so the six roles' guard-site PASSes
+  stand; the self-test block only is the changed surface.
+- Residue named exactly after H1/H2: the uuid sample is *un-pre-keyable*,
+  not unobservable — a poison may record the control's name/ids at its
+  first executed step and exempt them thereafter, so a post-guard disarm
+  that adapts at run time (or keys on properties of REAL corpus steps the
+  sample never reproduces) is owned by review discipline, exactly the
+  irreducible Goodhart floor round-12 already priced in; and a callable
+  swap that simultaneously holds a plain-function slot, this module's
+  `__globals__`, `co_filename == __file__`, no `__wrapped__`, and a
+  getsource-pristine read is beyond what an in-file self-control can pin
+  without a co-code byte pin (proven non-viable above) — named, not
+  claimed-away. Both classes require an edit that simultaneously weakens
+  live behavior AND passes every observed sample; the adversarial rounds
+  are the declared control for them.

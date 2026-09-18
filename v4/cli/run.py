@@ -2156,8 +2156,9 @@ def _self_test():
     cases): helper pins stay subprocess-free; the final-output
     controls spawn six stub services (a few tens of milliseconds
     each) to pin the clean-session end contract in both client I/O
-    branches, and the negative-expectation controls spawn four more
-    (two codes x two directions).
+    branches, the negative-expectation controls spawn four more
+    (two codes x two directions), and the multi-step control one
+    more (four steps through the real dispatch).
     """
 
     import tempfile
@@ -2393,17 +2394,28 @@ def _self_test():
                     service.proc.kill()
                     service.proc.wait(timeout=2)
 
-    # Multi-step control (tester round-12 G-B): the guard is per-call but
-    # the runner dispatches many steps per case, so post-guard code --
-    # which the freeze below deliberately does not cover -- can disarm the
-    # guard for every LATER step (rebind CaseRunner.run_rpc_step, or poison
-    # the case's own step dicts).  A single-call control cannot see that:
-    # both channels need a first step to arm.  This control runs one case
-    # through the real run() dispatch -- an innocent warm-up step, then a
-    # negative step against a stub that always succeeds -- and requires
-    # the guard to raise on the second step.  The case is deliberately not
-    # named "self-test": the round-12 exhibits exempted that name, so a
-    # name-keyed disarm dies here instead of hiding.
+    # Multi-step control (tester round-12 G-B, strengthened per round-13
+    # H1): the guard is per-call but the runner dispatches many steps per
+    # case, so post-guard code -- which the freeze below deliberately does
+    # not cover -- can disarm the guard for every LATER step (rebind
+    # CaseRunner.run_rpc_step, or poison the case's own step dicts).  A
+    # single-call control cannot see that: both channels need a first step
+    # to arm.  This control runs one case through the real run() dispatch
+    # -- three innocent warm-up steps, then a negative step against a stub
+    # that always succeeds -- and requires the guard to raise on the late
+    # step.  The sample is un-PRE-keyable by design (round-13 H1): the
+    # case name and every reader id carry a fresh uuid4 per invocation,
+    # so a disarm cannot pre-exempt the control's name (the exemption
+    # trick pointed at a fixed name dies here), cannot carry a
+    # hard-coded key to the sampled reader ids, and cannot arm on a step
+    # count the control does not reach; and the acceptance requires a
+    # run_rpc_step frame FROM THIS FILE in the traceback, so spoofing
+    # the guard message from a wrapper (a run() rebind raising the exact
+    # substring) is not acceptance.  A poison that OBSERVES the sample
+    # at its first executed step and exempts it adaptively, or keys on
+    # properties of REAL corpus steps the sample never reproduces, is
+    # outside this control -- review-discipline territory, named so the
+    # freeze comment below owns only what it pins.
     multi_ok_resp = ("import sys,json\n"
                      "for line in sys.stdin.buffer:\n"
                      "    r=json.loads(line)\n"
@@ -2411,16 +2423,20 @@ def _self_test():
                      "'id':r['id'],'result':{'method':'iprange.v1.reader.close',"
                      "'closed':True}}).encode()+b'\\n')\n"
                      "    sys.stdout.buffer.flush()\n")
-    warm_step = {"kind": "rpc", "method": "iprange.v1.reader.close",
-                 "actor": "consumer", "params": {"reader": "0" * 32}}
-    late_negative = {"kind": "rpc", "method": "iprange.v1.reader.close",
-                     "actor": "consumer", "params": {"reader": "1" * 32},
-                     "expect_error": {"code": "invalid_argument",
-                                      "outcome": "not_started"}}
     with tempfile.TemporaryDirectory(dir=owned_temp_root()) as mwork:
+        _multi_name = "pair-control-late-" + uuid.uuid4().hex
+        _warm = {"kind": "rpc", "method": "iprange.v1.reader.close",
+                 "actor": "consumer",
+                 "params": {"reader": uuid.uuid4().hex}}
+        _late = {"kind": "rpc", "method": "iprange.v1.reader.close",
+                 "actor": "consumer", "params": {"reader": uuid.uuid4().hex},
+                 "expect_error": {"code": "invalid_argument",
+                                  "outcome": "not_started"}}
         multi_runner = CaseRunner(None, {
-            "schema": "iprange-cli-case-v1", "name": "pair-control-late",
-            "fixtures": [], "steps": [warm_step, late_negative],
+            "schema": "iprange-cli-case-v1", "name": _multi_name,
+            "fixtures": [],
+            "steps": [dict(_warm, params={"reader": uuid.uuid4().hex})
+                      for _ in range(3)] + [_late],
         }, mwork, "test")
         multi_service = JsonRpcService([sys.executable, "-c", multi_ok_resp],
                                        "stub")
@@ -2429,15 +2445,24 @@ def _self_test():
             try:
                 multi_runner.run()
             except AssertionError as exc:
+                _frame_ok = False
+                _tb = exc.__traceback__
+                while _tb is not None:
+                    if (_tb.tb_frame.f_code.co_name == "run_rpc_step"
+                            and _tb.tb_frame.f_code.co_filename
+                            == __file__):
+                        _frame_ok = True
+                        break
+                    _tb = _tb.tb_next
                 if ("succeeded but the step declared expect_error"
-                        not in str(exc)):
+                        not in str(exc)) or not _frame_ok:
                     raise AssertionError(
                         "expect_error multi-step control: failed for an "
                         f"unrelated reason: {exc}") from exc
             else:
                 raise AssertionError(
                     "expect_error multi-step control: a success response "
-                    "on the second (negative) step was accepted; post-"
+                    "on the late (negative) step was accepted; post-"
                     "guard code disarmed the guard for later steps")
         finally:
             multi_runner.service = None
@@ -2470,8 +2495,10 @@ def _self_test():
     # one call, nothing after the guard can prevent it; ACROSS calls,
     # however, post-guard code is unconstrained by this freeze and CAN
     # disarm the guard for later steps of a case (rebinding the method or
-    # poisoning the case's own step dicts -- tester round-12 G-B), so that
-    # exposure is owned by the multi-step control above, not by the freeze.
+    # poisoning the case's own step dicts -- tester round-12 G-B).  The
+    # multi-step control above samples that exposure with an
+    # un-pre-keyable case; an adaptive or off-sample disarm is outside
+    # both arms and owned by review discipline.
     # Comments are not in the AST, so they may change without a re-stamp.
     # This is a freeze, not semantic analysis: it cannot be wrong about
     # Python behavior, and it does not protect edits to the helpers the
@@ -2527,22 +2554,49 @@ def run_rpc_step(self, step):
             f"{step['expect_error'].get('code')!r}")
 '''
 
-    # Identity arms (tester round-12 G-A): inspect.getsource silently
-    # follows __wrapped__, so without these the freeze would parse the
-    # pristine inner def while production called a wraps()-decorated
-    # wrapper -- green self-test, laundered negative steps.  The compared
-    # attribute must BE the plain function the golden describes.
+    # Identity arms (tester round-12 G-A, closed for round-13 H2): the
+    # compared attribute must BE the plain function this module compiled,
+    # not merely present as one through a chosen access path.  Four arms,
+    # each pinning one channel by which the arms could see a pristine
+    # function while production executes something else: the class-dict
+    # slot itself must hold a plain function (a data descriptor whose
+    # __get__ lies per accessor, or a staticmethod/classmethod wrapper,
+    # fails here even when attribute access looks clean); __globals__
+    # must be this module's dict (an exec'd spoof compiled against a
+    # registered stub module passes getsource -- the real def is read
+    # from disk -- but carries foreign globals); __wrapped__ must be
+    # absent (inspect.getsource silently follows it, so a wraps()
+    # decorator or rebind would have the freeze parse the inner def
+    # while the wrapper executes); and the parsed def must carry no
+    # decorators.  Executed-callable identity across these arms is the
+    # belt; the traceback-authentic multi-step control above is the
+    # suspenders for the dispatch path.
+    if (type(CaseRunner.__dict__.get("run_rpc_step"))
+            is not types.FunctionType):
+        raise AssertionError(
+            "expect_error guard freeze: the CaseRunner class dict slot "
+            "run_rpc_step does not hold a plain function -- a descriptor "
+            "or staticmethod/classmethod rebind can answer the arms one "
+            "way while production resolves another callable")
+    if (getattr(CaseRunner.run_rpc_step, "__globals__", None)
+            is not globals()):
+        raise AssertionError(
+            "expect_error guard freeze: CaseRunner.run_rpc_step was not "
+            "compiled by this module -- a spoofed function can read "
+            "pristine through inspect while executing other code")
+    if (getattr(CaseRunner.run_rpc_step, "__code__", None) is None
+            or CaseRunner.run_rpc_step.__code__.co_filename != __file__):
+        raise AssertionError(
+            "expect_error guard freeze: CaseRunner.run_rpc_step was not "
+            "compiled from this file -- an exec'd function carrying this "
+            "module's globals would otherwise pass the slot and globals "
+            "arms while its body launders")
     if getattr(CaseRunner.run_rpc_step, "__wrapped__", None) is not None:
         raise AssertionError(
             "expect_error guard freeze: CaseRunner.run_rpc_step carries "
             "__wrapped__; the freeze would pin the inner def while the "
             "wrapper executes -- the executed callable must be the pinned "
             "one")
-    if type(CaseRunner.run_rpc_step) is not types.FunctionType:
-        raise AssertionError(
-            "expect_error guard freeze: CaseRunner.run_rpc_step is not a "
-            "plain function (a staticmethod/classmethod/descriptor rebind "
-            "evades the source pin)")
     _golden = ast.parse(_FROZEN_RPC_PREFIX).body[0]
     _actual = ast.parse(
         textwrap.dedent(inspect.getsource(CaseRunner.run_rpc_step))).body[0]
