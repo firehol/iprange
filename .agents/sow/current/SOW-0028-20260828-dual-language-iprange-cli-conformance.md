@@ -18301,12 +18301,22 @@ than a hidden hole.
   in `.local/shared/status.md`, no bearing on the findings). Brief:
   adjudicate the named residue list (Q1), audit records sentences (Q2),
   attack shapes outside every named class (Q3).
-- **Q1 result — the guard-disarm floor holds.** All seven named residue
-  classes executed green-self-test laundering with no in-arm static or
-  identity closure found: adaptive observation, uuid-supply hijack
-  (re-keyed), method key, step-shape key, call-context key, in-frame
-  message decoy, off-sample-real-step key. Zero DECIDABLE-UNNAMED from
-  Q1. Exhibits and logs: `.local/tester/r17-kit/` (`build_r17.py`,
+- **Q1 result — the guard-disarm floor holds, with an evidence limit.
+  All seven named residue classes executed with a green self-test and no
+  in-arm static or identity closure was found: adaptive observation,
+  uuid-supply hijack (re-keyed), method key, step-shape key,
+  call-context key, in-frame message decoy, off-sample-real-step key.
+  Silent laundering of a real negative step was DEMONSTRATED for five of
+  them; for the method-key and off-sample-real-step keys the role's
+  instrument was defective (its fixture-bearing mixed-method row bypasses
+  the guard loudly on the pristine tree too), so those two are established
+  by green-self-test evidence ONLY, laundering unestablished
+  (astra gate turn 4, residue_laundering_evidence_overstated; role report
+  .local/tester/report-round15.md rows q-method-key / q-offsample). This
+  does not weaken the floor conclusion — a green self-test with no
+  in-arm closure is the floor criterion — but the record must not claim
+  laundering it did not measure. Zero DECIDABLE-UNNAMED from Q1.
+  Exhibits and logs: `.local/tester/r17-kit/` (`build_r17.py`,
   `probe17.py`, `logs/probe*.log`).
 - **Q3 result — Finding 1 (P2), a decidable class outside the named
   list.** `check_expected_error` (v4/cli/run.py:862-905) is reached from
@@ -18338,11 +18348,19 @@ than a hidden hole.
      non-object data, wrong domain code, wrong outcome, missing/non-object
      /extra/missing-member details, mismatched value, unexpected refusal
      on a positive step). Mutation proof
-     `.local/lead-r15/mutation-proof-round16.txt`: pristine ACCEPT; six
-     relaxations die naming a refusal-content pin; the data-shape
-     relaxations die loudly at the pin site (crash at the pin is still a
-     detection; silent laundering is the only failure mode). No shipped
-     verifier line changed — this is coverage, not behavior (astra's own
+     `.local/shared/evidence/round16/mutation-proof-round16.txt` (the
+     instrument now reports the ACTUAL failure site, and success is read
+     from stdout only — a traceback echoes the driver source into stderr;
+     astra gate turn 4, mutation_proof_misattributes_failure_sites):
+     pristine ACCEPT; five relaxations (empty body, transport code,
+     domain code, outcome, details block) die naming a refusal-content
+     pin; the two data-shape relaxations are still DETECTED but by
+     pre-existing machinery — `always-raise` fails the genuine-refusal arm
+     of the existing subprocess pair at run.py:2378 and `condition-false`
+     crashes inside `check_expected_error` itself — so they are not
+     evidence for the new pins. Silent acceptance is the only unscored
+     outcome and no relaxation survived it. No shipped verifier line
+     changed — this is coverage, not behavior (astra's own
      framing).
   2. Records: the r16d/e/j bullet above restated (control, not arms, for
      the shipped exhibits; re-keyed exhibits for arm attribution, and the
@@ -18354,16 +18372,28 @@ than a hidden hole.
      step control does NOT close step-count keys (33 committed cases run
      >4 steps, max 134).
   3. `.agents/tools/kit-gc.sh` is the committed authoritative
-     implementation; `.local/kit-gc.sh` is a forwarding wrapper (prior
-     untracked copy preserved at `.local/lead-r15/kit-gc.sh.previous-untracked`).
-     It fixes the enclosing-kit bug (role_dir computed from the candidate
-     path), drops the r1[0-9] literal for a real highest-kit scan, treats
-     any kit touched within `--min-age` days as active, refuses deletion
-     of directories containing protected files (reports, manifests,
-     SHASUMS, sha256 sidecars), and makes `--all` widen only the sweep,
-     never a safety rule. Functional suite:
-     `.local/lead-r15/test_kit_gc.sh`, 15/15 against synthetic trees
-     (never `.local/`).
+     implementation and the mandated entry point; the workstation's
+     `.local/kit-gc.sh` is a convenience forwarding wrapper only (prior
+     untracked copy preserved at
+     `.local/lead-r15/kit-gc.sh.previous-untracked`). It fixes the
+     enclosing-kit bug (role_dir computed from the candidate path),
+     selects the live kit by NUMERIC kit identity instead of a
+     version-sorted full pathname (unnumbered `work/`/`dr/` no longer
+     outrank `r20-kit`), keeps `r1[0-9]`-style literals out of the rule,
+     treats any kit touched within `--min-age` days as active (which is
+     also the separate protection for unnumbered workspaces), refuses
+     deletion of directories containing protected files (reports,
+     manifests, SHASUMS, sha256 sidecars) or manifest-REFERENCED files
+     (registry built once per prune run from every manifest*.json under
+     `.local/`, paths resolved against the manifest directory,
+     `.local/`, and the repo root), normalizes `--keep` to an absolute
+     path and compares at directory boundaries (relative `--keep` works),
+     exits 0 from report mode on healthy small trees, and makes `--all`
+     widen only the sweep, never a safety rule. Functional suite
+     (`.local/lead-r15/test_kit_gc.sh`, staged at
+     `.local/shared/evidence/round16/kit-gc-suite.sh`): 23/23 against
+     synthetic trees — never `.local/` — including the four
+     astra-turn-4 counterexamples and the report-mode exit.
   4. Freeze signature comparison includes `FunctionDef.returns` (absent
      annotation pins as `Constant(None)` — the same AST a literal `->
      None` parses to).
@@ -18379,3 +18409,58 @@ than a hidden hole.
   pinned (round-16); records state the bounded guarantee. What remains
   outside the frozen syntax and the specified behavioral cases is owned
   by review discipline, not by an analyzer.
+
+## Round 17 — astra gate turn 4: cleanup safeguards and record accuracy (2026-09-19)
+
+- Astra gate turn 3 over the round-16 delta: NEEDS CHANGES — 6 P2 + 1 P3.
+  Result: `.local/shared/evidence/round16/astra-turn-4-result.txt`. The
+  refusal-content controls, r16d/e/j attribution, decorator-neutral
+  binding, bounded comments, return-annotation comparison and retry
+  wording were verified landed. Open items, each lead-verified against
+  source before acting:
+  1. cleanup manifest_references_unprotected — REVIEWS.md promises
+     manifest-referenced artifacts survive; the script checked only
+     protected FILENAMES inside a candidate. True: an old target holding
+     a manifest-referenced `result.log` was eligible.
+  2. cleanup_live_kit_selection_not_numeric — the live kit came from
+     `sort -V` over a mixed pattern list; a probe showed `work/`
+     outranking `r20-kit`, exposing the highest numbered live kit. True.
+  3. cleanup_relative_keep_ignored — `--keep` compared verbatim against
+     absolute candidates; relative paths protected nothing. True.
+  4. cleanup_report_exits_unsuccessfully_for_small_directory — report mode
+     died on `set -e` when the last sandbox was under the 1 GB cap,
+     printing no guidance. True (reproduced: rc=1, guidance missing).
+  5. residue_laundering_evidence_overstated — the Round-15 record said
+     seven classes demonstrated laundering; the role report shows the
+     method-key and off-sample-real-step rows are green-self-test only
+     (defective B2 instrument). True as stated; record corrected above.
+  6. mutation_proof_misattributes_failure_sites — the instrument scored
+     any nonzero exit as detection and labeled every non-named crash
+     "at the pin site". `data-shape-always-raise` actually dies at the
+     pre-existing genuine-refusal pair control (run.py:2378), and the
+     success marker was read from combined output, which a traceback
+     echoes. True; count corrected (five pin-named, not six); record
+     corrected above.
+  7. P3 mandatory_cleanup_entrypoint_remains_untracked — REVIEWS.md
+     mandated the untracked `.local/kit-gc.sh`. Fixed: the committed
+     `.agents/tools/kit-gc.sh` is now the mandated path; the wrapper is
+     convenience only.
+- Repairs at this revision (no run.py change; `git diff 3e75cfec..HEAD`
+  touches only `.agents/tools/kit-gc.sh`, REVIEWS.md, this SOW, and the
+  evidence): numeric kit-identity live-kit rule; active-kit rule also
+  protects unnumbered workspaces; manifest-reference registry built once
+  per prune from every manifest*.json under `.local/` (paths resolved
+  against the manifest dir, `.local/`, repo root); `--keep` normalized to
+  absolute and compared at directory boundaries; report mode exits 0 on
+  healthy small trees; `--all` still widens only the sweep. The
+  mutation-proof instrument now reports the actual failing frame and
+  exception and reads the success marker from stdout only.
+- Validation at this revision: self-test PASS 0.93 s; negative 56/0/1;
+  live.lifecycle 4/0/1; kind-gate 133+5; kit-gc functional suite 23/23
+  on synthetic trees including all four turn-4 counterexamples (never
+  `.local/`); guard region `abacfa59…` and run.py byte-identical to
+  3e75cfec — the refusal-content pins and the six roles' guard-site
+  PASSes stand unchanged.
+- What this round does NOT do: no new classifier, no expanded
+  guard-mutation campaign (astra's explicit instruction), no engine or
+  protocol change.

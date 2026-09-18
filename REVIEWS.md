@@ -109,7 +109,8 @@ Rules for the kit:
 At milestone-4 close-out, `.local/` held 370 GB: eighteen reviewer sandboxes
 each kept a full copy of the repo tree *with its cargo/go/C build target*
 (20–26 GB each) from completed rounds. Prevention, enforced by
-`.local/kit-gc.sh`:
+`.agents/tools/kit-gc.sh` (committed; a `.local/kit-gc.sh` convenience
+wrapper may forward to it, but nothing may depend on it):
 
 - Roles must **never copy a buildable repo tree into the sandbox**. Probes
   that need source mutations use a **symlink farm**: symlink every file of
@@ -121,8 +122,8 @@ each kept a full copy of the repo tree *with its cargo/go/C build target*
   tree copy, and reports the build in its round notes so the lead can
   prune it.
 - Every role sandbox must be **≤ 1 GB after a gate closes**. The lead runs
-  `.local/kit-gc.sh` (report) at each milestone-gate close, attics any
-  `*.md` exhibits with `.local/kit-gc.sh --attic <dirs>`, then prunes stale
+  `.agents/tools/kit-gc.sh` (report) at each milestone-gate close, attics
+  any `*.md` exhibits with it `--attic <dirs>`, then prunes stale
   build targets with `--prune-builds --apply`; the live (highest-numbered)
   kit per role is protected by the script and is handled at the *next*
   gate's close. Deleting stale round trees is a lead duty, not a reviewer
