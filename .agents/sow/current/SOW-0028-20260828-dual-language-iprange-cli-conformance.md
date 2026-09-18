@@ -18025,3 +18025,87 @@ than a hidden hole.
   side from the opposite direction. A control's claim is now: every
   *provably* unconditional pre-call divert fails the self-test;
   undecidable diverts are the named residue.
+
+##### Round 11 convergence — F-I adjudication, astra turn 2, and the golden-region freeze (2026-09-18)
+
+- **F-I (P2) adjudicated at `f977d171`** (both independent tester
+  sessions opened it; core families agree). Lead direct-`_dead_maker`
+  evaluation confirmed the survivors still real at HEAD: (1) the
+  BoolOp fold returns *truth*, not the short-circuit *value*, so
+  `(2 or step.get("x")) == 2` launders (runtime-True, folded-False)
+  while `(1 and 2) == 1` over-rejects (runtime-False, folded-True);
+  (2) handler bodies are unread (`try: raise / except: return`
+  launders); (3) truthy-completion loop `else` is unread
+  (`for _ in (1,): _n = 1 / else: return` launders); (4) `_inert`
+  spelling gaps (`a, b = 1, 2`, `a = b = 1`, `a: int = 1`); plus a
+  10th survivor found by the lead by construction: `while True:` with
+  no exit is a dead-maker by non-termination and unclassified. The
+  family-4 capture-wildcard/`object()` parts of the older 11h report
+  were already closed at `f977d171`.
+- **Design fork put to the standing external control (user: "ask
+  astra")**. astra gate session `ea962c0a1a874e67bdcce924ec265541`,
+  turn 2, prompt `.local/lead-r10/astra-fork-prompt.txt` (neutral:
+  the three options as recorded, no lead recommendation), run via the
+  external-reviewers runner, read-only, effort xhigh. **Verdict:
+  NEEDS CHANGES; option 1 (golden-region freeze) with concrete
+  requirements**: keep the behavioral two-code controls; replace
+  classifier + purity scan + shape/position arms with an explicit AST
+  snapshot of the uninterrupted function prefix through the complete
+  guard; prefer a readable golden source fragment parsed alongside the
+  actual source and compared without location attributes; re-stamping
+  deliberate, never automatic; the guarantee stated exactly — edits
+  to the region require updating its reviewed snapshot; it does not
+  prove arbitrary Python semantics nor protect helpers or the golden.
+  astra additionally verified two over-strict arms the lead's farms
+  had missed: `with suppress(ValueError): raise` is classified a
+  divert though it completes, and `except LookupError` does not match
+  a `KeyError` raise by name though inheritance catches it — the
+  classifier is unsound in BOTH directions, which astra (and the
+  lead's re-verification of both claims) treats as decisive against
+  option 2. astra also ruled the records defective as material
+  acceptance-record defects: the `##### Round 11 continuation 2`
+  stopping-principle paragraph above (and its status.md mirror) claim
+  "every *provably* unconditional pre-call divert fails the
+  self-test", which the confirmed F-I survivors falsify. **This
+  section supersedes that paragraph; the paragraph is retained as
+  historical record of what was believed at `d992c50e`.**
+- **Implementation (this commit)**: `v4/cli/run.py` — the ~430-line
+  static block (shape pin, position arms, purity scan, `_dead_maker`
+  and all helpers `_const_bool`, `_inert`, `_infallible`,
+  `_handler_catches`, `_try_first_exit_diverts`, `_escapes_loop`,
+  `_always_matches`, both `for stmt in top[:call_index]` loops) is
+  deleted and replaced by `_FROZEN_RPC_PREFIX`: the readable golden
+  source of `run_rpc_step` from its `def` line through the complete
+  guard (42 lines, matching the shipped region byte-for-byte at
+  insertion time), parsed and compared statement-by-statement against
+  the live function with `ast.dump(..., include_attributes=False)`,
+  plus signature comparison and a live-statements-after-guard check
+  (the guard may not become the function's last statement). Comments
+  are not in the AST, so comment edits do not force a re-stamp; code
+  edits inside the region do, until the golden literal is changed
+  deliberately. Net −333 lines. The behavioral two-code pair is
+  untouched. The `run_rpc_step` body itself is byte-identical to
+  `f977d171` (region digest `abacfa59…`), so the six roles' round-11
+  PASSes on the shipped guard stand; only the self-test changed.
+- **Closure farm** (`.local/lead-r10/freeze-farm.py`, 22 mutants +
+  3 controls, faithful runtime injection into HEAD): every F-A..F-I
+  shape family now dies — narrowing/deletion/move/body-gutting
+  shapes hit the freeze arm, and pre-call diverts (BoolOp-eq,
+  handler-return, loop-else, tuple-inert-return, match-wildcard,
+  while-True, erase-expect, expect-pinned-return, suppress, lookup-
+  raise) die at the behavioral pair or the freeze arm;
+  `live-dyn-decoy` and `interposed` (statement between call and
+  guard) die at the freeze. Controls: a post-guard edit is ACCEPTed
+  (the freeze covers entry-through-guard only, as specified), a
+  deliberate golden re-stamp is ACCEPTed, pristine ACCEPTs in 0.9 s.
+  Negative family 56/0/1-skip and `live.lifecycle` 4/4 green;
+  `run: shared command_sanitize controls executed=58 expected=58`.
+- **Convergence accounting**: nine rounds of the same meta-claim
+  ("the classifier catches every decidable keyed-on-nothing pre-call
+  divert") produced nine repairs and, per astra, two verified
+  over-rejections — the arm itself became the defect surface, exactly
+  the debt pattern AGENTS.md rejects. The freeze replaces a semantic
+  claim (which can be wrong) with a syntactic one (which cannot):
+  "this region is AST-stable unless re-stamped". The cost is explicit
+  maintenance: legitimate refactoring of the prefix requires a
+  deliberate golden re-stamp in the same commit as its review record.

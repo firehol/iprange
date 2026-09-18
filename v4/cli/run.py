@@ -2393,449 +2393,116 @@ def _self_test():
                     service.proc.kill()
                     service.proc.wait(timeout=2)
 
-    # Guard-shape pin (tester round-11 F-C): the behavioral controls
-    # above sample one point per dimension, so a guard narrowed by any
-    # added conjunction (pinned to this control's method, outcome, or
-    # code set) survives them while laundering every negative step that
-    # differs from the sampled point.  This pin reads the guard's
-    # syntax tree instead: run_rpc_step must contain EXACTLY one `if`
-    # whose test is the two-operand conjunction of the response-has-no-
-    # error test and the expect_error-is-present test, with no extra
-    # conjunct and no replaced operand shape.  Any conjunction a
-    # future edit adds across any dimension fails here, not silently.
+    # Frozen-prefix pin (astra gate session ea962c0a... turn 2, option 1):
+    # the behavioral controls above sample one point per dimension, and the
+    # nine adversarial rounds F-A..F-I showed that every static reach
+    # classifier design tested here is unsound in both directions at once:
+    # decidable pre-call diverts slipped through (BoolOp short-circuit
+    # values, handler-body returns, truthy loop-else, inert-binding
+    # spellings) while ordinary non-diverting code was rejected
+    # (`with suppress(ValueError): raise`, `except LookupError` catching a
+    # KeyError subclass).  A Python control-flow analyzer has no finite
+    # stopping condition, so the classifier, the purity scan and the
+    # shape/position arms are replaced by a syntactic freeze: the region of
+    # run_rpc_step from its entry through the complete expect_error guard
+    # must match the golden statements below, compared as ASTs with
+    # location attributes stripped.
+    #
+    # The guarantee is exactly: any edit to that region -- narrowing or
+    # moving the guard, inserting a decoy or divert before the call,
+    # deleting either pinned statement -- fails this self-test until the
+    # golden is re-stamped deliberately together with the review record
+    # justifying the change.  A divert can only skip the guard by running
+    # before it, and the compared region covers everything from entry to
+    # the guard; code after the guard is unconstrained because nothing
+    # that runs after it can prevent it.  Comments are not in the AST, so
+    # they may change without a re-stamp.  This is a freeze, not semantic
+    # analysis: it cannot be wrong about Python behavior, and it does not
+    # protect edits to the helpers the region calls or to the behavioral
+    # controls above -- the sampled pair still owns those edges.
     import ast
     import inspect
     import textwrap
 
-    guard_tree = ast.parse(
-        textwrap.dedent(inspect.getsource(CaseRunner.run_rpc_step)))
-    guard_shapes = []
-    for node in ast.walk(guard_tree):
-        if not (isinstance(node, ast.If)
-                and isinstance(node.test, ast.BoolOp)
-                and isinstance(node.test.op, ast.And)
-                and len(node.test.values) == 2):
-            continue
-        no_error, declared = node.test.values
-        if (isinstance(no_error, ast.Compare)
-                and len(no_error.ops) == 1
-                and isinstance(no_error.ops[0], ast.NotIn)
-                and isinstance(no_error.left, ast.Constant)
-                and no_error.left.value == "error"
-                and isinstance(no_error.comparators[0], ast.Name)
-                and no_error.comparators[0].id == "response"
-                and isinstance(declared, ast.Compare)
-                and len(declared.ops) == 1
-                and isinstance(declared.ops[0], ast.IsNot)
-                and isinstance(declared.left, ast.Call)
-                and isinstance(declared.left.func, ast.Attribute)
-                and declared.left.func.attr == "get"
-                and isinstance(declared.left.func.value, ast.Name)
-                and declared.left.func.value.id == "step"
-                and len(declared.left.args) == 1
-                and isinstance(declared.left.args[0], ast.Constant)
-                and declared.left.args[0].value == "expect_error"
-                and isinstance(declared.comparators[0], ast.Constant)
-                and declared.comparators[0].value is None):
-            guard_shapes.append(node)
-    if len(guard_shapes) != 1:
-        raise AssertionError(
-            "expect_error guard shape pin: run_rpc_step must contain "
-            "exactly one unqualified two-operand guard "
-            "(`\"error\" not in response and "
-            "step.get(\"expect_error\") is not None`); found "
-            f"{len(guard_shapes)} — a narrowed or qualified guard "
-            "launderes every negative step outside its qualification")
-    if not (guard_shapes[0].body and
-            isinstance(guard_shapes[0].body[0], ast.Raise)):
-        raise AssertionError(
-            "expect_error guard shape pin: the guard's body must raise "
-            "immediately, not record and continue")
-    # Position arms (tester round-11 F-D, F-E): shape and count do not
-    # say where the guard executes.  F-D taught that the guard must
-    # follow the service.call response assignment immediately; F-E
-    # taught that the walk-based scan accepted a dead canonical pair
-    # nested inside `if False:` (dead-in-position) and stayed silent on
-    # pre-call suppression (a code-pinned return or an expect_error
-    # erase placed BEFORE the call assignment).  Three fixes:
-    # (1) the call-and-guard adjacency is pinned in the function's own
-    #     top-level statement list only, so a pair nested anywhere
-    #     (including a dead wrapper) can never satisfy position;
-    # (2) no top-level statement before the call may reference
-    #     expect_error in any syntactic role or mutate/rebind `step`
-    #     (pop/clear/update/setdefault, subscript write, del, or
-    #     reassignment), which is the pre-call suppression channel;
-    # (3) The floor that remains after (1) and (2), stated rather than
-    #     hidden: a pre-call exit or erase keyed on values OUTSIDE the
-    #     behavioral control's sample (the control exercises method
-    #     reader.close, actor consumer, and codes input_format /
-    #     invalid_argument; an exit keyed on anything else, or a check
-    #     delegated to a helper so no expect_error token appears in
-    #     this function) is not visible to a single-function static
-    #     pin.  An exit that does trigger on the control's own
-    #     reader.close/consumer/sampled-code combination dies on the
-    #     behavioral pair, so the
-    #     pin and the pair close the class from opposite sides and only
-    #     the off-sample residue survives; closing that would need
-    #     whole-module taint analysis, which this kit deliberately
-    #     prices out -- adversarial reviewer rounds are the control for
-    #     edits that exotic.
-    # The decoy floor, stated to the reach arm's proof boundary: an
-    # exact-shape decoy at the pinned top-level position EXECUTES
-    # unless something before it diverts -- executing, its immediate
-    # unconditional Raise on exactly the guard's condition makes it the
-    # working guard; diverting, the divert is either a dead-maker the
-    # reach arm rejects or an off-sample/undecidable test inside the
-    # declared static boundary.  A nested dead decoy fails (1) directly.
-    func_def = (guard_tree.body[0] if guard_tree.body
-                and isinstance(guard_tree.body[0], ast.FunctionDef)
-                else None)
-    if func_def is None:
-        raise AssertionError(
-            "expect_error guard shape pin: run_rpc_step source must "
-            "parse to a single function definition")
-    top = func_def.body
-    call_index = None
-    for index, stmt in enumerate(top):
-        if (isinstance(stmt, ast.Assign)
-                and len(stmt.targets) == 1
-                and isinstance(stmt.targets[0], ast.Name)
-                and stmt.targets[0].id == "response"
-                and isinstance(stmt.value, ast.Call)
-                and isinstance(stmt.value.func, ast.Attribute)
-                and stmt.value.func.attr == "call"
-                and isinstance(stmt.value.func.value, ast.Name)
-                and stmt.value.func.value.id == "service"):
-            call_index = index
-            break
-    if (call_index is None or call_index + 1 >= len(top)
-            or top[call_index + 1] is not guard_shapes[0]):
-        raise AssertionError(
-            "expect_error guard shape pin: the canonical guard must be "
-            "the statement immediately after the service.call response "
-            "assignment in the function's top-level statement list; a "
-            "guard reached only after earlier control flow, or a pair "
-            "nested inside any wrapper, launders the flow it skips")
-    for stmt in top[:call_index]:
-        for node in ast.walk(stmt):
-            references = ((isinstance(node, ast.Constant)
-                           and node.value == "expect_error")
-                          or (isinstance(node, ast.keyword)
-                              and node.arg == "expect_error")
-                          or (isinstance(node, ast.Attribute)
-                              and node.attr == "expect_error"))
-            mutates = False
-            if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
-                targets = (node.targets if isinstance(node, ast.Assign)
-                           else [node.target])
-                for target in targets:
-                    if (isinstance(target, ast.Name) and target.id == "step") or (
-                            isinstance(target, ast.Subscript)
-                            and isinstance(target.value, ast.Name)
-                            and target.value.id == "step"):
-                        mutates = True
-            elif isinstance(node, ast.Delete):
-                mutates = any(isinstance(t, ast.Subscript)
-                              and isinstance(t.value, ast.Name)
-                              and t.value.id == "step"
-                              for t in node.targets)
-            elif (isinstance(node, ast.Call)
-                  and isinstance(node.func, ast.Attribute)
-                  and isinstance(node.func.value, ast.Name)
-                  and node.func.value.id == "step"
-                  and node.func.attr in ("pop", "clear", "update",
-                                         "setdefault")):
-                mutates = True
-            if references or mutates:
-                raise AssertionError(
-                    "expect_error guard shape pin: a top-level statement "
-                    "before the service.call response assignment "
-                    "references expect_error or mutates step -- pre-call "
-                    "suppression launders every negative step by never "
-                    "reaching the guard")
-    # Reach arm (tester round-11 F-F, extended for F-G): position pins
-    # where the pair sits, but a top-level divert BEFORE the call makes
-    # everything after it dead -- including a fully canonical,
-    # top-level, adjacent call+guard decoy pair, which then satisfies
-    # the shape, position, body, and count arms while the live path
-    # hides ahead of the divert behind a dynamic-key narrowed guard (no
-    # expect_error token, so purity never sees it).  The arm therefore
-    # classifies every statement before the call and rejects any that
-    # provably diverts control away: a bare Return/Raise; an If whose
-    # test folds to a provable truth value -- folding RAW through
-    # ast.literal_eval (constants, constant displays including set/dict
-    # str/bytes) plus tri-state BoolOp short-circuit (`if True or
-    # <unknown>:` is provably true), Not, and Eq on raw values (so
-    # `1 == 2` folds False, not truthiness-of-the-operands) -- selecting
-    # a diverting branch; a While/For whose certain first iteration
-    # diverts; a Match whose unguarded always-matching case (bare or
-    # named wildcard, or an alternative list containing one) diverts
-    # and no earlier case can capture the subject and continue; a Try
-    # whose first statement is an exit or whose finally block diverts
-    # (a finally cannot complete normally past its own exit).  The
-    # shipped pre-call flow has none of these (its returns live inside
-    # the non-constant notification arm and the known-method raise
-    # inside a non-provable if), so pristine passes.
-    # Proof boundary, stated as the arm's actual reach (F-G/F-H/F-I):
-    # residue is (1) tests the fold cannot decide -- Names, Calls,
-    # non-Eq Compare operators, Is/In, and compound tests whose
-    # short-circuit cannot be decided from folded members; (2) Match
-    # cases carrying a guard or a pattern that can fail for some
-    # subject (value/singletons/star/mapping rest, isinstance class
-    # patterns, or a wildcard whose match can be pre-empted by an
-    # earlier case that continues); (3) Try diverts below the first
-    # statement when the body can fail (an earlier failure skips a
-    # later exit, and it skips an else too -- only an inert body makes
-    # a diverting else unconditional), catchable first-statement exits,
-    # and a raise in an except/finally that the fold cannot prove runs;
-    # (4) helper-delegated checks (no expect_error token in this
-    # function); (5) certain-iteration loop bodies whose exit is
-    # reachable only past a lexical break/continue escape.  Those are
-    # the declared static residue; the adversarial review rounds are
-    # its control.
-    _MATCH = getattr(ast, "Match", None)
-    _MATCH_AS = getattr(ast, "MatchAs", None)
-    _MATCH_OR = getattr(ast, "MatchOr", None)
-    _MATCH_CLS = getattr(ast, "MatchClass", None)
-    _TRY_TYPES = (ast.Try,) + tuple(
-        t for t in (getattr(ast, "TryStar", None),) if t is not None)
-
-    def _const_bool(node):
-        # (True, raw value) when a control-flow test provably folds;
-        # (False, None) otherwise.  Raw values (truthiness applied by
-        # If/While/For, Eq compares values), so `1 == 2` folds False
-        # and `"" == 0` folds False while `2591` stays truthy-True and
-        # `{1}` folds a non-empty set.
+    _FROZEN_RPC_PREFIX = '''\
+def run_rpc_step(self, step):
+    method = step["method"]
+    actor = declared_actor(step)
+    params = self.substitute(step["params"], actor)
+    before = self.inventory()
+    if not methods.known(method):
+        raise AssertionError(f"case {self.case['name']!r}: unknown method {method}")
+    negative = step.get("expect_params_rejected")
+    if negative is None:
         try:
-            return True, ast.literal_eval(node)
-        except (ValueError, SyntaxError, TypeError, MemoryError,
-                RecursionError):
-            pass
-        if isinstance(node, ast.BoolOp):
-            folded = [_const_bool(value) for value in node.values]
-            if isinstance(node.op, ast.And):
-                if any(known and not bool(value)
-                       for known, value in folded):
-                    return True, False
-                if all(known for known, _ in folded):
-                    return True, True
-            else:
-                if any(known and bool(value) for known, value in folded):
-                    return True, True
-                if all(known for known, _ in folded):
-                    return True, False
-            return False, None
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
-            known, value = _const_bool(node.operand)
-            return (True, not bool(value)) if known else (False, None)
-        if (isinstance(node, ast.Compare)
-                and all(isinstance(op, ast.Eq) for op in node.ops)):
-            # Chained equality (a == b == c folds iff every operand
-            # folds; the result is the pairwise conjunction).
-            operands = [node.left] + list(node.comparators)
-            folded = [_const_bool(operand) for operand in operands]
-            if all(known for known, _ in folded):
-                values = [value for _, value in folded]
-                return True, all(values[i] == values[i + 1]
-                                 for i in range(len(values) - 1))
-        return False, None
-
-    def _inert(node):
-        # Statements that cannot raise: pass, a constant-valued
-        # expression statement, or an assignment of a literal-evaluable
-        # value to a plain name (attribute/subscript targets could
-        # fail through __setattr__/__setitem__, so they stay inert-
-        # false and the else diverts under them remain residue).
-        if isinstance(node, ast.Pass):
-            return True
-        if isinstance(node, ast.Expr):
-            try:
-                ast.literal_eval(node.value)
-                return True
-            except (ValueError, SyntaxError, TypeError, MemoryError,
-                    RecursionError):
-                return False
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 \
-                and isinstance(node.targets[0], ast.Name):
-            try:
-                ast.literal_eval(node.value)
-                return True
-            except (ValueError, SyntaxError, TypeError, MemoryError,
-                    RecursionError):
-                return False
-        return False
-
-    def _infallible(expr):
-        # True when a return value cannot raise: None or a literal_eval
-        # literal.  Anything else (Name load, Call, Subscript) may fail,
-        # and a failing first statement hands control to a handler.
-        if expr is None:
-            return True
-        try:
-            ast.literal_eval(expr)
-            return True
-        except (ValueError, SyntaxError, TypeError, MemoryError,
-                RecursionError):
-            return False
-
-    def _handler_catches(handler, exc_name):
-        t = handler.type
-        if t is None:
-            return True
-        nodes = t.elts if isinstance(t, ast.Tuple) else [t]
-        names = []
-        for n in nodes:
-            if isinstance(n, ast.Name):
-                names.append(n.id)
-            else:
-                return True  # attribute/computed class: cannot decide
-        return ("Exception" in names or "BaseException" in names
-                or (exc_name is not None and exc_name in names))
-
-    def _try_first_exit_diverts(node):
-        # A first-statement Return/Raise diverts only when it cannot be
-        # caught by this very Try: an uncatchable raise or a return
-        # whose value cannot raise.  A catching handler (bare,
-        # Exception, or naming the class) converts the exit into normal
-        # completion.
-        first = node.body[0] if node.body else None
-        if first is None or not isinstance(first, (ast.Return, ast.Raise)):
-            return False
-        if isinstance(first, ast.Return):
-            return not node.handlers or _infallible(first.value)
-        exc = first.exc
-        if exc is None:
-            return not node.handlers
-        exc_name = (exc.id if isinstance(exc, ast.Name)
-                    else exc.func.id if (isinstance(exc, ast.Call)
-                                         and isinstance(exc.func, ast.Name))
-                    else None)
-        if exc_name is None:
-            return not node.handlers
-        return not any(_handler_catches(h, exc_name) for h in node.handlers)
-
-    def _escapes_loop(statements):
-        # A Break/Continue in THIS loop's scope (descending through If,
-        # With, Try and Match clause bodies, but NOT into nested
-        # For/While -- those bind to their own loop) makes a body-held
-        # exit non-certain, so the arm must not reject.
-        stack = list(statements)
-        while stack:
-            node = stack.pop()
-            if isinstance(node, (ast.Break, ast.Continue)):
-                return True
-            if isinstance(node, (ast.For, ast.While)):
-                continue
-            stack.extend(ast.iter_child_nodes(node))
-        return False
-
-    def _always_matches(pattern):
-        # True when a match pattern cannot fail for ANY subject: a bare
-        # or named wildcard, the same behind a capture (`_ as y`: a
-        # capture never adds failure, so recurse through
-        # MatchAs.pattern), an alternative list containing one, or a
-        # zero-argument `object` class pattern.  Guarded cases,
-        # isinstance class patterns, and every other failable pattern
-        # stay in the declared boundary.
-        if _MATCH_AS is not None and isinstance(pattern, _MATCH_AS):
-            return pattern.pattern is None or _always_matches(pattern.pattern)
-        if _MATCH_OR is not None and isinstance(pattern, _MATCH_OR):
-            return any(_always_matches(alt) for alt in pattern.patterns)
-        if _MATCH_CLS is not None and isinstance(pattern, _MATCH_CLS):
-            return (isinstance(pattern.cls, ast.Name)
-                    and pattern.cls.id == "object"
-                    and not pattern.patterns and not pattern.kwd_attrs)
-        return False
-
-    def _dead_maker(statements):
-        # A statement list diverts control away unconditionally when it
-        # holds a Return/Raise, a provable-test If whose taken branch is
-        # itself a dead-maker, a certain-first-iteration While/For whose
-        # body diverts with no lexical break/continue escape, a
-        # provably-falsy While/For whose else diverts (the body never
-        # runs, the else always does), a With whose body diverts (a
-        # failing __enter__ propagates out anyway), an Assert whose test
-        # folds False, an always-matching unguarded diverting case that
-        # no earlier non-diverting case can pre-empt, or a Try whose
-        # first statement is an UNcatchable exit, whose inert prefix
-        # leads to a trailing bare return, or whose finally diverts.
-        for child in statements:
-            if isinstance(child, (ast.Return, ast.Raise)):
-                return True
-            if isinstance(child, ast.If):
-                known, value = _const_bool(child.test)
-                if known and _dead_maker(
-                        child.body if bool(value) else (child.orelse or [])):
-                    return True
-            elif isinstance(child, ast.While):
-                known, value = _const_bool(child.test)
-                if known and bool(value):
-                    if (_dead_maker(child.body)
-                            and not _escapes_loop(child.body)):
-                        return True
-                elif known and _dead_maker(child.orelse):
-                    return True
-            elif isinstance(child, ast.For):
-                known, value = _const_bool(child.iter)
-                if known and bool(value):
-                    if (_dead_maker(child.body)
-                            and not _escapes_loop(child.body)):
-                        return True
-                elif known and _dead_maker(child.orelse):
-                    return True
-            elif isinstance(child, ast.With):
-                if _dead_maker(child.body):
-                    return True
-            elif isinstance(child, ast.Assert):
-                known, value = _const_bool(child.test)
-                if known and not bool(value):
-                    return True
-            elif _MATCH is not None and isinstance(child, _MATCH):
-                for index, case in enumerate(child.cases):
-                    if (case.guard is None and _always_matches(case.pattern)
-                            and _dead_maker(case.body)
-                            and all(_dead_maker(prior.body)
-                                    for prior in child.cases[:index])):
-                        return True
-            elif isinstance(child, _TRY_TYPES):
-                if _try_first_exit_diverts(child):
-                    return True
-                if (child.body
-                        and isinstance(child.body[-1], ast.Return)
-                        and child.body[-1].value is None
-                        and len(child.body) > 1
-                        and all(_inert(stmt)
-                                for stmt in child.body[:-1])):
-                    # An inert prefix cannot fail and a bare Return
-                    # cannot be caught, so the trailing return runs
-                    # unconditionally even with handlers present.
-                    return True
-                # else: runs exactly when the body completes without
-                # raising; an all-inert body cannot fail, so a diverting
-                # else is then unconditional.
-                if (child.orelse and _dead_maker(child.orelse)
-                        and child.body
-                        and all(_inert(stmt) for stmt in child.body)):
-                    return True
-                if child.finalbody and _dead_maker(child.finalbody):
-                    return True
-        return False
-
-    for stmt in top[:call_index]:
-        if isinstance(stmt, (ast.Return, ast.Raise)):
+            case_schema.validate_rpc_request(method, params)
+        except ValidationError as exc:
             raise AssertionError(
-                "expect_error guard shape pin: a top-level bare "
-                "return/raise before the service.call response "
-                "assignment makes the pinned pair dead code; a dead "
-                "canonical decoy passes every other arm and launders "
-                "the live path hidden ahead of it")
-        if _dead_maker([stmt]):
+                f"case {self.case['name']!r}: invalid request params: {exc}") from exc
+    else:
+        # Negative-params mode.  Client-side validation is bypassed
+        # so the service's own params validator answers, and the
+        # bypass is only honest when that validator has something to
+        # refuse: the committed schema must reject the same request.
+        self.check_request_is_contract_invalid(method, params)
+
+    service = self.service_for(actor)
+    self.actor_steps[actor] = self.actor_steps.get(actor, 0) + 1
+    if method not in self.actor_operations[actor]:
+        self.actor_operations[actor].append(method)
+    if step.get("notification"):
+        service.notify(method, params)
+        self.record_ledger(before, step)
+        return
+
+    request_id = f"case-{self.case['name']}"
+    response = service.call(request_id, method, params)
+    if "error" not in response and step.get("expect_error") is not None:
+        # A success response on a step that declared expect_error is
+        # a missing refusal, not a pass: the negative expectation
+        # must fail here, before the digest recording and before the
+        # fall-through to the (absent) expect_result assertions that
+        # used to launder the divergence.
+        raise AssertionError(
+            f"case {self.case['name']!r}: method {method} succeeded but "
+            f"the step declared expect_error "
+            f"{step['expect_error'].get('code')!r}")
+'''
+
+    _golden = ast.parse(_FROZEN_RPC_PREFIX).body[0]
+    _actual = ast.parse(
+        textwrap.dedent(inspect.getsource(CaseRunner.run_rpc_step))).body[0]
+    _drift = "expect_error guard freeze: "
+    if (not isinstance(_actual, ast.FunctionDef)
+            or _actual.name != "run_rpc_step"):
+        raise AssertionError(
+            _drift + "run_rpc_step is no longer a plain function named "
+            "run_rpc_step; the frozen prefix cannot be located")
+    if (ast.dump(_golden.args, include_attributes=False)
+            != ast.dump(_actual.args, include_attributes=False)):
+        raise AssertionError(
+            _drift + "the run_rpc_step signature is part of the frozen "
+            "prefix; restore it or re-stamp _FROZEN_RPC_PREFIX "
+            "deliberately with a review record")
+    if len(_actual.body) <= len(_golden.body):
+        raise AssertionError(
+            _drift + f"run_rpc_step has no live statements after the "
+            f"frozen prefix (golden {len(_golden.body)} of "
+            f"{len(_actual.body)} statements); the guard must not become "
+            "the function's last statement")
+    for _i, (_g, _a) in enumerate(zip(_golden.body, _actual.body)):
+        _gd = ast.dump(_g, include_attributes=False)
+        _ad = ast.dump(_a, include_attributes=False)
+        if _gd != _ad:
             raise AssertionError(
-                "expect_error guard shape pin: a statement before the "
-                "service.call response assignment provably diverts "
-                "control away unconditionally; the pinned pair is dead "
-                "code and a dead canonical decoy launders the live "
-                "path hidden ahead of it")
+                _drift + f"run_rpc_step statement {_i} no longer matches "
+                "the frozen golden prefix\ngolden: "
+                f"{_gd}\nactual: {_ad}\nThe entry-to-guard region is "
+                "frozen: restore it, or re-stamp _FROZEN_RPC_PREFIX "
+                "deliberately together with the review record that "
+                "justifies the change")
+
+
 
     # Committed-report provenance.  These run here instead of behind a
     # ``--self-test`` flag the battery could omit, because the runner's helper
