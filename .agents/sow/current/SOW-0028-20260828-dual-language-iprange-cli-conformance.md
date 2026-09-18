@@ -18804,3 +18804,9 @@ than a hidden hole.
   exit 2, two chmod-000 privacy fixtures, 8 of 36 role sandboxes over
   the 1 GB aggregate cap). `v4/cli/run.py` remains byte-identical to
   3e75cfec (guard region `abacfa59…`); the runner self-test passes.
+- Follow-up (same day, closes turn-11's non-blocking P3
+  `supplementary_mutation_runs_not_manifest_bound`): the two mutation
+  runs are now reproducible and bound — mutant definitions
+  (`mutation-check-*.py`) and full command outputs
+  (`mutation-check-*.txt`, exit 1 with the named FAIL lines) are staged
+  in `evidence/round16/` and manifest entries describe what each binds.
