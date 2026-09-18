@@ -2550,6 +2550,54 @@ def _self_test():
                     "references expect_error or mutates step -- pre-call "
                     "suppression launders every negative step by never "
                     "reaching the guard")
+    # Reach arm (tester round-11 F-F): position pins where the pair
+    # sits, but a top-level unconditional exit BEFORE the call makes
+    # everything after it dead -- including a fully canonical, top-
+    # level, adjacent call+guard decoy pair, which then satisfies the
+    # shape, position, body, and count arms while the live path hides
+    # in a constant-true block ahead of the exit with a dynamic-key
+    # narrowed guard (no expect_error token, so purity never sees
+    # it).  A top-level bare Return or Raise, or a constant-test If
+    # whose executed branch exits, before the call is therefore a
+    # dead-maker: the shipped pre-call flow has neither (its only
+    # pre-call returns live inside the non-constant notification arm).
+    # Residual: a top-level exit keyed on a NAME (e.g. a variable
+    # assigned from a helper) is as invisible to this static reach
+    # scan as the (3) off-sample floor says the behavioral pair is to
+    # an off-sample key -- same declared residue, same review-round
+    # control.
+    def _dead_maker(statements):
+        # A statement list diverts control away unconditionally when it
+        # holds a bare Return/Raise, or a constant-test If whose taken
+        # branch is itself a dead-maker (recursion covers nested
+        # `if True: if True: return` towers).
+        for child in statements:
+            if isinstance(child, (ast.Return, ast.Raise)):
+                return True
+            if (isinstance(child, ast.If)
+                    and isinstance(child.test, ast.Constant)
+                    and _dead_maker(child.body if child.test.value
+                                    else (child.orelse or []))):
+                return True
+        return False
+
+    for stmt in top[:call_index]:
+        if isinstance(stmt, (ast.Return, ast.Raise)):
+            raise AssertionError(
+                "expect_error guard shape pin: a top-level bare "
+                "return/raise before the service.call response "
+                "assignment makes the pinned pair dead code; a dead "
+                "canonical decoy passes every other arm and launders "
+                "the live path hidden ahead of it")
+        if (isinstance(stmt, ast.If)
+                and isinstance(stmt.test, ast.Constant)
+                and _dead_maker(stmt.body if stmt.test.value
+                                else (stmt.orelse or []))):
+            raise AssertionError(
+                "expect_error guard shape pin: a constant-test if "
+                "whose executed branch returns or raises before the "
+                "service.call response assignment is a dead-maker for "
+                "the pinned pair")
 
     # Committed-report provenance.  These run here instead of behind a
     # ``--self-test`` flag the battery could omit, because the runner's helper
