@@ -322,9 +322,12 @@ func TestScratchBatchSurplusParksFIFO(t *testing.T) {
 	// Astra gate finding P1-1 (Go mirror): one resolution group
 	// answering with more addresses than batchCapacity used to fail
 	// the whole feed. The guarantee is capacity deferral: the surplus
-	// parks FIFO. The pre-fix behavior fails the first pushRange
-	// error assertion; the end-to-end drain is proven by the committed
-	// corpus case publish.dns_overflow_batch on both engines.
+	// parks AND the next batch hands it out first -- both halves are
+	// asserted here (a discarding drain passes every push-side
+	// assertion and fails the collection below; tester round-9 F1).
+	// The corpus case publish.dns_overflow_batch proves publication of
+	// a large resolution group end-to-end; this pin owns the
+	// park-and-drain contract.
 	path := filepath.Join(t.TempDir(), "empty.txt")
 	if err := os.WriteFile(path, nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -355,6 +358,41 @@ func TestScratchBatchSurplusParksFIFO(t *testing.T) {
 	// Family refusals remain errors: only capacity defers.
 	if err := core.pushRange(parsedRange{fromLo: 1, toLo: 1}); err == nil {
 		t.Fatal("wrong-family push must still fail")
+	}
+
+	// The drain half (tester round-9 F1, mirroring the Rust pin):
+	// nextBatch must hand out the parked surplus FIFO in full. A drain
+	// that pops and discards passes every push-side assertion above
+	// and fails the equality below. The loop's first action clears the
+	// batch, so the pre-filled head is scratch; what must survive is
+	// the queue.
+	var handed []uint64
+	for {
+		batch, err := source.NextBatch()
+		if err != nil {
+			t.Fatalf("drain: %v", err)
+		}
+		if batch == nil {
+			break
+		}
+		if len(batch) == 0 {
+			t.Fatal("a non-empty queue must hand out a batch")
+		}
+		for _, value := range batch {
+			handed = append(handed, uint64(value.From))
+		}
+	}
+	want := make([]uint64, 0, total-batchCapacity)
+	for i := batchCapacity + 1; i <= total; i++ {
+		want = append(want, uint64(i))
+	}
+	if len(handed) != len(want) {
+		t.Fatalf("drain lost ranges: handed %d, parked %d", len(handed), len(want))
+	}
+	for i := range want {
+		if handed[i] != want[i] {
+			t.Fatalf("drain must be FIFO at %d: got %d want %d", i, handed[i], want[i])
+		}
 	}
 }
 

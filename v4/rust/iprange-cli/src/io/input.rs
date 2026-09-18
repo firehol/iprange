@@ -1782,13 +1782,12 @@ mod tests {
         // with more addresses than BATCH_CAPACITY used to fail the
         // whole feed with "range does not fit the bounded parser
         // batch/family". The guarantee is capacity deferral: the
-        // surplus parks (bounded by the group) and waits FIFO. The
-        // pre-fix behavior is the FIRST assertion failing (an Err
-        // from push_range); the end-to-end drain through
-        // next_family_batch is proven by the committed corpus case
-        // publish.dns_overflow_batch, which publishes 300 hostname
-        // lines (each group answer outliving one batch) on both
-        // engines.
+        // surplus parks (bounded by the group) AND the next batch
+        // hands it out first -- both halves are asserted here (a
+        // discarding drain fails the collection below; tester
+        // round-9 F1). The corpus case publish.dns_overflow_batch
+        // proves publication of a large resolution group succeeds
+        // end-to-end; this pin owns the park-and-drain contract.
         let unique = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
@@ -1826,6 +1825,26 @@ mod tests {
         );
         // Family refusals remain errors: only capacity defers.
         assert!(source.push_range(v6(1, 1)).is_err());
+
+        // The drain half (tester round-9 F1): next_batch must hand out
+        // the parked surplus FIFO, and every parked range must reach a
+        // batch. A drain that pops and discards passes every
+        // push-side assertion above and fails the count/order checks
+        // here. The loop's first action is `batch.clear()`, so the
+        // pre-filled batch is scratch; what must survive is the queue.
+        let mut handed = Vec::new();
+        while let Some(batch) = source.next_batch().unwrap() {
+            assert!(!batch.is_empty(), "a non-empty queue must hand out a batch");
+            assert!(batch.len() <= BATCH_CAPACITY);
+            handed.extend(batch.iter().map(|range| u32::try_from(range.from.0).unwrap()));
+        }
+        // Nothing was lost and nothing reordered: the parked ranges
+        // arrive in exactly the order they parked. (The pre-filled
+        // head of the original group was cleared as loop scratch, so
+        // the expectation is the parked tail, not the full group.)
+        let parked_expect: Vec<u32> =
+            ((BATCH_CAPACITY + 1) as u32..=total as u32).collect();
+        assert_eq!(handed, parked_expect, "the drain must hand out the parked FIFO in full");
         std::fs::remove_file(path).unwrap();
     }
 

@@ -17577,3 +17577,61 @@ name, all evidence rotated together) -> astra re-review in session
    the digests. Performance P3s: drained-array retention documented in
    the code comments as bounded amortization (not a leak); battery
    cost prose below names the measurement basis for both figures.
+
+## Round 9 (gate-fix delta) — verdict log, in arrival order
+
+Anchor: `4921bb09` (12 files). HEAD moved under the round with two
+within-scope addenda commits (`b73a20ba`, `2ff93bf1`; the lead addenda
+section and `.local/shared/status.md` record exactly what they change:
+family-specific hostname cap 255/256 with both-engine pins, the
+attempt-fold tamper term + control (self-test 70), retention comments,
+bundle hygiene — no reopened class).
+
+- performance: **PASS**, no P0-P2. Four instructions executed with
+  executable proof: per-line hot-path cost inside noise (paired 1M-line
+  publish, median -2.8 ms); parked queue bounded by one group
+  (realistic <= ~1.5 MiB, strictly tighter than C's whole-set
+  in-memory); report growth +3% against a 1.27 MB artifact retirement;
+  one-sweep coverage proven identical (378 pairs, same pins), mode
+  triple-bound so the regular artifact cannot silently downgrade.
+  P3s all closed same-session: retention comments on both engines,
+  battery cost basis named (pooled ~100 s vs serial 1,117 s),
+  bundle rc/run-shape recorded.
+- tester: **FAIL on F1 (P1)** — the P1-1 drain half had no detecting
+  test anywhere: the push-side pins asserted only parked contents, and
+  `publish.dns_overflow_batch` cannot detect a discarding drain
+  (300 `localhost` lines answer far under 256 addresses on this host,
+  so the overflow branch is never taken, and every numeric member is
+  `$ignore`d — a truncated publish reads identical). Reproduced with
+  mutation D1 (pop-and-discard in the drain): the pin suite and the
+  corpus case both pass on the mutated binary. **F1 CLOSED the same
+  session**: the Rust and Go push-side pins now assert the drain half
+  (`next_batch`/`nextBatch` must hand out the parked surplus in full,
+  FIFO — the pre-filled head is documented loop scratch), and D1 is
+  re-proven to FAIL each (rust: `the drain must hand out the parked
+  FIFO in full`; go: `drain lost ranges: handed 0, parked 44`). The
+  corpus case's comment and the SOW claim are narrowed accordingly:
+  the case proves publication of a large group succeeds end-to-end;
+  the pins own the park-and-drain contract. Tester's other items: all
+  three P1 repairs mutation-proven in the role's own blob-exact builds
+  (m1-m5/g1-g5 each FAIL their named test; pre-fix binaries from
+  52f29a64 blobs FAIL all six corpus legs with the documented errors,
+  G builds PASS all six); fold controls attack the real fold (old
+  loop order turns exactly the two order controls BAD; neutralizing
+  the verdict term turns the third BAD); fixture base64 re-derived
+  independently; kind-gate direction probed five ways; P2-5/P2-6
+  verified. P3s: corpus.log binary binding (same class as portability
+  F1, closed by BUNDLE-PROVENANCE.md + re-capture); the family-cap and
+  70th-control addenda (recorded above); temp-file style on assertion
+  failure (existing suite convention).
+- portability: **FAIL on F1 (P1)** — the kit's bundle corpus.log had
+  run against F-era `/tmp/opencode/wsbin` binaries (digests were not
+  bound; the role rebuilt from the G tree to prove the passes are
+  real). F1 CLOSED the same session: canonical-recipe rebuild from the
+  committed tree, digests+recipes in
+  `.local/w1926g-qualification/BUNDLE-PROVENANCE.md`, corpus
+  re-captured 6/6 PASS against exactly those binaries. Four instructed
+  items PASS (localhost assumption P3-risk stated in SOW; `bytes`
+  import clean on all four vet targets; no cfg divergence; BE refusal
+  verified, not assumed). Leg-27 precondition recorded: keep
+  `localhost_resolves_*` inside the native cargo run.
