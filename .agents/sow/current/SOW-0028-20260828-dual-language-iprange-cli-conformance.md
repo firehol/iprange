@@ -18087,15 +18087,22 @@ than a hidden hole.
   untouched. The `run_rpc_step` body itself is byte-identical to
   `f977d171` (region digest `abacfa59…`), so the six roles' round-11
   PASSes on the shipped guard stand; only the self-test changed.
-- **Closure farm** (`.local/lead-r10/freeze-farm.py`, 22 mutants +
-  3 controls, faithful runtime injection into HEAD): every F-A..F-I
+- **Closure farm** (`.local/lead-r10/freeze-farm.py`, 18 DIE mutants +
+  2 ACCEPT controls + pristine = 21 trees, faithful runtime injection into
+  HEAD; counts corrected per tester round-12 P3): every F-A..F-I
   shape family now dies — narrowing/deletion/move/body-gutting
   shapes hit the freeze arm, and pre-call diverts (BoolOp-eq,
   handler-return, loop-else, tuple-inert-return, match-wildcard,
   while-True, erase-expect, expect-pinned-return, suppress, lookup-
   raise) die at the behavioral pair or the freeze arm;
   `live-dyn-decoy` and `interposed` (statement between call and
-  guard) die at the freeze. Controls: a post-guard edit is ACCEPTed
+  guard) die at the freeze. Two farm entries (`pre-match-wildcard`
+  SyntaxError, `pre-suppress` NameError) die at import time from injection
+  defects rather than an arm, and `pre-while-true` dies at the farm's
+  external timeout (a non-terminating region edit hangs the self-test);
+  all three are red under the freeze's own semantics (any pre-guard edit
+  dies at the positional compare) and are recorded honestly here rather
+  than claimed as arm kills. Controls: a post-guard edit is ACCEPTed
   (the freeze covers entry-through-guard only, as specified), a
   deliberate golden re-stamp is ACCEPTed, pristine ACCEPTs in 0.9 s.
   Negative family 56/0/1-skip and `live.lifecycle` 4/4 green;
@@ -18109,3 +18116,43 @@ than a hidden hole.
   "this region is AST-stable unless re-stamped". The cost is explicit
   maintenance: legitimate refactoring of the prefix requires a
   deliberate golden re-stamp in the same commit as its review record.
+
+##### Round 12 (2026-09-18) — tester FAIL on the freeze: G-A/G-B, repaired same turn
+
+- Fresh single tester closure session (one-live-session rule honored) at
+  `28739fdf`: verdict FAIL, two P2s, both verified real by the lead.
+- **G-A (P2)**: `inspect.getsource` silently follows `__wrapped__`, so a
+  `functools.wraps` decorator (at the def or via post-class rebind) makes
+  the freeze parse the pristine inner def while production executes the
+  wrapper — green self-test, laundered negative steps (role exhibits
+  m2/m5: self-test ACCEPT + probe A-LAUNDERED; lead reproduced the unwrap
+  channel by direct probe). Repaired: three identity arms — reject
+  `__wrapped__` presence, require `type(...) is types.FunctionType`,
+  reject a non-empty parsed `decorator_list`.
+- **G-B (P2)**: the sentence "code after the guard is unconstrained
+  because nothing that runs after it can prevent it" is false as written
+  for the multi-step process: post-guard code can disarm the guard for
+  LATER steps (method rebind m6; or poisoning the case's own step dicts
+  m9 — no monkeypatching at all). Repaired both ways the role offered:
+  the sentence is restated to per-call truth with the cross-call exposure
+  named and its owner identified, AND a multi-step behavioral control was
+  added — a two-step case (innocent warm-up, then negative) run through
+  the real `run()` dispatch against an always-success stub, requiring the
+  guard to raise on step 2. The control case is deliberately not named
+  `self-test`, because both exhibits exempted that name.
+- Repair verification (`.local/lead-r10/g-round12-verify.py`): the role's
+  nine mutants are pure-insertion against `28739fdf`, so each hunk is
+  ported onto the repaired HEAD (anchor-verified) — ALL-OK: m1/m2/m5/m6/m9
+  die at the new multi-step control, m3/m4/m8 at the behavioral pair, m7
+  loudly at import, `decorator-neutral` (a transparent wrapper no other
+  arm can see) dies exactly at the new `__wrapped__` arm pinning its
+  necessity, a staticmethod rebind dies loudly, and the ACCEPT controls
+  (pristine, post-guard edit) hold. Pristine self-test 0.89 s; negative
+  corpus 56/0/1. The guard region itself is untouched (still `abacfa59…`),
+  so the six roles' guard-site PASSes continue to stand; only the
+  self-test block grew (~+60 lines).
+- Sequence from here: tester delta closure on the repaired HEAD; the six
+  other roles delta-review this self-test change (the chunk they approved
+  has changed shape twice since — freeze, then G-A/G-B arms); then the
+  standing close-out: leg 27, closure battery, evidence child, astra
+  re-review in `ea962c0a…`, push.

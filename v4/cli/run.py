@@ -2393,6 +2393,58 @@ def _self_test():
                     service.proc.kill()
                     service.proc.wait(timeout=2)
 
+    # Multi-step control (tester round-12 G-B): the guard is per-call but
+    # the runner dispatches many steps per case, so post-guard code --
+    # which the freeze below deliberately does not cover -- can disarm the
+    # guard for every LATER step (rebind CaseRunner.run_rpc_step, or poison
+    # the case's own step dicts).  A single-call control cannot see that:
+    # both channels need a first step to arm.  This control runs one case
+    # through the real run() dispatch -- an innocent warm-up step, then a
+    # negative step against a stub that always succeeds -- and requires
+    # the guard to raise on the second step.  The case is deliberately not
+    # named "self-test": the round-12 exhibits exempted that name, so a
+    # name-keyed disarm dies here instead of hiding.
+    multi_ok_resp = ("import sys,json\n"
+                     "for line in sys.stdin.buffer:\n"
+                     "    r=json.loads(line)\n"
+                     "    sys.stdout.buffer.write(json.dumps({'jsonrpc':'2.0',"
+                     "'id':r['id'],'result':{'method':'iprange.v1.reader.close',"
+                     "'closed':True}}).encode()+b'\\n')\n"
+                     "    sys.stdout.buffer.flush()\n")
+    warm_step = {"kind": "rpc", "method": "iprange.v1.reader.close",
+                 "actor": "consumer", "params": {"reader": "0" * 32}}
+    late_negative = {"kind": "rpc", "method": "iprange.v1.reader.close",
+                     "actor": "consumer", "params": {"reader": "1" * 32},
+                     "expect_error": {"code": "invalid_argument",
+                                      "outcome": "not_started"}}
+    with tempfile.TemporaryDirectory(dir=owned_temp_root()) as mwork:
+        multi_runner = CaseRunner(None, {
+            "schema": "iprange-cli-case-v1", "name": "pair-control-late",
+            "fixtures": [], "steps": [warm_step, late_negative],
+        }, mwork, "test")
+        multi_service = JsonRpcService([sys.executable, "-c", multi_ok_resp],
+                                       "stub")
+        multi_runner.service = multi_service
+        try:
+            try:
+                multi_runner.run()
+            except AssertionError as exc:
+                if ("succeeded but the step declared expect_error"
+                        not in str(exc)):
+                    raise AssertionError(
+                        "expect_error multi-step control: failed for an "
+                        f"unrelated reason: {exc}") from exc
+            else:
+                raise AssertionError(
+                    "expect_error multi-step control: a success response "
+                    "on the second (negative) step was accepted; post-"
+                    "guard code disarmed the guard for later steps")
+        finally:
+            multi_runner.service = None
+            if multi_service.proc.poll() is None:
+                multi_service.proc.kill()
+                multi_service.proc.wait(timeout=2)
+
     # Frozen-prefix pin (astra gate session ea962c0a... turn 2, option 1):
     # the behavioral controls above sample one point per dimension, and the
     # nine adversarial rounds F-A..F-I showed that every static reach
@@ -2410,19 +2462,25 @@ def _self_test():
     #
     # The guarantee is exactly: any edit to that region -- narrowing or
     # moving the guard, inserting a decoy or divert before the call,
-    # deleting either pinned statement -- fails this self-test until the
-    # golden is re-stamped deliberately together with the review record
-    # justifying the change.  A divert can only skip the guard by running
-    # before it, and the compared region covers everything from entry to
-    # the guard; code after the guard is unconstrained because nothing
-    # that runs after it can prevent it.  Comments are not in the AST, so
-    # they may change without a re-stamp.  This is a freeze, not semantic
-    # analysis: it cannot be wrong about Python behavior, and it does not
-    # protect edits to the helpers the region calls or to the behavioral
-    # controls above -- the sampled pair still owns those edges.
+    # deleting either pinned statement, or wrapping the def in a decorator
+    # -- fails this self-test until the golden is re-stamped deliberately
+    # together with the review record justifying the change.  A divert can
+    # only skip the guard within its own call by running before it, and the
+    # compared region covers everything from entry to the guard.  Within
+    # one call, nothing after the guard can prevent it; ACROSS calls,
+    # however, post-guard code is unconstrained by this freeze and CAN
+    # disarm the guard for later steps of a case (rebinding the method or
+    # poisoning the case's own step dicts -- tester round-12 G-B), so that
+    # exposure is owned by the multi-step control above, not by the freeze.
+    # Comments are not in the AST, so they may change without a re-stamp.
+    # This is a freeze, not semantic analysis: it cannot be wrong about
+    # Python behavior, and it does not protect edits to the helpers the
+    # region calls or to the behavioral controls above -- the sampled pair
+    # still owns those edges.
     import ast
     import inspect
     import textwrap
+    import types
 
     _FROZEN_RPC_PREFIX = '''\
 def run_rpc_step(self, step):
@@ -2469,6 +2527,22 @@ def run_rpc_step(self, step):
             f"{step['expect_error'].get('code')!r}")
 '''
 
+    # Identity arms (tester round-12 G-A): inspect.getsource silently
+    # follows __wrapped__, so without these the freeze would parse the
+    # pristine inner def while production called a wraps()-decorated
+    # wrapper -- green self-test, laundered negative steps.  The compared
+    # attribute must BE the plain function the golden describes.
+    if getattr(CaseRunner.run_rpc_step, "__wrapped__", None) is not None:
+        raise AssertionError(
+            "expect_error guard freeze: CaseRunner.run_rpc_step carries "
+            "__wrapped__; the freeze would pin the inner def while the "
+            "wrapper executes -- the executed callable must be the pinned "
+            "one")
+    if type(CaseRunner.run_rpc_step) is not types.FunctionType:
+        raise AssertionError(
+            "expect_error guard freeze: CaseRunner.run_rpc_step is not a "
+            "plain function (a staticmethod/classmethod/descriptor rebind "
+            "evades the source pin)")
     _golden = ast.parse(_FROZEN_RPC_PREFIX).body[0]
     _actual = ast.parse(
         textwrap.dedent(inspect.getsource(CaseRunner.run_rpc_step))).body[0]
@@ -2478,6 +2552,12 @@ def run_rpc_step(self, step):
         raise AssertionError(
             _drift + "run_rpc_step is no longer a plain function named "
             "run_rpc_step; the frozen prefix cannot be located")
+    if _actual.decorator_list:
+        raise AssertionError(
+            _drift + "run_rpc_step carries decorators; a decorator can "
+            "wrap the pinned def and execute instead of it -- remove it "
+            "or re-stamp _FROZEN_RPC_PREFIX deliberately with a review "
+            "record")
     if (ast.dump(_golden.args, include_attributes=False)
             != ast.dump(_actual.args, include_attributes=False)):
         raise AssertionError(
