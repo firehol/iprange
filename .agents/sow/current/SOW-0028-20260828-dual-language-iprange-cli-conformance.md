@@ -17962,3 +17962,66 @@ This chain is what REVIEWS.md's adversarial loop costs — four rounds
 of the same finding class, each repaired below the previous mutant,
 until the surviving-shape residue is a stated, checkable floor rather
 than a hidden hole.
+
+##### Round 11 continuation 2 (2026-09-18) — F-F, F-G, F-H and the classifier's soundness floor
+
+- **F-F (P2, tester 11f)** at `891736d9`: position alone does not
+  imply reachability — a FULLY top-level dead canonical pair is
+  constructible (live dynamic-key guard in `if True:`, a top-level bare
+  return or constant-true divert, then the canonical top-level
+  call+guard pair), satisfying shape+position+body+count while purity
+  never sees the live path's concatenated key. Closed at `b0aeba18`
+  with the reach arm (no top-level bare `Return`/`Raise` or
+  constant-`If` divert before the response assignment; recursive on
+  nested constant-true towers).
+- **F-G (P2, tester 11g)** at `af86a271`: the reach arm classified only
+  `Constant`-test `If`, so eight provably unconditional diverts
+  (`while True: return`, `for _ in (None,):`, `if True and True:`,
+  `if not False:`, `if 1 == 1:`, `match True: case _:`,
+  `try: return`, nested if-True towers) resurrected the class. Closed
+  at `a419663f` (message-amended `b039be8b`) with the role's classifier:
+  `_const_bool` fold + While/For/Match-wildcard/Try-first-statement
+  arms. Two lead corrections during adoption: guarded wildcard cases
+  must not be classified as diverts (the role's version would over-
+  reject legitimate code), and Match/MatchAs/TryStar are accessed
+  getattr-tolerantly for the undeclared harness Python floor.
+- **F-H (P2, tester 11h round)** at `b039be8b`: the fold itself was
+  unsound in both directions — Eq compared truthiness (`(1 == 2) ==
+  False` laundered; `if 1 == 2: return` over-rejected), set/dict
+  displays sat outside the fold (four launderings, refuting the arm's
+  own comment), named wildcards and MatchOr alternatives went
+  unclassified, and short-circuit-true `or` plus `finally: return`
+  were laundered while the boundary sentence mis-characterized them as
+  off-sample residue. Closed at `a419663f` with the role's
+  `fixproof-11g` classifier: `ast.literal_eval` raw-value fold (values
+  compared by Eq, truthiness applied only at If/While/For), tri-state
+  BoolOp short-circuit soundness, `_always_matches` with earlier-
+  cases-divert ordering, Try finalbody. The decoy floor and proof
+  boundary were restated to the arm's actual reach.
+- **Lead addendum `d992c50e`** — found by construction, not by a
+  reviewer, which is the point of REVIEWS.md principle 2: building the
+  closure farm required extending the fold to chained Eq and the Try
+  arm to inert-prefix bodies, and those extensions exposed two
+  soundness holes in the classifier shipped at `a419663f`: a first-
+  statement `raise` was classified unconditional even when catchable
+  handlers exist (the raised type is not claimed, so it diverts only
+  with no handlers), and the else/inert rules needed a precise inert-
+  statement set (`pass`, literal expressions, literal-to-name
+  assignment; attribute/subscript targets can fail through
+  `__setattr__`/`__setitem__` and stay residue). Farm methodology
+  recorded: accept-side probes must keep the canonical pair intact
+  (prepend before `service_for`; a second call against the one-shot
+  stub times out and mis-scores), and a subject-specific diverting
+  pattern may die at ANY arm — detection is detection.
+- Stopping principle for this chain: the classifier decides
+  provability. The residue it declares — tests whose truth no constant
+  fold can decide, patterns that can fail for some subject, try bodies
+  that can fail before a later exit, catchable raises whose type is
+  not claimed, and helper-delegated checks — is exactly the set a
+  single-function static analysis cannot bound without halting-class
+  reasoning. The floor sentences now name each class; the adversarial
+  reviewer rounds are the declared control for edits that exploit the
+  residue, and the behavioral two-code control closes the on-sample
+  side from the opposite direction. A control's claim is now: every
+  *provably* unconditional pre-call divert fails the self-test;
+  undecidable diverts are the named residue.
