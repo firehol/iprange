@@ -17911,3 +17911,54 @@ Rust comment).
 Sequencing after the round closes 7/7: leg 27 at the final revision,
 closure battery at the final revision (single full sweep), evidence
 child commit, astra re-review (session ea962c0a…), push.
+
+##### Round 11 continuation (2026-09-18) — F-E and F-F on the guard-pin chain
+
+- **F-E (P2, tester 11d)** at `65a796fb`: the walk-based position scan
+  accepted `deadinposition` (canonical call+guard pair nested inside
+  `if False:` with a setpin-narrowed live guard — refuting the pin's
+  floor claim as then written) and `precall`/`premutate` (code-pinned
+  early return / `expect_error` erase placed before the response
+  assignment). Closed at `7959189b`: the call-and-guard adjacency is
+  pinned in the function's TOP-LEVEL statement list only (nested pairs
+  can never satisfy position), plus a pre-call purity scan rejecting
+  any top-level statement before the call that references
+  `expect_error` (Constant/keyword/Attribute roles) or mutates/rebinds
+  `step` (`pop`/`clear`/`update`/`setdefault`, subscript write, `del`,
+  reassignment — RHS-agnostic, proven so by the role). `891736d9`
+  (comment-only, zero executable delta) restated the residual floor
+  honestly: on-sample-keyed pre-call suppression dies on the
+  behavioral pair; off-sample or helper-delegated keys are the
+  declared residue owned by the review rounds.
+- **F-F (P2, tester 11e)** at `891736d9`: the restated decoy floor was
+  still false — a FULLY top-level dead canonical pair is constructible
+  (live dynamic-key guard inside `if True:`, then a top-level bare
+  `return` or constant-true divert, then the canonical top-level
+  call+guard pair): shape, position, body, and count arms all match
+  the dead pair; purity never sees the live path's concatenated key;
+  committed `cursor_closed` steps launder with a green self-test. The
+  lead reproduced both shapes independently (an unfaithful first
+  reconstruction — missing the decoy pair's own call — died on the
+  position arm, which is itself evidence the arms bind what they
+  claim). Closed at `b0aeba18` with the role's reach arm: no top-level
+  bare `Return`/`Raise` before the response assignment, and no
+  constant-test `If` whose executed branch diverts (recursive, so
+  nested `if True:` towers count); the shipped pre-call flow has
+  neither, so pristine passes. Residual (stated): name-keyed top-level
+  exits are invisible to a static reach scan exactly as the (3) floor
+  is invisible to the behavioral pair — the same declared residue
+  class, controlled by the review rounds themselves.
+- Farm at `b0aeba18` (sixteen trees): fourteen attack shapes die at
+  their expected arm (six F-C, four F-D, two F-E, two F-F); the
+  on-sample method-keyed pre-call return dies on the behavioral pair
+  (the pin and the pair close the on-sample class from opposite
+  sides); the helper-keyed exit survives only the static arms — the
+  declared floor verified to exist as described, which is what makes
+  the floor statement checkable rather than hopeful. Pristine
+  self-test rc 0 (0.894 s); negative-family corpus 56 PASS / 0 FAIL /
+  14 designed skips.
+
+This chain is what REVIEWS.md's adversarial loop costs — four rounds
+of the same finding class, each repaired below the previous mutant,
+until the surviving-shape residue is a stated, checkable floor rather
+than a hidden hole.
