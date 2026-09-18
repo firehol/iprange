@@ -18456,11 +18456,15 @@ than a hidden hole.
   mutation-proof instrument now reports the actual failing frame and
   exception and reads the success marker from stdout only.
 - Validation at this revision: self-test PASS 0.93 s; negative 56/0/1;
-  live.lifecycle 4/0/1; kind-gate 133+5; kit-gc functional suite 21/21 assertions
-  on synthetic trees including all four turn-4 counterexamples (never
-  `.local/`); guard region `abacfa59…` and run.py byte-identical to
+  live.lifecycle 4/0/1; kind-gate 133+5; kit-gc functional suite 23/23
+  assertions on synthetic trees including all four turn-4 counterexamples
+  (never `.local/`); guard region `abacfa59…` and run.py byte-identical to
   3e75cfec — the refusal-content pins and the six roles' guard-site
-  PASSes stand unchanged.
+  PASSes stand unchanged. (The 21/21 figure that briefly appeared on this
+  line was a round-18 `sed` accident rewriting history; restored to the value
+  recorded at f3d4c0a6 per astra turn 6
+  historical_validation_count_rewritten. The 21-assertion suite belongs to
+  round 18, the 14-assertion suite to the round-19 reporter.)
 - What this round does NOT do: no new classifier, no expanded
   guard-mutation campaign (astra's explicit instruction), no engine or
   protocol change.
@@ -18533,3 +18537,56 @@ than a hidden hole.
   32 GB `.local/` exits 0 with no stale candidates and no blockers.
   `v4/cli/run.py` is byte-identical to 3e75cfec (guard region
   `abacfa59…`): no shipped behavior changed in rounds 17 or 18.
+
+## Round 19 — cleanup automation removed: read-only reporter + human removal procedure (2026-09-19)
+
+- After astra turns 4-6 each found new guard defects in the mandated
+  cleanup tool (turn 6: 6 P2 + 3 P3, all but the record items located in
+  `.agents/tools/kit-gc.py`, including a regression the round-5 rewrite
+  itself introduced in `--attic`), the lead escalated the scope question
+  to the user. User decision: adopt the advisor-ruling option 3 — a
+  narrow read-only reporter replaces the automation; the ruling also
+  corrected three of the lead's framings (guards-as-warnings would keep
+  the very complexity being justified away; always-exit-0 hides failure
+  classes; "inherently unbounded" was overstated — the valid reason is
+  that automatic deletion is machinery beyond the operational need).
+- `.agents/tools/kit-gc.py` is now a usage reporter: single read-only
+  pass over `.local/`; per-dir allocated (blocks*512, symlinks not
+  followed, sparse-aware) and apparent sizes; role-sandbox cap check
+  against the REVIEWS.md 1 GB policy (`--cap` to override); an
+  inspection inventory of build-target-named and >512 MB directories as
+  name/size/newest-mtime facts with an explicit "NOT removal
+  recommendations" label. Exit classes are distinct: 0 clean, 1
+  over-cap finding, 2 scan incomplete with every inspection error
+  listed and no zero-substitution. No delete path, no archive path, no
+  safety classifier, no stale/active verdicts (mtimes are reported,
+  never interpreted).
+- REVIEWS.md § Kit hygiene rewritten: source-prevention rules unchanged
+  and mandatory (symlink farms, staged binaries, shared build targets,
+  ≤ 1 GB cap, live-kit-at-next-gate); removal is now an explicit human
+  procedure with three named checks per path (ownership, inactivity,
+  preservation — copy durable artifacts into `.local/shared/evidence/`
+  and bind them in the gate manifest before deleting), single named
+  paths only, never globs, `shared/` never a target. AGENTS.md matches
+  (closes turn-6's entry-point consistency finding by removal of the
+  inconsistency).
+- Records: the round-17 suite count restored to its recorded 23/23 (a
+  round-18 `sed` had overwritten history — astra turn 6
+  historical_validation_count_rewritten); astra turn-6 result copied
+  verbatim to `.local/shared/evidence/round16/astra-turn6-result.txt`;
+  the `.local/kit-gc.sh` convenience wrapper deleted (it forwarded to a
+  now-nonexistent mode set).
+- Validation at this revision: reporter suite 14/14 assertions on
+  synthetic trees (healthy exit 0; over-cap exit 1 via `--cap 10`;
+  inspection-error exit 2 with INCOMPLETE visible; sparse and symlink
+  accounting — allocated vs apparent; nested `v4/target` listed;
+  `shared/` excluded; byte-identical tree across both modes; no
+  destructive calls in source). Read-only run over the real 32 GB
+  `.local/`: exit 2 — two unreadable directories are the parity and
+  w8-golegacy `chmod 000` privacy fixtures, correctly reported as
+  errors instead of zeroed; five real over-cap sandboxes identified for
+  the human procedure (lead-r10/sb 3.9 GB, tester/r9-kit 4.0 GB,
+  performance/w1919 1.6 GB, portability/w1925 1.4 GB,
+  security/target-r9b 1.1 GB). `v4/cli/run.py` byte-identical to
+  3e75cfec (guard region `abacfa59…`); no product behavior touched in
+  rounds 17-19.

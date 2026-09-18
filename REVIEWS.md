@@ -108,9 +108,15 @@ Rules for the kit:
 
 At milestone-4 close-out, `.local/` held 370 GB: eighteen reviewer sandboxes
 each kept a full copy of the repo tree *with its cargo/go/C build target*
-(20–26 GB each) from completed rounds. Prevention, enforced by
-`.agents/tools/kit-gc.py` (committed; a `.local/kit-gc.sh` convenience
-wrapper may forward to it, but nothing may depend on it):
+(20–26 GB each) from completed rounds. The controls below prevent that at
+its source; they are mandatory. `.agents/tools/kit-gc.py` (committed) is a
+**read-only usage reporter**: it measures disk allocation per sandbox,
+reports cap violations and large build-target-named directories as
+inspection data, and **never deletes, never archives, and never states
+that anything is safe to remove** (user decision 2026-09-19: automatic
+deletion and its safety classifier were removed as machinery beyond the
+actual operational need, which is occasionally removing a few named
+directories). Removal is the human procedure defined below.
 
 - Roles must **never copy a buildable repo tree into the sandbox**. Probes
   that need source mutations use a **symlink farm**: symlink every file of
@@ -122,14 +128,31 @@ wrapper may forward to it, but nothing may depend on it):
   tree copy, and reports the build in its round notes so the lead can
   prune it.
 - Every role sandbox must be **≤ 1 GB after a gate closes**. The lead runs
-  `.agents/tools/kit-gc.py` (report) at each milestone-gate close, attics
-  any `*.md` exhibits with it `--attic <dirs>`, then prunes stale
-  build targets by naming them: `--prune-builds --apply PATH...`
-  (there is no sweep-delete mode; every guard is re-checked per path); the live (highest-numbered)
-  kit per role is protected by the script and is handled at the *next*
-  gate's close. Deleting stale round trees is a lead duty, not a reviewer
-  one; reports, manifests, and anything manifest-referenced are never
-  pruned (the script refuses `shared/`, reports, and `--keep` paths).
+  `.agents/tools/kit-gc.py` at each milestone-gate close and must resolve
+  every reported over-cap sandbox before the gate is recorded. The
+  reporter's exit code is part of the result: 0 within cap, 1 at least
+  one sandbox over cap, 2 scan incomplete because an entry could not be
+  measured (its numbers are then partial — an unreadable subtree is a
+  finding to explain, never silently zeroed).
+- **Removal is a human procedure, and it is a lead duty, not a reviewer
+  one.** For each directory the lead decides to remove, all three checks
+  must be established *for that path* first, and recorded in the gate
+  note:
+  1. **ownership** — which role/round created it, and that no session
+     still uses it (a live kit is the newest round per role and is
+     handled at the *next* gate's close, not this one);
+  2. **inactivity** — last modification, and that no open review or
+     pending re-review depends on the contents;
+  3. **preservation** — whether the subtree holds anything durable:
+     `report*.md`, `manifest*.json`, `SHASUMS*`, `*.sha256`, evidence
+     referenced by any manifest under `.local/`, or anything
+     manifest-referenced elsewhere. Copy such artifacts into
+     `.local/shared/evidence/<gate>/` first and bind them in that
+     gate's `manifest.json`; the reporter deliberately does no archiving
+     for you.
+  Then remove that single named path (`rm -rf <exact-path>`), never a
+  glob and never a directory the lead has not individually inspected.
+  `.local/shared/` is never a removal target.
 
 ## Lead invocation message (exact shape)
 
