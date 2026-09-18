@@ -18222,3 +18222,55 @@ than a hidden hole.
   claimed-away. Both classes require an edit that simultaneously weakens
   live behavior AND passes every observed sample; the adversarial rounds
   are the declared control for them.
+
+##### Round 14 (2026-09-18) — tester FAIL: H3/H4 (control sample still pre-keyable), repaired; role judges the arm+control set at the floor after these
+
+- Tester delta-closure at `7bc66c8c`: FAIL, two P2s + two P3s. Lead
+  reproduced both exhibits by execution before repair (`build_r16.py`:
+  r16a/r16b ACCEPT + A-LAUNDERED; `build_demo16.py d-b`: satisfied frame
+  `code_is_real=False`).
+- **H3 (P2)**: the uuid4 randomization left a fixed literal PREFIX
+  (`"pair-control-late-" + uuid`) — a zero-observation pre-key; the
+  exemption trick moved to the invariant part of the name. Repaired: the
+  case name is now a bare `uuid4().hex` (schema allows any min_len-1
+  name; corpus names are human-readable, collision nil).
+- **H4 (P2)**: the traceback-authenticity check matched CLAIMED
+  `co_name`/`co_filename`, which exec'd code can forge. Repaired per the
+  role's demonstrated closure: acceptance requires
+  `tb_frame.f_code is CaseRunner.run_rpc_step.__code__` and the frame's
+  `step` local to be the sample's late step dict — identity, not claims.
+- **H5/H6 (P3)**: residue sentences under-listed the floor and the arms
+  comment said "Four arms" while shipping five checks. Repaired: the
+  control comment now names every residue class the role executed —
+  adaptive observation, in-process-state keys (uuid-supply hijack),
+  static-description keys (method, step shape, call context — the
+  `_self_test`-frame stack key — and the in-frame message decoy),
+  off-sample-real-step keys — and states plainly that the static decoy
+  has NO decidable closure at this arm (split literals evade an exact-
+  literal scan; the same undecidability class that sank the reach
+  classifier, priced rather than re-implemented); the freeze comment
+  cross-references that enumeration; the arms comment enumerates all
+  five checks numbered to their channels.
+- Re-verification at the repaired HEAD: `build_r16.py` — r16a and r16b
+  die at the control (CTRL-ACCEPTED-SUCCESS: their exemptions no longer
+  match the bare-uuid name / their forged frame no longer authenticates);
+  r16f/r16g die at CTRL-UNRELATED (frame identity rejects the message
+  spoof); r16d/e/j die at the globals/slot/co-file arms as mapped;
+  r16h (uuid-supply hijack) dies at the control only because its
+  exemption body still quotes the retired prefixed name; the re-keyed
+  variant (hijack sets the values AND exempts them) is the in-process-
+  state residue the control comment now names, and the role priced that
+  class as residue, not as a patchable hole; r16c/r16i ACCEPT as
+  adjudicated NAMED residue (r16c's prefix key is inert against the bare
+  uuid; r16i's stack-context key is exactly the call-context class the
+  sentence now names). `build_r13.py`
+  9/9 + `build_t2f.py` + `g-round12-verify.py` ALL-OK 13/13; pristine
+  self-test 0.90 s; negative corpus 56/0/1; live.lifecycle 4/0/1; guard
+  region `abacfa59…` byte-identical — six roles' guard-site PASSes stand.
+- **Convergence status**: the role's explicit task-4 judgment — H3/H4 are
+  the last NEW decidable classes; with their closures plus the residue
+  sentence naming the static-description/in-process-state class, the
+  arm+control set is AT THE FLOOR and the next round should adjudicate
+  residue, not patch. If it instead opens another new decidable class,
+  the standing escalation (astra gate session `ea962c0a…`, turn 3) fires
+  instead of another same-turn patch.

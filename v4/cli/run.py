@@ -2403,19 +2403,33 @@ def _self_test():
     # to arm.  This control runs one case through the real run() dispatch
     # -- three innocent warm-up steps, then a negative step against a stub
     # that always succeeds -- and requires the guard to raise on the late
-    # step.  The sample is un-PRE-keyable by design (round-13 H1): the
-    # case name and every reader id carry a fresh uuid4 per invocation,
-    # so a disarm cannot pre-exempt the control's name (the exemption
-    # trick pointed at a fixed name dies here), cannot carry a
-    # hard-coded key to the sampled reader ids, and cannot arm on a step
-    # count the control does not reach; and the acceptance requires a
-    # run_rpc_step frame FROM THIS FILE in the traceback, so spoofing
-    # the guard message from a wrapper (a run() rebind raising the exact
-    # substring) is not acceptance.  A poison that OBSERVES the sample
-    # at its first executed step and exempts it adaptively, or keys on
-    # properties of REAL corpus steps the sample never reproduces, is
-    # outside this control -- review-discipline territory, named so the
-    # freeze comment below owns only what it pins.
+    # step.  The sample is un-PRE-keyable by design (round-13 H1, closed
+    # for round-14 H3): the case name and every reader id are bare uuid4
+    # values generated per invocation -- no fixed prefix or literal a
+    # disarm can quote from source (the H3 exhibit pre-exempted the old
+    # "pair-control-late-" prefix with zero observation), no hard-coded
+    # reader-id key is possible, and the poison cannot arm on a step
+    # count the control does not reach.  Acceptance requires the raise's
+    # frame to carry the pinned function's own code object and the
+    # sample's late step dict as its `step` local (round-14 H4): a raise
+    # from exec'd code CLAIMING co_name/co_filename, or a guard-message
+    # spoof from a run() rebind, is not acceptance.  What remains
+    # outside this control is owned by review discipline and named:
+    # observing the sample at its first executed step and exempting
+    # adaptively; keying on in-process state the sample relies on
+    # (rebinding uuid.uuid4 before the control runs makes the "random"
+    # values predictable); keying on the sample's STATIC DESCRIPTION
+    # from source -- its method, its step shape, or its call context (a
+    # poison that disarms unless a _self_test frame is on the stack
+    # needs no uuid value, no observation and no corpus property);
+    # including an in-frame decoy that mimics the guard message for
+    # control-shaped cases while laundering every other step; or keying
+    # on properties of REAL corpus steps the sample never reproduces.  The static-description
+    # decoy has no closure here: killing it statically means scanning
+    # post-guard string constants, and split literals evade an
+    # exact-literal scan -- the same undecidability class that sank the
+    # reach classifier, priced rather than re-implemented.  The freeze
+    # comment below owns only what it pins.
     multi_ok_resp = ("import sys,json\n"
                      "for line in sys.stdin.buffer:\n"
                      "    r=json.loads(line)\n"
@@ -2424,7 +2438,7 @@ def _self_test():
                      "'closed':True}}).encode()+b'\\n')\n"
                      "    sys.stdout.buffer.flush()\n")
     with tempfile.TemporaryDirectory(dir=owned_temp_root()) as mwork:
-        _multi_name = "pair-control-late-" + uuid.uuid4().hex
+        _multi_name = uuid.uuid4().hex
         _warm = {"kind": "rpc", "method": "iprange.v1.reader.close",
                  "actor": "consumer",
                  "params": {"reader": uuid.uuid4().hex}}
@@ -2445,12 +2459,17 @@ def _self_test():
             try:
                 multi_runner.run()
             except AssertionError as exc:
+                # Authenticity by code-object and step identity, not by
+                # claimed co_name/co_filename (round-14 H4: exec'd code
+                # can claim both).  A descriptor-slot rebind without a
+                # __code__ crashes this line loudly -- red is red.
                 _frame_ok = False
+                _pinned = CaseRunner.run_rpc_step.__code__
                 _tb = exc.__traceback__
                 while _tb is not None:
-                    if (_tb.tb_frame.f_code.co_name == "run_rpc_step"
-                            and _tb.tb_frame.f_code.co_filename
-                            == __file__):
+                    if (_tb.tb_frame.f_code is _pinned
+                            and _tb.tb_frame.f_locals.get("step")
+                            is _late):
                         _frame_ok = True
                         break
                     _tb = _tb.tb_next
@@ -2496,8 +2515,11 @@ def _self_test():
     # however, post-guard code is unconstrained by this freeze and CAN
     # disarm the guard for later steps of a case (rebinding the method or
     # poisoning the case's own step dicts -- tester round-12 G-B).  The
-    # multi-step control above samples that exposure with an
-    # un-pre-keyable case; an adaptive or off-sample disarm is outside
+    # multi-step control above samples that exposure with a bare-uuid,
+    # code-object-authentic case; the residue classes the control
+    # comment enumerates (adaptive observation, in-process-state keys
+    # such as a hijacked uuid supply, static-description keys such as
+    # an in-frame message decoy, off-sample-real-step keys) are outside
     # both arms and owned by review discipline.
     # Comments are not in the AST, so they may change without a re-stamp.
     # This is a freeze, not semantic analysis: it cannot be wrong about
@@ -2554,23 +2576,26 @@ def run_rpc_step(self, step):
             f"{step['expect_error'].get('code')!r}")
 '''
 
-    # Identity arms (tester round-12 G-A, closed for round-13 H2): the
-    # compared attribute must BE the plain function this module compiled,
-    # not merely present as one through a chosen access path.  Four arms,
-    # each pinning one channel by which the arms could see a pristine
-    # function while production executes something else: the class-dict
-    # slot itself must hold a plain function (a data descriptor whose
-    # __get__ lies per accessor, or a staticmethod/classmethod wrapper,
-    # fails here even when attribute access looks clean); __globals__
-    # must be this module's dict (an exec'd spoof compiled against a
-    # registered stub module passes getsource -- the real def is read
-    # from disk -- but carries foreign globals); __wrapped__ must be
-    # absent (inspect.getsource silently follows it, so a wraps()
-    # decorator or rebind would have the freeze parse the inner def
-    # while the wrapper executes); and the parsed def must carry no
-    # decorators.  Executed-callable identity across these arms is the
-    # belt; the traceback-authentic multi-step control above is the
-    # suspenders for the dispatch path.
+    # Identity arms (tester round-12 G-A, closed for round-13 H2 and
+    # round-14 H6): the compared attribute must BE the plain function this
+    # module compiled, not merely present as one through a chosen access
+    # path.  Five checks, each pinning one channel by which the arms
+    # could see a pristine function while production executes something
+    # else: (1) the class-dict slot itself must hold a plain function (a
+    # data descriptor whose __get__ lies per accessor, or a
+    # staticmethod/classmethod wrapper, fails here even when attribute
+    # access looks clean); (2) __globals__ must be this module's dict (an
+    # exec'd spoof compiled against a registered stub module passes
+    # getsource -- the real def is read from disk -- but carries foreign
+    # globals); (3) its code object must come from this file (an exec'd
+    # spoof handed this module's globals passes (1) and (2) yet was
+    # compiled elsewhere); (4) __wrapped__ must be absent
+    # (inspect.getsource silently follows it, so a wraps() decorator or
+    # rebind would have the freeze parse the inner def while the wrapper
+    # executes); and (5) the parsed def must carry no decorators.
+    # Executed-callable identity across these arms is the belt; the
+    # code-object-authentic multi-step control above is the suspenders
+    # for the dispatch path.
     if (type(CaseRunner.__dict__.get("run_rpc_step"))
             is not types.FunctionType):
         raise AssertionError(
