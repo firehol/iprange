@@ -2154,9 +2154,10 @@ def _self_test():
 
     Runs on every runner invocation (main() calls it before loading
     cases): helper pins stay subprocess-free; the final-output
-    controls spawn four stub services (a few tens of milliseconds
+    controls spawn six stub services (a few tens of milliseconds
     each) to pin the clean-session end contract in both client I/O
-    branches.
+    branches, and the negative-expectation controls spawn four more
+    (two codes x two directions).
     """
 
     import tempfile
@@ -2248,10 +2249,15 @@ def _self_test():
     # the forced threaded branch) are covered, and a clean session
     # keeps passing.  The stubs stay alive until close() closes
     # stdin, so the peer is still alive when close() shuts it down.
+    # Stub answers go through sys.stdout.buffer with an explicit LF byte
+    # terminator: a text-mode print() on native Windows translates the
+    # terminator to CRLF, which decode_response_line correctly rejects,
+    # so a natively executed self-test would die before its guard ran.
     read_resp = ("import sys,json;"
                  "r=json.loads(sys.stdin.buffer.readline());"
-                 "print(json.dumps({'jsonrpc':'2.0','id':r['id'],"
-                 "'result':{}}),flush=True);")
+                 "sys.stdout.buffer.write(json.dumps({'jsonrpc':'2.0',"
+                 "'id':r['id'],'result':{}}).encode()+b'\\n');"
+                 "sys.stdout.buffer.flush();")
     for threaded in (False, True):
         for label, tail in (
                 ("trailing-output", "print('not-json',flush=True);"
@@ -2326,52 +2332,66 @@ def _self_test():
     # (method/closed) is fully satisfiable by the stub, so the
     # success-laundering arm must trip the guard itself and nothing
     # else; a weaker guard shape fails this control for the wrong reason.
-    negative_step = {
-        "method": "iprange.v1.reader.close",
-        "actor": "consumer",
-        "params": {"reader": "0" * 32},
-        "expect_error": {"code": "input_format", "outcome": "not_started"},
-    }
+    # Both arms run over TWO declared codes (tester round-11 F-A): a
+    # guard narrowed to one hard-coded domain code survives a single-code
+    # control while laundering every negative step that declares another
+    # code.  input_format covers the streaming-refusal class;
+    # invalid_argument is the corpus's most-used negative code (25 steps),
+    # so a code-narrowed guard cannot survive the pair.
     ok_resp = ("import sys,json;"
                "r=json.loads(sys.stdin.buffer.readline());"
-               "print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':"
-               "{'method':'iprange.v1.reader.close','closed':True}}),"
-               "flush=True);")
-    err_resp = ("import sys,json;"
+               "sys.stdout.buffer.write(json.dumps({'jsonrpc':'2.0',"
+               "'id':r['id'],'result':{'method':'iprange.v1.reader.close',"
+               "'closed':True}}).encode()+b'\\n');"
+               "sys.stdout.buffer.flush();")
+
+    def err_resp(domain_code):
+        return ("import sys,json;"
                 "r=json.loads(sys.stdin.buffer.readline());"
-                "print(json.dumps({'jsonrpc':'2.0','id':r['id'],'error':"
-                "{'code':-32010,'message':'stub refusal','data':"
-                "{'code':'input_format','outcome':'not_started'}}}),"
-                "flush=True);")
-    for label, stub_src, must_raise in (
-            ("success-laundering", ok_resp, True),
-            ("genuine-refusal", err_resp, False),
-    ):
-        service = JsonRpcService([sys.executable, "-c", stub_src
-                                  + "sys.stdin.buffer.read()"], "stub")
-        runner.service = service
-        try:
+                "sys.stdout.buffer.write(json.dumps({'jsonrpc':'2.0',"
+                "'id':r['id'],'error':{'code':-32010,'message':"
+                "'stub refusal','data':{'code':'" + domain_code + "',"
+                "'outcome':'not_started'}}}).encode()+b'\\n');"
+                "sys.stdout.buffer.flush();")
+
+    for code in ("input_format", "invalid_argument"):
+        negative_step = {
+            "method": "iprange.v1.reader.close",
+            "actor": "consumer",
+            "params": {"reader": "0" * 32},
+            "expect_error": {"code": code, "outcome": "not_started"},
+        }
+        for label, stub_src, must_raise in (
+                ("success-laundering", ok_resp, True),
+                ("genuine-refusal", err_resp(code), False),
+        ):
+            service = JsonRpcService([sys.executable, "-c", stub_src
+                                      + "sys.stdin.buffer.read()"], "stub")
+            runner.service = service
             try:
-                runner.run_rpc_step(negative_step)
-            except AssertionError as exc:
-                if not must_raise:
-                    raise AssertionError(
-                        f"expect_error control {label}: a genuine product "
-                        f"error must pass, got: {exc}") from exc
-                if "succeeded but the step declared expect_error" not in str(exc):
-                    raise AssertionError(
-                        f"expect_error control {label}: failed for an "
-                        f"unrelated reason: {exc}") from exc
-            else:
-                if must_raise:
-                    raise AssertionError(
-                        f"expect_error control {label}: a success response "
-                        "on a step declaring expect_error was accepted")
-        finally:
-            runner.service = None
-            if service.proc.poll() is None:
-                service.proc.kill()
-                service.proc.wait(timeout=2)
+                try:
+                    runner.run_rpc_step(negative_step)
+                except AssertionError as exc:
+                    if not must_raise:
+                        raise AssertionError(
+                            f"expect_error control {label}/{code}: a genuine "
+                            f"product error must pass, got: {exc}") from exc
+                    if ("succeeded but the step declared expect_error"
+                            not in str(exc)):
+                        raise AssertionError(
+                            f"expect_error control {label}/{code}: failed "
+                            f"for an unrelated reason: {exc}") from exc
+                else:
+                    if must_raise:
+                        raise AssertionError(
+                            f"expect_error control {label}/{code}: a success "
+                            "response on a step declaring expect_error was "
+                            "accepted")
+            finally:
+                runner.service = None
+                if service.proc.poll() is None:
+                    service.proc.kill()
+                    service.proc.wait(timeout=2)
 
     # Committed-report provenance.  These run here instead of behind a
     # ``--self-test`` flag the battery could omit, because the runner's helper

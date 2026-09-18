@@ -2494,7 +2494,7 @@ control is a failure and not a smaller run:
 
 ```bash
 # Gate and harness self-tests (offline, no products needed).
-nice python3 v4/cli/check_refusal_class_parity.py --self-test   # 66 controls
+nice python3 v4/cli/check_refusal_class_parity.py --self-test   # 70 controls
 nice python3 v4/cli/check_kind_coverage.py --self-test          # 133 controls + 5 acceptance
 nice python3 v4/cli/forgery_battery.py                           # 21 classes
 nice python3 v4/cli/check_fifo_surface.py --self-test   # 18 + 5 structural, 17 arms x 2 engines
@@ -2505,7 +2505,7 @@ nice python3 v4/cli/throughput_harness.py --self-test   # 12 cases + 4 structura
 nice python3 v4/cli/resource_harness.py --self-test      # 25 control groups
 nice python3 v4/cli/crash_harness.py --self-test         # 26 controls, eight groups
 nice python3 v4/cli/windows_guard_harness.py --self-test # 39 total (38 on POSIX + 1 native-only) + 10 verify
-nice python3 v4/cli/command_sanitize.py --self-test      # 57 registry controls
+nice python3 v4/cli/command_sanitize.py --self-test      # 58 registry controls
 nice python3 v4/cli/check_producer_privacy.py --self-test # 40 producer controls
 nice python3 v4/cli/windows_housekeeping_harness.py --self-test  # incl. 9 report-verification controls
 nice python3 v4/cli/races/runner.py --self-test          # 22 mutation (15 arm, 7 detector) + 6 committed-report writer controls

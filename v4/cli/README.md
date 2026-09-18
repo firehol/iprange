@@ -294,9 +294,9 @@ when it claims the gap, a cell the table does support must FAIL when it
 denies the gap, a rollup that scores the reported gaps as divergences must
 FAIL, and the conforming pair must report them with a divergence count of
 zero.  `SELF_TEST_CASES_TOTAL`
-pins the count at 66 controls (`--self-test` reported "PASSED: 66 cases (committed total
-66)"), so a control deleted from the gate is a self-test failure rather
-than a silent shrink.
+pins the count at 70 controls (`--self-test` reports "PASSED: 70 cases
+(committed total 70)"), so a control deleted from the gate is a self-test
+failure rather than a silent shrink.
 Timing, stated by scope. This parity gate's own committed run is the
 sub-minute step: `evidence/refusal-class-parity.json` records
 `elapsed_seconds` 34.237 for 483 main-grid cells on both engines (23 arms

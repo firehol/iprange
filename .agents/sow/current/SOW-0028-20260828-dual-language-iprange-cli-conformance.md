@@ -17749,3 +17749,100 @@ bundle hygiene — no reopened class).
   import clean on all four vet targets; no cfg divergence; BE refusal
   verified, not assumed). Leg-27 precondition recorded: keep
   `localhost_resolves_*` inside the native cargo run.
+
+#### Round 10 (2026-09-18) — the tester delta review at 197b6263 and the repair at 8092d7d6
+
+Scope: delta `4921bb09..197b6263` (the seven post-round-9 commits),
+instructions in status.md "Round-10 instructions". Only the tester
+reported at the anchor (round-9 sessions had returned; the other six
+roles' round-9 verdicts stand); the round therefore adjudicates the
+tester's report alone.
+
+- tester: **FAIL on F-1 (P1)** — three named halves of the e647024e
+  C-parity unique-count contract had NO detecting test in either engine
+  or the corpus: (a) dropping the lower bracket bound
+  (`expected < max_unique`) survives everything (the probe the pin
+  presents as the below-max-record detector is screened upstream by the
+  open-time record-count check and never reaches the bracket); (b)
+  re-keying the v2 comparison on the header claim instead of the derived
+  flag survives everything; (c) deleting the streaming claims-optimized
+  refusal survives everything. Each survived 370 Rust bin tests, the Go
+  fileio package, and the binary corpus cases, with a named C-oracle-
+  REFUSED witness the mutant PUBLISHES (witness-below.bin, mc-lie.bin,
+  me-lie.bin — the role recorded the C verdicts). F-1's other anchors all
+  verified closed: round-9 tester F1 (drain) via D1 re-FAIL on both
+  engine pins, parity F1 (limbs) via the swap FAILing both pins and all
+  four matrix legs, parity F2 arms via the old-guard mutation; fixtures
+  6/6 byte-identical engines + C verdicts 6/6; zero-records mutant is an
+  equivalent mutant (not rated). P3-1..P3-4: runner `expect_error`
+  laundering (a success response on a negative step passed), digest-
+  group-before-error ergonomics, sandbox-copy structural failures, fileio
+  coverage floor.
+- Adjudication (lead): F-1 verified real by reproducing the three
+  mutations in lead sandbox copies and confirming the survival, then
+  confirming each named witness's C-oracle verdict
+  (`/usr/bin/iprange -4/-6`). P3-1 verified by reading
+  `run_rpc_step`: the success path validated only `expect_result`, so a
+  declared-but-absent expectation asserted nothing.
+
+Repair commit **8092d7d6** (signed; four files, +146/-3):
+
+- Five new probes per engine (two complete lie/honest pairs; the third
+  pair's honest twin is the C-loadable bracket interior already pinned by
+  E1's honest probe, so omitted — tester round-11 F-B) in BOTH engines'
+  count pins: `v1-lower-bracket`(3, must refuse)/honest(100, loads),
+  `v2-ordered-nonopt-lie`(99)/honest(20) over STRICTLY ORDERED
+  non-adjacent records (keys the derived flag),
+  `v1-claims-optimized-overlap`(5 over (1..3),(3..5), bracket-interior
+  count — only the claim refusal catches it). Lead self-review caught
+  two transcription defects in the first draft before commit: the Rust
+  draft overwrote the pin's zero-records probe, and probe (3) used a
+  `lines 20` variant instead of the tester's exact 111-byte me-lie
+  witness; both fixed, and all eleven pin fixtures now verify
+  rust==go byte-identical, equal to the tester's five witnesses, with
+  C-oracle verdicts matching every asserted direction
+  (`.local/lead-r10/fx_bind_new.py`, 11/11 + 5/5).
+- Mutation proof at the pre-commit tree (lead sandbox, kits restored
+  byte-exact by cmp after): E1/E2/E3 each FAIL the named probe in BOTH
+  engines (`mutation D1-class`: rust `binary_unique_count_follows_c_validation`
+  fails at the exact new assert; go fails the named subtest) — staged at
+  `.local/w1926h-qualification/mutation-proof.txt`.
+- P3-1 CLOSED beyond the suggested one-liner: the guard sits in
+  `run_rpc_step` BEFORE `record_digest` (a laundered success can never
+  record a digest), raises naming the missing refusal, and the runner
+  self-test gained a two-arm control (success-laundering must raise with
+  the guard's own message; genuine-refusal must still pass
+  `check_expected_error`) on every invocation; the control method is
+  `reader.close` because its strict result schema is fully stub-
+  satisfiable, so a weaker guard shape fails the control for the wrong
+  reason (proven: the guard-deletion mutant tripped the schema
+  mismatch, not the assertion).
+- BLAST RADIUS found by applying the guard: one live corpus defect —
+  `live.lifecycle` step 4 declared `expect_error invalid_argument` on
+  `commit.resolve`, an input both engines have ALWAYS resolved
+  successfully (the step predates the guard and was never scored). The
+  lead's unreachability proof: `validate_attempt`
+  (`iprange-livedb/src/commit_resolution.rs:140-148`) is the only
+  InvalidArgument source on the path, and the handler maps SDK errors
+  with outcome `outcome_unknown`, never `not_started`. The case step now
+  asserts the truthful success shape (`resolution "committed"`, one
+  `$ignore` for the session-volatile identity), adding the corpus's
+  first positive commit.resolve coverage. Evidence pair staged: PRE-
+  repair log 228/4 (the four FAILs are the guard scoring the old wrong
+  expectation) vs post-repair 232 PASS / 0 FAIL / 143 designed skips.
+- P3-2/P3-3 accepted as-is (runner ergonomics, sandbox-copy structural
+  failures); P3-4 (fileio statement coverage 17.1%) is superseded in
+  direction by the coverage harness's module-wide figures — noted, not
+  acted on within this round.
+
+Suite state at 8092d7d6: Go fileio green; Rust bins 370/0; runner
+self-test OK (58 shared controls + 2 new arms); kind-gate self-test
+133+5; full matrix all (fixed runner, tester round-10 binaries per
+BUNDLE-PROVENANCE product-identity argument) 232/0/143.
+
+Round-11 (seven-role delta review of 8092d7d6 alone) launched per
+REVIEWS.md: kit anchor `8092d7d6…` (`head` updated), instructions in
+status.md, bundle at `.local/w1926h-qualification/`. Sequencing after
+7/7: regenerate leg 27 at the final revision, native Windows leg,
+closure battery at the final revision, evidence child commit, astra
+re-review in session `ea962c0a1a874e67bdcce924ec265541`, push.
