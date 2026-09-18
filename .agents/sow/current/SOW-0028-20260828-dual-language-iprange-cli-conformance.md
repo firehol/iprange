@@ -18707,3 +18707,44 @@ than a hidden hole.
   performance 3.7, fit-for-purpose 2.2, parity 2.1, operations 2.0,
   security 1.8). `v4/cli/run.py` byte-identical to 3e75cfec; guard
   region `abacfa59…`; runner self-test PASS.
+
+### Round 21 — astra turn 9 (1 P2): two non-discriminating fixtures rebuilt (2026-09-19)
+
+- Astra turn 9 over d3e8f8a2: NEEDS CHANGES — one P2,
+  `reporter_regression_checks_still_overstate_coverage`, staged verbatim
+  at `.local/shared/evidence/round16/astra-turn9-result.txt`. The review
+  states no additional reporter implementation defect was verified
+  (probes confirmed exit classes 0/1/2, the file-only cap decision,
+  aggregate rows, the apparent-size definition; all 17 staged artifacts
+  matched their manifest hashes, and HEAD, binary hashes, assertion
+  count and the eight-over-cap report all agree). The remaining blocker
+  was evidence quality in the suite itself:
+  1. **Directory-symlink recency was not isolated.** `touch -d now`
+     without `-h` moved the TARGET directory, and the sandbox directory
+     kept its fresh creation mtime, so the asserted "newest mtime comes
+     from the link" comparisons could pass without the link being
+     measured; one line also carried a dead `or True` bypass. Astra's
+     probe zeroed the link's mtime contribution and all five section-D
+     assertions still passed.
+  2. **The file-only exit-1 claim was not attributable.** Section B1
+     left `tester` ~80 MiB over the same 50 MiB cap, so B2's exit 1
+     happened regardless of the file-only sandbox's own decision.
+- Repairs at this revision (suite + records only; reporter code
+  unchanged — astra verified no implementation defect remains):
+  * section D ages the sandbox directory AND the whole target side to
+    2020, then stamps only the link itself with `touch -h`; the
+    assertion requires the unit's measured `newest_mtime` to equal the
+    link's own mtime within one second — exact equality, so zeroing or
+    ignoring the link fails the assertion; the dead `or True` is gone;
+  * section B2 rebuilt as a three-stage causal proof: B1 residue removed
+    and baseline asserted exit 0, then ONLY the file-only sandbox is
+    allowed to cross the cap, and exactly one OVER-CAP line must exist
+    when exit flips to 1; the file-only requirement (no child units) is
+    asserted alongside the sandbox row.
+- Validation: suite 17/17 staged (count matches the bound log); real-tree
+  run unchanged (scan INCOMPLETE exit 2, two chmod-000 privacy fixtures,
+  8 of 36 role sandboxes over the 1 GB aggregate cap). `v4/cli/run.py`
+  remains byte-identical to 3e75cfec (guard region `abacfa59…`); the
+  runner self-test passes. The manifest rebinds the suite log/script and
+  binds the turn-9 result, with `head` naming the commit that carries
+  this section.
