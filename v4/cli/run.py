@@ -2465,15 +2465,25 @@ def _self_test():
     #     expect_error in any syntactic role or mutate/rebind `step`
     #     (pop/clear/update/setdefault, subscript write, del, or
     #     reassignment), which is the pre-call suppression channel;
-    # (3) residual after (2) is a pre-call exit that never mentions
-    #     expect_error or step -- it fires on the control's own
-    #     reader.close steps and dies on the behavioral pair, so the
-    #     two mechanisms close the class from opposite sides.
-    # The decoy floor, correctly stated this time: an exact-shape decoy
-    # at the pinned position executes (top level, unconditional flow),
-    # so its body arm -- an immediate unconditional Raise on exactly
-    # the guard's condition -- makes it the working guard itself; a
-    # dead decoy is necessarily nested and fails (1).
+    # (3) The floor that remains after (1) and (2), stated rather than
+    #     hidden: a pre-call exit or erase keyed on values OUTSIDE the
+    #     behavioral control's sample (the control exercises method
+    #     reader.close, actor consumer, and codes input_format /
+    #     invalid_argument; an exit keyed on anything else, or a check
+    #     delegated to a helper so no expect_error token appears in
+    #     this function) is not visible to a single-function static
+    #     pin.  An exit that does trigger on the control's own
+    #     reader.close/consumer/sampled-code combination dies on the
+    #     behavioral pair, so the
+    #     pin and the pair close the class from opposite sides and only
+    #     the off-sample residue survives; closing that would need
+    #     whole-module taint analysis, which this kit deliberately
+    #     prices out -- adversarial reviewer rounds are the control for
+    #     edits that exotic.
+    # The decoy floor, correctly stated: an exact-shape decoy at the
+    # pinned top-level position EXECUTES, so its unconditional Raise on
+    # exactly the guard's condition makes it the working guard itself;
+    # a dead decoy is necessarily nested (if False: etc.) and fails (1).
     func_def = (guard_tree.body[0] if guard_tree.body
                 and isinstance(guard_tree.body[0], ast.FunctionDef)
                 else None)
