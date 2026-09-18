@@ -2480,10 +2480,13 @@ def _self_test():
     #     whole-module taint analysis, which this kit deliberately
     #     prices out -- adversarial reviewer rounds are the control for
     #     edits that exotic.
-    # The decoy floor, correctly stated: an exact-shape decoy at the
-    # pinned top-level position EXECUTES, so its unconditional Raise on
-    # exactly the guard's condition makes it the working guard itself;
-    # a dead decoy is necessarily nested (if False: etc.) and fails (1).
+    # The decoy floor, stated to the reach arm's proof boundary: an
+    # exact-shape decoy at the pinned top-level position EXECUTES
+    # unless something before it diverts -- executing, its immediate
+    # unconditional Raise on exactly the guard's condition makes it the
+    # working guard; diverting, the divert is either a dead-maker the
+    # reach arm rejects or an off-sample/undecidable test inside the
+    # declared static boundary.  A nested dead decoy fails (1) directly.
     func_def = (guard_tree.body[0] if guard_tree.body
                 and isinstance(guard_tree.body[0], ast.FunctionDef)
                 else None)
@@ -2550,35 +2553,98 @@ def _self_test():
                     "references expect_error or mutates step -- pre-call "
                     "suppression launders every negative step by never "
                     "reaching the guard")
-    # Reach arm (tester round-11 F-F): position pins where the pair
-    # sits, but a top-level unconditional exit BEFORE the call makes
-    # everything after it dead -- including a fully canonical, top-
-    # level, adjacent call+guard decoy pair, which then satisfies the
-    # shape, position, body, and count arms while the live path hides
-    # in a constant-true block ahead of the exit with a dynamic-key
-    # narrowed guard (no expect_error token, so purity never sees
-    # it).  A top-level bare Return or Raise, or a constant-test If
-    # whose executed branch exits, before the call is therefore a
-    # dead-maker: the shipped pre-call flow has neither (its only
-    # pre-call returns live inside the non-constant notification arm).
-    # Residual: a top-level exit keyed on a NAME (e.g. a variable
-    # assigned from a helper) is as invisible to this static reach
-    # scan as the (3) off-sample floor says the behavioral pair is to
-    # an off-sample key -- same declared residue, same review-round
-    # control.
+    # Reach arm (tester round-11 F-F, extended for F-G): position pins
+    # where the pair sits, but a top-level divert BEFORE the call makes
+    # everything after it dead -- including a fully canonical,
+    # top-level, adjacent call+guard decoy pair, which then satisfies
+    # the shape, position, body, and count arms while the live path
+    # hides ahead of the divert behind a dynamic-key narrowed guard (no
+    # expect_error token, so purity never sees it).  The arm therefore
+    # classifies every statement before the call and rejects any that
+    # provably diverts control away: a bare Return/Raise; an If whose
+    # provable truth value (folded through BoolOp/Not/Eq-Compare, so
+    # `if True and True:`, `if not False:`, `if 1 == 1:` count) selects
+    # a diverting branch; a While/For whose certain first iteration
+    # diverts (while-true, for-over-nonempty-constant); a Match whose
+    # unguarded wildcard case diverts; a Try whose first statement is
+    # an exit (a bare return/raise cannot itself fail).  The shipped
+    # pre-call flow has none of these (its returns live inside the
+    # non-constant notification arm and the known-method raise inside a
+    # non-provable if), so pristine passes.
+    # Proof boundary, stated as the arm's actual reach (F-G): tests
+    # whose truth cannot be folded (Name, Call, non-Eq Compare, and
+    # compound tests mixing them), Try diverts below the first
+    # statement, Match cases with a guard or a pattern narrower than
+    # `_`, and any helper-delegated check (no expect_error token in
+    # this function) are invisible to this static scan -- that residue
+    # is the same declared off-sample class as the (3) floor, and the
+    # adversarial review rounds are its control.
+    _MATCH = getattr(ast, "Match", None)
+    _MATCH_AS = getattr(ast, "MatchAs", None)
+    _TRY_TYPES = (ast.Try,) + tuple(
+        t for t in (getattr(ast, "TryStar", None),) if t is not None)
+
+    def _const_bool(node):
+        # (True, value) when a control-flow test provably folds to a
+        # truth value; (False, None) otherwise.
+        if isinstance(node, ast.Constant):
+            return True, bool(node.value)
+        if isinstance(node, ast.BoolOp):
+            folded = [_const_bool(value) for value in node.values]
+            if all(known for known, _ in folded):
+                values = [value for _, value in folded]
+                return True, (all(values) if isinstance(node.op, ast.And)
+                              else any(values))
+            return False, None
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Not):
+            known, value = _const_bool(node.operand)
+            return (True, not value) if known else (False, None)
+        if (isinstance(node, ast.Compare) and len(node.ops) == 1
+                and isinstance(node.ops[0], ast.Eq)):
+            left_k, left_v = _const_bool(node.left)
+            right_k, right_v = _const_bool(node.comparators[0])
+            return (True, left_v == right_v) if left_k and right_k \
+                else (False, None)
+        if isinstance(node, (ast.Tuple, ast.List)):
+            return True, bool(node.elts)
+        return False, None
+
     def _dead_maker(statements):
         # A statement list diverts control away unconditionally when it
-        # holds a bare Return/Raise, or a constant-test If whose taken
-        # branch is itself a dead-maker (recursion covers nested
-        # `if True: if True: return` towers).
+        # holds a bare Return/Raise, a provable-test If whose taken
+        # branch is itself a dead-maker, a certain-first-iteration
+        # While/For with a diverting body, an always-matching unguarded
+        # wildcard case with a diverting body, or a Try whose first
+        # statement is an exit.
         for child in statements:
             if isinstance(child, (ast.Return, ast.Raise)):
                 return True
-            if (isinstance(child, ast.If)
-                    and isinstance(child.test, ast.Constant)
-                    and _dead_maker(child.body if child.test.value
-                                    else (child.orelse or []))):
-                return True
+            if isinstance(child, ast.If):
+                known, value = _const_bool(child.test)
+                if known and _dead_maker(
+                        child.body if value else (child.orelse or [])):
+                    return True
+            elif isinstance(child, ast.While):
+                known, value = _const_bool(child.test)
+                if known and value and _dead_maker(child.body):
+                    return True
+            elif isinstance(child, ast.For):
+                known, value = _const_bool(child.iter)
+                if known and value and _dead_maker(child.body):
+                    return True
+            elif _MATCH is not None and isinstance(child, _MATCH):
+                for case in child.cases:
+                    if (case.guard is None
+                            and _MATCH_AS is not None
+                            and isinstance(case.pattern, _MATCH_AS)
+                            and case.pattern.name is None
+                            and case.pattern.pattern is None
+                            and _dead_maker(case.body)):
+                        return True
+            elif isinstance(child, _TRY_TYPES):
+                if (child.body and isinstance(child.body[0],
+                                              (ast.Return, ast.Raise))):
+                    return True
         return False
 
     for stmt in top[:call_index]:
@@ -2589,15 +2655,13 @@ def _self_test():
                 "assignment makes the pinned pair dead code; a dead "
                 "canonical decoy passes every other arm and launders "
                 "the live path hidden ahead of it")
-        if (isinstance(stmt, ast.If)
-                and isinstance(stmt.test, ast.Constant)
-                and _dead_maker(stmt.body if stmt.test.value
-                                else (stmt.orelse or []))):
+        if _dead_maker([stmt]):
             raise AssertionError(
-                "expect_error guard shape pin: a constant-test if "
-                "whose executed branch returns or raises before the "
-                "service.call response assignment is a dead-maker for "
-                "the pinned pair")
+                "expect_error guard shape pin: a statement before the "
+                "service.call response assignment provably diverts "
+                "control away unconditionally; the pinned pair is dead "
+                "code and a dead canonical decoy launders the live "
+                "path hidden ahead of it")
 
     # Committed-report provenance.  These run here instead of behind a
     # ``--self-test`` flag the battery could omit, because the runner's helper
