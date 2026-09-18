@@ -17373,9 +17373,170 @@ session is new, so a NEW astra session is started for the milestone-4
 gate; this paragraph is the required handoff record.
 
 Gate at F: the delta presented to astra is commits `7c2d2cf7`,
-`8e354ac9`, `38aea8fc`, `3e7f04df` over `origin/master` `271be2d9`,
-with the F artifacts (`v4/cli/evidence/` at `3e7f04df`, battery
-manifest `eb26933b…` binding revision `38aea8fc…`, SOW records,
-`.local/shared/status.md` round log). Astra verdict recorded in
-`.local/astra-verdicts.md` (outside the commit trail, standing P3
-note); no repository commit follows the gate's PASS.
+`8e354ac9`, `38aea8fc`, and the signed evidence-filing child of F over
+`origin/master` `271be2d9`, with the F artifacts (`v4/cli/evidence/`,
+battery manifest `eb26933b…` binding revision `38aea8fc…`, SOW records,
+`.local/shared/status.md` round log). Astra reviewed the exact tree
+(commit `52f29a64`) and returned NEEDS CHANGES (turn 1, seven findings
+as adjudicated above); no repository commit follows the gate's PASS.
+
+### Gate turn 1 verdict — NEEDS CHANGES (2026-09-18)
+
+Astra session `ea962c0a1a874e67bdcce924ec265541` reviewed the whole
+milestone at `52f29a64` in strong adversarial final-review mode and
+returned NEEDS CHANGES: seven in-scope findings (three P1, three P2,
+one P3), all independently verified by the lead before disposition:
+
+- P1-1 (both engines, product): the JSON-RPC streaming parsers buffer
+  up to 4,096 hostnames, resolve the whole group, and push every
+  answer into the 256-slot batch without draining — ≥257 resolved
+  addresses fail `input_format` ("range does not fit the bounded
+  parser batch/family"). Violates the bounded-batch publication
+  contract (spec line: "Parsed ranges are normalized ... in bounded
+  batches").
+- P1-2 (both engines, product): streaming text lexer diverges from the
+  authoritative legacy rules the JSON-RPC spec requires — a CR-only
+  record (CRLF blank line) and a NUL-led record error out instead of
+  being empty records; the hostname path submits the whole trimmed
+  line (suffix included) instead of the scanned token, so
+  `localhost # comment` and `localhost\r` reach resolution with the
+  suffix intact.
+- P1-3 (both engines, product): streaming binary readers use checked
+  arithmetic for inclusive range cardinality, so the full-universe
+  IPv6 range `::/0` fails "binary range size overflows" where C
+  (`src/ipset6_binary.c:233`, wrapping `u128_add`) and the Rust
+  legacy reader (`legacy/binary.rs:286`) accept the payload.
+- P2-4 (harness): `run_pressure_sweep` replaces `best` with any
+  passing candidate before the disagreement comparison, so
+  [wedge, pass] grades clean — the runner's own "any disagreement
+  fails" requirement (stated at its line ~1169) is order-dependent.
+  Confirmed by a bounded in-memory probe of the real function.
+- P2-5 (harness/privacy): `foreign_profile_forms` folds foreign macOS
+  profile needles with the AUDITING host's case rule, so
+  `/USERS/OPERATOR`-class spellings bypass a Linux audit. Confirmed
+  by probe.
+- P2-6 (battery): at tier full, [9b] runs the 378-cell sweep AND [9c]
+  runs it again (~2 x 100 s), violating the REVIEWS.md rule that the
+  expensive axis runs at most once per gate and replaces its subset.
+  The README "routine 108-cell subset" sentence is false for the F
+  artifacts (both committed reports record mode `full`, 378 cells).
+- P3: three stale present-tense claims in README historical-current
+  sections (:2258 stale-artifact wording, :2273 coverage figures,
+  :2300 eight-defect claim vs an empty known-defects.json), and the
+  SOW named the pre-amend evidence hash.
+
+Unrelated (noted, not blocking): pre-existing C oracle full-IPv6
+round-trip defect (`src/ipset6.h:74`, `src/ipset6_binary.c:290`) —
+tracking follows the fix wave.
+
+Astra's independent verification recorded as holding: all 20 manifest
+bindings, the 11-entry ledger, the 321-step battery tally, the 36
+native Windows records.
+
+Disposition: milestone returns to the implementation loop per
+REVIEWS.md milestone-gate step 2. Fix chunks: A product (P1-1/2/3,
+Rust+Go, with publication-level tests pinning the C-legacy parity),
+B harness (P2-4 sticky disagreement + order-sensitive controls, P2-6
+single full-axis execution), C privacy (P2-5 origin-platform folding +
+cross-host case controls), D records (P3 stale prose). Then the seven
+roles re-review, the battery re-runs at the new revision, and astra
+re-reviews in session `ea962c0a…`.
+
+## Gate-fix wave (chunk G) — turn-1 findings repaired at the G revision (2026-09-18)
+
+Product (P1-1/P1-2/P1-3), both engines, Rust first, same-shape Go:
+
+- `v4/rust/iprange-cli/src/io/input.rs` / `v4/go/internal/cli/fileio/input.go`:
+  a `pending` FIFO parks ranges a resolution group pushes past
+  BATCH_CAPACITY; `pushRange` refuses only family mismatch; the batch
+  loop drains parked surplus before opening more input and end-of-input
+  no longer drops a non-empty queue. Mirrors the bounded-batch
+  publication contract: the batch stays bounded, the group no longer
+  fails the feed.
+- Text lexer: records truncated at the first NUL (C cstr rule, cited);
+  a CR-leading surviving record is Empty (C classify); the hostname
+  path submits the scanned TOKEN (`hostname_token`/`hostnameToken`,
+  C hostname_v4/v6), never the whole trimmed line.
+- Binary reader: IPv2 inclusive cardinality and the running total use
+  C's wrapping u128 rule (src/ipset6_binary.c:49), so the
+  full-universe optimized payload (header `unique ips 0`) loads as
+  both authoritative legacy readers accept it; IPv1 keeps C's checked
+  accumulator (src/ipset_binary.c:34-39).
+- Detecting pins, mutation-proven (CR-rule, wrap, push-range, Go lexer
+  mutations each FAIL the named test, restored green): Rust unit tests
+  `streaming_lexer_matches_legacy_record_rules`,
+  `batch_surplus_parks_fifo_instead_of_failing`,
+  `binary_v6_full_universe_range_loads_like_legacy`; Go
+  `TestScratchLegacyLexicalForms`, `TestScratchBatchSurplusParksFIFO`,
+  `TestScratchBinaryV6FullUniverse`. Committed corpus cases:
+  `publish.dns_overflow_batch` (300 localhost lines publish; the
+  pre-fix answer was input_format refusal), `publish.legacy_lexical_forms`
+  (CRLF-blank + NUL + `localhost # comment\r` file publishes; the token
+  is what the resolver sees), `publish.binary_v6_full_range` (::/0 v2
+  payload publishes with addresses = 2^128 exactly, both engines —
+  smoke-proven at G). Host-dependent answer counts are `$ignore`d by
+  design (the detection is publication success itself; pinning counts
+  would encode /etc/hosts — the same reasoning as
+  tests/legacy_dns_bookkeeping.rs).
+- Suite state at G: Go `go test ./... -count=1` all green; Rust
+  `cargo test --all-features` 1046 passed / 0 failed (1043 + the 3 new
+  pins).
+
+Harness (P2-4/P2-6) and privacy (P2-5):
+
+- `check_refusal_class_parity.py`: `fold_attempt_records` is a pure,
+  order-independent fold — the representative is the passing attempt
+  when one exists, the disagreement verdict comes from the SET of
+  attempt verdicts, and every attempt's verdict is preserved in
+  `attempt_verdicts` inside the cell record. The sweep keeps every
+  attempt instead of overwriting `best`. Deeper close: the report
+  verdict itself never scored pressure disagreement (a truthfully
+  flaky cell PASSED the gate — proven before and after the fold by a
+  bounded probe), so `verify_pressure_report` now fails any engine
+  half whose attempt verdicts disagree. Self-test 66 -> 69 controls:
+  both-order mix, all-one-verdict shapes + passing representative, and
+  the truthfully-disagreed-cell verdict control.
+- Battery `track_parity`: ONE sweep per gate under ONE name — at tier
+  full the chosen axis sweeps once (full replaces routine per REVIEWS.md
+  policy 5) into `refusal-class-parity.json`; the `[9c]` duplicate
+  second-full-sweep and the `[16g]`/consumption/`COMMITTED_CONSUMED`
+  `-full` plumbing are retired (recorded deferrals name the finding);
+  `command_sanitize.COMMITTED_REPORT_WRITERS` carries only the regular
+  name, the committed `refusal-class-parity-full.json` is deleted, and
+  the standalone full-pressure script writes the regular name.
+- `command_sanitize.py`: foreign profile roots carry their ORIGIN
+  platform's fold (`_FOREIGN_PROFILE_SHAPES`: macOS root case-folded,
+  FreeBSD/Linux/illumos POSIX-folded, Windows root windows-folded), and
+  the report scan reads every candidate three ways (auditing fold,
+  windows fold, darwin fold). Group-13 controls extended with the four
+  case-varied foreign roots + sibling/other-login scope checks + an
+  origin-decided-fold anchor; 57 -> 58 controls. Astra's probe
+  reproduced and closed: `/USERS/OPERATOR` and `/users/operator`
+  mid-string forms are refused from a Linux audit; other logins and
+  siblings stay clean.
+
+Records (P3): README head rewritten from the committed artifacts —
+single-sweep manifest sentence, one-parity-digest, 483/36 committed
+parity state, coverage over 30 packages with the F figures,
+throughput medians 15,394.0/45,751.7 (rounds and census from the
+artifact), known-defects prose aligned to the committed EMPTY ledger
+(the eight go-engine entries are retired history, closed by wave
+19.24), corpus 74 case files (three new), parity self-test count 69,
+shared-writer control count 58; the SOW handoff paragraph names the
+evidence commit durably (no self-hash).
+
+Kind-gate rotation tolerance (harness, this wave): the self-test's
+genuine-evidence anchors and control helpers now filter exactly the
+three designed pre-rotation drift classes — parity tables vs committed
+artifact (existing), corpus walk vs golden counts (regex, report <
+tree ONLY), case directory vs matrix rows (the two "has no row" shapes
+plus the lagging count, report > tree stays a blocker). Forged-forward
+counts (report ahead of tree) still fail; everything else the golden
+and matrix rules can write still fails.
+
+Re-qualification sequence at G: seven-role re-review of this delta ->
+native Windows leg (product code changed: the Go suites, the numeric
+consensus, and both harness reports re-execute at the G revision) ->
+closure battery at the G revision (single full sweep, one parity
+name, all evidence rotated together) -> astra re-review in session
+`ea962c0a1a874e67bdcce924ec265541` -> push.

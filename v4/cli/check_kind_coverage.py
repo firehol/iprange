@@ -7056,13 +7056,94 @@ def _self_test():
         "records a pinned-refusal table digest other than the committed "
         "table", "records no pinned_table_sha256")
 
+    # The golden artifact has the same relation to its producer as the
+    # parity artifact has to the arm/path-kind tables: the report records
+    # what the corpus walk said when check_golden.py swept it, and the
+    # gate re-walks the corpus under the CURRENT checkout.  A wave that
+    # commits new case files therefore leaves the committed artifact
+    # behind by exactly the count its own battery will rotate back into
+    # agreement -- the pre-rotation condition here is a matter of record
+    # (the cases and the battery land in one milestone), not a finding,
+    # and the same "honest, complete evidence must not fail the gate"
+    # rule that opens the parity rotation applies.  Direction matters:
+    # only a report LAGGING the tree is tolerated (rotation closes it);
+    # a report claiming MORE than the corpus walk found is a forgery,
+    # not staleness, and still blocks.  Every other golden complaint --
+    # an uncovered method, a corpus problem, a wrong schema, a non-PASS
+    # result -- still blocks.
+    _GOLDEN_DRIFT = re.compile(
+        r"^golden \S+: records (golden_files|golden_exchanges|"
+        r"case_files_seen|case_files) (\d+) where the corpus under this "
+        r"checkout says (\d+)")
+
+    def _golden_rotation_drift(problem):
+        """True for a golden problem that is exactly this tree lagging.
+
+        Only report < tree is drift the rotation closes; report > tree
+        claims corpus the walk did not find and still blocks."""
+
+        match = _GOLDEN_DRIFT.match(problem)
+        if match is None:
+            return False
+        try:
+            return int(match.group(2)) < int(match.group(3))
+        except ValueError:
+            return False
+
+    # The matrix artifacts enumerate the cases the executed binaries ran;
+    # a tree that commits new case files leaves every committed matrix
+    # behind until the battery regenerates them.  The needles are the
+    # tree-ahead-of-report direction ONLY: a missing row for a case the
+    # tree now defines, or a row count below the corpus walk, each of
+    # which the next rotation closes.  A PASS row that contradicts its
+    # definition, an invented case name, a duplicate row, a row count
+    # ABOVE the corpus, or an actor mismatch still blocks: rotation
+    # tolerance never forgives a report that claims more than the tree
+    # can back.
+    _MATRIX_DRIFT = re.compile(
+        r"^matrix \S+: report has (\d+) rows but the committed corpus "
+        r"defines (\d+) cases for this matrix")
+
+    def _matrix_rotation_drift(problem):
+        """True for a matrix problem that is exactly this tree lagging.
+
+        The two "has no row" shapes are worded so only a case the tree
+        defines can produce them (an invented row says "row for case
+        ... which no committed case ... defines" instead, and stays a
+        blocker).  The count message is matched exactly and only in the
+        lagging direction: a report claiming MORE rows than the corpus
+        defines is a forgery, not staleness."""
+
+        if ("has no row. A case defined under" in problem
+                or "has no row. Mixed matrices" in problem):
+            return True
+        match = _MATRIX_DRIFT.match(problem)
+        if match is None:
+            return False
+        try:
+            return int(match.group(1)) < int(match.group(2))
+        except ValueError:
+            return False
+
     def outside_parity_rotation(problems):
-        """Problems that are not the recorded parity-artifact rotation."""
+        """Problems that are not a recorded pre-rotation artifact drift.
+
+        Three artifact classes carry a pre-rotation condition by design:
+        the refusal-class parity report (against the arm/path-kind and
+        pin tables), the golden report (against the corpus walk), and
+        the matrix reports (against the case directory).  In each case
+        the committed artifact can legitimately lag the tables, corpus,
+        or case set of the very tree whose battery will rotate it, and
+        the rotation is the battery's own obligation.  Only the exact
+        tree-lags-report needles are tolerated; everything else these
+        rules can write still fails."""
 
         return [problem for problem in problems
-                if not (problem.startswith("refusal-class-parity ")
-                        and any(mark in problem
-                                for mark in PARITY_ROTATION_MARKS))]
+                if not ((problem.startswith("refusal-class-parity ")
+                         and any(mark in problem
+                                 for mark in PARITY_ROTATION_MARKS))
+                        or _golden_rotation_drift(problem)
+                        or _matrix_rotation_drift(problem))]
 
     evidence_dir = os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "evidence")
@@ -7306,7 +7387,19 @@ def _self_test():
                     sensitivity=kwargs.get("sensitivity_paths"),
                     posix_guard=kwargs.get("posix_guard_paths"),
                     race=kwargs.get("race_paths"))
-            return outer_assess(matrix_paths, crash_paths, **kwargs)
+            problems, coverage, sources = outer_assess(
+                matrix_paths, crash_paths, **kwargs)
+            # A control mutates ONE artifact and must be judged on that
+            # mutation.  When the funnel consumed the genuine committed
+            # reports, the golden corpus-walk counters can legitimately
+            # lag the checkout by whatever this tree's cases added
+            # since the last rotation -- the same pre-rotation condition
+            # the parity tables carry. It is a property of the tree, not
+            # of any control, and the real enforcement is the CLI gate
+            # ([10f]/[10r]), which calls outer_assess directly.
+            if head == committed_revision:
+                problems = outside_parity_rotation(problems)
+            return problems, coverage, sources
 
         # 0a. The surface reports on their own pass the consumed-report rules.
         problems, _c, _s = assess(four, [crash_path])
@@ -10401,7 +10494,13 @@ def _self_test():
             assert matched, (
                 f"{label}: the doctored binding was not refused for "
                 f"{needle!r}: {problems[:3]}")
-            others = [problem for problem in problems if problem not in matched]
+            # Pre-rotation drift (the parity tables, the corpus walk, or
+            # the case directory outrunning a committed artifact) is a
+            # property of this tree, not of the control, and would make
+            # every control report a foreign problem; it is filtered for
+            # the same reason the genuine-evidence anchor filters it.
+            others = outside_parity_rotation(
+                [problem for problem in problems if problem not in matched])
             assert not others, (
                 f"{label}: the control tripped rules besides its own, which "
                 f"makes it unable to tell its defect from any other: "
@@ -10475,7 +10574,10 @@ def _self_test():
             assert own, (
                 f"{label}: the mutated report was not refused for "
                 f"{needle!r}: {problems[:3]}")
-            others = [problem for problem in problems if problem not in own]
+            # See manifest_field_control: pre-rotation drift belongs to
+            # the tree, not to the control.
+            others = outside_parity_rotation(
+                [problem for problem in problems if problem not in own])
             assert not others, (
                 f"{label}: the control tripped rules besides its own, which "
                 f"makes it unable to tell its defect from any other: "

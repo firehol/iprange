@@ -1,0 +1,69 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "publish.legacy_lexical_forms",
+ "requires": "iprange.v1.current.publish",
+ "fixtures": [
+  {
+   "path": "forms.txt",
+   "source": {
+    "base64": "MTkyLjAuMi4xDQoNCjE5Mi4wLjIuMg0KAGdhcmJhZ2UKMTk4LjUxLjEwMC43CmxvY2FsaG9zdCAjIGNvbW1lbnQNCg=="
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/forms.txt"
+     ],
+     "family": "ipv4",
+     "fix_network": false,
+     "default_prefix": 32,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
+    },
+    "feed": "lexforms",
+    "value_tag": {
+     "text": "lexforms"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "lexical-forms"
+    },
+    "destination": "$WORK/lexforms.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "expect_result": {
+    "report": {
+     "input_record_count": {
+      "$ignore": true
+     },
+     "normalized_interval_count": {
+      "$ignore": true
+     },
+     "addresses": {
+      "$ignore": true
+     }
+    },
+    "publication": {
+     "$ignore": true
+    }
+   }
+  }
+ ]
+}

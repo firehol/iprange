@@ -120,6 +120,15 @@ pub struct TextInputSource<K> {
     /// every text input instead of a fresh Vec per line.
     line_buf: Vec<u8>,
     batch: Vec<AddressRange<K>>,
+    /// Ranges parked while one resolution group overflows the fixed
+    /// batch (astra gate finding P1-1): resolved answers arrive faster
+    /// than the batch drains, so the surplus waits here and the next
+    /// `next_family_batch` hands it out first. Without this, 257
+    /// answers from a single hostname group used to fail the whole
+    /// feed with "range does not fit the bounded parser batch/family"
+    /// even though the batched publication contract only requires
+    /// bounded batches, not bounded resolution groups.
+    pending: VecDeque<ParsedRange>,
     finished: bool,
     last_error: Option<&'static str>,
     last_message: Option<String>,
@@ -217,6 +226,7 @@ impl<K: InputKey> TextInputSource<K> {
             options,
             line_buf: Vec::new(),
             batch: Vec::with_capacity(BATCH_CAPACITY),
+            pending: VecDeque::new(),
             finished: false,
             last_error: None,
             last_message: None,
@@ -415,10 +425,22 @@ impl<K: InputKey> TextInputSource<K> {
     where
         K: InputKey,
     {
-        if self.batch.len() >= BATCH_CAPACITY || !K::family_matches(range) {
+        if !K::family_matches(range) {
             return Err(self.format_error("range does not fit the bounded parser batch/family"));
         }
-        self.batch.push(K::address_range(range));
+        if self.batch.len() >= BATCH_CAPACITY {
+            // A resolution group can outpace the drain: one group of
+            // up to HOSTNAME_BATCH_CAPACITY names answers with more
+            // addresses than the batch has slots (the batch itself is
+            // filled one range per loop step elsewhere, so this is the
+            // only surplus path and the queue stays bounded by the
+            // group). The surplus parks FIFO and the next batch hands
+            // it out first, instead of failing the feed. Family
+            // refusals stay errors: only capacity is deferred.
+            self.pending.push_back(range);
+        } else {
+            self.batch.push(K::address_range(range));
+        }
         Ok(())
     }
 
@@ -459,11 +481,19 @@ impl RangeSource<AddressRange<Ipv6Key>> for TextInputSource<Ipv6Key> {
 
 impl<K: InputKey> TextInputSource<K> {
     fn next_family_batch(&mut self) -> iprange_livedb::Result<Option<()>> {
-        if self.finished {
+        if self.finished && self.pending.is_empty() {
             return Ok(None);
         }
         self.batch.clear();
         loop {
+            // Parked surplus first: a previous resolution group may
+            // have filled the batch and deferred the rest (P1-1).
+            while self.batch.len() < BATCH_CAPACITY {
+                match self.pending.pop_front() {
+                    Some(range) => self.batch.push(K::address_range(range)),
+                    None => break,
+                }
+            }
             if self.batch.len() >= BATCH_CAPACITY {
                 return Ok(Some(()));
             }
@@ -472,7 +502,7 @@ impl<K: InputKey> TextInputSource<K> {
                     true => {}
                     false => {
                         self.finished = true;
-                        if self.batch.is_empty() {
+                        if self.batch.is_empty() && self.pending.is_empty() {
                             return Ok(None);
                         }
                         return Ok(Some(()));
@@ -576,14 +606,35 @@ impl<K: InputKey> TextInputSource<K> {
                 if record.from > record.to {
                     return Err(InputError::format("binary range start exceeds end"));
                 }
-                let unique = record
-                    .to
-                    .checked_sub(record.from)
-                    .and_then(|value| value.checked_add(1))
-                    .ok_or_else(|| InputError::format("binary range size overflows"))?;
-                let next_unique = actual_unique
-                    .checked_add(unique)
-                    .ok_or_else(|| InputError::format("binary unique count overflows"))?;
+                // Inclusive cardinality and the running total follow the
+                // authoritative legacy readers (astra gate finding P1-3).
+                // C sums v2 cardinality with wrapping u128 arithmetic
+                // (src/ipset6_binary.c:49, u128_add(u128_sub(..), ONE)
+                // accumulated by u128_add), so the full-universe range
+                // ::/0 contributes 2^128 and wraps to zero -- exactly the
+                // header count of an optimized full-universe payload,
+                // which both legacy readers accept. The Rust legacy
+                // reader replicates the same rule (legacy/binary.rs:286).
+                // v1/IPv4 keeps C's checked accumulator
+                // (src/ipset_binary.c:34-39, binary_add_unique_ips
+                // refuses a u64 overflow), so overflow stays an error
+                // there.
+                let unique = if ipv6 {
+                    record.to.wrapping_sub(record.from).wrapping_add(1)
+                } else {
+                    record
+                        .to
+                        .checked_sub(record.from)
+                        .and_then(|value| value.checked_add(1))
+                        .ok_or_else(|| InputError::format("binary range size overflows"))?
+                };
+                let next_unique = if ipv6 {
+                    actual_unique.wrapping_add(unique)
+                } else {
+                    actual_unique
+                        .checked_add(unique)
+                        .ok_or_else(|| InputError::format("binary unique count overflows"))?
+                };
                 if *optimized {
                     if let Some((_, previous_to)) = *previous {
                         if record.from <= previous_to
@@ -837,8 +888,22 @@ fn strip_bom(line: &mut Vec<u8>) {
 }
 
 fn parse_text_line(line: &[u8], options: TextInputOptions) -> Result<ParsedLine, String> {
+    // C classifies the fgets buffer as a C string: every end-of-line test
+    // in parse_line()/parse_line6() stops at a NUL (src/ipset_load.c:150,
+    // 173, 195, 224; src/ipset6_load.c:68, 99, 127, 144), so only the
+    // bytes before the first NUL can change the outcome. The legacy
+    // reader applies this with cstr() (src/legacy/parse.rs); the
+    // streaming adapter must not diverge (astra gate finding P1-2).
+    let line = match line.iter().position(|byte| *byte == 0) {
+        Some(end) => &line[..end],
+        None => line,
+    };
     let rest = trim_leading(line);
-    if rest.is_empty() || rest[0] == b'#' || rest[0] == b';' {
+    // C treats a record whose first surviving character is CR as an empty
+    // line (src/ipset_load.c classify: Some(b'\r') | Some(b'\n') => Empty),
+    // so a CRLF feed's blank line -- the record is exactly "\r" once the
+    // reader strips LF -- is an empty record, not an input error.
+    if rest.is_empty() || matches!(rest[0], b'#' | b';' | b'\r') {
         return Ok(ParsedLine::Empty);
     }
     if options.family == AddressFamilyInput::Ipv4 {
@@ -854,8 +919,16 @@ fn parse_text_line(line: &[u8], options: TextInputOptions) -> Result<ParsedLine,
     } else if let Some(result) = parse_ipv6_mode_line(rest, options)? {
         return Ok(result);
     }
-    if hostname_is_complete(rest) {
-        return Ok(ParsedLine::Hostname(rest.to_vec()));
+    // C hostname_v4()/hostname_v6() resolve the SCANNED TOKEN, never the
+    // rest of the line (src/legacy/parse.rs:1087-1100): a trailing
+    // comment or CR is legal after the token but must not reach the
+    // resolver. Handing the whole trimmed line to the resolver made
+    // "host # comment" a lookup for "host # comment" (astra gate
+    // finding P1-2). scan_while caps the token exactly like C's
+    // MAX_TOKEN/MAX_TOKEN6 scan; the 255-byte bound is kept as the
+    // accept test.
+    if let Some(token) = hostname_token(rest) {
+        return Ok(ParsedLine::Hostname(token));
     }
     Err(format!(
         "invalid input line: {}",
@@ -1275,12 +1348,18 @@ fn token_address_family(token: &[u8]) -> Option<bool> {
     }
 }
 
-fn hostname_is_complete(line: &[u8]) -> bool {
+/// C hostname_v4()/hostname_v6() (src/legacy/parse.rs:1087-1100):
+/// scan the token, accept only when what follows (after spaces) is
+/// empty or a comment/CR, and return the TOKEN itself. The old
+/// `hostname_is_complete` predicate checked the shape but the caller
+/// then handed the whole line to the resolver, so a trailing comment
+/// or CR rode along into the lookup.
+fn hostname_token(line: &[u8]) -> Option<Vec<u8>> {
     let (token, rest) = scan_while(line, is_hostname_byte);
-    if token.len() > 255 {
-        return false;
+    if token.is_empty() || token.len() > 255 || !complete_after_token(rest) {
+        return None;
     }
-    !token.is_empty() && complete_after_token(rest)
+    Some(token.to_vec())
 }
 
 fn is_hostname_byte(byte: &u8) -> bool {
@@ -1623,6 +1702,147 @@ mod tests {
         ));
         assert!(parse_text_line(b"host.example - other", opts).is_err());
         assert!(parse_text_line(b"1.2.3.4#comment", opts).is_ok());
+    }
+
+    #[test]
+    fn streaming_lexer_matches_legacy_record_rules() {
+        // Astra gate finding P1-2: the streaming lexer must classify
+        // records exactly as the legacy C loader does (cstr truncation
+        // at NUL, CR-leading records empty) and resolve the hostname
+        // TOKEN, not the whole line. Each assertion here is the
+        // pre-fix failure: "\r" and the NUL record used to be
+        // input_format errors, and "localhost # comment\r" used to be
+        // handed to the resolver whole-line.
+        let opts = options(AddressFamilyInput::Ipv4, 32, true);
+        // A CRLF feed's blank line is the record "\r" once the reader
+        // strips LF: empty, not an error (src/ipset_load.c classify).
+        assert_eq!(parse_text_line(b"\r", opts).unwrap(), ParsedLine::Empty);
+        assert_eq!(
+            parse_text_line(b"  \r", opts).unwrap(),
+            ParsedLine::Empty,
+            "spaces then CR still begin the record with CR after trimming"
+        );
+        // C stops at the first NUL: the surviving text is empty.
+        assert_eq!(
+            parse_text_line(b"\x00garbage", opts).unwrap(),
+            ParsedLine::Empty
+        );
+        assert_eq!(
+            parse_text_line(b"1.2.3.4\x00junk", opts).unwrap(),
+            ParsedLine::Range(v4(0x01020304, 0x01020304)),
+            "bytes after the NUL cannot change the outcome"
+        );
+        // The resolver sees the token, never the trailing suffix.
+        assert_eq!(
+            parse_text_line(b"localhost # comment\r", opts).unwrap(),
+            ParsedLine::Hostname(b"localhost".to_vec())
+        );
+        assert_eq!(
+            parse_text_line(b"host.example\r", opts).unwrap(),
+            ParsedLine::Hostname(b"host.example".to_vec())
+        );
+        // A numeric record keeps the trailing-CR acceptance.
+        assert_eq!(
+            parse_text_line(b"1.2.3.4\r", opts).unwrap(),
+            ParsedLine::Range(v4(0x01020304, 0x01020304))
+        );
+    }
+
+    #[test]
+    fn batch_surplus_parks_fifo_instead_of_failing() {
+        // Astra gate finding P1-1: one resolution group answering
+        // with more addresses than BATCH_CAPACITY used to fail the
+        // whole feed with "range does not fit the bounded parser
+        // batch/family". The guarantee is capacity deferral: the
+        // surplus parks (bounded by the group) and waits FIFO. The
+        // pre-fix behavior is the FIRST assertion failing (an Err
+        // from push_range); the end-to-end drain through
+        // next_family_batch is proven by the committed corpus case
+        // publish.dns_overflow_batch, which publishes 300 hostname
+        // lines (each group answer outliving one batch) on both
+        // engines.
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-input-pending-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::write(&path, b"").unwrap();
+        let mut source = TextInputSource::<Ipv4Key>::new(
+            vec![path.display().to_string()],
+            options(AddressFamilyInput::Ipv4, 32, true),
+            true,
+            10,
+        )
+        .unwrap();
+        let total = BATCH_CAPACITY + 44;
+        for index in 0..total {
+            source
+                .push_range(v4(index as u32 + 1, index as u32 + 1))
+                .expect("capacity overflow must park, not fail");
+        }
+        assert_eq!(source.batch.len(), BATCH_CAPACITY);
+        assert_eq!(source.pending.len(), total - BATCH_CAPACITY);
+        let parked: Vec<u32> = source
+            .pending
+            .iter()
+            .map(|range| u32::try_from(range.from).expect("in range"))
+            .collect();
+        assert_eq!(parked.first().copied(), Some(BATCH_CAPACITY as u32 + 1));
+        assert_eq!(parked.last().copied(), Some(total as u32));
+        assert!(
+            parked.windows(2).all(|pair| pair[0] + 1 == pair[1]),
+            "the parked surplus must be FIFO"
+        );
+        // Family refusals remain errors: only capacity defers.
+        assert!(source.push_range(v6(1, 1)).is_err());
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn binary_v6_full_universe_range_loads_like_legacy() {
+        // Astra gate finding P1-3: an optimized v2 payload with one
+        // record ::/0 and header "unique ips 0" is valid for the
+        // authoritative readers (C wraps the 2^128 cardinality,
+        // src/ipset6_binary.c:49; legacy/binary.rs:286 replicates),
+        // so the streaming reader must accept it too.
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "iprange-input-v6full-{}-{unique}",
+            std::process::id()
+        ));
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"iprange binary format v2.0\n");
+        bytes.extend_from_slice(b"ipv6\n");
+        bytes.extend_from_slice(b"optimized\n");
+        bytes.extend_from_slice(b"record size 32\n");
+        bytes.extend_from_slice(b"records 1\n");
+        bytes.extend_from_slice(b"bytes 36\n");
+        bytes.extend_from_slice(b"lines 1\n");
+        bytes.extend_from_slice(b"unique ips 0\n");
+        bytes.extend_from_slice(&0x1a2b_3c4du32.to_ne_bytes());
+        bytes.extend_from_slice(&[0u8; 16]);
+        bytes.extend_from_slice(&[0xffu8; 16]);
+        std::fs::write(&path, bytes).unwrap();
+
+        let mut source = TextInputSource::<Ipv6Key>::new(
+            vec![path.display().to_string()],
+            options(AddressFamilyInput::Ipv6, 128, true),
+            true,
+            10,
+        )
+        .unwrap();
+        let ranges = source.next_batch().unwrap().unwrap();
+        assert_eq!(ranges.len(), 1);
+        assert_eq!((ranges[0].from.hi, ranges[0].from.lo), (0, 0));
+        assert_eq!((ranges[0].to.hi, ranges[0].to.lo), (u64::MAX, u64::MAX));
+        assert!(source.next_batch().unwrap().is_none());
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]

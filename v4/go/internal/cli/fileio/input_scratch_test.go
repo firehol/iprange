@@ -269,3 +269,112 @@ func TestScratchEndToEndV6(t *testing.T) {
 		t.Fatalf("end: %v %v", batch, err)
 	}
 }
+
+func TestScratchLegacyLexicalForms(t *testing.T) {
+	// Astra gate finding P1-2 (Go mirror of the Rust pin): the
+	// streaming lexer must classify records exactly as the legacy C
+	// loader does (cstr truncation at NUL, CR-leading records empty)
+	// and resolve the hostname TOKEN, not the whole line. Each case
+	// below is the pre-fix failure: "\r" and the NUL record used to
+	// be input_format errors, and "localhost # comment\r" used to be
+	// handed to the resolver whole-line.
+	if parsed, err := parseTextLine([]byte("\r"), opt4(32, true)); err != nil || parsed.kind != parsedEmpty {
+		t.Fatalf("CRLF blank line: %+v %v", parsed, err)
+	}
+	if parsed, err := parseTextLine([]byte("  \r"), opt4(32, true)); err != nil || parsed.kind != parsedEmpty {
+		t.Fatalf("spaces then CR: %+v %v", parsed, err)
+	}
+	if parsed, err := parseTextLine([]byte("\x00garbage"), opt4(32, true)); err != nil || parsed.kind != parsedEmpty {
+		t.Fatalf("NUL record: %+v %v", parsed, err)
+	}
+	if parsed, err := parseTextLine([]byte("1.2.3.4\x00junk"), opt4(32, true)); err != nil ||
+		parsed.kind != parsedRangeLine || parsed.value.fromLo != 0x01020304 {
+		t.Fatalf("NUL truncation: %+v %v", parsed, err)
+	}
+	parsed, err := parseTextLine([]byte("localhost # comment\r"), opt4(32, true))
+	if err != nil || parsed.kind != parsedHostname || string(parsed.hostname) != "localhost" {
+		t.Fatalf("hostname token: %+v %v", parsed, err)
+	}
+	if parsed, err := parseTextLine([]byte("host.example\r"), opt4(32, true)); err != nil ||
+		parsed.kind != parsedHostname || string(parsed.hostname) != "host.example" {
+		t.Fatalf("hostname CR suffix: %+v %v", parsed, err)
+	}
+	if parsed, err := parseTextLine([]byte("1.2.3.4\r"), opt4(32, true)); err != nil ||
+		parsed.kind != parsedRangeLine || parsed.value.fromLo != 0x01020304 {
+		t.Fatalf("numeric CR: %+v %v", parsed, err)
+	}
+}
+
+func TestScratchBatchSurplusParksFIFO(t *testing.T) {
+	// Astra gate finding P1-1 (Go mirror): one resolution group
+	// answering with more addresses than batchCapacity used to fail
+	// the whole feed. The guarantee is capacity deferral: the surplus
+	// parks FIFO. The pre-fix behavior fails the first pushRange
+	// error assertion; the end-to-end drain is proven by the committed
+	// corpus case publish.dns_overflow_batch on both engines.
+	path := filepath.Join(t.TempDir(), "empty.txt")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source, err := NewTextInputSource4([]string{path}, opt4(32, true), true, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	core := &source.core
+	total := batchCapacity + 44
+	for index := 0; index < total; index++ {
+		value := parsedRange{fromLo: uint64(index + 1), toLo: uint64(index + 1), ipv4: true}
+		if err := core.pushRange(value); err != nil {
+			t.Fatalf("push %d must park, not fail: %v", index, err)
+		}
+	}
+	if len(core.batch) != batchCapacity || len(core.pending) != total-batchCapacity {
+		t.Fatalf("parking: batch=%d pending=%d", len(core.batch), len(core.pending))
+	}
+	if core.pending[0].fromLo != uint64(batchCapacity)+1 || core.pending[len(core.pending)-1].fromLo != uint64(total) {
+		t.Fatalf("pending bounds: %+v ... %+v", core.pending[0], core.pending[len(core.pending)-1])
+	}
+	for i := 1; i < len(core.pending); i++ {
+		if core.pending[i].fromLo != core.pending[i-1].fromLo+1 {
+			t.Fatalf("pending must be FIFO at %d", i)
+		}
+	}
+	// Family refusals remain errors: only capacity defers.
+	if err := core.pushRange(parsedRange{fromLo: 1, toLo: 1}); err == nil {
+		t.Fatal("wrong-family push must still fail")
+	}
+}
+
+func TestScratchBinaryV6FullUniverse(t *testing.T) {
+	// Astra gate finding P1-3 (Go mirror): an optimized v2 payload
+	// with one record ::/0 and header "unique ips 0" is valid for the
+	// authoritative readers (C wraps the 2^128 cardinality,
+	// src/ipset6_binary.c:49; the Rust legacy reader replicates at
+	// legacy/binary.rs:286), so the streaming reader must accept it.
+	var payload []byte
+	payload = append(payload, []byte("iprange binary format v2.0\nipv6\noptimized\nrecord size 32\nrecords 1\nbytes 36\nlines 1\nunique ips 0\n")...)
+	payload = append(payload, 0x4d, 0x3c, 0x2b, 0x1a) // 0x1a2b3c4d little endian
+	payload = append(payload, make([]byte, 16)...)
+	for i := 0; i < 16; i++ {
+		payload = append(payload, 0xff)
+	}
+	path := filepath.Join(t.TempDir(), "v6full.bin")
+	if err := os.WriteFile(path, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source, err := NewTextInputSource6([]string{path}, opt6(128, true), true, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch, err := source.NextBatch()
+	if err != nil {
+		t.Fatalf("full-universe v2 payload must load like the legacy readers: %v", err)
+	}
+	if len(batch) != 1 || batch[0].FromHi != 0 || batch[0].FromLo != 0 ||
+		batch[0].ToHi != ^uint64(0) || batch[0].ToLo != ^uint64(0) {
+		t.Fatalf("payload: %+v", batch)
+	}
+	if batch, err := source.NextBatch(); err != nil || batch != nil {
+		t.Fatalf("end: %v %v", batch, err)
+	}
+}

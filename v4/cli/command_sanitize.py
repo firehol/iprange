@@ -813,6 +813,29 @@ def operator_login(profile=None):
     return trimmed.replace(_WIN_SEP, "/").rsplit("/", 1)[-1]
 
 
+def _fold_darwin(path):
+    """macOS case fold: the default APFS volume is case-insensitive, so
+    a profile spelled any way addresses the same directory there.
+    Separators stay POSIX (astra gate finding P2-5)."""
+    return path.lower()
+
+
+# (template, origin-platform fold) for every host shape this project's
+# evidence is authored on. The fold is the ORIGIN's rule, never the
+# auditing host's: ``_comparison_fold`` reads ``sys.platform`` for the
+# case decision, so folding a macOS needle on Linux kept its case and
+# let ``/USERS/OPERATOR`` -- a spelling that IS the operator's macOS
+# profile there -- slip through an audit run on Linux (astra gate
+# finding P2-5).
+_FOREIGN_PROFILE_SHAPES = (
+    ("/home/{}", _normcase),                    # Linux, msys2/Cygwin POSIX home
+    ("/Users/{}", _fold_darwin),                # macOS (case-insensitive volume)
+    ("/usr/home/{}", _normcase),                # FreeBSD
+    ("/export/home/{}", _normcase),             # illumos/SmartOS
+    ("C:" + _WIN_SEP + "Users" + _WIN_SEP + "{}", _fold_windows),  # native Windows + msys view
+)
+
+
 def foreign_profile_forms(login=None):
     """Folded profile roots the operator owns on hosts other than this one.
 
@@ -825,17 +848,18 @@ def foreign_profile_forms(login=None):
     which is how two committed Windows reports carried the operator's
     profile while their own privacy block attested it as null.
 
-    Every form goes through ``_comparison_fold``, so the same person's root
-    is one form whatever separator or case the authoring shell used, and
-    the mount alias needs no entry of its own because folding ``/c`` names
-    the volume it stands for.
+    Each root is folded by the rule of the platform that authors it
+    (``_FOREIGN_PROFILE_SHAPES``): the separator rewrite is common, but
+    the case decision belongs to the originating volume, not to the
+    interpreter reading the report. The mount alias needs no entry of
+    its own because folding ``/c`` names the volume it stands for.
     """
     name = operator_login() if login is None else login
     if not name:
         return []
     forms = []
-    for template in _PROFILE_ROOT_TEMPLATES:
-        folded = _comparison_fold(template.format(name))
+    for template, fold in _FOREIGN_PROFILE_SHAPES:
+        folded = fold(template.format(name))
         if folded not in forms:
             forms.append(folded)
     return forms
@@ -902,7 +926,15 @@ def personal_path_in_report(report):
     # names the other directory, so a scan limited to ``profile_path()``
     # reported "0 problems" over a report that carried the profile.
     def _candidate_readings(spelling):
-        readings = [_comparison_fold(spelling), _fold_windows(spelling)]
+        # Three readings of one value, each meeting the needles of one
+        # host shape: the auditing fold, the Windows fold (a Windows
+        # volume is case- and separator-insensitive by definition), and
+        # the macOS fold (a default APFS volume is case-insensitive, so
+        # the operator's macOS root must be found whatever case the
+        # authoring shell wrote it in -- astra gate finding P2-5).
+        # Every reading can only add a refusal, never remove one.
+        readings = [_comparison_fold(spelling), _fold_windows(spelling),
+                    _fold_darwin(spelling)]
         out = []
         for reading in readings:
             if reading not in out:
@@ -1395,19 +1427,20 @@ COMMITTED_REPORT_WRITERS = {
         "owner": "gate-c",
     },
     "check_refusal_class_parity.py": {
-        # The parity gate sweeps its descriptor-pressure axis at two coverages:
-        # the routine 12-profile subset and, at a milestone, the full 42-profile
-        # product.  Both are the same measurement on the same launcher against
-        # the same committed pin table, written by the same ``--json-report``
-        # call, so the full axis is this writer's second artifact rather than a
-        # second writer: naming it here is what lets the 378-cell sweep be filed
-        # as evidence instead of living in a scratch directory, and the audit
-        # then refuses a hand-edited or copied-forward copy of it like any other
-        # committed report.  Registering the name also obliges the artifact to be
-        # present (``audit_committed_reports``), so the registry entry and the
-        # rotated ``refusal-class-parity-full.json`` must land together.
-        "artifacts": ("refusal-class-parity.json",
-                      "refusal-class-parity-full.json"),
+        # The parity gate sweeps its descriptor-pressure axis at one
+        # coverage per run: the routine 12-profile subset by default,
+        # the full 42-profile product at a milestone.  The chosen axis
+        # sweeps ONCE and lands in the one committed artifact
+        # (astra gate finding P2-6: the full tier used to execute the
+        # 378-cell product twice, once per committed name, against the
+        # rule that an expensive axis runs at most once per gate and
+        # replaces its subset).  The second name
+        # (``refusal-class-parity-full.json``) existed only because a
+        # cp of identical bytes was replaced by a duplicate sweep; with
+        # one sweep per gate there is one artifact, one registry entry,
+        # and the report's own ``pressure.mode`` records which axis it
+        # swept.
+        "artifacts": ("refusal-class-parity.json",),
         "screened": ("--go", "--rust", "--fixture", "--work", "--json-report"),
         "tier": SHARED_TIER,
         "owner": "lead",
@@ -2773,13 +2806,24 @@ def _provenance_self_test():
             "/usr/home/operator",       # FreeBSD
             "/export/home/operator",    # illumos
         ]
+        # The case-variation class (astra gate finding P2-5): on the
+        # origin host each of these spellings IS the operator's profile,
+        # because that host's volume treats the directory case- or
+        # separator-insensitively. An audit on Linux must refuse every
+        # one of them even though the auditing fold cannot see them.
+        CASE_VARIED_FOREIGN_ROOTS = [
+            "/USERS/OPERATOR",          # macOS APFS default volume
+            "/Users/OPERATOR",          # mixed case, same volume
+            "C:\\USERS\\OPERATOR",      # native Windows volume
+            "/c/USERS/operator",        # msys2 alias with a folded segment
+        ]
         saved_profile = profile_path
         cross_misses, cross_leaks, writer_leaks = [], [], []
         try:
             def auditing_home():
                 return AUDIT_HOME
             profile_path = auditing_home
-            for froot in FOREIGN_ROOTS:
+            for froot in FOREIGN_ROOTS + CASE_VARIED_FOREIGN_ROOTS:
                 # The embedded shape is the one the leaked reports carried:
                 # the profile sits inside a recorded shell line, where no
                 # whole-path fold may rewrite a mid-string mount alias.
@@ -2794,8 +2838,12 @@ def _provenance_self_test():
                         cross_misses.append((shape, froot))
             # The rule is scoped to the operator's own login: a foreign root
             # that names somebody else is not this gate's business, and a
-            # sibling of the operator's foreign root is not the root.
-            for froot in FOREIGN_ROOTS:
+            # sibling of the operator's foreign root is not the root.  The
+            # case-varied spellings appear here too: a case- or
+            # separator-insensitive origin volume makes the ROOT one
+            # directory, but it never makes a SIBLING the root, so
+            # /USERS/OPERATOR-notes must stay clean under every reading.
+            for froot in FOREIGN_ROOTS + CASE_VARIED_FOREIGN_ROOTS:
                 parent = froot[:froot.rindex(_WIN_SEP if _WIN_SEP in froot else "/")]
                 for value in (parent + "/someone-else/staged.bin",
                               froot + "-notes/staged.bin"):
@@ -2830,14 +2878,24 @@ def _provenance_self_test():
                "arrived through a foreign host's profile root",
                not writer_leaks, str(writer_leaks[:4]))
         expect("the operator login the foreign roots are built from is the "
-               "auditing host's own, so a report cannot dodge them by being "
-               "audited on a different platform",
+               "auditing host's own, and every root carries its ORIGIN "
+               "platform's fold -- never the auditing host's -- so a report "
+               "cannot dodge them by being audited on another platform "
+               "(astra gate finding P2-5)",
                operator_login(AUDIT_HOME) == "operator"
                and foreign_profile_forms("operator") == [
-                   _comparison_fold(template.format("operator"))
-                   for template in dict.fromkeys(
-                       template.format("operator")
-                       for template in _PROFILE_ROOT_TEMPLATES)],
+                   fold(template.format("operator"))
+                   for template, fold in _FOREIGN_PROFILE_SHAPES],
+               str(foreign_profile_forms("operator")))
+        expect("the foreign folds are origin-decided: on any auditing "
+               "platform the macOS root is case-folded and the FreeBSD "
+               "root is not, while the Windows root folds both ways",
+               "/users/operator" in foreign_profile_forms("operator")
+               and "/Users/operator" not in foreign_profile_forms("operator")
+               and "/usr/home/operator" in foreign_profile_forms("operator")
+               and _fold_windows("C:" + _WIN_SEP + "Users"
+                                 + _WIN_SEP + "operator")
+               in foreign_profile_forms("operator"),
                str(foreign_profile_forms("operator")))
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -2847,7 +2905,7 @@ def _provenance_self_test():
 # Executed-control count of ``_provenance_self_test``.  A harness self-test
 # that only prints "0 failures" cannot tell a passed run from a run in which
 # nothing executed, so the count is asserted here and by every harness that
-# calls into this module.  57 = the 40 controls that pin the sanctioned commit
+# calls into this module.  58 = the 40 controls that pin the sanctioned commit
 # path, the provenance and privacy block, the source audit, and the pinned
 # drive-relative anchor; the seven controls of numbered group 11, which pin
 # that a committed report never carries a checkout directory and that the
@@ -2855,13 +2913,15 @@ def _provenance_self_test():
 # numbered group 12, which pin that the profile comparison is decided by the
 # directory a path names and not by the separator, case, or msys2 mount-alias
 # spelling its caller wrote, for each of the three profile entry points: the
-# matcher, input screening, and the report scan; and the four controls of
+# matcher, input screening, and the report scan; and the five controls of
 # numbered group 13, which pin the cross-host case that group 12 cannot
 # express -- an audit running under a POSIX home must still name the
 # operator's profile when the report authored it under another host's
-# profile root, in each root spelling the supported platforms produce, and
-# the shared writer must refuse to install such a report.
-PROVENANCE_SELF_TEST_CHECKS = 57
+# profile root, in each root spelling the supported platforms produce
+# (including the case-varied spellings a case-insensitive origin volume
+# makes one directory, astra gate finding P2-5, and the origin-decided
+# fold itself), and the shared writer must refuse to install such a report.
+PROVENANCE_SELF_TEST_CHECKS = 58
 
 
 def _self_test():

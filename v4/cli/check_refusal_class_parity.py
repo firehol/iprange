@@ -51,10 +51,13 @@ can relabel a real class divergence as a gap.
 
 Which axis a run swept is recorded as ``pressure.mode``, named by the
 ``--pressure`` option and checked against the swept profile set and the recorded
-command line.  The milestone's full sweep is a separate committed artifact,
-``refusal-class-parity-full.json``, filed beside the routine
+command line.  Each run sweeps ONE axis and writes ONE committed artifact,
 ``refusal-class-parity.json``: 378 cells over 42 profiles is an evidence file,
-not a console log.
+not a console log, and the report itself says which axis it swept.  The
+full axis REPLACES the routine subset in the same invocation (REVIEWS.md,
+test execution policy 5: an expensive axis runs at most once per gate); a
+second committed name for a second execution of the same axis was retired
+as a gate defect (astra finding P2-6).
 
 Authority
 ---------
@@ -1130,7 +1133,11 @@ def pressure_cell_from_records(arm, profile, records, attempts):
                         "exit_class": ("host" if kind == "host" else
                                        "success" if kind == "answered" else
                                        "refused" if kind == "error" else "none"),
-                        "verdict": verdict, "why": source.get("why")}
+                        "verdict": verdict, "why": source.get("why"),
+                        # What every attempt answered (fold_attempt_records):
+                        # the representative stands for the cell, and a
+                        # reader must still see an attempt it stands over.
+                        "attempt_verdicts": source.get("attempt_verdicts")}
         if verdict == "disagreement":
             cell["flaky"] = True
         if kind == "no-answer":
@@ -1155,6 +1162,37 @@ def pressure_cell_from_records(arm, profile, records, attempts):
     if poller is not None and poller.get("poller_ever") is not None:
         cell["go_poller"] = list(poller["poller_ever"])
     return cell
+
+
+def fold_attempt_records(records):
+    """Fold one engine's repeated cell attempts into one record.
+
+    The sweep runs every cell at least twice and "any disagreement
+    failing" (design section 10) is the requirement, so the fold must
+    make disagreement irreversible and order-independent (astra gate
+    finding P2-4). The old loop replaced its representative with any
+    passing candidate BEFORE comparing verdicts, so [wedge, pass] lost
+    the wedge and certified a failing cell clean, while [pass, wedge]
+    kept it: the same physical run graded by the order the attempts
+    happened to land in.
+
+    Now: the representative is the passing attempt when one exists (so
+    the cell's answer content is the successful open the pin table
+    judges) or the first attempt otherwise, and the disagreement verdict
+    is decided from the SET of verdicts, which no ordering can change.
+    ``attempt_verdicts`` preserves what every attempt answered, so a
+    reader sees the discarded wedge instead of trusting one record.
+    """
+
+    verdicts = [record.get("verdict") for record in records]
+    best = next((record for record in records
+                 if record.get("verdict") == "pass"), records[0])
+    best = dict(best)
+    best["attempt_verdicts"] = verdicts
+    if len(set(verdicts)) > 1:
+        best["verdict"] = "disagreement"
+        best["why"] = "cell disagreed across runs"
+    return best
 
 
 def run_pressure_sweep(go, rust, fixture, work, profiles, mode, runs=2,
@@ -1244,18 +1282,16 @@ def run_pressure_sweep(go, rust, fixture, work, profiles, mode, runs=2,
             # launcher inside run_cell, which owns that classification and
             # answers it without starting a doomed process; the sweep
             # reads the verdict back rather than duplicating the rule.
-            best = None
-            for _attempt in range(attempts):
-                candidate = fd_pressure_harness.run_cell(
+            # Every attempt is kept and folded by fold_attempt_records:
+            # disagreement is sticky and order-independent (P2-4), so a
+            # passing attempt can no longer erase an earlier wedge.
+            attempt_records = [
+                fd_pressure_harness.run_cell(
                     engine, bins, ctx, hold_path, arm, record["limit"],
                     record["held"], record["runtime_state"],
                     record["null_device_state"])
-                if best is None or (candidate.get("verdict") == "pass"):
-                    best = candidate
-                if candidate.get("verdict") != best.get("verdict"):
-                    best["verdict"] = "disagreement"
-                    best["why"] = "cell disagreed across runs"
-            per_engine[engine] = best
+                for _attempt in range(attempts)]
+            per_engine[engine] = fold_attempt_records(attempt_records)
         cell = pressure_cell_from_records(arm, profile, per_engine, attempts)
         pin = PINNED_PRESSURE_CLASSES.get((arm, profile))
         failed = 0
@@ -1806,6 +1842,21 @@ def verify_pressure_report(report):
             continue
         for engine in ("go", "rust"):
             problems.extend(pressure_cell_problems(cell, pin, engine))
+            # Design section 10: "every cell executed at least twice
+            # with any disagreement failing" (astra gate finding
+            # P2-4). The fold marks the disagreement in the record's
+            # verdict and keeps every attempt's verdict in
+            # attempt_verdicts; this is the term that makes the rule
+            # an obligation of the verdict rather than a console line.
+            # A cell whose answer changed across attempts is
+            # nondeterminism, not parity evidence, exactly as the
+            # grid's retry term decides for the other two axes.
+            if (cell.get(engine) or {}).get("verdict") == "disagreement":
+                problems.append(
+                    f"pressure cell ({arm}, {profile}, {engine}): attempts "
+                    f"disagreed across runs (attempt_verdicts "
+                    f"{(cell.get(engine) or {}).get('attempt_verdicts')!r}); "
+                    f"a nondeterministic cell is not parity evidence")
         divergent, band_gap = _pressure_cell_divergence(pin, cell)
         if bool(cell.get("band_gap")) != band_gap:
             # The per-cell flag is a report about the table, so it is judged
@@ -3488,7 +3539,7 @@ def _sync_summary(report):
 # doctored-report cases and every control that assesses a report or mutates the
 # tables directly; adding or removing one changes this constant in the same
 # change, and a run whose total drifts from it fails.
-SELF_TEST_CASES_TOTAL = 66
+SELF_TEST_CASES_TOTAL = 69
 
 
 def _self_test():
@@ -4390,6 +4441,72 @@ def _self_test():
         failures += 1
         for problem in problems[:3]:
             print(f"       {problem}")
+
+    # The attempt fold (astra gate finding P2-4). The sweep's "any
+    # disagreement fails" rule lived in a loop that replaced its
+    # representative with a passing candidate BEFORE comparing, so the
+    # same physical outcomes graded [wedge, pass] clean while
+    # [pass, wedge] graded flaky: the fold, not the launcher, decided
+    # the cell. These controls attack the pure fold with both orders
+    # of one mixed run and with every all-one-verdict shape, so
+    # re-introducing the order dependence fails here rather than in a
+    # committed zero-flake report.
+    wedge_pass = fold_attempt_records(
+        [{"verdict": "wedge", "why": "forced"},
+         {"verdict": "pass", "answer": '{"result": {}}'}])
+    pass_wedge = fold_attempt_records(
+        [{"verdict": "pass", "answer": '{"result": {}}'},
+         {"verdict": "wedge", "why": "forced"}])
+    order_sticky = (wedge_pass["verdict"] == "disagreement"
+                    and pass_wedge["verdict"] == "disagreement"
+                    and wedge_pass["attempt_verdicts"] == ["wedge", "pass"]
+                    and pass_wedge["attempt_verdicts"] == ["pass", "wedge"])
+    tally["controls"] += 1
+    print(f"{'ok  ' if order_sticky else 'BAD '} an attempt mix must grade "
+          f"disagreement in either order  "
+          f"orders={[wedge_pass['verdict'], pass_wedge['verdict']]}")
+    if not order_sticky:
+        failures += 1
+
+    def fold_shape(records, want_verdict, want_representative_answer=None):
+        folded = fold_attempt_records(records)
+        ok = folded.get("verdict") == want_verdict
+        if want_representative_answer is not None:
+            ok = ok and folded.get("answer") == want_representative_answer
+        return ok
+
+    stable_shapes = (
+        fold_shape([{"verdict": "pass"}, {"verdict": "pass"}], "pass")
+        and fold_shape([{"verdict": "wedge"}], "wedge")
+        and fold_shape([{"verdict": "wedge"}, {"verdict": "wedge"}], "wedge")
+        # The representative is the passing attempt (its answer is the
+        # content the pin judges) even when the disagreement stands.
+        and fold_shape([{"verdict": "wedge"},
+                        {"verdict": "pass", "answer": "A"}],
+                       "disagreement", "A"))
+    tally["controls"] += 1
+    print(f"{'ok  ' if stable_shapes else 'BAD '} fold verdicts and the "
+          f"passing representative must stay stable  ok={stable_shapes}")
+    if not stable_shapes:
+        failures += 1
+
+    # The fold's disagreement must FAIL the report verdict (design
+    # section 10). The old verdict path scored a disagreeing cell by
+    # its representative's answer content only, so an honestly flaky
+    # cell passed the gate: the disagreement rule lived nowhere at
+    # verdict time. This control marks one cell's go half disagreed,
+    # re-syncs honestly, and requires the term -- deleting the term
+    # from verify_pressure_report fails here, not in a committed
+    # zero-flake report.
+    def truthfully_disagreed_cell(report):
+        target = pressure_cell_in(report, PRESSURE_SAMPLE_CELL)
+        target["go"]["verdict"] = "disagreement"
+        target["go"]["attempt_verdicts"] = ["wedge", "pass"]
+
+    with_pressure_report(
+        truthfully_disagreed_cell,
+        "a truthfully disagreed pressure cell must FAIL the verdict",
+        "attempts disagreed across runs")
 
     # The committed-report contract of this writer, measured rather than
     # asserted.  A parity report names the binaries it swept, the work

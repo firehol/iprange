@@ -12,6 +12,7 @@ package fileio
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -153,12 +154,22 @@ type activeInput struct {
 // typed exported sources wrap it with their batch conversion (Rust
 // TextInputSource<K>).
 type textInputCore[K any] struct {
-	paths       []string
-	activePath  string
-	active      *activeInput
-	options     TextInputOptions
-	lineBuf     []byte
-	batch       []K
+	paths      []string
+	activePath string
+	active     *activeInput
+	options    TextInputOptions
+	lineBuf    []byte
+	batch      []K
+	// pending parks ranges while one resolution group overflows the
+	// fixed batch (astra gate finding P1-1, mirroring the Rust
+	// source): resolved answers arrive faster than the batch drains,
+	// so the surplus waits FIFO and the next nextBatch hands it out
+	// first. Without this, 257 answers from a single hostname group
+	// failed the whole feed with "range does not fit the bounded
+	// parser batch/family" even though the batched publication
+	// contract only requires bounded batches, not bounded resolution
+	// groups.
+	pending     []parsedRange
 	finished    bool
 	lastCode    string
 	lastMessage string
@@ -313,11 +324,17 @@ func (c *textInputCore[K]) pathLabel() string {
 }
 
 func (c *textInputCore[K]) nextBatch() ([]K, error) {
-	if c.finished {
+	if c.finished && len(c.pending) == 0 {
 		return nil, nil
 	}
 	c.batch = c.batch[:0]
 	for {
+		// Parked surplus first: a previous resolution group may have
+		// filled the batch and deferred the rest (P1-1).
+		for len(c.batch) < batchCapacity && len(c.pending) > 0 {
+			c.batch = append(c.batch, c.convert(c.pending[0]))
+			c.pending = c.pending[1:]
+		}
 		if len(c.batch) >= batchCapacity {
 			return c.batch, nil
 		}
@@ -328,7 +345,7 @@ func (c *textInputCore[K]) nextBatch() ([]K, error) {
 			}
 			if !opened {
 				c.finished = true
-				if len(c.batch) == 0 {
+				if len(c.batch) == 0 && len(c.pending) == 0 {
 					return nil, nil
 				}
 				return c.batch, nil
@@ -455,13 +472,23 @@ func (c *textInputCore[K]) readStepInner() (*step, error) {
 	if compareU128(value.fromHi, value.fromLo, value.toHi, value.toLo) > 0 {
 		return nil, c.formatError("binary range start exceeds end")
 	}
+	// Inclusive cardinality and the running total follow the
+	// authoritative legacy readers (astra gate finding P1-3, mirroring
+	// the Rust source). C sums v2 cardinality with wrapping u128
+	// arithmetic (src/ipset6_binary.c:49, u128_add(u128_sub(..), ONE)
+	// accumulated by u128_add), so the full-universe range ::/0
+	// contributes 2^128 and wraps to zero -- exactly the header count
+	// of an optimized full-universe payload, which both legacy readers
+	// accept. v1/IPv4 keeps C's checked accumulator
+	// (src/ipset_binary.c:34-39, binary_add_unique_ips refuses a u64
+	// overflow), so overflow stays an error there.
 	diff := subU128(value.toHi, value.toLo, value.fromHi, value.fromLo)
 	unique, overflow := addU128(diff.hi, diff.lo, 0, 1)
-	if overflow {
+	if overflow && !ipv6 {
 		return nil, c.formatError("binary range size overflows")
 	}
-	next, overflow := addU128(binary.actualUnique.hi, binary.actualUnique.lo, unique.hi, unique.lo)
-	if overflow {
+	next, nextOverflow := addU128(binary.actualUnique.hi, binary.actualUnique.lo, unique.hi, unique.lo)
+	if nextOverflow && !ipv6 {
 		return nil, c.formatError("binary unique count overflows")
 	}
 	if binary.optimized && binary.hasPrevious {
@@ -747,8 +774,16 @@ func (c *textInputCore[K]) resolveNames(names []string) error {
 }
 
 func (c *textInputCore[K]) pushRange(value parsedRange) error {
-	if len(c.batch) >= batchCapacity || !c.familyMatches(value) {
+	if !c.familyMatches(value) {
 		return c.formatError("range does not fit the bounded parser batch/family")
+	}
+	if len(c.batch) >= batchCapacity {
+		// A resolution group (or a binary burst) can outpace the
+		// drain; the surplus parks in bounded form (a FIFO slice
+		// handed out by the next batch) instead of failing the feed.
+		// Family refusals stay errors: only capacity is deferred.
+		c.pending = append(c.pending, value)
+		return nil
 	}
 	c.batch = append(c.batch, c.convert(value))
 	return nil
@@ -1006,8 +1041,22 @@ func equalBytes(left, right []byte) bool {
 }
 
 func parseTextLine(line []byte, options TextInputOptions) (parsedLine, error) {
+	// C classifies the fgets buffer as a C string: every end-of-line
+	// test in parse_line()/parse_line6() stops at a NUL
+	// (src/ipset_load.c:150, 173, 195, 224; src/ipset6_load.c:68, 99,
+	// 127, 144), so only the bytes before the first NUL can change the
+	// outcome. The legacy reader applies this with cstr()
+	// (src/legacy/parse.rs); the streaming adapter must not diverge
+	// (astra gate finding P1-2).
+	if end := bytes.IndexByte(line, 0); end >= 0 {
+		line = line[:end]
+	}
 	rest := trimLeading(line)
-	if len(rest) == 0 || rest[0] == '#' || rest[0] == ';' {
+	// C treats a record whose first surviving character is CR as an
+	// empty line (src/ipset_load.c classify: '\r' | '\n' => Empty), so
+	// a CRLF feed's blank line -- the record is exactly "\r" once the
+	// reader strips LF -- is an empty record, not an input error.
+	if len(rest) == 0 || rest[0] == '#' || rest[0] == ';' || rest[0] == '\r' {
 		return parsedLine{kind: parsedEmpty}, nil
 	}
 	if options.Family == AddressFamilyInputIPv4 {
@@ -1031,8 +1080,14 @@ func parseTextLine(line []byte, options TextInputOptions) (parsedLine, error) {
 			return result, err
 		}
 	}
-	if hostnameIsComplete(rest) {
-		return parsedLine{kind: parsedHostname, hostname: rest}, nil
+	// C hostname_v4()/hostname_v6() resolve the SCANNED TOKEN, never the
+	// rest of the line (src/legacy/parse.rs:1087-1100): a trailing
+	// comment or CR is legal after the token but must not reach the
+	// resolver. Handing the whole trimmed line to the resolver made
+	// "host # comment" a lookup for "host # comment" (astra gate
+	// finding P1-2).
+	if token := hostnameToken(rest); token != nil {
+		return parsedLine{kind: parsedHostname, hostname: token}, nil
 	}
 	return parsedLine{}, fmt.Errorf("invalid input line: %s", string(line))
 }
@@ -1534,12 +1589,18 @@ func tokenAddressFamily(token []byte) (bool, bool) {
 	return false, classifyV4Token(token)
 }
 
-func hostnameIsComplete(line []byte) bool {
+// hostnameToken mirrors C hostname_v4()/hostname_v6()
+// (src/legacy/parse.rs:1087-1100): scan the token, accept only when
+// what follows (after spaces) is empty or a comment/CR, and return the
+// TOKEN itself. The old hostnameIsComplete predicate checked the shape
+// but the caller then handed the whole line to the resolver, so a
+// trailing comment or CR rode along into the lookup.
+func hostnameToken(line []byte) []byte {
 	token, rest := scanWhile(line, isHostnameByte)
-	if len(token) > 255 {
-		return false
+	if len(token) == 0 || len(token) > 255 || !completeAfterToken(rest) {
+		return nil
 	}
-	return len(token) > 0 && completeAfterToken(rest)
+	return token
 }
 
 // dnsRange maps one resolved address to the input family: IPv6 mode

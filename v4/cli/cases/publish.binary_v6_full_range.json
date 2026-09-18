@@ -1,0 +1,65 @@
+{
+ "schema": "iprange-cli-case-v1",
+ "name": "publish.binary_v6_full_range",
+ "requires": "iprange.v1.current.publish",
+ "fixtures": [
+  {
+   "path": "v6-full.bin",
+   "source": {
+    "base64": "aXByYW5nZSBiaW5hcnkgZm9ybWF0IHYyLjAKaXB2NgpvcHRpbWl6ZWQKcmVjb3JkIHNpemUgMzIKcmVjb3JkcyAxCmJ5dGVzIDM2CmxpbmVzIDEKdW5pcXVlIGlwcyAwCk08KxoAAAAAAAAAAAAAAAAAAAAA/////////////////////w=="
+   }
+  }
+ ],
+ "steps": [
+  {
+   "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/v6-full.bin"
+     ],
+     "family": "ipv6",
+     "fix_network": false,
+     "default_prefix": 128,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
+    },
+    "feed": "v6full",
+    "value_tag": {
+     "text": "v6full"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "binary-v6-full-range"
+    },
+    "destination": "$WORK/v6-full.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "expect_result": {
+    "report": {
+     "input_record_count": {
+      "$ignore": true
+     },
+     "normalized_interval_count": "1",
+     "addresses": "340282366920938463463374607431768211456"
+    },
+    "publication": {
+     "$ignore": true
+    }
+   }
+  }
+ ]
+}

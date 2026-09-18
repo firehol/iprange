@@ -19,10 +19,13 @@ committed-report writer — is what makes relabelling detectable without
 trusting the producing machine: it binds every report by role, byte
 length, content SHA-256, and revision, plus the eleven-entry staged
 binary ledger by digest.  Both kind-gate passes (fresh and committed,
-after rotation) returned rc 0 at this revision, and the manifest lists
-two distinct `refusal-class-parity` digests: the routine axis and the
-milestone full axis are independent ledger-bound sweeps, not copies —
-identical bytes under two names is exactly what the gate refuses.
+after rotation) returned rc 0, and the manifest lists exactly one
+`refusal-class-parity` digest: the chosen axis — at the milestone tier
+the 378-cell full sweep, which replaces the routine subset — executes
+once per gate under one committed name (astra gate finding P2-6; an
+earlier wave paid for the same axis twice under two names, which is
+exactly the rule "an expensive axis runs at most once per gate and
+replaces its overlapping subset" forbids).
 Against the previously fully-qualified revision `2c788b8e`, this set's
 revisions DO change engine sources — the legacy parse/DNS paths of
 `v4/rust/iprange-cli` and `v4/go/internal/cli/legacy` (the
@@ -64,10 +67,12 @@ warning gate, the GOOS cross-compilation matrix (19 steps ran, 1 skipped
 as unsupported by the toolchain), the four matrices, the crash battery
 in both mixed directions and its two `/usr/bin/false` negatives, the
 resource and throughput proofs with their self-tests, golden,
-sensitivity, the refusal-class parity gate on BOTH pressure axes (the
-routine 108-cell subset and the 378-cell milestone sweep, each its own
-ledger-bound run with its own committed name and manifest digest), the
-POSIX guard, the FIFO surface gate, the committed swap-race battery
+sensitivity, the refusal-class parity gate sweeping its chosen
+pressure axis exactly once (at the milestone tier that is the 378-cell
+full product, which replaces the 108-cell routine subset in the same
+invocation — one ledger-bound run, one committed name, one manifest
+digest; astra gate finding P2-6 retired the duplicate second sweep),
+the POSIX guard, the FIFO surface gate, the committed swap-race battery
 replay, `tests.d` for both engines (121 of 121 groups green per engine),
 the ledger reconciliation, the kind gate on fresh and on committed
 reports, the forgery battery, and the coverage harness.  The console
@@ -82,7 +87,7 @@ against the rotated files, not repairs.  The race probes execute from
 their own scratch directories, so the battery creates no
 repository-root scratch.
 
-Matrices and corpus.  `v4/cli/cases/` holds 71 case files, and the
+Matrices and corpus.  `v4/cli/cases/` holds 74 case files, and the
 committed matrix reports were generated over all 71 at the revision under
 test, closing the 63-versus-71 disclosure of earlier waves.  The eight
 cases added after the first 63 are the two feed outcome cases, the four
@@ -121,7 +126,7 @@ cross-consumer step, which those matrices cannot exercise by design.
 The `known-defects.json` ledger is committed empty, and the kind gate
 enforces it in both directions — an unlisted FAIL fails the gate, and a
 listed defect that passes fails
-it.  `check_golden.py` reports 55 golden exchanges PASS over the 71 case files; `sensitivity_gate.py` reports 14 modes PASS.
+it.  `check_golden.py` reports 55 golden exchanges PASS over the 74 case files; `sensitivity_gate.py` reports 14 modes PASS.
 
 Refusal-class parity gate (committed).
 `v4/cli/check_refusal_class_parity.py` drives both binaries over a
@@ -138,29 +143,35 @@ under its own bounded deadline (4 s) and a differing repeat is retried
 (2 retries), so a flake is counted apart from a divergence and a hang
 apart from both.  Budget: 55 s per grid; measured 7.9 s with the pooled
 grid runner (12 jobs) — the milestone pressure axis runs beside the
-grid and reports its own `pressure.elapsed_seconds` (101.2 s / 99.9 s
-for the two committed sweeps).  `evidence/refusal-class-parity.json` carries each
+grid and reports its own `pressure.elapsed_seconds` (101.2 s for the
+committed sweep).  `evidence/refusal-class-parity.json` carries each
 binary's SHA-256 and `system.describe` implementation label plus
 `git_head`.  The verdict is two-layer on purpose: the report must first
 describe its own execution honestly (cell count against the derived
 grid, every disagreeing cell named in the divergences list, no cell
 claiming agreement with differing answers), and the contract term is
 applied on top — zero divergences, no unanswered cell, no flaky cell,
-every pinned refusal satisfied.  Committed result in both
-`refusal-class-parity.json` and `refusal-class-parity-full.json` at
-their recorded `git_head`: 483/483 cells executed, 0 divergences, 0
-hangs, 0 flaky, 36/36 pinned refusals satisfied, verdict PASS, plus
-378/378 pressure cells (all 42 milestone profiles) with 0 blocked, 0
-missing, and 0 vacuous.  The two artifacts are independent
-ledger-bound sweeps of the same grid at the same revision — each with
-its own content digest in `battery-manifest.json`, because the kind
-gate refuses one digest carried under two names.  The 418-cell/29-pin
-state recorded in earlier waves is closed by this rotation.  `--self-test`
-(66 controls, pinned by `SELF_TEST_CASES_TOTAL`, offline)
+every pinned refusal satisfied.  Committed result in
+`refusal-class-parity.json` at its recorded `git_head`: 483/483 cells
+executed, 0 divergences, 0 hangs, 0 flaky, 36/36 pinned refusals
+satisfied, verdict PASS, plus 378/378 pressure cells (`mode` full, all
+42 milestone profiles) with 0 blocked, 0 missing, and 0 vacuous.  One
+sweep, one artifact, one manifest digest: the milestone tier sweeps the
+full axis as the regular artifact (astra gate finding P2-6 retired the
+second committed name and the duplicate sweep that justified it).  The
+418-cell/29-pin state recorded in earlier waves is closed by this
+rotation.  `--self-test`
+(69 controls, pinned by `SELF_TEST_CASES_TOTAL`, offline)
 includes the three anchors this gate exists to provide: an injected
 synthetic divergence must FAIL, a report with zero executed cells must
 FAIL, and deleting the fixture that pins the `validate.live`
 sidecar-fold shape (`live_recovery_coordination_unavailable`) must FAIL.
+It also attacks the attempt fold directly (astra gate finding P2-4):
+the same physical [wedge, pass] mix must grade disagreement in either
+order, and a truthfully disagreed pressure cell must FAIL the report
+verdict — the fold's disagreement is now an obligation of the verdict,
+not only a console line, so a committed zero-flake report means every
+attempt of every cell agreed.
 The mid-wave 42-divergence state those product workers were created for
 is closed: the writer-symlink, recovery-order, feeds-outcome, zero-length,
 procfs/sysfs, and unix-socket classes all agree cell-for-cell now.
@@ -203,10 +214,12 @@ consistent.  The crash battery reports 16 scenarios PASS in each mixed
 direction, and its two `/usr/bin/false` negative controls each record 0
 of 16 scenarios passing, proving a substituted non-product binary is
 detected.  The resource harness records 8/8 proofs PASS under bounded
-read and write deadlines, and the throughput attestation records go
-median 36,774.4 replies/s (rounds 36,774.4 / 37,636.9 / 33,999.3; thread
-census 13/10) and rust median 59,014.0 replies/s (rounds 59,014.0 /
-57,937.9 / 62,531.5; census 4/4) with its 12-case self-test.
+read and write deadlines, and the throughput attestation (committed
+artifact figures) records go median 15,394.0 replies/s (rounds
+10,595.5 / 15,394.0 / 17,105.2) and rust median 45,751.7 replies/s
+(rounds 44,010.1 / 45,751.7 / 53,368.4), each with its 12-case
+self-test.  These are host-load observations, not a contract; the
+census terms are below in the throughput entry.
 
 Coverage (measured, not asserted).  `evidence/coverage-go.json`, produced
 by `v4/cli/coverage_harness.py`, records unit and corpus-driven
@@ -394,8 +407,7 @@ Which reports name which revision.  Twenty measurement reports,
 `git_head=38aea8fc5777d1cf985ab2e53e7a66e503f59469`: the four matrices,
 `crash.json`, `crash-go_to_rust.json`, `crash-negative.json`,
 `crash-negative-producer-false.json`, `fifo-surface.json`,
-`throughput.json`, `refusal-class-parity.json`,
-`refusal-class-parity-full.json`, `coverage-go.json`,
+`throughput.json`, `refusal-class-parity.json`, `coverage-go.json`,
 `golden.json`, `sensitivity.json`, `resource.json`, `guard-posix.json`,
 `race-battery.json`, `windows-guard.json`, and
 `windows-housekeeping.json`.  `known-defects.json` is a ledger rather
@@ -535,10 +547,10 @@ unsupported by the installed Go toolchain) plus
 rust_to_go 25 PASS + 24 skips, go_to_rust 25 PASS + 24 skips; crash
 16/16 scenarios in both directions with both `/bin/false` negatives
 rejected (0 passed, 16 failed each); resource proofs 8/8 with the
-harness self-test PASS; throughput PASS (busy-reply median 17,689.4
-replies/s for go with 18 clone calls and 6/9 unique child tids at
-3,000/6,000 requests, 55,471.5 for rust with 4 clone calls and 4 unique
-child tids; attestation, not a threshold); golden 55 exchanges / 49 case files;
+harness self-test PASS; throughput PASS (busy-reply median 15,394.0
+replies/s for go with 17 clone calls and 11/13 unique child tids at
+3,000/6,000 requests, 45,751.7 for rust with 4 clone calls and 4 unique
+child tids; attestation, not a threshold); golden 55 exchanges / 71 case files;
 sensitivity gate 14/14; guard POSIX negative control PASS for both
 products; kind-coverage gate PASS on the fresh reports; FIFO
 surface gate PASS (17 arms x 2 engines) with its self-test PASS
@@ -2253,12 +2265,14 @@ the binding that field provides.
   that a row deletion would otherwise remove silently, the
   `PINNED_REFUSALS` table whose expectations come from the Rust authority,
   the binary digests and `system.describe` implementation labels it drove,
-  and `git_head`.  Committed at the artifact's own revision: 418 cells
-  executed, 0 divergences, 0 hangs, 0 flaky, 29 of 29 pins satisfied,
-  verdict PASS.  That grid and pin table are stale against the current
-  gate (483 cells, 36 pins), which is the pre-rotation condition the kind
-  gate reports; the wave battery rotates this artifact together with the
-  manifest.  See the head block and `../README.md`.
+  and `git_head`.  Committed at the artifact's own revision: 483 cells
+  executed, 0 divergences, 0 hangs, 0 flaky, 36 of 36 pins satisfied,
+  verdict PASS, plus the full 378-cell pressure sweep (0 flaky, 0
+  hangs, 0 divergences) that replaces the routine subset at the
+  milestone tier.  Earlier waves committed a 418-cell/29-pin grid and,
+  at the full tier, a duplicate second sweep under a second name; both
+  conditions are closed by this rotation (astra gate finding P2-6).
+  See the head block and `../README.md`.
 - `coverage-go.json` — `iprange-cli-coverage-go-report-v1`, produced by
   `coverage_harness.py`.  Measured Go coverage in three separable figures:
   `unit` from the module's own `go test -cover`, `integration` from the
@@ -2270,9 +2284,9 @@ the binding that field provides.
   rather than published.  The instrumented binaries and their own staging
   directory are recorded so a reader can confirm they are not the
   qualification or throughput binaries; killed runs are never merged.
-  Committed at this revision: unit 46.22% / 63.30% / 42.92%, integration
-  40.16% / 59.07% / 36.22%, merged 59.35% / 80.08% / 54.63% (statements /
-  functions / blocks) over 28 packages.
+  Committed at this revision: unit 48.98% / 65.60% / 45.45%, integration
+  41.22% / 60.14% / 37.31%, merged 60.46% / 80.89% / 55.71% (statements /
+  functions / blocks) over 30 packages.
 - `golden.json`, `sensitivity.json` —
   `iprange-cli-golden-report-v1` and
   `iprange-cli-sensitivity-report-v1`. The golden-exchange and
@@ -2297,24 +2311,19 @@ the binding that field provides.
   failure branch let a fabricated entry sit beside an all-PASS report
   unnoticed.
 
-  The eight current entries are all owned by `go-engine`: six in `matrix-go`
+  The ledger is committed EMPTY at this revision: the eight entries the
+  go-engine carried through wave 19.23 — six in `matrix-go`
   (`writer.symlink_live_direct_replace`, `writer.symlink_live_feeds_create`,
   `recovery.inspect_live_junk`, `recover.live_junk`,
   `feeds.missing_feed_outcomes`, `snapshot.zero_byte_destination`) and the
-  two of those that also run in the `go_to_rust` direction
-  (`snapshot.zero_byte_destination`, `writer.symlink_live_direct_replace`).
-  Each records the reply the Go engine actually gives against the class the
-  Rust authority gives — `io` instead of `wrong_state` for a writer pointed
-  at a symlink to a live database, `format_invalid` instead of
-  `live_recovery_current_generation_unprovable` and
-  `recovery_candidate_changed` for the live recovery classify order,
-  `not_started` instead of `read_only_failure` for a missing feed, and a
-  refused rather than successful zero-length snapshot destination — together
-  with the resolution and the removal criterion.  Every one of them is
-  expected to disappear when the wave-19.24 product repairs land: a listed
-  case that PASSes fails the gate, so the ledger must be emptied in the same
-  integration that fixes the engine, and the gate names any entry left
-  behind.
+  two of those that also ran in the `go_to_rust` direction — were retired
+  when the wave-19.24 product repairs landed, and the battery has been
+  green over the empty ledger at every rotation since.  An empty ledger
+  means the battery must be entirely green, and it is: that is the state
+  the two-directional enforcement above describes (a FAIL row the ledger
+  does not list fails the gate; a listed case that PASSes fails the
+  gate), so a future regression must be declared in the ledger before it
+  can be tolerated, and it cannot hide there after it is fixed.
 
 ## Gate invocation
 
@@ -2331,7 +2340,6 @@ nice python3 v4/cli/check_kind_coverage.py \
   --fifo-surface v4/cli/evidence/fifo-surface.json \
   --throughput v4/cli/evidence/throughput.json \
   --refusal-class-parity v4/cli/evidence/refusal-class-parity.json \
-  --refusal-class-parity v4/cli/evidence/refusal-class-parity-full.json \
   --coverage-go v4/cli/evidence/coverage-go.json \
   --windows-housekeeping v4/cli/evidence/windows-housekeeping.json \
   --windows-guard v4/cli/evidence/windows-guard.json \
@@ -2351,9 +2359,10 @@ nice python3 v4/cli/check_kind_coverage.py \
 # omitted, are discovered beside the reports already named; a report that
 # cannot be found is a gate problem, not a skipped check.  Every consumed
 # class must also be attested by the battery manifest, so an artifact the
-# gate never consumes cannot be hollowed out unnoticed.  The milestone's
-# full-axis sweep is a second --refusal-class-parity value of the same
-# class, appended when `refusal-class-parity-full.json` exists.  --sha256-ledger takes a sha256sum-format
+# gate never consumes cannot be hollowed out unnoticed.  The parity class
+# carries exactly one committed report: the chosen axis sweeps once into
+# `refusal-class-parity.json` (astra gate finding P2-6 retired the
+# second name and the duplicate full sweep that justified it).  --sha256-ledger takes a sha256sum-format
 # ledger produced by the battery's own build step over the staged binaries,
 # and when supplied every binary digest recorded in a consumed report must
 # appear in it.  The committed `battery-manifest.json` is the durable form
@@ -2447,9 +2456,9 @@ the derived `privacy` block, screens the inputs the caller declares, and
 refuses the write when any screened input or any finished string value
 names an operator profile path.  Splitting the write from the provenance
 would let a harness keep the artifact and drop the audit, so the registry
-is audited as a set: `command_sanitize.py --self-test` executes 57
+is audited as a set: `command_sanitize.py --self-test` executes 58
 controls over the whole registry, and every harness self-test must report
-`shared command_sanitize controls executed=57 expected=57` before its own
+`shared command_sanitize controls executed=58 expected=58` before its own
 result counts.  `check_producer_privacy.py` attacks the three
 lead-owned writers from the outside with 40 committed controls, so
 neither a writer that screens nothing, nor one that serializes its own
