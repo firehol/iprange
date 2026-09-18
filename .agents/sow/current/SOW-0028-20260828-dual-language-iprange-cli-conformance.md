@@ -18541,9 +18541,13 @@ than a hidden hole.
 ## Round 19 — cleanup automation removed: read-only reporter + human removal procedure (2026-09-19)
 
 - After astra turns 4-6 each found new guard defects in the mandated
-  cleanup tool (turn 6: 6 P2 + 3 P3, all but the record items located in
-  `.agents/tools/kit-gc.py`, including a regression the round-5 rewrite
-  itself introduced in `--attic`), the lead escalated the scope question
+  cleanup tool (turn 6: 5 P2 + 3 P3 against the bound
+  `.local/shared/evidence/round16/astra-turn6-result.txt`; the earlier
+  "6 P2" figure in this section and in the lead status file was a
+  miscount, corrected per astra turn 7 remaining_round17_record_errors.
+  All findings were located in `.agents/tools/kit-gc.py` or record
+  binding, including a regression the round-5 rewrite itself introduced
+  in `--attic`), the lead escalated the scope question
   to the user. User decision: adopt the advisor-ruling option 3 — a
   narrow read-only reporter replaces the automation; the ruling also
   corrected three of the lead's framings (guards-as-warnings would keep
@@ -18568,8 +18572,10 @@ than a hidden hole.
   preservation — copy durable artifacts into `.local/shared/evidence/`
   and bind them in the gate manifest before deleting), single named
   paths only, never globs, `shared/` never a target. AGENTS.md matches
-  (closes turn-6's entry-point consistency finding by removal of the
-  inconsistency).
+  the procedure (the entry-point consistency finding was turn 5's
+  `cleanup_documentation_still_inconsistent`, already repaired in round
+  18 and verified repaired by turn 6; the earlier attribution of that
+  finding to turn 6 in this section was corrected per astra turn 7).
 - Records: the round-17 suite count restored to its recorded 23/23 (a
   round-18 `sed` had overwritten history — astra turn 6
   historical_validation_count_rewritten); astra turn-6 result copied
@@ -18590,3 +18596,45 @@ than a hidden hole.
   security/target-r9b 1.1 GB). `v4/cli/run.py` byte-identical to
   3e75cfec (guard region `abacfa59…`); no product behavior touched in
   rounds 17-19.
+
+### Round 19 addendum — astra turn 7 (bb222299): reporter measurement fixes
+
+- Astra turn 7 over the read-only reporter: NEEDS CHANGES — 2 P2 + 3 P3
+  (staged verbatim at `.local/shared/evidence/round16/
+  astra-turn7-result.txt`). Lead-verified all five against source and
+  staged data before acting: (1) the cap was compared per unit-of-role
+  instead of per sandbox aggregate — the staged real report itself proved
+  it (fit-for-purpose 2176 MB, parity 2069 MB unflagged); (2) directory
+  symlinks were never measured (os.walk + followlinks=False skips
+  statting them entirely); (3) the shared/_attic-md exclusion matched the
+  name in any path component instead of the two ROOT-level trees; (4)
+  round-19 records said turn 6 was "6 P2" (bound file: 5 P2) and
+  attributed the entry-point finding to turn 6 (it was turn 5's, verified
+  repaired by turn 6); (5) the docstring contradicted the measurement
+  (sparse holes are not charged; directory entries add allocated blocks
+  but no apparent bytes).
+- Repairs at this revision (reporter + records only; run.py untouched):
+  cap now evaluated on each `.local/<role>/` sandbox aggregate (direct
+  role-dir files included; unit lines carry the sandbox total);
+  directory symlinks contribute their own blocks, link-value length and
+  mtime without traversal; exclusions compare against
+  `.local/shared`/`.local/_attic-md` by identity; docstring and text
+  report describe the implemented semantics ("aggregate per sandbox");
+  a consumer exiting before flush no longer leaks exit 120 (devnull
+  recipe preserves the scan's own class). Records corrected in the SOW
+  Round-19 section and the lead status file for the turn-6 count and the
+  entry-point attribution.
+- Validation: reporter suite 13/13 synthetic assertions (adds the
+  aggregate-cap counterexample — two individually-under-cap children with
+  over-cap aggregate; direct-role-file counting; dir-symlink
+  measurement/recency/no-traversal; nested-`shared`-named candidate now
+  MUST appear; broken-pipe class). Real-tree run: scan INCOMPLETE, exit
+  2, the same two chmod-000 privacy fixtures as errors; **eight** role
+  sandboxes over the 1 GB aggregate cap (tester 7.5 GB, portability
+  6.0 GB, lead-r10 5.6 GB, performance 3.7 GB, fit-for-purpose 2.2 GB,
+  parity 2.1 GB, operations 2.0 GB, security 1.8 GB) — the correct
+  picture for the human removal procedure, which is a gate-close duty;
+  the live r17/r18 kits stay protected by the next-gate rule. The
+  earlier "five over-cap sandboxes" sentence in the Round-19 record was
+  the flawed per-unit view; this addendum supersedes it. `v4/cli/run.py`
+  byte-identical to 3e75cfec; guard region `abacfa59…`.

@@ -34,9 +34,11 @@ Exit codes (distinct failure classes, all visible):
 
 Sizes: "allocated" = st_blocks*512 summed WITHOUT following symlinks —
 the disk-hygiene metric (a symlink farm costs link bytes, not its
-targets' bytes, and sparse files cost their holes). "apparent" = st_size
-sum, also without following symlinks. Both are reported; neither is the
-other.
+targets' bytes; a sparse file costs only its mapped blocks, so its holes
+are NOT charged). "apparent" = sum of regular-file st_size, also without
+following symlinks; directory entries contribute their allocated blocks
+but no apparent bytes, so apparent is a file-content measure and can be
+lower than allocated. Neither substitutes for the other.
 
 Known limitations (deliberate, not oversights):
   * modification times are reported, never interpreted: recency is an
@@ -71,6 +73,8 @@ def repo_and_root():
 
 
 REPO, ROOT = repo_and_root()
+SHARED_DIR = ROOT / "shared"        # the central kit: never a candidate
+ATTIC_DIR = ROOT / "_attic-md"      # exhibit archive: never a candidate
 
 
 def ancestors_to_root(d: Path):
@@ -126,6 +130,21 @@ def scan():
                 errors.append(f"{fp}: {err}")
                 continue
             add(d, st.st_blocks * 512, st.st_size, st.st_mtime)
+        # os.walk puts directory symlinks in `dirs` and, with
+        # followlinks=False, never visits them -- so their own inode is
+        # never statted by the loop above. Measure the link itself
+        # (blocks, link value length, mtime) WITHOUT traversing its
+        # target; otherwise usage and recency are silently understated
+        # while the scan claims to be complete.
+        for name in dirs:
+            dp2 = os.path.join(dp, name)
+            if os.path.islink(dp2):
+                try:
+                    st = os.stat(dp2, follow_symlinks=False)
+                except OSError as err:
+                    errors.append(f"{dp2}: {err}")
+                    continue
+                add(d, st.st_blocks * 512, st.st_size, st.st_mtime)
     return agg, errors
 
 
@@ -161,14 +180,19 @@ def main() -> int:
     children = sorted(p for p in agg if p.parent == ROOT and p.is_dir())
     role_units = []
     for role in children:
-        if role.name in ("shared", "_attic-md"):
+        if role in (SHARED_DIR, ATTIC_DIR):
             continue
+        # The sandbox is the whole .local/<role>/ tree (REVIEWS.md,
+        # .agents/review-roles/README.md): the cap applies to its
+        # AGGREGATE allocation, including files directly in the role dir.
+        role_alloc = agg.get(role, [0, 0, 0.0])[0]
         for unit in sorted(p for p in agg if p.parent == role and p.is_dir()):
             a = agg.get(unit, [0, 0, 0.0])
             role_units.append({"role": role.name, "unit": unit.name,
                                "path": str(unit), "allocated": a[0],
                                "apparent": a[1], "newest_mtime": a[2],
-                               "over_cap": a[0] > args.cap})
+                               "sandbox_allocated": role_alloc,
+                               "over_cap": role_alloc > args.cap})
     top_level = [{"path": str(c), "allocated": agg.get(c, [0, 0, 0])[0],
                   "apparent": agg.get(c, [0, 0, 0])[1],
                   "newest_mtime": agg.get(c, [0, 0, 0])[2]}
@@ -177,7 +201,13 @@ def main() -> int:
     for d, a in agg.items():
         if d == ROOT or ROOT not in d.parents:
             continue
-        if "shared" in d.parts or "_attic-md" in d.parts:
+        # exclude the central kit and the archive by IDENTITY (they are
+        # single directories under ROOT), not by matching a name anywhere
+        # in the path -- a checkout under an ancestor called "shared" must
+        # still surface its candidates
+        if d == SHARED_DIR or d == ATTIC_DIR:
+            continue
+        if SHARED_DIR in d.parents or ATTIC_DIR in d.parents:
             continue
         why = None
         if build_named(d.name):
@@ -198,41 +228,56 @@ def main() -> int:
     else:
         rc, state = 0, "COMPLETE"
 
-    if args.json:
-        print(json.dumps({
-            "scan_state": state, "root": str(ROOT), "cap_bytes": args.cap,
-            "top_level": top_level, "role_units": role_units,
-            "inspect_candidates": candidates,
-            "inspection_errors": errors,
-            "note": "read-only reporter; inventory is data for human "
-                    "inspection, never a removal verdict",
-        }, indent=1))
-        return rc
-
-    print(f"== {ROOT} usage (allocated = blocks*512, symlinks not followed) ==")
-    for t in top_level:
-        print(f"{fmt_mb(t['allocated'])} alloc  {fmt_mb(t['apparent'])} app  {t['path']}")
-    print(f"\n== role sandboxes vs {args.cap // (1024 * 1024)} MB cap ==")
-    if not role_units:
-        print("(none found)")
-    for r in role_units:
-        flag = "  OVER-CAP" if r["over_cap"] else ""
-        print(f"{fmt_mb(r['allocated'])} alloc  {r['role']}/{r['unit']}{flag}")
-    print("\n== directories for HUMAN INSPECTION — name/size facts only, "
-          "NOT removal recommendations ==")
-    if not candidates:
-        print("(none)")
-    for c in candidates:
-        print(f"{fmt_mb(c['allocated'])} alloc  newest {ts(c['newest_mtime'])}  "
-              f"[{c['why']}]  {c['path']}")
-    if errors:
-        print("\n== INSPECTION ERRORS: scan INCOMPLETE, numbers partial ==")
-        for e in errors:
-            print(f"ERROR  {e}")
-    print(f"\nscan: {state}; exit {rc} "
-          "(0 within cap, 1 over-cap finding, 2 inspection error)")
-    print("Removal is a human procedure (REVIEWS.md § Kit hygiene): "
-          "ownership, inactivity, preservation checks, then remove by name.")
+    # A pipe consumer may exit before the buffered writes flush; that is
+    # not a scan failure. The devnull recipe below keeps the scan's own
+    # exit class from leaking as a 120 flush error.
+    try:
+        if args.json:
+            print(json.dumps({
+                "scan_state": state, "root": str(ROOT),
+                "cap_bytes": args.cap,
+                "top_level": top_level, "role_units": role_units,
+                "inspect_candidates": candidates,
+                "inspection_errors": errors,
+                "note": "read-only reporter; inventory is data for human "
+                        "inspection, never a removal verdict",
+            }, indent=1))
+        else:
+            print(f"== {ROOT} usage (allocated = blocks*512, symlinks "
+                  "not followed) ==")
+            for t in top_level:
+                print(f"{fmt_mb(t['allocated'])} alloc  "
+                      f"{fmt_mb(t['apparent'])} app  {t['path']}")
+            print(f"\n== role sandboxes vs {args.cap // (1024 * 1024)} MB "
+                  "cap (aggregate per .local/<role>/ sandbox) ==")
+            if not role_units:
+                print("(none found)")
+            for r in role_units:
+                flag = "  OVER-CAP" if r["over_cap"] else ""
+                print(f"{fmt_mb(r['allocated'])} alloc  "
+                      f"{r['role']}/{r['unit']}{flag}")
+            print("\n== directories for HUMAN INSPECTION — name/size facts "
+                  "only, NOT removal recommendations ==")
+            if not candidates:
+                print("(none)")
+            for c in candidates:
+                print(f"{fmt_mb(c['allocated'])} alloc  "
+                      f"newest {ts(c['newest_mtime'])}  "
+                      f"[{c['why']}]  {c['path']}")
+            if errors:
+                print("\n== INSPECTION ERRORS: scan INCOMPLETE, numbers "
+                      "partial ==")
+                for e in errors:
+                    print(f"ERROR  {e}")
+            print(f"\nscan: {state}; exit {rc} "
+                  "(0 within cap, 1 over-cap finding, 2 inspection error)")
+            print("Removal is a human procedure (REVIEWS.md § Kit hygiene): "
+                  "ownership, inactivity, preservation checks, then remove "
+                  "by name.")
+        sys.stdout.flush()
+    except BrokenPipeError:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
     return rc
 
 
