@@ -18544,7 +18544,7 @@ than a hidden hole.
   cleanup tool (turn 6: 5 P2 + 3 P3 against the bound
   `.local/shared/evidence/round16/astra-turn6-result.txt`; the earlier
   "6 P2" figure in this section and in the lead status file was a
-  miscount, corrected per astra turn 7 remaining_round17_record_errors.
+  miscount, corrected per astra turn 7 round19_misstates_previous_verdict.
   All findings were located in `.agents/tools/kit-gc.py` or record
   binding, including a regression the round-5 rewrite itself introduced
   in `--attic`), the lead escalated the scope question
@@ -18638,3 +18638,72 @@ than a hidden hole.
   earlier "five over-cap sandboxes" sentence in the Round-19 record was
   the flawed per-unit view; this addendum supersedes it. `v4/cli/run.py`
   byte-identical to 3e75cfec; guard region `abacfa59…`.
+
+### Round 20 — astra turn 8 (2 P2 + 3 P3): cap per sandbox independent of children; fixtures rewritten to the real failure shapes (2026-09-19)
+
+- Astra turn 8 over eef1e4e1: NEEDS CHANGES — 2 P2 + 3 P3, staged
+  verbatim at `.local/shared/evidence/round16/astra-turn8-result.txt`
+  (the lead's first report to the user quoted only four findings; the
+  fifth, `apparent_size_definition_still_omits_symlinks`, was caught in
+  this round and is fixed below — a repeat of under-reporting the lead
+  must not make). All five verified against source before acting:
+  1. `file_only_sandbox_still_bypasses_cap` (P2): true — the aggregate
+     was computed but cap decisions and the exit status were produced
+     only inside the child-unit loop, so a `.local/<role>/` holding
+     solely files yielded no rows and exit 0. Reproduced by reading the
+     code path.
+  2. `reporter_regression_fixtures_miss_claimed_counterexamples` (P2):
+     true and damning — three of the round-19 suite's "regression"
+     assertions did not exercise the shapes they claimed (both 40 MiB
+     children nested under one unit dir, which the OLD per-unit code
+     already flagged; a symlink to a NONEXISTENT path that `touch`
+     turned into a regular file, so the directory-symlink branch never
+     ran; a directory named `nested-shared`, which the OLD exact-name
+     exclusion never rejected). Green results that prove nothing are
+     worse than no results: they make the next reader trust coverage
+     that does not exist.
+  3. `text_cap_rows_do_not_show_claimed_aggregate` (P3): true — the
+     flagged row printed the child's size while the flag described the
+     parent; the aggregate was not on the row.
+  4. `evidence_metadata_retains_stale_revision_and_counts` (P3): true —
+     manifest head said "bb222299 + round-19 addendum (this commit)",
+     the suite command claimed 16/16 while the bound log had 13 lines,
+     and the report command said five over-cap sandboxes while the JSON
+     listed eight.
+  5. `apparent_size_definition_still_omits_symlinks` (P3): true — the
+     docstring said apparent = regular-file st_size only, while the
+     implementation also adds symlink-value lengths (lines 134/149);
+     the directory-symlink probe has no regular files yet reported
+     2,048 apparent bytes.
+- Repairs at this revision (reporter + records + evidence only;
+  `v4/cli/run.py` untouched):
+  * one cap decision per `.local/<role>/` sandbox computed
+    independently of child rows (`sandboxes[]` is the decision carrier;
+    file-only sandboxes flag and flip the exit; unit rows stay
+    subordinate detail and carry the sandbox total);
+  * text report restructured: `SANDBOX <role> [OVER-CAP]` rows print
+    the sandbox aggregate, child units indented beneath as detail;
+  * docstring defines apparent as file sizes PLUS symlink-value lengths,
+    directory metadata excluded from apparent;
+  * suite rewritten to astra's named failure shapes (16 assertions):
+    individually-small SIBLING units with over-cap aggregate (the old
+    per-unit code misses this), FILE-ONLY sandbox (the pre-fix code
+    misses this), direct-role-dir file aggregation, directory symlink
+    to an EXISTING POPULATED directory with link-newer-than-target
+    recency (the pre-fix code misses both size and mtime; traversal
+    would over-charge), nested EXACT-name `shared/target` surfaced
+    while central `.local/shared` stays hidden, sparse accounting,
+    exit-class 0/1/2 separation, broken-pipe class, byte-identical tree
+    across modes, no destructive calls. Every fixture is annotated with
+    which historical defect it catches;
+  * manifest rebuilt: per-run entries now state the artifact identity
+    honestly (the `head` field points at the git log instead of a
+    mid-flight self-description), the suite entry says 16/16 matching
+    the bound log, the report entries say eight over-cap sandboxes
+    matching the bound JSON, and the turn-8 result is bound verbatim.
+- Validation: suite 16/16; real-tree run scan INCOMPLETE exit 2 (two
+  chmod-000 privacy fixtures as errors), 8 of 36 role sandboxes over
+  the 1 GB aggregate cap (tester 7.5 GB, portability 6.0, lead-r10 5.6,
+  performance 3.7, fit-for-purpose 2.2, parity 2.1, operations 2.0,
+  security 1.8). `v4/cli/run.py` byte-identical to 3e75cfec; guard
+  region `abacfa59…`; runner self-test PASS.

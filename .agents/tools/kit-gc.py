@@ -35,10 +35,12 @@ Exit codes (distinct failure classes, all visible):
 Sizes: "allocated" = st_blocks*512 summed WITHOUT following symlinks —
 the disk-hygiene metric (a symlink farm costs link bytes, not its
 targets' bytes; a sparse file costs only its mapped blocks, so its holes
-are NOT charged). "apparent" = sum of regular-file st_size, also without
-following symlinks; directory entries contribute their allocated blocks
-but no apparent bytes, so apparent is a file-content measure and can be
-lower than allocated. Neither substitutes for the other.
+are NOT charged). "apparent" = sum of regular-file st_size PLUS
+symlink-value lengths (both kinds of link are measured as stored, never
+followed); directory entries contribute their allocated blocks but no
+apparent bytes. Apparent is therefore a content/link-value measure and
+can be lower or higher than allocated; neither substitutes for the
+other.
 
 Known limitations (deliberate, not oversights):
   * modification times are reported, never interpreted: recency is an
@@ -178,21 +180,27 @@ def main() -> int:
 
     agg, errors = scan()
     children = sorted(p for p in agg if p.parent == ROOT and p.is_dir())
+    # One cap decision per ROLE SANDBOX (.local/<role>/ aggregate, per
+    # REVIEWS.md and .agents/review-roles/README.md), computed
+    # independently of child rows: a sandbox holding only files has no
+    # child units and must still be measured against the cap.
+    sandboxes = []
     role_units = []
     for role in children:
         if role in (SHARED_DIR, ATTIC_DIR):
             continue
-        # The sandbox is the whole .local/<role>/ tree (REVIEWS.md,
-        # .agents/review-roles/README.md): the cap applies to its
-        # AGGREGATE allocation, including files directly in the role dir.
         role_alloc = agg.get(role, [0, 0, 0.0])[0]
+        sandboxes.append({"role": role.name, "path": str(role),
+                          "allocated": role_alloc,
+                          "apparent": agg.get(role, [0, 0, 0.0])[1],
+                          "newest_mtime": agg.get(role, [0, 0, 0.0])[2],
+                          "over_cap": role_alloc > args.cap})
         for unit in sorted(p for p in agg if p.parent == role and p.is_dir()):
             a = agg.get(unit, [0, 0, 0.0])
             role_units.append({"role": role.name, "unit": unit.name,
                                "path": str(unit), "allocated": a[0],
                                "apparent": a[1], "newest_mtime": a[2],
-                               "sandbox_allocated": role_alloc,
-                               "over_cap": role_alloc > args.cap})
+                               "sandbox_allocated": role_alloc})
     top_level = [{"path": str(c), "allocated": agg.get(c, [0, 0, 0])[0],
                   "apparent": agg.get(c, [0, 0, 0])[1],
                   "newest_mtime": agg.get(c, [0, 0, 0])[2]}
@@ -220,7 +228,7 @@ def main() -> int:
                                "why": why})
     candidates.sort(key=lambda c: -c["allocated"])
 
-    over = [r for r in role_units if r["over_cap"]]
+    over = [s for s in sandboxes if s["over_cap"]]
     if errors:
         rc, state = 2, "INCOMPLETE"
     elif over:
@@ -236,7 +244,8 @@ def main() -> int:
             print(json.dumps({
                 "scan_state": state, "root": str(ROOT),
                 "cap_bytes": args.cap,
-                "top_level": top_level, "role_units": role_units,
+                "top_level": top_level, "sandboxes": sandboxes,
+                "role_units": role_units,
                 "inspect_candidates": candidates,
                 "inspection_errors": errors,
                 "note": "read-only reporter; inventory is data for human "
@@ -249,13 +258,20 @@ def main() -> int:
                 print(f"{fmt_mb(t['allocated'])} alloc  "
                       f"{fmt_mb(t['apparent'])} app  {t['path']}")
             print(f"\n== role sandboxes vs {args.cap // (1024 * 1024)} MB "
-                  "cap (aggregate per .local/<role>/ sandbox) ==")
-            if not role_units:
+                  "cap (one decision per .local/<role>/ aggregate) ==")
+            if not sandboxes:
                 print("(none found)")
+            units_by_role = {}
             for r in role_units:
-                flag = "  OVER-CAP" if r["over_cap"] else ""
-                print(f"{fmt_mb(r['allocated'])} alloc  "
-                      f"{r['role']}/{r['unit']}{flag}")
+                units_by_role.setdefault(r["role"], []).append(r)
+            for s in sorted(sandboxes, key=lambda s: -s["allocated"]):
+                flag = "  OVER-CAP" if s["over_cap"] else ""
+                print(f"{fmt_mb(s['allocated'])} alloc  "
+                      f"SANDBOX {s['role']}{flag}")
+                for r in sorted(units_by_role.get(s["role"], []),
+                                key=lambda r: -r["allocated"]):
+                    print(f"{fmt_mb(r['allocated'])} alloc    "
+                          f"unit {r['unit']}")
             print("\n== directories for HUMAN INSPECTION — name/size facts "
                   "only, NOT removal recommendations ==")
             if not candidates:
