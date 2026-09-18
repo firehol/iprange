@@ -2451,6 +2451,44 @@ def _self_test():
         raise AssertionError(
             "expect_error guard shape pin: the guard's body must raise "
             "immediately, not record and continue")
+    # Position arm (tester round-11 F-D): shape and count do not say
+    # what precedes the guard.  A code-pinned early return inserted
+    # before the canonical guard, or a dead canonical decoy planted
+    # after it, survives the pair above while laundering every negative
+    # step outside the mutant's condition.  The unique shape match must
+    # therefore be the statement immediately after the service.call
+    # response assignment.  Residual floor (stated rather than hidden):
+    # an exact-shape decoy sitting at that position itself, with a
+    # laundering real guard behind it, would need a body that raises
+    # unconditionally (so it IS the working guard for the corpus) yet
+    # skips steps -- impossible while body[0] is an unconditional
+    # Raise, which the body arm above pins.
+    positioned = False
+    for node in ast.walk(guard_tree):
+        for field in ("body", "orelse", "finalbody"):
+            stmts = getattr(node, field, None)
+            if not isinstance(stmts, list):
+                continue
+            for index in range(len(stmts) - 1):
+                stmt = stmts[index]
+                if (isinstance(stmt, ast.Assign)
+                        and len(stmt.targets) == 1
+                        and isinstance(stmt.targets[0], ast.Name)
+                        and stmt.targets[0].id == "response"
+                        and isinstance(stmt.value, ast.Call)
+                        and isinstance(stmt.value.func, ast.Attribute)
+                        and stmt.value.func.attr == "call"
+                        and isinstance(stmt.value.func.value, ast.Name)
+                        and stmt.value.func.value.id == "service"
+                        and stmts[index + 1] is guard_shapes[0]):
+                    positioned = True
+    if not positioned:
+        raise AssertionError(
+            "expect_error guard shape pin: the canonical guard must be "
+            "the statement immediately after the service.call response "
+            "assignment; a guard reached only after earlier control "
+            "flow (or shadowed by a decoy) launders the steps that "
+            "flow skips")
 
     # Committed-report provenance.  These run here instead of behind a
     # ``--self-test`` flag the battery could omit, because the runner's helper
