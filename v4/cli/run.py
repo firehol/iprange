@@ -2576,23 +2576,27 @@ def _self_test():
     # shipped pre-call flow has none of these (its returns live inside
     # the non-constant notification arm and the known-method raise
     # inside a non-provable if), so pristine passes.
-    # Proof boundary, stated as the arm's actual reach (F-G/F-H):
+    # Proof boundary, stated as the arm's actual reach (F-G/F-H/F-I):
     # residue is (1) tests the fold cannot decide -- Names, Calls,
     # non-Eq Compare operators, Is/In, and compound tests whose
     # short-circuit cannot be decided from folded members; (2) Match
     # cases carrying a guard or a pattern that can fail for some
-    # subject (value/singletons/star/mapping rest, or a wildcard whose
-    # match can be pre-empted by an earlier case that continues); (3)
-    # Try diverts below the first statement when the body can fail
-    # (an earlier failure skips a later exit, and it skips an else too
-    # -- only an inert body makes a diverting else unconditional); a
-    # raise in an except/finally that the fold cannot prove runs is
-    # not claimed; (4) helper-delegated checks (no expect_error token
-    # in this function).  Those are the declared
-    # static residue; the adversarial review rounds are its control.
+    # subject (value/singletons/star/mapping rest, isinstance class
+    # patterns, or a wildcard whose match can be pre-empted by an
+    # earlier case that continues); (3) Try diverts below the first
+    # statement when the body can fail (an earlier failure skips a
+    # later exit, and it skips an else too -- only an inert body makes
+    # a diverting else unconditional), catchable first-statement exits,
+    # and a raise in an except/finally that the fold cannot prove runs;
+    # (4) helper-delegated checks (no expect_error token in this
+    # function); (5) certain-iteration loop bodies whose exit is
+    # reachable only past a lexical break/continue escape.  Those are
+    # the declared static residue; the adversarial review rounds are
+    # its control.
     _MATCH = getattr(ast, "Match", None)
     _MATCH_AS = getattr(ast, "MatchAs", None)
     _MATCH_OR = getattr(ast, "MatchOr", None)
+    _MATCH_CLS = getattr(ast, "MatchClass", None)
     _TRY_TYPES = (ast.Try,) + tuple(
         t for t in (getattr(ast, "TryStar", None),) if t is not None)
 
@@ -2661,25 +2665,100 @@ def _self_test():
                 return False
         return False
 
+    def _infallible(expr):
+        # True when a return value cannot raise: None or a literal_eval
+        # literal.  Anything else (Name load, Call, Subscript) may fail,
+        # and a failing first statement hands control to a handler.
+        if expr is None:
+            return True
+        try:
+            ast.literal_eval(expr)
+            return True
+        except (ValueError, SyntaxError, TypeError, MemoryError,
+                RecursionError):
+            return False
+
+    def _handler_catches(handler, exc_name):
+        t = handler.type
+        if t is None:
+            return True
+        nodes = t.elts if isinstance(t, ast.Tuple) else [t]
+        names = []
+        for n in nodes:
+            if isinstance(n, ast.Name):
+                names.append(n.id)
+            else:
+                return True  # attribute/computed class: cannot decide
+        return ("Exception" in names or "BaseException" in names
+                or (exc_name is not None and exc_name in names))
+
+    def _try_first_exit_diverts(node):
+        # A first-statement Return/Raise diverts only when it cannot be
+        # caught by this very Try: an uncatchable raise or a return
+        # whose value cannot raise.  A catching handler (bare,
+        # Exception, or naming the class) converts the exit into normal
+        # completion.
+        first = node.body[0] if node.body else None
+        if first is None or not isinstance(first, (ast.Return, ast.Raise)):
+            return False
+        if isinstance(first, ast.Return):
+            return not node.handlers or _infallible(first.value)
+        exc = first.exc
+        if exc is None:
+            return not node.handlers
+        exc_name = (exc.id if isinstance(exc, ast.Name)
+                    else exc.func.id if (isinstance(exc, ast.Call)
+                                         and isinstance(exc.func, ast.Name))
+                    else None)
+        if exc_name is None:
+            return not node.handlers
+        return not any(_handler_catches(h, exc_name) for h in node.handlers)
+
+    def _escapes_loop(statements):
+        # A Break/Continue in THIS loop's scope (descending through If,
+        # With, Try and Match clause bodies, but NOT into nested
+        # For/While -- those bind to their own loop) makes a body-held
+        # exit non-certain, so the arm must not reject.
+        stack = list(statements)
+        while stack:
+            node = stack.pop()
+            if isinstance(node, (ast.Break, ast.Continue)):
+                return True
+            if isinstance(node, (ast.For, ast.While)):
+                continue
+            stack.extend(ast.iter_child_nodes(node))
+        return False
+
     def _always_matches(pattern):
         # True when a match pattern cannot fail for ANY subject: a bare
-        # or named wildcard (MatchAs without an inner pattern), or an
-        # alternative list containing one.  Guarded cases and every
-        # pattern that can fail stay in the declared boundary.
+        # or named wildcard, the same behind a capture (`_ as y`: a
+        # capture never adds failure, so recurse through
+        # MatchAs.pattern), an alternative list containing one, or a
+        # zero-argument `object` class pattern.  Guarded cases,
+        # isinstance class patterns, and every other failable pattern
+        # stay in the declared boundary.
         if _MATCH_AS is not None and isinstance(pattern, _MATCH_AS):
-            return pattern.pattern is None
+            return pattern.pattern is None or _always_matches(pattern.pattern)
         if _MATCH_OR is not None and isinstance(pattern, _MATCH_OR):
             return any(_always_matches(alt) for alt in pattern.patterns)
+        if _MATCH_CLS is not None and isinstance(pattern, _MATCH_CLS):
+            return (isinstance(pattern.cls, ast.Name)
+                    and pattern.cls.id == "object"
+                    and not pattern.patterns and not pattern.kwd_attrs)
         return False
 
     def _dead_maker(statements):
         # A statement list diverts control away unconditionally when it
-        # holds a bare Return/Raise, a provable-test If whose taken
-        # branch is itself a dead-maker, a certain-first-iteration
-        # While/For with a diverting body, an always-matching unguarded
-        # diverting case that no earlier non-diverting case can
-        # pre-empt, or a Try whose first statement is an exit or whose
-        # finally diverts.
+        # holds a Return/Raise, a provable-test If whose taken branch is
+        # itself a dead-maker, a certain-first-iteration While/For whose
+        # body diverts with no lexical break/continue escape, a
+        # provably-falsy While/For whose else diverts (the body never
+        # runs, the else always does), a With whose body diverts (a
+        # failing __enter__ propagates out anyway), an Assert whose test
+        # folds False, an always-matching unguarded diverting case that
+        # no earlier non-diverting case can pre-empt, or a Try whose
+        # first statement is an UNcatchable exit, whose inert prefix
+        # leads to a trailing bare return, or whose finally diverts.
         for child in statements:
             if isinstance(child, (ast.Return, ast.Raise)):
                 return True
@@ -2690,11 +2769,26 @@ def _self_test():
                     return True
             elif isinstance(child, ast.While):
                 known, value = _const_bool(child.test)
-                if known and bool(value) and _dead_maker(child.body):
+                if known and bool(value):
+                    if (_dead_maker(child.body)
+                            and not _escapes_loop(child.body)):
+                        return True
+                elif known and _dead_maker(child.orelse):
                     return True
             elif isinstance(child, ast.For):
                 known, value = _const_bool(child.iter)
-                if known and bool(value) and _dead_maker(child.body):
+                if known and bool(value):
+                    if (_dead_maker(child.body)
+                            and not _escapes_loop(child.body)):
+                        return True
+                elif known and _dead_maker(child.orelse):
+                    return True
+            elif isinstance(child, ast.With):
+                if _dead_maker(child.body):
+                    return True
+            elif isinstance(child, ast.Assert):
+                known, value = _const_bool(child.test)
+                if known and not bool(value):
                     return True
             elif _MATCH is not None and isinstance(child, _MATCH):
                 for index, case in enumerate(child.cases):
@@ -2704,34 +2798,26 @@ def _self_test():
                                     for prior in child.cases[:index])):
                         return True
             elif isinstance(child, _TRY_TYPES):
-                # A first-statement Return cannot be caught; a first-
-                # statement Raise only diverts when the try has no
-                # handler that could catch it (with handlers present,
-                # which type raises is not claimed -- residue).
-                if child.body and isinstance(child.body[0], ast.Return):
-                    return True
-                if (child.body and isinstance(child.body[0], ast.Raise)
-                        and not child.handlers):
+                if _try_first_exit_diverts(child):
                     return True
                 if (child.body
                         and isinstance(child.body[-1], ast.Return)
+                        and child.body[-1].value is None
                         and len(child.body) > 1
                         and all(_inert(stmt)
                                 for stmt in child.body[:-1])):
                     # An inert prefix cannot fail and a bare Return
                     # cannot be caught, so the trailing return runs
-                    # unconditionally -- same proof as the first-
-                    # statement rule, just further down.  (A trailing
-                    # raise is NOT claimed: a handler can catch it.)
-                    return True
-                if child.finalbody and _dead_maker(child.finalbody):
+                    # unconditionally even with handlers present.
                     return True
                 # else: runs exactly when the body completes without
-                # raising; an inert body (pass, or literal assignments
-                # and constant expressions -- nothing that can fail)
-                # makes the else divert unconditionally.
+                # raising; an all-inert body cannot fail, so a diverting
+                # else is then unconditional.
                 if (child.orelse and _dead_maker(child.orelse)
+                        and child.body
                         and all(_inert(stmt) for stmt in child.body)):
+                    return True
+                if child.finalbody and _dead_maker(child.finalbody):
                     return True
         return False
 
