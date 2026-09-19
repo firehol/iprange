@@ -171,8 +171,44 @@ directories). Removal is the human procedure defined below.
   with no defect involved.
   Reducing the count to 0/1 requires the user relocating the standing
   fixtures.
-- **Removal is a human procedure, and it is a lead duty, not a reviewer
-  one.** For each directory the lead decides to remove, all three checks
+- **Removal of disposable reviewer scratch is pre-authorized for the lead, and
+  it must be executed by the guard tool, never by hand.** The owner authorized
+  lead-initiated removal of unneeded reviewer scratch on 2026-09-19, with the
+  condition that no accident is possible. That authorization covers *what* may
+  be removed; it does not relax a single check. `.agents/tools/kit-rm.py` is
+  the only sanctioned way to remove anything under `.local/`: it takes a list
+  file of literal absolute paths, is dry-run by default, and removes a path
+  only after eight guards pass for that exact path and are then **re-run
+  immediately before the `rmtree`** (state can change between planning and
+  acting):
+  **G1** literal absolute path, no glob/quote/control characters, and equal to
+  its own `realpath` (so no symlink component);
+  **G2** strictly inside `<repo>/.local/`, never `.local` itself or above;
+  **G3** depth ≥ 2 below `.local/`, so a **role root can never be removed** and
+  every report, HEARTBEAT and brief survives;
+  **G4** not `.local/shared` or `.local/_attic-md`, nor inside either — refused
+  by identity, never by a name match;
+  **G5** a real directory, not a symlink, file or missing path;
+  **G6** no `.git` entry (a checkout or worktree is never scratch), and no
+  unreadable or mode-000 directory **inside or at** the target — the standing
+  privacy fixtures are part of the gate signal, so a list line naming one is
+  refused rather than walked past;
+  **G7** the path (and any ancestor of it) appears in **no** gate artifact —
+  every tracked file, `status.md`, `head`, every evidence `manifest.json`,
+  every astra-turn prompt — searched in **both** absolute and repo-relative
+  form, because a bound manifest reason can cite `.local/<role>/kit/...`
+  relatively and deleting that input would invalidate the claim it supports;
+  **G8** no non-terminal subagent run for this repository, because a role may
+  be measuring inside its own sandbox right now; an unreadable status file or a
+  missing runs root counts as live and refuses.
+  `--execute` additionally requires a non-empty `--reason`, and each removal is
+  appended to `.local/shared/removals.log` (timestamp, size, path, reason).
+  Guards fail closed: an unrecognized run state, an unreadable status, or a
+  failed `git ls-files` all lead to refusal, not to removal. `kit-rm.py` is
+  tested by an adversarial suite in which every attack must be refused **and**
+  one legitimate scratch tree must be allowed, so it cannot pass by refusing
+  everything or by removing everything.
+- **Removal is a lead duty, not a reviewer one.** For each directory the lead decides to remove, all three checks
   must be established *for that path* first, and recorded in the gate
   note:
   1. **ownership** — which role/round created it, and that no session
