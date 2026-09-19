@@ -18926,3 +18926,70 @@ than a hidden hole.
   numbers. The v4/cli/evidence/README.md "all twenty" count (N2) is
   rotation-owned — the closure battery at the final revision rewrites
   that README from the staged artifacts; it is not hand-edited here.
+
+## Round 24 — wave 13 (re-review of the 680fae56 fix batch): 2 PASS / 4 FAIL; all findings closed at 9cfd66e8 (2026-09-19)
+
+- Wave-13 verdicts (same six role sessions resumed by exact run id,
+  scoped to git diff 44af9a36..680fae56): parity PASS, portability PASS,
+  operations FAIL (1 P2), security FAIL (1 P2), performance FAIL
+  (2 P2), fit-for-purpose FAIL (2 P2). Every finding lead-verified
+  (synthetic reproductions where executable) before acting; none was
+  dismissed.
+- Root cause A — reporter text-mode crash (security + performance P2,
+  operations P3, portability P3-B/C): the round-23 "ASCII printed
+  strings" closure covered literals only; a filesystem-derived
+  surrogate-escaped path in an ERROR row crashed text mode under
+  ASCII stdout (and, for surrogates, under plain UTF-8), truncating the
+  report and flipping the exit class 2 -> 1, which the same batch's
+  new REVIEWS.md gate-close table misreads as over-cap. Fixed by
+  stdout errors=backslashreplace + (path, message) error pairs (also
+  removes the first-colon-split PARTIAL-attribution defeats on
+  Windows-style and colon-named paths) + singular grammar; suite
+  sections E3/E4/E5 pin all three classes byte-exactly.
+- Root cause B — manifest completeness/reproducibility (operations +
+  performance + fit-for-purpose F-13/F-14, P2s): the wave-13 rebuild
+  had un-bound the two mutation-check output logs while surviving
+  entries called them "the bound .txt", and wall_seconds was honest
+  but not derivable from any bound artifact. Fixed: timed.sh
+  --self-timed stamps a TIMED: begin/end/wall footer into each bound
+  log (duration recomputable from the bytes), both mutation-check pairs
+  re-executed against the current suite and re-bound, and staging now
+  asserts disk-set == bound-set and staged-source == live-source —
+  that check immediately caught one more stale binding (kit-gc-suite.sh)
+  which is fixed and re-hashed; manifest = 26 entries, 0 mismatches,
+  0 unbound files.
+- Record/prose corrections (all role-verified): the pin census is four
+  arms on check_expected_params_rejected + two on
+  check_request_is_contract_invalid (corrected in SOW Round-23, the
+  run.py comment, the commit text and SOW-0033); the "empty params is
+  rejected by every request schema" comment is replaced with the
+  executed truth (system.describe has required: [], methods.py:67 —
+  parity P3-1; the pin arm itself stays sound because [] is rejected
+  as non-dict by every schema, and the comment now states which
+  property the accepted arm depends on); exit-2 is documented as the
+  README's argument-parsing class, not a formal reservation; the
+  disclosed revert path now names the surgical unit (the contiguous
+  _self_test() pin block) instead of reverting the closure commit;
+  turn-11 digest cross-verification attributed to portability +
+  operations (the two that recomputed it); the 0.90/0.93/0.97 timing
+  confusion replaced by one attributed account (bound log in-process
+  0.92 s, manifest wall_seconds 0.95 s, 0.97 s was a role replay);
+  "22 entries" -> the staging now guarantees disk==bound by check.
+- Closed by adjudication, not code: operations' P3 that the F-2/F-3
+  fixes lack detecting tests — both regressions fail loud (rc 1 +
+  traceback / labeled instruction) and cannot yield a false PASS;
+  pinning them would re-import the subprocess-per-arm cost the
+  subprocess-free pin design avoids; recorded here as the reasoned
+  rejection.
+- Disclosed role self-faults (no action needed): operations' farm
+  materialization discipline applied (cp --remove-destination);
+  portability corrected its own round-12 .pyc claim (the removed
+  __pycache__ was the role's own artifact — lead record stands);
+  performance and fit-for-purpose budget honesty notes.
+- Validation at 9cfd66e8: self-test PASS; negative 56/0/1;
+  live.lifecycle 4/0/1; kind-gate 133+5; guard region 673-716
+  abacfa59… unchanged; run.py delta vs 680fae56 comment-only (no code
+  line changed — engines, schema, wire, guard all byte-intact);
+  reporter suite 24/24; params mutation proof 4/4; real-tree reporter
+  exit 2 with exactly the two known fixture errors and PARTIAL on
+  parity + w8-golegacy only.
