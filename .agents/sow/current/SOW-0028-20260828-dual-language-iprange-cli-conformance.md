@@ -19858,3 +19858,103 @@ files at `binary_paths`; guard digest recomputed and equal to the live file.
 Next: the close-out chain at the final revision — leg-27 Windows re-stamp, the
 closure battery (attesting `1609b395…`), the evidence child commit, astra gate
 turn 12 (no inconclusive available to it; every item must be decided), then push.
+
+## Round 31 — wave 20 (seven roles at cacc2501): 1 PASS / 4 FAIL (7 P2) / 3 timeouts; batch 7 closes all seven (2026-09-19)
+
+Reviewed revision: `cacc2501`. Verdicts: portability **PASS** (2 P3 + 2
+inconclusive), parity **FAIL** (1 P2), performance **FAIL** (3 P2), tester
+**FAIL** (2 P2), security **FAIL** (2 P2, report written before its timeout),
+operations and fit-for-purpose **timed out with no report** (their briefs were
+the heaviest; both are resumable and were resumed for the next round). No
+product, engine, wire-format, CLI or guard defect: guard `abacfa59…`, `run.py`
+blob `d4e5ce5bb223`, and `git diff --name-only 9a8f64e8..HEAD -- v4/` is empty.
+
+**Three roles converged independently on one root cause in a control I wrote in
+batch 6, and each instance was fixed at the class, not the instance.**
+
+1. **The read-back did not close the class it claimed to** (tester F1,
+   performance P2-2; parity judged it closed from code shape). It reopened the
+   same `MANIFEST_PATH` the writer used, so if the write is diverted, both
+   halves move together and the control passes. Reproduced with the exact defect
+   restored (15 `cmd_path`→`path` occurrences): rc 0, `manifest rebuilt` printed,
+   manifest bytes unchanged. Fixed twice over: the manifest location is now
+   module state that no local can rebind, and the write verifies **fd identity**
+   (`/proc/self/fd` + `samefile`) before content, so a diverted write fails
+   regardless of what the target already contains. Falsified both ways: diverting
+   the write → rc 1 naming the diverted target; restoring the original shadowing
+   verbatim → rc 0, harmless, which is the proof that the class is gone rather
+   than the instance suppressed.
+2. **The footer guard was keyed on prose** (performance P2-1). `wall_source`
+   was tested with `startswith("timed")`, but the two `INLINE_FOOTER` logs carry
+   `"inline TIMED footer inside this log"`, so **2 of 14 timed logs were outside
+   the guard** while my batch-6 sentence claimed every problem was fatal. Fixed
+   to test structure (`wall_seconds is not None or rc is not None`). Falsified on
+   both wordings: stripping the footer from the inline-footer log now returns
+   rc 1 with the offending `wall_seconds` named; the runner-side wording still
+   does too.
+3. **A pin that cannot detect its own staleness is not a pin** (tester F2,
+   performance P2-3). My Round-30 claim "suite **47 assertions 0 failures**,
+   1.80 s" cited a bound log captured at `12:12:42Z` — 40 minutes **before**
+   `test_kit_gc.sh` was edited and 4.5 h before the commit; batch 6 added checks
+   *inside* H3, so the count stayed 47 and the count could not reveal it. Fixed
+   with a new leg **H4**: every `ok` label in the bound log must occur verbatim in
+   the shipped suite source. Falsified by replacing the batch-7 label with the
+   batch-5 one at an **unchanged count of 47**: `FAIL H4 1 bound label(s) absent
+   from the shipped suite`. Sequencing stated exactly: during a capture the file
+   holds that run's output, so H3/H4 are self-consistent by construction and the
+   staleness bite lands on the next run against an installed log — which is why
+   the close-out now iterates to a fixpoint (stage → run → install → stage) and
+   the installed bound log carries both new labels.
+
+**Also fixed this batch:** H3 now pins group **membership** against the declared
+`RUNNER_SIDE` list read from the byte-paired restage tool (parity P2-1: moving a
+log between groups passed every value test, while the note's justification for
+keeping four early captures is precisely that they are runner-side); falsified by
+the exact tamper parity used. `--root DIR` lets the restage operate on a copy —
+without it, falsifying this tool meant opening the live record, which two review
+waves had already done (portability disclosed running it for real). Pair checks
+are now automatic-only for the live kit: a copy reports `pairs not checked
+(--root copy)` rather than offering a flag that could be misused. The byte-invalid
+list line (portability P3-1) was **my own regression**: `needle.encode()` raised
+inside the removal loop, after other paths had been deleted; fixed with
+`os.fsencode` plus output-channel `backslashreplace` and a
+`surrogateescape` audit log, pinned by E5 and falsified by reverting the block.
+The G1 reason no longer claims a symlink where realpath normalised a separator
+(P3-2).
+
+**Two of my own records were corrected against the revisions they describe**,
+both marked in place rather than silently rewritten. (a) My wave-20 refutation of
+security's "H3 is a pin that cannot fail" asserted the cited override existed
+nowhere; that grep was run against the batch-6 tree **after** batch 6 removed the
+dead override, and reported as evidence about `9a8f64e8` — where security's own
+grep returned two hits. The reviewer is preferred on its own executed check at the
+revision under review; and because the suite and restage live under gitignored
+`.local/`, no tracked history can settle it, which is itself an argument for the
+evidence child commit. (b) My shadowed-write severity claim named two tracked
+files as would-be clobber targets; both are **relative** command tokens the
+resolver skips, so no tracked file was ever reachable — the five real targets are
+bound evidence tools under `.local/`. Verified by replicating the token filter:
+27 passing tokens, none tracked. This is the fifth instance of recording a
+measurement without the revision it measured, and four are mine.
+
+**Kit state after batch 7, converged to a fixpoint:** suite **48 assertions,
+0 failures** (47 labels + H4) with the bound log carrying both new labels;
+`kit-rm` suite **52 assertions, 0 failures**, every guard falsified by reverting
+it; H3 green on `(4 quoted, 14 timed logs)` and red on membership, value,
+coverage and empty-group tampers; external checker `OK (0 mismatch(es))` over
+`round16` + `wave12`, 37 entries, 11 pairs; zero `__pycache__` anywhere policed;
+live reporter `rc 2` with exactly the two standing privacy fixtures (both still
+mode `000`) and **0 OVER-CAP**; HEAD = kit head = manifest head = `f0c08a74`;
+tree clean. Two root-level strays from the misdirected write were preserved as
+evidence (`.local/lead-r15/shadowed-write-artifact*.json`) and removed from the
+repo root.
+
+**Reviewer budget note:** three of seven children hit the 25-minute child timeout
+this wave (security wrote its report first; operations and fit-for-purpose did
+not). Their scope was the heaviest of the milestone — attacking a destructive
+tool across an environment matrix and re-deriving a set-equality pin. Next
+dispatch splits their scope and caps probes explicitly.
+
+Next: closure verification of batch 7, then leg-27 Windows re-stamp at the final
+revision, the closure battery (attesting `1609b395…`), the evidence child commit,
+astra gate turn 12 (no inconclusive available to it), then push.
