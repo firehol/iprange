@@ -108,7 +108,58 @@ LIST "$L/g7deep/a";                     run KEEP "G7 grandparent of a cited dir"
 mkdir -p "$L/g7deep/other/cache"
 LIST "$L/g7deep/other";                 run DRY  "uncited sibling still allowed"   --list "$T/list"
 
+echo "--- E2: G7 protects cited CONTENT, not just the cited directory (wave-19 security P1) ---"
+# A record naming `.local/<role>/kit` depends on everything under it, so a
+# descendant must be refused exactly as the directory itself is. The needle scan
+# cannot see this: the record never spells out the deeper path.
+mkdir -p "$L/g7sub/kit/deepcache"
+printf 'the proof read .local/g7sub/kit during staging\n' >> "$L/shared/status.md"
+LIST "$L/g7sub/kit/deepcache";          run KEEP "G7 descendant of a cited dir"    --list "$T/list"
+LIST "$L/g7sub/kit";                    run KEEP "G7 the cited dir itself"         --list "$T/list"
+mkdir -p "$L/g7sub/sibling/cache"
+LIST "$L/g7sub/sibling";                run DRY  "uncited sibling still removable"  --list "$T/list"
+
+echo "--- E3: exact-path guarantee, no whitespace stripping (wave-19 portability P2-1) ---"
+# `strip()` on a list line made --execute on "<dir> " remove the DIFFERENT
+# directory "<dir>" and log the stripped name, so a listed path and a destroyed
+# path could differ while the run reported success.
+mkdir -p "$L/spam/w1 " "$L/spam/w1"
+printf 'listed\n'  > "$L/spam/w1 /IMPORTANT.txt"
+printf 'unlisted\n' > "$L/spam/w1/IMPORTANT.txt"
+printf '%s\n' "$L/spam/w1 " > "$T/list"
+# This case deletes for real, so the live-run guard must be terminal first; the
+# G8 section below re-arms it to a non-terminal state before testing it.
+printf '{"state":"complete","cwd":"%s"}\n' "$R" > "$A/status.json"
+"$PYBIN" "$K" --list "$T/list" --runs-root "$T/async" --execute --reason "selftest" > "$T/ws.out" 2>&1
+if [ ! -d "$L/spam/w1 " ] && [ -d "$L/spam/w1" ]; then
+  ok "removed the LISTED trailing-space dir and left its stripped twin"
+else
+  bad "exact-path guarantee broken: listed_present=$([ -d "$L/spam/w1 " ] && echo Y || echo N) twin_present=$([ -d "$L/spam/w1" ] && echo Y || echo N)"
+fi
+if grep -qF "spam/w1 " "$L/shared/removals.log"; then
+  ok "removals.log recorded the true trailing-space path"
+else
+  bad "removals.log lost the trailing space"
+fi
+# a whitespace-only line is a malformed list, refused rather than dropped
+printf '   \n' > "$T/wsblank"
+"$PYBIN" "$K" --list "$T/wsblank" --runs-root "$T/async" >/dev/null 2>&1
+[ $? = 2 ] && ok "whitespace-only list line refused (rc 2)" || bad "whitespace-only line not refused"
+
+echo "--- E4: an unwritable tree is refused BEFORE anything is deleted (wave-19 portability P3-2) ---"
+mkdir -p "$L/roperm/cap/inner"
+printf 'k1\n' > "$L/roperm/cap/f1"; printf 'k2\n' > "$L/roperm/cap/inner/f2"
+chmod 555 "$L/roperm/cap/inner" "$L/roperm/cap"
+LIST "$L/roperm/cap";                   run KEEP "G6 unwritable: refuse first"      --list "$T/list"
+if [ -f "$L/roperm/cap/f1" ] && [ -f "$L/roperm/cap/inner/f2" ]; then
+  ok "unwritable tree left completely intact"
+else
+  bad "PARTIAL DELETION on an unwritable tree"
+fi
+chmod -R 755 "$L/roperm/cap" 2>/dev/null
+
 echo "--- F: live-run guard (G8) ---"
+printf '{"state":"running","cwd":"%s"}\n' "$R" > "$A/status.json"
 LIST "$L/perf/w1/cargo-target";         run KEEP "G8 live run in this repo"        --list "$T/list"
 # same list, with the live run marked terminal: the positive control
 printf '{"state":"complete","cwd":"%s"}\n' "$R" > "$A/status.json"

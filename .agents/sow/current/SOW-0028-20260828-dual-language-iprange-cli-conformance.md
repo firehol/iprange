@@ -19721,3 +19721,116 @@ Next: the close-out chain at the final revision — leg-27 Windows re-stamp, the
 closure battery (attesting `1609b395…`), the evidence child commit, astra gate
 turn 12 (where the inconclusive state is not available and every item must be
 decided), then push.
+
+## Round 30 — wave 19 (seven roles at 9a8f64e8): 1 PASS / 6 FAIL, first P1 since wave 14, plus a shadowed-variable bug that made the restage write elsewhere (2026-09-19)
+
+Reviewed revision: `9a8f64e8`. Verdicts: parity **PASS** (3 P3 + 1 inconclusive),
+tester **FAIL** (1 P2), performance **FAIL** (1 P2), portability **FAIL** (1 P2
++ 2 P3), security **FAIL** (1 P1 + 1 P2), operations **FAIL** (1 P2),
+fit-for-purpose **FAIL** (1 P2). No product, engine, wire-format, CLI-behaviour
+or guard defect: guard 673-716 `abacfa59…`, `v4/cli/run.py` blob `d4e5ce5bb223`,
+and no file under `v4/` changed in batch 5 or 6.
+
+**The P1, in the tool I ran under the user's removal authorization** (security):
+`referenced()` protected a cited path and its ancestors but **not its
+descendants**, while every record cites kit scratch at directory granularity.
+A record naming `.local/<role>/kit` depends on everything inside it, so
+removing `.local/<role>/kit/cache` destroys cited input exactly as removing the
+directory does. Security measured it against the real kit (`.local/lead-r10/f22`
+refused; `.local/lead-r10/f22/outcomepin` removable), reproduced it end to end,
+and reported that **79 of the 92 removals already executed were descendants of
+directories named in gate artifacts**. I reproduced the hole and the fix
+independently, and then measured the realized damage with an exact-match scan
+over all 2,333 gate artifacts: **zero** removed paths were themselves cited,
+**zero** cited paths now dangle, and every directory the bound evidence names
+still exists (`.local/tester/r17-kit/g12`, `.local/lead-r10/sb`,
+`.local/lead-r15/mutcheck`, `.local/parity/r2`). The 5 removals that sit under
+a cited directory are build caches (`sb/rust`, `r2/gocache`, `r2/ctgt`,
+`r2/gocache2`, `w1920/bench-9c111954`) — none is named by any record, so no
+bound claim was invalidated. REVIEWS.md's G7 text and `test_kit_rm.sh` had
+documented and tested only the ancestor direction, so the tool's own contract
+described the weaker guarantee it implemented. Fixed by matching citations as a
+set with bidirectional prefix tests; `test_kit_rm.sh` gained E2 (descendant
+refused, cited dir refused, uncited sibling still removable), and the guard is
+falsified by a reverted copy.
+
+**Portability's P2, reproduced before and after fixing**: `lines = [l.strip()
+for l in …]` destroyed trailing whitespace *before* any guard ran, so
+`--execute` on a listed `"<dir> "` removed the **different** directory
+`<dir>` and logged the stripped name — a direct violation of "removes the
+listed path and nothing else". I reproduced it exactly (listed kept, unlisted
+destroyed), fixed it to preserve lines verbatim while refusing a
+whitespace-only line as a malformed list (rc 2), and added E3 to the committed
+suite. Exposure was measured, not assumed: **zero** whitespace-named directories
+exist under the live `.local/`, so nothing was mis-removable in the real run.
+Portability also found that G6 checked readability but not writability, so
+`--execute` on a tree with an unwritable child reported refusal *after* deleting
+every writable sibling and logging nothing; I reproduced that partial deletion
+with a reverted copy (writable files gone, refusal printed, no log line) and
+fixed it by checking writability of the target and every directory before any
+deletion (E4).
+
+**The defect I introduced in this batch, which invalidated my own verification**
+(self-found; reported here because it is the most instructive item in the round).
+While implementing fit-for-purpose's F-24 command-path check I wrote
+`path = token.lstrip("-")` inside the new loop, shadowing the `path` that held
+`<evidence>/manifest.json`. The tool therefore wrote the manifest into a file
+named by a command token while the real `manifest.json` kept its previous bytes,
+and it **exited 0**. Four consecutive verification runs — restage reporting
+"manifest rebuilt", `capture_groups` reported absent, H3 reported failing — were
+interpreted as a staging-order problem or as H3 being wrong. H3 was correct;
+the writer was silently writing elsewhere. Two things made it findable rather
+than fatal: the write target happened to be a *nonexistent* name (the last token
+of the last command), so it created a stray file instead of overwriting a real
+one — but had `manifest["runs"]` been ordered differently the same bug would
+have overwritten `./.agents/tools/kit-gc.py` or `kit-gc-suite.sh`, both tracked;
+and the surviving content was recoverable, which is why
+`.local/lead-r15/shadowed-write-artifact.json` is kept as evidence. The fix is
+two lines: rename the loop variable, and make the restage **read the file back**
+after writing and require the bytes to equal what it built and the required
+fields to be present, so a silent no-op exit 0 becomes impossible. Recorded
+because "it exited 0" is not evidence that a record changed, and because the
+reviewers' five-attempt rule is not the only control that catches wrong claims —
+an assertion I wrote myself caught this one.
+
+**Batch-6 fixes, each falsified by reverting it:** the restage now treats a
+footerless log in a declared group as fatal rather than advisory (operations and
+performance both drove it to exit 0 with a footer-derived `wall_seconds`
+surviving), and refuses any manifest entry that advertises footer-derived
+`wall_seconds`/`rc` for a log whose footer is gone; the grouping is recorded as
+**data** (`capture_groups`: runner-side names, re-run names, per-log begin) and
+H3 compares that data with the bytes for **set equality**, because prose cannot
+be diffed for membership and the old H3 only asked whether a quoted instant
+existed somewhere — which my own test showed stayed green on a note truncated to
+three of fourteen logs (security P2, tester P2). F-24's convention sentence was
+rewritten to scope the resolvability claim to what is enforceable: kit-owned
+paths must exist, engine binaries are the declared external input attested by
+`binaries`/`binary_paths` rather than by an ephemeral `/tmp` path. The suite
+exports `PYTHONDONTWRITEBYTECODE=1`, because batch 5 added the first leg that
+imports a tool module rather than executing it, which dirtied an H2-policed
+directory (tester P2).
+
+**Where two role claims did not survive verification, stated rather than
+accepted:** security filed "H3 is a pin that cannot fail" citing a suite-level
+`H3=${H3:-…}` override at line 39; that variable does not exist anywhere in the
+suite (`grep -n "H3="` on both the live and staged copies returns nothing), so
+the stated mechanism was wrong — the substance was right and is fixed. Tester
+filed "zero `__pycache__` is false" naming two caches; both were transient
+reviewer `importlib` probes and were gone when I measured, and the root cause
+they identified is real and is now prevented. My own first H3 falsification was
+a silent `str.replace()` no-op, which is why every mutation below asserts that
+its anchor landed before the result is used.
+
+**Cost and control profile after batch 6:** suite **47 assertions 0 failures**,
+1.80 s (83 ms per added leg, 8× inside the 15 s bound); reporter 2.36/2.41 s,
+down from 7.22 s purely because 23 GB of kit was removed; `kit-rm` suite
+**49 assertions 0 failures**, with each new guard falsified by a reverted copy
+(descendant protection → DRY; whitespace stripping → the stripped twin deleted;
+writability check → partial deletion). Live reporter `rc 2`, ERROR rows = the two
+standing privacy fixtures, **0 OVER-CAP**; evidence 37 entries, 11 pairs,
+disk == bound, checker `rc 0`, zero caches; all three binary digests match the
+files at `binary_paths`; guard digest recomputed and equal to the live file.
+
+Next: the close-out chain at the final revision — leg-27 Windows re-stamp, the
+closure battery (attesting `1609b395…`), the evidence child commit, astra gate
+turn 12 (no inconclusive available to it; every item must be decided), then push.

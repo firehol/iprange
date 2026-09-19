@@ -191,25 +191,38 @@ directories). Removal is the human procedure defined below.
   **G4** not `.local/shared` or `.local/_attic-md`, nor inside either — refused
   by identity, never by a name match;
   **G5** a real directory, not a symlink, file or missing path;
-  **G6** no `.git` entry (a checkout or worktree is never scratch), and no
-  unreadable or mode-000 directory **inside or at** the target — the standing
-  privacy fixtures are part of the gate signal, so a list line naming one is
-  refused rather than walked past;
-  **G7** the path (and any ancestor of it) appears in **no** gate artifact —
-  every tracked file, `status.md`, `head`, every evidence `manifest.json`,
-  every astra-turn prompt — searched in **both** absolute and repo-relative
-  form, because a bound manifest reason can cite `.local/<role>/kit/...`
-  relatively and deleting that input would invalidate the claim it supports;
+  **G6** no `.git` entry (a checkout or worktree is never scratch); no
+  unreadable or mode-000 directory **at or inside** the target, since the
+  standing privacy fixtures are part of the gate signal and a list line naming
+  one must be refused rather than walked past; and no directory the operator
+  cannot write, checked **before** deletion — without this, `rmtree` removes
+  every writable sibling, then fails on the unwritable child, so a refusal is
+  reported after partial destruction and nothing is logged;
+  **G7** the path appears in **no** gate artifact — every tracked file,
+  `status.md`, `head`, every evidence `manifest.json`, every astra-turn prompt —
+  searched in **both** absolute and repo-relative form. Protection is
+  **bidirectional**: an ancestor is refused because removing it removes the
+  cited path, and a **descendant** is refused because a record citing
+  `.local/<role>/kit` depends on everything inside it, so deleting
+  `.local/<role>/kit/cache` destroys cited input even though no record spells
+  out that deeper path (wave-19 found the descendant case unimplemented, and it
+  had already been exercised by real removals);
   **G8** no non-terminal subagent run for this repository, because a role may
   be measuring inside its own sandbox right now; an unreadable status file or a
   missing runs root counts as live and refuses.
   `--execute` additionally requires a non-empty `--reason`, and each removal is
   appended to `.local/shared/removals.log` (timestamp, size, path, reason).
-  Guards fail closed: an unrecognized run state, an unreadable status, or a
-  failed `git ls-files` all lead to refusal, not to removal. `kit-rm.py` is
-  tested by an adversarial suite in which every attack must be refused **and**
-  one legitimate scratch tree must be allowed, so it cannot pass by refusing
-  everything or by removing everything.
+  List lines are paths and are used verbatim: a trailing space is part of a
+  directory name, and stripping it would make `--execute` remove a *different*
+  directory than the one listed while logging the stripped name. A line of only
+  whitespace is a malformed list and is refused.
+  Guards fail closed: an unrecognized run state, an unreadable status, a missing
+  runs root, or a failed `git ls-files` all lead to refusal, not to removal.
+  `kit-rm.py` is tested by an adversarial suite in which every attack must be
+  refused **and** one legitimate scratch tree must be allowed, so it cannot pass
+  by refusing everything or by removing everything; each guard there is also
+  falsified by reverting the corresponding check, because a guard that cannot be
+  shown to fail is not a guard.
 - **Removal is a lead duty, not a reviewer one.** For each directory the lead decides to remove, all three checks
   must be established *for that path* first, and recorded in the gate
   note:

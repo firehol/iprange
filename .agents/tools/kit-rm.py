@@ -47,6 +47,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -90,18 +91,37 @@ def gate_artifacts() -> list[str]:
 
 
 def referenced(path: str, texts: list[str]) -> str | None:
-    """Return the first artifact naming this path, else None (G7).
+    """Return a human-readable reason this path is load-bearing, else None (G7).
+
+    The return value is always a reason string, never a path: callers print it
+    verbatim. Returning a path here once produced a relpath() of free text.
 
     Records cite kit scratch two ways: the absolute path (commands, checker
     output) and a repo-relative path such as
     `.local/tester/r17-kit/g12/*-mutant.py` (manifest reasons, SOW prose).
-    Both forms are searched, plus the path plus a separator, or a directory
-    named only relatively could be deleted out from under a bound claim.
+    Both forms are searched.
+
+    Protection is bidirectional, because the failure mode is asymmetric: a
+    record that names `.local/<role>/kit` depends on that directory AND on
+    everything inside it, so removing a descendant destroys the cited input
+    just as surely as removing the cited directory itself. Ancestors are also
+    refused, since removing one removes the cited path with it. What stays
+    removable is a path that shares no ancestor with any citation.
     """
     needles = [path, path + os.sep]
     if path.startswith(REPO + os.sep):
         rel = os.path.relpath(path, REPO)
         needles += [rel, rel + os.sep]
+    # The missing case before wave 19: a record citing `.local/<role>/kit`
+    # depends on everything INSIDE it, so removing `.local/<role>/kit/cache`
+    # destroys cited input exactly as removing the cited directory does. The
+    # needle scan above cannot see this (the record never spells out the
+    # deeper path), so citations are matched as a set and any ancestor or
+    # descendant relationship refuses the path.
+    for cited in cited_paths():
+        if path == cited or path.startswith(cited + os.sep) \
+                or cited.startswith(path + os.sep):
+            return f"related to cited path {cited}"
     for p in texts:
         if os.path.getsize(p) > 8 * 1024 * 1024:
             continue
@@ -109,10 +129,10 @@ def referenced(path: str, texts: list[str]) -> str | None:
             with open(p, "rb") as fh:
                 blob = fh.read()
         except OSError:
-            return p
+            return f"gate artifact {p} could not be read"
         for needle in needles:
             if needle.encode() in blob:
-                return p
+                return f"named by gate artifact {os.path.relpath(p, REPO)}"
     return None
 
 
@@ -160,6 +180,11 @@ def inner_hazards(path: str) -> str | None:
         return f"the target is itself mode-000 ({path})"
     if not os.access(path, os.R_OK | os.X_OK):
         return f"the target is not readable by us ({path})"
+    # Removal is all-or-nothing: without write access part-way down, rmtree
+    # deletes what it can and then fails, so a refusal would arrive after
+    # partial destruction and nothing would be logged.
+    if not os.access(path, os.W_OK):
+        return f"the target is not writable by us; rmtree could half-delete ({path})"
     for root, dirs, files in os.walk(path, followlinks=False):
         if ".git" in dirs or ".git" in files:
             return f"contains a git entry at {root}"
@@ -171,8 +196,9 @@ def inner_hazards(path: str) -> str | None:
                 return f"cannot stat directory {full}: {err}"
             if mode & 0o777 == 0:
                 return f"contains a mode-000 fixture {full}"
-            if not os.access(full, os.R_OK | os.X_OK):
-                return f"contains an unreadable directory {full}"
+            if not os.access(full, os.R_OK | os.X_OK | os.W_OK):
+                return (f"contains a directory we cannot fully traverse and "
+                        f"delete ({full})")
     return None
 
 
@@ -186,6 +212,35 @@ def size_of(path: str) -> int:
             except OSError:
                 continue
     return total
+
+
+_CITED_CACHE: list[str] | None = None
+
+
+def cited_paths() -> list[str]:
+    """Absolute paths named in a gate artifact, cached for the descendant test.
+
+    Extracted rather than hand-listed: a citation is any `.local/...` token in
+    a record, at any depth, in either the absolute or the repo-relative form.
+    """
+    global _CITED_CACHE
+    if _CITED_CACHE is not None:
+        return _CITED_CACHE
+    found: set[str] = set()
+    token = re.compile(r"(?:\.local/[\w.\-]+)(?:/[\w.\-]+)*")
+    for art in gate_artifacts():
+        try:
+            text = open(art, encoding="utf-8", errors="replace").read()
+        except OSError:
+            continue
+        for m in token.findall(text):
+            m = m.rstrip(".")
+            if m.count("/") < 2:      # .local itself or a bare role: not a citation
+                continue
+            found.add(os.path.join(REPO, m))
+            found.add(m)
+    _CITED_CACHE = sorted(found)
+    return _CITED_CACHE
 
 
 def check(path: str, texts: list[str], live: list[str]) -> tuple[bool, str, int]:
@@ -214,7 +269,7 @@ def check(path: str, texts: list[str], live: list[str]) -> tuple[bool, str, int]
         return False, "G6 " + hazard, 0
     where = referenced(path, texts)
     if where:
-        return False, f"G7 named by gate artifact {os.path.relpath(where, REPO)}", 0
+        return False, "G7 " + where, 0
     return True, "removable", size_of(path)
 
 
@@ -237,9 +292,24 @@ def main(argv: list[str]) -> int:
         print(f"no such list file: {args.list}", file=sys.stderr)
         return 2
 
-    lines = [l.strip() for l in open(args.list, encoding="utf-8") if l.strip()]
+    # A list line is a path, so it is preserved verbatim: stripping whitespace
+    # here made `--execute` on "<dir> " remove a DIFFERENT directory (<dir>)
+    # and log the stripped name, hiding what was destroyed. Only the newline is
+    # removed, and a line that is whitespace-only is refused as a bad path
+    # rather than silently dropped.
+    raw = open(args.list, encoding="utf-8", errors="surrogateescape").read().split("\n")
+    lines = [l for l in (x.rstrip("\r") for x in raw) if l != ""]
     if not lines:
         print("list file is empty; nothing to do", file=sys.stderr)
+        return 2
+    # A line of only whitespace is a malformed list, not a blank separator: it
+    # must be reported rather than dropped (so an operator cannot believe a
+    # path was submitted when the editor stripped it) and never reached as a
+    # stripped path that names a different directory.
+    blank = [i for i, l in enumerate(lines, 1) if not l.strip()]
+    if blank:
+        print(f"list line(s) contain only whitespace: {blank}; refusing to run",
+              file=sys.stderr)
         return 2
 
     texts = gate_artifacts()
