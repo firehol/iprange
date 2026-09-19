@@ -149,7 +149,9 @@ directories). Removal is the human procedure defined below.
   chmod-000 and byte-invalid-name fixtures inside `.local/<role>/`, and
   those are inspection errors until the fixture is removed (the wave-14 role
   runs recorded the reporter at 8 ERROR rows and at 7 in one of their
-  three runs — security's and performance's round-14 reports — with the exit
+  three runs — security's, portability's and performance's round-14 reports
+  (security rendered 8; portability's run recorded 8 of 8; performance's three
+  runs recorded 2, 7 and 4) — with the exit
   class and per-row attribution correct in every case). The gate-close
   signal is therefore: exit 2 whose errors are all attributable to known
   fixture paths (the two standing privacy fixtures plus any fixture a
@@ -158,9 +160,11 @@ directories). Removal is the human procedure defined below.
   is a human inspection judgment, not a machine check: the machine-readable
   parts are the exit class and the `--json` error entries, and the
   "zero OVER-CAP rows" half is a **precondition** for closing the gate, not
-  a steady state — it becomes true through the named-path removals in
-  § Removal below (the count fell from 8 to 7 in wave 15 as one sandbox
-  retired, with no defect involved).
+  a steady state — the lead's § Removal procedure below is what clears a row,
+  and the count can also move without it: the wave-15 8→7 drop was the `tester`
+  role pruning 18 named superseded scratch paths inside its own current kit to
+  satisfy the ≤ 1 GB round-end rule (the sandbox is still present, 427.6 MB and
+  within cap, not removed), with no defect involved.
   Reducing the count to 0/1 requires the user relocating the standing
   fixtures.
 - **Removal is a human procedure, and it is a lead duty, not a reviewer
@@ -189,8 +193,9 @@ directories). Removal is the human procedure defined below.
   level); and a staged copy must equal the live source it came from.
   `__pycache__` bytecode caches are derived, not artifacts: the checker
   reports them on their own line and the suite's H2 section requires their
-  absence, so commands that import from an evidence directory run with
-  `PYTHONDONTWRITEBYTECODE=1`. This is checked by
+  absence, so the proof commands that import from an evidence directory run
+  with `PYTHONDONTWRITEBYTECODE=1` (H2 requires the absence of caches
+  regardless of how a command was invoked). This is checked by
   `.local/shared/tools/check-evidence-binding.py` (a bound copy of it lives
   in the evidence directory, so the checker is itself verifiable; its exit
   classes are 0 holds / 1 mismatch / 2 usage or uninterpretable manifest)

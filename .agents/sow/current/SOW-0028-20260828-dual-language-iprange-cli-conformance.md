@@ -18440,7 +18440,8 @@ than a hidden hole.
   6. mutation_proof_misattributes_failure_sites — the instrument scored
      any nonzero exit as detection and labeled every non-named crash
      "at the pin site". `data-shape-always-raise` actually dies at the
-     pre-existing genuine-refusal pair control (raise at run.py:2379-2381 at 44af9a36), and the
+     pre-existing genuine-refusal pair control (raise at run.py:2378-2380 at 44af9a36,
+     2379-2381 from 680fae56 onward), and the
      success marker was read from combined output, which a traceback
      echoes. True; count corrected (five pin-named, not six); record
      corrected above.
@@ -18840,7 +18841,10 @@ than a hidden hole.
      every timed run carries `wall_seconds` measured by the lead and a
      VERBATIM replayable `command` argv (prose commands replaced; the
      old entry claimed "~0.93 s" against a bound log whose printed
-     figure was `0.90s`, while the role's own replay measured `0.97s` —
+     figure was `0.90s`, while the role's own replay measured `0.97s`
+     [Round-25 mark: `0.97 s` has no bound producer — the wave-12 bound
+     log is the `0.90 s` variant (sha `80f60969…`), and no role replay
+     produced a bound `0.97 s`; security wave-15 P2-1] —
      three figures, one claim);
      static artifacts carry `command: null` + `wall_reason`. Bound
      report now binds every file staged in the directory (checked at
@@ -18896,7 +18900,8 @@ than a hidden hole.
   * line-anchor and supersession corrections (security P3-1,
     performance P3-1, P3-4 hash note): `check_expected_error` cited as
     862-900 (def 862, body end 900, next def 902, stable across
-    86a645e5/44af9a36); pair-control raise cited 2379-2381 at 44af9a36;
+    86a645e5/44af9a36); pair-control raise cited 2378-2380 at 44af9a36
+    (2379-2381 from 680fae56 onward);
     the two `.agents/tools/kit-gc.sh` statements in Rounds 17-18 are
     marked SUPERSEDED in place (history preserved, current procedure
     unambiguous); the 673-716 region statement: the frozen prefix ends
@@ -18978,7 +18983,9 @@ than a hidden hole.
   turn-11 digest cross-verification attributed to portability +
   operations (the two that recomputed it); the 0.90/0.93/0.97 timing
   confusion replaced by one attributed account (bound log in-process
-  0.92 s, manifest wall_seconds 0.95 s, 0.97 s was a role replay);
+  0.92 s, manifest wall_seconds 0.95 s, 0.97 s was a role replay
+  [Round-25 mark: no bound or role-replay artifact produces `0.97 s`; the
+  figure appears only in wave-12 role prose — security wave-15 P2-1]);
   "22 entries" -> the staging now guarantees disk==bound by check.
 - Closed by adjudication, not code: operations' P3 that the F-2/F-3
   fixes lack detecting tests — both regressions fail loud (rc 1 +
@@ -19159,9 +19166,16 @@ live:
   documents the JSON parse rule (strip `TIMED:` lines before parsing a
   report log that carries a footer).
 - operations' P3 on the revert-unit sentence: the surgical unit remains the
-  contiguous `_self_test()` pin block; the batch's `main()`-area change is a
-  three-line comment inside that same `_self_test()` region, so reverting
-  the unit still reverts the whole pin surface.
+  contiguous `_self_test()` pin block (four arms on
+  `check_expected_params_rejected` + two on
+  `check_request_is_contract_invalid`). The wave-13 batch's second run.py hunk
+  is a comment in `main()` at 3117-3122, which the pin block does NOT cover;
+  the wave-14 batch's only run.py hunk is the three-line comment at 2529-2531
+  inside `_self_test()`. Reverting the pin block therefore reverts every pin
+  and the 2529-2531 comment, and leaves the `main()` comment in place — the
+  truthful scope. (An earlier version of this sentence said the batch's
+  `main()`-area change was inside the same `_self_test()` region, mixing the
+  two hunks; wave-15 operations P2-2.)
 
 ### Adjudications (no code)
 
@@ -19315,7 +19329,7 @@ Validation at this batch: suite **36/36** (`kit-gc-suite.txt`, bound, footer
 rc 0) with E6/E7/E8/E9/E10/E11 green; both mutants **CAUGHT** with
 `unexpected=0`, `error_classes='AssertionError:'` and the diff in the log;
 mutation proof 8/8 with both negative controls FAIL for the required reasons
-(60.10 s); params proof re-run; evidence **36 entries**, 10 staged/live pairs
+(60.11 s in the current bound log, which was re-captured cache-free at wave 16; the batch-2 capture printed 60.10 s); params proof re-run; evidence **36 entries**, 10 staged/live pairs
 verified, disk==bound, checker rc 0, zero caches; reporter on the live kit
 exit 2 with exactly the two standing privacy fixtures and 8 over-cap sandbox
 rows (the latter is the gate-close precondition, not a defect); guard region
@@ -19328,3 +19342,83 @@ avoid the harness's inferred writer gate that mislabeled four completed
 children as failed in wave 15; then the close-out chain: leg-27 Windows
 re-stamp at the final revision, the closure battery (attesting `1609b395…`),
 the evidence child commit, astra gate turn 12, and push.
+
+## Round 27 — wave 16 (seven roles at 09f2df6a): 2 PASS / 5 FAIL, 12 P2 filings in 9 classes; third fix batch (2026-09-19)
+
+Reviewed revision: `09f2df6a` (the wave-15 fix batch). Verdicts: tester **PASS**
+(4 P3), portability **PASS** (4 P3 + 1 records note), performance **FAIL**
+(2 P2), fit-for-purpose **FAIL** (3 P2), operations **FAIL** (3 P2),
+security **FAIL** (1 P2), parity **FAIL** (1 P2). No product, engine,
+wire-format or guard defect was found; five roles independently confirmed the
+wave-14/wave-15 closures by executed A/B and by falsifying the new pins, and
+every wave-15 finding filed by the roles above was verified closed at source.
+
+Twelve P2 filings reduce to nine classes, all records or tooling:
+
+1. **The exit-class guard was still not total** (performance P2-2,
+   fit-for-purpose F-19): `announce_incomplete` guarded its fallback `print`
+   with `except OSError` while guarding the traceback with `except Exception`,
+   so a Python-level closed stdout raised `ValueError` *inside* the classifier
+   and left rc 1 — the over-cap class. Proven with a write-raising stdout;
+   deleting the guard left the suite green, so nothing pinned it. Fixed by
+   guarding the fallback with `except Exception` and pinned by an E10 leg
+   (closed stdout + internal failure -> rc 2).
+2. **One proof log carried no input identity** (performance P2-1, operations
+   P3): `mutation-proof-params.py` imported the *stale, header-less* mkfarm
+   from a role sandbox, so "every proof log names the run.py content it
+   mutated" was false for it. Fixed: the proof lives in the evidence directory,
+   imports the bound mkfarm (identity-printing), has a live twin, and its
+   bound command is absolute; re-run with the identity line present.
+3. **One of six printed path fields was still unescaped** (operations P2-1):
+   the report header printed `ROOT` raw, so with a newline-named install
+   directory a forged `scan: COMPLETE; exit 0` line appeared while the record
+   claimed "every printed path field" was escaped. Fixed in the tool, and E11
+   was rewritten to plant a newline in ROOT, a role name, a unit name and a
+   candidate name, with a unique payload marker so a forged line is
+   unambiguous (the earlier fixture could not distinguish a forged line from
+   the tool's own `scan:` line).
+4. **Two citations said "2379-2381 at 44af9a36"** and Round-25 claimed they had
+   been brought in line when they had not (fit-for-purpose F-18). Corrected in
+   place to `2378-2380` for that revision (and `2379-2381` from `680fae56`).
+5. **The revert-unit sentence still mixed two hunks** (operations P2-2): it
+   called the wave-13 `main()` comment part of the `_self_test()` pin region.
+   Rewritten to name both hunks and their real scopes.
+6. **Two echoes of the `0.97 s` claim were left unmarked** (security P2):
+   Round-23 and Round-24 still asserted a role replay produced it. Both are now
+   marked in place with the hash-verified fact (no bound or role-replay
+   artifact produces `0.97 s`).
+7. **A recorded command invoked an unbound script** (fit-for-purpose F-20a):
+   `g-round12-at-round16.txt` ran `g-round12-verify.py` from a role sandbox.
+   The script is now bound (with a live twin and a pair), prints its run.py
+   input identity, and its reason names the one external input it still reads
+   (the tester kit's g12 mutant files) instead of leaving the claim implied.
+8. **A stale duration figure** (fit-for-purpose F-20b, operations P3): Round-26
+   cited `(60.10 s)` where the bound footer and the manifest say `60.11 s`.
+9. **A normative sentence misattributed a mechanism** (parity P2): REVIEWS.md
+   said the OVER-CAP count "fell from 8 to 7 as one sandbox retired", but no
+   sandbox retired — the `tester` role pruned 18 named scratch paths inside its
+   own current kit to satisfy the round-end cap (the sandbox is still present
+   at 427.6 MB). Rewritten to state that mechanism and to keep § Removal as the
+   lead's procedure.
+
+Tooling hardened beyond the filings, each verified: the binding checker escapes
+what it prints and classifies a manifest entry that escapes the directory as
+class 2 (proved by execution); the suite gained a cache-only leg (so a
+reversed-polarity checker can no longer pass the cache assertion on the stray's
+rc 1 alone) and an escaping-entry leg; the evidence set is now **37 entries**
+with **11** staged/live pairs verified; the suite is **40 assertions, 0
+failures**; and the manifest is rebuilt with `head` = the exact reviewed
+revision.
+
+Validation at this batch: suite 40/40 (`kit-gc-suite.txt`, bound); evidence 37
+entries, 11 pairs, disk == bound, checker rc 0, zero caches; params proof and
+g-round12 re-run with the input identity printed; both mutation-check logs carry
+the live-vs-mutant diff and score CAUGHT with `unexpected=0`; negative controls
+OK (60.11 s in the current bound log); guard region `abacfa59…` unchanged;
+run.py still comment-only by AST identity against `680fae56`.
+
+Next: wave 17 verifies this batch's closures with the same seven sessions
+(scoped to their own wave-16 findings and the controls this batch changed), then
+the close-out chain: leg-27 Windows re-stamp at the final revision, the closure
+battery (attesting `1609b395…`), the evidence child commit, astra gate turn 12,
+and push.

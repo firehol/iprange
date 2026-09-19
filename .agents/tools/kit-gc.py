@@ -100,8 +100,8 @@ def announce_incomplete(where: str) -> int:
     try:
         print(f"scan: INCOMPLETE; exit 2 (internal failure in {where}; "
               "no measurement in this run is trustworthy)")
-    except OSError:
-        pass
+    except Exception:   # a closed or otherwise hostile stdout must not turn
+        pass            # the classifier into the crash it classifies
     return 2
 
 
@@ -329,7 +329,7 @@ def main() -> int:
                         "inspection, never a removal verdict",
             }, indent=1))
         else:
-            print(f"== {ROOT} usage (allocated = blocks*512, symlinks "
+            print(f"== {esc(ROOT)} usage (allocated = blocks*512, symlinks "
                   "not followed) ==")
             for t in top_level:
                 print(f"{fmt_mb(t['allocated'])} alloc  "
