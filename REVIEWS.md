@@ -147,13 +147,20 @@ directories). Removal is the human procedure defined below.
   regression. During a review wave the reporter can legitimately list
   MORE errors and more PARTIAL rows: reviewers create their own
   chmod-000 and byte-invalid-name fixtures inside `.local/<role>/`, and
-  those are inspection errors until the fixture is removed (wave 14
-  experienced the reporter at 8 and 7 error rows while roles held open
-  fixtures, with the exit class and per-row attribution correct in every
-  case). The gate-close signal is therefore: exit 2 whose errors are all
-  attributable to known fixture paths (the two standing privacy fixtures
-  plus any fixture a still-open reviewer session created), zero OVER-CAP
-  rows, and no PARTIAL flag on any sandbox row outside those roles.
+  those are inspection errors until the fixture is removed (the wave-14 role
+  runs recorded the reporter at 8 ERROR rows and at 7 in one of their
+  three runs — security's and performance's round-14 reports — with the exit
+  class and per-row attribution correct in every case). The gate-close
+  signal is therefore: exit 2 whose errors are all attributable to known
+  fixture paths (the two standing privacy fixtures plus any fixture a
+  still-open reviewer session created), zero OVER-CAP rows, and no PARTIAL
+  flag on any sandbox row outside those roles. Attachability of the errors
+  is a human inspection judgment, not a machine check: the machine-readable
+  parts are the exit class and the `--json` error entries, and the
+  "zero OVER-CAP rows" half is a **precondition** for closing the gate, not
+  a steady state — it becomes true through the named-path removals in
+  § Removal below (the count fell from 8 to 7 in wave 15 as one sandbox
+  retired, with no defect involved).
   Reducing the count to 0/1 requires the user relocating the standing
   fixtures.
 - **Removal is a human procedure, and it is a lead duty, not a reviewer
@@ -177,14 +184,21 @@ directories). Removal is the human procedure defined below.
   `.local/shared/` is never a removal target.
 - **Staging assertions are enforced, not asserted.** Every artifact the
   evidence manifest binds must exist on disk with the recorded sha256 and
-  byte count, every file in an evidence directory must be bound, and a
-  staged copy must equal the live source it came from. This is checked by
-  `.local/shared/tools/check-evidence-binding.py` (a bound copy of it
-  lives in the evidence directory, so the checker is itself verifiable)
-  and re-run by the kit-gc suite's H section; both fail loudly, which is
-  how a stale staged suite and two dropped mutation-check bindings were
-  found in waves 13-14. Helper scripts a bound log depends on (`timed.sh`,
-  `mkfarm.py`) are bound alongside it so the directory is self-contained.
+  byte count; **every file at any depth** in an evidence directory must be
+  bound (a stray staged into a subdirectory is reported like one at the top
+  level); and a staged copy must equal the live source it came from.
+  `__pycache__` bytecode caches are derived, not artifacts: the checker
+  reports them on their own line and the suite's H2 section requires their
+  absence, so commands that import from an evidence directory run with
+  `PYTHONDONTWRITEBYTECODE=1`. This is checked by
+  `.local/shared/tools/check-evidence-binding.py` (a bound copy of it lives
+  in the evidence directory, so the checker is itself verifiable; its exit
+  classes are 0 holds / 1 mismatch / 2 usage or uninterpretable manifest)
+  and re-run by the kit-gc suite's H section with every staged/live pair.
+  Both fail loudly, which is how a stale staged suite, two dropped
+  mutation-check bindings, a nested `__pycache__` and a drifted harness
+  were found in waves 13-15. Helper scripts a bound log depends on are
+  bound alongside it so the directory is self-contained.
 
 ## Lead invocation message (exact shape)
 

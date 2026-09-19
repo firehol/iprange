@@ -33,9 +33,12 @@ Exit codes (distinct failure classes, all visible):
   1  scan complete; at least one role sandbox exceeds the cap (finding)
   2  scan INCOMPLETE: inspection errors (unreadable dir, stat failure);
      the printed numbers are partial and say so.  An unexpected internal
-     failure is also 2 -- traceback on stderr, "scan: INCOMPLETE" on
-     stdout -- so an unforeseen crash can never be read as a completed
-     over-cap scan.
+     failure in this file's own execution -- module initialization or main
+     -- is also 2: traceback on stderr, "scan: INCOMPLETE" on stdout, so an
+     unforeseen crash can never be read as a completed over-cap scan.  A
+     failure that prevents this module from executing at all (SyntaxError
+     or ImportError at load) exits with the interpreter's own status; no
+     file can classify its own failure to load.
 
 Sizes: "allocated" = st_blocks*512 summed WITHOUT following symlinks —
 the disk-hygiene metric (a symlink farm costs link bytes, not its
@@ -80,7 +83,27 @@ def repo_and_root():
     return here.parent.parent, here.parent.parent / ".local"
 
 
-REPO, ROOT = repo_and_root()
+def announce_incomplete(where: str) -> int:
+    """Report an internal failure as INCOMPLETE (class 2), never as 1.
+
+    rc 1 asserts a completed scan that found a sandbox over the cap, so a
+    failure anywhere in this program's own execution must not exit 1.  The
+    traceback is best-effort on the current stderr: a hostile stderr (a
+    strict error handler on a surrogate-bearing message) must not turn the
+    classifier into the crash it classifies.  The INCOMPLETE line goes to
+    the stdout the backslashreplace policy already protects.
+    """
+    try:
+        traceback.print_exc()
+    except Exception:
+        pass
+    try:
+        print(f"scan: INCOMPLETE; exit 2 (internal failure in {where}; "
+              "no measurement in this run is trustworthy)")
+    except OSError:
+        pass
+    return 2
+
 
 # Paths on disk can hold bytes that decode to lone surrogates; printing
 # them must never crash the report or flip the exit class (wave-13:
@@ -93,8 +116,13 @@ try:
 except (AttributeError, ValueError):    # non-replaceable stdout (pipes
     pass                                # already reconfigured, exotic)
 
-SHARED_DIR = ROOT / "shared"        # the central kit: never a candidate
-ATTIC_DIR = ROOT / "_attic-md"      # exhibit archive: never a candidate
+# A failure here is an internal failure (class 2), not a completed scan.
+try:
+    REPO, ROOT = repo_and_root()
+    SHARED_DIR = ROOT / "shared"        # the central kit: never a candidate
+    ATTIC_DIR = ROOT / "_attic-md"      # exhibit archive: never a candidate
+except Exception:
+    raise SystemExit(announce_incomplete("module initialization"))
 
 
 def ancestors_to_root(d: Path):
@@ -177,6 +205,20 @@ def build_named(name: str) -> bool:
 
 def fmt_mb(n: float) -> str:
     return f"{n / (1024 * 1024):9.1f} MB"
+
+
+def esc(text) -> str:
+    """Escape line-breaking characters in a printed path or name.
+
+    The text report is line-oriented: a directory whose NAME contains a
+    newline can otherwise inject a whole line into the report, which a
+    human reader (and any line-based gate predicate) cannot tell from a
+    real one (wave-15 portability P3: a fixture named
+    "evil\\nscan: COMPLETE; exit 0" echoed as a plausible report line).
+    Only \\r and \\n are escaped: they are what forges lines, and leaving
+    every other byte alone keeps Windows and colon-named paths readable.
+    """
+    return str(text).replace("\r", "\\r").replace("\n", "\\n")
 
 
 def ts(mtime: float) -> str:
@@ -291,7 +333,7 @@ def main() -> int:
                   "not followed) ==")
             for t in top_level:
                 print(f"{fmt_mb(t['allocated'])} alloc  "
-                      f"{fmt_mb(t['apparent'])} app  {t['path']}")
+                      f"{fmt_mb(t['apparent'])} app  {esc(t['path'])}")
             print(f"\n== role sandboxes vs {args.cap // (1024 * 1024)} MB "
                   "cap (one decision per .local/<role>/ aggregate) ==")
             if not sandboxes:
@@ -306,11 +348,11 @@ def main() -> int:
                     flag += ("  PARTIAL (%d inspection error%s below)"
                              % (n_pe, "" if n_pe == 1 else "s"))
                 print(f"{fmt_mb(s['allocated'])} alloc  "
-                      f"SANDBOX {s['role']}{flag}")
+                      f"SANDBOX {esc(s['role'])}{flag}")
                 for r in sorted(units_by_role.get(s["role"], []),
                                 key=lambda r: -r["allocated"]):
                     print(f"{fmt_mb(r['allocated'])} alloc    "
-                          f"unit {r['unit']}")
+                          f"unit {esc(r['unit'])}")
             print("\n== directories for HUMAN INSPECTION -- name/size facts "
                   "only, NOT removal recommendations ==")
             if not candidates:
@@ -318,12 +360,12 @@ def main() -> int:
             for c in candidates:
                 print(f"{fmt_mb(c['allocated'])} alloc  "
                       f"newest {ts(c['newest_mtime'])}  "
-                      f"[{c['why']}]  {c['path']}")
+                      f"[{c['why']}]  {esc(c['path'])}")
             if errors:
                 print("\n== INSPECTION ERRORS: scan INCOMPLETE, numbers "
                       "partial ==")
                 for ep, em in errors:
-                    print(f"ERROR  {ep}: {em}")
+                    print(f"ERROR  {esc(ep)}: {em}")
             print(f"\nscan: {state}; exit {rc} "
                   "(0 within cap, 1 over-cap finding, 2 inspection error)")
             print("Removal is a human procedure (REVIEWS.md 'Kit hygiene'): "
@@ -348,10 +390,7 @@ def main_guarded() -> int:
     try:
         return main()
     except Exception:  # noqa: BLE001 - deliberate last-resort classification
-        traceback.print_exc()
-        print("scan: INCOMPLETE; exit 2 (internal failure; no measurement "
-              "in this run is trustworthy)")
-        return 2
+        return announce_incomplete("main")
 
 
 if __name__ == "__main__":
