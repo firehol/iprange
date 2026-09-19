@@ -150,8 +150,9 @@ directories). Removal is the human procedure defined below.
   those are inspection errors until the fixture is removed (the wave-14 role
   runs recorded the reporter at 8 ERROR rows and at 7 in one of their
   three runs — security's, portability's and performance's round-14 reports
-  (security rendered 8; portability's run recorded 8 of 8; performance's three
-  runs recorded 2, 7 and 4) — with the exit
+  (security rendered 8 ERROR rows; portability rendered 8 ERROR lines, of
+  which it attributed 6 to other roles' fixtures; performance's three runs
+  recorded 2, 7 and 4) — with the exit
   class and per-row attribution correct in every case). The gate-close
   signal is therefore: exit 2 whose errors are all attributable to known
   fixture paths (the two standing privacy fixtures plus any fixture a
@@ -163,8 +164,11 @@ directories). Removal is the human procedure defined below.
   a steady state — the lead's § Removal procedure below is what clears a row,
   and the count can also move without it: the wave-15 8→7 drop was the `tester`
   role pruning 18 named superseded scratch paths inside its own current kit to
-  satisfy the ≤ 1 GB round-end rule (the sandbox is still present, 427.6 MB and
-  within cap, not removed), with no defect involved.
+  satisfy the ≤ 1 GB round-end rule (its own round-15 report lists the 18 paths
+  by name and reports 430 MB at its round end; a lead re-measurement with
+  `kit-gc.py --json` at 11:00 UTC on 2026-09-19 read 422.7 MB allocated and
+  `over_cap: false` — the sandbox is present and within cap, not removed),
+  with no defect involved.
   Reducing the count to 0/1 requires the user relocating the standing
   fixtures.
 - **Removal is a human procedure, and it is a lead duty, not a reviewer
@@ -245,6 +249,10 @@ skips this gate.
 3. **Role round (small chunk)**: lead stages the evidence, updates the kit,
    invokes all 7 roles in parallel (one message each, continued sessions).
 4. **Adjudication**: any role FAIL ⇒ the lead verifies the finding.
+   - `INCONCLUSIVE AND POTENTIALLY WRONG` ⇒ not a finding; the lead records
+     the item and what the role tried, and either resolves it by its own
+     investigation or names where it is tracked. It never blocks approval
+     and never becomes a fix obligation on its own.
    - Real ⇒ fix, then ask the same role sessions to re-review (step 2→3).
    - False positive ⇒ the lead negotiates in the role's session with
      concrete counter-evidence; a finding is dropped only if the role is
@@ -269,7 +277,11 @@ skips this gate.
      in its own session workspace only).
    Verdicts: `PRODUCTION GRADE` passes; `NEEDS CHANGES` with any verified
    in-scope P0/P1/P2 blocks: fix ⇒ roles re-review affected code ⇒ astra
-   re-review, repeat. False positives are rebutted to astra in-session with
+   re-review, repeat. **Astra has no inconclusive verdict**: it must decide
+   every item it examines — the role-side `INCONCLUSIVE AND POTENTIALLY
+   WRONG` state (§ Reviewer work rules) is deliberately withheld from the
+   gate reviewer, whose job is to adjudicate the milestone, not to park
+   doubts. False positives are rebutted to astra in-session with
    evidence and the exchange is preserved; unresolved P0-P2 findings are
    never waived by the lead alone.
 3. **Full battery** runs once at the milestone boundary (not per step).
@@ -334,11 +346,22 @@ Binding details recorded from user decisions 2026-09-16:
   counter, so the dispatch brief must carry the protocol and the role must
   self-administer it: `date +%s` once at start (T0) and before every
   numbered probe, printing elapsed in the probe line; a per-probe budget
-  (default 4 min) with **at most two re-attempts** — the initial attempt
-  plus two retries, three attempts in total; a fourth attempt is
-  prohibited and the probe is recorded `INCONCLUSIVE: <named obstacle>`,
-  which is a valid, reportable terminal outcome and lead-adjudication
-  input; a total wall budget, and at 70 % of it the role stops probing and
+  (default 4 min) with **up to five attempts per incident** — the initial
+  attempt plus four retries. An *incident* is one alleged defect; the five
+  attempts are the budget for proving it (re-run, vary the input, isolate
+  the mechanism, attack the control instead of the claim, measure the
+  counterfactual). **If the fifth attempt has not produced the concrete
+  scenario below, the role must report the item as
+  `INCONCLUSIVE AND POTENTIALLY WRONG: <what was tried, what remains
+  unproven>`** — a valid, reportable terminal outcome and explicit
+  lead-adjudication input. Such an item is **not a finding**: it does not
+  count toward the verdict, does not block a chunk, and must not be
+  recorded with a severity, because the role did not establish it. The
+  point of the state is to make an unproven suspicion cheaper to disclose
+  than to drop silently; a role that suspects a defect and cannot prove it
+  in five attempts has discharged its duty by naming it, not by asserting
+  it. A role that files a P0-P2 without the scenario has skipped work it
+  was given the budget to do; a total wall budget, and at 70 % of it the role stops probing and
   writes the report with what it has. A probe whose intent repeats a
   previously executed probe's intent is a stop-and-report condition, not a
   re-derivation invitation (re-deriving at greater depth is the documented
@@ -357,8 +380,15 @@ Binding details recorded from user decisions 2026-09-16:
   show the suite accepts it.
 - Same-failure search: when one instance of a class is found, hunt the
   class across the chunk.
-- Report: `Reviewed HEAD: <sha>`, verdict PASS/FAIL, numbered findings
-  (severity, file:line, trigger, expected, actual, impact, causal path),
-  P3s last. Written to `.local/<role>/report.md`; compact copy returned in
-  the session reply.
+- Report: `Reviewed HEAD: <sha>`, verdict **PASS** or **FAIL**, numbered
+  findings (severity, file:line, trigger, expected, actual, impact, causal
+  path), P3s last, then a separate `## Inconclusive and potentially wrong`
+  section holding every item the five-attempt budget could not prove (what
+  was tried, what remains unproven, what would settle it). Verdict counts
+  findings only: an inconclusive item never makes a round FAIL. Written to
+  `.local/<role>/report.md`; compact copy returned in the session reply.
+- **This verdict state belongs to roles only.** The milestone gate reviewer
+  (astra) does not get it: it must decide every item it examines, either as
+  a verified finding with the scenario or as `PRODUCTION GRADE`. See
+  § Milestone gate.
 - Roles stay open across rounds; later messages are delta re-reviews.

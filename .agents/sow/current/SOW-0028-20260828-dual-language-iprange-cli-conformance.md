@@ -19329,7 +19329,13 @@ Validation at this batch: suite **36/36** (`kit-gc-suite.txt`, bound, footer
 rc 0) with E6/E7/E8/E9/E10/E11 green; both mutants **CAUGHT** with
 `unexpected=0`, `error_classes='AssertionError:'` and the diff in the log;
 mutation proof 8/8 with both negative controls FAIL for the required reasons
-(60.11 s in the current bound log, which was re-captured cache-free at wave 16; the batch-2 capture printed 60.10 s); params proof re-run; evidence **36 entries**, 10 staged/live pairs
+(60.11 s in the current bound log — its footer is the sole producer of that
+figure and the manifest agrees with it; the `60.10 s` figure cited here was
+itself wrong [Round-28 mark: no artifact in the evidence set ever printed
+60.10; the only captures holding that duration print 60.09 s (06:25:06Z) or
+60.11 s (07:06:59Z), and the earlier one was overwritten by the later, so no
+artifact attests it — fit-for-purpose wave-17 F-21]); params proof re-run;
+evidence **36 entries**, 10 staged/live pairs
 verified, disk==bound, checker rc 0, zero caches; reporter on the live kit
 exit 2 with exactly the two standing privacy fixtures and 8 over-cap sandbox
 rows (the latter is the gate-close precondition, not a defect); guard region
@@ -19343,7 +19349,7 @@ children as failed in wave 15; then the close-out chain: leg-27 Windows
 re-stamp at the final revision, the closure battery (attesting `1609b395…`),
 the evidence child commit, astra gate turn 12, and push.
 
-## Round 27 — wave 16 (seven roles at 09f2df6a): 2 PASS / 5 FAIL, 12 P2 filings in 9 classes; third fix batch (2026-09-19)
+## Round 27 — wave 16 (seven roles at 09f2df6a): 2 PASS / 5 FAIL, 10 P2 filings in 9 classes; third fix batch (2026-09-19)
 
 Reviewed revision: `09f2df6a` (the wave-15 fix batch). Verdicts: tester **PASS**
 (4 P3), portability **PASS** (4 P3 + 1 records note), performance **FAIL**
@@ -19353,7 +19359,12 @@ wire-format or guard defect was found; five roles independently confirmed the
 wave-14/wave-15 closures by executed A/B and by falsifying the new pins, and
 every wave-15 finding filed by the roles above was verified closed at source.
 
-Twelve P2 filings reduce to nine classes, all records or tooling:
+Ten P2 filings reduce to nine classes, all records or tooling (the seven
+verdict lines sum to 10: performance 2, fit-for-purpose 3, operations 3,
+security 1, parity 1. This record earlier said "Twelve", which over-counted by
+two; the operations 3 is its own verdict line's figure, while that report's
+round-17 note counts 2 P2 + 2 P3 for the same round — the class list below
+names 10 items and is the authority):
 
 1. **The exit-class guard was still not total** (performance P2-2,
    fit-for-purpose F-19): `announce_incomplete` guarded its fallback `print`
@@ -19422,3 +19433,166 @@ Next: wave 17 verifies this batch's closures with the same seven sessions
 the close-out chain: leg-27 Windows re-stamp at the final revision, the closure
 battery (attesting `1609b395…`), the evidence child commit, astra gate turn 12,
 and push.
+
+## Round 28 — wave 17 (seven roles at eccdda6f): 2 PASS / 5 FAIL, 6 P2 filings, 5 valid in 5 classes; fourth fix batch and a new verdict state (2026-09-19)
+
+Reviewed revision: `eccdda6f` (the wave-16 fix batch). Verdicts: operations
+**PASS** (4 notes), security **PASS** (2 P3), tester **FAIL** (1 P2),
+performance **FAIL** (1 P2), fit-for-purpose **FAIL** (1 P2), parity **FAIL**
+(2 P2), portability **FAIL** (1 P2). Six P2 filings, of which **five are valid
+and one is refuted**; no product, engine, wire-format, CLI-behaviour or guard
+defect was found, and the guard region stayed `abacfa593c3d5063…` with the
+`v4/cli/run.py` blob at `d4e5ce5bb223` throughout.
+
+Five valid P2s, in the classes the roles named:
+
+1. **A pin that could not fail** (tester P2-1, independently reached by
+   portability as "E11b is payload-shaped, not field-shaped"): `E11b` required
+   `escaped-fields >= 4`, and the escaped top-level and candidate paths embed
+   the escaped ROOT string, so running the suite against a copy whose report
+   header was reverted to raw `{ROOT}` printed the same `ok` line while a
+   forged `^evil` line was present. The wave-16 fix for the header
+   line-injection defect therefore had no detecting test. Fixed by a new leg
+   **E11c**: five payload tokens, one per printed field (`eviltop` for the
+   header, `evilrole` for the sandbox row, `evilunit` for the unit row,
+   `evilcand` for the candidate row, `evilerr` for the ERROR row), asserting
+   zero raw `^<token>` continuation lines **and** at least one escaped
+   occurrence per token, plus `rc 2`, one `^scan:` line and empty stderr. The
+   leg is field-shaped, so un-escaping any single field turns it red
+   regardless of payload text.
+2. **The binding checker was forgeable by a directory name** (portability
+   P2-1): it escaped entry names but printed its **directory argument** raw —
+   the derived-cache line and, through `{err}`, the `FileNotFoundError` text.
+   A directory named `y$'\n'FORGED-CHECKER-LINE` put a line-initial token in
+   the checker's own output, which the SOW and `status.md` claimed it escaped.
+   Fixed by escaping `directory` on the cache line, escaping the exception
+   message as well as the directory in the class-2 path, and escaping both
+   paths on the `pair holds:` line. Detected by two new legs, **E9g**
+   (newline-named evidence dir with a cache: `rc 0`, zero forged stdout lines)
+   and **E9h** (newline-named dir with no manifest: `rc 2`, message escaped).
+   Exit classes were never forgeable (portability measured `rc 1` and `rc 2`
+   correctly), which is why this is P2 and not P1.
+3. **A measurement attributed to the wrong role** (parity P2-1, same sentence
+   noted by operations and portability): `REVIEWS.md` § Kit hygiene said
+   "portability's run recorded 8 of 8". No role report contains that wording;
+   portability's round-14 report says `8 ERROR lines` at `:329` and "6 of 8
+   errors" at `:393`, the single `7` belongs to performance's second run
+   (`:230`, "2, 7 and 4"), and security rendered 8. Rewritten to name each
+   role's actual figure. The adjacent `422.7 MB` tester sandbox figure now
+   carries its source and capture stamp instead of a bare number (security
+   P3-b): the `427.6 MB` it replaced was an unattributed snapshot.
+4. **An evidence header contradicting the evidence** (parity P2-2): the
+   manifest `product_note` listed `g-round12-at-round16` among logs "NOT
+   re-captured", but its own footer is `begin=2026-09-19T07:31:36Z
+   wall=4.77s` — batch 3 re-ran it. The note now states each group's capture
+   instants from the logs' own footers (runner-side logs `01:25:51Z`–
+   `01:26:51Z`; proof and reporter-side logs `06:26:00Z`–`07:33:24Z`) instead
+   of asserting a not-re-captured list, and it states the AST-identity
+   argument with the four blob hashes rather than one.
+5. **A duration provenance asserted from imagination, inside the correction of
+   a duration-provenance finding** (fit-for-purpose F-21): Round-26's
+   corrected sentence claimed the negative-controls log "was re-captured
+   cache-free at wave 16" and that "the batch-2 capture printed 60.10 s". The
+   held log's sha and mtime show it *is* the batch-2 capture, its footer prints
+   `60.11`, and no artifact ever printed `60.10`. Marked in place (Round-22
+   precedent) with the measured facts: the two captures that hold that
+   duration print `60.09 s` (06:25:06Z) and `60.11 s` (07:06:59Z), and the
+   earlier was overwritten by the later, so nothing attests 60.10.
+
+**One P2 is a false positive and is rebutted with counter-evidence:**
+performance's P2-1 asserts that `SOW:19410-19413` states *"the identity
+mechanism is general and lives in mkfarm, so every mutation or replay log that
+reads v4/cli/run.py carries its input identity line"*, and that
+`ast-compare-680fae56-vs-final.txt` violates it. Verification: that sentence
+exists nowhere — `grep -rn "identity mechanism is general"` over the working
+tree returns only performance's own report, `grep -c "carries its input
+identity line"` on the SOW returns 0, `git log --all --grep` returns nothing,
+and `git show eccdda6f --format=%B | grep -c "identity mechanism"` returns 0;
+the cited lines hold the "Validation at this batch" paragraph. The universal
+claims that do exist are scoped to **proof logs** (`SOW:19283`, `status.md`
+batch-2 entry, the manifest's `mkfarm.py` reason) and every mkfarm-importing
+proof complies. The named counterexample also fails on its merits: the
+ast-compare log carries four `git-blob=` lines naming each revision plus the
+worktree blob, and its `command`/`wall_reason` were already recorded as a
+static provenance artifact, not a proof. Rebuttal is sent in performance's
+session per § Adjudication ("a finding is dropped only if the role is shown
+wrong"); it is not silently discarded.
+
+**Process change, at the user's instruction.** `REVIEWS.md` § Reviewer work
+rules gains a verdict state: a role gets **up to five attempts per incident**
+to prove it (re-run, vary the input, isolate the mechanism, attack the control,
+measure the counterfactual), and if the fifth attempt has not produced the
+concrete scenario the role must report the item as **`INCONCLUSIVE AND
+POTENTIALLY WRONG`** — a valid terminal outcome that is *not* a finding, carries
+no severity, does not count toward the verdict and does not block a chunk. The
+state exists so that disclosing an unproven suspicion is cheaper than dropping
+it silently. It is **withheld from the milestone gate reviewer**: § Milestone
+gate now states that astra has no inconclusive verdict and must decide every
+item it examines, because its role is to adjudicate, not to park doubts.
+
+**Reviewer model composition, at the user's instruction.** Waves 15-17 ran six
+roles on `qwen3.8-flash-next` (the lead's own model, inherited because no
+per-role model was ever set) and `tester` on
+`deepseek-v4-flash-deepseek` — the latter by accident, when its stopped session
+could not resume. Wave 18 runs **all seven roles on
+`qwen3.8-flash-next`**, with `tester` **spawned fresh** rather than continued.
+Recorded residual risk, stated rather than hidden: six same-model reviewers plus
+a same-model lead share blind spots, so cross-family coverage inside the loop
+comes only from the fresh tester's predecessor rounds and from astra
+(`gpt-6-astra`, effort `xhigh`), which is a different family and found guard
+defects in turns 4-6 that the internal roles had missed. The lead-verification
+gate in § Adjudication is the control that caught performance's fabricated
+citation, and it remains mandatory.
+
+**Batch-4 validation, by execution:** the suite is **43 assertions, 0 failures**
+(40 + E11c + E9g + E9h). Each new pin was mutation-proven to fail against the
+defect it pins, which is the control that `E11b` lacked: reverting the report
+header to raw `{ROOT}` drives **`FAIL E11c rc=2 fields_ok=0`**; restoring the
+raw directory on the cache line drives **`FAIL E9g rc=0 raw=1`**; restoring the
+raw exception message drives **`FAIL E9h rc=2 raw=1`**. The two mutant sources
+were regenerated from the edited tool (`make-mutants.py` reads the live
+`kit-gc.py`) and both mutation checks still score **CAUGHT** with
+`unexpected=0` and `error_classes='AssertionError:'`; their logs were
+re-captured by replaying their bound commands verbatim. Evidence is **37
+entries**, disk == bound, all **11** staged/live pairs hold, checker `rc 0`,
+zero `__pycache__` in `.agents/tools` or either evidence directory. The bound
+`kit-gc-suite.txt` (4323 B, sha256 `61be19e22bbd…`, `rc 0`, `wall 1.73 s`) is
+byte-identical apart from its `TIMED:` footer to an independent verification run
+made after installation. Sequencing note, stated so the record is exact: the
+suite's `H` leg verifies the staged state as it stood when that log was
+captured, so the *installed* state is attested by the external checker over
+`round16` and `wave12` plus the `restage-round16.py --head` pair comparison
+that follows it, not by the log alone. Live reporter: `rc 2`, exactly the two
+standing privacy fixtures as ERROR rows (`parity/r2/p2/d1/unreadable`,
+`w8-golegacy/sc/perm/dir000`), `scan: INCOMPLETE`, and **7** OVER-CAP rows — the
+`tester` sandbox is now within cap at 422.7 MB (`--json`: `allocated 443240448`,
+`over_cap: false`), so closing the gate still requires the removal decision the
+user has not yet made.
+
+**P3s and their disposition:** fixed in this batch — `esc()`'s docstring now
+names its CR/LF-only scope and the residual (`\v`, `\f`, `\x1c`, `\x1d`,
+`\x1e`, `\x85`, U+2028, U+2029 break `str.splitlines()` but forge no
+`grep`-anchored line; measured: a real `\n` gives count 1, each of those
+gives 0), the exit-class summary now qualifies the traceback and the
+INCOMPLETE line as best-effort on a hostile stream, `restage-round16.py`
+implements the `--dry-run` it advertised and ignored (it now reports
+`WOULD CHANGE`/`unchanged` and writes nothing — reading the record cannot
+mutate it), and the Round-27 tally is corrected from 12 to 10 filings with the
+per-role figures named. Left open, tracked here rather than deferred to prose:
+`mutation-check.sh` still prints the live-vs-mutant diff with no identity check
+against its declaration (tester P3-1) and its class-extraction regex is
+untouched (P3-2); the checker tolerates a manifest entry that carries a name but
+no hash (tester P3-4, self-attesting-manifest class, one-line hardening
+available); a hostile non-stream stdout/stderr object can still force `rc 1`
+(tester P3-3); `--head` accepts only lowercase 40-hex and `/dev/full` stdout
+still exits 120 (performance P3s, inert for the gate signal);
+`.local/w1926-durability/mutcheck/kit-gc-*.py` wave-13 mutant sources remain on
+disk (operations P3-d), named for the gate-close removal list; the ast-compare
+manifest row still carries both `command` and `wall_reason` (parity P3-2).
+
+Next: wave 18, all seven roles on `qwen3.8-flash-next` with a fresh `tester`,
+under the five-attempt / `INCONCLUSIVE AND POTENTIALLY WRONG` rule, scoped to
+this batch's closures and the controls it changed. Then the close-out chain:
+leg-27 Windows re-stamp at the final revision, the closure battery (attesting
+`1609b395…`), the evidence child commit, astra gate turn 12 — where the
+inconclusive state is not available and every item must be decided — and push.

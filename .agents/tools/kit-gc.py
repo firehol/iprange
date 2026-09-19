@@ -34,11 +34,14 @@ Exit codes (distinct failure classes, all visible):
   2  scan INCOMPLETE: inspection errors (unreadable dir, stat failure);
      the printed numbers are partial and say so.  An unexpected internal
      failure in this file's own execution -- module initialization or main
-     -- is also 2: traceback on stderr, "scan: INCOMPLETE" on stdout, so an
-     unforeseen crash can never be read as a completed over-cap scan.  A
-     failure that prevents this module from executing at all (SyntaxError
-     or ImportError at load) exits with the interpreter's own status; no
-     file can classify its own failure to load.
+     -- is also 2, with "scan: INCOMPLETE" on stdout, so an unforeseen crash
+     can never be read as a completed over-cap scan.  The traceback is
+     best-effort on the current stderr and the INCOMPLETE line is best-effort
+     on the current stdout: a hostile stream can suppress either, while the
+     exit status still classifies (see announce_incomplete).  A failure that
+     prevents this module from executing at all (SyntaxError or ImportError at
+     load) exits with the interpreter's own status; no file can classify its
+     own failure to load.
 
 Sizes: "allocated" = st_blocks*512 summed WITHOUT following symlinks —
 the disk-hygiene metric (a symlink farm costs link bytes, not its
@@ -215,8 +218,15 @@ def esc(text) -> str:
     human reader (and any line-based gate predicate) cannot tell from a
     real one (wave-15 portability P3: a fixture named
     "evil\\nscan: COMPLETE; exit 0" echoed as a plausible report line).
-    Only \\r and \\n are escaped: they are what forges lines, and leaving
-    every other byte alone keeps Windows and colon-named paths readable.
+    Only \\r and \\n are escaped: they are what forges lines for every
+    consumer this report has (the gate predicates are `^-`anchored `grep`, and
+    `grep`, `sed` and shell line reading treat only \\n as a line break), and
+    leaving every other byte alone keeps Windows and colon-named paths
+    readable.  Residual, by design: a reader using str.splitlines() also
+    breaks on \\v, \\f, \\x1c, \\x1d, \\x1e, \\x85, U+2028 and U+2029, none
+    of which is escaped here, so such a reader would see additional "lines"
+    from a hostile name.  Nothing on this project's gate path reads the report
+    that way.
     """
     return str(text).replace("\r", "\\r").replace("\n", "\\n")
 
