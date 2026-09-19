@@ -164,11 +164,13 @@ directories). Removal is the human procedure defined below.
   a steady state — the lead's § Removal procedure below is what clears a row,
   and the count can also move without it: the wave-15 8→7 drop was the `tester`
   role pruning 18 named superseded scratch paths inside its own current kit to
-  satisfy the ≤ 1 GB round-end rule (its own round-15 report lists the 18 paths
-  by name and reports 430 MB at its round end; a lead re-measurement with
-  `kit-gc.py --json` at 11:00 UTC on 2026-09-19 read 422.7 MB allocated and
-  `over_cap: false` — the sandbox is present and within cap, not removed),
-  with no defect involved.
+  satisfy the ≤ 1 GB round-end rule. Its own round-15 report lists the 18 paths
+  by name and reports its round-end size; the current size is read from the
+  bound `kit-gc-report-real.txt`/`.json` `SANDBOX tester` row, whose TIMED footer
+  dates the measurement. No figure is quoted here: a number copied out of a bound
+  artifact goes stale the moment that artifact is re-captured, so the reference is
+  the durable form. The sandbox is present and within cap, not removed, and no
+  defect was involved in the count changing.
   Reducing the count to 0/1 requires the user relocating the standing
   fixtures.
 - **Removal of disposable reviewer scratch is pre-authorized for the lead, and

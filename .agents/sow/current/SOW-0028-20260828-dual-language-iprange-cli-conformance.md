@@ -19567,7 +19567,12 @@ standing privacy fixtures as ERROR rows (`parity/r2/p2/d1/unreadable`,
 `w8-golegacy/sc/perm/dir000`), `scan: INCOMPLETE`, and **7** OVER-CAP rows — the
 `tester` sandbox is now within cap at 422.7 MB (`--json`: `allocated 443240448`,
 `over_cap: false`), so closing the gate still requires the removal decision the
-user has not yet made.
+user has not yet made. [Round-29 mark: the quoted figure is a restatement of a
+bound artifact and drifted on the next capture — the `12:11:43Z` bound
+`kit-gc-report-real` row reads `423.0 MB alloc`, `allocated 443580416`,
+`over_cap: false`. True as written at the instant it measured; the durable form
+is the reference, not the number. The removal decision was made on 2026-09-19
+and executed with zero OVER-CAP rows remaining — see Round 29.]
 
 **P3s and their disposition:** fixed in this batch — `esc()`'s docstring now
 names its CR/LF-only scope and the residual (`\v`, `\f`, `\x1c`, `\x1d`,
@@ -19596,3 +19601,123 @@ this batch's closures and the controls it changed. Then the close-out chain:
 leg-27 Windows re-stamp at the final revision, the closure battery (attesting
 `1609b395…`), the evidence child commit, astra gate turn 12 — where the
 inconclusive state is not available and every item must be decided — and push.
+
+## Round 29 — wave 18 (all seven roles at 85f3f666): 2 PASS / 5 FAIL naming ONE blocker; the restated-fact class removed structurally (2026-09-19)
+
+Reviewed revision: `85f3f666`. Composition, per the user's instruction: all
+seven roles on `qwen3.8-flash-next`, `tester` spawned fresh on that model.
+Verdicts: performance **PASS**, portability **PASS** (3 P3 + 2 inconclusive),
+parity **FAIL** (1 P2), operations **FAIL** (1 P2), security **FAIL** (1 P2),
+tester **FAIL** (1 P2), fit-for-purpose **FAIL** (1 P2). `tester` and
+fit-for-purpose were cut off by a 25-minute child timeout I set and were
+resumed for a closing pass with an 8-minute cap; both wrote reports.
+
+**All five FAILs name the same blocker, independently verified by executed
+grep with no disagreement between roles.** The manifest `product_note` I wrote
+in batch 4 asserts `kit-gc-report-real.*` were "not re-captured" at
+`01:26:42Z`/`01:26:51Z`, but batch 4 itself re-captured them: their bound
+footers read `11:24:31.299Z` and `11:24:38.250Z`. Its stated proof-window upper
+bound `07:33:24Z` exists in no timed log, and the window excluded
+`mutation-check-*` (11:22:58Z, 11:23:00Z). The four runner-side instants in the
+same sentence did match, so the note was selectively true — the most dangerous
+form. fit-for-purpose added the characterisation that distinguishes this from
+F-21: the quoted instants are *stale-but-real* footers of the immediately
+preceding capture (attested by surviving snapshots under
+`.local/operations/r17-kit/ev/`), not invented figures, which turns the fix
+from an apology into a derivation.
+
+Root cause, named so it is not mistaken for bad luck: **a record that restates
+a fact already present in bound bytes goes stale the moment those bytes are
+re-captured.** This is the fourth instance in this milestone (the `0.97 s`
+attribution, the `60.10 s` clause, the not-re-captured list, this one), and
+three of the four were mine.
+
+Fix, at the class rather than the instance:
+
+- `product_note` is **derived** from each bound log's own `TIMED` footer at
+  restage time. The grouping stays declared (which log measures what is a
+  design fact); the instants come from the bytes. A log with no footer in a
+  declared group, or an empty group, fails the restage.
+- `guard_region_sha256` is recomputed from `v4/cli/run.py` at restage instead of
+  being typed, and the note no longer duplicates the digest — it names the
+  field. Bound and derived values agree: `abacfa593c3d5063…`.
+- Binary digests are recomputed at restage, and the **attested bytes are now
+  durable**: the digests were *true* (they match what the corpus commands
+  invoked) but pointed at `/tmp/opencode/lead-r10-bin/`, which is ephemeral and
+  is not the location REVIEWS.md mandates. The exact bytes are preserved at
+  `.local/shared/binaries/corpus-attested/{go,rust}/…`, the manifest records
+  those paths in `binary_paths`, and a missing binary or digest drift fails the
+  restage instead of being recorded.
+- New leg **H3** asserts every capture instant the note quotes exists as a
+  `begin=` in some bound log, so a stale manifest cannot pass the suite.
+
+New legs, each **mutation-proven to fail** (the standard since wave 17):
+**E12** pins the inspection-error MESSAGE as a line-safe field — two legs,
+because they prove different things: a unit leg over `format_error_row()` with a
+newline-bearing message, and an end-to-end leg over a hostile directory *name*.
+**E9i** pins the `pair holds:` line, which was escaped but unpinned (a raw print
+there forged a line with the other two legs green). Suite **43 → 47
+assertions, 0 failures**. Proofs: raw `pair holds:` → only `FAIL E9i rc=0 raw=1`;
+message sink not escaped → only `FAIL E12 message escape`, with the end-to-end
+leg correctly staying green because CPython's `OSError.__str__` repr-quotes the
+filename — which is exactly why the unit leg is required and why the prior
+safety was incidental rather than designed; a stale instant injected into a
+copy of the manifest → `FAIL H3 instants in no bound footer`.
+
+Two of my own process errors, disclosed because both nearly produced a false
+"proven" claim: the first H3 mutation was a **silent no-op** (`str.replace()`
+on an instant the note no longer held — the note had moved to `12:12:42Z`
+between capture and mutation), so its green result proved nothing; caught only
+because I checked whether the anchor was present. Fixed by asserting the
+injection landed. And the first E12 mutant lost the executable bit (`cp`
+preserves mode; the farm execs the file directly), producing 24 unrelated
+`rc 126` failures instead of one clean red; rerunning with mode 0755 gives
+exactly one red leg and zero collateral on other pins.
+
+**The `{em}` finding closed as P3, fixed anyway.** Tester judged the reporter's
+unescaped error-message sink "safe by accident, not by design" and could not
+break it in five attempts, so it filed P3 rather than a finding — the correct
+call under the five-attempt rule. It is fixed and pinned anyway, because the
+safety depended on a CPython formatting detail rather than on the code.
+
+**Performance withdrew its wave-17 fabricated citation** after the in-session
+rebuttal: it re-checked at both revisions, confirmed the sentence exists nowhere,
+and recorded "WITHDRAWN — false positive by me" with the evidence. fit-for-purpose
+drafted a P2 against the Round-28 class list and **refuted it itself on attempt
+two** (`sort -u | wc -l` = 10 distinct filing IDs in 9 classes, which is what the
+header says), recording it as withdrawn. Four roles used the inconclusive state
+for items they could not prove, and none of those items counts toward a verdict.
+
+**Kit removal executed under the new guarded tool** (user authorization,
+REVIEWS.md § Kit hygiene). 92 paths over two passes, ~23 GB freed. The guards
+are proven by an adversarial suite of 41 assertions that asserts **both**
+directions — every attack refused *and* one legitimate scratch tree allowed —
+and two real fail-open bugs were found by it and fixed: `live_runs()` ignored
+`--runs-root` (G8 inert under test) and `gate_artifacts()` returned an empty
+list when `git ls-files` failed (G7 silently disabled itself). G7 then refused
+`.local/lead-r10/{sb,f22,fh,fi}` because `status.md` names them, and G6 refused
+`.local/parity/r2` because the privacy fixture lives inside it, while still
+removing the 3.4 GB build cache inside `lead-r10/sb` — the referenced directory
+survives, its disposable output does not. After removal: **zero OVER-CAP rows**,
+`rc 2` with exactly the two standing privacy fixtures as ERROR rows, both
+fixtures still mode 000, all seven round-18 reports and heartbeats intact,
+evidence checker `rc 0`, zero caches.
+
+**One more instance of the class, caught in my own sentence:** Round 28 quoted
+the tester sandbox at `422.7 MB`, which had already moved to `423.0 MB alloc`
+at the `12:11:43Z` capture — restating a bound number goes stale on the next
+capture regardless of intent. REVIEWS.md now **references** the bound
+`kit-gc-report-real` row instead of quoting its value. This is why the derived
+note names the manifest field rather than repeating the digest.
+
+State at this batch: suite **47 ok / 0 FAIL** (bound `kit-gc-suite.txt`);
+evidence **37 entries**, **11** staged/live pairs, disk == bound, checker
+`rc 0`, zero `__pycache__`; live reporter `rc 2`, ERROR rows = exactly the two
+standing privacy fixtures, **0 OVER-CAP**; guard 673-716 `abacfa59…` and
+`v4/cli/run.py` blob `d4e5ce5bb223` unchanged, no file under `v4/` touched by
+this batch; engines, wire format and schema untouched.
+
+Next: the close-out chain at the final revision — leg-27 Windows re-stamp, the
+closure battery (attesting `1609b395…`), the evidence child commit, astra gate
+turn 12 (where the inconclusive state is not available and every item must be
+decided), then push.

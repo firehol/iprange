@@ -231,6 +231,19 @@ def esc(text) -> str:
     return str(text).replace("\r", "\\r").replace("\n", "\\n")
 
 
+def format_error_row(path: str, message: str) -> str:
+    """One INSPECTION ERRORS line, with both fields line-safe.
+
+    A message is a printed field exactly like the path: escaping only the path
+    left the line forgeable by any exception whose str() embeds a raw newline.
+    Today every shape scan() appends is an OSError, whose str() repr-quotes the
+    filename, so that safety was incidental rather than designed; keeping the
+    formatting in one function is what makes it assertable without a hostile
+    filesystem. --json does not use this: JSON's own quoting protects it.
+    """
+    return f"ERROR  {esc(path)}: {esc(message)}"
+
+
 def ts(mtime: float) -> str:
     if not mtime:
         return "unknown        "
@@ -375,7 +388,7 @@ def main() -> int:
                 print("\n== INSPECTION ERRORS: scan INCOMPLETE, numbers "
                       "partial ==")
                 for ep, em in errors:
-                    print(f"ERROR  {esc(ep)}: {em}")
+                    print(format_error_row(ep, em))
             print(f"\nscan: {state}; exit {rc} "
                   "(0 within cap, 1 over-cap finding, 2 inspection error)")
             print("Removal is a human procedure (REVIEWS.md 'Kit hygiene'): "
