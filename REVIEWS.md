@@ -140,14 +140,22 @@ directories). Removal is the human procedure defined below.
   measured (its numbers are then partial — an unreadable subtree is a
   finding to explain, never silently zeroed). A sandbox row carrying
   `PARTIAL (n inspection errors below)` has an incomplete measurement and
-  must not be read as within-cap. Steady state on this kit: two
+  must not be read as within-cap. Steady state on a QUIESCENT kit: two
   `chmod 000` privacy fixtures (parity `r2/p2/d1/unreadable` and
   w8-golegacy `sc/perm/dir000`) make exit 2 permanent while they exist —
   that is the reporter refusing to zero an unreadable subtree, not a
-  regression. The gate-close signal is therefore: exit 2 with ONLY those
-  known fixture paths as errors, zero OVER-CAP rows, and no PARTIAL flag
-  on any sandbox row outside the two fixture roles. Reducing the count to
-  0/1 requires the user relocating the fixtures.
+  regression. During a review wave the reporter can legitimately list
+  MORE errors and more PARTIAL rows: reviewers create their own
+  chmod-000 and byte-invalid-name fixtures inside `.local/<role>/`, and
+  those are inspection errors until the fixture is removed (wave 14
+  experienced the reporter at 8 and 7 error rows while roles held open
+  fixtures, with the exit class and per-row attribution correct in every
+  case). The gate-close signal is therefore: exit 2 whose errors are all
+  attributable to known fixture paths (the two standing privacy fixtures
+  plus any fixture a still-open reviewer session created), zero OVER-CAP
+  rows, and no PARTIAL flag on any sandbox row outside those roles.
+  Reducing the count to 0/1 requires the user relocating the standing
+  fixtures.
 - **Removal is a human procedure, and it is a lead duty, not a reviewer
   one.** For each directory the lead decides to remove, all three checks
   must be established *for that path* first, and recorded in the gate
@@ -167,6 +175,16 @@ directories). Removal is the human procedure defined below.
   Then remove that single named path (`rm -rf <exact-path>`), never a
   glob and never a directory the lead has not individually inspected.
   `.local/shared/` is never a removal target.
+- **Staging assertions are enforced, not asserted.** Every artifact the
+  evidence manifest binds must exist on disk with the recorded sha256 and
+  byte count, every file in an evidence directory must be bound, and a
+  staged copy must equal the live source it came from. This is checked by
+  `.local/shared/tools/check-evidence-binding.py` (a bound copy of it
+  lives in the evidence directory, so the checker is itself verifiable)
+  and re-run by the kit-gc suite's H section; both fail loudly, which is
+  how a stale staged suite and two dropped mutation-check bindings were
+  found in waves 13-14. Helper scripts a bound log depends on (`timed.sh`,
+  `mkfarm.py`) are bound alongside it so the directory is self-contained.
 
 ## Lead invocation message (exact shape)
 

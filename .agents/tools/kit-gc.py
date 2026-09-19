@@ -24,13 +24,18 @@ Modes (all read-only):
                        directories FOR HUMAN INSPECTION (path, sizes,
                        newest modification time). The inventory is data
                        for a decision, never a removal verdict.
-  kit-gc.py --json     the same data as machine-readable JSON.
+  kit-gc.py --json     the same data as machine-readable JSON;
+                       "inspection_errors" is a list of {path, error}
+                       objects, one per unmeasurable subtree.
 
 Exit codes (distinct failure classes, all visible):
   0  scan complete; every role sandbox within the cap
   1  scan complete; at least one role sandbox exceeds the cap (finding)
   2  scan INCOMPLETE: inspection errors (unreadable dir, stat failure);
-     the printed numbers are partial and say so
+     the printed numbers are partial and say so.  An unexpected internal
+     failure is also 2 -- traceback on stderr, "scan: INCOMPLETE" on
+     stdout -- so an unforeseen crash can never be read as a completed
+     over-cap scan.
 
 Sizes: "allocated" = st_blocks*512 summed WITHOUT following symlinks —
 the disk-hygiene metric (a symlink farm costs link bytes, not its
@@ -59,6 +64,7 @@ import datetime
 import json
 import os
 import sys
+import traceback
 from pathlib import Path
 
 BUILD_NAMES = {"target", "ctarget", "gocache", "llvm-cov-target"}
@@ -159,7 +165,7 @@ def scan():
                 try:
                     st = os.stat(dp2, follow_symlinks=False)
                 except OSError as err:
-                    errors.append(f"{dp2}: {err}")
+                    errors.append((dp2, str(err)))
                     continue
                 add(d, st.st_blocks * 512, st.st_size, st.st_mtime)
     return agg, errors
@@ -330,5 +336,23 @@ def main() -> int:
     return rc
 
 
+def main_guarded() -> int:
+    """Run main(), classifying an unforeseen failure as INCOMPLETE.
+
+    The exit classes above are a contract the caller trusts: rc 1 asserts
+    a completed scan that found a sandbox over the cap.  An unexpected
+    exception must therefore never leave the process as 1 (wave-14: a
+    string/pair mismatch in the inspection-error list did exactly that,
+    reporting "over-cap" for a scan that had produced no report at all).
+    """
+    try:
+        return main()
+    except Exception:  # noqa: BLE001 - deliberate last-resort classification
+        traceback.print_exc()
+        print("scan: INCOMPLETE; exit 2 (internal failure; no measurement "
+              "in this run is trustworthy)")
+        return 2
+
+
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main_guarded())

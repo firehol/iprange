@@ -18993,3 +18993,180 @@ than a hidden hole.
   reporter suite 24/24; params mutation proof 4/4; real-tree reporter
   exit 2 with exactly the two known fixture errors and PARTIAL on
   parity + w8-golegacy only.
+
+## Round 25 — wave 14 (six-role re-review at 26cf54b3): 2 PASS / 4 FAIL, all four FAILs the same one-line defect; fix batch (2026-09-19)
+
+Reviewed revision: `26cf54b3` (the wave-13 closure batch `680fae56..26cf54b3`).
+Six persistent role sessions were resumed against that immutable revision.
+Verdicts: parity **PASS**, security **PASS**, performance **FAIL (1 P2)**,
+fit-for-purpose **FAIL (1 P2)**, operations **FAIL (1 P0-P2)**,
+portability **FAIL (1 P0-P2)**.
+
+### The converged defect
+
+Four roles filed the same defect independently, one of them reproducing it
+live:
+
+- `.agents/tools/kit-gc.py` converted three of its four inspection-error
+  append sites to `(path, message)` pairs in the wave-13 batch and left the
+  directory-symlink branch appending `f"{dp2}: {err}"`, while all three
+  consumers unpack pairs (`for ep, _msg in errors`, the `--json`
+  comprehension, the ERROR printer).
+- An `lstat` failure on a directory symlink — the window a concurrent
+  `rm -rf` / `rm -f link` produces, which is exactly what the gate-close
+  pruning this tool supports looks like — therefore raised
+  `ValueError: too many values to unpack` out of `main()`, printing no
+  report and exiting class **1** ("over-cap finding") where the truth is
+  **2** ("scan incomplete"). The tool that defines the gate signal could
+  report the wrong class with no report at all.
+- Lead A/B, both copies at the same `.agents/tools/` path so `repo_and_root()`
+  resolves the same ROOT: pre-fix (`9cfd66e8:v4/cli/kit-gc.py`) → rc 1,
+  0 `scan:` lines, `ValueError` traceback; fixed → rc 2, `scan: INCOMPLETE`
+  line, the ERROR row naming the link, empty stderr, and the pair-typed
+  `inspection_errors` entry in `--json`.
+- The role fixtures failed exactly as portability predicted for the naive
+  traps: a dangling symlink (`lstat` succeeds) and a `chmod 000` parent
+  (`scandir` fails before the entry reaches `dirs`) never enter the branch,
+  so the pin had to inject the failure at the syscall.
+
+### Fix batch
+
+- `kit-gc.py`: the append site is a pair; the docstring documents the
+  `--json` `inspection_errors` shape; a new `main_guarded()` classifies an
+  unforeseen exception as **2** (traceback preserved on stderr, a
+  `scan: INCOMPLETE` line on stdout) so no internal failure can be read as
+  a completed over-cap scan (portability P3-A, and the class that produced
+  this finding in the first place).
+- Suite grew 24 → **29** assertions: E6 injects the directory-symlink
+  `lstat` failure through a delegating `os.stat` wrapper and asserts rc 2,
+  the ERROR row, the PARTIAL marker, empty stderr, and the pair-typed JSON
+  entry; E7 asserts the internal-failure exit class; H re-runs the binding
+  check (skipped for mutant runs, where staging state is not the subject);
+  H2 asserts no `__pycache__` under `.agents/tools` (the artifact that
+  reappeared mid-wave). The suite accepts `KITGC_SRC` so a mutant can be
+  driven through it directly.
+- `timed.sh` takes one `date` call per boundary (ISO stamp and nanosecond
+  value from the same instant), so a log's `wall` is exactly recomputable
+  from its own text; previously separate calls made recomputation ±0.01 s
+  (operations P3).
+- Mutants are regenerated from the **fixed** tool at staging
+  (`make-mutants.py`, each differing by exactly its one named relaxation,
+  diff printed into the bound log — a mutant kept from an earlier revision
+  would differ from the live tool by the relaxation *and* every later fix
+  and would prove nothing). `mutation-check.sh` requires the primary FAIL
+  line, rejects undeclared FAIL lines, and requires every error class in
+  the run to be `AssertionError` (the fixtures' assertions are the intended
+  detection signal; any other class means the mutant died for an unrelated
+  reason). Both mutants: **CAUGHT**, `unexpected=0`,
+  `error_classes='AssertionError:'`.
+- The Round-18 negative controls now have bound artifacts: the scorer
+  exposes `score_case()` and `mutation-proof-negative-controls.py` imports
+  it rather than restating the rule; the syntax-error mutant scores FAIL
+  `missing=['refusal-content pin']`, the sleep mutant scores FAIL at
+  rc 124 (60.09 s).
+- `run.py:2529-2531`: parity's endorsed precision ("must keep params the
+  committed schema ACCEPTS (a required prop is how it does so today)").
+- Evidence re-staged: **32 entries** (was 26), disk-set == bound-set, with
+  the helper scripts the logs depend on bound too (`timed.sh`,
+  `mkfarm.py`, `check-evidence-binding.py`), so the directory is
+  self-contained. `check-evidence-binding.py` is the durable form of the
+  disk==bound and staged==live assertions that were previously run inline
+  once and persisted nowhere (operations P3); the suite's H section runs it
+  at every suite invocation.
+- `ast-compare-680fae56-vs-final.txt` binds the provenance claim: top-level
+  AST dumps of `680fae56`, `9cfd66e8`, `26cf54b3` and the worktree are
+  identical, the bound logs were captured at the `9cfd66e8` content
+  (git-blob `1885fe6b685a`), which `26cf54b3` also carries, the batch's only
+  run.py change is the three-line comment (worktree blob `d4e5ce5bb223`),
+  and the guard region digest is `abacfa59…`. No bound log was re-captured,
+  because no re-run can change a comment.
+- `REVIEWS.md` steady state is now qualified: on a *quiescent* kit exactly
+  the two `chmod 000` privacy fixtures are errors; **during a wave**
+  reviewers legitimately add their own chmod-000 and byte-invalid-name
+  fixtures inside `.local/<role>/`, so more ERROR/PARTIAL rows are expected
+  while a session is open (wave 14 saw the reporter at 8 and 7 error rows
+  with the exit class and per-row attribution correct every time). The
+  gate-close signal is exit 2 with all errors attributable to known fixture
+  paths, zero OVER-CAP rows, and no PARTIAL outside those roles.
+- Battery comment sync: four anchors citing the runner's `--filter`
+  selector were stale (`run.py:2796` → the selector is at `run.py:3131`
+  after the intervening insertions). Both copies are edited together and
+  remain byte-identical. **Digest supersession: `33bfb02f…` → `1609b395…`**
+  (sha256 `1609b395b6a34a0b72c6addb33bad8a148217a39b3477a10fb0ea1f75f2efcb9`,
+  `bash -n` clean, behavior-identical). The console attestation for the
+  closure battery must therefore attest `1609b395…`, and the value
+  `33bfb02f…` recorded in the wave-13 record is superseded by this round.
+
+### Corrections to the Round-24 record (all verified against primary evidence)
+
+- The `0.97 s` figure is **not** a role replay: it is the printed
+  `SELF-TEST-PASSED in 0.97s` line of the bound self-test log as staged at
+  wave 12 (operations' wave-12 report quotes it), quoted onward by the
+  roles; the manifest's `wall_seconds` (0.95 s at that staging) is the
+  canonical figure.
+- The turn-11 result digest `764c45c6…` was cross-verified in **all four**
+  wave-13 role reports (fit-for-purpose, security, operations,
+  portability), not by the two named there; the exclusivity claim is
+  dropped.
+- The census-fix list no longer names "the run.py comment" as a place that
+  carried the params-pin count; the count lived in the SOW and SOW-0033,
+  and the run.py comment at that revision was the empty-params correction.
+- `product_note` now states git blob names precisely instead of prose: the
+  bound logs' content is `1885fe6b685a82bee5e5d9d8f8e94e27daca25e6`
+  (`9cfd66e8` and `26cf54b3`), the worktree after the batch is
+  `d4e5ce5bb223`. The P3 that reported a `befce698…` note quoted the
+  wave-13-era text, which existed only in the role's own earlier report and
+  in no current artifact.
+- Pair-control anchor re-measured by AST: the `raise` statement spans
+  `run.py:2379-2381` (the `if not must_raise:` guard is 2378); the number in
+  the record stands, and the "2378-2380" reading was a miscount.
+- `convention` now says a verbatim replayable **shell command string**
+  rather than "argv" (the field holds shell strings, not argv arrays) and
+  documents the JSON parse rule (strip `TIMED:` lines before parsing a
+  report log that carries a footer).
+- operations' P3 on the revert-unit sentence: the surgical unit remains the
+  contiguous `_self_test()` pin block; the batch's `main()`-area change is a
+  three-line comment inside that same `_self_test()` region, so reverting
+  the unit still reverts the whole pin surface.
+
+### Adjudications (no code)
+
+- portability's read that "both bound mutation-check logs died for the wrong
+  reason" is **refuted by its own evidence**: both logs contain zero
+  `ValueError` and their tracebacks are the fixtures' `AssertionError`
+  (`link value missing: 0`, `[]`); a crashed reporter would have produced a
+  `JSONDecodeError`, not those messages. The mutant diffs are one named
+  relaxation each. The suspicion is recorded rather than dismissed because
+  the same class had just been fixed one line away.
+- performance's P3 on a bound `--json` log not being a parseable single JSON
+  is accepted and answered by the documented strip rule (the footer is what
+  makes `wall_seconds` recomputable; removing it would trade one true
+  property for another).
+- portability's P3-C (`__pycache__` reappeared at 04:34:41 inside its own
+  window, loader unnamed): the artifact is removed and H2 now asserts its
+  absence, so the regression cannot return silently; the record no longer
+  claims pycache can never reappear, only that the suite pins its absence.
+- operations'/fit-for-purpose's recommendation to scope the F-2/F-3
+  no-detecting-test rejection so it cannot be cited for exit-class defects
+  is accepted: the rejection applies to regressions that fail loud and
+  cannot produce a false PASS; an exit-class defect always needs a pin.
+
+### Validation at this batch
+
+Suite 29/29 (`kit-gc-suite.txt`, bound, footer rc 0); E6/E7/H/H2 green;
+both mutants CAUGHT; mutation proof 8/8 with both negative controls FAIL by
+the required reasons; provenance artifact bound; real-tree reporter exit 2
+with exactly the two known privacy fixtures, PARTIAL on parity +
+w8-golegacy only, and 8 OVER-CAP sandbox rows pending human removal;
+binding checker over both gate dirs: 32 + 1 entries, 0 mismatches, 0
+unbound, both staged/live pairs holding; `timed.sh` exactness verified;
+guard region `abacfa59…` unchanged; run.py delta comment-only by AST
+identity.
+
+### Next
+
+Targeted wave-15 re-review of this batch by the four roles that filed the
+P2 (performance, fit-for-purpose, operations, portability) plus security
+(its records P3s), then the close-out chain: leg-27 Windows re-stamp at the
+final revision, the closure battery (attesting `1609b395…`), the evidence
+child commit, astra gate turn 12, and push.

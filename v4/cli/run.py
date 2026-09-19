@@ -2526,8 +2526,9 @@ def _self_test():
     # no-required-props schema (system.describe, methods.py:67), so a
     # well-formed reader.close object -- which all its props are
     # required for -- is the accepted arm.  The two arms below pin both
-    # branches; which method is used for the accepted arm must keep a
-    # required prop, or the arm stops pinning what it claims.
+    # branches; which method is used for the accepted arm must keep
+    # params the committed schema ACCEPTS (a required prop is how it
+    # does so today).
     runner.check_request_is_contract_invalid("iprange.v1.reader.close", [])
     try:
         runner.check_request_is_contract_invalid(
