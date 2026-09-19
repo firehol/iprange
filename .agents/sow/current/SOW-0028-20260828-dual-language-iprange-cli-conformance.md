@@ -19591,9 +19591,18 @@ no hash (tester P3-4, self-attesting-manifest class, one-line hardening
 available); a hostile non-stream stdout/stderr object can still force `rc 1`
 (tester P3-3); `--head` accepts only lowercase 40-hex and `/dev/full` stdout
 still exits 120 (performance P3s, inert for the gate signal);
-`.local/w1926-durability/mutcheck/kit-gc-*.py` wave-13 mutant sources remain on
-disk (operations P3-d), named for the gate-close removal list; the ast-compare
-manifest row still carries both `command` and `wall_reason` (parity P3-2).
+`.local/lead-r15/mutcheck/` wave-13 mutant sources (seven files:
+`kit-gc-drop-dir-symlink-branch.py`, `kit-gc-file-only-no-cap-decision.py`,
+two `output-*.txt`, two `suite-*.sh`, `SUPERSEDED.md`) remain on disk
+(operations P3-d, which cited this path correctly in
+`.local/operations/report-round15.md`, `report-round16.md` and
+`report-round17.md`), named for the gate-close removal list; [Round-32 mark:
+an earlier version of this line named
+`.local/w1926-durability/mutcheck/kit-gc-*.py`; that directory does not exist,
+and `.local/shared/removals.log` has no line naming `w1926-durability`, so the
+path was wrong when written rather than removed after — measured at
+`c590a145`]; the ast-compare manifest row still carries both `command` and
+`wall_reason` (parity P3-2).
 
 Next: wave 18, all seven roles on `qwen3.8-flash-next` with a fresh `tester`,
 under the five-attempt / `INCONCLUSIVE AND POTENTIALLY WRONG` rule, scoped to
@@ -19859,7 +19868,21 @@ Next: the close-out chain at the final revision — leg-27 Windows re-stamp, the
 closure battery (attesting `1609b395…`), the evidence child commit, astra gate
 turn 12 (no inconclusive available to it; every item must be decided), then push.
 
-## Round 31 — wave 20 (seven roles at cacc2501): 1 PASS / 4 FAIL (7 P2) / 3 timeouts; batch 7 closes all seven (2026-09-19)
+ ## Round 31 — wave 20 (seven roles at cacc2501): 1 PASS / 4 FAIL (7 P2) / 3 timeouts; batch 7 closes all seven (2026-09-19)
+
+[Round-32 mark: the "(7 P2)" tally in this heading reconciles to neither the
+filed wave-20 reports nor any stated merge rule, and "batch 7 closes all
+seven" under-attests. Raw filings are **8**: parity 1 (H3 group-membership
+reclassification), performance 3 (footer guard keyed on prose; read-back class;
+stale bound suite log), tester 2 (read-back class; stale bound suite log),
+security 2 (Round-30 refutation false as written; kit-rm falsification legs
+unbound). Merging the two shared-root-cause pairs — tester F1 with performance
+P2-2 (read-back) and tester F2 with performance P2-3 (staleness) — gives **6**
+distinct closures, not 7; the merge rule is one closure per root cause, since
+each pair was fixed by a single control. Batch 7 closed five of the six; the
+sixth (security's kit-rm falsification-legs finding) was carried to wave 21 and
+is closed by batch 8. Verified against
+`.local/{parity,performance,tester,security}/report-round20.md`.]
 
 Reviewed revision: `cacc2501`. Verdicts: portability **PASS** (2 P3 + 2
 inconclusive), parity **FAIL** (1 P2), performance **FAIL** (3 P2), tester
@@ -19940,7 +19963,13 @@ measurement without the revision it measured, and four are mine.
 **Kit state after batch 7, converged to a fixpoint:** suite **48 assertions,
 0 failures** (47 labels + H4) with the bound log carrying both new labels;
 `kit-rm` suite **52 assertions, 0 failures**, every guard falsified by reverting
-it; H3 green on `(4 quoted, 14 timed logs)` and red on membership, value,
+it [Round-32 mark: the 52 count was true but unbound, and "every guard
+falsified" was false as written — the suite's KEEP legs accepted ANY refusal,
+and `check()` evaluates G8 before G6/G7, so with the live-run fixture armed
+across sections A–E2 every G6/G7 leg passed on G8's refusal without its own
+guard ever running. Proven by mutation at batch 8: a tool with the G6 git-scan
+deleted, and one with G7 disabled, each passed the suite 52/52. Fixed and
+bound in Round 32.]; H3 green on `(4 quoted, 14 timed logs)` and red on membership, value,
 coverage and empty-group tampers; external checker `OK (0 mismatch(es))` over
 `round16` + `wave12`, 37 entries, 11 pairs; zero `__pycache__` anywhere policed;
 live reporter `rc 2` with exactly the two standing privacy fixtures (both still
@@ -19958,3 +19987,107 @@ dispatch splits their scope and caps probes explicitly.
 Next: closure verification of batch 7, then leg-27 Windows re-stamp at the final
 revision, the closure battery (attesting `1609b395…`), the evidence child commit,
 astra gate turn 12 (no inconclusive available to it), then push.
+
+## Round 32 — wave 21c closing pass, batch 8, and the kit-rm falsification finding (2026-09-19/20)
+
+Reviewed revision: `c590a145` (batches 5–7 touched no file under `v4/`:
+`git diff --name-only 9a8f64e8..HEAD -- v4/` empty; guard region
+`abacfa593c3d5063…` and `run.py` blob `d4e5ce5bb223` recomputed unchanged).
+The wave-21c closing pass completed: **security PASS** (kit-rm E5
+counterfactual load-bearing; the fd-identity guard holds on all three
+sub-claims over `--root` copies; the Round-31 mark judged accurate) and
+**fit-for-purpose FAIL (3 P2)**, all three carried into batch 8 and closed
+here. The five wave-21 roles (tester, performance, parity, operations,
+portability) had already returned PASS with zero P0–P2 at this revision.
+
+**Batch 8 closed the three adjudicated record defects, and its falsification
+work found a fourth that was real.**
+
+1. **The kit-rm suite is now a bound artifact** (ffp F1-P2, the last instance
+   of the class batch 7 closed). `kit-rm-suite.txt` (timed, footer-derived wall
+   and rc, verbatim replayable command) and `kit-rm-suite.sh` (staged==live
+   pair) joined the manifest; H4 extended to a two-leg loop pinning every `ok`
+   label of BOTH bound suite logs against the shipped suite sources. The
+   kit-rm suite prints labels through a `run()` helper that appends
+   `" refused"` / `" allowed"` / `" refused at parse (rc 2)"` and interpolates
+   its own rc into one label (`"(rc $rc)"`), so the printed label never appears
+   verbatim in the source; the leg strips the fixed suffixes and normalizes the
+   interpolated rc before the 24-char prefix test. The normalization is
+   falsified three ways (renamed label base → FAIL; normalization reverted →
+   19 FAILs, so it is load-bearing and not a blanket weakening; kit-gc leg
+   unaffected — its labels carry no suffixes). One honest limitation is stated
+   in the H4 comment: the rc normalization is not a fixed string, so a log
+   differing from the shipped suite solely in that captured number passes the
+   label pin; the rc value is attested by the suite's own assertions.
+2. **The Round-31 "(7 P2)" tally was irreconcilable** (ffp F2-P2). Marked in
+   place under the Round-31 heading: raw filings are 8 (parity 1, performance
+   3, tester 2, security 2, verified against the four filed
+   `.local/<role>/report-round20.md`); merging the two shared-root-cause pairs
+   (read-back, staleness) gives 6 distinct closures; batch 7 closed five,
+   batch 8 the sixth.
+3. **SOW:19594 named a directory that never existed** (ffp F3-P2). Corrected
+   in place to `.local/lead-r15/mutcheck/` (seven files named), with the
+   Round-32 mark stating the old path was wrong when written, not removed
+   after (`removals.log` has no `w1926-durability` line), and citing
+   operations' correct path in `report-round15/16/17.md`.
+4. **NEW, found by the batch's own falsification work (P1-class by the
+   milestone's own rule — a pin that cannot fail).** Binding the falsification
+   claim required first proving the suite could detect a deleted guard. It
+   could not. Two defects, both found by mutation before anything was bound:
+   - **KEEP legs accepted any refusal.** `run()` grepped `^KEEP` without naming
+     the guard, and `check()` evaluates G8 before G6/G7 while the suite armed a
+     live-run status across sections A–E2 — so all eleven G6/G7 KEEP legs
+     passed on G8's refusal with their own guards never running. A tool with
+     the G6 git-scan deleted passed 52/52; a tool with G7 disabled passed
+     52/52.
+   - **DRY legs matched the summary line.** `grep -q '^DRY'` also matches the
+     run's `DRY RUN: 0 removed, 1 refused` footer, so a path REFUSED by any
+     guard still "passed" the allowed-direction legs; a tool refusing
+     everything passed all four DRY legs (only section I's real-deletion legs
+     caught it).
+   - **Fix (surgical, tracked suite):** KEEP legs now pin the guard token that
+     must cause the refusal (`KEEP:G6\ contains\ a\ git\ entry` etc., each
+     token measured against the live tool, not assumed); DRY legs pin the
+     per-path `DRY     would remove` line; the live-run fixture is empty for
+     A–E2 (G8 armed only inside section F, which arms and clears it
+     explicitly); two fixtures reshaped so the intended guard is the first to
+     fire (the mode-000-child fixture now holds a mode-000 CHILD so the
+     contains-a-mode-000-fixture arm fires, and the relative-citation leg sits
+     at depth ≥ 2 so G3 cannot be what refuses it); one new leg added
+     (G7 needle scan on a citation the token extractor cannot capture). The
+     suite is now **53 assertions, 0 failures**.
+   - **Bound falsification driver** (`.local/lead-r15/kit-rm-mutation-check.sh`,
+     the kit-gc `mutation-check.sh` pattern, one file): nine mutants derived
+     from the live tool by one named transform each — one reverted arm per
+     guard G1–G8 plus refuse-everything — each transform asserts its anchor
+     landed before the mutant is used; a mutant is CAUGHT only when the suite
+     exits non-zero AND the named primary FAIL line is present. The bound log
+     carries the live-vs-mutant diff of each mutant under a `diff-<name>:`
+     section, so each CAUGHT line says what was reverted. All nine CAUGHT.
+     **H5** pins the bound log against the shipped driver both ways (every
+     declared `mutant` leg appears CAUGHT; every CAUGHT name is declared),
+     falsified by deleting a leg from a driver copy and by planting a stale
+     CAUGHT name in a log copy.
+   - The durable claim "every guard falsified by reverting it" (REVIEWS.md
+     § Kit hygiene) is now true **as a bound artifact**: the suite log, the
+     driver log, both staged sources, the pairs, H4 and H5 all attest it, and
+     every pin in the chain was shown to fire against its own defect class.
+
+**Kit state after batch 8, converged to a fixpoint:** kit-gc suite **50
+assertions, 0 failures** (49 + H5); kit-rm suite **53 assertions, 0
+failures**; falsification driver **9/9 CAUGHT**; manifest **41 entries, 13
+staged/live pairs**, head `c590a145`; H4 green on both logs (50 + 53 labels,
+0 stale); H5 green (9 mutants); external checker `OK (0 mismatch(es))`;
+restage `--dry-run` reports `manifest unchanged`; live reporter `rc 2` with
+exactly the two standing privacy fixtures and **0 OVER-CAP**; zero
+`__pycache__` in policed dirs; `v4/` still empty-diff since `9a8f64e8`; guard
+`abacfa59…` unchanged.
+
+**Reviewer budget note:** the wave-21c closing pass ran on narrowed 3-item
+briefs after two 25-minute timeouts; both roles filed on the fresh dispatch.
+The fit-for-purpose report was written twice by a duplicate dispatch (lead
+error; the later, strictly more complete run is authoritative).
+
+Next: wave 22 (fresh fit-for-purpose, parity, tester at the batch-8 revision)
+→ all-7 PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
+battery (`1609b395…`) → evidence child commit → astra turn 12 → push.
