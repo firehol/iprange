@@ -120,7 +120,12 @@ directories). Removal is the human procedure defined below.
 
 - Roles must **never copy a buildable repo tree into the sandbox**. Probes
   that need source mutations use a **symlink farm**: symlink every file of
-  the tree into the sandbox and materialize only the mutated file(s)
+  the tree into the sandbox and materialize only the mutated file(s).
+  Materializing means **replacing the link itself** — `cp --remove-destination
+  <src> <link>` or `ln -sf` — never writing *through* it: `cp`, `open('w')`
+  and editors follow symlinks and will mutate the real tree (operations
+  wave-12 disclosed a ~30 s write into `v4/cli/run.py` this way; restored
+  from the HEAD blob, verified byte-identical)
   (the `r13-kit` pattern). Probes that need compiled code use the staged
   binaries in `.local/shared/binaries/` — not a private build.
 - If a role genuinely must build, it sets `CARGO_TARGET_DIR`/`GOCACHE` to
@@ -133,7 +138,16 @@ directories). Removal is the human procedure defined below.
   reporter's exit code is part of the result: 0 within cap, 1 at least
   one sandbox over cap, 2 scan incomplete because an entry could not be
   measured (its numbers are then partial — an unreadable subtree is a
-  finding to explain, never silently zeroed).
+  finding to explain, never silently zeroed). A sandbox row carrying
+  `PARTIAL (n inspection errors below)` has an incomplete measurement and
+  must not be read as within-cap. Steady state on this kit: two
+  `chmod 000` privacy fixtures (parity `r2/p2/d1/unreadable` and
+  w8-golegacy `sc/perm/dir000`) make exit 2 permanent while they exist —
+  that is the reporter refusing to zero an unreadable subtree, not a
+  regression. The gate-close signal is therefore: exit 2 with ONLY those
+  known fixture paths as errors, zero OVER-CAP rows, and no PARTIAL flag
+  on any sandbox row outside the two fixture roles. Reducing the count to
+  0/1 requires the user relocating the fixtures.
 - **Removal is a human procedure, and it is a lead duty, not a reviewer
   one.** For each directory the lead decides to remove, all three checks
   must be established *for that path* first, and recorded in the gate

@@ -228,6 +228,20 @@ def main() -> int:
                                "why": why})
     candidates.sort(key=lambda c: -c["allocated"])
 
+    # Map each inspection error to the sandbox whose measurement it
+    # invalidates (a 0.0/low aggregate under an unreadable subtree is a
+    # PARTIAL row, never a clean measurement -- operations wave-12 F-4).
+    err_sandboxes: dict = {}
+    for e in errors:
+        ep = e.split(":", 1)[0]
+        rel = os.path.relpath(ep, ROOT) if ep.startswith(str(ROOT) + os.sep) else None
+        if rel and not rel.startswith(".."):
+            top = rel.split(os.sep)[0]
+            err_sandboxes[top] = err_sandboxes.get(top, 0) + 1
+    for sbx in sandboxes:
+        n = err_sandboxes.get(sbx["role"], 0)
+        if n:
+            sbx["partial_errors"] = n
     over = [s for s in sandboxes if s["over_cap"]]
     if errors:
         rc, state = 2, "INCOMPLETE"
@@ -266,13 +280,15 @@ def main() -> int:
                 units_by_role.setdefault(r["role"], []).append(r)
             for s in sorted(sandboxes, key=lambda s: -s["allocated"]):
                 flag = "  OVER-CAP" if s["over_cap"] else ""
+                if s.get("partial_errors"):
+                    flag += f"  PARTIAL ({s['partial_errors']} inspection errors below)"
                 print(f"{fmt_mb(s['allocated'])} alloc  "
                       f"SANDBOX {s['role']}{flag}")
                 for r in sorted(units_by_role.get(s["role"], []),
                                 key=lambda r: -r["allocated"]):
                     print(f"{fmt_mb(r['allocated'])} alloc    "
                           f"unit {r['unit']}")
-            print("\n== directories for HUMAN INSPECTION — name/size facts "
+            print("\n== directories for HUMAN INSPECTION -- name/size facts "
                   "only, NOT removal recommendations ==")
             if not candidates:
                 print("(none)")
@@ -287,7 +303,7 @@ def main() -> int:
                     print(f"ERROR  {e}")
             print(f"\nscan: {state}; exit {rc} "
                   "(0 within cap, 1 over-cap finding, 2 inspection error)")
-            print("Removal is a human procedure (REVIEWS.md § Kit hygiene): "
+            print("Removal is a human procedure (REVIEWS.md 'Kit hygiene'): "
                   "ownership, inactivity, preservation checks, then remove "
                   "by name.")
         sys.stdout.flush()

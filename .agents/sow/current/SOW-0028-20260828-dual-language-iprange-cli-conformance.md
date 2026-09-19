@@ -18319,7 +18319,7 @@ than a hidden hole.
   Exhibits and logs: `.local/tester/r17-kit/` (`build_r17.py`,
   `probe17.py`, `logs/probe*.log`).
 - **Q3 result — Finding 1 (P2), a decidable class outside the named
-  list.** `check_expected_error` (v4/cli/run.py:862-905) is reached from
+  list.** `check_expected_error` (v4/cli/run.py:862-900; def at 862, body ends 900, next def 902 — line numbers identical at 86a645e5 and 44af9a36) is reached from
   the frozen guard but sits after it: outside the golden prefix and
   outside what the identity arms pin. Emptied or relaxed, the self-test
   stayed green while wrong refusal verdicts were accepted — the corpus's
@@ -18372,7 +18372,10 @@ than a hidden hole.
      step control does NOT close step-count keys (33 committed cases run
      >4 steps, max 134).
   3. `.agents/tools/kit-gc.sh` is the committed authoritative
-     implementation and the mandated entry point; the workstation's
+     implementation and the mandated entry point [SUPERSEDED: rounds
+     18-19 replaced this .sh with the read-only `.agents/tools/kit-gc.py`
+     and deleted the .sh — see Round 18/19; this line is historical
+     record, not current procedure]; the workstation's
      `.local/kit-gc.sh` is a convenience forwarding wrapper only (prior
      untracked copy preserved at
      `.local/lead-r15/kit-gc.sh.previous-untracked`). It fixes the
@@ -18437,14 +18440,16 @@ than a hidden hole.
   6. mutation_proof_misattributes_failure_sites — the instrument scored
      any nonzero exit as detection and labeled every non-named crash
      "at the pin site". `data-shape-always-raise` actually dies at the
-     pre-existing genuine-refusal pair control (run.py:2378), and the
+     pre-existing genuine-refusal pair control (raise at run.py:2379-2381 at 44af9a36), and the
      success marker was read from combined output, which a traceback
      echoes. True; count corrected (five pin-named, not six); record
      corrected above.
   7. P3 mandatory_cleanup_entrypoint_remains_untracked — REVIEWS.md
      mandated the untracked `.local/kit-gc.sh`. Fixed: the committed
      `.agents/tools/kit-gc.sh` is now the mandated path; the wrapper is
-     convenience only.
+     convenience only. [SUPERSEDED by round 19: the `.sh` was deleted and
+     the mandated procedure is the read-only `.agents/tools/kit-gc.py`
+     plus the named-path human removal procedure.]
 - Repairs at this revision (no run.py change; `git diff 3e75cfec..HEAD`
   touches only `.agents/tools/kit-gc.sh`, REVIEWS.md, this SOW, and the
   evidence): numeric kit-identity live-kit rule; active-kit rule also
@@ -18810,3 +18815,104 @@ than a hidden hole.
   (`mutation-check-*.py`) and full command outputs
   (`mutation-check-*.txt`, exit 1 with the named FAIL lines) are staged
   in `evidence/round16/` and manifest entries describe what each binds.
+
+## Round 23 — wave 12 (six-role delta review): 3 PASS / 3 FAIL; all P2s closed; reporter hardening (2026-09-19)
+
+- Wave-12 verdicts at 44af9a36 (guard `abacfa59…` recomputed by every
+  role as its own probe 1; all prior guard-site PASSes stand on that
+  byte-identity): parity PASS (3 P3), security PASS (5 P3), portability
+  PASS (4 P3), operations FAIL (1 P2 + 5 P3), performance FAIL (1 P2 +
+  3 P3), fit-for-purpose FAIL (3 P2 + 5 P3). Every P2 is the
+  records/evidence-binding class; no product-behavior defect was found
+  by any role; fit-for-purpose proved whole-module AST-reprint identity
+  outside `_self_test()` across `8092d7d6..44af9a36` (digest
+  `cb8e02ca0dcba78e`), strengthening the "engines and public protocol
+  unchanged" premise to proof.
+- Operations disclosed a symlink-farm near-miss (its materialization
+  wrote through a link into `v4/cli/run.py` for ~30 s, self-restored
+  from the HEAD blob). Lead re-verified independently: working-tree hash
+  `dc91e4aad7ee72dcd85a00c22b8559b463907c65` equals the HEAD blob,
+  guard region recomputes `abacfa59…`, `git status` clean. REVIEWS.md §
+  Kit hygiene now states the correct materialization command.
+- P2 closures (all lead-verified against source before fixing):
+  1. Manifest duration/binding (operations F-1, performance P2,
+     fit-for-purpose F-1): `evidence/round16/manifest.json` rebuilt —
+     every timed run carries `wall_seconds` measured by the lead and a
+     VERBATIM replayable `command` argv (prose commands replaced; the
+     old entry claimed "~0.93 s" against a bound log reading `0.97s`);
+     static artifacts carry `command: null` + `wall_reason`. Bound
+     report now 22 entries, all re-hashed after staging.
+  2. Stale destructive-tool mandate in the lead narrative
+     (fit-for-purpose F-2): status.md Disk-hygiene block corrected in
+     place with a round-22 pointer to the option-3 procedure.
+  3. Gate-record binding (fit-for-purpose F-3): turn-11 PRODUCTION
+     GRADE copied verbatim into the gate evidence and manifest
+     (sha `764c45c6…`, later cross-verified independently by
+     fit-for-purpose and portability); `evidence/wave12/manifest.json`
+     created; manifest `gate` string now names turn 11.
+- P3 closures applied now (small, same-file, no behavior risk):
+  * reporter ASCII-safety (portability P3-1, lead-reproduced
+    UnicodeEncodeError that turned a within-cap rc 0 into rc 1 under an
+    ASCII stdout): all printed strings are now pure ASCII (docstring
+    keeps Unicode; only `print()` payloads matter), suite pins the class
+    under `PYTHONIOENCODING=ascii` for both exit classes (P3-3
+    coverage gap);
+  * sandbox PARTIAL marker (operations F-4): a role row whose subtree
+    contains inspection errors is flagged `PARTIAL (n ...)` so a reduced
+    aggregate is never read as a clean within-cap measurement; REVIEWS.md
+    states the permanent-exit-2 steady state (two chmod-000 privacy
+    fixtures; relocation is a user decision, not taken);
+  * self-test failure routing (operations F-2): the three `_self_test()`
+    calls moved out of the `load_cases` except-tuple — a non-
+    AssertionError escape now surfaces as a traceback with the failure
+    exit instead of `parser.error` (exit 2, reserved for argument
+    problems by v4/cli/README.md);
+  * golden SyntaxError (operations F-3): a corrupted `_FROZEN_RPC_PREFIX`
+    literal now raises the labeled re-stamp instruction like every other
+    freeze arm;
+  * params-rejection pins (parity P3-1): five direct pins on
+    `check_expected_params_rejected` (matching -32602, non-object error,
+    wrong transport code, needle-not-in-message) plus both branches of
+    `check_request_is_contract_invalid`; mutation proof
+    `mutation_proof_params.py` kills all three comparison relaxations
+    (drop-non-dict / drop-transport / drop-needle) while pristine passes
+    — this closes the same-failure search of round-16's refusal-content
+    class at its sibling verifier. LEAD DECISION, disclosed: the role
+    rated it P3; the lead implemented the role's own named smallest fix
+    because stopping the same-failure hunt one verifier early is the
+    pattern that cost this milestone nine astra turns; one revert commit
+    restores the prior state if the user prefers tracking;
+  * line-anchor and supersession corrections (security P3-1,
+    performance P3-1, P3-4 hash note): `check_expected_error` cited as
+    862-900 (def 862, body end 900, next def 902, stable across
+    86a645e5/44af9a36); pair-control raise cited 2379-2381 at 44af9a36;
+    the two `.agents/tools/kit-gc.sh` statements in Rounds 17-18 are
+    marked SUPERSEDED in place (history preserved, current procedure
+    unambiguous); the 673-716 region statement: the frozen prefix ends
+    with the guard raise at 715; line 716 is the first live statement
+    after it — the operative boundary remains the statement-wise golden
+    compare (roles verified);
+  * `.agents/tools/__pycache__/` (portability P3-2) removed; it is a
+    gitignored artifact of an out-of-suite import and the tool has no
+    module API.
+- Recorded as tracked, NOT implemented (scope discipline): the
+  post-guard `matches_expected` direct controls (security P3-5: the
+  role itself adjudicated acceptance-direction-only, latent not active,
+  explicitly "not a finding"; implementing it would open pinning every
+  post-guard helper). Followup: `.agents/sow/pending/SOW-0033-20260919-post-guard-verifier-controls.md`
+  carries the `matches_expected` controls (plan-gated; nothing
+  implemented on its authority); the parity P3-2
+  battery-rotation witness is owned by the closure battery below (the `details`-arm pins are witnessed by
+  battery-era matrix reports; the closure battery at the final revision
+  rotates them).
+- Self-test cost after this batch: PASS 0.95 s (budget <= 2 s); guard
+  region unchanged; reporter suite 20/20 incl. the ASCII class;
+  params-pin mutation proof 4/4.
+- Timing provenance (performance P3-2): the 0.90/0.92/0.93/0.95 s
+  figures in the Round-13..16 records are genuine per-execution
+  measurements taken at those revisions and are not rewritten; from
+  this round the canonical durations are the manifest's `wall_seconds`
+  fields, and timing prose should cite them rather than new inline
+  numbers. The v4/cli/evidence/README.md "all twenty" count (N2) is
+  rotation-owned — the closure battery at the final revision rewrites
+  that README from the staged artifacts; it is not hand-edited here.

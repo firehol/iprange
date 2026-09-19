@@ -2157,9 +2157,10 @@ def _self_test():
     controls spawn six stub services (a few tens of milliseconds
     each) to pin the clean-session end contract in both client I/O
     branches, the negative-expectation controls spawn four more
-    (two codes x two directions), the refusal-content pins call the
-    verifier helper directly (subprocess-free), and the multi-step
-    control one more (four steps through the real dispatch).
+    (two codes x two directions), the refusal-content and
+    params-rejection pins call the verifier helpers directly
+    (subprocess-free), and the multi-step control one more
+    (four steps through the real dispatch).
     """
 
     import tempfile
@@ -2475,6 +2476,66 @@ def _self_test():
                     f"refusal-content pin {_lbl}: the wrong refusal was "
                     "accepted silently")
 
+    # Params-rejection pins (parity wave-12 P3-1, applied as the same-
+    # failure search of the round-16 refusal-content class): the sibling
+    # verifiers for expect_params_rejected had no arm -- relaxing the
+    # -32602 comparison or the message needle kept the self-test green
+    # while 55 committed steps (53 pinning a needle) silently stopped
+    # asserting the params-refusal contract.  Direct calls, same pattern;
+    # the kind gate covers transport_code end-to-end, so the pins own the
+    # verifier's own comparisons.
+    _pre_step = {"method": "iprange.v1.reader.close", "actor": "consumer",
+                 "params": {"reader": "0" * 32},
+                 "expect_params_rejected": {"message_contains": "params"}}
+    _pre_ok = {"code": frame.STD_INVALID_PARAMS,
+               "message": "params must be an object", "data": {}}
+    for _lbl, _resp, _must_raise, _frag in (
+            ("matching-32602", {"error": dict(_pre_ok)}, False, None),
+            ("non-object-error", {"error": "x"}, True,
+             "was expected to answer"),
+            ("wrong-transport-code", {"error": {"code": frame.PRODUCT_ERROR,
+                                                "message": "params must be "
+                                                "an object"}}, True,
+             "got code="),
+            ("needle-not-in-message", {"error": {"code": -32602,
+                                                 "message": "something "
+                                                 "else"}}, True,
+             "does not contain"),
+    ):
+        try:
+            runner.check_expected_params_rejected(_pre_step, "m",
+                                                  _pre_step["params"], _resp)
+        except AssertionError as _exc:
+            if not _must_raise:
+                raise AssertionError(
+                    f"params-rejection pin {_lbl}: a matching -32602 "
+                    f"refusal must pass, got: {_exc}") from _exc
+            if _frag not in str(_exc):
+                raise AssertionError(
+                    f"params-rejection pin {_lbl}: raised for an "
+                    f"unrelated reason: {_exc}") from _exc
+        else:
+            if _must_raise:
+                raise AssertionError(
+                    f"params-rejection pin {_lbl}: wrong params-refusal "
+                    "verdict accepted silently")
+    # check_request_is_contract_invalid owns the schema/service agreement
+    # premise: a step asserting -32602 must be one the committed schema
+    # rejects.  Empty params is rejected by every request schema (all
+    # params are required objects); a well-formed reader.close params
+    # object is accepted -- so the two arms below pin both branches.
+    runner.check_request_is_contract_invalid("iprange.v1.reader.close", [])
+    try:
+        runner.check_request_is_contract_invalid(
+            "iprange.v1.reader.close", {"reader": "0" * 32})
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError(
+            "params-rejection pin schema-accepts-must-raise: a step "
+            "asserting -32602 whose params the committed schema ACCEPTS "
+            "passed check_request_is_contract_invalid")
+
     # Multi-step control (tester round-12 G-B, strengthened per round-13
     # H1): the guard is per-call but the runner dispatches many steps per
     # case, so post-guard code -- which the freeze below deliberately does
@@ -2710,7 +2771,17 @@ def run_rpc_step(self, step):
             "__wrapped__; the freeze would pin the inner def while the "
             "wrapper executes -- the executed callable must be the pinned "
             "one")
-    _golden = ast.parse(_FROZEN_RPC_PREFIX).body[0]
+    try:
+        _golden = ast.parse(_FROZEN_RPC_PREFIX).body[0]
+    except SyntaxError as _exc:
+        # A corrupted golden is a re-stamp event, not a mystery: say so
+        # with the same instruction every other freeze arm prints
+        # (operations wave-12 F-3).
+        raise AssertionError(
+            "expect_error guard freeze: the _FROZEN_RPC_PREFIX golden "
+            "literal does not parse (" + str(_exc) + "); restore it or "
+            "re-stamp _FROZEN_RPC_PREFIX deliberately with a review "
+            "record") from _exc
     _actual = ast.parse(
         textwrap.dedent(inspect.getsource(CaseRunner.run_rpc_step))).body[0]
     _drift = "expect_error guard freeze: "
@@ -3038,10 +3109,16 @@ def main():
         if path:
             binaries[key] = executable(path, f"{key} binary")
 
+    # The self-tests are qualification gates, not data loading: a
+    # non-AssertionError escape here must surface as a traceback with a
+    # failure exit, never be routed into parser.error (exit 2 is
+    # reserved by v4/cli/README.md for argument problems, and discarding
+    # the traceback hides the defect from the operator) -- operations
+    # wave-12 F-2.
+    oracle._self_test()
+    case_schema._self_test()
+    _self_test()
     try:
-        oracle._self_test()
-        case_schema._self_test()
-        _self_test()
         use_cases = load_cases(args.cases)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         parser.error(str(exc))
