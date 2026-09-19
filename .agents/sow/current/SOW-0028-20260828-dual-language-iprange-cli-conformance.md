@@ -20076,7 +20076,8 @@ work found a fourth that was real.**
 **Kit state after batch 8, converged to a fixpoint:** kit-gc suite **50
 assertions, 0 failures** (49 + H5); kit-rm suite **53 assertions, 0
 failures**; falsification driver **9/9 CAUGHT**; manifest **41 entries, 13
-staged/live pairs**, head `c590a145`; H4 green on both logs (50 + 53 labels,
+staged/live pairs**, head deriving to HEAD after this record's commit is
+re-stamped; H4 green on both logs (50 + 53 labels,
 0 stale); H5 green (9 mutants); external checker `OK (0 mismatch(es))`;
 restage `--dry-run` reports `manifest unchanged`; live reporter `rc 2` with
 exactly the two standing privacy fixtures and **0 OVER-CAP**; zero
