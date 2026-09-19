@@ -19783,7 +19783,17 @@ the writer was silently writing elsewhere. Two things made it findable rather
 than fatal: the write target happened to be a *nonexistent* name (the last token
 of the last command), so it created a stray file instead of overwriting a real
 one — but had `manifest["runs"]` been ordered differently the same bug would
-have overwritten `./.agents/tools/kit-gc.py` or `kit-gc-suite.sh`, both tracked;
+have overwritten `./.agents/tools/kit-gc.py` or `kit-gc-suite.sh`, both tracked.
+[Round-30 mark: that severity claim is false as written, corrected from the
+bytes. The write target is the last token of the last recorded command that
+passes `startswith("/")`, and both named files are RELATIVE tokens in their
+commands (`./.agents/tools/kit-gc.py`, `.local/lead-r15/test_kit_gc.sh`), so the
+filter skips them. The five tokens that WOULD pass are all under gitignored
+`.local/`: `.local/lead-r15/ast-compare.py` and the four bound tools
+`.local/shared/evidence/round16/{g-round12-verify,mutation-proof-negative-controls,
+mutation-proof-params,mutation-proof-round16}.py` — each an existing file that
+the manifest itself attests, so a different ordering would have destroyed bound
+evidence tooling and broken the binding, but no tracked file was ever at risk.]
 and the surviving content was recoverable, which is why
 `.local/lead-r15/shadowed-write-artifact.json` is kept as evidence. The fix is
 two lines: rename the loop variable, and make the restage **read the file back**
@@ -19810,16 +19820,30 @@ exports `PYTHONDONTWRITEBYTECODE=1`, because batch 5 added the first leg that
 imports a tool module rather than executing it, which dirtied an H2-policed
 directory (tester P2).
 
-**Where two role claims did not survive verification, stated rather than
-accepted:** security filed "H3 is a pin that cannot fail" citing a suite-level
-`H3=${H3:-…}` override at line 39; that variable does not exist anywhere in the
-suite (`grep -n "H3="` on both the live and staged copies returns nothing), so
-the stated mechanism was wrong — the substance was right and is fixed. Tester
-filed "zero `__pycache__` is false" naming two caches; both were transient
-reviewer `importlib` probes and were gone when I measured, and the root cause
-they identified is real and is now prevented. My own first H3 falsification was
-a silent `str.replace()` no-op, which is why every mutation below asserts that
-its anchor landed before the result is used.
+**Where two role claims needed adjudication, stated rather than accepted:**
+security filed "H3 is a pin that cannot fail", citing a suite-level
+`H3=${H3:-…}` override at line 39. This round's first version of this record
+refuted that by asserting the variable exists nowhere. **That refutation is
+false as written about the revision it describes** [Round-31 mark: I ran
+`grep -n "H3="` against the batch-6 working tree, in which batch 6 had already
+removed the dead override, and reported the result as evidence about `9a8f64e8`,
+the revision security reviewed. Security's own grep, executed at `9a8f64e8`, is
+the contemporaneous observation and it returned two hits — the `H3=` override at
+line 39 and `E16=` at line 33. The reviewer is preferred on its own executed
+check at the revision under review]. Substance stands either way: the old H3
+could not fail, and it is fixed. This is the fifth instance of the same root
+cause in this milestone — a finding recorded without the revision it measured —
+and it is mine, in the very paragraph written to correct another revision
+qualifier. Independently unverifiable from tracked history: the reviewer suite
+and restage tool live under the gitignored `.local/`, so no `git show` can
+recover the batch-5 source; the only path to a durable check is the evidence
+child commit.
+
+Tester filed "zero `__pycache__` is false" naming two caches; both were
+transient reviewer `importlib` probes and were gone when I measured, and the
+root cause it identified is real and is now prevented. My own first H3
+falsification was a silent `str.replace()` no-op, which is why every mutation
+below asserts that its anchor landed before the result is used.
 
 **Cost and control profile after batch 6:** suite **47 assertions 0 failures**,
 1.80 s (83 ms per added leg, 8× inside the 15 s bound); reporter 2.36/2.41 s,

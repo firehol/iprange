@@ -158,6 +158,22 @@ else
 fi
 chmod -R 755 "$L/roperm/cap" 2>/dev/null
 
+echo "--- E5: a byte-invalid list line fails closed and does not stop the run (wave-20 portability P3-1) ---"
+# The path bytes must reach the guards intact; only the output channels may
+# substitute. A bare encode() raised inside the removal loop, i.e. after other
+# paths had already been deleted, so this asserts: no traceback, the good line
+# still evaluated, and a non-destructive outcome.
+mkdir -p "$L/gxb/ok"
+python3 -c "
+with open('$T/list','wb') as f:
+    f.write(b'$L/gxb/ok\n')
+    f.write(b'$L/gxb/bad\xffname\n')
+"
+out=$("$PYBIN" "$K" --list "$T/list" --runs-root "$T/async" 2>&1); rc=$?
+printf '%s\n' "$out" | grep -q Traceback && bad "E5 traceback on a byte-invalid line" || ok "E5 no traceback (rc $rc)"
+printf '%s\n' "$out" | grep -q "gxb/ok" && ok "E5 the clean line was still evaluated" || bad "E5 clean line skipped"
+[ -d "$L/gxb/ok" ] && ok "E5 nothing removed while a line was undisplayable" || bad "E5 removed data on a malformed line"
+
 echo "--- F: live-run guard (G8) ---"
 printf '{"state":"running","cwd":"%s"}\n' "$R" > "$A/status.json"
 LIST "$L/perf/w1/cargo-target";         run KEEP "G8 live run in this repo"        --list "$T/list"

@@ -15,7 +15,8 @@ a relaxation of the guards.
 
 Guards (a path is refused, not removed, if ANY fails):
   G1  the list line is an absolute path with no glob or whitespace-control
-      characters, and equals its own realpath (so no symlink component);
+      characters, and equals its own realpath (so neither a symlink nor a
+      non-normalised path such as a trailing separator can slip through);
   G2  realpath is strictly inside `<repo>/.local/` (never `.local` itself);
   G3  depth >= 2 below `.local/` (a role root is never removed: its reports,
       HEARTBEAT and briefs survive every removal);
@@ -131,7 +132,12 @@ def referenced(path: str, texts: list[str]) -> str | None:
         except OSError:
             return f"gate artifact {p} could not be read"
         for needle in needles:
-            if needle.encode() in blob:
+            # os.fsencode, not str.encode: a list line can carry bytes that
+            # decode to lone surrogates, and encode() would raise inside the
+            # removal loop after other paths had already been deleted
+            # (wave-20 portability P3-1).
+            nb = os.fsencode(needle)
+            if nb in blob:
                 return f"named by gate artifact {os.path.relpath(p, REPO)}"
     return None
 
@@ -247,7 +253,7 @@ def check(path: str, texts: list[str], live: list[str]) -> tuple[bool, str, int]
     if not os.path.isabs(path) or (GLOB_CHARS & set(path)):
         return False, "G1 not a literal absolute path", 0
     if path != os.path.realpath(path):
-        return False, "G1 path is not its own realpath (symlink component)", 0
+        return False, "G1 path is not its own realpath (symlink or non-normalised path)", 0
     if not path.startswith(LOCAL + os.sep):
         return False, "G2 outside .local/", 0
     rel = os.path.relpath(path, LOCAL)
@@ -288,6 +294,17 @@ def main(argv: list[str]) -> int:
         print("refusing to remove anything: --execute requires a non-empty --reason",
               file=sys.stderr)
         return 2
+    # A list line can carry bytes that decode to lone surrogates. Guards and
+    # removal must see the exact path, so the bytes are preserved and only the
+    # OUTPUT channels tolerate them -- the same split kit-gc.py uses: the report
+    # is display, the log is data (wave-20 portability P3-1; a bare encode()
+    # raised inside the removal loop, after other paths had already gone).
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="backslashreplace")
+        except (AttributeError, ValueError):
+            pass
+
     if not os.path.isfile(args.list):
         print(f"no such list file: {args.list}", file=sys.stderr)
         return 2
@@ -354,7 +371,10 @@ def main(argv: list[str]) -> int:
         removed += 1
         freed += nbytes
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        with open(os.path.join(SHARED, "removals.log"), "a", encoding="utf-8") as fh:
+        # surrogateescape so the recorded path is the bytes that were removed,
+        # not a replacement character: the log is the audit trail.
+        with open(os.path.join(SHARED, "removals.log"), "a",
+                  encoding="utf-8", errors="surrogateescape") as fh:
             fh.write(f"{stamp}\t{human(nbytes)}\t{path}\t{args.reason}\n")
         print(f"REMOVED {human(nbytes)}: {path}")
 
