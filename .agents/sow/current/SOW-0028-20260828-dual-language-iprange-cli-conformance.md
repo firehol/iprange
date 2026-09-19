@@ -18839,16 +18839,20 @@ than a hidden hole.
      fit-for-purpose F-1): `evidence/round16/manifest.json` rebuilt —
      every timed run carries `wall_seconds` measured by the lead and a
      VERBATIM replayable `command` argv (prose commands replaced; the
-     old entry claimed "~0.93 s" against a bound log reading `0.97s`);
+     old entry claimed "~0.93 s" against a bound log whose printed
+     figure was `0.90s`, while the role's own replay measured `0.97s` —
+     three figures, one claim);
      static artifacts carry `command: null` + `wall_reason`. Bound
-     report now 22 entries, all re-hashed after staging.
+     report now binds every file staged in the directory (checked at
+     staging), all re-hashed.
   2. Stale destructive-tool mandate in the lead narrative
      (fit-for-purpose F-2): status.md Disk-hygiene block corrected in
      place with a round-22 pointer to the option-3 procedure.
   3. Gate-record binding (fit-for-purpose F-3): turn-11 PRODUCTION
      GRADE copied verbatim into the gate evidence and manifest
      (sha `764c45c6…`, later cross-verified independently by
-     fit-for-purpose and portability); `evidence/wave12/manifest.json`
+     portability and operations — fit-for-purpose and security read the
+     verdict text; only the two named roles recomputed the digest); `evidence/wave12/manifest.json`
      created; manifest `gate` string now names turn 11.
 - P3 closures applied now (small, same-file, no behavior risk):
   * reporter ASCII-safety (portability P3-1, lead-reproduced
@@ -18870,7 +18874,7 @@ than a hidden hole.
   * golden SyntaxError (operations F-3): a corrupted `_FROZEN_RPC_PREFIX`
     literal now raises the labeled re-stamp instruction like every other
     freeze arm;
-  * params-rejection pins (parity P3-1): five direct pins on
+  * params-rejection pins (parity P3-1): four direct arms on
     `check_expected_params_rejected` (matching -32602, non-object error,
     wrong transport code, needle-not-in-message) plus both branches of
     `check_request_is_contract_invalid`; mutation proof
@@ -18880,8 +18884,12 @@ than a hidden hole.
     class at its sibling verifier. LEAD DECISION, disclosed: the role
     rated it P3; the lead implemented the role's own named smallest fix
     because stopping the same-failure hunt one verifier early is the
-    pattern that cost this milestone nine astra turns; one revert commit
-    restores the prior state if the user prefers tracking;
+    pattern that cost this milestone nine astra turns. Revert unit: the pins
+    are a contiguous insertion in `_self_test()` (four arms on
+    `check_expected_params_rejected` + two arms on
+    `check_request_is_contract_invalid`); a surgical revert is that block
+    only — NOT `git revert` of the closure commit, which also carries the
+    P2 fixes (security wave-13 note on the disclosed revert path);
   * line-anchor and supersession corrections (security P3-1,
     performance P3-1, P3-4 hash note): `check_expected_error` cited as
     862-900 (def 862, body end 900, next def 902, stable across
@@ -18905,7 +18913,9 @@ than a hidden hole.
   battery-rotation witness is owned by the closure battery below (the `details`-arm pins are witnessed by
   battery-era matrix reports; the closure battery at the final revision
   rotates them).
-- Self-test cost after this batch: PASS 0.95 s (budget <= 2 s); guard
+- Self-test cost after this batch: wall_seconds 0.95 per the bound
+  manifest (budget <= 2 s; in-process figure 0.92 s, the delta is
+  interpreter start-up); guard
   region unchanged; reporter suite 20/20 incl. the ASCII class;
   params-pin mutation proof 4/4.
 - Timing provenance (performance P3-2): the 0.90/0.92/0.93/0.95 s

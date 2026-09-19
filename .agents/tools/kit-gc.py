@@ -75,6 +75,18 @@ def repo_and_root():
 
 
 REPO, ROOT = repo_and_root()
+
+# Paths on disk can hold bytes that decode to lone surrogates; printing
+# them must never crash the report or flip the exit class (wave-13:
+# text mode died with UnicodeEncodeError on a surrogate-named chmod-000
+# fixture and returned rc 1 "over-cap" where the truth was rc 2
+# "incomplete"; --json was immune). Encoding errors are escaped for the
+# whole run instead.
+try:
+    sys.stdout.reconfigure(errors="backslashreplace")
+except (AttributeError, ValueError):    # non-replaceable stdout (pipes
+    pass                                # already reconfigured, exotic)
+
 SHARED_DIR = ROOT / "shared"        # the central kit: never a candidate
 ATTIC_DIR = ROOT / "_attic-md"      # exhibit archive: never a candidate
 
@@ -101,7 +113,10 @@ def scan():
     contribute nothing.
     """
     agg = {}
-    errors = []
+    # (path, message) pairs: PARTIAL attribution must use the real
+    # erroring path, never a first-colon split of a formatted string
+    # (Windows drive letters, colon-named roles -- wave-13 P3).
+    errors: list = []
 
     def add(path: Path, alloc: int, app: int, mtime: float):
         for anc in ancestors_to_root(path):
@@ -112,10 +127,10 @@ def scan():
                 slot[2] = mtime
 
     def onerror(err):
-        errors.append(f"{getattr(err, 'filename', '?')}: {err}")
+        errors.append((str(getattr(err, "filename", "?")), str(err)))
 
     if not ROOT.is_dir():
-        return agg, [f"{ROOT}: missing"]
+        return agg, [(str(ROOT), "missing")]
     for dp, dirs, files in os.walk(ROOT, onerror=onerror, followlinks=False):
         d = Path(dp)
         agg.setdefault(d, [0, 0, 0.0])
@@ -123,13 +138,13 @@ def scan():
             st = os.stat(d, follow_symlinks=False)
             add(d, st.st_blocks * 512, 0, st.st_mtime)  # dir's own blocks
         except OSError as err:
-            errors.append(f"{d}: {err}")
+            errors.append((str(d), str(err)))
         for name in files:
             fp = os.path.join(dp, name)
             try:
                 st = os.stat(fp, follow_symlinks=False)
             except OSError as err:
-                errors.append(f"{fp}: {err}")
+                errors.append((fp, str(err)))
                 continue
             add(d, st.st_blocks * 512, st.st_size, st.st_mtime)
         # os.walk puts directory symlinks in `dirs` and, with
@@ -232,8 +247,7 @@ def main() -> int:
     # invalidates (a 0.0/low aggregate under an unreadable subtree is a
     # PARTIAL row, never a clean measurement -- operations wave-12 F-4).
     err_sandboxes: dict = {}
-    for e in errors:
-        ep = e.split(":", 1)[0]
+    for ep, _msg in errors:
         rel = os.path.relpath(ep, ROOT) if ep.startswith(str(ROOT) + os.sep) else None
         if rel and not rel.startswith(".."):
             top = rel.split(os.sep)[0]
@@ -261,7 +275,8 @@ def main() -> int:
                 "top_level": top_level, "sandboxes": sandboxes,
                 "role_units": role_units,
                 "inspect_candidates": candidates,
-                "inspection_errors": errors,
+                "inspection_errors": [{"path": ep, "error": em}
+                                      for ep, em in errors],
                 "note": "read-only reporter; inventory is data for human "
                         "inspection, never a removal verdict",
             }, indent=1))
@@ -281,7 +296,9 @@ def main() -> int:
             for s in sorted(sandboxes, key=lambda s: -s["allocated"]):
                 flag = "  OVER-CAP" if s["over_cap"] else ""
                 if s.get("partial_errors"):
-                    flag += f"  PARTIAL ({s['partial_errors']} inspection errors below)"
+                    n_pe = s["partial_errors"]
+                    flag += ("  PARTIAL (%d inspection error%s below)"
+                             % (n_pe, "" if n_pe == 1 else "s"))
                 print(f"{fmt_mb(s['allocated'])} alloc  "
                       f"SANDBOX {s['role']}{flag}")
                 for r in sorted(units_by_role.get(s["role"], []),
@@ -299,8 +316,8 @@ def main() -> int:
             if errors:
                 print("\n== INSPECTION ERRORS: scan INCOMPLETE, numbers "
                       "partial ==")
-                for e in errors:
-                    print(f"ERROR  {e}")
+                for ep, em in errors:
+                    print(f"ERROR  {ep}: {em}")
             print(f"\nscan: {state}; exit {rc} "
                   "(0 within cap, 1 over-cap finding, 2 inspection error)")
             print("Removal is a human procedure (REVIEWS.md 'Kit hygiene'): "

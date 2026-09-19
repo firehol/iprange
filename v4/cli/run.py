@@ -2521,9 +2521,13 @@ def _self_test():
                     "verdict accepted silently")
     # check_request_is_contract_invalid owns the schema/service agreement
     # premise: a step asserting -32602 must be one the committed schema
-    # rejects.  Empty params is rejected by every request schema (all
-    # params are required objects); a well-formed reader.close params
-    # object is accepted -- so the two arms below pin both branches.
+    # rejects.  Params must be a JSON object, so the list [] is rejected
+    # by every registered schema; by contrast {} is accepted by the one
+    # no-required-props schema (system.describe, methods.py:67), so a
+    # well-formed reader.close object -- which all its props are
+    # required for -- is the accepted arm.  The two arms below pin both
+    # branches; which method is used for the accepted arm must keep a
+    # required prop, or the arm stops pinning what it claims.
     runner.check_request_is_contract_invalid("iprange.v1.reader.close", [])
     try:
         runner.check_request_is_contract_invalid(
@@ -3111,10 +3115,10 @@ def main():
 
     # The self-tests are qualification gates, not data loading: a
     # non-AssertionError escape here must surface as a traceback with a
-    # failure exit, never be routed into parser.error (exit 2 is
-    # reserved by v4/cli/README.md for argument problems, and discarding
-    # the traceback hides the defect from the operator) -- operations
-    # wave-12 F-2.
+    # failure exit, never be routed into parser.error: exit 2 is the
+    # argument-parsing class documented in v4/cli/README.md, and
+    # discarding the traceback hides the defect from the operator --
+    # operations wave-12 F-2.
     oracle._self_test()
     case_schema._self_test()
     _self_test()

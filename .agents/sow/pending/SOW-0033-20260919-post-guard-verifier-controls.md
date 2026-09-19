@@ -16,8 +16,8 @@ The runner's acceptance verifiers that run **after** the frozen
 `expect_error` guard (run.py:673-716) are outside both the golden
 snapshot and the identity arms. Two of them now carry direct pins
 (`check_expected_error` — 11 pins, SOW-0028 round 16;
-`check_expected_params_rejected` + `check_request_is_contract_invalid` —
-5 pins, round 23). The remaining gap is `matches_expected`
+`check_expected_params_rejected` (4 arms) + `check_request_is_contract_invalid`
+(2 arms) — 6 direct pins, round 23). The remaining gap is `matches_expected`
 (run.py:648-670), the verifier that decides whether an engine result
 matches a case's expected value tree (`expect_result` and error
 `details` values route through it).
