@@ -149,7 +149,17 @@ def live_runs(runs_root: str = RUNS_ROOT) -> list[str]:
     file that cannot be read, or that lacks a cwd, counts as live: refusal is
     cheap and a wrong removal is not. `runs_root` is a parameter, not a
     constant read, so a test can point the guard at a fixture directory.
+
+    An absent runs root counts as live too. The startup check refuses it with
+    rc 2, but this function is also called by the pre-deletion recheck, where
+    a root that vanished since planning cannot prove there is no live
+    reviewer -- returning [] there would let the recheck pass while the
+    evidence it depends on is gone (wave-24 finding: the documented
+    fail-closed rule in REVIEWS.md § Kit hygiene held at startup but not at
+    the recheck).
     """
+    if not os.path.isdir(runs_root):
+        return [f"runs-root {runs_root} is not a directory"]
     live = []
     for status in glob.glob(os.path.join(runs_root, "*", "status.json")):
         try:

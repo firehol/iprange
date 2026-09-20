@@ -20266,7 +20266,26 @@ plus the G2 inside-.local arm, so they are defense-in-depth, not reachable
 behavior. The claim is therefore scoped exactly: **every guard has a mutant,
 and every arm that can fire alone has a mutant**; the two unreachable arms are
 recorded as a P3 (wave 23 tester) with the reachability argument, and whether
-to delete them is an open design decision, not a silent edit. manifest **41 entries,
+to delete them is an open design decision, not a silent edit.
+[Round-35 mark: three parts of this scoping sentence were false as written,
+all reproduced by execution at wave 24 (ffp + tester converged). (a) "every
+arm that can fire alone has a mutant" — four arms fire alone with no driver
+mutant: G1-not-a-literal (revert → 2 named FAILs), G6 target-mode-000 (1),
+G6 target-unwritable (1), G6 child-mode-000 (2); each IS pinned by a named
+suite leg, so the falsification exists but lives in the suite, not the
+driver. (b) "G5 is a symlink … unreachable, pre-empted by the G1 realpath
+arm" — false: a self-loop symlink passes G1's realpath-equality
+(`realpath(loop) == loop`), and the live tool refuses it with exactly the
+G5-islink message; the arm fires alone, with no leg and no mutant (its
+removal is still refused by the adjacent G5-isdir arm, so the tool fails
+closed regardless — defense-in-depth holds, the reachability claim did not;
+my batch-10 measurement used symlink→existing-dir, which G1 does pre-empt).
+(c) "all three G6 arms" undercounts: the code has six G6 return arms.
+Batch 11 narrowed the durable claim to what is pinned: every guard has a
+mutant; every arm that can fire alone is pinned by a named suite leg (a
+revert of that arm turns the suite red on its own leg, measured per-arm);
+G5-islink is reachable, doubly covered by G5-isdir, and recorded as such.
+Per the astra advisory, no mutants were added merely to rescue the sentence.] manifest **41 entries,
 13 staged/live pairs**, head deriving to HEAD after this record's commit is
 re-stamped; H4 green both ways on both logs (50 + 56 labels, multiset hashes
 matching the suites' own declarations); H5 green (13 legs); external checker
@@ -20275,7 +20294,10 @@ reporter `rc 2` with exactly the two standing privacy fixtures and **0
 OVER-CAP**; zero `__pycache__` in policed dirs; `v4/` still empty-diff since
 `9a8f64e8`; guard `abacfa59…` unchanged. Falsification battery: 12/12
 outcomes as expected (copies only), covering the multiset pin's three
-forgery shapes.
+forgery shapes. [Round-35 mark: false as written — the three forgery shapes
+were run ad hoc by the lead and by parity, not added to
+`.local/handoff/falsify-b8.sh`; the battery's 12 outcomes did not include
+them (wave 24 tester). Batch 11 added the shapes to the battery itself.]
 
 **Reviewer budget note:** all three roles filed on the first dispatch; no
 timeouts; no incidents this wave (the wave-22 symlink truncation did not
@@ -20285,3 +20307,108 @@ Next: wave 24 (fresh fit-for-purpose, parity, tester at the batch-10
 revision; briefs narrowed to the batch-10 deltas) → all-7 PASS at one
 revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure battery
 (`1609b395…`) → evidence child commit → astra turn 12 → push.
+
+## Round 35 — wave 24 (three roles at f37cdb59): 0 PASS / 3 FAIL, 4 distinct P2s; the astra advisory and batch 11 (2026-09-20)
+
+Reviewed revision: `f37cdb59` (batch 10). Fresh `fit-for-purpose`, `parity`
+and `tester`. All three FAILed; after dedup, **4 distinct P2s**, every one
+reproduced by execution (filer reproducer plus the lead's independent copy
+replay). No product/engine/wire/CLI defect: `v4/` empty-diff since
+`9a8f64e8`, guard `abacfa59…`, blob `d4e5ce5bb223`.
+
+**The four findings:**
+
+1. **Bound-log greenness was unpinned** (parity): with the ok-label multiset
+   intact, injecting `FAIL` lines and flipping the `SUITE: all guards
+   proven` sentinel into `SUITE: FAILURES ABOVE` passed H4 (both legs print
+   `ok`), H3, the binding checker, and a `--root` restage that re-published
+   rc 0 from the tampered footer. Same class in H5 for the driver log
+   (injected `NOT-CAUGHT` + verdict flip → `ok (13 legs)`).
+2. **"Every arm that can fire alone has a mutant" was false** (ffp + tester,
+   converged): four arms fire alone with no driver mutant — G1-not-a-literal
+   (revert → 2 named FAILs), G6 target-mode-000 (1), G6 target-unwritable
+   (1), G6 child-mode-000 (2). Each IS pinned by a named suite leg; the
+   claim conflated suite-leg pinning with driver mutants.
+3. **"G5-islink is unreachable" was false** (tester): a self-loop symlink
+   passes G1's realpath-equality and the arm fires alone — the lead's
+   batch-10 measurement used symlink→existing-dir, which G1 does pre-empt.
+   Removal stays refused either way (adjacent G5-isdir arm), so the tool
+   fails closed; the reachability *explanation* was wrong.
+4. **The battery sentence was false** (tester): the three multiset-forgery
+   shapes were run ad hoc, not added to `falsify-b8.sh`, while Round 34
+   said the battery covered them.
+
+**The astra advisory (milestone-gate advice, session `fb94c6f0…`,
+gpt-6-astra/xhigh, read-only).** Asked whether this is scope drift and how
+to close, astra: (a) agreed it is drift, located in claim expansion, not in
+adversarial review; (b) rejected the recursion framing — falsification is
+finite; the recursion comes from demanding automated proof for every proof
+mechanism without naming the trust boundary, which is **independent
+inspection of assertions, negative controls, the capture mechanism and the
+bound artifacts**; (c) rejected both immediate closure and unlimited
+hardening, prescribing a bounded closure repair: fix what protects required
+behavior (the greenness pin; and the runs-root fail-closed gap it found in
+`kit-rm.py` — startup refused a missing runs root but the pre-deletion
+recheck called `live_runs()`, which returned `[]` for a vanished root,
+silently passing G8; lead confirmed by execution), narrow the overclaims
+without adding replacement completeness claims, and **do not add mutants
+merely to rescue a sentence**; (d) stopping rule: stop when a frozen
+candidate satisfies a finite set of approved requirements, its evidence is
+sufficient and internally consistent, and no verified in-scope P0–P2
+remains; every new blocker must name the frozen requirement, a concrete
+counterexample and a material consequence.
+
+**Batch 11 closures (user-approved as astra's option c):**
+
+1. **Greenness pinned on all three bound logs.** H4 now requires, per bound
+   suite log: zero `FAIL ` lines, TIMED footer rc 0, and — where the
+   producer emits one — the unique success sentinel and no failure
+   sentinel. H5 requires the same for the driver log (no `NOT-CAUGHT` line,
+   footer rc 0, unique verdict sentinel). All five corruption shapes
+   (inject-FAIL, flip-sentinel, footer-rc, inject-NOT-CAUGHT,
+   driver-flip) now FAIL the pins, demonstrated on copies and bound in the
+   battery (shapes ix–x added; battery now 19/19 outcomes).
+2. **The runs-root fail-closed gap fixed at the source** (`kit-rm.py`
+   `live_runs()`): a vanished runs root now counts as live, so the
+   pre-deletion recheck refuses instead of silently passing. Pinned by two
+   new E6 legs (startup rc 2 + nothing removed; unit probe that
+   `live_runs(missing)` fails closed) and by the driver's 13th mutant
+   `g8-runsroot` (revert → exactly the unit-probe leg red). This is required
+   behavior per REVIEWS.md § Kit hygiene ("a missing runs root … leads to
+   refusal"), not an optional claim — claim reduction could not remove it.
+3. **The sentinel wording narrowed** (astra step 4): the kit-rm suite's
+   success line is now `SUITE: all assertions passed` — what the run shows —
+   replacing `SUITE: all guards proven`, which implied exhaustive proof.
+4. **The three false sentences marked in place** (in the Round-34 text) and
+   the durable coverage claim narrowed to what is pinned: every guard has a
+   mutant; every arm that can fire alone is pinned by a named suite leg
+   (per-arm revert measured); G5-islink is reachable and doubly covered.
+   No mutants were added for the four overclaim arms (per the advisory), and
+   no coverage pin was added — the proof chain ends at independent
+   inspection here.
+
+**Kit state after batch 11, converged to a fixpoint:** kit-gc suite **50
+assertions, 0 failures**; kit-rm suite **59 assertions, 0 failures** (56 +
+the three E6 legs); falsification driver **13 mutants + crash self-test,
+all CAUGHT**; manifest **41 entries, 13 staged/live pairs**, head deriving
+to HEAD after this record's commit is re-stamped; H4 green both ways on
+both logs (50 + 59 labels; multiset hashes match the suites' declarations;
+greenness: zero FAIL lines, footer rc 0, sentinel) and H5 green (13 legs +
+greenness); external checker `OK (0 mismatch(es))`; restage `--dry-run`
+reports `manifest unchanged`; live reporter `rc 2` with exactly the two
+standing privacy fixtures and **0 OVER-CAP**; zero `__pycache__` in policed
+dirs; `v4/` still empty-diff since `9a8f64e8`; guard `abacfa59…` unchanged.
+Battery: **19/19** outcomes as expected (copies only), now including the
+five greenness corruptions and the two multiset forgeries.
+
+**Reviewer budget note:** the first fit-for-purpose dispatch died mid-work
+without filing (harness failure, disclosed); the fresh re-dispatch filed
+normally. No other incidents.
+
+Next: wave 25 (fresh fit-for-purpose, parity, tester at the batch-11
+revision; brief = the astra stopping rule: does the frozen candidate
+satisfy the approved requirements with sufficient, internally consistent
+evidence, and is every durable sentence exactly what a pin proves — new
+blockers must name requirement + counterexample + material consequence) →
+all-7 PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
+battery (`1609b395…`) → evidence child commit → astra turn 12 → push.

@@ -2,13 +2,16 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: 1258e37916263c40ed90dda46089d07d5f039eb6b7f58b1f9d0c87abd464267a
+# H4-LABEL-HASH: e4d69485aaddc34e737bcecd5d8fa0c7aaf529910c489ed1ea93d908ea8e3d20
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
 # which wave 23 forged by delete+duplicate at unchanged count). Any leg added,
 # removed, renamed or reworded must update this line in the same edit.
 set -uo pipefail
+# E6 exec_modules the tool for the live_runs unit probe; keep bytecode caches
+# out of policed dirs (H2).
+export PYTHONDONTWRITEBYTECODE=1
 KIT=/home/costa/src/firehol/iprange
 # Overridable so the mutation driver can run this suite against a reverted
 # copy of the tool: a guard that cannot be shown to fail is not a guard.
@@ -232,6 +235,27 @@ printf '%s\n' "$out" | grep -q Traceback && bad "E5 traceback on a byte-invalid 
 printf '%s\n' "$out" | grep -q "gxb/ok" && ok "E5 the clean line was still evaluated" || bad "E5 clean line skipped"
 [ -d "$L/gxb/ok" ] && ok "E5 nothing removed while a line was undisplayable" || bad "E5 removed data on a malformed line"
 
+echo "--- E6: the runs-root guard fails closed at startup AND at the recheck (wave-24) ---"
+# Startup: an absent runs root cannot prove there is no live reviewer -> rc 2,
+# nothing removed. The pre-deletion recheck calls live_runs() directly, so a
+# root that vanished after planning must count as live there too: that path
+# cannot be raced from a shell, so it is pinned at the unit level.
+mkdir -p "$L/perf/w1/rr-scratch"
+LIST "$L/perf/w1/rr-scratch"
+"$PYBIN" "$K" --list "$T/list" --runs-root "$T/no-such-runs" >/dev/null 2>&1; rc=$?
+[ "$rc" = 2 ] && ok "missing runs root refused at startup (rc 2)" || bad "missing runs root rc=$rc"
+[ -d "$L/perf/w1/rr-scratch" ] && ok "missing runs root removed nothing" || bad "DATA REMOVED on a missing runs root"
+cat > "$T/lr-probe.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+r = m.live_runs("/nonexistent-runs-root-for-selftest")
+print("FAILCLOSED" if r else "OPEN")
+PY
+lr=$("$PYBIN" "$T/lr-probe.py" "$K")
+[ "$lr" = "FAILCLOSED" ] && ok "live_runs fails closed on a vanished root" || bad "live_runs returned no-runs for a vanished root"
+
 echo "--- F: live-run guard (G8) ---"
 # live_runs() scans <runs-root>/*/status.json, so the status lives in a run dir
 mkdir -p "$A/one"
@@ -271,5 +295,8 @@ grep -q '^REMOVED' "$T/exec.out" && ok "executed removal reported" || bad "no RE
 [ -f "$L/shared/removals.log" ] && grep -q 'selftest' "$L/shared/removals.log" && ok "removal logged with reason" || bad "not logged"
 
 echo
-[ $fail = 0 ] && echo "SUITE: all guards proven" || echo "SUITE: FAILURES ABOVE"
+# The sentinel states what the run shows (every assertion passed), not what
+# the suite proves about the tool: "all guards proven" implied exhaustive
+# proof and was removed at batch 11 (wave-24 review, astra advisory).
+[ $fail = 0 ] && echo "SUITE: all assertions passed" || echo "SUITE: FAILURES ABOVE"
 exit $fail
