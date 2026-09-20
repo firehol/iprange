@@ -2,10 +2,12 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-OK-COUNT: 55
-# The green ok-label count this suite prints, declared by the suite itself and
-# pinned against the bound log by the kit-gc suite's H4 reverse direction
-# (batch 9). Any leg added or removed must update this line in the same edit.
+# H4-LABEL-HASH: 1258e37916263c40ed90dda46089d07d5f039eb6b7f58b1f9d0c87abd464267a
+# sha256 over this suite's green ok-label multiset (sorted, newline-joined),
+# declared by the suite itself and pinned against the bound log by the kit-gc
+# suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
+# which wave 23 forged by delete+duplicate at unchanged count). Any leg added,
+# removed, renamed or reworded must update this line in the same edit.
 set -uo pipefail
 KIT=/home/costa/src/firehol/iprange
 # Overridable so the mutation driver can run this suite against a reverted
@@ -197,6 +199,17 @@ else
   bad "PARTIAL DELETION on an unwritable subtree"
 fi
 chmod -R 755 "$L/roperm2/cap" 2>/dev/null
+# target-unreadable: the target hides its own contents from the walk (mode
+# 0300 = writable+executable, NOT readable), so the git and mode-000 scans
+# inside it see nothing and the target-unreadable arm is the only thing that
+# refuses it (wave-23 tester P2: reverting that arm kept the suite green and
+# the tool reported the tree removable)
+mkdir -p "$L/roperm3/cap/.git" "$L/roperm3/cap/locked"
+printf 'k\n' > "$L/roperm3/cap/f1"
+chmod 000 "$L/roperm3/cap/locked"
+chmod 300 "$L/roperm3/cap"
+LIST "$L/roperm3/cap";                  run "KEEP:G6 the target is not readable" "G6 unreadable target: refuse before blind removal" --list "$T/list"
+chmod -R 755 "$L/roperm3/cap" 2>/dev/null; rm -rf "$L/roperm3" 2>/dev/null
 
 echo "--- E5: a byte-invalid list line fails closed and does not stop the run (wave-20 portability P3-1) ---"
 # The path bytes must reach the guards intact; only the output channels may
@@ -204,6 +217,11 @@ echo "--- E5: a byte-invalid list line fails closed and does not stop the run (w
 # paths had already been deleted, so this asserts: no traceback, the good line
 # still evaluated, and a non-destructive outcome.
 mkdir -p "$L/gxb/ok"
+# the undisplayable path is CREATED so check() walks past G5 into the G7
+# needle scan, where os.fsencode is load-bearing (wave-23 fit-for-purpose P2:
+# with the dir absent the run stopped at "G5 not a directory" and an
+# os.fsencode->encode() regression kept the whole suite green)
+python3 -c "import os; os.makedirs(b'$L/gxb/bad\xffname', exist_ok=True)"
 python3 -c "
 with open('$T/list','wb') as f:
     f.write(b'$L/gxb/ok\n')

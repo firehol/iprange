@@ -20136,7 +20136,13 @@ records, not drifting.
    Forward catches renames at unchanged count; the count catches add/remove;
    the count also closes the gap the 24-char window leaves (finding 5).
    Falsified three ways (leg deleted from log copy → FAIL; stale declaration →
-   FAIL; tampered label → forward FAIL).
+   FAIL; tampered label → forward FAIL). [Round-34 mark: the scalar count pin
+   was itself forgeable — wave 23 (parity + tester, converged) passed
+   delete-one-leg + duplicate-another at unchanged count, a cross-log
+   self-report swap, and a ` refused` → ` allowed` inversion. Batch 10
+   replaced it with a **multiset hash** declaration (`# H4-LABEL-HASH:`);
+   all three forgeries now FAIL, and the "count catches" sentences here are
+   superseded by the Round-34 record.]
 3. **The H4 rc-normalization caveat hid a real blind spot** (parity): the
    interpolated `E5 no traceback (rc $rc)` label let `rc 0`→`rc 7` pass every
    pin while the suite asserted nothing about that rc. Fixed **at the class**:
@@ -20153,6 +20159,11 @@ records, not drifting.
    parity): the two H4 self-report lines share a 61-char prefix (49/50
    distinct). The comment now states the window is a rename detector, not a
    unique identity, and the count pin (finding 2) covers what it cannot see.
+   [Round-34 mark: wave 23 tester showed the batch-9 replacement sentences
+   were still false as written — the scalar count does NOT catch a rename
+   whose 24-prefix collides with a surviving label, nor a delete+duplicate.
+   Batch 10's multiset hash is what covers the window's blind spot; the
+   code comment now says exactly that.]
 6. **Three Round-32 sentences false as written** (ffp, all reproduced): "all
    eleven G6/G7 KEEP legs" → ten (E4 ran after E3's terminal rewrite and fired
    on G6 itself); "only section I caught refuse-everything" → E3's exact-path
@@ -20191,3 +20202,86 @@ Next: wave 23 (fresh fit-for-purpose, parity, tester at the batch-9 revision;
 briefs narrowed to the batch-9 deltas) → all-7 PASS at one revision ⇒ tree
 FINAL → leg-27 Windows re-stamp → closure battery (`1609b395…`) → evidence
 child commit → astra turn 12 → push.
+
+## Round 34 — wave 23 (three roles at 0ad221fd): 0 PASS / 3 FAIL, 4 distinct P2s; batch 10 closes them (2026-09-20)
+
+Reviewed revision: `0ad221fd` (batch 9). Fresh `fit-for-purpose`, `parity`
+and `tester`. All three FAILed; after dedup, **4 distinct P2s**, every one
+reproduced by execution (filer reproducer plus the lead's independent copy
+replay). No product/engine/wire/CLI/guard defect: `v4/` empty-diff since
+`9a8f64e8`, guard `abacfa59…`, blob `d4e5ce5bb223`. The wave also confirmed
+CLOSED, by execution, every batch-9 closure in scope (driver count rule alive
+— re-declaring a count flips it to NOT-CAUGHT; subtree arm pinned by its own
+leg with no mutual masking with the target arm; E5 rc assertion catches a
+silent `exit(3)`; binding chain, H3, pairs, kit-state numbers all recompute).
+
+**The four findings and their closures:**
+
+1. **H4's batch-9 scalar count pin was forgeable** (parity + tester,
+   converged; lead reproduced all three shapes on copies): delete one `ok`
+   leg and duplicate another at unchanged count; erase one H4 self-report
+   line and duplicate the cross-log twin; invert ` refused` → ` allowed` on a
+   label whose base exists in the source. A count cannot see a multiset
+   change. Fixed: each shipped suite now declares `# H4-LABEL-HASH:` — the
+   sha256 of its green ok-label **multiset** (sorted, newline-joined) — and
+   H4's reverse direction requires the bound log's multiset to match. The
+   forward prefix pin stays as an independent check, so re-typing the
+   declaration to match a forged log fails when the forged labels do not
+   exist in the source. Falsified against exactly the three forgery shapes
+   (all FAIL) plus the battery's stale-declaration and deleted-leg cases.
+2. **Batch 9's replacement sentences were still false as written** (tester
+   F2): "24 chars is enough to catch a renamed or removed label base" and
+   "the count catches it" — refuted by the same forgeries. The code comment
+   now states the window is a rename detector and the multiset hash is the
+   integrity pin; the two Round-33 sentences are marked in place above.
+3. **The G6 target-unreadable arm was unpin-detectable** (tester): reverting
+   `kit-rm.py:187-188` kept the suite 55/55 green and the tool reported a
+   mode-0300 tree containing `.git/` and a mode-000 child as removable
+   (removal itself still fails safely inside rmtree, hence P2 not P1; lead
+   reproduced). Fixed: E4 gained a third fixture — target mode 0300 (writable
+   + executable, NOT readable) hiding a `.git` entry and a mode-000 child —
+   pinned by the named leg `G6 unreadable target: refuse before blind
+   removal`, and the driver gained the **g6-unreadable mutant** (exactly 1
+   FAIL, the named leg).
+4. **The E5 fixture never reached the `os.fsencode` arm** (fit-for-purpose):
+   the byte-invalid list line named a directory that was never created, so
+   `check()` returned at `G5 not a directory` before the G7 needle scan;
+   reverting `os.fsencode` → `encode()` kept the suite 55/55 green while the
+   Round-32 record claimed the E5 counterfactual load-bearing (lead
+   reproduced both directions: fixture as shipped → green; fixture with the
+   raw-0xFF dir created → `FAIL E5 traceback`). Fixed at the fixture: E5 now
+   creates the undisplayable directory, so the run reaches the needle scan,
+   and the driver gained the **g7-fsencode mutant** (exactly 1 FAIL, the E5
+   traceback leg).
+
+**Kit state after batch 10, converged to a fixpoint:** kit-gc suite **50
+assertions, 0 failures**; kit-rm suite **56 assertions, 0 failures** (55 +
+the unreadable-target leg); falsification driver **12 mutants + crash
+self-test, all CAUGHT** — one reverted arm per guard, including all three G6
+arms and the G7 fsencode arm, plus refuse-everything. Two arms have no mutant
+because they are unreachable given the earlier checks (measured at batch 10:
+reverting either keeps the suite 56/56 green): `G2 resolves to .local itself
+or above` and `G5 is a symlink` — both are pre-empted by the G1 realpath arm
+plus the G2 inside-.local arm, so they are defense-in-depth, not reachable
+behavior. The claim is therefore scoped exactly: **every guard has a mutant,
+and every arm that can fire alone has a mutant**; the two unreachable arms are
+recorded as a P3 (wave 23 tester) with the reachability argument, and whether
+to delete them is an open design decision, not a silent edit. manifest **41 entries,
+13 staged/live pairs**, head deriving to HEAD after this record's commit is
+re-stamped; H4 green both ways on both logs (50 + 56 labels, multiset hashes
+matching the suites' own declarations); H5 green (13 legs); external checker
+`OK (0 mismatch(es))`; restage `--dry-run` reports `manifest unchanged`; live
+reporter `rc 2` with exactly the two standing privacy fixtures and **0
+OVER-CAP**; zero `__pycache__` in policed dirs; `v4/` still empty-diff since
+`9a8f64e8`; guard `abacfa59…` unchanged. Falsification battery: 12/12
+outcomes as expected (copies only), covering the multiset pin's three
+forgery shapes.
+
+**Reviewer budget note:** all three roles filed on the first dispatch; no
+timeouts; no incidents this wave (the wave-22 symlink truncation did not
+recur — the briefs now warn about it).
+
+Next: wave 24 (fresh fit-for-purpose, parity, tester at the batch-10
+revision; briefs narrowed to the batch-10 deltas) → all-7 PASS at one
+revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure battery
+(`1609b395…`) → evidence child commit → astra turn 12 → push.
