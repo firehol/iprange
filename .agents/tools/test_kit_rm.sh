@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: a31cdd02bcd59ffb1cd3ccb97d128506f4f1e3a199e740268b1d2e4db320cdb0
+# H4-LABEL-HASH: 8eeddd1dc47311c58ab873522042969d760688d368564d8d8017a2b7527ea134
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -465,6 +465,116 @@ grep -q 'audit log is not appendable' <<<"$out" && [ "$rc" = 2 ] \
   || bad "DELETED WITH NO AUDIT TRAIL (dir case)"
 chmod 755 "$L/shared"; printf 'restored\n' >> "$L/shared/removals.log"
 rm -rf "$L/perf/w4"
+
+echo "--- J2: the log must be a REGULAR file (wave-29 fit-for-purpose P2-1) ---"
+# open("a") follows symlinks and blocks on FIFOs, so a log that is a link to
+# /dev/null "succeeds" while recording nothing durable: a worse outcome than
+# the wave-28 crash, because the run reports EXECUTED rc 0.
+mkdir -p "$L/perf/w5/cargo-target" && printf 'k\n' > "$L/perf/w5/cargo-target/f"
+LIST "$L/perf/w5/cargo-target"
+# literal labels per shape (no variable interpolation into ok labels): the H4
+# forward pin requires every printed label to appear verbatim in this source
+# (batch 9). A helper that interpolates the shape name would print a label the
+# source never contains, and the pin would reject the bound log.
+rm -f "$L/shared/removals.log"; ln -s /dev/null "$L/shared/removals.log"
+out=$(timeout 20 "$PYBIN" "$K" --list "$T/list" --runs-root "$T/async" --execute --reason "selftest" 2>&1); rc=$?
+[ "$rc" = 124 ] && bad "symlink log hung the tool (no timeout escape)" \
+  || { grep -q 'not a regular file' <<<"$out" && [ "$rc" = 2 ] \
+       && ok "symlink audit log refused at startup (rc 2)" || bad "symlink log rc=$rc: $(tail -1 <<<"$out")"; }
+[ -f "$L/perf/w5/cargo-target/f" ] && ok "symlink log: nothing deleted" \
+  || bad "DELETED WITH NO AUDIT TRAIL (symlink)"
+rm -f "$L/shared/removals.log"; mkfifo "$L/shared/removals.log"
+out=$(timeout 20 "$PYBIN" "$K" --list "$T/list" --runs-root "$T/async" --execute --reason "selftest" 2>&1); rc=$?
+[ "$rc" = 124 ] && bad "fifo log hung the tool (no timeout escape)" \
+  || { grep -q 'not a regular file' <<<"$out" && [ "$rc" = 2 ] \
+       && ok "fifo audit log refused at startup (rc 2)" || bad "fifo log rc=$rc: $(tail -1 <<<"$out")"; }
+[ -f "$L/perf/w5/cargo-target/f" ] && ok "fifo log: nothing deleted" \
+  || bad "DELETED WITH NO AUDIT TRAIL (fifo)"
+rm -rf "$L/shared/removals.log"; mkdir "$L/shared/removals.log"
+out=$(timeout 20 "$PYBIN" "$K" --list "$T/list" --runs-root "$T/async" --execute --reason "selftest" 2>&1); rc=$?
+[ "$rc" = 124 ] && bad "dir log hung the tool (no timeout escape)" \
+  || { grep -q 'not a regular file' <<<"$out" && [ "$rc" = 2 ] \
+       && ok "dir audit log refused at startup (rc 2)" || bad "dir log rc=$rc: $(tail -1 <<<"$out")"; }
+[ -f "$L/perf/w5/cargo-target/f" ] && ok "dir log: nothing deleted" \
+  || bad "DELETED WITH NO AUDIT TRAIL (dir)"
+rm -rf "$L/shared/removals.log"
+printf 'restored\n' > "$L/shared/removals.log"
+rm -rf "$L/perf/w5"
+
+echo "--- J3: the record is durable BEFORE the path is destroyed (wave-29 parity P2-1) ---"
+# RLIMIT_FSIZE makes the log unwritable for NEW data while open("a") succeeds:
+# the old code deleted the target and then died in the append. With
+# write-ahead audit the append failure refuses the removal instead.
+mkdir -p "$L/perf/w6/cargo-target" && printf 'k\n' > "$L/perf/w6/cargo-target/f"
+head -c 1000 /dev/zero | tr '\0' 'x' > "$L/shared/removals.log"
+LIST "$L/perf/w6/cargo-target"
+out=$(bash -c "ulimit -f 1; exec timeout 60 '$PYBIN' '$K' --list '$T/list' --runs-root '$T/async' --execute --reason selftest" 2>&1); rc=$?
+grep -q 'audit record could not be written' <<<"$out" \
+  && ok "write-time log failure refuses the removal" || bad "write-time failure rc=$rc: $(tail -1 <<<"$out")"
+[ -f "$L/perf/w6/cargo-target/f" ] && ok "target intact when the record cannot be written" \
+  || bad "DELETED WITH NO AUDIT TRAIL (write-time)"
+grep -q '^REMOVED' <<<"$out" && bad "REMOVED claim without a record" || ok "no REMOVED claim"
+rm -rf "$L/perf/w6"
+
+echo "--- J4: a removal that fails after its record gets a compensating line ---"
+# Write-ahead means the log can name a path that survived. Without the
+# compensating entry the audit trail would claim a destruction that did not
+# happen. Deterministic at the unit level: rmtree is replaced by a raiser.
+cat > "$T/compensate-probe.py" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+scratch = sys.argv[2]
+os.makedirs(os.path.join(scratch, "inner"), exist_ok=True)
+open(os.path.join(scratch, "inner", "f"), "w").write("k\n")
+def boom(path, *a, **k):
+    raise OSError(13, "simulated rmtree failure")
+m.shutil.rmtree = boom
+m.gate_artifacts = lambda: []
+m.live_runs = lambda runs_root=None: []
+lst = os.path.join(os.path.dirname(scratch), "comp-list")
+with open(lst, "w") as fh:
+    fh.write(scratch + "\n")
+m.main(["kit-rm.py", "--list", lst, "--runs-root",
+        os.path.dirname(scratch), "--execute", "--reason", "selftest"])
+print("KEPT" if os.path.isdir(scratch) else "GONE")
+PY
+out=$("$PYBIN" "$T/compensate-probe.py" "$K" "$L/perf/w7/cargo-target" 2>&1); rc=$?
+tail -1 <<<"$out" | grep -q '^KEPT$' && ok "simulated rmtree failure kept the target" || bad "target state after simulated failure: $(tail -1 <<<"$out")"
+grep -q 'REMOVAL-FAILED: \[Errno 13\] simulated rmtree failure' "$L/shared/removals.log" \
+  && ok "compensating REMOVAL-FAILED line recorded" || bad "no compensating line in the audit log"
+rm -rf "$L/perf/w7" "$L/perf/w7/comp-list"
+
+echo "--- J5: O_NOFOLLOW closes the swap-between-check-and-open window ---"
+# The shape check lstats the log, then opens it: between the two an attacker
+# can replace a regular file with a symlink to /dev/null. O_NOFOLLOW makes
+# the open itself reject that. Deterministic at the unit level: lstat is
+# faked to report a regular file while the real path is a symlink.
+cat > "$T/nofollow-probe.py" <<'PROBE'
+import importlib.util, os, sys, stat
+spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+logdir = sys.argv[2]
+os.makedirs(logdir, exist_ok=True)
+m.AUDIT_LOG = os.path.join(logdir, "removals.log")
+real = os.path.join(logdir, "real-target")
+open(real, "w").write("nothing durable here\n")
+os.symlink(real, m.AUDIT_LOG)
+true_lstat = os.lstat
+def fake_lstat(path, *a, **k):
+    if path == m.AUDIT_LOG:
+        return os.stat(real)   # the attacker swapped AFTER a regular-file check
+    return true_lstat(path, *a, **k)
+os.lstat = fake_lstat
+why = m.append_audit("RECORD\n")
+print("REFUSED" if why else "FOLLOWED")
+PROBE
+out=$("$PYBIN" "$T/nofollow-probe.py" "$K" "$L/perf/w8" 2>&1 | tail -1)
+[ "$out" = "REFUSED" ] && ok "symlink swap after the shape check is refused" || bad "O_NOFOLLOW missing: the swap window was followed ($out)"
+grep -q RECORD "$L/perf/w8/real-target" && bad "audit record leaked through the swap" || ok "no record leaked through the swap"
+rm -rf "$L/perf/w8"
 
 echo
 # The sentinel states what the run shows (every assertion passed), not what

@@ -210,8 +210,14 @@ directories). Removal is the human procedure defined below.
   **G8** no non-terminal subagent run for this repository, because a role may
   be measuring inside its own sandbox right now; an unreadable status file or a
   missing runs root counts as live and refuses.
-  `--execute` additionally requires a non-empty `--reason`, and each removal is
-  appended to `.local/shared/removals.log` (timestamp, size, path, reason).
+  `--execute` additionally requires a non-empty `--reason`, and the audit
+  record for each removal (timestamp, size, path, reason) is appended,
+  flushed and fsynced to `.local/shared/removals.log` **before** the path is
+  destroyed, so no removal can complete without a durable record; a removal
+  that fails after its record gets a compensating `REMOVAL-FAILED` line. The
+  log must be a regular file (or absent): a symlink, directory or FIFO is
+  refused, because `open("a")` would follow or block on them and the trail
+  would silently not exist.
   List lines are paths and are used verbatim: a trailing space is part of a
   directory name, and stripping it would make `--execute` remove a *different*
   directory than the one listed while logging the stripped name. A line of only

@@ -35,8 +35,13 @@ Guards (a path is refused, not removed, if ANY fails):
       root means a role may be measuring inside its sandbox right now).
 
 Dry run is the default: nothing is removed unless --execute is passed WITH
---reason, and the removal of each path is logged (path, size, reason,
-timestamp) to `.local/shared/removals.log`.
+--reason. The audit record for each path (timestamp, size, path, reason) is
+appended, flushed and fsynced to `.local/shared/removals.log` BEFORE the
+destructive call, so a removal can never complete without a durable record;
+a removal that fails after its record gets a compensating line carrying a
+REMOVAL-FAILED field. The log must be a regular file (or absent): a symlink,
+directory or FIFO is refused, because open("a") would follow or block on
+them and the audit trail would silently not exist.
 
 Usage:
   kit-rm.py --list FILE                      # verify and report only
@@ -50,6 +55,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -66,6 +72,69 @@ RUNS_ROOT = "/tmp/pi-subagents-uid-1001/async-subagent-runs"
 TERMINAL = {"complete", "completed", "failed", "stopped", "cancelled",
             "canceled", "interrupted"}
 GLOB_CHARS = set("*?[]$\t\n\r'\"\\")
+
+
+AUDIT_LOG = os.path.join(SHARED, "removals.log")
+
+
+def audit_log_problem() -> str | None:
+    """Return why the audit log cannot hold a durable record, else None.
+
+    The log must be a regular file (or absent). open("a") follows symlinks
+    and blocks on FIFOs, so a link to /dev/null "succeeds" while nothing is
+    durably recorded, and a FIFO hangs the tool (wave-29 fit-for-purpose
+    P2-1). Appendability is probed, not assumed (wave-28 tester).
+    """
+    try:
+        st = os.lstat(AUDIT_LOG)
+    except FileNotFoundError:
+        st = None
+    if st is not None and not stat.S_ISREG(st.st_mode):
+        return (f"the audit log {AUDIT_LOG} is not a regular file "
+                f"({stat.filemode(st.st_mode)}); an append would not "
+                f"durably record anything")
+    try:
+        # O_NOFOLLOW makes the open itself reject a symlink, so a swap
+        # between the lstat above and this open cannot redirect the record
+        # (wave-29 fit-for-purpose P2-2: the race is closed at the syscall,
+        # not by check ordering).
+        os.close(os.open(AUDIT_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                         | os.O_NOFOLLOW))
+    except OSError as err:
+        return f"the audit log is not appendable ({err})"
+    return None
+
+
+def append_audit(line: str) -> str | None:
+    """Append one audit record durably; return a refusal reason, else None.
+
+    The shape check re-runs here, not only at startup: the log can be
+    replaced between the two (wave-29 fit-for-purpose P2-2, a reproduced
+    two-process chmod race). flush+fsync make the record durable BEFORE
+    the destructive call it documents, so a write-time failure (ENOSPC,
+    RLIMIT_FSIZE, a permission flip) refuses the removal instead of
+    orphaning it (wave-29 parity P2-1).
+    """
+    why = audit_log_problem()
+    if why:
+        return why
+    try:
+        fd = os.open(AUDIT_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                     | os.O_NOFOLLOW)
+    except OSError as err:
+        return f"the audit record could not be written ({err})"
+    # fdopen takes ownership of fd: on any later error the with-block closes
+    # it, so there is no second close here (a double close could release an
+    # unrelated recycled descriptor).
+    try:
+        with os.fdopen(fd, "a", encoding="utf-8",
+                       errors="surrogateescape") as fh:
+            fh.write(line)
+            fh.flush()
+            os.fsync(fh.fileno())
+    except OSError as err:
+        return f"the audit record could not be written ({err})"
+    return None
 
 
 def human(n: float) -> str:
@@ -412,14 +481,12 @@ def main(argv: list[str]) -> int:
         # The audit log is part of the removal contract: a removal that cannot
         # be logged must not happen. Without this probe an unwritable log let
         # rmtree complete, the append then crashed, and the run reported
-        # nothing about what it destroyed (wave-28 tester).
-        try:
-            with open(os.path.join(SHARED, "removals.log"), "a",
-                      encoding="utf-8", errors="surrogateescape"):
-                pass
-        except OSError as err:
-            print(f"refusing to remove anything: the audit log is not "
-                  f"appendable ({err})", file=sys.stderr)
+        # nothing about what it destroyed (wave-28 tester). The probe runs
+        # once here; the per-path append re-checks, because the record is
+        # written BEFORE the destructive call (wave-29).
+        why = audit_log_problem()
+        if why:
+            print(f"refusing to remove anything: {why}", file=sys.stderr)
             return 2
     if not os.path.isdir(args.runs_root):
         # An absent runs root cannot prove there is no live reviewer.
@@ -449,24 +516,33 @@ def main(argv: list[str]) -> int:
             kept += 1
             print(f"KEEP    re-check failed ({why2}): {path}")
             continue
+        # Write-ahead audit: the record is durable before the path is
+        # destroyed, so no removal can complete unlogged and no crash can
+        # orphan a deletion (wave-29). A removal that fails after its record
+        # gets a compensating line, so the log never claims a destruction
+        # that did not happen.
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # surrogateescape so the recorded path is the bytes that were removed,
+        # not a replacement character: the log is the audit trail.
+        why = append_audit(f"{stamp}\t{human(nbytes)}\t{path}\t{args.reason}\n")
+        if why:
+            kept += 1
+            print(f"KEEP    audit record refused ({why}): {path}")
+            continue
         try:
             shutil.rmtree(path)
         except OSError as err:
             kept += 1
+            append_audit(f"{stamp}\t-\t{path}\t{args.reason}\tREMOVAL-FAILED: {err}\n")
             print(f"KEEP    removal failed ({err}): {path}")
             continue
         if os.path.exists(path):
             kept += 1
+            append_audit(f"{stamp}\t-\t{path}\t{args.reason}\tREMOVAL-FAILED: still present\n")
             print(f"KEEP    still present after rmtree: {path}")
             continue
         removed += 1
         freed += nbytes
-        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        # surrogateescape so the recorded path is the bytes that were removed,
-        # not a replacement character: the log is the audit trail.
-        with open(os.path.join(SHARED, "removals.log"), "a",
-                  encoding="utf-8", errors="surrogateescape") as fh:
-            fh.write(f"{stamp}\t{human(nbytes)}\t{path}\t{args.reason}\n")
         print(f"REMOVED {human(nbytes)}: {path}")
 
     mode = "EXECUTED" if args.execute else "DRY RUN"

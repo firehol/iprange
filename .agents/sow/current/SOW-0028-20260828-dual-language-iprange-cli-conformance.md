@@ -20775,3 +20775,103 @@ revision, same stopping-rule brief) → if clean, re-run security,
 performance, operations, portability at the same final revision → all-7
 PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
 battery (`1609b395…`) → evidence child commit → astra turn 12 → push.
+
+## Round 40 — wave 29 (three roles at 8327a366): 1 PASS / 2 FAIL, 3 P2 (one family); batch 16 (2026-09-20)
+
+Reviewed revision: `8327a366` (batch 15). Fresh `fit-for-purpose`, `parity`
+and `tester` under the stopping rule. **tester PASS** (l1 revert fires its
+4 named legs with no masking; dangling-symlink / directory-as-log /
+read-only-mount all refuse; G7 message-pins proven load-bearing; battery
+25/25; H5 duplicate pin fires; H4 hash recomputed live==bound==header).
+**parity FAIL (1 P2)** and **fit-for-purpose FAIL (2 P2)** — all three P2s
+are the same fail-open family, one level deeper than batch 15. No product/
+engine/wire/CLI defect: `v4/` empty-diff since `9a8f64e8`, guard
+`abacfa59…`, blob `d4e5ce5bb223`.
+
+**The finding (required behavior, cannot be scoped away):**
+
+The batch-15 startup probe pinned only the `open()`-time failure. Three
+executed counterexamples show a removal can still complete with no durable
+audit record:
+
+- **parity P2-1** — `removals.log` under `RLIMIT_FSIZE` (`ulimit -f`): the
+  probe's `open("a")` succeeds, `rmtree` completes, the audit **write**
+  raises `OSError: [Errno 27] File too large` → rc 1, target GONE, zero log
+  entries. Executed twice, deterministic; all 78 labels + 25 battery legs
+  stayed green on it.
+- **fit-for-purpose P2-1** — `removals.log` is a symlink to `/dev/null` (or
+  dangling): `open("a")` follows it, the probe passes, removals execute rc 0
+  printing `EXECUTED` with zero durable audit — a worse outcome than
+  wave-28's rc 1, because nothing looks wrong.
+- **fit-for-purpose P2-2** — post-probe TOCTOU: a real two-process race
+  (flip the log `chmod 444` mid-run during a 3000-dir `rmtree`) reproduced
+  the wave-28 signature 3/3. The probe is startup-only; the append had no
+  re-check and no write-time handler.
+
+All three violate the frozen REVIEWS.md § Kit hygiene invariant "each
+removal is appended to `removals.log`". tester had filed the RLIMIT shape as
+P3 (judged theoretical); parity executed it deterministically and met the
+bar, so it is a P2 — the bar-check governs, not the vote.
+
+**Batch 16 closure — one mechanism, write-ahead audit:**
+
+- The audit record is now appended, `flush`ed and `fsync`ed to
+  `removals.log` **before** `rmtree`, so no removal can complete without a
+  durable record and no crash can orphan a deletion. A removal that fails
+  after its record gets a compensating `REMOVAL-FAILED` line, so the log
+  never claims a destruction that did not happen. This closes parity P2-1
+  (write-time failure now refuses the removal) and the TOCTOU half of ffp
+  P2-2 (the record is durable before the window matters).
+- `audit_log_problem()` requires the log to be a **regular file** (or
+  absent): a symlink, directory or FIFO is refused, because `open("a")`
+  would follow or block on them and the trail would silently not exist.
+  This closes ffp P2-1.
+- Both audit opens use `O_NOFOLLOW`, closing the swap-between-check-and-open
+  window at the syscall rather than by check ordering (the other half of ffp
+  P2-2).
+- REVIEWS.md § Kit hygiene states the strengthened contract (write-ahead,
+  fsync, regular-file requirement, compensating line).
+
+**Suite/driver additions:** section J2 (symlink/fifo/dir log, each with a
+literal label — the H4 forward pin rejects interpolated labels, found when a
+`$shape`-interpolating helper made the bound log red), J3 (RLIMIT_FSIZE
+write-time failure refuses the removal, target intact, no REMOVED claim),
+J4 (simulated rmtree failure after the record → compensating line), J5
+(faked lstat reports a regular file while the real path is a symlink →
+`O_NOFOLLOW` refuses the swap). Driver: `l1-log-probe` re-anchored to the new
+startup probe, `l2-shape-check` (fires all three J2 shapes), `l2b-nofollow`
+(fires J5), `l3-write-ahead` (moves the record back after rmtree, fires J3 +
+J4); `refuse-everything` collateral widened to 52.
+
+**Kit state after batch 16, converged to a fixpoint:** kit-rm suite **91
+assertions, 0 failures** (78 + the 13 batch-16 legs); kit-gc suite **50, 0**;
+falsification driver **27 mutants + crash self-test, all CAUGHT** (H5 prints
+28 legs); manifest **41 entries, 13 staged/live pairs**, head re-stamped to
+this record's commit; H4 green both ways on both logs (91 + 50 labels,
+multiset hashes match, greenness pins); H5 green (28 legs by count +
+greenness); external checker `OK (0 mismatch(es))`; restage `--dry-run`
+reports `manifest unchanged`; live reporter `rc 2` with exactly the two
+standing privacy fixtures and 0 OVER-CAP; zero `__pycache__`; `v4/` still
+empty-diff since `9a8f64e8`; guard `abacfa59…` unchanged.
+
+**Capture-sequence lesson, recorded for the kit:** the kit-gc H4 kit-rm leg
+reads the LIVE `.agents/tools/test_kit_rm.sh` source, so a capture sequence
+that rewrites the kit-rm source header between the kit-rm and kit-gc captures
+makes kit-gc's own log red — and a red kit-gc capture then corrupts the
+kit-gc source header if its hash is recomputed from that red run. The correct
+order is: finalize ALL sources first, then capture kit-rm → re-stage →
+capture kit-gc → re-stage → verify. The greenness pin did its job (it
+rejected the red bound log); the recovery was to restore the batch-15 kit-gc
+state (source unchanged in batch 16) and re-capture cleanly.
+
+Remaining P3s recorded, none blocking: FIFO `status.json` hangs `live_runs()`
+(fail-closed while hung); `size_of` unpinned (audit-size field only);
+non-UTF8 tracked filename crashes `gate_artifacts()` at rc 1 (still
+fail-closed; live repo has zero such names); sticky-parent + foreign-owned-
+target residual needs root to construct; battery 25/25 remains a run-fact.
+
+Next: wave 30 (fresh fit-for-purpose, parity, tester at the batch-16
+revision, same stopping-rule brief) → if clean, re-run security,
+performance, operations, portability at the same final revision → all-7
+PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
+battery (`1609b395…`) → evidence child commit → astra turn 12 → push.
