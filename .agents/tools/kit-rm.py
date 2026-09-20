@@ -72,8 +72,12 @@ def human(n: float) -> str:
     return f"{n / (1024 * 1024):.1f} MB"
 
 
-def gate_artifacts() -> list[str]:
-    """Files whose content makes a kit path load-bearing for the record."""
+def gate_artifacts() -> list[str] | None:
+    """Files whose content makes a kit path load-bearing for the record.
+
+    Returns None when the tracked-file scan failed: every caller must treat
+    that as a refusal, never as "no citations" (wave-26 tester finding).
+    """
     # The kit records are collected FIRST: if `git ls-files` fails we must
     # still check the files that make a kit path load-bearing, never return an
     # empty list (an empty list would disable G7 and fail open).
@@ -84,9 +88,12 @@ def gate_artifacts() -> list[str]:
         listing = subprocess.run(["git", "-C", REPO, "ls-files", "-z"],
                                  capture_output=True, check=True).stdout
     except (OSError, subprocess.SubprocessError):
-        listing = b""
-        print("note: git ls-files failed; tracked files are not scanned by G7",
-              file=sys.stderr)
+        # A failed scan of tracked files must REFUSE, not note-and-continue:
+        # a citation in any tracked file would be invisible and a real
+        # --execute would remove a path the record depends on
+        # (wave-26 tester finding; REVIEWS.md § Kit hygiene: a failed
+        # `git ls-files` leads to refusal, not to removal).
+        return None
     out += [os.path.join(REPO, p.decode()) for p in listing.split(b"\0") if p]
     return [p for p in out if os.path.isfile(p)]
 
@@ -119,7 +126,11 @@ def referenced(path: str, texts: list[str]) -> str | None:
     # needle scan above cannot see this (the record never spells out the
     # deeper path), so citations are matched as a set and any ancestor or
     # descendant relationship refuses the path.
-    for cited in cited_paths():
+    cited_set = cited_paths()
+    if cited_set is None:
+        return ("tracked-file scan failed; citations cannot be verified "
+                "(refused, not skipped)")
+    for cited in cited_set:
         if path == cited or path.startswith(cited + os.sep) \
                 or cited.startswith(path + os.sep):
             return f"related to cited path {cited}"
@@ -163,18 +174,30 @@ def live_runs(runs_root: str = RUNS_ROOT) -> list[str]:
     like "no live runs" and a real --execute removed a tree with the
     evidence unreadable (wave-25 fit-for-purpose finding, same class one
     permission level away).
+
+    Enumeration is scandir over the root, not a glob of */status.json: a
+    glob silently omits a mode-000 RUN DIRECTORY, which hid a live
+    repo-scoped run from both the startup scan and the pre-deletion recheck
+    and a real --execute removed a tree beside it (wave-26 fit-for-purpose
+    finding, the family one level deeper). With scandir, any run directory
+    whose status cannot be inspected -- directory unreadable, file
+    unreadable, malformed JSON -- counts as live: the whole fail-open family
+    closes at one mechanism instead of one permission level at a time.
     """
-    if not os.path.isdir(runs_root):
-        return [f"runs-root {runs_root} is not a directory"]
-    if not os.access(runs_root, os.R_OK | os.X_OK):
-        return [f"runs-root {runs_root} is not readable"]
     live = []
-    for status in glob.glob(os.path.join(runs_root, "*", "status.json")):
+    try:
+        run_dirs = [e.path for e in os.scandir(runs_root) if e.is_dir()]
+    except OSError as err:
+        return [f"runs-root {runs_root} cannot be listed ({err.__class__.__name__})"]
+    for run_dir in run_dirs:
+        status = os.path.join(run_dir, "status.json")
         try:
             with open(status, encoding="utf-8") as fh:
                 rec = json.load(fh)
+        except FileNotFoundError:
+            continue
         except (OSError, ValueError):
-            live.append(os.path.basename(os.path.dirname(status)) + ":unreadable")
+            live.append(os.path.basename(run_dir) + ":unreadable")
             continue
         state = rec.get("state")
         cwd = rec.get("cwd")
@@ -239,20 +262,29 @@ def size_of(path: str) -> int:
 
 
 _CITED_CACHE: list[str] | None = None
+_CITED_FAILED = False
 
 
-def cited_paths() -> list[str]:
+def cited_paths() -> list[str] | None:
     """Absolute paths named in a gate artifact, cached for the descendant test.
 
     Extracted rather than hand-listed: a citation is any `.local/...` token in
     a record, at any depth, in either the absolute or the repo-relative form.
+    Returns None when the tracked-file scan failed (refusal, not "no
+    citations"); the failure is sticky for the process.
     """
-    global _CITED_CACHE
+    global _CITED_CACHE, _CITED_FAILED
+    if _CITED_FAILED:
+        return None
     if _CITED_CACHE is not None:
         return _CITED_CACHE
+    arts = gate_artifacts()
+    if arts is None:
+        _CITED_FAILED = True
+        return None
     found: set[str] = set()
     token = re.compile(r"(?:\.local/[\w.\-]+)(?:/[\w.\-]+)*")
-    for art in gate_artifacts():
+    for art in arts:
         try:
             text = open(art, encoding="utf-8", errors="replace").read()
         except OSError:
@@ -348,6 +380,12 @@ def main(argv: list[str]) -> int:
         return 2
 
     texts = gate_artifacts()
+    if texts is None:
+        # G7 cannot be evaluated without the tracked-file scan; refusing is
+        # the documented behavior (REVIEWS.md § Kit hygiene; wave-26 tester).
+        print("G7: git ls-files failed; tracked citations cannot be "
+              "verified; removal is refused", file=sys.stderr)
+        return 2
     if not os.path.isdir(args.runs_root):
         # An absent runs root cannot prove there is no live reviewer.
         print(f"G8: runs root {args.runs_root} is not a directory; "

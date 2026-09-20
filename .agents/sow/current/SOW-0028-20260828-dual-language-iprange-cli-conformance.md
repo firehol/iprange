@@ -20461,10 +20461,14 @@ product/engine/wire/CLI defect: `v4/` empty-diff since `9a8f64e8`, guard
    unreadable — the same fail-closed class astra found at batch 11, one
    permission level away. Fixed at the source: an unreadable root counts as
    live; pinned by a named E6 leg and the `g8-root-unreadable` mutant.
-3. **Three fail-closed arms named in REVIEWS.md § Kit hygiene had no
-   detecting leg** (ffp + tester, converged): `live_runs` `:unreadable`
-   (invalid status), `:no-cwd`, unrecognized-state, and `referenced()`'s
-   artifact-unreadable arm — reverts kept the suite 59/59 green while
+ 3. **Three fail-closed arms named in REVIEWS.md § Kit hygiene had no
+    detecting leg** (ffp + tester, converged): `live_runs` `:unreadable`
+    (invalid status), `:no-cwd`, unrecognized-state, and `referenced()`'s
+    artifact-unreadable arm [Round-37 mark: "named in REVIEWS.md" overstates —
+    REVIEWS.md:219-220 names four conditions (unrecognized run state,
+    unreadable status, missing runs root, failed `git ls-files`); `:no-cwd`
+    and the artifact-unreadable arm are the tool's own fail-closed choices,
+    required by the same rule's logic but not enumerated there] — reverts kept the suite 59/59 green while
    removals proceeded with the evidence unreadable or malformed (tester
    executed a `REMOVED` with a live-run status present). These are required
    behavior, so evidence is owed: five new E6 legs (unreadable root,
@@ -20472,9 +20476,15 @@ product/engine/wire/CLI defect: `v4/` empty-diff since `9a8f64e8`, guard
    plus a file-runs-root unit probe that keeps the `isdir` arm load-bearing
    (without it the `isdir` revert was an equivalent mutant — the
    unreadable-root check masks it for absent paths; wave-25 tester P3), and
-   five new driver mutants, each firing exactly its named leg(s). The
-   coverage sentence is now true arm-by-arm by measurement, not by scope
-   reduction.
+    five new driver mutants, each firing exactly its named leg(s). The
+    coverage sentence is now true arm-by-arm by measurement, not by scope
+    reduction. [Round-37 mark: still false as written — wave 26 found three
+    more arms firing alone with no leg: the glob enumeration hiding a
+    mode-000 RUN DIRECTORY (ffp, executed REMOVED), the note-and-continue on
+    a failed `git ls-files` (tester, executed REMOVED of a tracked-file-cited
+    dir), and the pre-deletion recheck's freshness (tester, race + unit
+    probe). Batch 13 closed the family at the mechanism (scandir + refusal +
+    fresh recheck) with legs and mutants per branch; see Round 37.]
 4. **"H5 green (13 legs)" misquoted its bound artifact** (ffp + tester;
    parity filed it P3): the artifact printed 14 (13 mutants + the crash
    self-test). Marked in place; batch-12 numbers below quote the printed
@@ -20502,6 +20512,101 @@ incidents. The freeze-test bar worked as intended: every blocker named
 requirement + counterexample + consequence.
 
 Next: wave 26 (fresh fit-for-purpose, parity, tester at the batch-12
+revision, same stopping-rule brief) → all-7 PASS at one revision ⇒ tree
+FINAL → leg-27 Windows re-stamp → closure battery (`1609b395…`) → evidence
+child commit → astra turn 12 → push.
+
+## Round 37 — wave 26 (three roles at cbe8b93e): 1 PASS / 2 FAIL, 3 distinct P2s; batch 13 closes the fail-open family (2026-09-20)
+
+Reviewed revision: `cbe8b93e` (batch 12). Fresh `fit-for-purpose`, `parity`
+and `tester` under the stopping rule. **parity PASS (0 P0–P2)** — the first
+role PASS since wave 21; its two residual pin-asymmetries were filed P3
+(correctly: refused downstream by restage unanimity + checker digests, no
+material consequence). ffp FAIL (1 P2), tester FAIL (2 P2); after dedup,
+**3 distinct P2s**, all reproduced by the lead on copies before fixing.
+No product/engine/wire/CLI defect: `v4/` empty-diff since `9a8f64e8`, guard
+`abacfa59…`, blob `d4e5ce5bb223`.
+
+**The three findings — all destructive fail-opens of frozen required
+behavior (REVIEWS.md § Kit hygiene), not meta-layer pin findings:**
+
+1. **A mode-000 RUN DIRECTORY hid a live run from the glob** (ffp,
+   executed): `live_runs()` enumerated `runs_root/*/status.json` with a
+   glob, which silently omits an unreadable sub-directory; `--execute`
+   removed a scratch tree while a repo-scoped `running` status sat in a
+   mode-000 run dir. This was the third level of the same family (vanished
+   root → unreadable root → unreadable run dir).
+2. **A failed `git ls-files` noted-and-continued instead of refusing**
+   (tester, executed): with a broken `.git`, a path cited only in a TRACKED
+   file was REMOVED with a stderr note — REVIEWS.md:219-220 says a failed
+   `git ls-files` leads to refusal.
+3. **The pre-deletion recheck's freshness had no detecting evidence**
+   (tester): the code calls `live_runs()` fresh at the recheck (correct),
+   but a stale-reuse mutant kept the suite 65/65 green and removed a late
+   target in a race (2/3 vs 0/3) — the wave-24 "startup held, recheck did
+   not" gap one level deeper, this time in the evidence rather than the
+   code.
+
+**Batch 13 closures (family-level, per the astra rule that required
+behavior cannot be edited away):**
+
+1. `live_runs()` restructured: `os.scandir()` over the root (a mode-000 run
+   dir still appears in the listing; its unopenable `status.json` then
+   counts live) with the list failure itself returning a live entry — the
+   whole fail-open family closes at one mechanism instead of one permission
+   level at a time. A `FileNotFoundError` (run dir without `status.json`)
+   skips: a stray directory is not a run, and counting it live would
+   refuse the tool forever — pinned by its own DRY leg and mutant.
+2. `gate_artifacts()` returns None on a failed `git ls-files`; `main()`
+   refuses with rc 2 and `referenced()` refuses per-path when the citation
+   set is unavailable. The suite's sandbox is now a REAL git repo (a fake
+   `.git` would refuse every leg for the wrong reason), and a broken-git
+   mini-sandbox leg proves the refusal.
+3. The recheck freshness is pinned by a deterministic unit probe (first
+   `live_runs()` call no-runs, later calls live; correct code refuses at
+   the re-check and removes nothing; a stale-reuse mutant prints REMOVED)
+   and the `recheck-stale` mutant.
+4. Driver: 21 mutants + crash self-test (was 18+1), each firing exactly its
+   named leg(s) with declared collateral; the three dead anchors from the
+   rewrite were replaced by per-branch mutants (`g8-list-fail`,
+   `g8-scandir`, `g8-stray-dir`, `g8-status-unreadable`, `recheck-stale`,
+   `g7-gitfail`).
+5. Parity's two P3 asymmetries closed inside the same pins (lstrip-aligned
+   TIMED-rc regexes in H4/H5 matching restage's; `NOT-CAUGHT` anchor without
+   a required space; H5 additionally zero-checks FAIL lines), and H5 gained
+   a CAUGHT-line COUNT check — a duplicated mutant block (found by eye when
+   an edit left `g8-scandir` defined twice) passes a set comparison but not
+   a count. Battery: **25/25** outcomes (adds the indented-rc and
+   no-space-NOT-CAUGHT shapes).
+6. Wording corrections marked in place: the Round-36 arm-coverage sentence
+   (false for these three arms until batch 13) and "named in REVIEWS.md"
+   (the doc names four conditions; `:no-cwd` and the artifact-unreadable
+   arm are the tool's own fail-closed choices under the same rule's logic).
+   The battery is a runnable script whose output is NOT a manifest entry —
+   "bound in the battery" is narrowed to "the battery script contains the
+   shapes and runs 25/25; its run is not a bound artifact".
+
+**Kit state after batch 13, converged to a fixpoint:** kit-gc suite **50
+assertions, 0 failures**; kit-rm suite **69 assertions, 0 failures** (65 +
+the four batch-13 legs); falsification driver **21 mutants + crash
+self-test, all CAUGHT** (H5 prints 22 legs); manifest **41 entries, 13
+staged/live pairs**, head deriving to HEAD after this record's commit is
+re-stamped; H4 green both ways on both logs (50 + 69 labels; multiset
+hashes match the suites' declarations; greenness: zero FAIL lines
+whitespace-tolerant, all TIMED rc lines 0 after lstrip, unique success
+sentinel) and H5 green (22 legs by count + greenness); external checker
+`OK (0 mismatch(es))`; restage `--dry-run` reports `manifest unchanged`;
+live reporter `rc 2` with exactly the two standing privacy fixtures and **0
+OVER-CAP**; zero `__pycache__` in policed dirs; `v4/` still empty-diff
+since `9a8f64e8`; guard `abacfa59…` unchanged. Battery: **25/25** outcomes
+as expected (copies only).
+
+**Reviewer budget note:** all three roles filed on the first dispatch; no
+incidents. Wave 26 is the first wave with a role PASS; the three findings
+were required-behavior defects, exactly what the stopping rule says cannot
+be scoped away.
+
+Next: wave 27 (fresh fit-for-purpose, parity, tester at the batch-13
 revision, same stopping-rule brief) → all-7 PASS at one revision ⇒ tree
 FINAL → leg-27 Windows re-stamp → closure battery (`1609b395…`) → evidence
 child commit → astra turn 12 → push.

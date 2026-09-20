@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: 863b3fc0fd1f9e2eee798e665b82159e27e7a1b9cdb583bb11aa807971e5ccf3
+# H4-LABEL-HASH: ce0ab7b804424a26b06dcef7493db24d30ffb7d5c0a89210764005324d678701
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -22,10 +22,19 @@ ok(){ echo "ok   $1"; }
 bad(){ echo "FAIL $1"; fail=1; }
 
 # Sandbox repo that mirrors the real layout so attacks are real, not mocked.
-R="$T/repo"; mkdir -p "$R/.agents/tools" "$R/.git" "$R/.local/shared/evidence/round16"
+# A REAL git repo: gate_artifacts() now refuses when `git ls-files` fails
+# (wave-26 tester), so a fake .git would refuse every leg for the wrong
+# reason. The tracked file carries no `.local/` token, so it adds no G7
+# citation and cannot make any refusal correct for the wrong reason.
+command -v git >/dev/null || { echo "FAIL git is required by this suite"; exit 1; }
+R="$T/repo"; mkdir -p "$R/.agents/tools" "$R/.local/shared/evidence/round16"
 cp "$TOOL" "$R/.agents/tools/kit-rm.py"
 K="$R/.agents/tools/kit-rm.py"
 L="$R/.local"
+printf 'sandbox\n' > "$R/README.md"
+git -C "$R" -c init.defaultBranch=main init -q
+git -C "$R" -c user.name=suite -c user.email=suite@invalid add README.md
+git -C "$R" -c user.name=suite -c user.email=suite@invalid commit -q -m fixture
 
 # legitimate scratch: a build cache inside a role sandbox
 mkdir -p "$L/perf/w1/cargo-target/debug/deps" && head -c 200000 /dev/zero > "$L/perf/w1/cargo-target/debug/deps/x.o"
@@ -295,6 +304,61 @@ printf 'x\n' > "$L/shared/evidence/round17/manifest.json"
 chmod 000 "$L/shared/evidence/round17/manifest.json"
 LIST "$L/perf/w1/rr-scratch"; run "KEEP:G7 gate artifact" "G7 unreadable gate artifact refuses" --list "$T/list"
 chmod 644 "$L/shared/evidence/round17/manifest.json"; rm -rf "$L/shared/evidence/round17"
+# a live run hidden in an UNREADABLE RUN DIRECTORY: a glob of */status.json
+# silently omits it, so enumeration is scandir over the root and any run
+# directory whose status cannot be inspected counts as live (wave-26
+# fit-for-purpose: the fail-open family one level deeper than the root)
+mkdir -p "$A/hiddenrun"
+printf '{"state":"running","cwd":"%s"}\n' "$R" > "$A/hiddenrun/status.json"
+chmod 000 "$A/hiddenrun"
+LIST "$L/perf/w1/rr-scratch"; run "KEEP:G8 live subagent" "G8 hidden live run in an unreadable run dir" --list "$T/list"
+chmod 755 "$A/hiddenrun"; rm -rf "$A/hiddenrun"
+# a run directory WITHOUT status.json is not a run: scandir sees it, so the
+# FileNotFoundError arm must skip it -- otherwise every stray directory
+# refuses the tool forever (batch 13: the arm the scandir rewrite introduced)
+mkdir -p "$A/stray"
+LIST "$L/perf/w1/rr-scratch"; run DRY "stray run dir without status is not live" --list "$T/list"
+rmdir "$A/stray"
+# a failed `git ls-files` must REFUSE, not note-and-continue (wave-26
+# tester): the citation lives only in a tracked file, so a skipped scan
+# would remove a path the record depends on. Mini-sandbox with a broken .git.
+B="$T/broken-git"; mkdir -p "$B/.agents/tools" "$B/.git" "$B/.local/perf/w1/cited"
+cp "$TOOL" "$B/.agents/tools/kit-rm.py"
+printf 'cite %s\n' ".local/perf/w1/cited" > "$B/README.md"
+printf 'x\n' > "$B/.local/perf/w1/cited/f"
+mkdir -p "$T/async2"
+printf '%s\n' "$B/.local/perf/w1/cited" > "$T/list2"
+out=$("$PYBIN" "$B/.agents/tools/kit-rm.py" --list "$T/list2" --runs-root "$T/async2" --execute --reason selftest 2>&1); rc=$?
+[ "$rc" = 2 ] && [ -d "$B/.local/perf/w1/cited" ] \
+  && ok "G7 failed tracked-file scan: refused, cited dir intact" \
+  || bad "G7 git-scan failure not refused (rc=$rc): $(tail -1 <<<"$out")"
+# the pre-deletion recheck must call live_runs() FRESH (wave-26 tester: the
+# stale-reuse mutant kept the suite green and removed a late target in a
+# race). Deterministic at the unit level: first call no runs, later calls a
+# live run; correct code refuses at the re-check and removes nothing.
+cat > "$T/recheck-probe.py" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+scratch = sys.argv[2]
+os.makedirs(scratch, exist_ok=True)
+calls = {"n": 0}
+def fake_live_runs(runs_root=None):
+    calls["n"] += 1
+    return [] if calls["n"] == 1 else ["fakerun(running)"]
+m.live_runs = fake_live_runs
+m.gate_artifacts = lambda: []
+lst = os.path.join(os.path.dirname(scratch), "recheck-list")
+with open(lst, "w") as fh:
+    fh.write(scratch + "\n")
+m.main(["kit-rm.py", "--list", lst, "--runs-root",
+        os.path.dirname(scratch), "--execute", "--reason", "selftest"])
+print("REFUSED" if os.path.isdir(scratch) else "REMOVED")
+PY
+rc_out=$("$PYBIN" "$T/recheck-probe.py" "$K" "$L/perf/w1/recheck-target" 2>/dev/null | tail -1)
+[ "$rc_out" = "REFUSED" ] && ok "pre-deletion recheck calls live_runs fresh" || bad "recheck reused the planning live list ($rc_out)"
+rm -rf "$L/perf/w1/recheck-target" "$L/perf/w1/recheck-list"
 
 echo "--- F: live-run guard (G8) ---"
 # live_runs() scans <runs-root>/*/status.json, so the status lives in a run dir
