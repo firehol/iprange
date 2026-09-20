@@ -20379,13 +20379,20 @@ counterexample and a material consequence.
 3. **The sentinel wording narrowed** (astra step 4): the kit-rm suite's
    success line is now `SUITE: all assertions passed` — what the run shows —
    replacing `SUITE: all guards proven`, which implied exhaustive proof.
-4. **The three false sentences marked in place** (in the Round-34 text) and
-   the durable coverage claim narrowed to what is pinned: every guard has a
-   mutant; every arm that can fire alone is pinned by a named suite leg
-   (per-arm revert measured); G5-islink is reachable and doubly covered.
-   No mutants were added for the four overclaim arms (per the advisory), and
-   no coverage pin was added — the proof chain ends at independent
-   inspection here.
+ 4. **The three false sentences marked in place** (in the Round-34 text) and
+    the durable coverage claim narrowed to what is pinned: every guard has a
+    mutant; every arm that can fire alone is pinned by a named suite leg
+    (per-arm revert measured); G5-islink is reachable and doubly covered.
+    No mutants were added for the four overclaim arms (per the advisory), and
+    no coverage pin was added — the proof chain ends at independent
+    inspection here. [Round-36 mark: the narrowed sentence was still false as
+    written — wave 25 (ffp + tester, converged) reverted the `live_runs`
+    `:unreadable` and `:no-cwd` arms and the `referenced()`
+    artifact-unreadable arm and the suite stayed 59/59 green, so three
+    fail-closed arms named in REVIEWS.md § Kit hygiene fired alone with no
+    detecting leg. Batch 12 added the legs (required behavior, so evidence is
+    owed, not a sentence-rescue) and the matching driver mutants; the
+    sentence is now true by measurement, arm by arm.]
 
 **Kit state after batch 11, converged to a fixpoint:** kit-gc suite **50
 assertions, 0 failures**; kit-rm suite **59 assertions, 0 failures** (56 +
@@ -20394,7 +20401,17 @@ all CAUGHT**; manifest **41 entries, 13 staged/live pairs**, head deriving
 to HEAD after this record's commit is re-stamped; H4 green both ways on
 both logs (50 + 59 labels; multiset hashes match the suites' declarations;
 greenness: zero FAIL lines, footer rc 0, sentinel) and H5 green (13 legs +
-greenness); external checker `OK (0 mismatch(es))`; restage `--dry-run`
+greenness) [Round-36 marks: (a) "13 legs" misquoted the bound artifact, which
+printed 14 (13 mutants + the crash self-test) — the same class the milestone
+filed at Round-33; batch 12's record below quotes the printed number.
+(b) The batch-11 greenness pin was bypassable three ways (wave 25 parity,
+executed): a decoy `TIMED: label=decoy rc=0` line before the real rc=1 footer
+passed a first-match rc test and restage re-published rc 0 from it; a
+leading-space ` FAIL` line escaped the zero-FAIL anchor; a leading-space
+` NOT-CAUGHT` line escaped the H5 anchor. Batch 12 hardened all three
+(unanimity over every TIMED rc line, lstrip()-tolerant anchors, restage
+rejects disagreeing footers) and the bypass shapes are bound in the battery.]
+; external checker `OK (0 mismatch(es))`; restage `--dry-run`
 reports `manifest unchanged`; live reporter `rc 2` with exactly the two
 standing privacy fixtures and **0 OVER-CAP**; zero `__pycache__` in policed
 dirs; `v4/` still empty-diff since `9a8f64e8`; guard `abacfa59…` unchanged.
@@ -20412,3 +20429,79 @@ evidence, and is every durable sentence exactly what a pin proves — new
 blockers must name requirement + counterexample + material consequence) →
 all-7 PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
 battery (`1609b395…`) → evidence child commit → astra turn 12 → push.
+
+## Round 36 — wave 25 (three roles at 95f8be37): 0 PASS / 3 FAIL, 4 distinct P2s; batch 12 (2026-09-20)
+
+Reviewed revision: `95f8be37` (batch 11). Fresh `fit-for-purpose`, `parity`
+and `tester` under the astra stopping rule (every blocker must name the
+frozen requirement, an executed counterexample and a material consequence).
+All three FAILed; after dedup, **4 distinct P2s**, every one reproduced by
+execution (filer reproducer plus the lead's independent copy replay), every
+one meeting the bar — none is a pin-demand for imagined assurance. No
+product/engine/wire/CLI defect: `v4/` empty-diff since `9a8f64e8`, guard
+`abacfa59…`, blob `d4e5ce5bb223`.
+
+**The four findings and their closures:**
+
+1. **The batch-11 greenness pin was bypassable three ways** (parity,
+   executed): a decoy `TIMED: label=decoy rc=0` line inserted before the
+   real `rc=1` footer passed H4's first-match rc test, and `restage`
+   re-published rc 0 into the manifest from the decoy — the full chain
+   (pin → manifest → checker) attested a green run whose own footer said
+   rc≠0; a leading-space ` FAIL` line escaped the zero-FAIL anchor; a
+   leading-space ` NOT-CAUGHT` line escaped the H5 anchor. Closed: H4/H5
+   require **unanimity** over every `TIMED rc` line and match FAIL /
+   NOT-CAUGHT after `lstrip()`; `footer_values()` rejects disagreeing
+   footers (rc and begin/end/wall) with rc 1 instead of first-match. All
+   three bypass shapes plus the original five corruptions are bound in the
+   battery (23/23 outcomes).
+2. **`live_runs()` still failed open on an unreadable runs root** (ffp,
+   executed): `isdir()` passes a mode-000 root while the glob silently sees
+   no status files, so `--execute` removed a tree with the live-run evidence
+   unreadable — the same fail-closed class astra found at batch 11, one
+   permission level away. Fixed at the source: an unreadable root counts as
+   live; pinned by a named E6 leg and the `g8-root-unreadable` mutant.
+3. **Three fail-closed arms named in REVIEWS.md § Kit hygiene had no
+   detecting leg** (ffp + tester, converged): `live_runs` `:unreadable`
+   (invalid status), `:no-cwd`, unrecognized-state, and `referenced()`'s
+   artifact-unreadable arm — reverts kept the suite 59/59 green while
+   removals proceeded with the evidence unreadable or malformed (tester
+   executed a `REMOVED` with a live-run status present). These are required
+   behavior, so evidence is owed: five new E6 legs (unreadable root,
+   unreadable status, no-cwd, unrecognized state, unreadable gate artifact)
+   plus a file-runs-root unit probe that keeps the `isdir` arm load-bearing
+   (without it the `isdir` revert was an equivalent mutant — the
+   unreadable-root check masks it for absent paths; wave-25 tester P3), and
+   five new driver mutants, each firing exactly its named leg(s). The
+   coverage sentence is now true arm-by-arm by measurement, not by scope
+   reduction.
+4. **"H5 green (13 legs)" misquoted its bound artifact** (ffp + tester;
+   parity filed it P3): the artifact printed 14 (13 mutants + the crash
+   self-test). Marked in place; batch-12 numbers below quote the printed
+   value.
+
+**Kit state after batch 12, converged to a fixpoint:** kit-gc suite **50
+assertions, 0 failures**; kit-rm suite **65 assertions, 0 failures** (59 +
+the six batch-12 legs); falsification driver **18 mutants + crash
+self-test, all CAUGHT** (H5 prints 19 legs); manifest **41 entries, 13
+staged/live pairs**, head deriving to HEAD after this record's commit is
+re-stamped; H4 green both ways on both logs (50 + 65 labels; multiset
+hashes match the suites' declarations; greenness: zero FAIL lines
+whitespace-tolerant, all TIMED rc lines 0, unique success sentinel) and H5
+green (19 legs + greenness); external checker `OK (0 mismatch(es))`;
+restage `--dry-run` reports `manifest unchanged`; live reporter `rc 2` with
+exactly the two standing privacy fixtures and **0 OVER-CAP**; zero
+`__pycache__` in policed dirs (one appeared in `.agents/tools/` during wave
+25 from an unattributed child probe; removed — it is derived, not an
+artifact); `v4/` still empty-diff since `9a8f64e8`; guard `abacfa59…`
+unchanged. Battery: **23/23** outcomes as expected (copies only), now
+including the three wave-25 bypass shapes and the restage footer-rejection.
+
+**Reviewer budget note:** all three roles filed on the first dispatch; no
+incidents. The freeze-test bar worked as intended: every blocker named
+requirement + counterexample + consequence.
+
+Next: wave 26 (fresh fit-for-purpose, parity, tester at the batch-12
+revision, same stopping-rule brief) → all-7 PASS at one revision ⇒ tree
+FINAL → leg-27 Windows re-stamp → closure battery (`1609b395…`) → evidence
+child commit → astra turn 12 → push.

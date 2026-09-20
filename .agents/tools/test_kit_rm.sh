@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: e4d69485aaddc34e737bcecd5d8fa0c7aaf529910c489ed1ea93d908ea8e3d20
+# H4-LABEL-HASH: 863b3fc0fd1f9e2eee798e665b82159e27e7a1b9cdb583bb11aa807971e5ccf3
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -255,6 +255,46 @@ print("FAILCLOSED" if r else "OPEN")
 PY
 lr=$("$PYBIN" "$T/lr-probe.py" "$K")
 [ "$lr" = "FAILCLOSED" ] && ok "live_runs fails closed on a vanished root" || bad "live_runs returned no-runs for a vanished root"
+# a readable+executable FILE as the runs root: the isdir check is the only arm
+# that refuses it (os.access passes, the glob sees nothing), so this probe
+# keeps that arm load-bearing (batch 12: without it the isdir revert was an
+# equivalent mutant -- the unreadable-root check masks it for absent paths)
+printf 'x\n' > "$T/file-root"; chmod 755 "$T/file-root"
+cat > "$T/lr-probe2.py" <<'PY'
+import importlib.util, sys
+spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+r = m.live_runs(sys.argv[2])
+print("FAILCLOSED" if r else "OPEN")
+PY
+lr2=$("$PYBIN" "$T/lr-probe2.py" "$K" "$T/file-root")
+[ "$lr2" = "FAILCLOSED" ] && ok "live_runs fails closed on a file runs root" || bad "live_runs returned no-runs for a file runs root"
+# The remaining fail-closed arms named in REVIEWS.md § Kit hygiene each get
+# their own leg (wave-25: reverts of these arms kept the suite green while
+# removals proceeded with the live-run evidence unreadable or malformed):
+# unreadable runs root, unreadable status, status without cwd, unrecognized
+# state, and an unreadable gate artifact.
+mkdir -p "$T/ro-runs"; chmod 000 "$T/ro-runs"
+LIST "$L/perf/w1/rr-scratch"
+out=$("$PYBIN" "$K" --list "$T/list" --runs-root "$T/ro-runs" 2>&1); rc=$?
+grep -q "^KEEP    G8" <<<"$out" && [ -d "$L/perf/w1/rr-scratch" ] \
+  && ok "unreadable runs root: refused, nothing removed" || bad "unreadable runs root not refused (rc=$rc)"
+chmod 755 "$T/ro-runs"
+mkdir -p "$A/badrun" && printf 'not json at all\n' > "$A/badrun/status.json"
+LIST "$L/perf/w1/rr-scratch"; run "KEEP:G8 live subagent" "G8 unreadable status counts live" --list "$T/list"
+rm -rf "$A/badrun"
+mkdir -p "$A/nocwd" && printf '{"state":"complete"}\n' > "$A/nocwd/status.json"
+LIST "$L/perf/w1/rr-scratch"; run "KEEP:G8 live subagent" "G8 status without cwd counts live" --list "$T/list"
+rm -rf "$A/nocwd"
+mkdir -p "$A/weird" && printf '{"state":"banana","cwd":"%s"}\n' "$R" > "$A/weird/status.json"
+LIST "$L/perf/w1/rr-scratch"; run "KEEP:G8 live subagent" "G8 unrecognized state counts live" --list "$T/list"
+rm -rf "$A/weird"
+mkdir -p "$L/shared/evidence/round17"
+printf 'x\n' > "$L/shared/evidence/round17/manifest.json"
+chmod 000 "$L/shared/evidence/round17/manifest.json"
+LIST "$L/perf/w1/rr-scratch"; run "KEEP:G7 gate artifact" "G7 unreadable gate artifact refuses" --list "$T/list"
+chmod 644 "$L/shared/evidence/round17/manifest.json"; rm -rf "$L/shared/evidence/round17"
 
 echo "--- F: live-run guard (G8) ---"
 # live_runs() scans <runs-root>/*/status.json, so the status lives in a run dir

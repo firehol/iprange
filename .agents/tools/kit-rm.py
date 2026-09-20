@@ -157,9 +157,17 @@ def live_runs(runs_root: str = RUNS_ROOT) -> list[str]:
     evidence it depends on is gone (wave-24 finding: the documented
     fail-closed rule in REVIEWS.md § Kit hygiene held at startup but not at
     the recheck).
+
+    An unreadable runs root counts as live by the same rule: isdir() passes
+    while the glob silently sees no status files, so a mode-000 root looked
+    like "no live runs" and a real --execute removed a tree with the
+    evidence unreadable (wave-25 fit-for-purpose finding, same class one
+    permission level away).
     """
     if not os.path.isdir(runs_root):
         return [f"runs-root {runs_root} is not a directory"]
+    if not os.access(runs_root, os.R_OK | os.X_OK):
+        return [f"runs-root {runs_root} is not readable"]
     live = []
     for status in glob.glob(os.path.join(runs_root, "*", "status.json")):
         try:
