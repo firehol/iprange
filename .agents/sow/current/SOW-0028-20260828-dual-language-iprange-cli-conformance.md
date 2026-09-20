@@ -20610,3 +20610,79 @@ Next: wave 27 (fresh fit-for-purpose, parity, tester at the batch-13
 revision, same stopping-rule brief) → all-7 PASS at one revision ⇒ tree
 FINAL → leg-27 Windows re-stamp → closure battery (`1609b395…`) → evidence
 child commit → astra turn 12 → push.
+
+## Round 38 — wave 27 (three roles at 0fec27e1): 2 PASS / 1 FAIL, 1 P2 + two judgment calls; batch 14 (2026-09-20)
+
+Reviewed revision: `0fec27e1` (batch 13). Fresh `fit-for-purpose`, `parity`
+and `tester` under the stopping rule. **fit-for-purpose PASS** (15
+permission shapes on the scandir restructure; independently written
+stale-recheck mutant; full recomputation; Rounds 31–37 sweep clean) and
+**parity PASS** (battery 25/25; all bindings recomputed; H5 count pin
+caught a forged duplicate CAUGHT line). **tester FAIL (1 P2)** — reproduced
+by the lead on a copy before fixing. No product/engine/wire/CLI defect:
+`v4/` empty-diff since `9a8f64e8`, guard `abacfa59…`, blob `d4e5ce5bb223`.
+
+**The finding (required behavior, cannot be scoped away):**
+
+- **The unwritable-PARENT arm was missing** (tester): with a writable
+  target inside an unwritable parent, `rmtree` empties the target and dies
+  unlinking it — the tool printed `KEEP removal failed` **after** the
+  destruction, logged nothing, and the suite stayed 69/69 green on a
+  revert. This violates the tool's own all-or-nothing invariant (the
+  `inner_hazards` docstring names exactly this shape) and the
+  arm-by-arm coverage sentence. Same construction and fix pattern as the
+  batch-9 subtree finding; the parent check was the one missing member of
+  that family (rmtree needs parent-write to unlink the target itself).
+
+**Two judgment calls the lead made under the stopping rule (user delegated
+both):**
+
+1. **The vacuous `git ls-files` scan is refused, not filed away as P3**
+   (ffp filed it P3 on the letter: the frozen requirement names *failed*
+   scans, and an empty-but-successful scan meets it as written). The
+   material consequence is identical to the fixed wave-26 finding — G7's
+   tracked-file half silently blind — so the requirement's intent governs:
+   `gate_artifacts()` now also refuses when the listing does not name the
+   tool's own path (the tool is tracked, so any listing missing it is
+   vacuous). Pinned by a dedicated leg (committed repo, then `.git/index`
+   deleted → rc 0 + empty list → refusal, cited dir intact) and a
+   mechanism-level mutant (`g7-scan-blind`) reverting both arms at once.
+2. **The four roles that last PASSed at `c590a145` will be re-run at the
+   final revision** rather than arguing staleness: REVIEWS.md requires all
+   seven at one revision, and the cheap re-run makes that literally true.
+
+**Batch 14 closures:** parent-writability arm in `inner_hazards()` + E4
+fixture (writable target, unwritable parent) + named leg + `g6-parent-
+unwritable` mutant; vacuous-scan refusal + leg + `g7-scan-blind` mutant
+(replacing the now-equivalent `g7-gitfail`); parity's P3-A closed at the
+mechanism (a valid-JSON non-object status counts live instead of crashing
+on `.get`) + leg + `g8-non-object` mutant. The suite sandbox is now a real
+git repo with the tool itself tracked.
+
+**Kit state after batch 14, converged to a fixpoint:** kit-gc suite **50
+assertions, 0 failures**; kit-rm suite **73 assertions, 0 failures** (69 +
+the four batch-14 legs); falsification driver **23 mutants + crash
+self-test, all CAUGHT** (H5 prints 24 legs); manifest **41 entries, 13
+staged/live pairs**, head deriving to HEAD after this record's commit is
+re-stamped; H4 green both ways on both logs (50 + 73 labels; multiset
+hashes match; greenness pins) and H5 green (24 legs by count + greenness);
+external checker `OK (0 mismatch(es))`; restage `--dry-run` reports
+`manifest unchanged`; live reporter `rc 2` with exactly the two standing
+privacy fixtures and **0 OVER-CAP**; zero `__pycache__` in policed dirs;
+`v4/` still empty-diff since `9a8f64e8`; guard `abacfa59…` unchanged.
+Battery: **25/25** outcomes as expected (copies only).
+
+**Reviewer budget note:** ffp and parity PASSed on the first dispatch;
+tester filed one real destructive fail-open. ffp disclosed and removed its
+own stray `__pycache__` write. Remaining P3s recorded, none blocking:
+FIFO `status.json` hangs `live_runs()` (fail-closed while hung, no
+timeout); `size_of` unpinned (audit-size field only); the still-present-
+after-rmtree arm established cannot-fire-alone; the broken-git leg presumes
+no ancestor repo above the temp dir.
+
+Next: wave 28 (fresh fit-for-purpose, parity, tester at the batch-14
+revision, same stopping-rule brief) → if clean, re-run security,
+performance, operations, portability at the same final revision (decision
+2 above) → all-7 PASS at one revision ⇒ tree FINAL → leg-27 Windows
+re-stamp → closure battery (`1609b395…`) → evidence child commit → astra
+turn 12 → push.

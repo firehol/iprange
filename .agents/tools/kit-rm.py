@@ -94,7 +94,15 @@ def gate_artifacts() -> list[str] | None:
         # (wave-26 tester finding; REVIEWS.md § Kit hygiene: a failed
         # `git ls-files` leads to refusal, not to removal).
         return None
-    out += [os.path.join(REPO, p.decode()) for p in listing.split(b"\0") if p]
+    files = [p.decode() for p in listing.split(b"\0") if p]
+    # A successful-but-empty (or vacuous) listing is as blind as a failed
+    # one: this tool is itself tracked, so any listing that does not name
+    # its own path cannot be the tracked set, and G7's tracked-file half
+    # would silently see no citations (wave-27 fit-for-purpose P3, closed
+    # on intent: the requirement is that G7 never goes silently blind).
+    if os.path.relpath(os.path.abspath(__file__), REPO) not in files:
+        return None
+    out += [os.path.join(REPO, p) for p in files]
     return [p for p in out if os.path.isfile(p)]
 
 
@@ -199,6 +207,12 @@ def live_runs(runs_root: str = RUNS_ROOT) -> list[str]:
         except (OSError, ValueError):
             live.append(os.path.basename(run_dir) + ":unreadable")
             continue
+        if not isinstance(rec, dict):
+            # valid JSON that is not an object cannot prove the run terminal;
+            # counting it live keeps the documented fail-closed rule instead
+            # of crashing on .get (wave-27 parity P3-A)
+            live.append(os.path.basename(run_dir) + ":not-an-object")
+            continue
         state = rec.get("state")
         cwd = rec.get("cwd")
         if cwd is None:
@@ -232,6 +246,14 @@ def inner_hazards(path: str) -> str | None:
     # partial destruction and nothing would be logged.
     if not os.access(path, os.W_OK):
         return f"the target is not writable by us; rmtree could half-delete ({path})"
+    # The parent must be writable too: rmtree empties the target and then
+    # unlinks the target directory itself, which needs write access on the
+    # PARENT. An unwritable parent produced exactly the forbidden shape --
+    # contents gone, KEEP printed after the destruction, nothing logged
+    # (wave-27 tester; same construction as the batch-9 subtree finding).
+    parent = os.path.dirname(path)
+    if not os.access(parent, os.W_OK):
+        return f"the parent is not writable by us; rmtree could half-delete ({parent})"
     for root, dirs, files in os.walk(path, followlinks=False):
         if ".git" in dirs or ".git" in files:
             return f"contains a git entry at {root}"

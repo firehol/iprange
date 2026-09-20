@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: ce0ab7b804424a26b06dcef7493db24d30ffb7d5c0a89210764005324d678701
+# H4-LABEL-HASH: e976d048b4c260a3f85a7f2c89b3ce65b14e305a43183c7b381b76187acff035
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -33,7 +33,9 @@ K="$R/.agents/tools/kit-rm.py"
 L="$R/.local"
 printf 'sandbox\n' > "$R/README.md"
 git -C "$R" -c init.defaultBranch=main init -q
-git -C "$R" -c user.name=suite -c user.email=suite@invalid add README.md
+# the tool must be tracked: gate_artifacts() refuses a listing that does not
+# name its own path (a vacuous scan is as blind as a failed one)
+git -C "$R" -c user.name=suite -c user.email=suite@invalid add README.md .agents/tools/kit-rm.py
 git -C "$R" -c user.name=suite -c user.email=suite@invalid commit -q -m fixture
 
 # legitimate scratch: a build cache inside a role sandbox
@@ -211,6 +213,20 @@ else
   bad "PARTIAL DELETION on an unwritable subtree"
 fi
 chmod -R 755 "$L/roperm2/cap" 2>/dev/null
+# unwritable PARENT: the target and its contents are fully writable, so the
+# target-level and subtree arms pass; only the parent arm can refuse before
+# rmtree empties the target and dies unlinking it (wave-27 tester: the old
+# tool deleted all contents, printed KEEP after the fact, logged nothing)
+mkdir -p "$L/roperm4/parent/cap/inner"
+printf 'k1\n' > "$L/roperm4/parent/cap/f1"; printf 'k2\n' > "$L/roperm4/parent/cap/inner/f2"
+chmod 555 "$L/roperm4/parent"
+LIST "$L/roperm4/parent/cap";           run "KEEP:G6 the parent is not writable" "G6 unwritable parent: refuse before half-delete" --list "$T/list"
+if [ -f "$L/roperm4/parent/cap/f1" ] && [ -f "$L/roperm4/parent/cap/inner/f2" ]; then
+  ok "unwritable-parent tree left completely intact"
+else
+  bad "PARTIAL DELETION with an unwritable parent"
+fi
+chmod -R 755 "$L/roperm4" 2>/dev/null; rm -rf "$L/roperm4" 2>/dev/null
 # target-unreadable: the target hides its own contents from the walk (mode
 # 0300 = writable+executable, NOT readable), so the git and mode-000 scans
 # inside it see nothing and the target-unreadable arm is the only thing that
@@ -299,6 +315,9 @@ rm -rf "$A/nocwd"
 mkdir -p "$A/weird" && printf '{"state":"banana","cwd":"%s"}\n' "$R" > "$A/weird/status.json"
 LIST "$L/perf/w1/rr-scratch"; run "KEEP:G8 live subagent" "G8 unrecognized state counts live" --list "$T/list"
 rm -rf "$A/weird"
+mkdir -p "$A/scalar" && printf '42\n' > "$A/scalar/status.json"
+LIST "$L/perf/w1/rr-scratch"; run "KEEP:G8 live subagent" "G8 non-object status counts live" --list "$T/list"
+rm -rf "$A/scalar"
 mkdir -p "$L/shared/evidence/round17"
 printf 'x\n' > "$L/shared/evidence/round17/manifest.json"
 chmod 000 "$L/shared/evidence/round17/manifest.json"
@@ -332,6 +351,23 @@ out=$("$PYBIN" "$B/.agents/tools/kit-rm.py" --list "$T/list2" --runs-root "$T/as
 [ "$rc" = 2 ] && [ -d "$B/.local/perf/w1/cited" ] \
   && ok "G7 failed tracked-file scan: refused, cited dir intact" \
   || bad "G7 git-scan failure not refused (rc=$rc): $(tail -1 <<<"$out")"
+# a SUCCESSFUL-but-empty scan (index deleted: git rc 0, zero files) is as
+# blind as a failed one; the tool is tracked, so a listing missing its own
+# path is vacuous and must refuse (wave-27 fit-for-purpose, closed on intent)
+C="$T/vacuous-git"; mkdir -p "$C/.agents/tools" "$C/.git" "$C/.local/perf/w1/cited"
+cp "$TOOL" "$C/.agents/tools/kit-rm.py"
+printf 'cite %s\n' ".local/perf/w1/cited" > "$C/README.md"
+printf 'x\n' > "$C/.local/perf/w1/cited/f"
+git -C "$C" -c init.defaultBranch=main init -q
+git -C "$C" -c user.name=suite -c user.email=suite@invalid add README.md .agents/tools/kit-rm.py
+git -C "$C" -c user.name=suite -c user.email=suite@invalid commit -q -m fixture
+rm -f "$C/.git/index"          # ls-files now succeeds with an EMPTY list
+mkdir -p "$T/async3"
+printf '%s\n' "$C/.local/perf/w1/cited" > "$T/list3"
+out=$("$PYBIN" "$C/.agents/tools/kit-rm.py" --list "$T/list3" --runs-root "$T/async3" --execute --reason selftest 2>&1); rc=$?
+[ "$rc" = 2 ] && [ -d "$C/.local/perf/w1/cited" ] \
+  && ok "G7 vacuous tracked-file scan: refused, cited dir intact" \
+  || bad "G7 vacuous scan not refused (rc=$rc): $(tail -1 <<<"$out")"
 # the pre-deletion recheck must call live_runs() FRESH (wave-26 tester: the
 # stale-reuse mutant kept the suite green and removed a late target in a
 # race). Deterministic at the unit level: first call no runs, later calls a
