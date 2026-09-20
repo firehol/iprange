@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: e976d048b4c260a3f85a7f2c89b3ce65b14e305a43183c7b381b76187acff035
+# H4-LABEL-HASH: a31cdd02bcd59ffb1cd3ccb97d128506f4f1e3a199e740268b1d2e4db320cdb0
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -36,7 +36,11 @@ git -C "$R" -c init.defaultBranch=main init -q
 # the tool must be tracked: gate_artifacts() refuses a listing that does not
 # name its own path (a vacuous scan is as blind as a failed one)
 git -C "$R" -c user.name=suite -c user.email=suite@invalid add README.md .agents/tools/kit-rm.py
-git -C "$R" -c user.name=suite -c user.email=suite@invalid commit -q -m fixture
+# gpgsign=false: a workstation-global commit.gpgsign=true makes this fixture
+# commit fail (rc 128) while the legs stay green, because gate_artifacts()
+# reads the INDEX, not the commits. The commit is decoration for realism; the
+# flag keeps it from failing silently (wave-28 parity P3-B).
+git -C "$R" -c commit.gpgsign=false -c user.name=suite -c user.email=suite@invalid commit -q -m fixture
 
 # legitimate scratch: a build cache inside a role sandbox
 mkdir -p "$L/perf/w1/cargo-target/debug/deps" && head -c 200000 /dev/zero > "$L/perf/w1/cargo-target/debug/deps/x.o"
@@ -341,7 +345,8 @@ rmdir "$A/stray"
 # a failed `git ls-files` must REFUSE, not note-and-continue (wave-26
 # tester): the citation lives only in a tracked file, so a skipped scan
 # would remove a path the record depends on. Mini-sandbox with a broken .git.
-B="$T/broken-git"; mkdir -p "$B/.agents/tools" "$B/.git" "$B/.local/perf/w1/cited"
+B="$T/broken-git"; mkdir -p "$B/.agents/tools" "$B/.git" "$B/.local/shared" "$B/.local/perf/w1/cited"
+: > "$B/.local/shared/removals.log"   # appendable: the refusal below must be G7's
 cp "$TOOL" "$B/.agents/tools/kit-rm.py"
 printf 'cite %s\n' ".local/perf/w1/cited" > "$B/README.md"
 printf 'x\n' > "$B/.local/perf/w1/cited/f"
@@ -349,23 +354,26 @@ mkdir -p "$T/async2"
 printf '%s\n' "$B/.local/perf/w1/cited" > "$T/list2"
 out=$("$PYBIN" "$B/.agents/tools/kit-rm.py" --list "$T/list2" --runs-root "$T/async2" --execute --reason selftest 2>&1); rc=$?
 [ "$rc" = 2 ] && [ -d "$B/.local/perf/w1/cited" ] \
+  && grep -q 'G7: git ls-files failed or returned a vacuous listing' <<<"$out" \
   && ok "G7 failed tracked-file scan: refused, cited dir intact" \
   || bad "G7 git-scan failure not refused (rc=$rc): $(tail -1 <<<"$out")"
 # a SUCCESSFUL-but-empty scan (index deleted: git rc 0, zero files) is as
 # blind as a failed one; the tool is tracked, so a listing missing its own
 # path is vacuous and must refuse (wave-27 fit-for-purpose, closed on intent)
-C="$T/vacuous-git"; mkdir -p "$C/.agents/tools" "$C/.git" "$C/.local/perf/w1/cited"
+C="$T/vacuous-git"; mkdir -p "$C/.agents/tools" "$C/.git" "$C/.local/shared" "$C/.local/perf/w1/cited"
+: > "$C/.local/shared/removals.log"   # appendable: the refusal below must be G7's
 cp "$TOOL" "$C/.agents/tools/kit-rm.py"
 printf 'cite %s\n' ".local/perf/w1/cited" > "$C/README.md"
 printf 'x\n' > "$C/.local/perf/w1/cited/f"
 git -C "$C" -c init.defaultBranch=main init -q
 git -C "$C" -c user.name=suite -c user.email=suite@invalid add README.md .agents/tools/kit-rm.py
-git -C "$C" -c user.name=suite -c user.email=suite@invalid commit -q -m fixture
+git -C "$C" -c commit.gpgsign=false -c user.name=suite -c user.email=suite@invalid commit -q -m fixture
 rm -f "$C/.git/index"          # ls-files now succeeds with an EMPTY list
 mkdir -p "$T/async3"
 printf '%s\n' "$C/.local/perf/w1/cited" > "$T/list3"
 out=$("$PYBIN" "$C/.agents/tools/kit-rm.py" --list "$T/list3" --runs-root "$T/async3" --execute --reason selftest 2>&1); rc=$?
 [ "$rc" = 2 ] && [ -d "$C/.local/perf/w1/cited" ] \
+  && grep -q 'G7: git ls-files failed or returned a vacuous listing' <<<"$out" \
   && ok "G7 vacuous tracked-file scan: refused, cited dir intact" \
   || bad "G7 vacuous scan not refused (rc=$rc): $(tail -1 <<<"$out")"
 # the pre-deletion recheck must call live_runs() FRESH (wave-26 tester: the
@@ -433,6 +441,30 @@ grep -q '^REMOVED' "$T/exec.out" && ok "executed removal reported" || bad "no RE
 [ ! -e "$L/perf/w3/cargo-target" ] && ok "listed scratch gone" || bad "STILL PRESENT after removal"
 [ -d "$L/perf/w3/keepme" ] && ok "sibling kept" || bad "SIBLING COLLATERAL DAMAGE"
 [ -f "$L/shared/removals.log" ] && grep -q 'selftest' "$L/shared/removals.log" && ok "removal logged with reason" || bad "not logged"
+
+echo "--- J: an unappendable audit log refuses BEFORE anything is deleted (wave-28 tester) ---"
+# The log is part of the removal contract. Without the startup probe the
+# guards passed, rmtree completed, the append raised PermissionError, and the
+# run reported nothing about what it destroyed (rc 1, zero REMOVED lines).
+mkdir -p "$L/perf/w4/cargo-target" && printf 'k\n' > "$L/perf/w4/cargo-target/f"
+chmod 444 "$L/shared/removals.log"
+LIST "$L/perf/w4/cargo-target"
+out=$("$PYBIN" "$K" --list "$T/list" --runs-root "$T/async" --execute --reason "selftest" 2>&1); rc=$?
+grep -q 'audit log is not appendable' <<<"$out" && [ "$rc" = 2 ] \
+  && ok "unappendable log refused at startup (rc 2)" || bad "unappendable log rc=$rc: $(tail -1 <<<"$out")"
+[ -f "$L/perf/w4/cargo-target/f" ] && ok "nothing deleted when the log cannot be written" \
+  || bad "DELETED WITH NO AUDIT TRAIL"
+grep -q '^REMOVED' <<<"$out" && bad "REMOVED line despite unappendable log" || ok "no REMOVED claim"
+chmod 644 "$L/shared/removals.log"
+# a missing log in an unwritable directory is the same contract violation
+rm -f "$L/shared/removals.log"; chmod 555 "$L/shared"
+out=$("$PYBIN" "$K" --list "$T/list" --runs-root "$T/async" --execute --reason "selftest" 2>&1); rc=$?
+grep -q 'audit log is not appendable' <<<"$out" && [ "$rc" = 2 ] \
+  && ok "unwritable log directory refused at startup (rc 2)" || bad "unwritable log dir rc=$rc: $(tail -1 <<<"$out")"
+[ -f "$L/perf/w4/cargo-target/f" ] && ok "second refusal also deleted nothing" \
+  || bad "DELETED WITH NO AUDIT TRAIL (dir case)"
+chmod 755 "$L/shared"; printf 'restored\n' >> "$L/shared/removals.log"
+rm -rf "$L/perf/w4"
 
 echo
 # The sentinel states what the run shows (every assertion passed), not what

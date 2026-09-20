@@ -405,9 +405,22 @@ def main(argv: list[str]) -> int:
     if texts is None:
         # G7 cannot be evaluated without the tracked-file scan; refusing is
         # the documented behavior (REVIEWS.md § Kit hygiene; wave-26 tester).
-        print("G7: git ls-files failed; tracked citations cannot be "
-              "verified; removal is refused", file=sys.stderr)
+        print("G7: git ls-files failed or returned a vacuous listing; tracked "
+              "citations cannot be verified; removal is refused", file=sys.stderr)
         return 2
+    if args.execute:
+        # The audit log is part of the removal contract: a removal that cannot
+        # be logged must not happen. Without this probe an unwritable log let
+        # rmtree complete, the append then crashed, and the run reported
+        # nothing about what it destroyed (wave-28 tester).
+        try:
+            with open(os.path.join(SHARED, "removals.log"), "a",
+                      encoding="utf-8", errors="surrogateescape"):
+                pass
+        except OSError as err:
+            print(f"refusing to remove anything: the audit log is not "
+                  f"appendable ({err})", file=sys.stderr)
+            return 2
     if not os.path.isdir(args.runs_root):
         # An absent runs root cannot prove there is no live reviewer.
         print(f"G8: runs root {args.runs_root} is not a directory; "

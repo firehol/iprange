@@ -20686,3 +20686,92 @@ performance, operations, portability at the same final revision (decision
 2 above) → all-7 PASS at one revision ⇒ tree FINAL → leg-27 Windows
 re-stamp → closure battery (`1609b395…`) → evidence child commit → astra
 turn 12 → push.
+
+## Round 39 — wave 28 (three roles at a93b1eb5): 2 PASS / 1 FAIL, 1 P2; batch 15 (2026-09-20)
+
+Reviewed revision: `a93b1eb5` (batch 14). Fresh `fit-for-purpose`, `parity`
+and `tester` under the stopping rule. **fit-for-purpose PASS** (parent
+family verified closed at exactly the required depth — unwritable
+grandparent is provably safe because rmtree unlinks the target from its
+writable parent; all four vacuous-scan shapes refuse rc 2 with the cited
+dir intact; all five non-object status shapes count live without crashing;
+every Round-38 number recomputed true; Rounds 31–38 sweep clean) and
+**parity PASS** (binding chain fully re-derived: 41/41 digests, 13/13
+staged==live, H3 exact, both H4 multiset hashes, H5 24 legs, battery
+replayed 25/25; live `git ls-files` verified to contain the tool; v4/
+empty-diff, blob `d4e5ce5bb223`, guard `abacfa59…` recomputed). **tester
+FAIL (1 P2)** — executed, verified by the lead before fixing. No product/
+engine/wire/CLI defect: `v4/` empty-diff since `9a8f64e8`.
+
+**The finding (required behavior, cannot be scoped away):**
+
+- **An unappendable `removals.log` was a silent-complete-deletion + crash
+  path** (tester): with the log read-only (or its directory unwritable),
+  every guard passed, `--execute` ran `rmtree` to completion, the audit
+  append then raised `PermissionError` — the run exited rc 1 with **zero
+  REMOVED lines and zero log entries** for a path that was gone, and the
+  remaining list was skipped. REVIEWS.md § Kit hygiene freezes "each
+  removal is appended to `removals.log`"; a removal that leaves no audit
+  trail violates it, and the printed outcome actively hides the
+  destruction. Same fail-open class as the accepted wave-26/27 P2s.
+
+**Batch 15 closures:**
+
+- Startup audit-log appendability probe in `main()`: `--execute` refuses
+  (rc 2) before any guard evaluation or removal when
+  `<repo>/.local/shared/removals.log` cannot be opened for append. Pinned
+  by a two-case section-J leg (read-only log file; missing log in an
+  unwritable directory) asserting rc 2, the refusal reason, nothing
+  deleted, and no REMOVED claim — plus the `l1-log-probe` mutant (revert
+  → 4 named FAILs including `DELETED WITH NO AUDIT TRAIL`).
+- Parity P3-A closed: the G7 refusal message now reads "git ls-files
+  failed or returned a vacuous listing" — honest about both blindness
+  arms.
+- Parity P3-B closed: both fixture commits in the suite sandbox run with
+  `-c commit.gpgsign=false`, so a workstation-global `commit.gpgsign=true`
+  cannot make them fail silently (the legs read the index, so behavior
+  was neutral either way — the fix removes the silent-failure class).
+- Collateral found while pinning: the new startup probe made the two G7
+  mini-sandbox legs (broken-git, vacuous) refuse for the WRONG reason
+  (no `.local/shared` there → log probe fired first). Fixed at the
+  mechanism: both sandboxes get an appendable `removals.log`, and both
+  legs now pin the refusal *message*, not just rc 2 — so a refusal from
+  any other arm fails the leg. The `g7-scan-blind` mutant confirms the
+  legs are load-bearing again.
+
+**Kit state after batch 15, converged to a fixpoint:** kit-rm suite **78
+assertions, 0 failures** (73 + the five batch-15 legs); kit-gc suite **50,
+0**; falsification driver **24 mutants + crash self-test, all CAUGHT** (H5
+prints 25 legs); manifest **41 entries, 13 staged/live pairs**, head
+re-stamped to this record's commit; H4 green both ways on both logs (78 +
+50 labels, multiset hashes match, greenness pins); H5 green (25 legs by
+count + greenness); external checker `OK (0 mismatch(es))`; restage
+`--dry-run` reports `manifest unchanged`; live reporter `rc 2` with exactly
+the two standing privacy fixtures and 0 OVER-CAP; zero `__pycache__`;
+`v4/` still empty-diff since `9a8f64e8`; guard `abacfa59…` unchanged.
+
+**Battery anomaly, recorded honestly:** the first battery run after the
+batch-15 captures reported leg iv (planted stale kit-gc log label) silent.
+A standalone reproduction of exactly that mutation showed the H4 leg
+firing correctly, and two further full battery runs plus one more
+immediately before this record reported **25/25 all expected outcomes**.
+The failure did not reproduce in three subsequent runs; no mechanism was
+found for it (the leg's `timeout 300` is 50x the suite's measured 5.7 s).
+Working theory, labeled as speculation: a transient environment effect in
+that one run (the battery runs the full kit-gc suite per leg under load
+from the just-finished wave-28 children). If it recurs, it becomes a
+finding; three green runs and a green standalone repro are the current
+evidence.
+
+Remaining P3s recorded, none blocking: FIFO `status.json` hangs
+`live_runs()` (fail-closed while hung); `size_of` unpinned (audit-size
+field only); non-UTF8 tracked filename crashes `gate_artifacts()` at rc 1
+(still fail-closed; live repo has zero such names); sticky-parent +
+foreign-owned-target residual needs root to construct; battery 25/25
+remains a run-fact (the script recomputes to exactly 25 sites).
+
+Next: wave 29 (fresh fit-for-purpose, parity, tester at the batch-15
+revision, same stopping-rule brief) → if clean, re-run security,
+performance, operations, portability at the same final revision → all-7
+PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
+battery (`1609b395…`) → evidence child commit → astra turn 12 → push.
