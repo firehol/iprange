@@ -20034,17 +20034,22 @@ work found a fourth that was real.**
    milestone's own rule — a pin that cannot fail).** Binding the falsification
    claim required first proving the suite could detect a deleted guard. It
    could not. Two defects, both found by mutation before anything was bound:
-   - **KEEP legs accepted any refusal.** `run()` grepped `^KEEP` without naming
-     the guard, and `check()` evaluates G8 before G6/G7 while the suite armed a
-     live-run status across sections A–E2 — so all eleven G6/G7 KEEP legs
-     passed on G8's refusal with their own guards never running. A tool with
-     the G6 git-scan deleted passed 52/52; a tool with G7 disabled passed
-     52/52.
-   - **DRY legs matched the summary line.** `grep -q '^DRY'` also matches the
-     run's `DRY RUN: 0 removed, 1 refused` footer, so a path REFUSED by any
-     guard still "passed" the allowed-direction legs; a tool refusing
-     everything passed all four DRY legs (only section I's real-deletion legs
-     caught it).
+    - **KEEP legs accepted any refusal.** `run()` grepped `^KEEP` without naming
+      the guard, and `check()` evaluates G8 before G6/G7 while the suite armed a
+      live-run status across sections A–E2 — so all eleven G6/G7 KEEP legs
+      passed on G8's refusal with their own guards never running. A tool with
+      the G6 git-scan deleted passed 52/52; a tool with G7 disabled passed
+      52/52. [Round-33 mark: **ten**, not eleven — the E4 unwritable leg ran
+      after section E3 rewrote the live-run status to terminal, so E4 fired on
+      G6 itself, not on G8 (instrumented run at batch 9). The class and the fix
+      are unaffected.]
+    - **DRY legs matched the summary line.** `grep -q '^DRY'` also matches the
+      run's `DRY RUN: 0 removed, 1 refused` footer, so a path REFUSED by any
+      guard still "passed" the allowed-direction legs; a tool refusing
+      everything passed all four DRY legs (only section I's real-deletion legs
+      caught it). [Round-33 mark: section E3's exact-path legs caught it too
+      (2 of the 5 FAILs: the listed trailing-space dir survived, the
+      removals.log line was absent). "Only section I" is false as written.]
    - **Fix (surgical, tracked suite):** KEEP legs now pin the guard token that
      must cause the refusal (`KEEP:G6\ contains\ a\ git\ entry` etc., each
      token measured against the live tool, not assumed); DRY legs pin the
@@ -20078,7 +20083,13 @@ assertions, 0 failures** (49 + H5); kit-rm suite **53 assertions, 0
 failures**; falsification driver **9/9 CAUGHT**; manifest **41 entries, 13
 staged/live pairs**, head deriving to HEAD after this record's commit is
 re-stamped; H4 green on both logs (50 + 53 labels,
-0 stale); H5 green (9 mutants); external checker `OK (0 mismatch(es))`;
+0 stale) [Round-33 mark: the bound kit-gc log's own H4 self-report line read
+`49 labels` while this sentence said 50 — during a capture-to-temp the H4 leg
+counts the PREVIOUSLY installed log, so the self-report inside a fresh capture
+lags one install behind. Batch 9's count pin makes the lag visible instead of
+silent (the installed count is compared against the shipped suite's declared
+`H4-OK-COUNT`), and at the fixpoint the self-report and the file agree; the
+Round-33 kit state below quotes the converged numbers.]; H5 green (9 mutants); external checker `OK (0 mismatch(es))`;
 restage `--dry-run` reports `manifest unchanged`; live reporter `rc 2` with
 exactly the two standing privacy fixtures and **0 OVER-CAP**; zero
 `__pycache__` in policed dirs; `v4/` still empty-diff since `9a8f64e8`; guard
@@ -20092,3 +20103,91 @@ error; the later, strictly more complete run is authoritative).
 Next: wave 22 (fresh fit-for-purpose, parity, tester at the batch-8 revision)
 → all-7 PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
 battery (`1609b395…`) → evidence child commit → astra turn 12 → push.
+
+## Round 33 — wave 22 (three roles at b4a875ba): 0 PASS / 3 FAIL, 6 distinct P2s; batch 9 closes them (2026-09-20)
+
+Reviewed revision: `b4a875ba` (batch 8). Fresh `fit-for-purpose`, `parity` and
+`tester` (spawn-fresh-only; the batch-8 findings belong to those hunting
+grounds). All three FAILed; after dedup the filings are **6 distinct P2s**,
+every one verified by execution — the lead's own replication or the filer's
+reproducer, cross-checked. No product, engine, wire-format, CLI or guard
+defect: `v4/` empty-diff since `9a8f64e8`, guard `abacfa59…`, blob
+`d4e5ce5bb223`. Every finding is the same class batch 8 was built to close —
+a claim or pin proving less than stated — which is the loop converging on the
+records, not drifting.
+
+**The six findings and their closures:**
+
+1. **Driver header promised a rule the code did not implement** (filed by all
+   three roles; ffp's crash mutant reproduced the false CAUGHT: a tool raising
+   `RuntimeError` at startup fake-scores `g6-git`'s primary because `bad()`
+   embeds the tool's stderr tail in every KEEP failure line). Batch 9
+   implements the kit-gc rule properly: **exact FAIL-count pin** (each mutant
+   declares its count; a crash fails ~48 legs and is rejected), primary line
+   required, every FAIL line matched against the declared patterns, and a
+   **crash self-test** that proves the count rule fires against the exact
+   fake-CAUGHT shape. The Traceback rule was considered and rejected as dead
+   code: the suite swallows tool stderr into `last.out` and echoes only its
+   tail, so no Traceback reaches the driver's stdout.
+2. **H4 was one-directional** (parity): a bound log missing a whole `ok` leg
+   passed — every surviving label still occurs in the source. Fixed with the
+   **reverse direction as a count pin**: each shipped suite declares its green
+   ok-label count in an `# H4-OK-COUNT:` line and the bound log must match it.
+   Forward catches renames at unchanged count; the count catches add/remove;
+   the count also closes the gap the 24-char window leaves (finding 5).
+   Falsified three ways (leg deleted from log copy → FAIL; stale declaration →
+   FAIL; tampered label → forward FAIL).
+3. **The H4 rc-normalization caveat hid a real blind spot** (parity): the
+   interpolated `E5 no traceback (rc $rc)` label let `rc 0`→`rc 7` pass every
+   pin while the suite asserted nothing about that rc. Fixed **at the class**:
+   the label is now static (`E5 no traceback, clean exit`) and the leg asserts
+   `rc = 0` itself, so no non-fixed normalization remains anywhere in H4.
+4. **The G6 subtree-unwritable arm was undetectable** (tester): reverting
+   `kit-rm.py:205-207` kept the suite 53/53 green, and a real `--execute` then
+   half-deleted an unwritable-subtree tree with nothing logged (lead
+   reproduced: `f1` deleted, parent kept, no `removals.log` line). Fixed: the
+   E4 fixture now includes a **subtree-only-unwritable** tree (target
+   writable, descendant not) pinned by its own named KEEP leg, and the driver
+   gained the **g6-subtree mutant** (1 FAIL, exactly the named leg).
+5. **"24 chars distinguishes every label" was false for kit-gc** (tester +
+   parity): the two H4 self-report lines share a 61-char prefix (49/50
+   distinct). The comment now states the window is a rename detector, not a
+   unique identity, and the count pin (finding 2) covers what it cannot see.
+6. **Three Round-32 sentences false as written** (ffp, all reproduced): "all
+   eleven G6/G7 KEEP legs" → ten (E4 ran after E3's terminal rewrite and fired
+   on G6 itself); "only section I caught refuse-everything" → E3's exact-path
+   legs also did; "H4 green (50 + 53)" → the bound kit-gc log self-reported 49
+   (capture-to-temp counts the previously installed log; the count pin makes
+   the lag visible). All three marked in place under the Round-32 text.
+
+**Also fixed:** H5's label said "(9 mutants)" while counting the crash
+self-test as a mutant; it now says "(11 legs)" — 10 guard mutants plus the
+driver's own rejection-rule self-test, declared by the driver and pinned both
+ways.
+
+**Disclosed reviewer incident:** parity's probe followed a symlink and
+truncated the live `kit-rm-suite.txt` to 0 bytes; it restored provably
+identical bytes (sha `469f23fb…` = manifest; checker OK) and disclosed the
+procedure in its report header. The sandbox-symlink hazard is now a known
+reviewer-kit risk; no data loss.
+
+**Kit state after batch 9, converged to a fixpoint:** kit-gc suite **50
+assertions, 0 failures**; kit-rm suite **55 assertions, 0 failures** (53 + the
+subtree leg + the intact-tree companion); falsification driver **10/10 mutants
++ crash self-test CAUGHT**; manifest **41 entries, 13 staged/live pairs**,
+head deriving to HEAD after this record's commit is re-stamped; H4 green both
+ways on both logs (50 + 55 labels, counts matching the suites' own
+declarations); H5 green (11 legs); external checker `OK (0 mismatch(es))`;
+restage `--dry-run` reports `manifest unchanged`; live reporter `rc 2` with
+exactly the two standing privacy fixtures and **0 OVER-CAP**; zero
+`__pycache__` in policed dirs; `v4/` still empty-diff since `9a8f64e8`; guard
+`abacfa59…` unchanged. Falsification battery: 12/12 outcomes as expected
+(`.local/handoff/falsify-b8.sh`, copies only).
+
+**Reviewer budget note:** all three roles filed on the first dispatch at the
+narrowed batch-8 scope; no timeouts this wave.
+
+Next: wave 23 (fresh fit-for-purpose, parity, tester at the batch-9 revision;
+briefs narrowed to the batch-9 deltas) → all-7 PASS at one revision ⇒ tree
+FINAL → leg-27 Windows re-stamp → closure battery (`1609b395…`) → evidence
+child commit → astra turn 12 → push.

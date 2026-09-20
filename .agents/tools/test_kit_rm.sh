@@ -2,6 +2,10 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
+# H4-OK-COUNT: 55
+# The green ok-label count this suite prints, declared by the suite itself and
+# pinned against the bound log by the kit-gc suite's H4 reverse direction
+# (batch 9). Any leg added or removed must update this line in the same edit.
 set -uo pipefail
 KIT=/home/costa/src/firehol/iprange
 # Overridable so the mutation driver can run this suite against a reverted
@@ -59,14 +63,14 @@ run(){ # run <expect DRY|KEEP:<guard-token>|rc-N> <label> <args...>
 PYBIN=python3
 
 echo "--- A: path-shape attacks ---"
-LIST "$L";                              run KEEP:G2\ outside "G2 .local itself"    --list "$T/list"
-LIST "$R";                              run KEEP:G2\ outside "G2 repo root"        --list "$T/list"
-LIST "$L/..";                           run KEEP:G1\ path\ is\ not "G2 above .local (non-normalised)" --list "$T/list"
-LIST "/";                               run KEEP:G2\ outside "G2 /"               --list "$T/list"
-LIST "/etc";                            run KEEP:G2\ outside "G2 /etc"             --list "$T/list"
-LIST ".local/perf/w1";                  run KEEP:G1\ not\ a\ literal "G1 relative" --list "$T/list"
-LIST "$L/perf/w1*";                     run KEEP:G1\ not\ a\ literal "G1 glob"     --list "$T/list"
-LIST "$L/perf/w1/";                     run KEEP:G1\ path\ is\ not "G1 trailing space/sep" --list "$T/list"
+LIST "$L";                              run "KEEP:G2 outside" "G2 .local itself"    --list "$T/list"
+LIST "$R";                              run "KEEP:G2 outside" "G2 repo root"        --list "$T/list"
+LIST "$L/..";                           run "KEEP:G1 path is not" "G2 above .local (non-normalised)" --list "$T/list"
+LIST "/";                               run "KEEP:G2 outside" "G2 /"               --list "$T/list"
+LIST "/etc";                            run "KEEP:G2 outside" "G2 /etc"             --list "$T/list"
+LIST ".local/perf/w1";                  run "KEEP:G1 not a literal" "G1 relative" --list "$T/list"
+LIST "$L/perf/w1*";                     run "KEEP:G1 not a literal" "G1 glob"     --list "$T/list"
+LIST "$L/perf/w1/";                     run "KEEP:G1 path is not" "G1 trailing space/sep" --list "$T/list"
 # a list whose only content is whitespace is an empty list: the tool must
 # refuse to act on it (rc 2), not silently proceed
 LIST "  ";
@@ -74,52 +78,52 @@ LIST "  ";
 [ $? = 2 ] && ok "blank-only list refused (rc 2)" || bad "blank-only list not refused"
 
 echo "--- B: role roots and the protected kit ---"
-LIST "$L/perf";                         run KEEP:G3\ role\ root "G3 role root"      --list "$T/list"
-LIST "$L/shared";                       run KEEP:G3\ role\ root "G3 shared is a role root" --list "$T/list"
-LIST "$L/shared/evidence/round16";      run KEEP:G4\ central\ kit "G4 evidence dir" --list "$T/list"
-LIST "$L/_attic-md";                    run KEEP:G3\ role\ root "G3 attic is a role root" --list "$T/list"
-LIST "$L/_attic-md/ex";                 run KEEP:G4\ central\ kit "G4 inside attic" --list "$T/list"
+LIST "$L/perf";                         run "KEEP:G3 role root" "G3 role root"      --list "$T/list"
+LIST "$L/shared";                       run "KEEP:G3 role root" "G3 shared is a role root" --list "$T/list"
+LIST "$L/shared/evidence/round16";      run "KEEP:G4 central kit" "G4 evidence dir" --list "$T/list"
+LIST "$L/_attic-md";                    run "KEEP:G3 role root" "G3 attic is a role root" --list "$T/list"
+LIST "$L/_attic-md/ex";                 run "KEEP:G4 central kit" "G4 inside attic" --list "$T/list"
 
 echo "--- C: symlink and type attacks ---"
 ln -s "$L/perf/w1" "$L/eviltarget" 2>/dev/null
-LIST "$L/eviltarget";                   run KEEP:G1\ path\ is\ not "G1 symlink as path" --list "$T/list"
+LIST "$L/eviltarget";                   run "KEEP:G1 path is not" "G1 symlink as path" --list "$T/list"
 ln -s "$L/shared" "$T/link" 2>/dev/null
-LIST "$L/perf/w1/../../../.local/shared"; run KEEP:G1\ path\ is\ not "G1 .. traversal to shared" --list "$T/list"
+LIST "$L/perf/w1/../../../.local/shared"; run "KEEP:G1 path is not" "G1 .. traversal to shared" --list "$T/list"
 printf 'f\n' > "$L/perf/w1/plainfile"
-LIST "$L/perf/w1/plainfile";            run KEEP:G5\ not\ a\ directory "G5 regular file" --list "$T/list"
-LIST "$L/perf/nope";                    run KEEP:G5\ not\ a\ directory "G5 missing" --list "$T/list"
+LIST "$L/perf/w1/plainfile";            run "KEEP:G5 not a directory" "G5 regular file" --list "$T/list"
+LIST "$L/perf/nope";                    run "KEEP:G5 not a directory" "G5 missing" --list "$T/list"
 
 echo "--- D: content attacks (G6) ---"
-LIST "$L/parity/clone";                 run KEEP:G6\ contains\ a\ git\ entry "G6 git checkout" --list "$T/list"
+LIST "$L/parity/clone";                 run "KEEP:G6 contains a git entry" "G6 git checkout" --list "$T/list"
 # the fixture directly, and its parent: both must be refused
-LIST "$L/parity/r2/p2/d1/unreadable";   run KEEP:G6\ the\ target\ is\ itself\ mode-000 "G6 the mode-000 fixture itself" --list "$T/list"
+LIST "$L/parity/r2/p2/d1/unreadable";   run "KEEP:G6 the target is itself mode-000" "G6 the mode-000 fixture itself" --list "$T/list"
 mkdir -p "$L/perf/w2/with000/child" && chmod 000 "$L/perf/w2/with000/child"
-LIST "$L/perf/w2/with000";              run KEEP:G6\ contains\ a\ mode-000\ fixture "G6 dir holding a mode-000 child" --list "$T/list"
+LIST "$L/perf/w2/with000";              run "KEEP:G6 contains a mode-000 fixture" "G6 dir holding a mode-000 child" --list "$T/list"
 chmod 755 "$L/perf/w2/with000/child" 2>/dev/null; rmdir "$L/perf/w2/with000/child" 2>/dev/null; rmdir "$L/perf/w2/with000" 2>/dev/null
 mkdir -p "$L/parity/r2/p2/d1"           # parent of the standing fixture
-LIST "$L/parity/r2/p2";                 run KEEP:G6\ contains\ a\ mode-000\ fixture "G6 above the privacy fixture" --list "$T/list"
+LIST "$L/parity/r2/p2";                 run "KEEP:G6 contains a mode-000 fixture" "G6 above the privacy fixture" --list "$T/list"
 
 echo "--- E: gate-artifact reference (G7) ---"
-LIST "$L/w1926-gate/tdir";              run KEEP:G7\ related\ to\ cited\ path "G7 named by status.md" --list "$T/list"
+LIST "$L/w1926-gate/tdir";              run "KEEP:G7 related to cited path" "G7 named by status.md" --list "$T/list"
 # the same path cited REPO-RELATIVELY (how manifest reasons and SOW prose do
 # it), at depth >= 2 so G3 cannot be what refuses it
 printf 'the replay used %s under the kit\n' ".local/w1926-rel/inner" >> "$L/shared/status.md"
 mkdir -p "$L/w1926-rel/inner"
-LIST "$L/w1926-rel/inner";              run KEEP:G7\ related\ to\ cited\ path "G7 named relatively" --list "$T/list"
+LIST "$L/w1926-rel/inner";              run "KEEP:G7 related to cited path" "G7 named relatively" --list "$T/list"
 # the needle scan (not the citation set) must also refuse: the token
 # extractor captures only `.local/<role>/<sub>...` tokens, so a citation under
 # a role name containing '+' yields just the bare role (skipped as a
 # citation). Only the byte-needle scan can see this path.
 printf 'the manifest cites %s verbatim\n' ".local/w1926+gate/inner" >> "$L/shared/status.md"
 mkdir -p "$L/w1926+gate/inner"
-LIST "$L/w1926+gate/inner";             run KEEP:G7\ named\ by\ gate\ artifact "G7 needle scan on a token-extractor miss" --list "$T/list"
+LIST "$L/w1926+gate/inner";             run "KEEP:G7 named by gate artifact" "G7 needle scan on a token-extractor miss" --list "$T/list"
 # an ANCESTOR of a cited path must also be refused: removing the parent would
 # destroy the path the record depends on. The ancestors used here are at
 # depth >= 2, so a refusal is G7 and not G3's role-root rule.
 mkdir -p "$L/g7deep/a/b/c"
 printf 'bound replay read %s\n' ".local/g7deep/a/b/c" >> "$L/shared/status.md"
-LIST "$L/g7deep/a/b";                   run KEEP:G7\ related\ to\ cited\ path "G7 parent of a cited dir" --list "$T/list"
-LIST "$L/g7deep/a";                     run KEEP:G7\ related\ to\ cited\ path "G7 grandparent of a cited dir" --list "$T/list"
+LIST "$L/g7deep/a/b";                   run "KEEP:G7 related to cited path" "G7 parent of a cited dir" --list "$T/list"
+LIST "$L/g7deep/a";                     run "KEEP:G7 related to cited path" "G7 grandparent of a cited dir" --list "$T/list"
 # an unrelated sibling of a cited dir must still be allowed (no blanket block)
 mkdir -p "$L/g7deep/other/cache"
 LIST "$L/g7deep/other";                 run DRY  "uncited sibling still allowed"   --list "$T/list"
@@ -130,8 +134,8 @@ echo "--- E2: G7 protects cited CONTENT, not just the cited directory (wave-19 s
 # cannot see this: the record never spells out the deeper path.
 mkdir -p "$L/g7sub/kit/deepcache"
 printf 'the proof read .local/g7sub/kit during staging\n' >> "$L/shared/status.md"
-LIST "$L/g7sub/kit/deepcache";          run KEEP:G7\ related\ to\ cited\ path "G7 descendant of a cited dir" --list "$T/list"
-LIST "$L/g7sub/kit";                    run KEEP:G7\ related\ to\ cited\ path "G7 the cited dir itself" --list "$T/list"
+LIST "$L/g7sub/kit/deepcache";          run "KEEP:G7 related to cited path" "G7 descendant of a cited dir" --list "$T/list"
+LIST "$L/g7sub/kit";                    run "KEEP:G7 related to cited path" "G7 the cited dir itself" --list "$T/list"
 mkdir -p "$L/g7sub/sibling/cache"
 LIST "$L/g7sub/sibling";                run DRY  "uncited sibling still removable"  --list "$T/list"
 
@@ -162,16 +166,37 @@ printf '   \n' > "$T/wsblank"
 [ $? = 2 ] && ok "whitespace-only list line refused (rc 2)" || bad "whitespace-only line not refused"
 
 echo "--- E4: an unwritable tree is refused BEFORE anything is deleted (wave-19 portability P3-2) ---"
+# Two arms refuse an unwritable tree and BOTH must be pinned: the target-level
+# arm (the listed dir itself unwritable) and the subtree arm (a descendant
+# unwritable while the target is writable). The subtree arm is the one that
+# prevents an UNLOGGED partial deletion: with the target writable, rmtree
+# deletes the target's own files, then dies inside the unwritable descendant,
+# so nothing is logged and the tree is half-gone (found by mutation at batch 9:
+# reverting the subtree arm kept the suite green and a real --execute deleted
+# f1 and left the parent). The two fixtures are shaped so each arm is the FIRST
+# to fire on its own path.
 mkdir -p "$L/roperm/cap/inner"
 printf 'k1\n' > "$L/roperm/cap/f1"; printf 'k2\n' > "$L/roperm/cap/inner/f2"
 chmod 555 "$L/roperm/cap/inner" "$L/roperm/cap"
-LIST "$L/roperm/cap";                   run KEEP:G6\ the\ target\ is\ not\ writable "G6 unwritable: refuse first" --list "$T/list"
+LIST "$L/roperm/cap";                   run "KEEP:G6 the target is not writable" "G6 unwritable target: refuse first" --list "$T/list"
 if [ -f "$L/roperm/cap/f1" ] && [ -f "$L/roperm/cap/inner/f2" ]; then
   ok "unwritable tree left completely intact"
 else
   bad "PARTIAL DELETION on an unwritable tree"
 fi
 chmod -R 755 "$L/roperm/cap" 2>/dev/null
+# subtree-only: the target stays writable, a descendant does not, so the
+# target-level arm passes and the subtree arm must be what refuses it
+mkdir -p "$L/roperm2/cap/inner"
+printf 'k1\n' > "$L/roperm2/cap/f1"; printf 'k2\n' > "$L/roperm2/cap/inner/f2"
+chmod 555 "$L/roperm2/cap/inner"
+LIST "$L/roperm2/cap";                  run "KEEP:G6 contains a directory we cannot fully traverse" "G6 unwritable subtree: refuse before half-delete" --list "$T/list"
+if [ -f "$L/roperm2/cap/f1" ] && [ -f "$L/roperm2/cap/inner/f2" ]; then
+  ok "unwritable-subtree tree left completely intact"
+else
+  bad "PARTIAL DELETION on an unwritable subtree"
+fi
+chmod -R 755 "$L/roperm2/cap" 2>/dev/null
 
 echo "--- E5: a byte-invalid list line fails closed and does not stop the run (wave-20 portability P3-1) ---"
 # The path bytes must reach the guards intact; only the output channels may
@@ -185,7 +210,7 @@ with open('$T/list','wb') as f:
     f.write(b'$L/gxb/bad\xffname\n')
 "
 out=$("$PYBIN" "$K" --list "$T/list" --runs-root "$T/async" 2>&1); rc=$?
-printf '%s\n' "$out" | grep -q Traceback && bad "E5 traceback on a byte-invalid line" || ok "E5 no traceback (rc $rc)"
+printf '%s\n' "$out" | grep -q Traceback && bad "E5 traceback on a byte-invalid line" || { [ "$rc" = 0 ] && ok "E5 no traceback, clean exit" || bad "E5 rc=$rc on a byte-invalid line"; }
 printf '%s\n' "$out" | grep -q "gxb/ok" && ok "E5 the clean line was still evaluated" || bad "E5 clean line skipped"
 [ -d "$L/gxb/ok" ] && ok "E5 nothing removed while a line was undisplayable" || bad "E5 removed data on a malformed line"
 
@@ -193,7 +218,7 @@ echo "--- F: live-run guard (G8) ---"
 # live_runs() scans <runs-root>/*/status.json, so the status lives in a run dir
 mkdir -p "$A/one"
 printf '{"state":"running","cwd":"%s"}\n' "$R" > "$A/one/status.json"
-LIST "$L/perf/w1/cargo-target";         run KEEP:G8\ live\ subagent "G8 live run in this repo" --list "$T/list"
+LIST "$L/perf/w1/cargo-target";         run "KEEP:G8 live subagent" "G8 live run in this repo" --list "$T/list"
 # same list, with the live run marked terminal: the positive control
 printf '{"state":"complete","cwd":"%s"}\n' "$R" > "$A/one/status.json"
 LIST "$L/perf/w1/cargo-target";         run DRY  "positive control: real scratch"  --list "$T/list"
