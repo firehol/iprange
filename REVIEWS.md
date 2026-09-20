@@ -214,8 +214,12 @@ directories). Removal is the human procedure defined below.
   record for each removal (timestamp, size, path, reason) is appended,
   flushed and fsynced to `.local/shared/removals.log` **before** the path is
   destroyed, so no removal can complete without a durable record; a removal
-  that fails after its record gets a compensating `REMOVAL-FAILED` line. The
-  log must be a regular file (or absent): a symlink, directory or FIFO is
+  that fails after its record gets a compensating `REMOVAL-FAILED` line.
+  Because the log is append-only, a compensating line that cannot itself be
+  written leaves a record that over-claims a destruction: the tool prints an
+  ERROR line and exits rc 1 rather than reporting clean success, so an
+  uncorrectable trail is always surfaced (never silently believed). The log
+  must be a regular file (or absent): a symlink, directory or FIFO is
   refused, because `open("a")` would follow or block on them and the trail
   would silently not exist.
   List lines are paths and are used verbatim: a trailing space is part of a
@@ -261,12 +265,21 @@ directories). Removal is the human procedure defined below.
   in the evidence directory, so the checker is itself verifiable; its exit
   classes are 0 holds / 1 mismatch / 2 usage or uninterpretable manifest)
   and re-run by the kit-gc suite's H section with every staged/live pair.
-  Both fail loudly, which is how a stale staged suite, two dropped
-  mutation-check bindings, a nested `__pycache__` and a drifted harness
-  were found in waves 13-15. Helper scripts a bound log depends on are
-  bound alongside it so the directory is self-contained.
+   Both fail loudly, which is how a stale staged suite, two dropped
+   mutation-check bindings, a nested `__pycache__` and a drifted harness
+   were found in waves 13-15. Helper scripts a bound log depends on are
+   bound alongside it so the directory is self-contained.
+- **Capture order is fixed: finalize every source, then capture.** The
+  kit-gc suite's H4 leg checks the bound kit-rm log against the LIVE
+  `.agents/tools/test_kit_rm.sh` source (and its own log against its own
+  source), so a capture sequence that rewrites the kit-rm `# H4-LABEL-HASH:`
+  header *after* the kit-gc capture makes the kit-gc log red — and
+  recomputing a header from a red run then corrupts the source. The correct
+  order is: make all source edits final, then capture kit-rm → re-stage →
+  capture kit-gc → re-stage → verify kit-gc green. The greenness pin is what
+  makes a wrong order loud rather than silent.
 
-## Lead invocation message (exact shape)
+## Lead invocation message (exact shape) 
 
 ```text
 Reviewed HEAD: <sha>. Your role: .agents/review-roles/<role>.md — read it

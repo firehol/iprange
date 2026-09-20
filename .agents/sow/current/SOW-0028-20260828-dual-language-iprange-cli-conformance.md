@@ -20875,3 +20875,89 @@ revision, same stopping-rule brief) → if clean, re-run security,
 performance, operations, portability at the same final revision → all-7
 PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
 battery (`1609b395…`) → evidence child commit → astra turn 12 → push.
+
+## Round 41 — wave 30 (three roles at 59d4463e): 0 PASS / 3 FAIL, 1 P2 (unanimous); batch 17 (2026-09-21)
+
+Reviewed revision: `59d4463e` (batch 16). All three roles — `tester`,
+`parity`, `fit-for-purpose` — independently filed the **same P2** (a
+unanimous convergence, the strongest signal the process can produce). No
+product/engine/wire/CLI defect: `v4/` empty-diff since `9a8f64e8`, guard
+`abacfa59…`, blob `d4e5ce5bb223`.
+
+**The finding (required behavior):**
+
+- **The compensating `REMOVAL-FAILED` append failure was swallowed**
+  (kit-rm.py:536/541 at the reviewed HEAD): both compensating
+  `append_audit()` calls discarded their return value. Executed
+  counterexample (parity 2/2, tester, ffp): rmtree fails after its durable
+  write-ahead record AND the compensating line cannot be written (chmod-444
+  window / RLIMIT sized between the two appends) → the log permanently keeps
+  a bare record identical to a successful-removal entry for a path that
+  still exists, and the run prints the `EXECUTED` sentinel at **rc 0**.
+  Violates the batch-16 contract sentence "the log never claims a
+  destruction that did not happen" (REVIEWS.md § Kit hygiene). No J-leg or
+  mutant detected it (J4 used a healthy log).
+
+**Batch 17 closure (minimal-complete, per the astra advisory: fix the
+required-behavior gap and narrow the sentence — an append-only log cannot
+retract, so the tool must surface, not silently believe):**
+
+- Both compensating appends now check their return value. On failure the run
+  prints an `ERROR` line naming the path whose record over-claims a
+  destruction, sets `log_inconsistent`, and exits **rc 1** with a final
+  `WARNING` — an uncorrectable trail is always surfaced, never silently
+  believed. The removals that succeeded remain valid; the exit code says the
+  log needs operator attention.
+- The contract text in both `kit-rm.py`'s docstring and REVIEWS.md § Kit
+  hygiene was narrowed to state exactly what an append-only log guarantees:
+  write-ahead durability, compensating lines when possible, and surfacing
+  (ERROR + rc 1) when a correction is impossible.
+- New pins: suite section J6 (faked rmtree failure + forced compensating
+  failure → rc 1, ERROR line, bare record present, no false correction
+  recorded; scoped by a distinct reason so J4's line cannot collide) and
+  driver mutant `l4-surface` (reverts both arms to batch-16's discarding
+  behavior, fires the two J6 legs). `l3-write-ahead` and
+  `refuse-everything` collateral widened (5 and 55) because moving the
+  record back after rmtree also breaks the compensating path.
+- ffp's acted-on P3: the capture-order rule (finalize every source, then
+  capture kit-rm → re-stage → capture kit-gc → re-stage → verify) is now a
+  durable REVIEWS.md § Kit hygiene bullet, not only a Round-40 story.
+
+**Reviewer-kit incident, recorded honestly (tester self-disclosure):**
+during wave 30 a tester probe bug (live tool launched with an unset shell
+variable → relative `open(..., "w")`) truncated the LIVE
+`.local/shared/removals.log` at 22:23Z, destroying its prior content
+(~16 KB of removal history from earlier waves) before writing its own
+entries. The log is not manifest-bound, so no evidence binding was
+invalidated (the checker and fixpoint verify this). The surviving file now
+begins with the tester's probe entries; entries from 22:23Z onward are
+reviewer noise, not lead removals. No lead removal was lost (none ran
+between batch-15 close and the truncation). The truncation is a limitation
+of the log's protection model: the guards protect directories from
+deletion; a caller that opens the log itself with `open(..., "w")` bypasses
+the tool entirely. The tool's own contract (regular file, write-ahead,
+surfacing) is intact; this was a probe outside the tool.
+
+**Kit state after batch 17, converged to a fixpoint:** kit-rm suite **95
+assertions, 0 failures** (91 + the four J6 legs); kit-gc suite **50, 0**;
+falsification driver **28 mutants + crash self-test, all CAUGHT** (H5
+prints 29 legs); manifest **41 entries, 13 staged/live pairs**, head
+re-stamped to this record's commit; H4 green both ways on both logs (95 +
+50 labels); H5 green (29 legs); external checker `OK (0 mismatch(es))`;
+restage `--dry-run` reports `manifest unchanged`; live reporter `rc 2` with
+exactly the two standing privacy fixtures and 0 OVER-CAP; zero
+`__pycache__`; `v4/` still empty-diff since `9a8f64e8`; guard `abacfa59…`
+unchanged. Battery **25/25**.
+
+Remaining P3s recorded, none blocking: FIFO `status.json` hangs
+`live_runs()`; `size_of` unpinned; non-UTF8 tracked filename crashes
+`gate_artifacts()` at rc 1 (fail-closed); sticky-parent + foreign-owned
+residual needs root; battery 25/25 remains a run-fact; J3's RLIMIT trigger
+is Linux-specific (portability lane, noted by parity); the suite hard-needs
+coreutils `timeout` (parity P3).
+
+Next: wave 31 (fresh fit-for-purpose, parity, tester at the batch-17
+revision, same stopping-rule brief) → if clean, re-run security,
+performance, operations, portability at the same final revision → all-7
+PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
+battery (`1609b395…`) → evidence child commit → astra turn 12 → push.

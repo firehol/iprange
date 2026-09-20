@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: 8eeddd1dc47311c58ab873522042969d760688d368564d8d8017a2b7527ea134
+# H4-LABEL-HASH: addf63dc03ae57b635ad7d0a437b3dbb4bbd3dea861b278a9c13dcc36f5d9b5d
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -545,6 +545,52 @@ tail -1 <<<"$out" | grep -q '^KEPT$' && ok "simulated rmtree failure kept the ta
 grep -q 'REMOVAL-FAILED: \[Errno 13\] simulated rmtree failure' "$L/shared/removals.log" \
   && ok "compensating REMOVAL-FAILED line recorded" || bad "no compensating line in the audit log"
 rm -rf "$L/perf/w7" "$L/perf/w7/comp-list"
+
+echo "--- J6: an uncorrectable compensating line is surfaced, not believed ---"
+# Append-only means a bare write-ahead record cannot be retracted. If the
+# compensating line ALSO fails to write (rmtree failed AND the log became
+# unwritable in that window), the log keeps a record that over-claims a
+# destruction for a surviving path. The run must not report clean success:
+# it prints an ERROR line and exits rc 1 (wave-30 parity P2-1). Deterministic
+# at the unit level: rmtree raises, the first append (the record) succeeds,
+# the second append (the compensating line) is forced to fail.
+cat > "$T/uncorrectable-probe.py" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+scratch = sys.argv[2]
+os.makedirs(os.path.join(scratch, "inner"), exist_ok=True)
+open(os.path.join(scratch, "inner", "f"), "w").write("k\n")
+def boom(path, *a, **k):
+    raise OSError(13, "simulated rmtree failure")
+m.shutil.rmtree = boom
+m.gate_artifacts = lambda: []
+m.live_runs = lambda runs_root=None: []
+real_append = m.append_audit
+calls = {"n": 0}
+def flaky_append(line):
+    calls["n"] += 1
+    if calls["n"] == 1:
+        return real_append(line)          # the write-ahead record lands
+    return "simulated compensating failure"  # the correction cannot
+m.append_audit = flaky_append
+lst = os.path.join(os.path.dirname(scratch), "unc-list")
+with open(lst, "w") as fh:
+    fh.write(scratch + "\n")
+rc = m.main(["kit-rm.py", "--list", lst, "--runs-root",
+             os.path.dirname(scratch), "--execute", "--reason", "unc-test"])
+print("RC=%d KEPT=%s" % (rc, os.path.isdir(scratch)))
+PY
+out=$("$PYBIN" "$T/uncorrectable-probe.py" "$K" "$L/perf/w9/cargo-target" 2>&1); rc=$?
+grep -q 'RC=1 KEPT=True' <<<"$out" && ok "uncorrectable trail exits rc 1 with the target kept" || bad "uncorrectable trail: $(tail -1 <<<"$out")"
+grep -q 'claims a removal that did not happen' <<<"$out" && ok "uncorrectable trail prints an ERROR line" || bad "no ERROR line for the uncorrectable trail"
+# the bare record is present (over-claim) but no REMOVAL-FAILED line exists
+# for it: that is exactly the inconsistency the ERROR line surfaces. Scoped
+# to this leg's reason so J4's earlier compensating line cannot collide.
+grep -q 'REMOVAL-FAILED.*unc-test' "$L/shared/removals.log" && bad "a REMOVAL-FAILED line was written despite the forced failure" || ok "no false correction was recorded"
+grep -q 'unc-test' "$L/shared/removals.log" && ok "the bare over-claiming record is in the log" || bad "the write-ahead record never landed (probe broken)"
+rm -rf "$L/perf/w9" "$L/perf/w9/unc-list"
 
 echo "--- J5: O_NOFOLLOW closes the swap-between-check-and-open window ---"
 # The shape check lstats the log, then opens it: between the two an attacker

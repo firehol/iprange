@@ -39,9 +39,13 @@ Dry run is the default: nothing is removed unless --execute is passed WITH
 appended, flushed and fsynced to `.local/shared/removals.log` BEFORE the
 destructive call, so a removal can never complete without a durable record;
 a removal that fails after its record gets a compensating line carrying a
-REMOVAL-FAILED field. The log must be a regular file (or absent): a symlink,
-directory or FIFO is refused, because open("a") would follow or block on
-them and the audit trail would silently not exist.
+REMOVAL-FAILED field. Because the log is append-only, a compensating line
+that itself cannot be written leaves a record that over-claims a destruction:
+the tool then prints an ERROR line and exits rc 1 rather than reporting clean
+success, so an uncorrectable trail is always surfaced. The log must be a
+regular file (or absent): a symlink, directory or FIFO is refused, because
+open("a") would follow or block on them and the audit trail would silently
+not exist.
 
 Usage:
   kit-rm.py --list FILE                      # verify and report only
@@ -500,6 +504,11 @@ def main(argv: list[str]) -> int:
 
     removed = kept = 0
     freed = 0
+    # Set when the log holds a write-ahead record that could not be
+    # corrected after the removal failed: the trail then over-claims a
+    # destruction, and the run must not report clean success (wave-30
+    # parity P2-1).
+    log_inconsistent = False
     for path in lines:
         ok, why, nbytes = check(path, texts, live)
         if not ok:
@@ -533,13 +542,27 @@ def main(argv: list[str]) -> int:
             shutil.rmtree(path)
         except OSError as err:
             kept += 1
-            append_audit(f"{stamp}\t-\t{path}\t{args.reason}\tREMOVAL-FAILED: {err}\n")
+            why = append_audit(f"{stamp}\t-\t{path}\t{args.reason}\tREMOVAL-FAILED: {err}\n")
             print(f"KEEP    removal failed ({err}): {path}")
+            if why:
+                # The bare write-ahead record is still in the log and now
+                # looks like a successful removal for a path that survived.
+                # An append-only log cannot retract it, so the run must not
+                # report clean success: surface the inconsistency and fail.
+                print(f"ERROR   audit record for {path} claims a removal that "
+                      f"did not happen and could not be corrected ({why})",
+                      file=sys.stderr)
+                log_inconsistent = True
             continue
         if os.path.exists(path):
             kept += 1
-            append_audit(f"{stamp}\t-\t{path}\t{args.reason}\tREMOVAL-FAILED: still present\n")
+            why = append_audit(f"{stamp}\t-\t{path}\t{args.reason}\tREMOVAL-FAILED: still present\n")
             print(f"KEEP    still present after rmtree: {path}")
+            if why:
+                print(f"ERROR   audit record for {path} claims a removal that "
+                      f"did not happen and could not be corrected ({why})",
+                      file=sys.stderr)
+                log_inconsistent = True
             continue
         removed += 1
         freed += nbytes
@@ -547,6 +570,14 @@ def main(argv: list[str]) -> int:
 
     mode = "EXECUTED" if args.execute else "DRY RUN"
     print(f"{mode}: {removed} removed, {kept} refused, {human(freed)} freed")
+    if log_inconsistent:
+        # The audit trail holds a record that over-claims a destruction and
+        # could not be corrected. The removals that succeeded are fine, but
+        # the run must not report clean success: the log needs operator
+        # attention (wave-30 parity P2-1).
+        print("WARNING: the audit log holds an uncorrectable record; see the "
+              "ERROR lines above", file=sys.stderr)
+        return 1
     return 0
 
 
