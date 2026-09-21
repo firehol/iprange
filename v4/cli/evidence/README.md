@@ -2,15 +2,15 @@ Every measurement report in this directory records its own provenance,
 and reading that provenance is the only way to know what a committed
 artifact measures.  The set is now a completed rotation: all nineteen
 measurement reports, `build-ids.json`, and `battery-manifest.json` carry
-`git_head` `d0abc99f6d9ece56cba3f42f5a290c6dad398da4` — the revision
+`git_head` `4b42cc0b6622cb42cd501e6e2ff01a9e5887906e` — the revision
 under test — because the wave-19.27 full-tier closure battery ran
 with the work tree checked out at exactly that commit and the two
 Windows reports were authored natively on the authorized validation host
 from a fresh detached checkout of the same published commit (transferred
-as a complete-history git bundle; tree `c351a65acc41aaf42f194363c2c1a4ac7c23fc7e`
+as a complete-history git bundle; tree `00248d3dd70b1deba4cf448c3602dba265bbe9a2`
 equal to the qualification workstation's, `git status --porcelain` empty
-before and after; the twenty-two files the leg's snapshot manifest pins
-against its base commit are recorded in the reports by commit-blob
+before and after; the one file the leg's snapshot manifest pins
+against its base commit is recorded in the reports by commit-blob
 SHA-256).  The earlier
 mid-rotation state (Linux reports at one revision, Windows reports at a
 throwaway snapshot, a manifest binding zero live files) is what the kind
@@ -28,7 +28,7 @@ finding P2-6; an earlier wave paid for the same axis twice under two
 names, which is exactly the rule "an expensive axis runs at most once
 per gate and replaces its overlapping subset" forbids).  The manifest
 committed here is the one that battery emitted, and it is therefore
-true of its own revision `d0abc99f`: it lists one `refusal-class-parity`
+true of its own revision `4b42cc0b`: it lists one `refusal-class-parity`
 entry, because `refusal-class-parity-full.json` no longer exists at this
 revision — the single-name set is the post-rotation state the parity
 rule above describes, not a pre-rotation lag.
@@ -88,7 +88,7 @@ authored them on the same revision, and the Linux leg refuses to restate
 an artifact it did not measure — plus the two retired duplicate
 pressure-axis steps (`[9c]` and `[16g]`), which the single-sweep rule
 (astra gate finding P2-6) leaves deferred rather than run twice.  Wall
-time: 195.3 s at pooled 12 jobs (the pre-pool serial estimate of ~65
+time: 198.2 s at pooled 12 jobs (the pre-pool serial estimate of ~65
 minutes is obsolete; the milestone pressure sweep alone is ~100 s of
 it).  The `recheck-*` logs present in
 the battery reports directory are the kind gate's deliberate second pass
@@ -137,20 +137,18 @@ destination), `recovery.inspect_live_junk`
 (`recovery_candidate_changed`), `feeds.missing_feed_outcomes`
 (`name_not_found` with `read_only_failure`), and
 `validate.live_sidecar_fold` (`live_recovery_coordination_unavailable`).
-Committed results against the integrated binaries: `matrix-rust` 71 PASS
-/ 0 FAIL / 0 skipped (37 oracle checks); `matrix-go` 71 PASS / 0 FAIL / 0
-skipped (37 oracle checks); `matrix-rust_to_go` 40 PASS + 31 skipped (22
-oracle checks); `matrix-go_to_rust` 40 PASS + 31 skipped (22 oracle
+Committed results against the integrated binaries: `matrix-rust` 75 PASS
+/ 0 FAIL / 0 skipped (37 oracle checks); `matrix-go` 75 PASS / 0 FAIL / 0
+skipped (37 oracle checks); `matrix-rust_to_go` 41 PASS + 34 skipped (22
+oracle checks); `matrix-go_to_rust` 41 PASS + 34 skipped (22 oracle
 checks).  The mixed-matrix skips are cases without a cross-producer or
 cross-consumer step, which those matrices cannot exercise by design.
 The `known-defects.json` ledger is committed empty, and the kind gate
 enforces it in both directions — an unlisted FAIL fails the gate, and a
 listed defect that passes fails
 it.  `check_golden.py` reports 55 golden exchanges PASS; the committed
-`golden.json` records 71 case files for its own revision, and the tree
-here holds 75 — the four publication cases this wave adds — which the
-rotation re-walks (the kind gate's corpus-drift tolerance covers the
-lag).  `sensitivity_gate.py` reports 14 modes PASS.
+`golden.json` records 75 case files, matching the 75 the tree holds.
+`sensitivity_gate.py` reports 14 modes PASS.
 
 Refusal-class parity gate (committed).
 `v4/cli/check_refusal_class_parity.py` drives both binaries over a
@@ -165,9 +163,9 @@ Message text is not compared because it is a human diagnostic and the
 machine contract is the code and outcome.  Every attempt runs
 under its own bounded deadline (4 s) and a differing repeat is retried
 (2 retries), so a flake is counted apart from a divergence and a hang
-apart from both.  Budget: 55 s per grid; measured 7.9 s with the pooled
+apart from both.  Budget: 55 s per grid; measured 7.434 s with the pooled
 grid runner (12 jobs) — the milestone pressure axis runs beside the
-grid and reports its own `pressure.elapsed_seconds` (101.2 s for the
+grid and reports its own `pressure.elapsed_seconds` (102.175 s for the
 committed sweep).  `evidence/refusal-class-parity.json` carries each
 binary's SHA-256 and `system.describe` implementation label plus
 `git_head`.  The verdict is two-layer on purpose: the report must first
@@ -239,16 +237,16 @@ direction, and its two `/usr/bin/false` negative controls each record 0
 of 16 scenarios passing, proving a substituted non-product binary is
 detected.  The resource harness records 8/8 proofs PASS under bounded
 read and write deadlines, and the throughput attestation (committed
-artifact figures) records go median 15,394.0 replies/s (rounds
-10,595.5 / 15,394.0 / 17,105.2) and rust median 45,751.7 replies/s
-(rounds 44,010.1 / 45,751.7 / 53,368.4), each with its 12-case
+artifact figures) records go median 13,789.9 replies/s (rounds
+7,755.4 / 13,789.9 / 16,001.2) and rust median 43,190.7 replies/s
+(rounds 43,190.7 / 46,747.4 / 42,392.5), each with its 12-case
 self-test.  These are host-load observations, not a contract; the
 census terms are below in the throughput entry.
 
 Coverage (measured, not asserted).  `evidence/coverage-go.json`, produced
 by `v4/cli/coverage_harness.py`, records unit and corpus-driven
 integration coverage of the Go module.  At this revision (instrumented
-build of the `d0abc99f` working tree, `go version go1.27.0
+build of the `4b42cc0b` working tree, `go version go1.27.0
 linux/amd64`, covermode `atomic`): unit 28,222/57,513 statements =
 49.07%, 3,907/5,954 functions = 65.62%, 19,178/42,103 blocks = 45.55%;
 corpus-driven integration 22,862/54,094 = 42.26%, 3,515/5,742 = 61.22%,
@@ -264,7 +262,7 @@ or performance attestation, and killed runs (the crash battery kills its
 children, and a killed Go coverage binary writes no counter block) are
 never merged into the coverage evidence — only complete matrix runs
 contribute (each recorded matrix run shows `rc 0` or the contract's
-`rc 1` with its full 71/0/0 or 40/0/31 tallies intact).  `run.py` forwards
+`rc 1` with its full 75/0/0 or 41/0/34 tallies intact).  `run.py` forwards
 `GOCOVERDIR` to the child only because the harness sets it; the
 allowlist entry adds no child state to an ordinary qualification run.
 The harness self-test (14 cases) includes a source pin requiring every
@@ -400,20 +398,23 @@ shared log digest
 `96c8ab39679692f3a70afe878681c5217adf75125164d36e9035cd989cb6d328`
 unchanged across waves, cross-listing row equality, shared volume
 identity, zero temp residue.
-Each report embeds the six Windows artifact digests verified against the
-host builds — go `iprange.exe`
+The six Windows artifact digests are pinned by the leg's host-digests
+record and staged in the Linux ledger — go `iprange.exe`
 `4470f9e00476057af18a06d3e964322e7b341300d1df6af7f328aad90f14fa54`,
 go worker `fe961413c803ce89b96b5f1e5ac121f533603af811a79507dcb8eed248b82660`,
-rust `iprange.exe` `0797843b92b89aa4f1d74591a5fd1479ebfe040d09e3dcd681d6908f820ce12a`,
-rust worker `8187e4b6c8d1b451babf7114808858585cf3e4066b84f91e2469c5206dbee6c0`,
-fixture tool `c36687812e4afdb7dc2a56092864bfe3035ec496d4598d476e25692e4b407835`,
-fixture database `3329b26ffdc8316893ea9379ce02323e3d813cca474e0b06a38fdaaa533cf46f`
-— plus `build_provenance` with the host toolchain lines, the native
-test tallies, and the build commands.  The Go Windows `iprange.exe`
-worker is unchanged byte-for-byte from the previous wave; the product
-and Rust digests differ because the Rust linker emits non-deterministic
-bytes across builds, and every digest is the one the Linux ledger
-stages, so the two legs describe one source.  Both reports
+rust `iprange.exe` `d9508c3984d27ee57f6ea684cf1c7d9bfa99f6b2196a3f2ea687ef197c902396`,
+rust worker `4b5ba88a4e0299d566bb3a4d32d3e3efa8a4fa7289f38305b0f33a89fe6164ed`,
+fixture tool `2d669137e8d6029f2805ac0eed6a8783d85d0e60d6a82792c4769777c61ee61e`,
+fixture database `d6664b7570a82e1fedd3fdb787dfbdd7d9f57b2418d603dc9640d7313d7d2c24`.
+Each report embeds the subset it exercised — go and rust `iprange.exe`
+in both, plus the fixture database in the guard report — alongside
+`build_provenance` with the host toolchain lines, the native
+test tallies, and the build commands.  The Go Windows products are
+unchanged byte-for-byte from the previous wave; the Rust binaries and
+the fixture tool differ because the Rust linker emits non-deterministic
+bytes across builds (the fixture database differs as a consequence of
+being created by a freshly built tool), and every digest is the one the
+Linux ledger stages, so the two legs describe one source.  Both reports
 are sanitized: no host login name, no personal home path (the on-host
 privacy gate scans every string in every reading — raw, case-folded,
 separator-folded, MSYS-mount-translated — and refuses any artifact that
@@ -424,7 +425,7 @@ is redacted from the toolchain strings, and `checkout_root` is `null`.
 
 Which reports name which revision.  Nineteen measurement reports,
 `build-ids.json`, and `battery-manifest.json` in this directory carry
-`git_head=d0abc99f6d9ece56cba3f42f5a290c6dad398da4`: the four matrices,
+`git_head=4b42cc0b6622cb42cd501e6e2ff01a9e5887906e`: the four matrices,
 `crash.json`, `crash-go_to_rust.json`, `crash-negative.json`,
 `crash-negative-producer-false.json`, `fifo-surface.json`,
 `throughput.json`, `refusal-class-parity.json`, `coverage-go.json`,
@@ -442,7 +443,7 @@ SHA-256 in the staged ledger, not by an embedded revision.
 
 Current evidence regenerated by the wave-19.27 full-tier closure battery
 and the native Windows leg at revision
-`d0abc99f6d9ece56cba3f42f5a290c6dad398da4`
+`4b42cc0b6622cb42cd501e6e2ff01a9e5887906e`
 (product identities in the identity block below).  The paragraphs that
 follow record the product defects repaired along the road to this
 revision; each remains true of the current tree:  Wave 19.23 repairs the product defects
@@ -2255,9 +2256,9 @@ the binding that field provides.
   not host portable — so what the gate enforces is that every reply is
   served, the child exits cleanly, and the thread-creation count does not
   grow with the request count (measured at this revision: Go 17 `clone`
-  calls and Rust 4, each identical at the 3,000 and 6,000 request probes;
-  Go unique child tids 11 at 3,000 and 13 at 6,000, Rust 4 at both).
-  Committed medians at this revision: Go 15,394.0 and Rust 45,751.7
+  calls at 3,000 requests and 18 at 6,000, Rust 4 at both; Go unique
+  child tids 7 at 3,000 and 9 at 6,000, Rust 4 at both).
+  Committed medians at this revision: Go 13,789.9 and Rust 43,190.7
   replies/s.  Those are host-load observations, and the rate window starts
   at child spawn so it includes process start.  The report carries one
   median per product, so no second quieter-host figure can be cited from
@@ -2476,9 +2477,9 @@ the derived `privacy` block, screens the inputs the caller declares, and
 refuses the write when any screened input or any finished string value
 names an operator profile path.  Splitting the write from the provenance
 would let a harness keep the artifact and drop the audit, so the registry
-is audited as a set: `command_sanitize.py --self-test` executes 58
+is audited as a set: `command_sanitize.py --self-test` executes 59
 controls over the whole registry, and every harness self-test must report
-`shared command_sanitize controls executed=58 expected=58` before its own
+`shared command_sanitize controls executed=59 expected=59` before its own
 result counts.  `check_producer_privacy.py` attacks the three
 lead-owned writers from the outside with 40 committed controls, so
 neither a writer that screens nothing, nor one that serializes its own
@@ -2500,7 +2501,7 @@ nice python3 v4/cli/throughput_harness.py --self-test   # 12 cases + 4 structura
 nice python3 v4/cli/resource_harness.py --self-test      # 25 control groups
 nice python3 v4/cli/crash_harness.py --self-test         # 26 controls, eight groups
 nice python3 v4/cli/windows_guard_harness.py --self-test # 39 total (38 on POSIX + 1 native-only) + 10 verify
-nice python3 v4/cli/command_sanitize.py --self-test      # 58 registry controls
+nice python3 v4/cli/command_sanitize.py --self-test      # 59 registry controls
 nice python3 v4/cli/check_producer_privacy.py --self-test # 40 producer controls
 nice python3 v4/cli/windows_housekeeping_harness.py --self-test  # incl. 9 report-verification controls
 nice python3 v4/cli/races/runner.py --self-test          # 22 mutation (15 arm, 7 detector) + 6 committed-report writer controls

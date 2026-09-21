@@ -22,7 +22,7 @@
   "linux": "66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d",
   "windows": "66ddf70b52640f4baedda9313d2a13fecaa6735ce85a6bbd1211016d69de0e9d"
  },
- "git_head": "d0abc99f6d9ece56cba3f42f5a290c6dad398da4",
+ "git_head": "4b42cc0b6622cb42cd501e6e2ff01a9e5887906e",
  "inputs": {
   "manifest": "Cargo.toml",
   "source_files": 357
@@ -50,7 +50,7 @@
  "schema": "iprange-cli-build-ids-v1",
  "source_state": {
   "note": "the value is a pure function of iprange-livedb's Cargo.toml and src/**.rs content; any change under that package regenerates it. Regenerate this file whenever the package changes and never hand-edit a digest.",
-  "revision": "d0abc99f6d9ece56cba3f42f5a290c6dad398da4"
+  "revision": "4b42cc0b6622cb42cd501e6e2ff01a9e5887906e"
  },
  "verified_against_built_products": {
   "cli_contains_expected": true,

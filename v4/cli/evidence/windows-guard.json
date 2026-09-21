@@ -1,8 +1,8 @@
 {
   "all_ok": true,
   "build_provenance": {
-    "base_commit": "3de749ade72c20dc61f202f66a23b2b1d58c91fa",
-    "base_commit_subject": "v4/cli: make the cross-host privacy scan see POSIX profiles on Windows",
+    "base_commit": "05a3c2d8d54f1142908b971bcc41ba943f92a8c9",
+    "base_commit_subject": "v4: record the close-out defects and the targeted review round",
     "build_commands": [
       "go-vet [scored attempt 1, rc=0]: (cd <checkout>/v4/go && nice go vet ./...)",
       "go-build-cli [scored attempt 1, rc=0]: (cd <checkout>/v4/go && nice env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -o C:/msys64/tmp/qualsvc-w192627-W10/bin/go/iprange.exe ./cmd/iprange)",
@@ -32,13 +32,13 @@
     "carried_observation": "The release build graph (35 units compiled, target tree moved out of the checkout before the build so nothing was reused) reports 0 warning line(s) and the summary line(s) (none). The abandon_spawn warning(s) recorded verbatim: (none). Compared with the previously qualified native run's build log (qualsvc-w1925c-W/logs/cargo-build-bins.GREEN.log): that run reported 2 warning line(s) and this one 0; identical as a set: no. abandon_spawn is now #[cfg(unix)]-gated at v4/rust/iprange-livedb/src/worker/client.rs, whose doc comment records that its only callers are in the unix owned-stdio spawn path, so the Windows build graph has no dead-code report for it and none was suppressed here. This recipe does not deny warnings, and this leg neither introduced nor silenced any of them.",
     "changed_files": [
       {
-        "path": "v4/cli/cases/publish.binary_v6_asymmetric_limb.json",
-        "sha256": "4bd2f1693bc3b0e396c9e2ab5fd9372ee4f2bc067f99ecfd75e8a99ff983424f"
+        "path": "v4/cli/command_sanitize.py",
+        "sha256": "8280b61ede8124f4df76f1745579c1e76b6f06cbf753ce74b224a92b7894d2bc"
       }
     ],
-    "changed_files_note": "1 files differ between commit F d0abc99f6d9e and its parent 3de749ade72c and each is listed with the SHA-256 of the qualification-workstation copy; the checkout is byte-identical to commit F, proven by the equal tree object (tree hashing covers every tracked file, so the manifest measures content, the tree proves completeness). They carry the native-Windows portability repairs (Rust legacy parse and DNS, the Go legacy parser and platform-scoped numeric-form split with its cross-language tag gate, the shared privacy checkers) and the tests pinning them. The engine build identity and product digests legitimately differ from the 7c2d2cf7-era staged pair for exactly these source changes; v4/rust/iprange-livedb is untouched, so the host-invariant build id must persist unchanged.",
-    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit d0abc99f6d9ece56cba3f42f5a290c6dad398da4 with no local edit. It was created in a fresh directory for this leg by git clone of the git bundle transferred from the qualification workstation, a git fetch of refs/qual/w1926b-snapshot from that bundle, and git checkout --detach to the recorded revision; the clone origin is the bundle itself, so the source of truth for this leg is the bundle (git bundle verify reports it as recording a complete history), not any pre-existing host copy. rsync and scp/sftp are unavailable on this host, so the bundle was transferred over ssh with cat. Tree identity is proven by measurement rather than by sampling files: the checked-out tree object is c351a65acc41aaf42f194363c2c1a4ac7c23fc7e, which equals the tree of the same revision on the qualification workstation, and a git tree object hashes every tracked file, so an equal tree object is byte-identity of the whole source tree.",
-    "content_snapshot_note": "git_head is d0abc99f6d9ece56cba3f42f5a290c6dad398da4: the PUBLISHED commit F of the repository's master history (3de749ade72c20dc61f202f66a23b2b1d58c91fa is its parent, v4/cli: make the cross-host privacy scan see POSIX profiles on Windows). Unlike the earlier 19.26b leg, there is no throwaway commit-tree snapshot here: chunk W was committed, passed seven adversarial review rounds, and the leg builds from the commit itself, transferred as a git bundle recording complete history. The leg is reproducible from the public commit alone; changed_files lists every file the commit adds or changes versus its parent, pinned by SHA-256, including v4/cli/evidence/** (the two Windows reports this leg re-author are rotated into that directory by a later commit; the stale copies in the checkout are inputs the leg verifies byte-identical and then replaces by transfer, never in place).",
+    "changed_files_note": "1 files differ between commit F 4b42cc0b6622 and its parent 05a3c2d8d54f and each is listed with the SHA-256 of the qualification-workstation copy; the checkout is byte-identical to commit F, proven by the equal tree object (tree hashing covers every tracked file, so the manifest measures content, the tree proves completeness). They carry the native-Windows portability repairs (Rust legacy parse and DNS, the Go legacy parser and platform-scoped numeric-form split with its cross-language tag gate, the shared privacy checkers) and the tests pinning them. The engine build identity and product digests legitimately differ from the 7c2d2cf7-era staged pair for exactly these source changes; v4/rust/iprange-livedb is untouched, so the host-invariant build id must persist unchanged.",
+    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit 4b42cc0b6622cb42cd501e6e2ff01a9e5887906e with no local edit. It was created in a fresh directory for this leg by git clone of the git bundle transferred from the qualification workstation, a git fetch of refs/qual/w1926b-snapshot from that bundle, and git checkout --detach to the recorded revision; the clone origin is the bundle itself, so the source of truth for this leg is the bundle (git bundle verify reports it as recording a complete history), not any pre-existing host copy. rsync and scp/sftp are unavailable on this host, so the bundle was transferred over ssh with cat. Tree identity is proven by measurement rather than by sampling files: the checked-out tree object is 00248d3dd70b1deba4cf448c3602dba265bbe9a2, which equals the tree of the same revision on the qualification workstation, and a git tree object hashes every tracked file, so an equal tree object is byte-identity of the whole source tree.",
+    "content_snapshot_note": "git_head is 4b42cc0b6622cb42cd501e6e2ff01a9e5887906e: the PUBLISHED commit F of the repository's master history (05a3c2d8d54f1142908b971bcc41ba943f92a8c9 is its parent, v4: record the close-out defects and the targeted review round). Unlike the earlier 19.26b leg, there is no throwaway commit-tree snapshot here: chunk W was committed, passed seven adversarial review rounds, and the leg builds from the commit itself, transferred as a git bundle recording complete history. The leg is reproducible from the public commit alone; changed_files lists every file the commit adds or changes versus its parent, pinned by SHA-256, including v4/cli/evidence/** (the two Windows reports this leg re-author are rotated into that directory by a later commit; the stale copies in the checkout are inputs the leg verifies byte-identical and then replaces by transfer, never in place).",
     "flake_history": "Scored invocation: 0 of 30 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 1 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory.",
     "flake_reasons": [],
     "flake_reasons_note": "Each retry the driver classified as a host process-creation failure is recorded by the driver itself, per attempt, in flake-reasons.tsv; the recognised signatures are 0xc0000142 / STATUS_DLL_INIT_FAILED / its decimal spelling appearing in the step's own log, and an exit 127 whose log is empty (the tool was never started). Neither signature turns a red step green: a step that keeps failing exhausts the 4 attempts and is reported red with its log.",
@@ -237,7 +237,7 @@
         "scored_attempt": 1
       }
     },
-    "revision": "d0abc99f6d9ece56cba3f42f5a290c6dad398da4",
+    "revision": "4b42cc0b6622cb42cd501e6e2ff01a9e5887906e",
     "rust_build_recipe_note": "The Rust products were built by the recorded canonical invocation (--release --all-features --bins --examples) from the checkout itself into the checkout's own v4/rust/target, which was moved out of the tree to the work root before this run so nothing from an earlier build could be reused; the worker was also built explicitly with --release -p iprange-livedb --bin iprange-v4-worker, and the release worker was copied beside the debug test executable so the live_source_tests pins could answer. The Go products were built CGO_ENABLED=0 GOOS=windows GOARCH=amd64 -trimpath -buildvcs=false, which is why their digests do not depend on the build tree location.",
     "rust_dns_hex_scoped_note": "legacy::dns::tests::hex_numeric_hostnames_answer_locally_on_glibc is #[cfg(unix)]: glibc answers the inet_at-style hex numeric forms locally and Windows has no such form, so the compatibility is pinned only where it exists. The step still ran natively and its own summary line is 'running 0 tests', recorded so the case reads as scoped rather than omitted. The platform-independent batching contract it used to be tangled with is pinned by multi_file_batches_drain_independently, which runs on every target on the dotted-numeric loopback.",
     "shared_self_tests": {
@@ -307,12 +307,12 @@
     "C:/msys64/tmp/qualsvc-w192627-W10/prov-guard.json"
   ],
   "fixture": {
-    "mtime": 1789990536.1080153,
+    "mtime": 1790008974.0149066,
     "path": "C:/msys64/tmp/qualsvc-w192627-W10/win/fixture-w1924b.iprange",
-    "sha256": "3329b26ffdc8316893ea9379ce02323e3d813cca474e0b06a38fdaaa533cf46f",
+    "sha256": "d6664b7570a82e1fedd3fdb787dfbdd7d9f57b2418d603dc9640d7313d7d2c24",
     "size": 16384
   },
-  "git_head": "d0abc99f6d9ece56cba3f42f5a290c6dad398da4",
+  "git_head": "4b42cc0b6622cb42cd501e6e2ff01a9e5887906e",
   "platform": "windows",
   "privacy": {
     "checked_inputs": [
@@ -330,7 +330,7 @@
     "go": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789990535.9055552,
+        "mtime": 1790008973.739915,
         "path": "C:/msys64/tmp/qualsvc-w192627-W10/win/go/iprange.exe",
         "sha256": "4470f9e00476057af18a06d3e964322e7b341300d1df6af7f328aad90f14fa54",
         "size": 14092800
@@ -766,15 +766,15 @@
       "implementation": "go",
       "sources_before": {
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\go\\A\u03a31.iprange": {
-          "sha256_before": "3329b26ffdc8316893ea9379ce02323e3d813cca474e0b06a38fdaaa533cf46f",
+          "sha256_before": "d6664b7570a82e1fedd3fdb787dfbdd7d9f57b2418d603dc9640d7313d7d2c24",
           "sidecar_absent_before": true
         },
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\go\\db.iprange": {
-          "sha256_before": "3329b26ffdc8316893ea9379ce02323e3d813cca474e0b06a38fdaaa533cf46f",
+          "sha256_before": "d6664b7570a82e1fedd3fdb787dfbdd7d9f57b2418d603dc9640d7313d7d2c24",
           "sidecar_absent_before": true
         },
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\go\\db_\u00e4.iprange": {
-          "sha256_before": "3329b26ffdc8316893ea9379ce02323e3d813cca474e0b06a38fdaaa533cf46f",
+          "sha256_before": "d6664b7570a82e1fedd3fdb787dfbdd7d9f57b2418d603dc9640d7313d7d2c24",
           "sidecar_absent_before": true
         }
       }
@@ -782,9 +782,9 @@
     "rust": {
       "all_ok": true,
       "binary": {
-        "mtime": 1789990535.9827673,
+        "mtime": 1790008973.8429258,
         "path": "C:/msys64/tmp/qualsvc-w192627-W10/win/rust/iprange.exe",
-        "sha256": "0797843b92b89aa4f1d74591a5fd1479ebfe040d09e3dcd681d6908f820ce12a",
+        "sha256": "d9508c3984d27ee57f6ea684cf1c7d9bfa99f6b2196a3f2ea687ef197c902396",
         "size": 6343680
       },
       "cases": {
@@ -1218,23 +1218,23 @@
       "implementation": "rust",
       "sources_before": {
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\rust\\A\u03a31.iprange": {
-          "sha256_before": "3329b26ffdc8316893ea9379ce02323e3d813cca474e0b06a38fdaaa533cf46f",
+          "sha256_before": "d6664b7570a82e1fedd3fdb787dfbdd7d9f57b2418d603dc9640d7313d7d2c24",
           "sidecar_absent_before": true
         },
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\rust\\db.iprange": {
-          "sha256_before": "3329b26ffdc8316893ea9379ce02323e3d813cca474e0b06a38fdaaa533cf46f",
+          "sha256_before": "d6664b7570a82e1fedd3fdb787dfbdd7d9f57b2418d603dc9640d7313d7d2c24",
           "sidecar_absent_before": true
         },
         "C:\\msys64\\tmp\\qualsvc-w192627-W10\\guardwork\\rust\\db_\u00e4.iprange": {
-          "sha256_before": "3329b26ffdc8316893ea9379ce02323e3d813cca474e0b06a38fdaaa533cf46f",
+          "sha256_before": "d6664b7570a82e1fedd3fdb787dfbdd7d9f57b2418d603dc9640d7313d7d2c24",
           "sidecar_absent_before": true
         }
       }
     }
   },
   "provenance": {
-    "base_commit": "3de749ade72c20dc61f202f66a23b2b1d58c91fa",
-    "base_commit_subject": "v4/cli: make the cross-host privacy scan see POSIX profiles on Windows",
+    "base_commit": "05a3c2d8d54f1142908b971bcc41ba943f92a8c9",
+    "base_commit_subject": "v4: record the close-out defects and the targeted review round",
     "build_commands": [
       "go-vet [scored attempt 1, rc=0]: (cd <checkout>/v4/go && nice go vet ./...)",
       "go-build-cli [scored attempt 1, rc=0]: (cd <checkout>/v4/go && nice env CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -buildvcs=false -o C:/msys64/tmp/qualsvc-w192627-W10/bin/go/iprange.exe ./cmd/iprange)",
@@ -1264,13 +1264,13 @@
     "carried_observation": "The release build graph (35 units compiled, target tree moved out of the checkout before the build so nothing was reused) reports 0 warning line(s) and the summary line(s) (none). The abandon_spawn warning(s) recorded verbatim: (none). Compared with the previously qualified native run's build log (qualsvc-w1925c-W/logs/cargo-build-bins.GREEN.log): that run reported 2 warning line(s) and this one 0; identical as a set: no. abandon_spawn is now #[cfg(unix)]-gated at v4/rust/iprange-livedb/src/worker/client.rs, whose doc comment records that its only callers are in the unix owned-stdio spawn path, so the Windows build graph has no dead-code report for it and none was suppressed here. This recipe does not deny warnings, and this leg neither introduced nor silenced any of them.",
     "changed_files": [
       {
-        "path": "v4/cli/cases/publish.binary_v6_asymmetric_limb.json",
-        "sha256": "4bd2f1693bc3b0e396c9e2ab5fd9372ee4f2bc067f99ecfd75e8a99ff983424f"
+        "path": "v4/cli/command_sanitize.py",
+        "sha256": "8280b61ede8124f4df76f1745579c1e76b6f06cbf753ce74b224a92b7894d2bc"
       }
     ],
-    "changed_files_note": "1 files differ between commit F d0abc99f6d9e and its parent 3de749ade72c and each is listed with the SHA-256 of the qualification-workstation copy; the checkout is byte-identical to commit F, proven by the equal tree object (tree hashing covers every tracked file, so the manifest measures content, the tree proves completeness). They carry the native-Windows portability repairs (Rust legacy parse and DNS, the Go legacy parser and platform-scoped numeric-form split with its cross-language tag gate, the shared privacy checkers) and the tests pinning them. The engine build identity and product digests legitimately differ from the 7c2d2cf7-era staged pair for exactly these source changes; v4/rust/iprange-livedb is untouched, so the host-invariant build id must persist unchanged.",
-    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit d0abc99f6d9ece56cba3f42f5a290c6dad398da4 with no local edit. It was created in a fresh directory for this leg by git clone of the git bundle transferred from the qualification workstation, a git fetch of refs/qual/w1926b-snapshot from that bundle, and git checkout --detach to the recorded revision; the clone origin is the bundle itself, so the source of truth for this leg is the bundle (git bundle verify reports it as recording a complete history), not any pre-existing host copy. rsync and scp/sftp are unavailable on this host, so the bundle was transferred over ssh with cat. Tree identity is proven by measurement rather than by sampling files: the checked-out tree object is c351a65acc41aaf42f194363c2c1a4ac7c23fc7e, which equals the tree of the same revision on the qualification workstation, and a git tree object hashes every tracked file, so an equal tree object is byte-identity of the whole source tree.",
-    "content_snapshot_note": "git_head is d0abc99f6d9ece56cba3f42f5a290c6dad398da4: the PUBLISHED commit F of the repository's master history (3de749ade72c20dc61f202f66a23b2b1d58c91fa is its parent, v4/cli: make the cross-host privacy scan see POSIX profiles on Windows). Unlike the earlier 19.26b leg, there is no throwaway commit-tree snapshot here: chunk W was committed, passed seven adversarial review rounds, and the leg builds from the commit itself, transferred as a git bundle recording complete history. The leg is reproducible from the public commit alone; changed_files lists every file the commit adds or changes versus its parent, pinned by SHA-256, including v4/cli/evidence/** (the two Windows reports this leg re-author are rotated into that directory by a later commit; the stale copies in the checkout are inputs the leg verifies byte-identical and then replaces by transfer, never in place).",
+    "changed_files_note": "1 files differ between commit F 4b42cc0b6622 and its parent 05a3c2d8d54f and each is listed with the SHA-256 of the qualification-workstation copy; the checkout is byte-identical to commit F, proven by the equal tree object (tree hashing covers every tracked file, so the manifest measures content, the tree proves completeness). They carry the native-Windows portability repairs (Rust legacy parse and DNS, the Go legacy parser and platform-scoped numeric-form split with its cross-language tag gate, the shared privacy checkers) and the tests pinning them. The engine build identity and product digests legitimately differ from the 7c2d2cf7-era staged pair for exactly these source changes; v4/rust/iprange-livedb is untouched, so the host-invariant build id must persist unchanged.",
+    "checkout": "authorized Windows validation host; the checkout is detached at the recorded revision and git status --porcelain is empty, so the tree is exactly commit 4b42cc0b6622cb42cd501e6e2ff01a9e5887906e with no local edit. It was created in a fresh directory for this leg by git clone of the git bundle transferred from the qualification workstation, a git fetch of refs/qual/w1926b-snapshot from that bundle, and git checkout --detach to the recorded revision; the clone origin is the bundle itself, so the source of truth for this leg is the bundle (git bundle verify reports it as recording a complete history), not any pre-existing host copy. rsync and scp/sftp are unavailable on this host, so the bundle was transferred over ssh with cat. Tree identity is proven by measurement rather than by sampling files: the checked-out tree object is 00248d3dd70b1deba4cf448c3602dba265bbe9a2, which equals the tree of the same revision on the qualification workstation, and a git tree object hashes every tracked file, so an equal tree object is byte-identity of the whole source tree.",
+    "content_snapshot_note": "git_head is 4b42cc0b6622cb42cd501e6e2ff01a9e5887906e: the PUBLISHED commit F of the repository's master history (05a3c2d8d54f1142908b971bcc41ba943f92a8c9 is its parent, v4: record the close-out defects and the targeted review round). Unlike the earlier 19.26b leg, there is no throwaway commit-tree snapshot here: chunk W was committed, passed seven adversarial review rounds, and the leg builds from the commit itself, transferred as a git bundle recording complete history. The leg is reproducible from the public commit alone; changed_files lists every file the commit adds or changes versus its parent, pinned by SHA-256, including v4/cli/evidence/** (the two Windows reports this leg re-author are rotated into that directory by a later commit; the stale copies in the checkout are inputs the leg verifies byte-identical and then replaces by transfer, never in place).",
     "flake_history": "Scored invocation: 0 of 30 recorded steps retried on a host process-creation failure signature the driver recognises (none); the retry cap was 4 attempts and the scored Go suite ran with no concurrent compile. Steps whose recorded attempt index exceeds 1: none. The driver recorded 1 invocation(s) in driver-invocations.log. No step was retried: every scored step carries attempt 1. Only the highest-attempt rc=0 record of each step is scored, and every cited log was checked to exist and to live outside the superseded directory.",
     "flake_reasons": [],
     "flake_reasons_note": "Each retry the driver classified as a host process-creation failure is recorded by the driver itself, per attempt, in flake-reasons.tsv; the recognised signatures are 0xc0000142 / STATUS_DLL_INIT_FAILED / its decimal spelling appearing in the step's own log, and an exit 127 whose log is empty (the tool was never started). Neither signature turns a red step green: a step that keeps failing exhausts the 4 attempts and is reported red with its log.",
@@ -1469,7 +1469,7 @@
         "scored_attempt": 1
       }
     },
-    "revision": "d0abc99f6d9ece56cba3f42f5a290c6dad398da4",
+    "revision": "4b42cc0b6622cb42cd501e6e2ff01a9e5887906e",
     "rust_build_recipe_note": "The Rust products were built by the recorded canonical invocation (--release --all-features --bins --examples) from the checkout itself into the checkout's own v4/rust/target, which was moved out of the tree to the work root before this run so nothing from an earlier build could be reused; the worker was also built explicitly with --release -p iprange-livedb --bin iprange-v4-worker, and the release worker was copied beside the debug test executable so the live_source_tests pins could answer. The Go products were built CGO_ENABLED=0 GOOS=windows GOARCH=amd64 -trimpath -buildvcs=false, which is why their digests do not depend on the build tree location.",
     "rust_dns_hex_scoped_note": "legacy::dns::tests::hex_numeric_hostnames_answer_locally_on_glibc is #[cfg(unix)]: glibc answers the inet_at-style hex numeric forms locally and Windows has no such form, so the compatibility is pinned only where it exists. The step still ran natively and its own summary line is 'running 0 tests', recorded so the case reads as scoped rather than omitted. The platform-independent batching contract it used to be tangled with is pinned by multi_file_batches_drain_independently, which runs on every target on the dotted-numeric loopback.",
     "shared_self_tests": {

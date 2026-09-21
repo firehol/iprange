@@ -3,7 +3,7 @@
   {
    "arm": "atfilelist.fifo",
    "data_code": "invalid_path",
-   "elapsed_ms": 10.5,
+   "elapsed_ms": 13.0,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_path",
@@ -16,7 +16,7 @@
   {
    "arm": "database.info",
    "data_code": "invalid_argument",
-   "elapsed_ms": 5.7,
+   "elapsed_ms": 2.7,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -29,7 +29,7 @@
   {
    "arm": "direct.csv-fifo",
    "data_code": "invalid_path",
-   "elapsed_ms": 6.1,
+   "elapsed_ms": 8.1,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_path",
@@ -42,7 +42,7 @@
   {
    "arm": "direct.replace-meta-fifo",
    "data_code": "invalid_path",
-   "elapsed_ms": 29.7,
+   "elapsed_ms": 9.2,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_path",
@@ -55,7 +55,7 @@
   {
    "arm": "feeds.create-source-fifo",
    "data_code": "invalid_argument",
-   "elapsed_ms": 2.2,
+   "elapsed_ms": 24.9,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -68,7 +68,7 @@
   {
    "arm": "inspect.immutable",
    "data_code": "invalid_argument",
-   "elapsed_ms": 29.1,
+   "elapsed_ms": 25.2,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -81,7 +81,7 @@
   {
    "arm": "inspect.live",
    "data_code": "invalid_argument",
-   "elapsed_ms": 24.8,
+   "elapsed_ms": 27.6,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -94,7 +94,7 @@
   {
    "arm": "inspect.offline",
    "data_code": "wrong_state",
-   "elapsed_ms": 23.8,
+   "elapsed_ms": 19.6,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "wrong_state",
@@ -107,7 +107,7 @@
   {
    "arm": "metadata.get",
    "data_code": "invalid_argument",
-   "elapsed_ms": 14.2,
+   "elapsed_ms": 2.3,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -120,7 +120,7 @@
   {
    "arm": "metadata.replace-file-fifo",
    "data_code": "invalid_path",
-   "elapsed_ms": 15.0,
+   "elapsed_ms": 7.0,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_path",
@@ -133,7 +133,7 @@
   {
    "arm": "reader.open",
    "data_code": "invalid_argument",
-   "elapsed_ms": 5.3,
+   "elapsed_ms": 2.2,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -146,7 +146,7 @@
   {
    "arm": "recover.immutable",
    "data_code": "invalid_argument",
-   "elapsed_ms": 43.0,
+   "elapsed_ms": 31.0,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -159,7 +159,7 @@
   {
    "arm": "recover.offline",
    "data_code": "wrong_state",
-   "elapsed_ms": 33.1,
+   "elapsed_ms": 36.9,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "wrong_state",
@@ -172,7 +172,7 @@
   {
    "arm": "snapshot.dest-fifo",
    "data_code": "conflict",
-   "elapsed_ms": 14.9,
+   "elapsed_ms": 25.7,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "conflict",
@@ -185,7 +185,7 @@
   {
    "arm": "validate.immutable",
    "data_code": "invalid_argument",
-   "elapsed_ms": 29.4,
+   "elapsed_ms": 10.3,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -198,7 +198,7 @@
   {
    "arm": "validate.live",
    "data_code": "invalid_argument",
-   "elapsed_ms": 65.9,
+   "elapsed_ms": 14.4,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -211,7 +211,7 @@
   {
    "arm": "validate.offline_candidate",
    "data_code": "wrong_state",
-   "elapsed_ms": 31.8,
+   "elapsed_ms": 25.8,
    "engine": "go",
    "exit_status": 0,
    "expected_code": "wrong_state",
@@ -224,7 +224,7 @@
   {
    "arm": "atfilelist.fifo",
    "data_code": "invalid_path",
-   "elapsed_ms": 29.6,
+   "elapsed_ms": 2.9,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_path",
@@ -237,7 +237,7 @@
   {
    "arm": "database.info",
    "data_code": "invalid_argument",
-   "elapsed_ms": 12.6,
+   "elapsed_ms": 1.3,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -250,7 +250,7 @@
   {
    "arm": "direct.csv-fifo",
    "data_code": "invalid_path",
-   "elapsed_ms": 4.2,
+   "elapsed_ms": 1.8,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_path",
@@ -263,7 +263,7 @@
   {
    "arm": "direct.replace-meta-fifo",
    "data_code": "invalid_path",
-   "elapsed_ms": 16.4,
+   "elapsed_ms": 1.0,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_path",
@@ -276,7 +276,7 @@
   {
    "arm": "feeds.create-source-fifo",
    "data_code": "invalid_argument",
-   "elapsed_ms": 114.8,
+   "elapsed_ms": 1.2,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -289,7 +289,7 @@
   {
    "arm": "inspect.immutable",
    "data_code": "invalid_argument",
-   "elapsed_ms": 10.3,
+   "elapsed_ms": 6.3,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -302,7 +302,7 @@
   {
    "arm": "inspect.live",
    "data_code": "invalid_argument",
-   "elapsed_ms": 20.8,
+   "elapsed_ms": 8.3,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -315,7 +315,7 @@
   {
    "arm": "inspect.offline",
    "data_code": "wrong_state",
-   "elapsed_ms": 30.2,
+   "elapsed_ms": 5.4,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "wrong_state",
@@ -328,7 +328,7 @@
   {
    "arm": "metadata.get",
    "data_code": "invalid_argument",
-   "elapsed_ms": 4.8,
+   "elapsed_ms": 4.7,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -341,7 +341,7 @@
   {
    "arm": "metadata.replace-file-fifo",
    "data_code": "invalid_path",
-   "elapsed_ms": 1.5,
+   "elapsed_ms": 1.3,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_path",
@@ -354,7 +354,7 @@
   {
    "arm": "reader.open",
    "data_code": "invalid_argument",
-   "elapsed_ms": 6.6,
+   "elapsed_ms": 11.9,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -367,7 +367,7 @@
   {
    "arm": "recover.immutable",
    "data_code": "invalid_argument",
-   "elapsed_ms": 23.1,
+   "elapsed_ms": 7.6,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -380,7 +380,7 @@
   {
    "arm": "recover.offline",
    "data_code": "wrong_state",
-   "elapsed_ms": 19.2,
+   "elapsed_ms": 5.8,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "wrong_state",
@@ -393,7 +393,7 @@
   {
    "arm": "snapshot.dest-fifo",
    "data_code": "conflict",
-   "elapsed_ms": 31.0,
+   "elapsed_ms": 5.7,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "conflict",
@@ -406,7 +406,7 @@
   {
    "arm": "validate.immutable",
    "data_code": "invalid_argument",
-   "elapsed_ms": 13.9,
+   "elapsed_ms": 5.0,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -419,7 +419,7 @@
   {
    "arm": "validate.live",
    "data_code": "invalid_argument",
-   "elapsed_ms": 18.2,
+   "elapsed_ms": 10.4,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "invalid_argument",
@@ -432,7 +432,7 @@
   {
    "arm": "validate.offline_candidate",
    "data_code": "wrong_state",
-   "elapsed_ms": 22.6,
+   "elapsed_ms": 11.8,
    "engine": "rust",
    "exit_status": 0,
    "expected_code": "wrong_state",
@@ -490,7 +490,7 @@
   "path": "/tmp/iprange-w1927/bin/rust/v4-fixture",
   "sha256": "6154e0991d35a593fbfed0dc696ce4fbb2b06cef2c1a99ccfb1d8003348c8f69"
  },
- "git_head": "d0abc99f6d9ece56cba3f42f5a290c6dad398da4",
+ "git_head": "4b42cc0b6622cb42cd501e6e2ff01a9e5887906e",
  "platform": {
   "machine": "x86_64",
   "python": "3.14.7",

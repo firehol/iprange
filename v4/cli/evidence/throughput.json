@@ -11,7 +11,7 @@
   "--json-report",
   "/tmp/iprange-w1927/reports/throughput.json"
  ],
- "git_head": "d0abc99f6d9ece56cba3f42f5a290c6dad398da4",
+ "git_head": "4b42cc0b6622cb42cd501e6e2ff01a9e5887906e",
  "method": {
   "burst_frames": 30,
   "note": "attestation, not a threshold: absolute rate is host load dependent, so the gate is that all replies are served, the child exits cleanly, and the thread count is constant in the request count",
@@ -48,38 +48,38 @@
  "product": {
   "go": {
    "implementation": "go",
-   "median_replies_per_s": 13883.8,
+   "median_replies_per_s": 13789.9,
    "path": "/tmp/iprange-w1927/bin/go/iprange",
    "rounds": [
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 9001.3,
+     "replies_per_s": 7755.4,
      "requests": 10000,
      "round": 0,
-     "seconds": 1.1109
+     "seconds": 1.2894
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 13883.8,
+     "replies_per_s": 13789.9,
      "requests": 10000,
      "round": 1,
-     "seconds": 0.7203
+     "seconds": 0.7252
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 15900.4,
+     "replies_per_s": 16001.2,
      "requests": 10000,
      "round": 2,
-     "seconds": 0.6289
+     "seconds": 0.625
     }
    ],
    "sha256": "c5670fff75a38d0c981c72350acf44dd15e93e764169d8350261c0ed1f0a79f2",
    "thread_structure": {
     "large": {
-     "clone_syscalls": 17,
+     "clone_syscalls": 18,
      "exit_status": 0,
      "replies": 6000,
      "requests": 6000,
@@ -90,39 +90,39 @@
      "exit_status": 0,
      "replies": 3000,
      "requests": 3000,
-     "unique_child_tids": 8
+     "unique_child_tids": 7
     },
     "tool": "/usr/bin/strace"
    }
   },
   "rust": {
    "implementation": "rust",
-   "median_replies_per_s": 42688.7,
+   "median_replies_per_s": 43190.7,
    "path": "/tmp/iprange-w1927/bin/rust/iprange",
    "rounds": [
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 42688.7,
+     "replies_per_s": 43190.7,
      "requests": 10000,
      "round": 0,
-     "seconds": 0.2343
+     "seconds": 0.2315
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 41753.9,
+     "replies_per_s": 46747.4,
      "requests": 10000,
      "round": 1,
-     "seconds": 0.2395
+     "seconds": 0.2139
     },
     {
      "exit_status": 0,
      "replies": 10000,
-     "replies_per_s": 44633.8,
+     "replies_per_s": 42392.5,
      "requests": 10000,
      "round": 2,
-     "seconds": 0.224
+     "seconds": 0.2359
     }
    ],
    "sha256": "057a378337ab35c641aed81ec01174bf5e44a5e6795bceac6e6a45f583c068e5",
