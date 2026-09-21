@@ -21039,3 +21039,87 @@ revision, same stopping-rule brief) → if clean, re-run security,
 performance, operations, portability at the same final revision → all-7
 PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
 battery (`1609b395…`) → evidence child commit → astra turn 12 → push.
+
+## Round 43 — wave 32 clean + wave 33 re-run: ALL SEVEN roles PASS at `7a36834b`; gate met (2026-09-21)
+
+**Wave 32** (fresh `fit-for-purpose`, `parity`, `tester` at `7a36834b`, the
+convergence checkpoint): **3/3 PASS, zero blockers.** All three roles
+independently judged batch 18 the design endpoint of the kit-rm guard/audit
+family: every `append_audit` site checks its return and surfaces failure
+(ERROR + rc 1), and an append-only log cannot retract, so no deeper silent
+path exists. Tester executed a new shape (dropping `continue` in the
+compensating arms) and correctly filed it P3 — no frozen requirement is
+violated (ERROR, rc 1, and a truthful log all survive; only summary
+arithmetic breaks). Parity's fixpoint method (kit-gc → kit-rm → kit-gc,
+bit-identical, fresh multisets == installed logs) passed. Fit-for-purpose
+confirmed the torn-fragment class has zero programmatic readers of
+`removals.log` repo-wide and is surfaced in-run.
+
+**Wave 33** (the four roles that last PASSed at `c590a145` re-run at the
+final candidate revision, per the Round-38 decision to make "all seven at
+one revision" literally true): **4/4 PASS, zero blockers.**
+
+- **security**: trust-boundary probes on the tool (hostile list file,
+  hostile tree, hostile environment) found no guard skip; v4/ empty-diff
+  re-verified; no standing `c590a145` finding reversed.
+- **performance**: kit-rm hot paths measured linear (~32–64 ms/path at
+  40/160/320 paths); `gate_artifacts()` runs once per invocation; the
+  write-ahead fsync costs 0.87 ms/record (~1.4% of a 40-path execute) —
+  the correctness price, not pathological. Suite 3.3 s (budget ~60 s).
+  **Driver cost, recorded per the performance P3:** the falsification
+  driver runs 127 s once per gate (31 legs at 4.1 s/leg, each leg a full
+  suite run against a mutated copy); every individual leg is far inside
+  the 15 s per-test cap, and the total is a once-per-gate cost, not a
+  suite-budget violation.
+- **operations**: gate walk executed read-only (restage dry-run, checker,
+  reporter) — every failure mode loud; partial-success output actionable
+  (ERROR names path and reason); the capture-order bullet proven
+  sufficient by building the strongest post-capture-edit shape (the H4
+  forward pin catches it).
+- **portability**: false-PASS hunt empty — every divergence direction
+  (missing `timeout`, missing `mkfifo`) lands on a FAIL line, never green;
+  the Windows audit-log path is fail-closed (lstat refuses a symlinked
+  log; the legacy-alias shape crashes before any rmtree); their own
+  wave-21 "Inconclusive" settled by direct evidence (E5's fixture writes
+  real 0xff bytes, verified with `od -c`).
+
+**Gate status: ALL SEVEN roles PASS at the single revision `7a36834b`.**
+The tree is FINAL pending the close-out chain (Windows re-stamp → closure
+battery → evidence child commit → astra turn 12 → push).
+
+**P3 adjudications at this gate (none blocking, per the stopping rule):**
+
+- **security P3-2, `GIT_INDEX_FILE`**: a crafted index that names the tool
+  itself blinds G7's tracked-file half (executed: a cited path printed
+  `REMOVED`). Accepted as P3: environment manipulation is same-principal —
+  whoever sets `GIT_INDEX_FILE` can edit the tracked files directly — and
+  accidental shapes fail closed. Offered to the user as an optional
+  two-line hardening (sanitize the git subprocess environment or verify
+  `git rev-parse --show-toplevel` matches `REPO`); not applied without a
+  user decision.
+- **security P3-1, `--reason` newline injection**: forges well-formed
+  audit lines through the tool; same-principal as direct log writes.
+- **reviewer noise in `removals.log`**: a security probe appended two
+  lines at 2026-09-21T00:40:32Z (one self-labeled `FABRICATED LEAD
+  REMOVAL`, a demo of P3-1). Appended only; no binding affected. All
+  entries from 2026-09-20T22:23Z onward are reviewer noise, not lead
+  removals; no lead removal was lost (none ran between the batch-15 close
+  and the wave-30 truncation).
+- **operations P3s**: no defined repair path for a torn manifest (restage
+  fails loudly, rc 1 — repair is manual re-stage, which works); no
+  automated pin that `.local/shared/head` equals HEAD (the binding checker
+  verifies the manifest head; the head file is checked by every reviewer's
+  first step).
+- **portability P3s**: the kit is Linux-bound de facto and fails red
+  (never silently) elsewhere; J3's RLIMIT trigger is Linux-specific.
+
+**Kit state at the gate:** kit-rm suite 100 ok / 0 FAIL; kit-gc suite 50 ok
+/ 0 FAIL; driver 30 mutants + crash self-test, all CAUGHT (H5 31 legs);
+manifest 41 entries / 13 staged/live pairs; checker OK; reporter rc 2 with
+exactly the two standing privacy fixtures, 0 OVER-CAP; battery 25/25; zero
+`__pycache__` in policed dirs; `v4/` empty-diff since `9a8f64e8`; guard
+`abacfa59…`; blob `d4e5ce5bb223`.
+
+Next: leg-27 Windows re-stamp (`.local/w1926-winrestamp/`) → closure
+battery (`1609b395…`) → evidence child commit → astra turn 12 (neutral
+prompt shown to the user first) → push `origin master`.
