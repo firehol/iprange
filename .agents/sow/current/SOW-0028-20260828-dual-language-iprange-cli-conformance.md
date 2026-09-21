@@ -21279,3 +21279,51 @@ mode-000 fixtures as inspection errors.
 **Next.** Targeted re-review at `5ca72efb` (security for the scanner
 delta, parity and fit-for-purpose for the README), then the astra control
 turn, then push.
+
+## Round 46 — batch 20: the Round-45 re-review's second tier of stale README figures closed (2026-09-21)
+
+The Round-45 targeted re-review at `ce6e8b4d` returned: `security` PASS
+(S44-1 and S44-2 closed; two new P3s — the "27 files re-scanned" claim
+does not reproduce under the host-real profile because `_expand_env_vars`
+expands the README's own prose `%PATH%`, and a pre-existing embedded/whole
+asymmetry for lexical-traversal drive-relative forms on the nt fold);
+`parity` FAIL with 7 P2s; `fit-for-purpose` FAIL with 3 P2s and 2 P3s.
+All P2s were one class — head-block numbers the `5ca72efb` re-derivation
+missed because it fixed the lines Round 44 named instead of sweeping the
+block — and all were independently re-derived from the bound artifacts
+before any edit:
+
+- GOOS matrix 17 ran / 2 skipped (task 016 log: openbsd/arm64 joined
+  dragonfly/arm64 as unsupported); the 19/1 pair was verbatim from the
+  w1926 log.
+- Rust unit suite 1,048 across 63 suites (the retained `rust-test.log`
+  has four appended sections, each 63 result lines summing to 1,048;
+  1,043 was the Sep-18 run at the earlier revision).
+- Kernel 7.1.13-2-MANJARO (every committed report's `platform.release`).
+- Coverage harness self-test 19 controls (gate constant and battery log).
+- Budget paragraph: nine `params.negative.budget_*` cases assert 47
+  refused requests (per-case counts 3/3/8/3/8/8/3/3/8 re-derived from the
+  case files; the 25/7-object text was true only at `22da3778`, before
+  `6a796017` added delivery and removals and expanded validation/recovery
+  to 8 arms each), and the arms mutate U32 and U64 members plus
+  all-or-nothing consistency arms, not "one u32 member".
+- The leg's changed-file pin names `command_sanitize.py` (the commit
+  under test's own diff; the reports' `changed_files` and the blob digest
+  `8280b61e…` agree) and describes the real mechanism — a transferred
+  content-SHA manifest re-hashed by the leg — not a `git cat-file
+  --batch` pass.
+- Go staging path `/tmp/iprange-w1927/go-stage` (the run the reports'
+  binary paths name).
+- `v4/cli/README.md` (never re-derived by any rotation): refusal-parity
+  elapsed 7.434 s, throughput round lists 7,755.4/13,789.9/16,001.2 and
+  43,190.7/46,747.4/42,392.5 with the Rust spread recomputed to 10.3%,
+  and 75 case files.
+
+Fixed at `a0d2f9a4`; manifest restaged 41/13 and head stamped to it;
+checker OK.  The two security P3s and the parity/ffp P3s are non-blocking
+under the standing bar (no frozen requirement contradicted); the `%PATH%`
+nuance is a records imprecision about a probe claim, and the drive-
+relative asymmetry predates this wave's delta.
+
+**Next.** Targeted re-review (parity, fit-for-purpose) at `a0d2f9a4`; if
+clean, astra turn 12, then push.
