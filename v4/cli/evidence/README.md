@@ -69,7 +69,7 @@ step of the wave-19.27 full-tier closure battery
 whose first console-log action is the SHA-256 of the exact bytes about to
 execute) recorded rc 0 on its first attempt: clean-staging builds of
 both engines from the checked-out revision, both unit suites, the Rust
-warning gate, the GOOS cross-compilation matrix (19 steps ran, 1 skipped
+warning gate, the GOOS cross-compilation matrix (17 steps ran, 2 skipped
 as unsupported by the toolchain), the four matrices, the crash battery
 in both mixed directions and its two `/usr/bin/false` negatives, the
 resource and throughput proofs with their self-tests, golden,
@@ -114,14 +114,17 @@ cases added after the first 63 are the two feed outcome cases, the four
 `maintenance.roundtrip.*` cases, and the two `params.negative.budget_*`
 cases named below.  Expectations are written
 from the staged Rust binary answers because Rust is the recorded
-authority for v4 semantics: seven budget objects from the JSON-RPC specification
-each take the seven `params.negative.budget_*` cases (`snapshot_budget`,
-`validation_budget`, `recovery_budget`, `algebra_budget`,
-`algebra_output_budget`, `result_budget`, `immutable_feed_budget`); each
-case sends the budgets of a real call with one `u32` member set to an
-out-of-range or wrong-typed value and asserts `expect_params_rejected`
-(transport `-32602`), pinning the refusal at the params boundary;
-twenty-five refused requests are asserted in total and each was verified
+authority for v4 semantics: nine `params.negative.budget_*` cases pin the
+budget objects of the JSON-RPC specification — the seven named budget
+objects (`snapshot_budget`, `validation_budget`, `recovery_budget`,
+`algebra_budget`, `algebra_output_budget`, `result_budget`,
+`immutable_feed_budget`) plus the `delivery` budget and the removals
+publication's `result_budget`; each case sends the budgets of a real call
+with one numeric member (U32 or U64) set to an out-of-range or wrong-typed
+value, or with a budget left partially disabled where the specification
+requires all-or-nothing, and asserts `expect_params_rejected` (transport
+`-32602`), pinning the refusal at the params boundary; forty-seven refused
+requests are asserted in total across the nine cases and each was verified
 refused by both engines.  `validation_budget` and `recovery_budget` omit
 zero for `max_scratch_files` because the specification gives zero a
 meaning there — disabled — so asserting a refusal would assert something
@@ -265,14 +268,14 @@ contribute (each recorded matrix run shows `rc 0` or the contract's
 `rc 1` with its full 75/0/0 or 41/0/34 tallies intact).  `run.py` forwards
 `GOCOVERDIR` to the child only because the harness sets it; the
 allowlist entry adds no child state to an ordinary qualification run.
-The harness self-test (14 cases) includes a source pin requiring every
+The harness self-test (19 controls) includes a source pin requiring every
 recorded `command` field to pass through the shared sanitizer, and the
 committed artifact records `v4/cli/run.py` checkout-relatively — no
 report in this directory records an operator home path.
 
 Unit suites.  `go test ./... -count=1` over `v4/go` (canonical
 `CGO_ENABLED=0`): 25 packages ok, 7 with no test files, 0 failures.
-`cargo test` over the Rust workspace: 1,043 tests passed across 63
+`cargo test` over the Rust workspace: 1,048 tests passed across 63
 suites, 0 failed, from a fresh `CARGO_TARGET_DIR` with the warning gate
 rc 0 and the Linux pin tally exported and empty (0 UNSCORED lines: every
 platform-gated pin scored on this host).  `tests.d` (the legacy-compatible suite, run against
@@ -291,9 +294,9 @@ wedged=0 on both engines.
 Toolchain, staging, and binary identities.  Linux:
 `go version go1.27.0 linux/amd64`; `rustc 1.91.1 (ed61e7d7e 2025-11-07)`,
 host `x86_64-unknown-linux-gnu`, LLVM 21.1.2; harness interpreter
-CPython 3.14.7 on Linux 7.1.9-1-MANJARO x86_64.  The Go products were
+CPython 3.14.7 on Linux 7.1.13-2-MANJARO x86_64.  The Go products were
 built `CGO_ENABLED=0 -trimpath -buildvcs=false` from a clean staging
-copy at `/tmp/iprange-w1926f2/go-stage`, so they embed neither local
+copy at `/tmp/iprange-w1927/go-stage`, so they embed neither local
 paths nor a VCS revision and their digests are layout-independent: a
 `CGO_ENABLED=0` rebuild of the source commit reproduces them byte for
 byte on any host.  The Rust products were built `--release
@@ -343,10 +346,12 @@ complete history, and the checked-out tree object equals the
 qualification workstation's tree for that commit, so tree hashing —
 which covers every tracked file — proves the checkout byte-identical to
 the source the Linux evidence measures.  The one file the commit changes
-against its parent (the `publish.binary_v6_asymmetric_limb` case) is
-pinned in `build_provenance` by the SHA-256 of the COMMIT BLOB, verified
-in one batched `git cat-file --batch` pass — blob digests, so no host
-checkout configuration can break the comparison.  Host toolchains:
+against its parent (`v4/cli/command_sanitize.py`) is pinned in
+`build_provenance` by the SHA-256 of its committed content: the
+workstation hashes the file, transfers the one-line manifest with the
+bundle, and the leg re-hashes the checked-out bytes and refuses the run on
+any mismatch — content digests measured on both sides, so no host checkout
+configuration can break the comparison.  Host toolchains:
 `go version go1.26.5
 windows/amd64`; `rustc 1.97.1 (8bab26f4f 2026-07-14)` host
 `x86_64-pc-windows-msvc`, LLVM 22.1.6; CPython 3.14.6 (mingw64,

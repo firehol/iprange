@@ -299,7 +299,7 @@ pins the count at 70 controls (`--self-test` reports "PASSED: 70 cases
 failure rather than a silent shrink.
 Timing, stated by scope. This parity gate's own committed run is the
 sub-minute step: `evidence/refusal-class-parity.json` records
-`elapsed_seconds` 34.237 for 483 main-grid cells on both engines (23 arms
+`elapsed_seconds` 7.434 for 483 main-grid cells on both engines (23 arms
 x 21 path kinds) plus the 108 cells of the `--pressure routine` axis.
 That figure is not a battery cost. The `--pressure full` axis is a
 separate, worker-run step whose cost is minutes rather than seconds at
@@ -398,9 +398,9 @@ band: the rate window starts when the child is spawned and so includes
 process start, interpreter/runtime init, and the first frame, and the
 figures move with system load, core count, and governor. The spread is
 visible inside a single committed report: for one pair of binaries on one
-host, the three rounds of `evidence/throughput.json` give Go 18,026.3 /
-17,689.4 / 17,683.7 and Rust 55,471.5 / 58,367.0 / 53,618.9 replies/s, so
-the Rust rate varies by about 8.8% round to round with nothing but load
+host, the three rounds of `evidence/throughput.json` give Go 7,755.4 /
+13,789.9 / 16,001.2 and Rust 43,190.7 / 46,747.4 / 42,392.5 replies/s, so
+the Rust rate varies by about 10.3% round to round with nothing but load
 changing. No ratio between the two engines is therefore implied
 by these numbers, and they are explicitly **not** usable as evidence for
 the 1.3x relative-rate contract planned for milestone 5 — that contract
@@ -432,7 +432,7 @@ gate resolves checkout-relative command arguments against; putting an
 object id in that field would break the identity binding rather than
 record it.
 
-- `cases/` — the declarative method-family cases (71 files). Every
+- `cases/` — the declarative method-family cases (75 files). Every
   rpc step declares its service role explicitly (`actor: producer` for
   artifact creation/mutation, `actor: consumer` for observation and
   transformation), so a transformation can run on either binary in a
