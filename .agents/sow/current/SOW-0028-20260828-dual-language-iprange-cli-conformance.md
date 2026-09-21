@@ -21226,3 +21226,56 @@ the delta touches — `security` (the privacy scanner is its component),
 empty-diff claim is now superseded and the README's rewritten claims match
 the artifacts). The other four roles' PASSes at `7a36834b` stand for the
 unchanged surfaces; this round closes the product delta.
+
+## Round 45 — batch 19: the Round-44 findings closed, evidence re-rotated to `4b42cc0b` (2026-09-21)
+
+Round 44's targeted review (security, parity, fit-for-purpose at `05a3c2d8`)
+returned FAIL from all three roles, converging on the delta itself:
+
+- **S44-1 (security, P2)**: the privacy scanner's separator fold collapsed
+  a doubled leading `//` only on non-Windows hosts, so a POSIX profile root
+  spelled `//Users/operator` installed clean under the Windows auditor's
+  fold.  The collapse is a kernel path-resolution rule, not an auditor-OS
+  property.  Fixed in `4b42cc0b`: `_privacy_spellings` now carries a
+  forward-slash reading with `//`-runs collapsed on every host (UNC-proof:
+  the reading is built from backslash-separated values, so collapsing `//`
+  cannot merge a UNC server and share), and group 13's `FOREIGN_ROOTS`
+  gained `//Users/operator` and `//usr/home/operator` (no new control; the
+  shared count stays 59).  The reproduction script refuses every doubled
+  shape; reverting the collapse fails the cross-host control that names
+  them; the 27 committed evidence files re-scanned under both folds show
+  zero false positives.
+- **S44-2 + parity P2-1 + fit-for-purpose P2-1..4 (the README)**: the
+  head block carried pre-rotation numbers.  Fixed by re-deriving every
+  current-state claim from the committed artifacts at `5ca72efb`: matrix
+  tallies 75/0/0 and 41/0/34 (oracle 37/22 unchanged), golden 75 case
+  files with the manufactured corpus-lag sentence removed, throughput
+  medians 13,789.9/43,190.7 with their round lists, refusal-parity
+  timings 7.434/102.175 s, battery wall 198.2 s, snapshot manifest of one
+  file, 59 shared self-test controls, and the Windows identity paragraph
+  rewritten truthfully: the six digests are pinned by the leg's
+  host-digests record and the staged ledger (the reports embed only the
+  subset each exercised — go and rust `iprange.exe` in both, the fixture
+  database in the guard report), and the rust binaries and fixture tool
+  changed at this revision because the Rust linker emits
+  non-deterministic bytes across builds.  The historical wave blocks
+  (19.23-era figures inside explicitly dated narratives) were left as the
+  record they are.
+
+**Evidence re-rotation.** Because the scanner fix touches `v4/`, the
+closure evidence was re-run at the final revision rather than left one
+commit behind: the native Windows leg re-ran green at `4b42cc0b`
+(battery EXIT 0, report leg rc 0, `changed_files: 1`, 59 controls,
+privacy null), and the full-tier closure battery re-ran green (318 steps,
+0 mismatches, 3 by-design deferrals, 198.2 s, script digest `1609b395…`).
+All 21 revision-bearing reports, `build-ids.json`, and
+`battery-manifest.json` now carry `git_head=4b42cc0b`; the Windows
+binaries were re-staged and their digests re-verified against the leg's
+host record.  The manifest was restaged to 41 entries / 13 staged-live
+pairs at `5ca72efb`, the head file re-stamped to match, the checker
+returns OK, and the reporter shows 0 OVER-CAP with only the two standing
+mode-000 fixtures as inspection errors.
+
+**Next.** Targeted re-review at `5ca72efb` (security for the scanner
+delta, parity and fit-for-purpose for the README), then the astra control
+turn, then push.
