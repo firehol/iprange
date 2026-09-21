@@ -811,10 +811,10 @@ swapped-in named pipe is refused promptly with the arm-exact class, and
 `hangs=0` is a measured result, not an expectation.
 
 The one-shot legacy argv surface is deliberately outside that contract.
-`v4/go/internal/cli/legacy/parse.go` reads its inputs with a bare
-`os.ReadFile`, and the Rust twin `v4/rust/iprange-cli/src/legacy/parse.rs`
-uses `std::fs::read`; both therefore block on a FIFO exactly as the C
-reference tool does — `src/iprange.h:57-71` opens the one-shot input with
+`v4/go/internal/cli/legacy/parse.go` reads its inputs whole through
+`calleropen.Open` (O_RDONLY) plus `io.ReadAll`, and the Rust twin
+`v4/rust/iprange-cli/src/legacy/parse.rs` uses `std::fs::read`; both
+therefore block on a FIFO exactly as the C reference tool does — `src/iprange.h:57-71` opens the one-shot input with
 plain `fopen(3)` and performs no type check before the read. That parity
 with the released C CLI is inherited behavior, not a gap the audit missed:
 the argv surface takes operator-typed arguments in a foreground process,

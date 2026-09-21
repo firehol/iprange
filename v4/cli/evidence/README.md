@@ -286,9 +286,12 @@ addresses, and finishes under a bounded `timeout` — the legacy stream
 input contract is preserved, and the regular-file requirements are
 scoped to the JSON-RPC surface (`.agents/sow/specs/iprange-jsonrpc-v1.md`
 "Legacy coexistence").  The never-block caller-path class was re-raced
-this wave on every arm (operations 30 attempts x 5 arms, parity
-120-trial input race, glm and performance swap probes): hangs=0,
-wedged=0 on both engines.
+this wave by the two committed race steps — the swap-race battery (30
+attempts x 5 arms: meta, csv, feed, atlist, reader; verdict PASS) and the
+parity input race at 40 trials per engine (NOT-REPRODUCED, 441,850 flips,
+wedged=0 on both engines).  The retained operations/glm/performance swap
+probes were NOTRUN this wave because their untracked scratch scripts are
+absent, which the battery reports rather than hides.
 
 Toolchain, staging, and binary identities.  Linux:
 `go version go1.27.0 linux/amd64`; `rustc 1.91.1 (ed61e7d7e 2025-11-07)`,
