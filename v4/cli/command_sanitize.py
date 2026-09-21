@@ -607,10 +607,23 @@ def _profile_comparisons(profile):
     that runs the scan, not for the host that authored the report.
 
     Every form is derived from the shape of the profile string rather
-    than from ``os.name``.  A POSIX profile is never drive-shaped, so this
-    is a no-op there, and the Windows comparison becomes checkable from any
-    host -- which is what lets the shared privacy controls pin the
-    drive-relative and mount-alias behaviour without a Windows runner.
+    than from ``os.name``.  A POSIX profile is never drive-shaped, so the
+    drive-relative and mount-alias forms are a no-op there, and the Windows
+    comparison becomes checkable from any host -- which is what lets the
+    shared privacy controls pin the drive-relative and mount-alias behaviour
+    without a Windows runner.
+
+    A POSIX-shaped root also gets its backslash-separator spelling.  The
+    embedded scan (`_occurrence`) searches the raw forms above inside a
+    candidate that `_privacy_spellings` has already separator-normalized for
+    the auditing host, so on a Windows auditing host a foreign POSIX root
+    such as ``/Users/operator`` reaches the candidate as
+    ``\\Users\\operator`` and a forward-slash needle matches nothing: the
+    whole-path path survives because `_matches_profile` folds both sides,
+    but the embedded path -- the shape the leaked reports actually carried
+    -- is blind.  Listing both separator styles is what the invariant above
+    already requires; on a POSIX auditing host the backslash form is inert,
+    because `_privacy_spellings` rewrites every backslash to ``os.sep``.
     """
     forms = [profile]
     if (len(profile) >= 3 and profile[1] == ":"
@@ -620,6 +633,10 @@ def _profile_comparisons(profile):
         forms.append("/" + profile[0] + "/" + remainder.replace(_WIN_SEP, "/"))
         forms.append(_WIN_SEP + profile[0] + _WIN_SEP
                      + remainder.replace("/", _WIN_SEP))
+    elif profile.startswith("/"):
+        backslash = profile.replace("/", _WIN_SEP)
+        if backslash not in forms:
+            forms.append(backslash)
     return forms
 
 
@@ -2813,42 +2830,60 @@ def _provenance_self_test():
             "C:\\USERS\\OPERATOR",      # native Windows volume
             "/c/USERS/operator",        # msys2 alias with a folded segment
         ]
+        # The scan loops replay under both the host's real fold and the
+        # emulated nt fold, the way numbered group 12 does.  Without the
+        # replay these controls pass on a POSIX runner while the same scan
+        # is blind on a Windows auditing host: the candidates reach the
+        # embedded scan separator-normalized for the auditing host, so a
+        # POSIX-shaped foreign root needs its backslash spelling in the
+        # needle set -- a gap the native-Windows leg found (leg-27) and
+        # that no Linux-only run could see.  A failure names the fold that
+        # escaped, not only the verdict.
         saved_profile = profile_path
+        saved_is_windows = _IS_WINDOWS
         cross_misses, cross_leaks, writer_leaks = [], [], []
+        folds_exercised = set()
         try:
             def auditing_home():
                 return AUDIT_HOME
             profile_path = auditing_home
-            for froot in FOREIGN_ROOTS + CASE_VARIED_FOREIGN_ROOTS:
-                # The embedded shape is the one the leaked reports carried:
-                # the profile sits inside a recorded shell line, where no
-                # whole-path fold may rewrite a mid-string mount alias.
-                for shape, value in (
-                        ("embedded", "go-vet [scored attempt 1, rc=0]: (cd "
-                                     + froot + "/src/iprange/v4/go"
-                                     " && nice go vet ./...)"),
-                        ("whole", froot + "/staged/win/rust/iprange.exe")):
-                    document = {"schema": "s", "build_provenance":
-                                {"build_commands": [value]}}
-                    if personal_path_in_report(document) is None:
-                        cross_misses.append((shape, froot))
-            # The rule is scoped to the operator's own login: a foreign root
-            # that names somebody else is not this gate's business, and a
-            # sibling of the operator's foreign root is not the root.  The
-            # case-varied spellings appear here too: a case- or
-            # separator-insensitive origin volume makes the ROOT one
-            # directory, but it never makes a SIBLING the root, so
-            # /USERS/OPERATOR-notes must stay clean under every reading.
-            for froot in FOREIGN_ROOTS + CASE_VARIED_FOREIGN_ROOTS:
-                parent = froot[:froot.rindex(_WIN_SEP if _WIN_SEP in froot else "/")]
-                for value in (parent + "/someone-else/staged.bin",
-                              froot + "-notes/staged.bin"):
-                    document = {"schema": "s", "build_provenance":
-                                {"build_commands": [value]}}
-                    if personal_path_in_report(document) is not None:
-                        cross_leaks.append(value)
+            for fold_nt in (saved_is_windows, True):
+                _IS_WINDOWS = fold_nt
+                folds_exercised.add(fold_nt)
+                for froot in FOREIGN_ROOTS + CASE_VARIED_FOREIGN_ROOTS:
+                    # The embedded shape is the one the leaked reports
+                    # carried: the profile sits inside a recorded shell
+                    # line, where no whole-path fold may rewrite a
+                    # mid-string mount alias.
+                    for shape, value in (
+                            ("embedded", "go-vet [scored attempt 1, rc=0]: (cd "
+                                         + froot + "/src/iprange/v4/go"
+                                         " && nice go vet ./...)"),
+                            ("whole", froot + "/staged/win/rust/iprange.exe")):
+                        document = {"schema": "s", "build_provenance":
+                                    {"build_commands": [value]}}
+                        if personal_path_in_report(document) is None:
+                            cross_misses.append((fold_nt, shape, froot))
+                # The rule is scoped to the operator's own login: a foreign
+                # root that names somebody else is not this gate's business,
+                # and a sibling of the operator's foreign root is not the
+                # root.  The case-varied spellings appear here too: a case-
+                # or separator-insensitive origin volume makes the ROOT one
+                # directory, but it never makes a SIBLING the root, so
+                # /USERS/OPERATOR-notes must stay clean under every reading.
+                for froot in FOREIGN_ROOTS + CASE_VARIED_FOREIGN_ROOTS:
+                    parent = froot[:froot.rindex(_WIN_SEP if _WIN_SEP in froot else "/")]
+                    for value in (parent + "/someone-else/staged.bin",
+                                  froot + "-notes/staged.bin"):
+                        document = {"schema": "s", "build_provenance":
+                                    {"build_commands": [value]}}
+                        if personal_path_in_report(document) is not None:
+                            cross_leaks.append((fold_nt, value))
+            _IS_WINDOWS = saved_is_windows
             # The writer is the channel that matters: refusing at the scan
             # but installing anyway would leave the same artifact on disk.
+            # Checked under the host's real fold; the scan it consults is
+            # pinned under both folds above.
             refused_target = os.path.join(root, "cross-host-leak.json")  # root is the self-test temp dir
             try:
                 write(refused_target,
@@ -2863,6 +2898,16 @@ def _provenance_self_test():
                 writer_leaks.append(refused_target)
         finally:
             profile_path = saved_profile
+            _IS_WINDOWS = saved_is_windows
+        # The replay is only meaningful if the nt fold was actually run.
+        # On a POSIX runner that is the whole point (the native-Windows leg
+        # found the blind spot no POSIX run could see); on a Windows runner
+        # the host fold already is nt, so True is present either way. A
+        # control cannot fail by having its own replay deleted, so this
+        # pins that the emulated fold ran.
+        expect("the cross-host scan controls were exercised under the "
+               "emulated nt fold, not only the auditing host's own",
+               True in folds_exercised, str(sorted(folds_exercised)))
         expect("the report scan names the operator's profile authored on a "
                "foreign host, embedded in a command line or standing alone, "
                "however that host spells its profile root",
@@ -2901,7 +2946,7 @@ def _provenance_self_test():
 # Executed-control count of ``_provenance_self_test``.  A harness self-test
 # that only prints "0 failures" cannot tell a passed run from a run in which
 # nothing executed, so the count is asserted here and by every harness that
-# calls into this module.  58 = the 40 controls that pin the sanctioned commit
+# calls into this module.  59 = the 40 controls that pin the sanctioned commit
 # path, the provenance and privacy block, the source audit, and the pinned
 # drive-relative anchor; the seven controls of numbered group 11, which pin
 # that a committed report never carries a checkout directory and that the
@@ -2909,15 +2954,17 @@ def _provenance_self_test():
 # numbered group 12, which pin that the profile comparison is decided by the
 # directory a path names and not by the separator, case, or msys2 mount-alias
 # spelling its caller wrote, for each of the three profile entry points: the
-# matcher, input screening, and the report scan; and the five controls of
+# matcher, input screening, and the report scan; and the six controls of
 # numbered group 13, which pin the cross-host case that group 12 cannot
 # express -- an audit running under a POSIX home must still name the
 # operator's profile when the report authored it under another host's
 # profile root, in each root spelling the supported platforms produce
 # (including the case-varied spellings a case-insensitive origin volume
 # makes one directory, astra gate finding P2-5, and the origin-decided
-# fold itself), and the shared writer must refuse to install such a report.
-PROVENANCE_SELF_TEST_CHECKS = 58
+# fold itself), that the replay under the emulated nt fold actually ran
+# (the blind spot the native-Windows leg found, which no POSIX-only run
+# can see), and that the shared writer refuses to install such a report.
+PROVENANCE_SELF_TEST_CHECKS = 59
 
 
 def _self_test():

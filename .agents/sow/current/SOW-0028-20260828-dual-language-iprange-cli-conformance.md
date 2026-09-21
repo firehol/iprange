@@ -21123,3 +21123,24 @@ exactly the two standing privacy fixtures, 0 OVER-CAP; battery 25/25; zero
 Next: leg-27 Windows re-stamp (`.local/w1926-winrestamp/`) → closure
 battery (`1609b395…`) → evidence child commit → astra turn 12 (neutral
 prompt shown to the user first) → push `origin master`.
+
+### Decision — leg-27 Windows defect (2026-09-21, user)
+
+Leg-27 at `225f4629` found a real product defect: the three shared
+self-tests fail on native Windows only. The privacy report-scan's
+mid-string (embedded) path is blind to the operator's profile when the
+report authored it under a POSIX-shaped foreign root (`/Users/operator`,
+`/usr/home/operator`, `/export/home/operator`, and the case-varied
+spellings), because `_privacy_spellings` rewrites `/`→`\` on Windows while
+`_profile_comparisons` emits a separator variant only for drive-shaped
+roots — contradicting that function's own documented invariant ("both
+separator styles are listed because the candidates a scan compares are
+separator-normalized for the host that runs the scan, not for the host
+that authored the report"). The whole-path case matches; the embedded case
+does not. The leg's fail-closed design worked: no report was authored,
+nothing installed.
+
+User decision: **fix now** (option 1, required behavior), not defer. This
+reopens the frozen-v4 claim: `v4/` is no longer empty-diff since
+`9a8f64e8`, so the all-7 gate at `7a36834b` is stale for the product
+surface and the fix needs a review round before the gate can be re-declared.
