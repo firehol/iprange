@@ -21144,3 +21144,85 @@ User decision: **fix now** (option 1, required behavior), not defer. This
 reopens the frozen-v4 claim: `v4/` is no longer empty-diff since
 `9a8f64e8`, so the all-7 gate at `7a36834b` is stale for the product
 surface and the fix needs a review round before the gate can be re-declared.
+
+## Round 44 — close-out found two product defects the Linux-only rounds could not see; targeted review round (2026-09-21)
+
+The all-7 gate was declared at `7a36834b` (Round 43) with the claim that
+`v4/` is empty-diff since the freeze `9a8f64e8`. The close-out chain then
+ran the native Windows leg (leg-27) at the final revision, and that leg —
+which no Linux-only review round substitutes for — found two real product
+defects. Fixing them changed `v4/`, so the Round-43 empty-diff claim is
+superseded by this round: it was true at `7a36834b`, and the two fixes
+below are the delta since. The engine, wire format, schema and CLI-binary
+behavior are unchanged; the delta is the privacy gate-tool and one test
+case. This round re-declares the gate at the final revision after the
+three roles whose lanes the delta touches review it.
+
+**Defect 1 — cross-host privacy scan blind on a Windows auditing host**
+(fixed `3de749ad`, `v4/cli/command_sanitize.py`). The report scan's
+embedded path compares a needle built from the operator's profile against
+a candidate that `_privacy_spellings` has already separator-normalized for
+the auditing host. On a Windows auditing host a POSIX-shaped foreign root
+(`/Users/operator`, `/usr/home/operator`, `/export/home/operator`, and the
+case-varied spellings) reaches the candidate with backslashes, while
+`_profile_comparisons` emitted a separator variant only for drive-shaped
+roots — so the embedded scan matched nothing. The whole-path comparison
+survived because `_matches_profile` folds both sides; the embedded
+comparison — the shape the previously leaked reports actually carried — did
+not. This is the exact class the cross-host scan exists to catch. Fix:
+`_profile_comparisons` also emits the backslash spelling of a POSIX-shaped
+root (completing the symmetry the function's own docstring already
+required); the cross-host controls (group 13) now replay under the emulated
+nt fold the way group 12 already did, and a new control pins that the
+replay actually ran, so a blind spot only a Windows auditing host exposes
+cannot pass a POSIX-only run again. Provenance self-test count 58 → 59.
+Falsified by two mutants (drop the backslash arm; drop the replay). No
+committed report's verdict flips (all 27 evidence files re-scanned).
+
+**Defect 2 — asym-netset digest group attested by one role only** (fixed
+`d0abc99f`, `v4/cli/cases/publish.binary_v6_asymmetric_limb.json`). The
+kind gate requires every digest group to be attested by both the producer
+and the consumer, so the consumer's export is compared against the
+producer's own artifact. This case declared `asym-netset` only on its
+consumer export step. The case was added at `e647024e`, after the last
+closure battery ran, so no prior closure scored it; the Linux closure
+battery caught it on first contact. Fix: add a producer-side export step
+carrying the same `asym-netset` digest group and the same expected netset
+digest, mirroring `mixed.export-cross-language.json`. Both engines produce
+the identical netset (all four matrices pass: rust, go, rust→go, go→rust),
+so the change closes the gate blind spot without revealing a cross-engine
+divergence.
+
+**Leg tooling fix** (`make-snapshot.sh`): the leg's `changed_files` was
+derived from a manifest self-seeded from the previous leg, so it froze at
+22 legacy-repair files and the report's "files differ between commit F and
+its parent" claim was false (the commit changes one file). The tool now
+derives the manifest from the commit's own diff against its parent, so the
+claim is true by construction; the leg was re-run and the report records
+`changed_files: 1`.
+
+**Closure battery** (full tier, script digest `1609b395…`): 318 steps
+checked, 0 mismatches, 3 deferrals (the two Windows reports owned by the
+native leg, plus the two retired duplicate pressure-axis steps astra gate
+finding P2-6 leaves deferred), 197.5 s wall. ALLDONE.
+
+**Evidence rotation** (`ff346362`): all 21 reports, `build-ids.json`, and
+`battery-manifest.json` rotated to the final revision; the README rewritten
+from the artifacts (revision, tree, step/wall/deferral counts, coverage
+percentages, the six Windows product digests, the native test tallies, the
+leg's changed-file count). The manifest binds 19 reports and an 11-entry
+ledger, with one `refusal-class-parity` entry (the second name retired).
+
+**Kit state:** kit-rm suite 100 ok / 0 FAIL; kit-gc suite 50 ok / 0 FAIL;
+driver 30 mutants + crash self-test all CAUGHT (H5 31 legs); manifest 41
+entries / 13 staged/live pairs; checker OK; reporter rc 2, two standing
+fixtures, 0 OVER-CAP; battery 25/25; zero `__pycache__`.
+
+**Review round (this round).** The two product fixes and the evidence
+rotation are reviewed at the final revision by the three roles whose lanes
+the delta touches — `security` (the privacy scanner is its component),
+`parity` (the asym-netset case is cross-engine evidence), and
+`fit-for-purpose` (the record's truth, including that Round 43's
+empty-diff claim is now superseded and the README's rewritten claims match
+the artifacts). The other four roles' PASSes at `7a36834b` stand for the
+unchanged surfaces; this round closes the product delta.
