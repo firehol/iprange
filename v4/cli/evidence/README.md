@@ -129,7 +129,7 @@ refused by both engines.  `validation_budget` and `recovery_budget` omit
 zero for `max_scratch_files` because the specification gives zero a
 meaning there — disabled — so asserting a refusal would assert something
 the contract does not say
-(`.agents/sow/specs/iprange-jsonrpc-v1.md:241-246`).  The other seven
+(`.agents/sow/specs/iprange-jsonrpc-v1.md:248-252`).  The other seven
 cases pin refusal classes plus one success path:
 `writer.symlink_live_direct_replace` and `writer.symlink_live_feeds_create`
 (`wrong_state` for a writer aimed through a symlink at a live database),
@@ -280,14 +280,13 @@ suites, 0 failed, from a fresh `CARGO_TARGET_DIR` with the warning gate
 rc 0 and the Linux pin tally exported and empty (0 UNSCORED lines: every
 platform-gated pin scored on this host).  `tests.d` (the legacy-compatible suite, run against
 each staged engine): 121 of 121 groups pass for both engines, including
-`121-legacy-fifo-input` (renamed from `102-` when parallel suite groups
-were added), which proves each of
+`102-legacy-fifo-input`, which proves each of
 C, Rust and Go waits for a delayed FIFO producer, consumes its
 addresses, and finishes under a bounded `timeout` — the legacy stream
 input contract is preserved, and the regular-file requirements are
 scoped to the JSON-RPC surface (`.agents/sow/specs/iprange-jsonrpc-v1.md`
 "Legacy coexistence").  The never-block caller-path class was re-raced
-this wave on every arm (operations 30 attempts x 8 arms, parity
+this wave on every arm (operations 30 attempts x 5 arms, parity
 120-trial input race, glm and performance swap probes): hangs=0,
 wedged=0 on both engines.
 

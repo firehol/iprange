@@ -297,15 +297,16 @@ zero.  `SELF_TEST_CASES_TOTAL`
 pins the count at 70 controls (`--self-test` reports "PASSED: 70 cases
 (committed total 70)"), so a control deleted from the gate is a self-test
 failure rather than a silent shrink.
-Timing, stated by scope. This parity gate's own committed run is the
-sub-minute step: `evidence/refusal-class-parity.json` records
-`elapsed_seconds` 7.434 for 483 main-grid cells on both engines (23 arms
-x 21 path kinds) plus the 108 cells of the `--pressure routine` axis.
-That figure is not a battery cost. The `--pressure full` axis is a
-separate, worker-run step whose cost is minutes rather than seconds at
-this host load, and the whole qualification battery is recorded as an
-hour-class step (see the named-cost disclosure in the active SOW), so
-neither may be described as running in under a minute.
+Timing, stated by scope. The committed run is one gate invocation under
+`--pressure full`: `evidence/refusal-class-parity.json` records
+`elapsed_seconds` 7.434 for the 483 main-grid cells on both engines (23
+arms x 21 path kinds), and the 378-cell pressure axis is timed apart in
+`pressure.elapsed_seconds` (102.175 s at this host load) because the main
+grid's figure never covers it. Neither figure is a battery cost: the
+whole qualification battery is a separate, minutes-class step (the
+committed closure run recorded 198.2 s wall; see the named-cost
+disclosure in the active SOW), so no single figure here may be read as
+the cost of the other.
 
 The committed artifact is `evidence/refusal-class-parity.json`. It records
 the SHA-256 and `system.describe` implementation label of each binary it
