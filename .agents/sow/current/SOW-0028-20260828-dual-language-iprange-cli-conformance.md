@@ -21327,3 +21327,40 @@ relative asymmetry predates this wave's delta.
 
 **Next.** Targeted re-review (parity, fit-for-purpose) at `a0d2f9a4`; if
 clean, astra turn 12, then push.
+
+## Round 47 — batch 21: the Round-46 second tier closed (2026-09-21)
+
+The Round-46 re-review at `394632a6` returned FAIL from `parity` (3 P2s,
+6 P3s) and `fit-for-purpose` (2 P2s, 4 P3s); all Round-45 findings were
+verified closed by both. The new P2s, all the same class, verified
+against artifacts before editing:
+
+- The legacy FIFO group is `tests.d/102-legacy-fifo-input`; the README's
+  "`121-legacy-fifo-input` (renamed from `102-`)" is false — no such
+  group ever existed in any revision (`git log --all` empty), the only
+  `121-` group is `121-nul-text-records`, and the battery runs `102-`.
+- The never-block re-race covers 5 arms x 30 attempts per
+  `race-battery.json` (meta, csv, feed, atlist, reader); the README said
+  8 arms.
+- `v4/cli/README.md`'s timing paragraph attributed the grid's 7.434 s to
+  "483 cells plus the 108 cells of the `--pressure routine` axis" and
+  called the battery hour-class. The committed report is one invocation
+  under `--pressure full`: grid 483 cells at 7.434 s, the 378-cell
+  pressure axis timed apart at 102.175 s (the gate's own comment states
+  the grid figure never covers the axis), and the closure battery ran
+  198.2 s. Rewritten to match.
+- P3 taken with the P2s: the spec cite for the zero-meaning passage
+  drifted 241-246 → 248-252 when the budget section grew.
+
+P3s NOT taken, with evidence: the SOW's "validation/recovery expanded
+5→8 at `6a796017`" is correct (5 arms at `22da3778`, 8 at `6a796017`,
+re-derived from both revisions' case files); the "two feed outcome
+cases" label matches the two `feeds.*read_only` cases added at
+`6a796017`.
+
+Fixed at `48e670ab`; manifest restaged 41/13 and head stamped to it;
+checker OK; reporter rc 2 with only the two standing mode-000 fixtures
+(0 OVER-CAP).
+
+**Next.** Targeted re-review (parity, fit-for-purpose) at `48e670ab`; if
+clean, astra turn 12, then push.
