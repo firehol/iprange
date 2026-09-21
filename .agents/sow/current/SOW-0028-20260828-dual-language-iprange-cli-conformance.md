@@ -21364,3 +21364,42 @@ checker OK; reporter rc 2 with only the two standing mode-000 fixtures
 
 **Next.** Targeted re-review (parity, fit-for-purpose) at `48e670ab`; if
 clean, astra turn 12, then push.
+
+## Round 48 — batch 22: the re-race scope and the legacy read mechanism (2026-09-21)
+
+The Round-48 re-review at `f63f438b` returned FAIL from both roles, and
+for the first time the `parity` role ran an exhaustive sweep — every
+number, digest, path, count and timing in the head block (lines 1–452)
+and every committed-artifact citation in `v4/cli/README.md`, each checked
+against the artifacts — and only ONE new P2 survived, inside the very
+sentence `48e670ab` had just edited:
+
+- The never-block re-race sentence claimed "parity 120-trial input race,
+  glm and performance swap probes" ran this wave. The bound artifacts say
+  otherwise: the battery invokes the parity input race at `--trials 40`
+  (`battery-w1926.sh:1941`; `log-race-parity.txt` records 40 outcomes per
+  engine, NOT-REPRODUCED, 441,850 flips, wedged=0), and the three
+  operations/glm/performance swap probes are NOTRUN this wave (their
+  untracked scratch scripts are absent; the battery reports NOTRUN rather
+  than hiding it). The 120-trial/1,302,172-flip race is a wave-19.23
+  fact. Rewritten to name the two race steps that actually ran and to
+  report the three probes as NOTRUN.
+- `v4/cli/README.md:814` (a P3 taken with the P2): the legacy one-shot
+  reader is `calleropen.Open` (O_RDONLY) + `io.ReadAll`, not bare
+  `os.ReadFile`. The blocking-on-FIFO parity with C's `fopen`+`read`
+  still holds because `calleropen.Open` clears `O_NONBLOCK` and returns a
+  blocking handle (`calleropen.go:25-50`), so the behavior claim stands
+  and only the mechanism name was stale.
+
+P3-b (the "30 battery steps / 36 rows" split) dismissed with evidence:
+`steps.tsv` has 36 rows, `native_steps` names 29, and the 7 non-native
+rows split 6 report-leg (author-prov, wh-run/verify, guard-run/verify,
+privacy-gate) + `cross-engine-numeric` (a battery consensus step), so
+30 battery + 6 report-leg = 36 is correct and derivable — the reviewer
+miscounted `cross-engine-numeric` as non-battery.
+
+Fixed at `aa5aad44`; manifest restaged 41/13 and head stamped to it;
+checker OK.
+
+**Next.** Targeted re-review (parity, fit-for-purpose) at `aa5aad44`; if
+clean, astra turn 12, then push.
