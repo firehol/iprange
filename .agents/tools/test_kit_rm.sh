@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: addf63dc03ae57b635ad7d0a437b3dbb4bbd3dea861b278a9c13dcc36f5d9b5d
+# H4-LABEL-HASH: a24f60713c585e580bdc701f4288ea005abbed815eaf4cb2f98bf40efb51d1ce
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -588,9 +588,80 @@ grep -q 'claims a removal that did not happen' <<<"$out" && ok "uncorrectable tr
 # the bare record is present (over-claim) but no REMOVAL-FAILED line exists
 # for it: that is exactly the inconsistency the ERROR line surfaces. Scoped
 # to this leg's reason so J4's earlier compensating line cannot collide.
-grep -q 'REMOVAL-FAILED.*unc-test' "$L/shared/removals.log" && bad "a REMOVAL-FAILED line was written despite the forced failure" || ok "no false correction was recorded"
+# Field order is stamp, size, path, reason, REMOVAL-FAILED -- so the reason
+# PRECEDES the marker (wave-31 tester P2-2: the reversed pattern could never
+# match, making this pin dead).
+grep -q 'unc-test.*REMOVAL-FAILED' "$L/shared/removals.log" && bad "a REMOVAL-FAILED line was written despite the forced failure" || ok "no false correction was recorded"
 grep -q 'unc-test' "$L/shared/removals.log" && ok "the bare over-claiming record is in the log" || bad "the write-ahead record never landed (probe broken)"
 rm -rf "$L/perf/w9" "$L/perf/w9/unc-list"
+
+echo "--- J7: the still-present arm surfaces an uncorrectable trail too ---"
+# The except-arm (J6) and the still-present arm are separate code paths; a
+# fix to one does not fix the other (wave-31 tester P2-1: reverting only the
+# still-present arm kept the whole suite green). Deterministic at the unit
+# level: rmtree is a no-op so the path survives, and the compensating append
+# is forced to fail.
+cat > "$T/stillpresent-probe.py" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+scratch = sys.argv[2]
+os.makedirs(os.path.join(scratch, "inner"), exist_ok=True)
+open(os.path.join(scratch, "inner", "f"), "w").write("k\n")
+m.shutil.rmtree = lambda path, *a, **k: None   # "succeeds", path survives
+m.gate_artifacts = lambda: []
+m.live_runs = lambda runs_root=None: []
+real_append = m.append_audit
+calls = {"n": 0}
+def flaky_append(line):
+    calls["n"] += 1
+    if calls["n"] == 1:
+        return real_append(line)          # the write-ahead record lands
+    return "simulated compensating failure"  # the correction cannot
+m.append_audit = flaky_append
+lst = os.path.join(os.path.dirname(scratch), "sp-list")
+with open(lst, "w") as fh:
+    fh.write(scratch + "\n")
+rc = m.main(["kit-rm.py", "--list", lst, "--runs-root",
+             os.path.dirname(scratch), "--execute", "--reason", "sp-test"])
+print("RC=%d KEPT=%s" % (rc, os.path.isdir(scratch)))
+PY
+out=$("$PYBIN" "$T/stillpresent-probe.py" "$K" "$L/perf/w10/cargo-target" 2>&1); rc=$?
+grep -q 'RC=1 KEPT=True' <<<"$out" && ok "still-present uncorrectable trail exits rc 1" || bad "still-present uncorrectable trail: $(tail -1 <<<"$out")"
+grep -q 'claims a removal that did not happen' <<<"$out" && ok "still-present trail prints an ERROR line" || bad "no ERROR line for the still-present trail"
+grep -q 'sp-test.*REMOVAL-FAILED' "$L/shared/removals.log" && bad "a false correction was recorded for the still-present arm" || ok "no false correction for the still-present arm"
+rm -rf "$L/perf/w10" "$L/perf/w10/sp-list"
+
+echo "--- J8: a failed record append is surfaced too (torn-fragment class) ---"
+# A record append that fails mid-write can leave a newline-less fragment
+# that reads like a removal record for a path that survived, and glues onto
+# every later line. The removal did not happen, so the trail over-claims it:
+# the run must surface (ERROR + rc 1), not print KEEP at rc 0 (wave-31
+# fit-for-purpose P2). Deterministic at the unit level: the record append is
+# forced to fail.
+cat > "$T/torn-record-probe.py" <<'PY'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+scratch = sys.argv[2]
+os.makedirs(os.path.join(scratch, "inner"), exist_ok=True)
+open(os.path.join(scratch, "inner", "f"), "w").write("k\n")
+m.gate_artifacts = lambda: []
+m.live_runs = lambda runs_root=None: []
+m.append_audit = lambda line: "simulated torn record failure"
+lst = os.path.join(os.path.dirname(scratch), "tr-list")
+with open(lst, "w") as fh:
+    fh.write(scratch + "\n")
+rc = m.main(["kit-rm.py", "--list", lst, "--runs-root",
+             os.path.dirname(scratch), "--execute", "--reason", "tr-test"])
+print("RC=%d KEPT=%s" % (rc, os.path.isdir(scratch)))
+PY
+out=$("$PYBIN" "$T/torn-record-probe.py" "$K" "$L/perf/w11/cargo-target" 2>&1); rc=$?
+grep -q 'RC=1 KEPT=True' <<<"$out" && ok "failed record append exits rc 1 with the target kept" || bad "failed record append: $(tail -1 <<<"$out")"
+grep -q 'could not be written' <<<"$out" && ok "failed record append prints an ERROR line" || bad "no ERROR line for the failed record append"
+rm -rf "$L/perf/w11" "$L/perf/w11/tr-list"
 
 echo "--- J5: O_NOFOLLOW closes the swap-between-check-and-open window ---"
 # The shape check lstats the log, then opens it: between the two an attacker

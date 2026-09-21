@@ -528,8 +528,10 @@ def main(argv: list[str]) -> int:
         # Write-ahead audit: the record is durable before the path is
         # destroyed, so no removal can complete unlogged and no crash can
         # orphan a deletion (wave-29). A removal that fails after its record
-        # gets a compensating line, so the log never claims a destruction
-        # that did not happen.
+        # gets a compensating line. Because the log is append-only, a record
+        # or correction that cannot be written leaves a trail that
+        # over-claims a destruction; every such failure is surfaced (ERROR +
+        # rc 1), never silently believed (wave-31).
         stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         # surrogateescape so the recorded path is the bytes that were removed,
         # not a replacement character: the log is the audit trail.
@@ -537,6 +539,13 @@ def main(argv: list[str]) -> int:
         if why:
             kept += 1
             print(f"KEEP    audit record refused ({why}): {path}")
+            # A failed record append can still leave a torn, newline-less
+            # fragment that reads like a removal record and glues onto every
+            # later line (wave-31 fit-for-purpose P2). The removal did not
+            # happen, so the trail over-claims it: surface, do not believe.
+            print(f"ERROR   audit record for {path} could not be written "
+                  f"({why}); the log may hold a torn record", file=sys.stderr)
+            log_inconsistent = True
             continue
         try:
             shutil.rmtree(path)

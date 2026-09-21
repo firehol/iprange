@@ -20961,3 +20961,81 @@ revision, same stopping-rule brief) → if clean, re-run security,
 performance, operations, portability at the same final revision → all-7
 PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
 battery (`1609b395…`) → evidence child commit → astra turn 12 → push.
+
+## Round 42 — wave 31 (three roles at afdd1ebf): 0 PASS / 3 FAIL, 4 P2 (three families); batch 18 (2026-09-21)
+
+Reviewed revision: `afdd1ebf` (batch 17). All three roles FAILed; four P2s
+in three related families. No product/engine/wire/CLI defect: `v4/`
+empty-diff since `9a8f64e8`, guard `abacfa59…`, blob `d4e5ce5bb223`.
+
+**The findings (required behavior):**
+
+1. **The still-present arm had no detecting leg** (tester P2-1): reverting
+   only the `os.path.exists()` arm's surfacing kept the whole suite green
+   (95 ok, labels byte-identical to the bound log) — J6 pins only the
+   except-arm. Violates Round-41's "both compensating appends check their
+   return" and REVIEWS.md's falsification rule.
+2. **J6's negative pin was dead** (tester P2-2 + parity P2-1, independent
+   convergence): the grep `REMOVAL-FAILED.*unc-test` contradicts the tool's
+   field order (reason precedes the marker), so it can never match — a
+   mutant that records a false compensating line keeps the suite green.
+   Parity additionally required the pin be falsifiable by a mutant.
+3. **A failed record append was silently believed** (ffp P2): the same
+   `append_audit` failure class that batch 17 surfaced in the compensating
+   arms was NOT surfaced in the record arm — a torn, newline-less fragment
+   over-claims a removal, glues onto every later line, and the run printed
+   KEEP at rc 0. Executed 2/2. The batch-17 generalization "an uncorrectable
+   trail is always surfaced" was therefore false as written; batch 17 was
+   not the endpoint.
+4. **A stale flat overclaim survived batch 17** (ffp, mergeable): the
+   in-loop comment still asserted "the log never claims a destruction that
+   did not happen", contradicted by the tool's own ERROR path.
+
+**Batch 18 closures:**
+
+- The record arm now surfaces identically: on a failed record append the run
+  prints `ERROR ... could not be written ... the log may hold a torn
+  record`, sets `log_inconsistent`, exits rc 1. All three `append_audit`
+  sites (record, except-arm, still-present) now check their return value.
+- New pins: J7 (still-present double-fault: faked no-op rmtree + forced
+  compensating failure → rc 1 + ERROR + no false correction) and J8 (failed
+  record append → rc 1 + ERROR). Driver: `l5-surface-stillpresent` and
+  `l6-surface-record` mutants; `l4-surface` widened to fire both J6 and J7
+  (4 legs); `l3-write-ahead` widened to 11; `refuse-everything` to 59.
+- J6's dead grep fixed to the correct field order (`unc-test.*REMOVAL-FAILED`)
+  and made falsifiable: l3 (which moves the record after rmtree) now fires
+  the "false correction recorded" legs, so the pin cannot silently rot again.
+- The stale comment was rewritten to the honest append-only statement.
+
+**Driver-editing hazard, recorded for the kit:** three separate edits this
+batch hit the same trap — a Python `s.replace` writing `" \\\\\n"` emits TWO
+literal backslashes, which bash reads as an escaped backslash (not a line
+continuation), silently merging the mutant's next argument into the header
+and making the mutant build an unchanged file (green suite, "undetected").
+Symptom: `NOT-CAUGHT <name>: suite rc=0 fails=0`. Diagnosis: `sed -n 'Np' |
+cat -A` on the header's last pattern line. This is the same class as the
+quoted-heredoc `\t` trap (batch 16) — the driver's transform blocks are
+single-quoted heredocs, so every backslash written by an editing script must
+be doubled deliberately, and every continuation must be exactly one `\`.
+
+**Kit state after batch 18, converged to a fixpoint:** kit-rm suite **100
+assertions, 0 failures** (95 + J7's three + J8's two); kit-gc suite **50,
+0**; falsification driver **30 mutants + crash self-test, all CAUGHT** (H5
+prints 31 legs); manifest **41 entries, 13 staged/live pairs**, head
+re-stamped to this record's commit; H4 green both ways (100 + 50 labels);
+H5 green (31 legs); checker `OK (0 mismatch(es))`; restage `--dry-run`
+`manifest unchanged`; reporter `rc 2`, two standing fixtures, 0 OVER-CAP;
+zero `__pycache__`; `v4/` empty-diff since `9a8f64e8`; guard `abacfa59…`.
+Battery **25/25**.
+
+Remaining P3s: FIFO `status.json` hangs `live_runs()`; `size_of` unpinned;
+non-UTF8 tracked filename crashes `gate_artifacts()` at rc 1 (fail-closed);
+sticky-parent + foreign-owned residual needs root; battery 25/25 a run-fact;
+J3's RLIMIT trigger is Linux-specific; the suite hard-needs coreutils
+`timeout`; post-truncation negative-claim trap on removals.log (parity).
+
+Next: wave 32 (fresh fit-for-purpose, parity, tester at the batch-18
+revision, same stopping-rule brief) → if clean, re-run security,
+performance, operations, portability at the same final revision → all-7
+PASS at one revision ⇒ tree FINAL → leg-27 Windows re-stamp → closure
+battery (`1609b395…`) → evidence child commit → astra turn 12 → push.

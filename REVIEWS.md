@@ -269,6 +269,18 @@ directories). Removal is the human procedure defined below.
    mutation-check bindings, a nested `__pycache__` and a drifted harness
    were found in waves 13-15. Helper scripts a bound log depends on are
    bound alongside it so the directory is self-contained.
+- **Driver edits must preserve single-backslash continuations.** Each
+  mutant's transform is a single-quoted heredoc, so a script that writes a
+  header continuation or an escape sequence must emit exactly one `\` per
+  continuation and double every backslash that must survive into the
+  transform. Two literal backslashes read as an escaped backslash rather
+  than a continuation, silently merging the next argument into the header;
+  the mutant then builds an unchanged file and reports `suite rc=0 fails=0`
+  (a green suite where a guard should have failed). `bash -n` does NOT catch
+  this — the merged line is valid syntax. The detecting signals are the
+  driver's own `suite rc=0 fails=0` verdict and, for anchors, `transform
+  anchor missing`; confirm with `sed -n '<line>p' | cat -A` on the header's
+  last pattern line.
 - **Capture order is fixed: finalize every source, then capture.** The
   kit-gc suite's H4 leg checks the bound kit-rm log against the LIVE
   `.agents/tools/test_kit_rm.sh` source (and its own log against its own
