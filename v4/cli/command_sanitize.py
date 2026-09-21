@@ -566,10 +566,28 @@ def _privacy_spellings(value):
             fold = _normcase
         for spelling in [fold(norm),
                          fold(os.path.normpath(norm)) if norm else norm]:
-            if not _IS_WINDOWS and spelling.startswith("//"):
+            if spelling.startswith("//"):
                 spelling = "/" + spelling.lstrip("/")
             if spelling not in out:
                 out.append(spelling)
+        # The forward-slash POSIX reading is carried as written, independent
+        # of the auditing host, the way the mount alias is.  On a Windows
+        # auditing host the separator rewrite above turns a POSIX root such
+        # as ``//Users/operator`` into the UNC-shaped ``\\Users\operator``,
+        # which no POSIX profile needle matches; but ``//Users/operator`` is a
+        # POSIX spelling whose kernel resolves to ``/Users/operator``, so a
+        # report authored on a POSIX host can carry it (embedded in a shell
+        # line, not only as a whole path) and the scan must still see the
+        # profile.  Collapsing a run of forward slashes to one is the authoring
+        # host's kernel rule, not the auditing host's OS, so it applies on
+        # every host; a Windows UNC is spelled with backslashes, never ``//``,
+        # so this forward-slash reading cannot misread a UNC.  Adding a
+        # candidate can only add a refusal, never remove one.
+        posix = base.replace("//", "/")
+        while "//" in posix:
+            posix = posix.replace("//", "/")
+        if posix not in out:
+            out.append(posix)
         if _IS_WINDOWS and _is_drive_relative(norm):
             for spelling in drive_relative_spellings(norm):
                 if spelling not in out:
@@ -2818,6 +2836,16 @@ def _provenance_self_test():
             "/Users/operator",          # macOS
             "/usr/home/operator",       # FreeBSD
             "/export/home/operator",    # illumos
+            # A POSIX kernel resolves a run of leading separators to one, so
+            # these doubled spellings ARE the operator's profile on the host
+            # that authored them.  On a Windows auditing host the candidate's
+            # forward slashes become backslashes and the UNC-shaped reading
+            # matches no POSIX needle, so the scan must carry the collapsed
+            # forward-slash reading too -- the gap the round-44 security
+            # review found (a doubled-leading-separator root installed clean
+            # on the nt fold while the single-separator root refused).
+            "//Users/operator",         # macOS, doubled leading separator
+            "//usr/home/operator",      # FreeBSD, doubled leading separator
         ]
         # The case-variation class (astra gate finding P2-5): on the
         # origin host each of these spellings IS the operator's profile,
