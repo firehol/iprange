@@ -61,6 +61,49 @@
   },
   {
    "kind": "rpc",
+   "actor": "producer",
+   "method": "iprange.v1.export",
+   "params": {
+    "source": {
+     "path": "$WORK/asym.iprange",
+     "mode": "immutable"
+    },
+    "view": {
+     "kind": "feed",
+     "feed": "asym"
+    },
+    "format": "netset",
+    "destination": "$WORK/asym-producer.netset",
+    "publication_policy": "fail_if_exists",
+    "result_budget": {
+     "max_rows": "1000",
+     "max_output_bytes": "1048576",
+     "max_open_files": 8
+    }
+   },
+   "digest_group": "asym-netset",
+   "expect_result": {
+    "format": "netset",
+    "rows": "65",
+    "addresses": "18446744073709551621",
+    "bytes": "783",
+    "sha256": "7851ad3b494b80a6a3e08121390526eaaee9848b0ba2dd6b06bfaadb186f103b",
+    "path": {
+     "$ignore": true
+    },
+    "identity": {
+     "$ignore": true
+    }
+   },
+   "assert_files": [
+    {
+     "path": "asym-producer.netset",
+     "sha256": "7851ad3b494b80a6a3e08121390526eaaee9848b0ba2dd6b06bfaadb186f103b"
+    }
+   ]
+  },
+  {
+   "kind": "rpc",
    "actor": "consumer",
    "method": "iprange.v1.export",
    "params": {
@@ -94,7 +137,13 @@
     "identity": {
      "$ignore": true
     }
-   }
+   },
+   "assert_files": [
+    {
+     "path": "asym.netset",
+     "sha256": "7851ad3b494b80a6a3e08121390526eaaee9848b0ba2dd6b06bfaadb186f103b"
+    }
+   ]
   }
  ]
 }
