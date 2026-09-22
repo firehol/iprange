@@ -21765,3 +21765,121 @@ no tracked file under `v4/` changed in this round.
 **Next.** The gate closes without another astra round on kit tooling: the
 kit is gone. Remaining SOW-0028 close-out: user acceptance of the milestone,
 follow-up mapping, SOW completion.
+
+## Milestone 5 — consolidated benchmark harness and measured ceilings (opened 2026-09-23)
+
+User decision 2026-09-23: milestone 5 is started (superseding the 2026-09-06
+"not started" decision 1A). The purpose, agreed with the user, is a common
+CLI in two languages with a common command line and output, used as the
+foundation of a **synthetic-benchmark library for both performance and
+correctness**, built around what `update-ipsets` actually needs.
+
+### Governing requirement: full replacement, not coexistence
+
+`update-ipsets` is to become a **thin wrapper around the iprange SDK**.
+Downloading, parsing, scheduling, application metadata and text artifacts
+stay in `update-ipsets`; **all core set-intelligence functionality is
+replaced by highly optimized iprange SDK actions**. The replacement targets
+identified from the current `update-ipsets` source (evidence, not
+assumption):
+
+| update-ipsets today | lines | replacing SDK action |
+|---|---|---|
+| Retention engine (`pkg/engine/retention.go`, `retention_update.go`): previous-vs-current diff, added/removed cohorts, hours-in-set, `retention.csv` | ~850 | first-seen/last-seen refresh + history projection in one membership transaction (spec § update-ipsets integration steps 2, 4) |
+| Geo/ASN comparison (`pkg/engine/asn.go`, `geoloc.go`, `country_payload.go`): per (feed × provider) overlap, bogon splits, `providers × feeds` pairs | ~1,850 | one-scan overlap aggregation + ordered provider joins + global-name algebra, no temporary merged feeds (step 5) |
+| Changeset/compare vs previous latest (`pkg/engine/process.go`) | — | compare / history projection (same path) |
+| Query "which lists contain this IP" (`pkg/engine/query.go`) | — | multi-feed membership query |
+| Parse / merge / exclude / binary write (`pkg/iprange` vendored library) | — | feed import into immutable current-feed file (step 1), publish (step 6) |
+| Snapshot/backup paths | — | exact snapshot/copy + recovery (step 6) |
+
+The benchmark library is therefore a **rehearsal of the migration**: when
+the future-workload scenarios are green on both languages (correctness) and
+measured (performance), the thin-wrapper design is proven before
+`update-ipsets` is touched.
+
+### Scenario matrix (INDICATIVE — not exhaustive)
+
+The list below is indicative. The harness must be a scenario *format plus
+runner*, extensible so that **every core functionality of `update-ipsets`
+can be expressed as an SDK-action scenario**; closing milestone 5 means the
+matrix covers the full replacement surface above, not merely the rows
+initially written. Scenarios are declarative JSON; the same file drives
+correctness mode and performance mode.
+
+Current workloads (legacy CLI surface, C-oracle comparable): merge/optimize,
+exclude-next (bogons), common/intersect, diff/compare, count-unique,
+ipset-reduce, `@filelist`/`@directory` expansion, binary v1/v2 write,
+query-overlap.
+
+Future workloads (`--jsonrpc`, mirroring spec § update-ipsets integration
+steps 1–6):
+
+- S1 import: unsorted, mixed-format streams → one immutable current-feed v4
+  file, no caller-side sorting, parallel feeds, per-feed failure boundary.
+- S2 first-seen/last-seen refresh across K simulated days with churn
+  profiles (adds/removes/stays); cohort ground truth from the generator.
+- S3 named-feed replacement in the central membership DB, serialized, with
+  crash injection proving the prior committed feed survives failure.
+- S4 history projection: one last-seen scan → all configured windows;
+  projected cohorts asserted against generator ground truth.
+- S5 joins: F feeds × P provider sets → overlap matrix, per-pair counts,
+  bogon split, aggregation, algebra publication — no temporary merged feeds.
+- S6 publish + snapshot + cross-open recovery: result files with exact
+  statistics, unsigned snapshot, both engines open the other's snapshot.
+
+Corpora: seeded deterministic generator (committed; blobs not), modeling
+real feed shapes — sorted/overlapping/unsorted ranges, CIDR+range+comment
+mixes, IPv4/IPv6, churn profiles. Sizes: 100k / 1M / 10M ranges per feed;
+~100 feeds, 7-day churn, 3 provider sets for the workflow scenarios; one
+production-sized ceiling run (1,000+ feeds, 10M ranges) at milestone close.
+
+### Measurement contract (fixes the known defects)
+
+- Timed and sampled from **outside the product**: the harness spawns the
+  real release binary and samples peak RSS via `getrusage(RUSAGE_CHILDREN)`
+  (exact, no polling race); the runner's own memory is excluded. This closes
+  the `v4/cli/resource-record.md:31-40` defect (measured the Python runner,
+  not the product) and the engine-side self-sampling limitation
+  (`iprange-v4-bench/measure.go:126-128`, `benches/update_ipsets/measure.rs:77`).
+- Release builds only; N rounds; median + spread reported; wall time,
+  child-only peak RSS, throughput per scenario; Go/Rust ratio per scenario
+  as the honest input for the ≤1.3x requirement (the requirement itself
+  stays SOW-0030's verdict).
+- Correctness mode: byte-identical stdout/stderr/exit and output-file
+  digests across Rust/Go, plus oracle invariants (scalar interval oracle
+  from `v4/cli/run.py`; generator ground truth for churn/cohorts).
+- Test-only necessary-work counters (page visits, range passes) per
+  `AGENTS.md`, compiled out of release.
+
+### Open decisions (user, before implementation)
+
+1. Harness language: Python stdlib reusing `run.py` framing/oracle
+   (recommended) vs Go vs Rust.
+2. First step: legacy-CLI scenarios + `--jsonrpc` feed workflow together
+   (recommended) vs legacy first.
+3. Whether SOW-0029/0030/0031 must land before the join/projection
+   scenarios can run against real methods (both engines already expose
+   history projection and joins, so recommended: build against what exists).
+
+### Pre-Implementation Gate (milestone 5)
+
+- Problem: no committed CLI benchmark exists; existing RSS numbers sample
+  the wrong process; the migration surface (retention, joins, projection)
+  has no cross-language workflow proof.
+- Evidence reviewed: spec § update-ipsets integration and § cross-language
+  conformance; `update-ipsets` `pkg/engine/{retention,retention_update,asn,
+  geoloc,country_payload,process,query}.go`; `v4/cli/resource-record.md`;
+  Followup § "CLI benchmark methodology has no committed harness"; existing
+  engine benches and `run.py` oracle.
+- Affected surfaces: new `v4/cli/benchmarks/` (harness, scenario format,
+  generator); REVIEWS.md area table (`cli-bench`); no engine or wire change
+  expected — findings against the engines become SOW-0030/0031 items.
+- Risks: scenario drift from real update-ipsets usage (mitigated by the
+  indicative-list rule and the thin-wrapper goal); measurement noise
+  (mitigated by N-round medians + spread reporting); harness becoming a
+  second qualification system (mitigated by reusing `run.py` framing/oracle
+  and plain-log evidence).
+- Validation plan: each scenario correctness-green on both engines;
+  performance logs plain-text per REVIEWS.md; role round on the harness
+  itself (tester: every scenario detects a seeded wrong-answer mutant;
+  performance: measurement contract enforced).
