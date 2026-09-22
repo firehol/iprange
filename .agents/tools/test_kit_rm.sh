@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: 6780e3da6f38c2ae8ea05210d0212f3a4c56da7e4d814d395a4391dee6516b9d
+# H4-LABEL-HASH: 79ebd70d5ec41e4f7030275ce7ab15cfb373f96b852f7d910f58a80e82c43185
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -153,6 +153,13 @@ LIST "$L/w1926 space/inner/child";      run "KEEP:G7 related to a path named by 
 printf 'the manifest cites %s verbatim\n' ".local/perf/w11/inner" >> "$L/shared/status.md"
 mkdir -p "$L/perf/w1/scratch"
 LIST "$L/perf/w1/scratch";              run DRY "G7 byte scan does not over-refuse a prefix sibling" --list "$T/list"
+# the exact sibling-root counterexample (astra turn-15 P2): citing
+# `.local/role/kit11` must NOT refuse the unrelated `.local/role/kit1` --
+# the citation is not an ancestor of the removal path at a component
+# boundary, and a substring match would refuse it.
+printf 'the manifest cites %s verbatim\n' ".local/g7sib/kit11" >> "$L/shared/status.md"
+mkdir -p "$L/g7sib/kit1"
+LIST "$L/g7sib/kit1";                   run DRY "G7 sibling root not refused by a longer-name citation" --list "$T/list"
 # a backtick-quoted citation (the common Markdown fence) must protect its
 # descendant: the citation regex captures the trailing backtick, so the strip
 # set must remove it (astra turn-13 P1).
@@ -196,6 +203,13 @@ LIST "$L/g7deep/a";                     run "KEEP:G7 related to cited path" "G7 
 # an unrelated sibling of a cited dir must still be allowed (no blanket block)
 mkdir -p "$L/g7deep/other/cache"
 LIST "$L/g7deep/other";                 run DRY  "uncited sibling still allowed"   --list "$T/list"
+# a prose mention of a bare ROLE ROOT (one slash) must not refuse the whole
+# subtree: the depth filter drops candidates shallower than two slashes,
+# because G3 already protects the role root itself and a role name in prose
+# is not a citation of everything under it.
+printf 'the role %s is mentioned in prose\n' ".local/g7depth" >> "$L/shared/status.md"
+mkdir -p "$L/g7depth/sub"
+LIST "$L/g7depth/sub";                  run DRY  "G7 a bare role-root mention does not refuse its subtree" --list "$T/list"
 
 echo "--- E2: G7 protects cited CONTENT, not just the cited directory (wave-19 security P1) ---"
 # A record naming `.local/<role>/kit` depends on everything under it, so a

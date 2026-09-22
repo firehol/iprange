@@ -21602,3 +21602,64 @@ green -> capture -> declare -> fixed point, verified by a second green run
 and a dry-run-unchanged restage).
 
 **Next.** Astra turn 15 on this delta; if PRODUCTION GRADE, push.
+
+## Round 53 — batch 27: G7 citation matching rebuilt on the citation-anchored design (2026-09-22)
+
+astra turn 15 (at `f3afe0f0`) returned NEEDS CHANGES: 1 P1, 1 P2, 2 P3.
+All verified real by the lead's probe. The P1 and P2 were the fourth and
+fifth findings in the same G7 citation-matching area, so instead of another
+patch the lead rebuilt the matcher on a different invariant and validated
+it against a 29-case cross-product (every path relation x plain/`+`/space/
+backtick-fence/JSON-quote/trailing-dot/comma citation form) in a standalone
+prototype BEFORE editing the tool.
+
+Root cause of the recurring class: the matcher anchored on the REMOVAL path
+and searched the artifacts for it as a byte substring. That is wrong in both
+directions — a citation of `.local/<role>/kit11` matched the unrelated
+sibling `.local/<role>/kit1` (the P2 false refusal), and no substring
+reading of a removal path can recover a citation spelled differently from
+it (the P1 missed protections, which had been patched four times).
+
+New design (`.agents/tools/kit-rm.py`): anchor on the CITATION.
+`citation_candidates()` scans every gate artifact once (cached per artifact
+set) and, from each `.local/` occurrence, emits every plausible cited path:
+the token to end of line, truncated at every space boundary (a real scratch
+name may contain spaces, which G1 accepts) and at every trailing-fence
+length (prose and JSON close a citation with punctuation that may also be a
+real filename byte, so a literal `kit.` or ``kit` `` directory keeps its own
+reading). `referenced()` then relates the removal path to each candidate by
+COMPONENT boundary (equal, or ancestor/descendant at a '/'), never by
+substring. A candidate with fewer than two slashes names at most a role root
+(G3 already protects it) and is dropped, so a bare role name in prose does
+not refuse its whole subtree. Adding a reading can only add a refusal, never
+remove one. The two reason strings are preserved (first-space-boundary
+reading -> "related to cited path"; a derived reading -> "related to a path
+named by gate artifact"), so all existing suite pins hold.
+
+Controls and mutants: the suite gained the exact sibling-root counterexample
+(cite `.local/role/kit11`, remove `.local/role/kit1` -> allowed), a bare
+role-root-mention control, and the combined-form controls; the driver's five
+stale G7 mutants were replaced by six arms each reverted alone — fsencode
+(byte-invalid line), artifact-unreadable, space-extension, fence-strip,
+component-relation, depth-filter — with the whole-check `g7-referenced` and
+`refuse-everything` broad mutants covering the rest. The exact/derived flag
+is reporting fidelity, not a safety arm, so it has no dedicated mutant.
+
+- **P3 (turn-13 result unbound):** closed in batch 26; the turn-14 prompt's
+  "turns 3-13 bound" claim is now attestable (manifest 43 entries).
+- **P3 (driver comment):** the recheck-stale comment now names both
+  detecting controls (fixed batch 26); the retired strip-arm description was
+  removed with the stale mutants.
+- **P3 (leg total):** the prompt's "34 driver legs" was wrong; the bound log
+  records 35 mutants + crash self-test = 36 legs. Corrected here and in the
+  next prompt.
+
+**Kit state after the batch:** kit-rm suite 115 ok / 0 FAIL; kit-gc suite 50
+ok / 0 FAIL (rc 0); driver 35 mutants + crash self-test all CAUGHT (36 legs);
+manifest 43 entries / 13 pairs restaged; checker OK; reporter rc 2 (two
+standing mode-000 fixtures, 0 OVER-CAP); zero __pycache__. The kit-gc
+capture-order bootstrap was executed again cleanly (seed -> declare -> green
+-> capture -> declare -> fixed point, verified by a second green run and a
+dry-run-unchanged restage).
+
+**Next.** Astra turn 16 on this delta; if PRODUCTION GRADE, push.

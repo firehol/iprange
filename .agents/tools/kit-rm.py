@@ -77,21 +77,13 @@ RUNS_ROOT = "/tmp/pi-subagents-uid-1001/async-subagent-runs"
 TERMINAL = {"complete", "completed", "failed", "stopped", "cancelled",
             "canceled", "interrupted"}
 GLOB_CHARS = set("*?[]$\t\n\r'\"\\")
-# Byte classes for citation matching (astra turn-12/13/14 P1).
-# _CITATION_HARD_BYTES: boundaries a citation token cannot cross because a
-# G1-legal removal path can never contain them -- whitespace plus every byte
-# G1 itself rejects (glob/control/quote/backslash). The byte-needle scan stops
-# at these, so a compact JSON citation `{"p":".local/<role>/my dir"}` extracts
-# to exactly the path (the surrounding quotes are hard boundaries).
-# _CITATION_SOFT_BYTES: path-LEGAL bytes that prose and Markdown still use to
-# fence a citation (the backtick fence, trailing sentence/clause punctuation).
-# A citation is read BOTH raw and soft-stripped, so a directory whose real
-# name ends in one of these bytes (`.local/<role>/kit.`) keeps its descendant
-# protection while the fenced form (`` `.local/<role>/kit` ``) is also seen.
-# Adding a reading can only add a refusal, never remove one.
-_CITATION_HARD_BYTES = frozenset(
-    os.fsencode(c) for c in " \t\n\r\v\f*?[]$'\"\\")
-_CITATION_SOFT_BYTES = b".,;:)]`"
+# Bytes prose and JSON use to CLOSE a citation (astra turn-12/13/14/15 P1).
+# A citation token is read at every trailing-fence length, one byte at a
+# time, so a directory whose real name ends in one of these bytes
+# (`.local/<role>/kit.`, ``.local/<role>/kit` ``) keeps its own reading while
+# the fenced or sentence-final form is also seen. Adding a reading can only
+# add a refusal, never remove one.
+_CITATION_FENCE_BYTES = frozenset(".,;:)]}\"'`>} ")
 
 
 AUDIT_LOG = os.path.join(SHARED, "removals.log")
@@ -247,111 +239,46 @@ def referenced(path: str, texts: list[str]) -> str | None:
     The return value is always a reason string, never a path: callers print it
     verbatim. Returning a path here once produced a relpath() of free text.
 
-    Records cite kit scratch two ways: the absolute path (commands, checker
-    output) and a repo-relative path such as
-    `.local/tester/r17-kit/g12/*-mutant.py` (manifest reasons, SOW prose).
-    Both forms are searched.
+    The scan anchors on the CITATION, not on the removal path: every plausible
+    `.local/...` path in the gate artifacts is extracted once (cached) and
+    related to the removal path by COMPONENT relation. Anchoring on the
+    removal path instead (searching the artifact for the path as a byte
+    substring) produced both failure classes this guard has accumulated: a
+    citation of `.local/<role>/kit11` matched the unrelated sibling
+    `.local/<role>/kit1` as a substring (false refusal), and no substring
+    reading of a removal path can recover a citation whose spelling differs
+    from it (missed protection). Component relation refuses exactly when one
+    path is the other or an ancestor of it at a '/' boundary, so a citation
+    protects itself, its ancestors and its descendants, and nothing else.
 
-    Protection is bidirectional, because the failure mode is asymmetric: a
-    record that names `.local/<role>/kit` depends on that directory AND on
-    everything inside it, so removing a descendant destroys the cited input
-    just as surely as removing the cited directory itself. Ancestors are also
-    refused, since removing one removes the cited path with it. What stays
-    removable is a path that shares no ancestor with any citation.
+    A citation is read at every space boundary and every trailing-fence
+    length, because a real scratch directory may contain spaces (G1 accepts
+    them) and may end in a punctuation byte that prose also uses to close a
+    citation. Each reading is a candidate; a candidate equal to the citation
+    as written reports "related to cited path", a derived reading reports
+    "related to a path named by gate artifact". Adding a reading can only add
+    a refusal, never remove one (astra turn-12/13/14/15 P1).
+
+    `texts` is accepted for call-site stability; the scan re-reads the
+    artifact set itself so a pre-deletion re-check sees files that appeared
+    after planning.
     """
-    needles = [path, path + os.sep]
-    if path.startswith(REPO + os.sep):
-        rel = os.path.relpath(path, REPO)
-        needles += [rel, rel + os.sep]
-    # Ancestor byte needles, for citations the token regex cannot spell: a
-    # component containing whitespace (G1 accepts spaces; the regex class
-    # excludes them because prose cannot delimit such a citation). Every
-    # citable ancestor of the removal path is searched, so a record citing
-    # `.local/role/my dir` protects removals under it. Ancestors stop at
-    # depth 2 below `.local/` because the citation depth filter never yields
-    # a shallower citation. A match is accepted only when the next byte
-    # cannot continue the cited path's last component: '/' means the citation
-    # is deeper than the needle (the removal path is then its ancestor),
-    # whitespace/quote/closing punctuation means prose closed it. A match
-    # followed by a component character is a longer sibling
-    # (`.local/<role>/w1` inside `.local/<role>/w11`) and must not refuse
-    # (astra turn-12 P1).
-    ancestor_needles: list[bytes] = []
-    ancestor = os.path.dirname(path)
-    while ancestor.startswith(LOCAL + os.sep):
-        arel = os.path.relpath(ancestor, LOCAL)
-        if arel in (".", "..") or len(arel.split(os.sep)) < 2:
-            break
-        ancestor_needles.append(os.fsencode(ancestor))
-        ancestor_needles.append(os.fsencode(arel))
-        ancestor = os.path.dirname(ancestor)
-    # The missing case before wave 19: a record citing `.local/<role>/kit`
-    # depends on everything INSIDE it, so removing `.local/<role>/kit/cache`
-    # destroys cited input exactly as removing the cited directory does. The
-    # needle scan above cannot see this (the record never spells out the
-    # deeper path), so citations are matched as a set and any ancestor or
-    # descendant relationship refuses the path.
-    cited_set = cited_paths()
-    if cited_set is None:
-        return ("tracked-file scan failed; citations cannot be verified "
-                "(refused, not skipped)")
-    for cited in cited_set:
-        if path == cited or path.startswith(cited + os.sep) \
-                or cited.startswith(path + os.sep):
-            return f"related to cited path {cited}"
-    for p in texts:
-        # No size skip: cited_paths() already reads every tracked file in
-        # full for the citation regex, so skipping a large artifact here would
-        # be inconsistent and would fail open for a regex-missed citation
-        # (space component) inside that artifact (astra turn-12 P1). Removals
-        # are rare and human-gated; reading the record set per path is cheap.
-        try:
-            with open(p, "rb") as fh:
-                blob = fh.read()
-        except OSError:
-            return f"gate artifact {p} could not be read"
-        for needle in needles:
-            # os.fsencode, not str.encode: a list line can carry bytes that
-            # decode to lone surrogates, and encode() would raise inside the
-            # removal loop after other paths had already been deleted
-            # (wave-20 portability P3-1).
-            nb = os.fsencode(needle)
-            if nb in blob:
-                return f"named by gate artifact {os.path.relpath(p, REPO)}"
-        for nb in ancestor_needles:
-            start = 0
-            while True:
-                i = blob.find(nb, start)
-                if i < 0:
-                    break
-                # Extract the citation token around this occurrence, scanning
-                # to HARD boundaries (whitespace or a byte G1 rejects, which a
-                # real path never contains) so a compact JSON citation
-                # `{"p":".local/<role>/my dir"}` extracts to exactly the path.
-                # The token is then read BOTH raw and soft-stripped: the raw
-                # reading protects a directory whose real name ends in a
-                # path-legal punctuation byte, the stripped reading names a
-                # fenced or sentence-final citation. A sibling citation
-                # (`.local/<role>/w11/inner` for a needle `.local/<role>/w1`)
-                # extracts to its own full path, which is neither ancestor nor
-                # descendant of the removal path, so it does not refuse
-                # (astra turn-12/13/14 P1).
-                j = i
-                while j > 0 and blob[j - 1:j] not in _CITATION_HARD_BYTES:
-                    j -= 1
-                k = i + len(nb)
-                while k < len(blob) and blob[k:k + 1] not in _CITATION_HARD_BYTES:
-                    k += 1
-                raw = blob[j:k]
-                for token in (raw, raw.rstrip(_CITATION_SOFT_BYTES)):
-                    for form in (os.fsencode(path),
-                                 os.fsencode(os.path.relpath(path, REPO))):
-                        if token and (form == token
-                                      or form.startswith(token + b"/")
-                                      or token.startswith(form + b"/")):
-                            return (f"related to a path named by gate artifact "
-                                    f"{os.path.relpath(p, REPO)}")
-                start = i + 1
+    cands = citation_candidates(texts)
+    if cands is None:
+        return ("gate artifacts could not be read or scanned; citations "
+                "cannot be verified (refused, not skipped)")
+    rel = os.path.relpath(path, REPO) if path.startswith(REPO + os.sep) else path
+    relb = os.fsencode(rel)
+    for cand, art, exact in cands:
+        if cand.count(b"/") < 2:
+            # names at most a role root, which G3 already protects from
+            # removal; a bare-role mention in prose must not refuse the
+            # role's whole subtree
+            continue
+        if relb == cand or relb.startswith(cand + b"/") or cand.startswith(relb + b"/"):
+            if exact:
+                return f"related to cited path {cand.decode(errors='replace')}"
+            return f"related to a path named by gate artifact {art}"
     return None
 
 
@@ -477,58 +404,71 @@ def size_of(path: str) -> int:
     return total
 
 
-_CITED_CACHE: list[str] | None = None
-_CITED_FAILED = False
+_CITATION_CACHE: dict[tuple[str, ...], list | None] = {}
 
 
-def cited_paths() -> list[str] | None:
-    """Absolute paths named in a gate artifact, cached for the descendant test.
+def citation_candidates(texts: list[str]) -> list | None:
+    """Every plausible cited `.local/...` path in the gate artifacts.
 
-    Extracted rather than hand-listed: a citation is any `.local/...` token in
-    a record, at any depth, in either the absolute or the repo-relative form.
-    Returns None when the tracked-file scan failed (refusal, not "no
-    citations"); the failure is sticky for the process.
+    Returns (candidate-bytes, artifact-name, exact) tuples, or None when the
+    tracked-file scan or an artifact read failed -- callers must treat None as
+    a refusal, never as "no citations" (wave-26 tester). Cached per artifact
+    set: the pre-deletion re-check passes a freshly read inventory, so a
+    record file that appeared after planning is seen there (astra turn-13
+    P2); the planning pass reuses one scan across all listed paths.
+
+    For each `.local/` occurrence the token runs to end of line (a real
+    scratch directory may contain spaces, which G1 accepts). Readings:
+      * the first space boundary -- the citation as written (exact);
+      * every later space boundary -- a citation whose name contains spaces
+        followed by prose (derived);
+      * every trailing-fence length of each -- prose and JSON close a
+        citation with punctuation that may also be a real filename byte, so
+        both readings are kept and a literal `kit.` or ``kit` `` directory
+        name survives as its own candidate (derived).
+    Trailing slashes are normalized away: a removal path is its own realpath
+    and never carries one (G1). A reading with fewer than two slashes names
+    at most a role root, which G3 already refuses, so it is dropped. Adding
+    a reading can only add a refusal, never remove one (astra turn-12/13/
+    14/15 P1).
     """
-    global _CITED_CACHE, _CITED_FAILED
-    if _CITED_FAILED:
-        return None
-    if _CITED_CACHE is not None:
-        return _CITED_CACHE
-    arts = gate_artifacts()
-    if arts is None:
-        _CITED_FAILED = True
-        return None
-    found: set[str] = set()
-    # The component class must match what G1 accepts, not a narrower guess:
-    # G1 rejects only the glob/control set and requires realpath equality, so
-    # a real scratch directory may legitimately contain '+', ',', ':' or '()'
-    # in a component. A regex that stops at those (the pre-wave-32 `[\w.\-]+`)
-    # truncates `.local/<role>+gate/inner` to `.local/<role>`, which the
-    # depth filter then drops, so a DESCENDANT of that citation lost its
-    # ancestor protection and became removable (astra turn-12 P1). Whitespace
-    # stays excluded (prose cannot delimit such a citation; the byte-needle
-    # ancestor scan covers it). Trailing prose punctuation is stripped so a
-    # citation ending a sentence or clause still names the real path.
-    token = re.compile(r"(?:\.local/[^\s/*?\[\]$'\"\\]+)(?:/[^\s/*?\[\]$'\"\\]+)*")
-    for art in arts:
+    key = tuple(texts)
+    if key in _CITATION_CACHE:
+        return _CITATION_CACHE[key]
+    found: set[tuple[bytes, str, bool]] = set()
+    for art in texts:
         try:
             text = open(art, encoding="utf-8", errors="replace").read()
         except OSError:
-            continue
-        for m in token.findall(text):
-            # Both readings are kept: the raw token (so a directory whose real
-            # name ends in a path-legal punctuation byte, `.local/<role>/kit.`,
-            # still protects its descendants) and the soft-stripped token (so a
-            # fenced or sentence-final citation names the real path). Adding a
-            # reading can only add a refusal, never remove one (astra turn-14
-            # P1: blind stripping destroyed the literal-name reading).
-            for cand in (m, m.rstrip(_CITATION_SOFT_BYTES.decode())):
-                if cand.count("/") < 2:  # .local itself or a bare role
-                    continue
-                found.add(os.path.join(REPO, cand))
-                found.add(cand)
-    _CITED_CACHE = sorted(found)
-    return _CITED_CACHE
+            _CITATION_CACHE[key] = None
+            return None
+        art_name = os.path.relpath(art, REPO)
+        i = 0
+        while True:
+            i = text.find(".local/", i)
+            if i < 0:
+                break
+            j = i
+            while j < len(text) and text[j] not in "\n\r\v\f":
+                j += 1
+            parts = text[i:j].split(" ")
+            for m in range(1, len(parts) + 1):
+                seg = " ".join(parts[:m]).rstrip("/")
+                # "exact" = the citation as written: the first space
+                # boundary with its closing fences removed (a fence is never
+                # part of a written path). Every reading past the first
+                # space boundary is a guess that the name contains spaces,
+                # hence derived.
+                exact = (m == 1)
+                found.add((os.fsencode(seg), art_name, exact))
+                k = len(seg)
+                while k > 0 and seg[k - 1] in _CITATION_FENCE_BYTES:
+                    k -= 1
+                    found.add((os.fsencode(seg[:k].rstrip("/")), art_name, exact))
+            i = j if j > i else i + 1
+    result = sorted(found)
+    _CITATION_CACHE[key] = result
+    return result
 
 
 def check(path: str, texts: list[str], live: list[str]) -> tuple[bool, str, int]:
@@ -666,8 +606,8 @@ def main(argv: list[str]) -> int:
         # progress. A re-check on stale inputs is not a re-check (astra
         # turn-12 P2). Removals are rare and human-gated, so the per-path
         # refresh cost is irrelevant next to the guard it restores.
-        global _CITED_CACHE
-        _CITED_CACHE = None
+        global _CITATION_CACHE
+        _CITATION_CACHE = {}
         texts2 = gate_artifacts()
         if texts2 is None:
             kept += 1
