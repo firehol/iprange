@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: cca4a46d804712c4dd0ac3a1f4842a73b87cbb2c325973b80d09bd881c6d9d25
+# H4-LABEL-HASH: 6f477325bc99a1df74bdeafc7e522e3b2cd5f38df769dcd6d751b8e903e70a40
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -219,6 +219,15 @@ printf 'see %s and %s in one line\n' ".local/g7multi/a/b" ".local/g7multi/c/d" >
 mkdir -p "$L/g7multi/c/d/child" "$L/g7multi/a/b/child"
 LIST "$L/g7multi/c/d/child";            run "KEEP:G7 related to cited path" "G7 second citation on a line protects its subtree" --list "$T/list"
 LIST "$L/g7multi/a/b/child";            run "KEEP:G7 related to cited path" "G7 first citation on a line protects its subtree" --list "$T/list"
+# a citation spelled with lexical ., .. or doubled slashes names the same
+# directory as its normalized form: the removal path is its own realpath
+# (G1), so the normalized reading must protect it (the lead's own audit of
+# the citation-anchored rebuild).
+printf 'bound replay read %s\n' ".local/g7lex/./kit" >> "$L/shared/status.md"
+printf 'bound replay read %s\n' ".local/g7lex2/a/../kit" >> "$L/shared/status.md"
+mkdir -p "$L/g7lex/kit/child" "$L/g7lex2/kit/child"
+LIST "$L/g7lex/kit/child";              run "KEEP:G7 related to a path named by gate artifact" "G7 lexical-dot citation protects the canonical path" --list "$T/list"
+LIST "$L/g7lex2/kit/child";             run "KEEP:G7 related to a path named by gate artifact" "G7 lexical-dotdot citation protects the canonical path" --list "$T/list"
 # a byte-invalid citation must protect a byte-invalid removal path: the
 # artifact is read with surrogateescape and os.fsencode reverses it exactly,
 # so the citation round-trips to the same bytes the list file produced

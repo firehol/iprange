@@ -464,15 +464,28 @@ def citation_candidates(texts: list[str]) -> list | None:
                 seg = " ".join(parts[:m]).rstrip("/")
                 # "exact" = the citation as written: the first space
                 # boundary with its closing fences removed (a fence is never
-                # part of a written path). Every reading past the first
-                # space boundary is a guess that the name contains spaces,
-                # hence derived.
+                # part of a written path, so every fence-stripped length of
+                # the first segment is still "as written"). Every reading
+                # past the first space boundary is a guess that the name
+                # contains spaces, hence derived.
                 exact = (m == 1)
-                found.add((os.fsencode(seg), art_name, exact))
+                as_written = {seg}
                 k = len(seg)
                 while k > 0 and seg[k - 1] in _CITATION_FENCE_BYTES:
                     k -= 1
-                    found.add((os.fsencode(seg[:k].rstrip("/")), art_name, exact))
+                    as_written.add(seg[:k].rstrip("/"))
+                for r in as_written:
+                    found.add((os.fsencode(r), art_name, exact))
+                # A removal path is its own realpath (G1), so a citation
+                # spelled with a lexical ., .., doubled slash or trailing
+                # slash names the same directory as its normalized form and
+                # must protect it too. normpath is a derived reading (a
+                # reading can only add a refusal, never remove one); a
+                # component that is merely named "..x" is untouched.
+                for r in as_written:
+                    n = os.path.normpath(r)
+                    if n != r:
+                        found.add((os.fsencode(n), art_name, False))
             # advance by one, not to end of line: a second `.local/` citation
             # on the same line is a separate anchor and must be extracted too
             # (advancing to j would silently drop every citation after the
