@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: 79ebd70d5ec41e4f7030275ce7ab15cfb373f96b852f7d910f58a80e82c43185
+# H4-LABEL-HASH: cca4a46d804712c4dd0ac3a1f4842a73b87cbb2c325973b80d09bd881c6d9d25
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -210,6 +210,33 @@ LIST "$L/g7deep/other";                 run DRY  "uncited sibling still allowed"
 printf 'the role %s is mentioned in prose\n' ".local/g7depth" >> "$L/shared/status.md"
 mkdir -p "$L/g7depth/sub"
 LIST "$L/g7depth/sub";                  run DRY  "G7 a bare role-root mention does not refuse its subtree" --list "$T/list"
+# two citations on one line: the scan advances by one, not to end of line, so
+# a second `.local/` occurrence on the same line is a separate anchor and
+# still protects its subtree (the lead's own audit of the citation-anchored
+# rebuild; advancing to EOL would silently drop every citation after the
+# first on a line).
+printf 'see %s and %s in one line\n' ".local/g7multi/a/b" ".local/g7multi/c/d" >> "$L/shared/status.md"
+mkdir -p "$L/g7multi/c/d/child" "$L/g7multi/a/b/child"
+LIST "$L/g7multi/c/d/child";            run "KEEP:G7 related to cited path" "G7 second citation on a line protects its subtree" --list "$T/list"
+LIST "$L/g7multi/a/b/child";            run "KEEP:G7 related to cited path" "G7 first citation on a line protects its subtree" --list "$T/list"
+# a byte-invalid citation must protect a byte-invalid removal path: the
+# artifact is read with surrogateescape and os.fsencode reverses it exactly,
+# so the citation round-trips to the same bytes the list file produced
+# (the lead's own audit; reading the artifact with errors="replace" would
+# mangle the invalid byte to U+FFFD and the citation could never match).
+python3 -c "
+with open('$L/shared/status.md','a') as f:
+    f.buffer.write(b'bound replay read .local/g7byte/bad\xffname\n')
+import os; os.makedirs(b'$L/g7byte/bad\xffname/child', exist_ok=True)
+"
+python3 -c "
+with open('$T/list','wb') as f:
+    f.write(b'$L/g7byte/bad\xffname/child\n')
+"
+out=$("$PYBIN" "$K" --list "$T/list" --runs-root "$T/async" 2>&1); rc=$?
+grep -q "^KEEP    G7" <<<"$out" && [ -d "$L/g7byte/bad"$'\xff'"name/child" ] \
+  && ok "G7 byte-invalid citation protects its byte-invalid subtree" \
+  || bad "G7 byte-invalid citation did not refuse (rc=$rc): $(tail -1 <<<"$out")"
 
 echo "--- E2: G7 protects cited CONTENT, not just the cited directory (wave-19 security P1) ---"
 # A record naming `.local/<role>/kit` depends on everything under it, so a

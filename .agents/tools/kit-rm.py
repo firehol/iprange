@@ -438,7 +438,15 @@ def citation_candidates(texts: list[str]) -> list | None:
     found: set[tuple[bytes, str, bool]] = set()
     for art in texts:
         try:
-            text = open(art, encoding="utf-8", errors="replace").read()
+            # surrogateescape, not replace: a removal path reaches this
+            # function through the list file read with surrogateescape, and
+            # os.fsencode reverses that mapping exactly. Reading the artifact
+            # with replace would mangle any invalid byte in a citation to
+            # U+FFFD, so a citation naming a byte-invalid path could never
+            # match the removal path -- the old byte-substring scan compared
+            # raw bytes and did not have this hole (astra turn-15 review,
+            # lead's own audit).
+            text = open(art, encoding="utf-8", errors="surrogateescape").read()
         except OSError:
             _CITATION_CACHE[key] = None
             return None
@@ -465,7 +473,11 @@ def citation_candidates(texts: list[str]) -> list | None:
                 while k > 0 and seg[k - 1] in _CITATION_FENCE_BYTES:
                     k -= 1
                     found.add((os.fsencode(seg[:k].rstrip("/")), art_name, exact))
-            i = j if j > i else i + 1
+            # advance by one, not to end of line: a second `.local/` citation
+            # on the same line is a separate anchor and must be extracted too
+            # (advancing to j would silently drop every citation after the
+            # first on a line).
+            i += 1
     result = sorted(found)
     _CITATION_CACHE[key] = result
     return result
