@@ -291,7 +291,7 @@ this wave by the two battery race steps — the committed swap-race battery
 the parity input race, run from the battery's scratch (40 trials per
 engine, NOT-REPRODUCED, 441,850 flips, wedged=0 on both engines; the
 figures are in the run's scratch log `reports/log-race-parity.txt`, which
-the bound console log records as the `[14x] rust_input_race` step at
+the retained console log records as the `[14x] rust_input_race` step at
 rc 0).  The retained operations/glm/performance swap
 probes were NOTRUN this wave because their untracked scratch scripts are
 absent, which the battery reports rather than hides.

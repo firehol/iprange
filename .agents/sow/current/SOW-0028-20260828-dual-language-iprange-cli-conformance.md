@@ -21206,7 +21206,8 @@ checked, 0 mismatches, 3 deferrals (the two Windows reports owned by the
 native leg, plus the two retired duplicate pressure-axis steps astra gate
 finding P2-6 leaves deferred), 197.5 s wall. ALLDONE.
 
-**Evidence rotation** (`ff346362`): all 21 reports, `build-ids.json`, and
+**Evidence rotation** (`ff346362`): all 19 measurement reports plus
+`build-ids.json` and
 `battery-manifest.json` rotated to the final revision; the README rewritten
 from the artifacts (revision, tree, step/wall/deferral counts, coverage
 percentages, the six Windows product digests, the native test tallies, the
@@ -21237,9 +21238,11 @@ returned FAIL from all three roles, converging on the delta itself:
   spelled `//Users/operator` installed clean under the Windows auditor's
   fold.  The collapse is a kernel path-resolution rule, not an auditor-OS
   property.  Fixed in `4b42cc0b`: `_privacy_spellings` now carries a
-  forward-slash reading with `//`-runs collapsed on every host (UNC-proof:
-  the reading is built from backslash-separated values, so collapsing `//`
-  cannot merge a UNC server and share), and group 13's `FOREIGN_ROOTS`
+  forward-slash reading with `//`-runs collapsed on every host (a doubled
+  leading separator such as `//Users/operator` is ambiguous — it also reads
+  as a UNC server under `ntpath.splitdrive` — so the scan refuses it
+  conservatively on any candidate match rather than resolving the
+  ambiguity), and group 13's `FOREIGN_ROOTS`
   gained `//Users/operator` and `//usr/home/operator` (no new control; the
   shared count stays 59).  The reproduction script refuses every doubled
   shape; reverting the collapse fails the cross-host control that names
@@ -21418,9 +21421,11 @@ step; the leg's own flake_history says "0 of 30 recorded steps retried").
 
 Two P3s taken at `078723c3`:
 - "the two committed race steps" was stale for the parity input race —
-  it runs from the battery's scratch and lives only in the bound console
-  log; the sentence now distinguishes the committed swap-race battery from
-  the scratch-run parity race.
+  it runs from the battery's scratch and its outcome figures live only in
+  the run's scratch log `reports/log-race-parity.txt` (the console log
+  records the step result, not the outcome lines); the sentence now
+  distinguishes the committed swap-race battery from the scratch-run
+  parity race.
 - The Go export-writer cite widened 249-262 → 249-264 to cover the
   `io`/`outcome_unknown` literals the sentence describes.
 
@@ -21435,3 +21440,72 @@ Manifest restaged 41/13 and head stamped to `078723c3`; checker OK.
 
 **Next.** Confirmation re-review of the two-line delta at `078723c3`
 (both roles), then astra turn 12, then push.
+
+## Round 50 — batch 24: astra turn-12 findings closed (kit-rm citation P1 + four P2 + P3s) (2026-09-22)
+
+astra turn 12 (external control, session ea962c0a…, at `ccd5641c`) returned
+NEEDS CHANGES: 1 P1, 4 P2, 4 P3, all in the kit tooling and records; the
+v4 product fixes and evidence bindings held (astra independently verified
+the 41-entry manifest, the 13 staged/live pairs, the 19 report bindings,
+the 11 staged binaries, and the privacy repairs). Every finding was
+verified real by the lead's own probe before any edit:
+
+- **P1 (citation truncation):** the G7 citation regex `[\w.\-]+` stopped at
+  `+`/space, which G1 accepts, so citing `.local/w1926+gate/inner`
+  truncated to the bare role (dropped by the depth filter) and a
+  DESCENDANT of that citation became removable. The lead's probe confirmed
+  it (`DESCENDANT of + cite: None` before the fix, refused after). Fixed:
+  the regex class now matches G1's accepted syntax (whitespace excluded —
+  prose cannot delimit it), and the byte-needle scan additionally searches
+  every citable ancestor of the removal path with maximal-token extraction
+  and bidirectional relation, so a whitespace-component citation is caught
+  too. The 8 MiB needle-scan skip was removed (it was inconsistent with
+  cited_paths() reading every tracked file in full, and failed open for a
+  regex-missed citation in a large artifact).
+- **P2 (stale re-check):** the pre-delete re-check reused the startup
+  citation cache and artifact inventory, so a citation added after
+  planning was invisible to it. Fixed: the re-check refreshes the cache
+  and re-reads the inventory.
+- **P2 (FIFO swap hang):** the audit-log opens used O_NOFOLLOW (rejects
+  symlinks) but not O_NONBLOCK and never fstat'd the opened descriptor, so
+  a post-lstat FIFO swap blocked the append. Fixed: O_NONBLOCK on both
+  opens plus an fstat regular-file check on the opened descriptor.
+- **P2 (directory entry not durable):** the first creation of removals.log
+  fsynced only the file, not the containing directory, so a crash could
+  lose the log's name after rmtree. Fixed: fsync the directory when the
+  open created the log.
+- **P2 (personal path in tracked suite):** test_kit_rm.sh embedded the
+  operator's absolute checkout. Fixed: derive the repo from the suite's
+  own location.
+- **P3s:** leading-dot sandbox misclassification in both tools (component
+  compare, not string prefix); the G6 docstring now says mode-000
+  *directory*; REVIEWS.md's removal instruction now names the guard tool
+  instead of `rm -rf`; the scanner comment and the SOW Round-45 text no
+  longer claim UNC ambiguity is impossible (it is refused conservatively);
+  the records' report count (19 measurement + 2 metadata) and the
+  parity-race figure location (the run's scratch log, not the console log)
+  were corrected.
+
+**Kit capture-order incident (lead error, recovered).** Adding five
+legitimate kit-rm legs raised the kit-rm suite's green label count from
+103 to 108, which changed the kit-gc suite's green multiset (its H4 label
+embeds the kit-rm count). The lead's first re-captures used a wrong order
+(direct redirect into the installed log, truncating the file the suite's
+own H4 self-read needs), corrupting the bound kit-gc log. Recovery used
+the documented bootstrap with a genuine green seed (a reviewer sandbox
+copy whose forward pin passed against the current source): install seed →
+set declaration to the seed's multiset → run green → capture the fresh run
+→ set declaration to the fresh multiset → re-run to the fixed point. No
+bound log was hand-written: every bound artifact is the verbatim output of
+a real green run, and the final kit-gc log reflects the CURRENT counts
+(108 kit-rm labels, 31 driver legs), not the seed's stale ones. The
+capture-order rule (REVIEWS.md § Kit hygiene) was already documented; this
+incident is a lead-process lesson, recorded here, not a tool defect.
+
+**Kit state after the batch:** kit-rm suite 108 ok / 0 FAIL; kit-gc suite
+50 ok / 0 FAIL (rc 0); driver 30 mutants + crash self-test all CAUGHT
+(H5 31 legs); manifest 41 entries / 13 pairs restaged and head-stamped;
+checker OK; reporter rc 2 with only the two standing mode-000 fixtures, 0
+OVER-CAP; zero __pycache__.
+
+**Next.** Astra turn 13 on this delta; if PRODUCTION GRADE, push.

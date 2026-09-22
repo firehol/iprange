@@ -24,8 +24,9 @@ Guards (a path is refused, not removed, if ANY fails):
       central kit and the archive are refused by identity, never by name match;
   G5  it is a real directory (not a symlink, not a file, not missing);
   G6  it contains no `.git` entry (a checkout or worktree is never scratch),
-      no directory unreadable to us, and no mode-000 entry (the standing
-      privacy fixtures ARE the gate signal);
+      no directory unreadable to us, and no mode-000 directory (the standing
+      privacy fixtures ARE the gate signal; a mode-000 regular file is not a
+      hazard because rmtree deletes it through the parent's write bit);
   G7  its exact path string appears in no gate artifact (every tracked file,
       `.local/shared/status.md`, `.local/shared/head`, every
       `.local/shared/evidence/*/manifest.json`, every
@@ -76,6 +77,13 @@ RUNS_ROOT = "/tmp/pi-subagents-uid-1001/async-subagent-runs"
 TERMINAL = {"complete", "completed", "failed", "stopped", "cancelled",
             "canceled", "interrupted"}
 GLOB_CHARS = set("*?[]$\t\n\r'\"\\")
+# Byte classes for the ancestor byte-needle scan (astra turn-12 P1). A
+# citation whose component contains whitespace cannot be captured by the
+# token regex, so the scan extracts the maximal non-whitespace token around
+# each ancestor-needle hit and strips trailing prose punctuation before
+# testing the path relation.
+_CITATION_WS_BYTES = frozenset(c for c in (b" ", b"\t", b"\n", b"\r", b"\v", b"\f"))
+_CITATION_STRIP_BYTES = b".,;:)]}\"'"
 
 
 AUDIT_LOG = os.path.join(SHARED, "removals.log")
@@ -101,11 +109,21 @@ def audit_log_problem() -> str | None:
         # O_NOFOLLOW makes the open itself reject a symlink, so a swap
         # between the lstat above and this open cannot redirect the record
         # (wave-29 fit-for-purpose P2-2: the race is closed at the syscall,
-        # not by check ordering).
-        os.close(os.open(AUDIT_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT
-                         | os.O_NOFOLLOW))
+        # not by check ordering). O_NONBLOCK makes the open itself reject a
+        # FIFO: a write-only open of a FIFO with no reader fails with ENXIO
+        # instead of blocking, and a FIFO with a reader is caught by the
+        # fstat below (astra turn-12 P2: lstat + O_NOFOLLOW alone still let a
+        # post-check FIFO swap hang the append).
+        fd = os.open(AUDIT_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+                     | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as err:
         return f"the audit log is not appendable ({err})"
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return ("the audit log is not a regular file after open "
+                    "(swapped between check and open)")
+    finally:
+        os.close(fd)
     return None
 
 
@@ -119,23 +137,45 @@ def append_audit(line: str) -> str | None:
     RLIMIT_FSIZE, a permission flip) refuses the removal instead of
     orphaning it (wave-29 parity P2-1).
     """
+    # Whether the log exists right now decides whether this open creates it:
+    # a newly created file's DIRECTORY ENTRY is not durable until the
+    # containing directory is fsynced (fsync(2) distinguishes the two), and
+    # the write-ahead contract requires the record to survive a crash that
+    # follows the removal (astra turn-12 P2). Checked BEFORE the shape probe,
+    # which opens with O_CREAT and would otherwise mask the creation.
+    try:
+        os.lstat(AUDIT_LOG)
+        existed = True
+    except FileNotFoundError:
+        existed = False
     why = audit_log_problem()
     if why:
         return why
     try:
         fd = os.open(AUDIT_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT
-                     | os.O_NOFOLLOW)
+                     | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as err:
         return f"the audit record could not be written ({err})"
-    # fdopen takes ownership of fd: on any later error the with-block closes
-    # it, so there is no second close here (a double close could release an
-    # unrelated recycled descriptor).
+    # fdopen takes ownership of fd from here on: on any later error the
+    # with-block closes it, so there is no second close (a double close could
+    # release an unrelated recycled descriptor). The fstat check runs before
+    # fdopen and must close the descriptor itself.
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        os.close(fd)
+        return ("the audit log is not a regular file after open "
+                "(swapped between check and open)")
     try:
         with os.fdopen(fd, "a", encoding="utf-8",
                        errors="surrogateescape") as fh:
             fh.write(line)
             fh.flush()
             os.fsync(fh.fileno())
+        if not existed:
+            dfd = os.open(os.path.dirname(AUDIT_LOG), os.O_RDONLY)
+            try:
+                os.fsync(dfd)
+            finally:
+                os.close(dfd)
     except OSError as err:
         return f"the audit record could not be written ({err})"
     return None
@@ -201,6 +241,28 @@ def referenced(path: str, texts: list[str]) -> str | None:
     if path.startswith(REPO + os.sep):
         rel = os.path.relpath(path, REPO)
         needles += [rel, rel + os.sep]
+    # Ancestor byte needles, for citations the token regex cannot spell: a
+    # component containing whitespace (G1 accepts spaces; the regex class
+    # excludes them because prose cannot delimit such a citation). Every
+    # citable ancestor of the removal path is searched, so a record citing
+    # `.local/role/my dir` protects removals under it. Ancestors stop at
+    # depth 2 below `.local/` because the citation depth filter never yields
+    # a shallower citation. A match is accepted only when the next byte
+    # cannot continue the cited path's last component: '/' means the citation
+    # is deeper than the needle (the removal path is then its ancestor),
+    # whitespace/quote/closing punctuation means prose closed it. A match
+    # followed by a component character is a longer sibling
+    # (`.local/perf/w1` inside `.local/perf/w11`) and must not refuse
+    # (astra turn-12 P1).
+    ancestor_needles: list[bytes] = []
+    ancestor = os.path.dirname(path)
+    while ancestor.startswith(LOCAL + os.sep):
+        arel = os.path.relpath(ancestor, LOCAL)
+        if arel in (".", "..") or len(arel.split(os.sep)) < 2:
+            break
+        ancestor_needles.append(os.fsencode(ancestor))
+        ancestor_needles.append(os.fsencode(arel))
+        ancestor = os.path.dirname(ancestor)
     # The missing case before wave 19: a record citing `.local/<role>/kit`
     # depends on everything INSIDE it, so removing `.local/<role>/kit/cache`
     # destroys cited input exactly as removing the cited directory does. The
@@ -216,8 +278,11 @@ def referenced(path: str, texts: list[str]) -> str | None:
                 or cited.startswith(path + os.sep):
             return f"related to cited path {cited}"
     for p in texts:
-        if os.path.getsize(p) > 8 * 1024 * 1024:
-            continue
+        # No size skip: cited_paths() already reads every tracked file in
+        # full for the citation regex, so skipping a large artifact here would
+        # be inconsistent and would fail open for a regex-missed citation
+        # (space component) inside that artifact (astra turn-12 P1). Removals
+        # are rare and human-gated; reading the record set per path is cheap.
         try:
             with open(p, "rb") as fh:
                 blob = fh.read()
@@ -231,6 +296,34 @@ def referenced(path: str, texts: list[str]) -> str | None:
             nb = os.fsencode(needle)
             if nb in blob:
                 return f"named by gate artifact {os.path.relpath(p, REPO)}"
+        for nb in ancestor_needles:
+            start = 0
+            while True:
+                i = blob.find(nb, start)
+                if i < 0:
+                    break
+                # Extract the maximal non-whitespace token containing this
+                # occurrence and strip trailing prose punctuation, then test
+                # the bidirectional path relation exactly as the citation set
+                # does. This catches a citation whose component contains
+                # whitespace (which the token regex cannot spell): the needle
+                # is an ancestor of the removal path, so a citation equal to
+                # the needle, above it, or under the removal path all refuse.
+                j = i
+                while j > 0 and blob[j - 1:j] not in _CITATION_WS_BYTES:
+                    j -= 1
+                k = i + len(nb)
+                while k < len(blob) and blob[k:k + 1] not in _CITATION_WS_BYTES:
+                    k += 1
+                token = blob[j:k].rstrip(_CITATION_STRIP_BYTES)
+                for form in (os.fsencode(path),
+                             os.fsencode(os.path.relpath(path, REPO))):
+                    if token and (form == token
+                                  or form.startswith(token + b"/")
+                                  or token.startswith(form + b"/")):
+                        return (f"related to a path named by gate artifact "
+                                f"{os.path.relpath(p, REPO)}")
+                start = i + 1
     return None
 
 
@@ -378,14 +471,24 @@ def cited_paths() -> list[str] | None:
         _CITED_FAILED = True
         return None
     found: set[str] = set()
-    token = re.compile(r"(?:\.local/[\w.\-]+)(?:/[\w.\-]+)*")
+    # The component class must match what G1 accepts, not a narrower guess:
+    # G1 rejects only the glob/control set and requires realpath equality, so
+    # a real scratch directory may legitimately contain '+', ',', ':' or '()'
+    # in a component. A regex that stops at those (the pre-wave-32 `[\w.\-]+`)
+    # truncates `.local/w1926+gate/inner` to `.local/w1926`, which the
+    # depth filter then drops, so a DESCENDANT of that citation lost its
+    # ancestor protection and became removable (astra turn-12 P1). Whitespace
+    # stays excluded (prose cannot delimit such a citation; the byte-needle
+    # ancestor scan covers it). Trailing prose punctuation is stripped so a
+    # citation ending a sentence or clause still names the real path.
+    token = re.compile(r"(?:\.local/[^\s/*?\[\]$'\"\\]+)(?:/[^\s/*?\[\]$'\"\\]+)*")
     for art in arts:
         try:
             text = open(art, encoding="utf-8", errors="replace").read()
         except OSError:
             continue
         for m in token.findall(text):
-            m = m.rstrip(".")
+            m = m.rstrip(_CITATION_STRIP_BYTES.decode())
             if m.count("/") < 2:      # .local itself or a bare role: not a citation
                 continue
             found.add(os.path.join(REPO, m))
@@ -402,7 +505,10 @@ def check(path: str, texts: list[str], live: list[str]) -> tuple[bool, str, int]
     if not path.startswith(LOCAL + os.sep):
         return False, "G2 outside .local/", 0
     rel = os.path.relpath(path, LOCAL)
-    if rel in (".", "..") or rel.startswith(".."):
+    # Component comparison, not a string prefix: a sandbox legitimately named
+    # "..reviewer" has a rel path starting with ".." but is inside .local/
+    # (astra turn-12 P3).
+    if rel in (".", "..") or rel.split(os.sep)[0] == "..":
         return False, "G2 resolves to .local itself or above", 0
     if len(rel.split(os.sep)) < 2:
         return False, "G3 role root: reports and briefs are never removed", 0
@@ -519,8 +625,21 @@ def main(argv: list[str]) -> int:
             kept += 1          # dry run removes nothing: every path is retained
             print(f"DRY     would remove {human(nbytes)}: {path}")
             continue
-        # Re-verify the exact path right before the destructive call.
-        ok2, why2, nbytes = check(path, texts, live_runs(args.runs_root))
+        # Re-verify the exact path right before the destructive call, against
+        # CHANGED state: the citation cache and the artifact inventory are
+        # process snapshots from startup, and a record can gain a citation of
+        # this path (or a new artifact can appear) while the run is in
+        # progress. A re-check on stale inputs is not a re-check (astra
+        # turn-12 P2). Removals are rare and human-gated, so the per-path
+        # refresh cost is irrelevant next to the guard it restores.
+        global _CITED_CACHE
+        _CITED_CACHE = None
+        texts2 = gate_artifacts()
+        if texts2 is None:
+            kept += 1
+            print(f"KEEP    re-check refused: tracked-file scan failed: {path}")
+            continue
+        ok2, why2, nbytes = check(path, texts2, live_runs(args.runs_root))
         if not ok2:
             kept += 1
             print(f"KEEP    re-check failed ({why2}): {path}")

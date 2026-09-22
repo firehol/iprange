@@ -580,9 +580,13 @@ def _privacy_spellings(value):
         # line, not only as a whole path) and the scan must still see the
         # profile.  Collapsing a run of forward slashes to one is the authoring
         # host's kernel rule, not the auditing host's OS, so it applies on
-        # every host; a Windows UNC is spelled with backslashes, never ``//``,
-        # so this forward-slash reading cannot misread a UNC.  Adding a
-        # candidate can only add a refusal, never remove one.
+        # every host.  A doubled-leading-separator POSIX root such as
+        # ``//Users/operator`` also has a UNC interpretation
+        # (``ntpath.splitdrive`` reads it as server ``//Users``), so the two
+        # readings are ambiguous for that spelling; the scan refuses on ANY
+        # candidate matching a foreign root, so the ambiguous spelling is
+        # refused conservatively rather than resolved.  Adding a candidate can
+        # only add a refusal, never remove one.
         posix = base.replace("//", "/")
         while "//" in posix:
             posix = posix.replace("//", "/")

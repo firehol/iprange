@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: a24f60713c585e580bdc701f4288ea005abbed815eaf4cb2f98bf40efb51d1ce
+# H4-LABEL-HASH: 6e80bfc8bd4324cd7250062ecd8a2383f4a1197f892492d4012e326e3462b533
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -12,7 +12,10 @@ set -uo pipefail
 # E6 exec_modules the tool for the live_runs unit probe; keep bytecode caches
 # out of policed dirs (H2).
 export PYTHONDONTWRITEBYTECODE=1
-KIT=/home/costa/src/firehol/iprange
+# Derive the repository from this suite's own location (three hops up from
+# .agents/tools/), so the suite tests the checkout it lives in and carries no
+# operator-specific path (astra turn-12 P2).
+KIT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)
 # Overridable so the mutation driver can run this suite against a reverted
 # copy of the tool: a guard that cannot be shown to fail is not a guard.
 TOOL=${KITRM_TOOL:-$KIT/.agents/tools/kit-rm.py}
@@ -130,13 +133,26 @@ LIST "$L/w1926-gate/tdir";              run "KEEP:G7 related to cited path" "G7 
 printf 'the replay used %s under the kit\n' ".local/w1926-rel/inner" >> "$L/shared/status.md"
 mkdir -p "$L/w1926-rel/inner"
 LIST "$L/w1926-rel/inner";              run "KEEP:G7 related to cited path" "G7 named relatively" --list "$T/list"
-# the needle scan (not the citation set) must also refuse: the token
-# extractor captures only `.local/<role>/<sub>...` tokens, so a citation under
-# a role name containing '+' yields just the bare role (skipped as a
-# citation). Only the byte-needle scan can see this path.
+# a '+' component is G1-legal and, since wave 32, captured by the citation
+# regex (the pre-wave-32 class stopped at '+', leaving only the bare role,
+# which the depth filter dropped). The citation set now refuses it.
 printf 'the manifest cites %s verbatim\n' ".local/w1926+gate/inner" >> "$L/shared/status.md"
 mkdir -p "$L/w1926+gate/inner"
-LIST "$L/w1926+gate/inner";             run "KEEP:G7 named by gate artifact" "G7 needle scan on a token-extractor miss" --list "$T/list"
+LIST "$L/w1926+gate/inner";             run "KEEP:G7 related to cited path" "G7 citation set on a '+' component" --list "$T/list"
+# a DESCENDANT of that '+' citation must also be refused (astra turn-12 P1:
+# the truncated citation made the descendant removable).
+mkdir -p "$L/w1926+gate/inner/child"
+LIST "$L/w1926+gate/inner/child";       run "KEEP:G7 related to cited path" "G7 descendant of a '+' citation" --list "$T/list"
+# a whitespace component is G1-legal but the token regex cannot spell it;
+# only the ancestor byte-needle scan can see this citation (wave 32).
+printf 'the manifest cites %s verbatim\n' ".local/w1926 space/inner" >> "$L/shared/status.md"
+mkdir -p "$L/w1926 space/inner/child"
+LIST "$L/w1926 space/inner/child";      run "KEEP:G7 related to a path named by gate artifact" "G7 byte scan on a whitespace component" --list "$T/list"
+# the byte scan must NOT refuse an unrelated sibling whose name merely
+# continues a cited component (`.local/perf/w1` inside `.local/perf/w11`).
+printf 'the manifest cites %s verbatim\n' ".local/perf/w11/inner" >> "$L/shared/status.md"
+mkdir -p "$L/perf/w1/scratch"
+LIST "$L/perf/w1/scratch";              run DRY "G7 byte scan does not over-refuse a prefix sibling" --list "$T/list"
 # an ANCESTOR of a cited path must also be refused: removing the parent would
 # destroy the path the record depends on. The ancestors used here are at
 # depth >= 2, so a refusal is G7 and not G3's role-root rule.
@@ -692,6 +708,114 @@ out=$("$PYBIN" "$T/nofollow-probe.py" "$K" "$L/perf/w8" 2>&1 | tail -1)
 [ "$out" = "REFUSED" ] && ok "symlink swap after the shape check is refused" || bad "O_NOFOLLOW missing: the swap window was followed ($out)"
 grep -q RECORD "$L/perf/w8/real-target" && bad "audit record leaked through the swap" || ok "no record leaked through the swap"
 rm -rf "$L/perf/w8"
+
+echo "--- J9: a FIFO swap after the shape check cannot hang the append (wave 32, astra turn-12 P2) ---"
+# O_NOFOLLOW rejects symlinks, not FIFOs: a write-only open of a FIFO with no
+# reader blocks forever. O_NONBLOCK makes the open fail with ENXIO, and the
+# fstat on the opened descriptor rejects a FIFO that does have a reader.
+cat > "$T/fifo-probe.py" <<'PROBE'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+logdir = sys.argv[2]
+os.makedirs(logdir, exist_ok=True)
+m.AUDIT_LOG = os.path.join(logdir, "removals.log")
+real = os.path.join(logdir, "real-target")
+open(real, "w").write("nothing durable here\n")
+os.mkfifo(m.AUDIT_LOG)
+true_lstat = os.lstat
+def fake_lstat(path, *a, **k):
+    if path == m.AUDIT_LOG:
+        return os.stat(real)   # the attacker swapped AFTER a regular-file check
+    return true_lstat(path, *a, **k)
+os.lstat = fake_lstat
+why = m.append_audit("RECORD\n")
+print("REFUSED" if why else "FOLLOWED")
+PROBE
+out=$(timeout 30 "$PYBIN" "$T/fifo-probe.py" "$K" "$L/perf/w9" 2>&1 | tail -1); rc=$?
+[ $rc = 124 ] && bad "FIFO swap HUNG the append (timeout)" || true
+[ "$out" = "REFUSED" ] && ok "FIFO swap after the shape check is refused" || bad "FIFO swap not refused ($out)"
+rm -rf "$L/perf/w9"
+
+echo "--- J10: a first-created audit log fsyncs its directory entry (wave 32, astra turn-12 P2) ---"
+# fsync(2) makes the FILE durable, not its DIRECTORY ENTRY: a crash after the
+# first record can lose the log's name while rmtree already ran. The fix
+# fsyncs the containing directory when the open created the log.
+cat > "$T/dirsync-probe.py" <<'PROBE'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+logdir = sys.argv[2]
+os.makedirs(logdir, exist_ok=True)
+m.AUDIT_LOG = os.path.join(logdir, "removals.log")
+fsynced = []
+true_fsync = os.fsync
+def spy(fno):
+    fsynced.append(os.fstat(fno).st_ino)
+    return true_fsync(fno)
+os.fsync = spy
+why = m.append_audit("RECORD\n")
+dir_ino = os.stat(logdir).st_ino
+print("REFUSED" if why else ("DIR-FSYNCED" if dir_ino in fsynced else "FILE-ONLY"))
+PROBE
+out=$("$PYBIN" "$T/dirsync-probe.py" "$K" "$L/perf/w10" 2>&1 | tail -1)
+[ "$out" = "DIR-FSYNCED" ] && ok "first-created log fsyncs its directory" || bad "directory entry not made durable ($out)"
+# and the second append (log exists) must NOT re-fsync the directory
+out2=$("$PYBIN" "$T/dirsync-probe.py" "$K" "$L/perf/w10" 2>&1 | tail -1)
+[ "$out2" = "FILE-ONLY" ] && ok "existing log skips the directory fsync" || bad "second append re-fsynced the directory ($out2)"
+rm -rf "$L/perf/w10"
+
+echo "--- J11: the pre-delete re-check sees citations added after startup (wave 32, astra turn-12 P2) ---"
+# The citation cache and the artifact inventory are process snapshots from
+# startup; a re-check on stale inputs is not a re-check. This probe drives the
+# SHIPPED main() end-to-end: live_runs is called once at startup and once per
+# re-check, so the citation is appended to status.md exactly at the re-check
+# call. The shipped code refreshes the cache and re-reads the inventory there
+# and refuses; a stale re-check removes the target.
+cat > "$T/recheck-probe.py" <<'PROBE'
+import importlib.util, os, sys
+spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)
+repo = sys.argv[2]
+m.REPO = repo
+m.LOCAL = os.path.join(repo, ".local")
+m.SHARED = os.path.join(m.LOCAL, "shared")
+target = os.path.join(m.LOCAL, "perf", "w11", "cargo-target")
+os.makedirs(target, exist_ok=True)
+open(os.path.join(target, "f"), "w").write("k\n")
+status = os.path.join(m.SHARED, "status.md")
+open(status, "w").write("nothing here yet\n")
+calls = {"n": 0}
+true_check = m.check
+def spy_check(path, texts, live):
+    calls["n"] += 1
+    r = true_check(path, texts, live)
+    if calls["n"] == 1:   # after the planning check passed: the record gains
+        # a citation of a DESCENDANT of the target. Only the cached citation
+        # set catches a descendant (the byte scan searches the path and its
+        # ancestors, never its descendants), so this isolates the cache
+        # refresh: a stale cache misses it and the target is removed.
+        open(status, "a").write("bound replay read .local/perf/w11/cargo-target/inner\n")
+    return r
+m.check = spy_check
+lst = os.path.join(repo, ".local", "recheck-list.txt")
+open(lst, "w").write(target + "\n")
+rc = m.main(["kit-rm.py", "--list", lst, "--runs-root", sys.argv[3],
+             "--execute", "--reason", "selftest"])
+print(f"RC={rc} SURVIVED={os.path.isdir(target)}")
+PROBE
+mkdir -p "$T/async-recheck"
+out=$("$PYBIN" "$T/recheck-probe.py" "$K" "$R" "$T/async-recheck" 2>&1 | tail -1)
+grep -q 'SURVIVED=True' <<<"$out" && ok "re-check refuses a citation added after startup" || bad "stale re-check removed the target: $out"
+rm -rf "$L/perf/w11"
+
+echo "--- K: a sandbox named '..x' is inside .local, not above it (wave 32, astra turn-12 P3) ---"
+mkdir -p "$L/..dot/inner"
+LIST "$L/..dot/inner";                  run DRY "leading-dot sandbox is inside .local" --list "$T/list"
+rm -rf "$L/..dot"
 
 echo
 # The sentinel states what the run shows (every assertion passed), not what

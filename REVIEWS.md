@@ -248,9 +248,11 @@ directories). Removal is the human procedure defined below.
      `.local/shared/evidence/<gate>/` first and bind them in that
      gate's `manifest.json`; the reporter deliberately does no archiving
      for you.
-  Then remove that single named path (`rm -rf <exact-path>`), never a
-  glob and never a directory the lead has not individually inspected.
-  `.local/shared/` is never a removal target.
+  Then remove that single named path through the guard tool (write the exact
+  path to a list file and run `.agents/tools/kit-rm.py --list FILE --execute
+  --reason "..."`), never a hand `rm -rf`, never a glob, and never a directory
+  the lead has not individually inspected. `.local/shared/` is never a removal
+  target.
 - **Staging assertions are enforced, not asserted.** Every artifact the
   evidence manifest binds must exist on disk with the recorded sha256 and
   byte count; **every file at any depth** in an evidence directory must be

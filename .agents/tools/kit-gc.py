@@ -320,7 +320,10 @@ def main() -> int:
     err_sandboxes: dict = {}
     for ep, _msg in errors:
         rel = os.path.relpath(ep, ROOT) if ep.startswith(str(ROOT) + os.sep) else None
-        if rel and not rel.startswith(".."):
+        # Component comparison, not a string prefix: a sandbox legitimately
+        # named "..reviewer" has a rel path starting with ".." but is inside
+        # the root, and must keep its PARTIAL marker (astra turn-12 P3).
+        if rel and rel != os.pardir and not rel.startswith(os.pardir + os.sep):
             top = rel.split(os.sep)[0]
             err_sandboxes[top] = err_sandboxes.get(top, 0) + 1
     for sbx in sandboxes:
