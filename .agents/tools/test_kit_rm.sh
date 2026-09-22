@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: 6e80bfc8bd4324cd7250062ecd8a2383f4a1197f892492d4012e326e3462b533
+# H4-LABEL-HASH: d2236ddf8200672e07e7070508549b1af75bdaa55b068756a9dd801fe6fb4768
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -153,6 +153,18 @@ LIST "$L/w1926 space/inner/child";      run "KEEP:G7 related to a path named by 
 printf 'the manifest cites %s verbatim\n' ".local/perf/w11/inner" >> "$L/shared/status.md"
 mkdir -p "$L/perf/w1/scratch"
 LIST "$L/perf/w1/scratch";              run DRY "G7 byte scan does not over-refuse a prefix sibling" --list "$T/list"
+# a backtick-quoted citation (the common Markdown fence) must protect its
+# descendant: the citation regex captures the trailing backtick, so the strip
+# set must remove it (astra turn-13 P1).
+printf 'the proof read `%s` during staging\n' ".local/w1926-tick/inner" >> "$L/shared/status.md"
+mkdir -p "$L/w1926-tick/inner/child"
+LIST "$L/w1926-tick/inner/child";       run "KEEP:G7 related to cited path" "G7 descendant of a backtick-quoted citation" --list "$T/list"
+# a JSON string citation with a whitespace component: the token regex cannot
+# spell it and the byte scan's extracted token carries a leading quote, so the
+# open-delimiter strip must remove it (astra turn-13 P1).
+printf '{"reason": "%s"}\n' ".local/w1926 jdir/inner" >> "$L/shared/status.md"
+mkdir -p "$L/w1926 jdir/inner/child"
+LIST "$L/w1926 jdir/inner/child";       run "KEEP:G7 related to a path named by gate artifact" "G7 JSON whitespace citation" --list "$T/list"
 # an ANCESTOR of a cited path must also be refused: removing the parent would
 # destroy the path the record depends on. The ancestors used here are at
 # depth >= 2, so a refusal is G7 and not G3's role-root rule.
@@ -475,7 +487,7 @@ chmod 644 "$L/shared/removals.log"
 # a missing log in an unwritable directory is the same contract violation
 rm -f "$L/shared/removals.log"; chmod 555 "$L/shared"
 out=$("$PYBIN" "$K" --list "$T/list" --runs-root "$T/async" --execute --reason "selftest" 2>&1); rc=$?
-grep -q 'audit log is not appendable' <<<"$out" && [ "$rc" = 2 ] \
+grep -q 'audit log directory.*is not writable' <<<"$out" && [ "$rc" = 2 ] \
   && ok "unwritable log directory refused at startup (rc 2)" || bad "unwritable log dir rc=$rc: $(tail -1 <<<"$out")"
 [ -f "$L/perf/w4/cargo-target/f" ] && ok "second refusal also deleted nothing" \
   || bad "DELETED WITH NO AUDIT TRAIL (dir case)"
@@ -738,42 +750,56 @@ out=$(timeout 30 "$PYBIN" "$T/fifo-probe.py" "$K" "$L/perf/w9" 2>&1 | tail -1); 
 [ "$out" = "REFUSED" ] && ok "FIFO swap after the shape check is refused" || bad "FIFO swap not refused ($out)"
 rm -rf "$L/perf/w9"
 
-echo "--- J10: a first-created audit log fsyncs its directory entry (wave 32, astra turn-12 P2) ---"
+echo "--- J10: the full CLI sequence fsyncs the audit log's directory entry (wave 32, astra turn-12/13 P2) ---"
 # fsync(2) makes the FILE durable, not its DIRECTORY ENTRY: a crash after the
-# first record can lose the log's name while rmtree already ran. The fix
-# fsyncs the containing directory when the open created the log.
+# first record can lose the log's name while rmtree already ran. The startup
+# probe must not create the log with O_CREAT (that made append_audit believe it
+# pre-existed and skip the directory fsync -- astra turn-13 P2), so this probe
+# drives the SHIPPED main() end-to-end and asserts the containing directory is
+# fsynced before the destructive call.
 cat > "$T/dirsync-probe.py" <<'PROBE'
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
-logdir = sys.argv[2]
-os.makedirs(logdir, exist_ok=True)
-m.AUDIT_LOG = os.path.join(logdir, "removals.log")
+repo = sys.argv[2]
+m.REPO = repo
+m.LOCAL = os.path.join(repo, ".local")
+m.SHARED = os.path.join(m.LOCAL, "shared")
+m.AUDIT_LOG = os.path.join(m.SHARED, "removals.log")
+target = os.path.join(m.LOCAL, "perf", "w10", "cargo-target")
+os.makedirs(target, exist_ok=True)
+open(os.path.join(target, "f"), "w").write("k\n")
+open(os.path.join(m.SHARED, "status.md"), "w").write("nothing here yet\n")
 fsynced = []
 true_fsync = os.fsync
 def spy(fno):
     fsynced.append(os.fstat(fno).st_ino)
     return true_fsync(fno)
 os.fsync = spy
-why = m.append_audit("RECORD\n")
-dir_ino = os.stat(logdir).st_ino
-print("REFUSED" if why else ("DIR-FSYNCED" if dir_ino in fsynced else "FILE-ONLY"))
+lst = os.path.join(repo, ".local", "dirsync-list.txt")
+open(lst, "w").write(target + "\n")
+m.main(["kit-rm.py", "--list", lst, "--runs-root", sys.argv[3],
+        "--execute", "--reason", "selftest"])
+dir_ino = os.stat(m.SHARED).st_ino
+print("DIR-FSYNCED" if dir_ino in fsynced else "DIR-MISSED")
 PROBE
-out=$("$PYBIN" "$T/dirsync-probe.py" "$K" "$L/perf/w10" 2>&1 | tail -1)
-[ "$out" = "DIR-FSYNCED" ] && ok "first-created log fsyncs its directory" || bad "directory entry not made durable ($out)"
-# and the second append (log exists) must NOT re-fsync the directory
-out2=$("$PYBIN" "$T/dirsync-probe.py" "$K" "$L/perf/w10" 2>&1 | tail -1)
-[ "$out2" = "FILE-ONLY" ] && ok "existing log skips the directory fsync" || bad "second append re-fsynced the directory ($out2)"
+mkdir -p "$T/async-dirsync"
+out=$("$PYBIN" "$T/dirsync-probe.py" "$K" "$R" "$T/async-dirsync" 2>&1 | tail -1)
+[ "$out" = "DIR-FSYNCED" ] && ok "the CLI sequence fsyncs the audit log directory before removal" || bad "directory entry not made durable across the CLI sequence ($out)"
 rm -rf "$L/perf/w10"
 
-echo "--- J11: the pre-delete re-check sees citations added after startup (wave 32, astra turn-12 P2) ---"
+echo "--- J11: the pre-delete re-check sees a citation in a record file that appeared after planning (wave 32, astra turn-12/13 P2) ---"
 # The citation cache and the artifact inventory are process snapshots from
-# startup; a re-check on stale inputs is not a re-check. This probe drives the
-# SHIPPED main() end-to-end: live_runs is called once at startup and once per
-# re-check, so the citation is appended to status.md exactly at the re-check
-# call. The shipped code refreshes the cache and re-reads the inventory there
-# and refuses; a stale re-check removes the target.
+# startup; a re-check on stale inputs is not a re-check. The fixture must be a
+# citation the stale inputs actually MISS: a citation in status.md is caught by
+# the byte scan even on a stale cache (status.md is in the planning inventory
+# and the target path is a substring of any descendant citation), so that shape
+# is non-discriminating (astra turn-13 P2). A citation in a NEW gate-artifact
+# file (matched by the astra-turn*.md glob) is invisible to the planning
+# inventory, so only the re-check's fresh gate_artifacts() + cleared cache see
+# it. The shipped code refuses; the stale re-check (driver mutant recheck-stale)
+# removes the target.
 cat > "$T/recheck-probe.py" <<'PROBE'
 import importlib.util, os, sys
 spec = importlib.util.spec_from_file_location("kitrm", sys.argv[1])
@@ -786,19 +812,17 @@ m.SHARED = os.path.join(m.LOCAL, "shared")
 target = os.path.join(m.LOCAL, "perf", "w11", "cargo-target")
 os.makedirs(target, exist_ok=True)
 open(os.path.join(target, "f"), "w").write("k\n")
-status = os.path.join(m.SHARED, "status.md")
-open(status, "w").write("nothing here yet\n")
+open(os.path.join(m.SHARED, "status.md"), "w").write("nothing here yet\n")
 calls = {"n": 0}
 true_check = m.check
 def spy_check(path, texts, live):
     calls["n"] += 1
     r = true_check(path, texts, live)
-    if calls["n"] == 1:   # after the planning check passed: the record gains
-        # a citation of a DESCENDANT of the target. Only the cached citation
-        # set catches a descendant (the byte scan searches the path and its
-        # ancestors, never its descendants), so this isolates the cache
-        # refresh: a stale cache misses it and the target is removed.
-        open(status, "a").write("bound replay read .local/perf/w11/cargo-target/inner\n")
+    if calls["n"] == 1:   # after the planning check passed: a NEW gate-artifact
+        # file appears citing the target exactly. It is not in the planning
+        # inventory, so a stale re-check cannot see it by any mechanism.
+        open(os.path.join(m.SHARED, "astra-turn99.md"), "w").write(
+            "bound replay read .local/perf/w11/cargo-target\n")
     return r
 m.check = spy_check
 lst = os.path.join(repo, ".local", "recheck-list.txt")
@@ -809,7 +833,7 @@ print(f"RC={rc} SURVIVED={os.path.isdir(target)}")
 PROBE
 mkdir -p "$T/async-recheck"
 out=$("$PYBIN" "$T/recheck-probe.py" "$K" "$R" "$T/async-recheck" 2>&1 | tail -1)
-grep -q 'SURVIVED=True' <<<"$out" && ok "re-check refuses a citation added after startup" || bad "stale re-check removed the target: $out"
+grep -q 'SURVIVED=True' <<<"$out" && ok "re-check refuses a citation in a record file added after planning" || bad "stale re-check removed the target: $out"
 rm -rf "$L/perf/w11"
 
 echo "--- K: a sandbox named '..x' is inside .local, not above it (wave 32, astra turn-12 P3) ---"

@@ -21271,8 +21271,8 @@ commit behind: the native Windows leg re-ran green at `4b42cc0b`
 (battery EXIT 0, report leg rc 0, `changed_files: 1`, 59 controls,
 privacy null), and the full-tier closure battery re-ran green (318 steps,
 0 mismatches, 3 by-design deferrals, 198.2 s, script digest `1609b395…`).
-All 21 revision-bearing reports, `build-ids.json`, and
-`battery-manifest.json` now carry `git_head=4b42cc0b`; the Windows
+All 21 revision-bearing files (the 19 measurement reports plus
+`build-ids.json` and `battery-manifest.json`) now carry `git_head=4b42cc0b`; the Windows
 binaries were re-staged and their digests re-verified against the leg's
 host record.  The manifest was restaged to 41 entries / 13 staged-live
 pairs at `5ca72efb`, the head file re-stamped to match, the checker
@@ -21509,3 +21509,55 @@ checker OK; reporter rc 2 with only the two standing mode-000 fixtures, 0
 OVER-CAP; zero __pycache__.
 
 **Next.** Astra turn 13 on this delta; if PRODUCTION GRADE, push.
+
+## Round 51 — batch 25: astra turn-13 findings closed (2026-09-22)
+
+astra turn 13 (at `a756b814`) returned NEEDS CHANGES: 1 P1, 2 P2, 2 P3.
+Every finding was verified real by the lead's own probe before editing.
+
+- **P1 (citation delimiters):** the batch-24 widened regex captured a
+  trailing backtick (the Markdown fence is G1-legal and was not in the
+  strip set), and the byte-scan token kept a leading quote from a JSON
+  citation, so both forms left a descendant unprotected. Fixed: backtick
+  added to the trailing strip set, leading-delimiter strip added to the
+  byte-scan token. Two new suite controls (backtick-quoted citation,
+  JSON whitespace citation) and two new driver mutants (each strip arm
+  reverted alone) pin both directions. The lead's probe confirms the
+  shipped code refuses both forms and still allows the prefix sibling.
+  A related hazard the lead found while testing: the tool's own comments
+  spelled fixture paths literally, and because the tool is a tracked gate
+  artifact its comments became citations that over-refused unrelated
+  removals; the comments now use `<role>` placeholders, the file's
+  existing convention.
+- **P2 (dir-fsync bypass):** the startup probe created an absent log with
+  O_CREAT, so append_audit believed it pre-existed and skipped the
+  directory fsync; the J10 fixture called append_audit directly and
+  missed the bypass. Fixed: the probe no longer creates (it checks
+  directory writability without creating), and append_audit fsyncs the
+  directory after every record — the lstat-then-create decision raced a
+  concurrent creator, and over-syncing is always safe. J10 rewritten to
+  drive the shipped main() end-to-end; a new l7 mutant (directory fsync
+  removed) falsifies it.
+- **P2 (non-discriminating J11):** the old fixture appended a citation to
+  status.md, which the byte scan catches even on a stale inventory, so the
+  control passed with the refresh removed. Fixed: the fixture now adds a
+  citation in a NEW gate-artifact file (matched by the astra-turn*.md
+  glob), invisible to the planning inventory; the recheck-stale mutant now
+  fails it (verified: SURVIVED=False under the mutant, True shipped).
+- **P3 (turn-12 result unbound):** the turn-13 prompt claimed turns 3-12
+  were bound but only 3-11 were. The turn-12 result is now installed and
+  bound (manifest 42 entries).
+- **P3 (report count):** the SOW's "21 revision-bearing reports,
+  build-ids.json, and battery-manifest.json" mis-split the set; corrected
+  to "21 revision-bearing files (19 measurement reports plus the two
+  metadata files)".
+
+**Kit state after the batch:** kit-rm suite 109 ok / 0 FAIL; kit-gc suite
+50 ok / 0 FAIL (rc 0); driver 33 mutants + crash self-test all CAUGHT;
+manifest 42 entries / 13 pairs restaged; checker OK; reporter rc 2 (two
+standing mode-000 fixtures, 0 OVER-CAP); zero __pycache__. The kit-gc
+capture-order bootstrap was executed cleanly this time (seed -> declare ->
+green run -> capture -> declare fresh -> fixed point, verified by a second
+green run and a dry-run-unchanged restage).
+
+**Next.** Astra turn 14 on this delta; if PRODUCTION GRADE, push.

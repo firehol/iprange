@@ -77,13 +77,18 @@ RUNS_ROOT = "/tmp/pi-subagents-uid-1001/async-subagent-runs"
 TERMINAL = {"complete", "completed", "failed", "stopped", "cancelled",
             "canceled", "interrupted"}
 GLOB_CHARS = set("*?[]$\t\n\r'\"\\")
-# Byte classes for the ancestor byte-needle scan (astra turn-12 P1). A
-# citation whose component contains whitespace cannot be captured by the
-# token regex, so the scan extracts the maximal non-whitespace token around
-# each ancestor-needle hit and strips trailing prose punctuation before
-# testing the path relation.
+# Byte classes for citation matching (astra turn-12/13 P1).
+# _CITATION_WS_BYTES: token boundaries for the ancestor byte-needle scan.
+# _CITATION_STRIP_BYTES: trailing prose/delimiter punctuation stripped from a
+# captured citation (the token regex cannot exclude a backtick from its
+# match: it is G1-legal and the common Markdown fence).
+# _CITATION_OPEN_BYTES: leading delimiters stripped from a token extracted by
+# the ancestor scan (a JSON citation carries a leading quote).
+# Stripping cannot lose protection: a path that legitimately begins or ends
+# with one of these bytes is still caught by the exact-path byte needle.
 _CITATION_WS_BYTES = frozenset(c for c in (b" ", b"\t", b"\n", b"\r", b"\v", b"\f"))
-_CITATION_STRIP_BYTES = b".,;:)]}\"'"
+_CITATION_STRIP_BYTES = b".,;:)]}\"'`"
+_CITATION_OPEN_BYTES = b"([{\"'`"
 
 
 AUDIT_LOG = os.path.join(SHARED, "removals.log")
@@ -105,6 +110,20 @@ def audit_log_problem() -> str | None:
         return (f"the audit log {AUDIT_LOG} is not a regular file "
                 f"({stat.filemode(st.st_mode)}); an append would not "
                 f"durably record anything")
+    if st is None:
+        # Absent is a valid shape: the first append creates the log and
+        # fsyncs the containing directory. Probing here with O_CREAT would
+        # create the log and make append_audit believe it pre-existed,
+        # skipping the directory fsync the creation requires (astra turn-13
+        # P2). The directory must still be writable for that creation, so
+        # check that without creating anything: an unwritable directory is
+        # refused at startup, before any destructive work, exactly as the
+        # existing-file probe refused it before.
+        if not os.access(os.path.dirname(AUDIT_LOG), os.W_OK | os.X_OK):
+            return (f"the audit log directory "
+                    f"{os.path.dirname(AUDIT_LOG)} is not writable; the "
+                    f"first record could not be created")
+        return None
     try:
         # O_NOFOLLOW makes the open itself reject a symlink, so a swap
         # between the lstat above and this open cannot redirect the record
@@ -113,8 +132,11 @@ def audit_log_problem() -> str | None:
         # FIFO: a write-only open of a FIFO with no reader fails with ENXIO
         # instead of blocking, and a FIFO with a reader is caught by the
         # fstat below (astra turn-12 P2: lstat + O_NOFOLLOW alone still let a
-        # post-check FIFO swap hang the append).
-        fd = os.open(AUDIT_LOG, os.O_WRONLY | os.O_APPEND | os.O_CREAT
+        # post-check FIFO swap hang the append). No O_CREAT: this path runs
+        # only when the log already exists, and creating it here would
+        # defeat append_audit's directory-fsync-on-creation (astra turn-13
+        # P2).
+        fd = os.open(AUDIT_LOG, os.O_WRONLY | os.O_APPEND
                      | os.O_NOFOLLOW | os.O_NONBLOCK)
     except OSError as err:
         return f"the audit log is not appendable ({err})"
@@ -137,17 +159,15 @@ def append_audit(line: str) -> str | None:
     RLIMIT_FSIZE, a permission flip) refuses the removal instead of
     orphaning it (wave-29 parity P2-1).
     """
-    # Whether the log exists right now decides whether this open creates it:
-    # a newly created file's DIRECTORY ENTRY is not durable until the
-    # containing directory is fsynced (fsync(2) distinguishes the two), and
-    # the write-ahead contract requires the record to survive a crash that
-    # follows the removal (astra turn-12 P2). Checked BEFORE the shape probe,
-    # which opens with O_CREAT and would otherwise mask the creation.
-    try:
-        os.lstat(AUDIT_LOG)
-        existed = True
-    except FileNotFoundError:
-        existed = False
+    # The directory is fsynced after every record, not only when this call
+    # created the log. fsync(2) makes the FILE durable but not its DIRECTORY
+    # ENTRY, and the write-ahead contract requires the record's name to
+    # survive a crash that follows the removal. Deciding "did I create it"
+    # from an lstat races with another process creating or replacing the log
+    # between the check and the open, and the unsafe direction (skip the
+    # directory sync on a file this call actually created) is exactly the
+    # failure astra turn-13 P2 found. Removals are rare and human-gated, so
+    # one extra directory fsync per record is the cheap, race-free shape.
     why = audit_log_problem()
     if why:
         return why
@@ -170,12 +190,11 @@ def append_audit(line: str) -> str | None:
             fh.write(line)
             fh.flush()
             os.fsync(fh.fileno())
-        if not existed:
-            dfd = os.open(os.path.dirname(AUDIT_LOG), os.O_RDONLY)
-            try:
-                os.fsync(dfd)
-            finally:
-                os.close(dfd)
+        dfd = os.open(os.path.dirname(AUDIT_LOG), os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
     except OSError as err:
         return f"the audit record could not be written ({err})"
     return None
@@ -252,7 +271,7 @@ def referenced(path: str, texts: list[str]) -> str | None:
     # is deeper than the needle (the removal path is then its ancestor),
     # whitespace/quote/closing punctuation means prose closed it. A match
     # followed by a component character is a longer sibling
-    # (`.local/perf/w1` inside `.local/perf/w11`) and must not refuse
+    # (`.local/<role>/w1` inside `.local/<role>/w11`) and must not refuse
     # (astra turn-12 P1).
     ancestor_needles: list[bytes] = []
     ancestor = os.path.dirname(path)
@@ -302,20 +321,21 @@ def referenced(path: str, texts: list[str]) -> str | None:
                 i = blob.find(nb, start)
                 if i < 0:
                     break
-                # Extract the maximal non-whitespace token containing this
-                # occurrence and strip trailing prose punctuation, then test
-                # the bidirectional path relation exactly as the citation set
-                # does. This catches a citation whose component contains
-                # whitespace (which the token regex cannot spell): the needle
-                # is an ancestor of the removal path, so a citation equal to
-                # the needle, above it, or under the removal path all refuse.
+                # Extract the citation token around this occurrence: scan to
+                # whitespace on both sides, then strip the delimiters prose
+                # and JSON wrap around a citation. This catches a citation
+                # whose component contains whitespace (which the token regex
+                # cannot spell). A sibling citation (`.local/<role>/w11/inner`
+                # for a needle `.local/<role>/w1`) extracts to its own full
+                # path, which is neither ancestor nor descendant of the
+                # removal path, so it does not refuse (astra turn-12/13 P1).
                 j = i
                 while j > 0 and blob[j - 1:j] not in _CITATION_WS_BYTES:
                     j -= 1
                 k = i + len(nb)
                 while k < len(blob) and blob[k:k + 1] not in _CITATION_WS_BYTES:
                     k += 1
-                token = blob[j:k].rstrip(_CITATION_STRIP_BYTES)
+                token = blob[j:k].lstrip(_CITATION_OPEN_BYTES).rstrip(_CITATION_STRIP_BYTES)
                 for form in (os.fsencode(path),
                              os.fsencode(os.path.relpath(path, REPO))):
                     if token and (form == token
@@ -475,7 +495,7 @@ def cited_paths() -> list[str] | None:
     # G1 rejects only the glob/control set and requires realpath equality, so
     # a real scratch directory may legitimately contain '+', ',', ':' or '()'
     # in a component. A regex that stops at those (the pre-wave-32 `[\w.\-]+`)
-    # truncates `.local/w1926+gate/inner` to `.local/w1926`, which the
+    # truncates `.local/<role>+gate/inner` to `.local/<role>`, which the
     # depth filter then drops, so a DESCENDANT of that citation lost its
     # ancestor protection and became removable (astra turn-12 P1). Whitespace
     # stays excluded (prose cannot delimit such a citation; the byte-needle
