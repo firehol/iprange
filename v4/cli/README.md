@@ -774,7 +774,7 @@ an unresolved failure is `outcome_unknown`, and the implementation must
 not remove a possibly published destination
 (`.agents/sow/specs/binary-format-v4.md:3915-3930`). Both engines
 implement the same mapping in their export writers —
-`v4/go/internal/cli/fileio/export_writer.go:249-262` and
+`v4/go/internal/cli/fileio/export_writer.go:249-264` and
 `v4/rust/iprange-cli/src/io/export_writer.rs:252-270` — and the
 publication evidence (destination, stage, policy, digest of what was
 written, and whether the private temporary was removed) travels with it,
