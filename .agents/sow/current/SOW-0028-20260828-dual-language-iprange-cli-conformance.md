@@ -21403,3 +21403,34 @@ checker OK.
 
 **Next.** Targeted re-review (parity, fit-for-purpose) at `aa5aad44`; if
 clean, astra turn 12, then push.
+
+## Round 49 — batch 23: both roles PASS; the two surviving P3s taken (2026-09-21)
+
+The Round-49 re-review at `1da9a1bd` returned **PASS from both**
+`parity` and `fit-for-purpose`. `parity` re-ran its exhaustive head-block
+sweep (every number, digest, path, count and timing against the
+artifacts) and found only one new P3; `fit-for-purpose` found three P3s,
+all wording/cite precision. Dispositions of Round-48: N4 closed, the
+legacy-read P3 taken, and the P3-b dismissal independently confirmed
+correct by the reviewer (steps.tsv 36 rows = 29 native + 7; the 7 split
+6 report-leg + `cross-engine-numeric`, a scored pre-authoring consensus
+step; the leg's own flake_history says "0 of 30 recorded steps retried").
+
+Two P3s taken at `078723c3`:
+- "the two committed race steps" was stale for the parity input race —
+  it runs from the battery's scratch and lives only in the bound console
+  log; the sentence now distinguishes the committed swap-race battery from
+  the scratch-run parity race.
+- The Go export-writer cite widened 249-262 → 249-264 to cover the
+  `io`/`outcome_unknown` literals the sentence describes.
+
+One P3 not taken, with reason: the "chunk-W" shorthand appears twice in
+the head block as a cross-wave label. It is long-standing vocabulary
+across the SOW and prior waves' records; renaming it now would churn
+historical narrative without changing any claim, and both reviewers
+classified it P3 (no frozen requirement contradicted).
+
+Manifest restaged 41/13 and head stamped to `078723c3`; checker OK.
+
+**Next.** Confirmation re-review of the two-line delta at `078723c3`
+(both roles), then astra turn 12, then push.
