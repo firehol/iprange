@@ -21663,3 +21663,51 @@ capture-order bootstrap was executed again cleanly (seed -> declare -> green
 dry-run-unchanged restage).
 
 **Next.** Astra turn 16 on this delta; if PRODUCTION GRADE, push.
+
+## Round 54 — batch 28: the lead's own audit closes three more citation-scan gaps (2026-09-22)
+
+Before spending another external round on the rebuilt matcher, the lead ran
+the internal audit the review protocol requires after repeated reviewer
+rounds: an exhaustive cross-product of path relations x citation spelling
+forms (343 cases) against the shipped code, plus targeted probes of classes
+the prototype had not covered. The cross-product found zero mismatches, but
+three probes found real gaps — the same missed-protection family astra had
+found four times, now closed by the lead rather than escalated:
+
+1. **Multi-citation lines.** The extraction loop advanced to end of line
+   after each `.local/` occurrence, so every citation after the first on a
+   line was silently dropped as an anchor. Fixed: advance by one. Control:
+   a two-citation line protects both subtrees; the line-advance mutant
+   fails exactly that control.
+2. **Byte round-trip.** Artifacts were read with `errors="replace"`, which
+   mangles invalid bytes to U+FFFD, so a citation naming a byte-invalid path
+   could never match the removal path (the list file is read with
+   surrogateescape, and `os.fsencode` reverses that mapping exactly).
+   Fixed: read with surrogateescape. Control: a byte-invalid citation
+   protects its byte-invalid subtree; the artifact-encoding mutant fails
+   exactly that control.
+3. **Lexical spellings.** A removal path is its own realpath (G1), but a
+   citation spelled with a lexical `.`, `..`, or doubled slash compared
+   unequal to the canonical path and failed to protect it. Fixed: each
+   as-written reading also contributes its `normpath` as a derived reading
+   (a reading can only add a refusal, never remove one; a component merely
+   named `..x` is untouched). Controls: lexical-dot and lexical-dotdot
+   citations protect the canonical subtree; the normpath mutant fails
+   exactly those two.
+
+The exact/derived flag was also corrected: every fence-stripped length of
+the first space-boundary segment is "as written" (a fence is never part of a
+written path), so a backtick-quoted citation keeps its "related to cited
+path" reason.
+
+**Kit state after the batch:** kit-rm suite 120 ok / 0 FAIL; kit-gc suite 50
+ok / 0 FAIL; driver 38 mutants + crash self-test all CAUGHT (39 legs; the
+three broad mutants — whole-check, depth-filter, refuse-everything — declare
+their reason-string collateral explicitly); manifest 43 entries / 13 pairs;
+checker OK; reporter rc 2 (two standing mode-000 fixtures, 0 OVER-CAP); zero
+__pycache__; head file == manifest head == HEAD (`603ea459`). The kit-gc
+capture-order bootstrap was executed again cleanly (seed -> declare -> green
+-> capture -> declare -> fixed point, verified by a second green run and a
+dry-run-unchanged restage).
+
+**Next.** Astra turn 16 on this delta; if PRODUCTION GRADE, push.
