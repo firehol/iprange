@@ -30,7 +30,7 @@ Hunting ground:
   finding.
 - Acceptance honesty: the lead's `status.md` and SOW records may only
   claim what the staged evidence proves at the reviewed HEAD. Compare each
-  acceptance sentence against the manifest and logs; a claim exceeding its
+  acceptance sentence against the evidence logs; a claim exceeding its
   evidence is a P1 even if the underlying behavior is fine.
 - Necessity: is the chunk the smallest coherent implementation of the
   requirement (long-term-best + minimal-complete from `AGENTS.md`)? Flag
