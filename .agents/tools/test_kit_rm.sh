@@ -2,7 +2,7 @@
 # Adversarial test for .agents/tools/kit-rm.py: every attack must be REFUSED
 # and one legitimate scratch tree must be ALLOWED. A destructive tool whose
 # guards never fire is worse than no tool, so both directions are asserted.
-# H4-LABEL-HASH: d2236ddf8200672e07e7070508549b1af75bdaa55b068756a9dd801fe6fb4768
+# H4-LABEL-HASH: 6780e3da6f38c2ae8ea05210d0212f3a4c56da7e4d814d395a4391dee6516b9d
 # sha256 over this suite's green ok-label multiset (sorted, newline-joined),
 # declared by the suite itself and pinned against the bound log by the kit-gc
 # suite's H4 reverse direction (batch 10; replaces batch 9's scalar count,
@@ -165,6 +165,27 @@ LIST "$L/w1926-tick/inner/child";       run "KEEP:G7 related to cited path" "G7 
 printf '{"reason": "%s"}\n' ".local/w1926 jdir/inner" >> "$L/shared/status.md"
 mkdir -p "$L/w1926 jdir/inner/child"
 LIST "$L/w1926 jdir/inner/child";       run "KEEP:G7 related to a path named by gate artifact" "G7 JSON whitespace citation" --list "$T/list"
+# compact JSON (no space after the colon): the byte scan must stop at the
+# hard quote boundary, not scan back over the key and colon (astra turn-14 P1).
+printf '{"input":"%s"}\n' ".local/w1926 cjson/inner" >> "$L/shared/status.md"
+mkdir -p "$L/w1926 cjson/inner/child"
+LIST "$L/w1926 cjson/inner/child";      run "KEEP:G7 related to a path named by gate artifact" "G7 compact-JSON whitespace citation" --list "$T/list"
+# a directory whose REAL name ends in a path-legal punctuation byte must keep
+# its descendant protection: the citation is read raw as well as stripped, so
+# stripping cannot destroy the literal-name reading (astra turn-14 P1).
+printf 'bound replay read %s\n' ".local/w1926-dot/kit." >> "$L/shared/status.md"
+mkdir -p "$L/w1926-dot/kit./child"
+LIST "$L/w1926-dot/kit./child";         run "KEEP:G7 related to cited path" "G7 descendant of a trailing-dot-named dir" --list "$T/list"
+printf 'bound replay read %s\n' '.local/w1926-tick2/kit`' >> "$L/shared/status.md"
+mkdir -p "$L/w1926-tick2/kit\`/child"
+LIST "$L/w1926-tick2/kit\`/child";      run "KEEP:G7 related to cited path" "G7 descendant of a backtick-named dir" --list "$T/list"
+# a whitespace component cited with trailing prose punctuation: the byte scan
+# must read the token both raw and stripped, so the stripped reading names the
+# real path (astra turn-14 P1; routes only through the byte scan, the regex
+# truncates a whitespace component to the bare role).
+printf 'bound replay read %s.\n' ".local/w1926-wdot/my dir" >> "$L/shared/status.md"
+mkdir -p "$L/w1926-wdot/my dir/child"
+LIST "$L/w1926-wdot/my dir/child";      run "KEEP:G7 related to a path named by gate artifact" "G7 byte scan strips a whitespace citation" --list "$T/list"
 # an ANCESTOR of a cited path must also be refused: removing the parent would
 # destroy the path the record depends on. The ancestors used here are at
 # depth >= 2, so a refusal is G7 and not G3's role-root rule.

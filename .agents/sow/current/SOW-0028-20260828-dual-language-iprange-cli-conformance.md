@@ -21561,3 +21561,44 @@ green run -> capture -> declare fresh -> fixed point, verified by a second
 green run and a dry-run-unchanged restage).
 
 **Next.** Astra turn 14 on this delta; if PRODUCTION GRADE, push.
+
+## Round 52 — batch 26: astra turn-14 findings closed (2026-09-22)
+
+astra turn 14 (at `26af78ec`) returned NEEDS CHANGES: 1 P1, 2 P3. All
+verified real by the lead's probe before editing.
+
+- **P1 (citation normalization destroyed real filename bytes and missed
+  compact JSON):** the batch-25 blind rstrip removed path-legal bytes from
+  the cited name, so a directory literally named `kit.` or ``kit` `` lost
+  its descendant protection, and the token scan stopped only at whitespace,
+  so a compact JSON citation `{"input":".local/<role>/my dir"}` extracted
+  the key and colon too and matched nothing. Fixed by replacing the single
+  strip set with two classes and dual readings: HARD boundaries (whitespace
+  plus every byte G1 itself rejects — a removal path can never contain
+  them, so they always end a citation) delimit the byte-scan token; SOFT
+  delimiters (path-legal bytes prose and Markdown fence with: backtick,
+  `.`, `;`, `:`, `)`, `]`) are read BOTH ways — every citation is kept raw
+  AND soft-stripped, in the citation set and in the byte scan. Adding a
+  reading can only add a refusal, never remove one. The lead's probe
+  confirms all seven shapes: literal `kit.`/``kit` `` dirs, compact JSON,
+  fenced citation, trailing-comma citation all refuse; the prefix sibling
+  and the sibling under a cited dir stay removable. Three new suite
+  controls and three new single-arm mutants (hard boundary → the two JSON
+  controls; byte-scan dual reading → the strip control; citation-set dual
+  reading → the two literal-name controls) pin every arm.
+- **P3 (turn-13 result unbound):** the turn-14 prompt claimed turns 3-13
+  bound while only 3-12 were — the same mistake turn 13 had flagged. The
+  turn-13 result is now installed and bound (manifest 43 entries).
+- **P3 (stale driver comment):** the recheck-stale comment still described
+  the retired non-discriminating fixture; rewritten to name both detecting
+  controls and why the new-file fixture is what makes J11 discriminating.
+
+**Kit state after the batch:** kit-rm suite 113 ok / 0 FAIL; kit-gc suite
+50 ok / 0 FAIL (rc 0); driver 34 mutants + crash self-test all CAUGHT;
+manifest 43 entries / 13 pairs restaged; checker OK; reporter rc 2 (two
+standing mode-000 fixtures, 0 OVER-CAP); zero __pycache__. The kit-gc
+capture-order bootstrap was executed again cleanly (seed -> declare ->
+green -> capture -> declare -> fixed point, verified by a second green run
+and a dry-run-unchanged restage).
+
+**Next.** Astra turn 15 on this delta; if PRODUCTION GRADE, push.

@@ -77,18 +77,21 @@ RUNS_ROOT = "/tmp/pi-subagents-uid-1001/async-subagent-runs"
 TERMINAL = {"complete", "completed", "failed", "stopped", "cancelled",
             "canceled", "interrupted"}
 GLOB_CHARS = set("*?[]$\t\n\r'\"\\")
-# Byte classes for citation matching (astra turn-12/13 P1).
-# _CITATION_WS_BYTES: token boundaries for the ancestor byte-needle scan.
-# _CITATION_STRIP_BYTES: trailing prose/delimiter punctuation stripped from a
-# captured citation (the token regex cannot exclude a backtick from its
-# match: it is G1-legal and the common Markdown fence).
-# _CITATION_OPEN_BYTES: leading delimiters stripped from a token extracted by
-# the ancestor scan (a JSON citation carries a leading quote).
-# Stripping cannot lose protection: a path that legitimately begins or ends
-# with one of these bytes is still caught by the exact-path byte needle.
-_CITATION_WS_BYTES = frozenset(c for c in (b" ", b"\t", b"\n", b"\r", b"\v", b"\f"))
-_CITATION_STRIP_BYTES = b".,;:)]}\"'`"
-_CITATION_OPEN_BYTES = b"([{\"'`"
+# Byte classes for citation matching (astra turn-12/13/14 P1).
+# _CITATION_HARD_BYTES: boundaries a citation token cannot cross because a
+# G1-legal removal path can never contain them -- whitespace plus every byte
+# G1 itself rejects (glob/control/quote/backslash). The byte-needle scan stops
+# at these, so a compact JSON citation `{"p":".local/<role>/my dir"}` extracts
+# to exactly the path (the surrounding quotes are hard boundaries).
+# _CITATION_SOFT_BYTES: path-LEGAL bytes that prose and Markdown still use to
+# fence a citation (the backtick fence, trailing sentence/clause punctuation).
+# A citation is read BOTH raw and soft-stripped, so a directory whose real
+# name ends in one of these bytes (`.local/<role>/kit.`) keeps its descendant
+# protection while the fenced form (`` `.local/<role>/kit` ``) is also seen.
+# Adding a reading can only add a refusal, never remove one.
+_CITATION_HARD_BYTES = frozenset(
+    os.fsencode(c) for c in " \t\n\r\v\f*?[]$'\"\\")
+_CITATION_SOFT_BYTES = b".,;:)]`"
 
 
 AUDIT_LOG = os.path.join(SHARED, "removals.log")
@@ -321,28 +324,33 @@ def referenced(path: str, texts: list[str]) -> str | None:
                 i = blob.find(nb, start)
                 if i < 0:
                     break
-                # Extract the citation token around this occurrence: scan to
-                # whitespace on both sides, then strip the delimiters prose
-                # and JSON wrap around a citation. This catches a citation
-                # whose component contains whitespace (which the token regex
-                # cannot spell). A sibling citation (`.local/<role>/w11/inner`
-                # for a needle `.local/<role>/w1`) extracts to its own full
-                # path, which is neither ancestor nor descendant of the
-                # removal path, so it does not refuse (astra turn-12/13 P1).
+                # Extract the citation token around this occurrence, scanning
+                # to HARD boundaries (whitespace or a byte G1 rejects, which a
+                # real path never contains) so a compact JSON citation
+                # `{"p":".local/<role>/my dir"}` extracts to exactly the path.
+                # The token is then read BOTH raw and soft-stripped: the raw
+                # reading protects a directory whose real name ends in a
+                # path-legal punctuation byte, the stripped reading names a
+                # fenced or sentence-final citation. A sibling citation
+                # (`.local/<role>/w11/inner` for a needle `.local/<role>/w1`)
+                # extracts to its own full path, which is neither ancestor nor
+                # descendant of the removal path, so it does not refuse
+                # (astra turn-12/13/14 P1).
                 j = i
-                while j > 0 and blob[j - 1:j] not in _CITATION_WS_BYTES:
+                while j > 0 and blob[j - 1:j] not in _CITATION_HARD_BYTES:
                     j -= 1
                 k = i + len(nb)
-                while k < len(blob) and blob[k:k + 1] not in _CITATION_WS_BYTES:
+                while k < len(blob) and blob[k:k + 1] not in _CITATION_HARD_BYTES:
                     k += 1
-                token = blob[j:k].lstrip(_CITATION_OPEN_BYTES).rstrip(_CITATION_STRIP_BYTES)
-                for form in (os.fsencode(path),
-                             os.fsencode(os.path.relpath(path, REPO))):
-                    if token and (form == token
-                                  or form.startswith(token + b"/")
-                                  or token.startswith(form + b"/")):
-                        return (f"related to a path named by gate artifact "
-                                f"{os.path.relpath(p, REPO)}")
+                raw = blob[j:k]
+                for token in (raw, raw.rstrip(_CITATION_SOFT_BYTES)):
+                    for form in (os.fsencode(path),
+                                 os.fsencode(os.path.relpath(path, REPO))):
+                        if token and (form == token
+                                      or form.startswith(token + b"/")
+                                      or token.startswith(form + b"/")):
+                            return (f"related to a path named by gate artifact "
+                                    f"{os.path.relpath(p, REPO)}")
                 start = i + 1
     return None
 
@@ -508,11 +516,17 @@ def cited_paths() -> list[str] | None:
         except OSError:
             continue
         for m in token.findall(text):
-            m = m.rstrip(_CITATION_STRIP_BYTES.decode())
-            if m.count("/") < 2:      # .local itself or a bare role: not a citation
-                continue
-            found.add(os.path.join(REPO, m))
-            found.add(m)
+            # Both readings are kept: the raw token (so a directory whose real
+            # name ends in a path-legal punctuation byte, `.local/<role>/kit.`,
+            # still protects its descendants) and the soft-stripped token (so a
+            # fenced or sentence-final citation names the real path). Adding a
+            # reading can only add a refusal, never remove one (astra turn-14
+            # P1: blind stripping destroyed the literal-name reading).
+            for cand in (m, m.rstrip(_CITATION_SOFT_BYTES.decode())):
+                if cand.count("/") < 2:  # .local itself or a bare role
+                    continue
+                found.add(os.path.join(REPO, cand))
+                found.add(cand)
     _CITED_CACHE = sorted(found)
     return _CITED_CACHE
 
