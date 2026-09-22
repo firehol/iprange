@@ -21427,8 +21427,9 @@ Two P3s taken at `078723c3`:
 One P3 not taken, with reason: the "chunk-W" shorthand appears twice in
 the head block as a cross-wave label. It is long-standing vocabulary
 across the SOW and prior waves' records; renaming it now would churn
-historical narrative without changing any claim, and both reviewers
-classified it P3 (no frozen requirement contradicted).
+historical narrative without changing any claim. `fit-for-purpose`
+raised it as P3 at Round 49 (a carry-over from Round 46); no P0–P2
+contradiction was found in it.
 
 Manifest restaged 41/13 and head stamped to `078723c3`; checker OK.
 
