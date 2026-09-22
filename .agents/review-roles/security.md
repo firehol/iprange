@@ -37,6 +37,6 @@ Hunting ground (records and documentation completeness):
   that contradict the code, stale paths, obsolete numbers. P1 when the
   record misleads a user or reviewer into believing a false claim about the
   product; P2 for cosmetic staleness.
-- The review kit itself: a manifest that does not match its logs, or an
-  evidence directory that omits a test the `status.md` claims ran, is a P1
-  against the lead.
+- The review kit itself: an evidence log that contradicts `status.md` (a
+  claimed run with no log, or a log its recorded command could not have
+  produced) is a P1 against the lead.

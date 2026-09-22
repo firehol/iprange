@@ -19,13 +19,26 @@ the repository.
    (see Implementation step 3). A defect found first by a reviewer or by
    astra that the lead's self-review should have caught is a process
    failure — fix the self-review, not just the defect.
-3. **Evidence-first, tests-never-rerun.** The lead runs every required test
-   and stages the output for reviewers. Reviewers must not rerun test
-   suites. They review the *suitability, practicality, and gaps* of the
-   tests and evidence. A reviewer may write and run small targeted probes
-   **only inside its own sandbox folder** (`.local/<role>/`) to prove or
-   refute a specific finding — never in `/tmp`, never in the repo tree,
-   never a full suite or battery.
+3. **Evidence-first: the lead runs the tests, the log is the evidence.** The
+   lead runs every required test for the chunk and writes the complete,
+   unedited output to a log file:
+   `{ nice <test-command>; echo "rc=$?"; } > .local/shared/evidence/<gate>/<name>.log`.
+   Reviewers are told the log path. They review the **suitability,
+   practicality, and gaps** of the tests and evidence rather than
+   re-deriving results, because re-running the whole battery per role per
+   round is wasted compute — not because re-running is forbidden. A
+   reviewer who doubts a specific claim may re-run the narrow test that
+   carries it (under `nice`, with a timeout, in its own sandbox): the
+   suites are committed and re-runnable in seconds, so a log is never an
+   authority that must be defended, only a convenience that saves time.
+   There is no manifest, no hash-binding, no staleness pin, and no
+   deletion guard over evidence: those were built to make a re-runnable
+   3-minute test trustworthy in isolation, and they cost more than the
+   time they saved (see § What this file deliberately does not do).
+   A reviewer may also write and run small targeted probes **only inside
+   its own sandbox folder** (`.local/<role>/`) to prove or refute a
+   specific finding — never in `/tmp`, never in the repo tree, never a
+   full suite or battery.
 4. **Reviewers are persistent.** Each role is spawned once per SOW and kept
    open; the lead continues the same session with "re-review at HEAD X".
    Roles are never restarted to "get a fresh view" unless a session is
@@ -87,211 +100,104 @@ input channel besides the repo:
   head                   exact revision under review (full SHA, one line)
   status.md              current chunk: scope, changed files, contracts touched,
                          SOW requirement IDs, lead's self-review findings + dispositions
-  evidence/<gate>/       one directory per gate:
-    manifest.json        command, rc, wall time, sha256 of log, for every test run
-    *.log                full test output, unedited
-.local/<role>/           each role's private sandbox (probes, stubs, mutated
-                         reports, its report.md) — set up once, never reset by the lead
+  evidence/<gate>/       one directory per gate: plain *.log files, each the
+                         complete unedited output of one test command, with
+                         the command and its rc inside the log
+  binaries/              staged binaries under review, with SHASUMS
+.local/<role>/           each role's private sandbox (probes, stubs, its report.md)
 ```
 
 Rules for the kit:
 
-- Evidence logs are complete and unedited; the manifest lets a role verify
-  the log belongs to the recorded command and revision. A role finding a
-  mismatch between manifest and log is a P1 against the lead's process.
+- A log is written by one command and never edited afterwards:
+  `{ nice <cmd>; echo "rc=$?"; } > <gate>/<name>.log`. The command line is
+  echoed as the log's first line so the log is self-describing. There is no
+  manifest and no hash-binding: every suite that produced a log is committed
+  and re-runnable, so a doubtful claim is checked by re-running the narrow
+  test, not by auditing the artifact chain.
 - `status.md` is the ONLY per-gate narrative the lead writes; roles read it
   instead of receiving regenerated summaries.
 - Binaries under review are staged in `.local/shared/binaries/` with
-  SHASUMS (existing pattern) so roles can run probes without building.
+  SHASUMS so roles can run probes without building.
 
 ### Kit hygiene (binding — the 370 GB incident)
 
 At milestone-4 close-out, `.local/` held 370 GB: eighteen reviewer sandboxes
 each kept a full copy of the repo tree *with its cargo/go/C build target*
 (20–26 GB each) from completed rounds. The controls below prevent that at
-its source; they are mandatory. `.agents/tools/kit-gc.py` (committed) is a
-**read-only usage reporter**: it measures disk allocation per sandbox,
-reports cap violations and large build-target-named directories as
-inspection data, and **never deletes, never archives, and never states
-that anything is safe to remove** (user decision 2026-09-19: automatic
-deletion and its safety classifier were removed as machinery beyond the
-actual operational need, which is occasionally removing a few named
-directories). Removal is the human procedure defined below.
+its source; they are mandatory:
 
 - Roles must **never copy a buildable repo tree into the sandbox**. Probes
   that need source mutations use a **symlink farm**: symlink every file of
   the tree into the sandbox and materialize only the mutated file(s).
   Materializing means **replacing the link itself** — `cp --remove-destination
   <src> <link>` or `ln -sf` — never writing *through* it: `cp`, `open('w')`
-  and editors follow symlinks and will mutate the real tree (operations
-  wave-12 disclosed a ~30 s write into `v4/cli/run.py` this way; restored
-  from the HEAD blob, verified byte-identical)
-  (the `r13-kit` pattern). Probes that need compiled code use the staged
-  binaries in `.local/shared/binaries/` — not a private build.
+  and editors follow symlinks and will mutate the real tree. Probes that
+  need compiled code use the staged binaries in `.local/shared/binaries/` —
+  not a private build.
 - If a role genuinely must build, it sets `CARGO_TARGET_DIR`/`GOCACHE` to
   one shared per-role location (`.local/<role>/.targets/`), never inside a
   tree copy, and reports the build in its round notes so the lead can
   prune it.
-- Every role sandbox must be **≤ 1 GB after a gate closes**. The lead runs
-  `.agents/tools/kit-gc.py` at each milestone-gate close and must resolve
-  every reported over-cap sandbox before the gate is recorded. The
-  reporter's exit code is part of the result: 0 within cap, 1 at least
-  one sandbox over cap, 2 scan incomplete because an entry could not be
-  measured (its numbers are then partial — an unreadable subtree is a
-  finding to explain, never silently zeroed). A sandbox row carrying
-  `PARTIAL (n inspection errors below)` has an incomplete measurement and
-  must not be read as within-cap. Steady state on a QUIESCENT kit: two
-  `chmod 000` privacy fixtures (parity `r2/p2/d1/unreadable` and
-  w8-golegacy `sc/perm/dir000`) make exit 2 permanent while they exist —
-  that is the reporter refusing to zero an unreadable subtree, not a
-  regression. During a review wave the reporter can legitimately list
-  MORE errors and more PARTIAL rows: reviewers create their own
-  chmod-000 and byte-invalid-name fixtures inside `.local/<role>/`, and
-  those are inspection errors until the fixture is removed (the wave-14 role
-  runs recorded the reporter at 8 ERROR rows and at 7 in one of their
-  three runs — security's, portability's and performance's round-14 reports
-  (security rendered 8 ERROR rows; portability rendered 8 ERROR lines, of
-  which it attributed 6 to other roles' fixtures; performance's three runs
-  recorded 2, 7 and 4) — with the exit
-  class and per-row attribution correct in every case). The gate-close
-  signal is therefore: exit 2 whose errors are all attributable to known
-  fixture paths (the two standing privacy fixtures plus any fixture a
-  still-open reviewer session created), zero OVER-CAP rows, and no PARTIAL
-  flag on any sandbox row outside those roles. Attachability of the errors
-  is a human inspection judgment, not a machine check: the machine-readable
-  parts are the exit class and the `--json` error entries, and the
-  "zero OVER-CAP rows" half is a **precondition** for closing the gate, not
-  a steady state — the lead's § Removal procedure below is what clears a row,
-  and the count can also move without it: the wave-15 8→7 drop was the `tester`
-  role pruning 18 named superseded scratch paths inside its own current kit to
-  satisfy the ≤ 1 GB round-end rule. Its own round-15 report lists the 18 paths
-  by name and reports its round-end size; the current size is read from the
-  bound `kit-gc-report-real.txt`/`.json` `SANDBOX tester` row, whose TIMED footer
-  dates the measurement. No figure is quoted here: a number copied out of a bound
-  artifact goes stale the moment that artifact is re-captured, so the reference is
-  the durable form. The sandbox is present and within cap, not removed, and no
-  defect was involved in the count changing.
-  Reducing the count to 0/1 requires the user relocating the standing
-  fixtures.
-- **Removal of disposable reviewer scratch is pre-authorized for the lead, and
-  it must be executed by the guard tool, never by hand.** The owner authorized
-  lead-initiated removal of unneeded reviewer scratch on 2026-09-19, with the
-  condition that no accident is possible. That authorization covers *what* may
-  be removed; it does not relax a single check. `.agents/tools/kit-rm.py` is
-  the only sanctioned way to remove anything under `.local/`: it takes a list
-  file of literal absolute paths, is dry-run by default, and removes a path
-  only after eight guards pass for that exact path and are then **re-run
-  immediately before the `rmtree`** (state can change between planning and
-  acting):
-  **G1** literal absolute path, no glob/quote/control characters, and equal to
-  its own `realpath` (so no symlink component);
-  **G2** strictly inside `<repo>/.local/`, never `.local` itself or above;
-  **G3** depth ≥ 2 below `.local/`, so a **role root can never be removed** and
-  every report, HEARTBEAT and brief survives;
-  **G4** not `.local/shared` or `.local/_attic-md`, nor inside either — refused
-  by identity, never by a name match;
-  **G5** a real directory, not a symlink, file or missing path;
-  **G6** no `.git` entry (a checkout or worktree is never scratch); no
-  unreadable or mode-000 directory **at or inside** the target, since the
-  standing privacy fixtures are part of the gate signal and a list line naming
-  one must be refused rather than walked past; and no directory the operator
-  cannot write, checked **before** deletion — without this, `rmtree` removes
-  every writable sibling, then fails on the unwritable child, so a refusal is
-  reported after partial destruction and nothing is logged;
-  **G7** the path appears in **no** gate artifact — every tracked file,
-  `status.md`, `head`, every evidence `manifest.json`, every astra-turn prompt —
-  searched in **both** absolute and repo-relative form. Protection is
-  **bidirectional**: an ancestor is refused because removing it removes the
-  cited path, and a **descendant** is refused because a record citing
-  `.local/<role>/kit` depends on everything inside it, so deleting
-  `.local/<role>/kit/cache` destroys cited input even though no record spells
-  out that deeper path (wave-19 found the descendant case unimplemented, and it
-  had already been exercised by real removals);
-  **G8** no non-terminal subagent run for this repository, because a role may
-  be measuring inside its own sandbox right now; an unreadable status file or a
-  missing runs root counts as live and refuses.
-  `--execute` additionally requires a non-empty `--reason`, and the audit
-  record for each removal (timestamp, size, path, reason) is appended,
-  flushed and fsynced to `.local/shared/removals.log` **before** the path is
-  destroyed, so no removal can complete without a durable record; a removal
-  that fails after its record gets a compensating `REMOVAL-FAILED` line.
-  Because the log is append-only, a compensating line that cannot itself be
-  written leaves a record that over-claims a destruction: the tool prints an
-  ERROR line and exits rc 1 rather than reporting clean success, so an
-  uncorrectable trail is always surfaced (never silently believed). The log
-  must be a regular file (or absent): a symlink, directory or FIFO is
-  refused, because `open("a")` would follow or block on them and the trail
-  would silently not exist.
-  List lines are paths and are used verbatim: a trailing space is part of a
-  directory name, and stripping it would make `--execute` remove a *different*
-  directory than the one listed while logging the stripped name. A line of only
-  whitespace is a malformed list and is refused.
-  Guards fail closed: an unrecognized run state, an unreadable status, a missing
-  runs root, or a failed `git ls-files` all lead to refusal, not to removal.
-  `kit-rm.py` is tested by an adversarial suite in which every attack must be
-  refused **and** one legitimate scratch tree must be allowed, so it cannot pass
-  by refusing everything or by removing everything; each guard there is also
-  falsified by reverting the corresponding check, because a guard that cannot be
-  shown to fail is not a guard.
-- **Removal is a lead duty, not a reviewer one.** For each directory the lead decides to remove, all three checks
-  must be established *for that path* first, and recorded in the gate
-  note:
-  1. **ownership** — which role/round created it, and that no session
-     still uses it (a live kit is the newest round per role and is
-     handled at the *next* gate's close, not this one);
-  2. **inactivity** — last modification, and that no open review or
-     pending re-review depends on the contents;
-  3. **preservation** — whether the subtree holds anything durable:
-     `report*.md`, `manifest*.json`, `SHASUMS*`, `*.sha256`, evidence
-     referenced by any manifest under `.local/`, or anything
-     manifest-referenced elsewhere. Copy such artifacts into
-     `.local/shared/evidence/<gate>/` first and bind them in that
-     gate's `manifest.json`; the reporter deliberately does no archiving
-     for you.
-  Then remove that single named path through the guard tool (write the exact
-  path to a list file and run `.agents/tools/kit-rm.py --list FILE --execute
-  --reason "..."`), never a hand `rm -rf`, never a glob, and never a directory
-  the lead has not individually inspected. `.local/shared/` is never a removal
-  target.
-- **Staging assertions are enforced, not asserted.** Every artifact the
-  evidence manifest binds must exist on disk with the recorded sha256 and
-  byte count; **every file at any depth** in an evidence directory must be
-  bound (a stray staged into a subdirectory is reported like one at the top
-  level); and a staged copy must equal the live source it came from.
-  `__pycache__` bytecode caches are derived, not artifacts: the checker
-  reports them on their own line and the suite's H2 section requires their
-  absence, so the proof commands that import from an evidence directory run
-  with `PYTHONDONTWRITEBYTECODE=1` (H2 requires the absence of caches
-  regardless of how a command was invoked). This is checked by
-  `.local/shared/tools/check-evidence-binding.py` (a bound copy of it lives
-  in the evidence directory, so the checker is itself verifiable; its exit
-  classes are 0 holds / 1 mismatch / 2 usage or uninterpretable manifest)
-  and re-run by the kit-gc suite's H section with every staged/live pair.
-   Both fail loudly, which is how a stale staged suite, two dropped
-   mutation-check bindings, a nested `__pycache__` and a drifted harness
-   were found in waves 13-15. Helper scripts a bound log depends on are
-   bound alongside it so the directory is self-contained.
-- **Driver edits must preserve single-backslash continuations.** Each
-  mutant's transform is a single-quoted heredoc, so a script that writes a
-  header continuation or an escape sequence must emit exactly one `\` per
-  continuation and double every backslash that must survive into the
-  transform. Two literal backslashes read as an escaped backslash rather
-  than a continuation, silently merging the next argument into the header;
-  the mutant then builds an unchanged file and reports `suite rc=0 fails=0`
-  (a green suite where a guard should have failed). `bash -n` does NOT catch
-  this — the merged line is valid syntax. The detecting signals are the
-  driver's own `suite rc=0 fails=0` verdict and, for anchors, `transform
-  anchor missing`; confirm with `sed -n '<line>p' | cat -A` on the header's
-  last pattern line.
-- **Capture order is fixed: finalize every source, then capture.** The
-  kit-gc suite's H4 leg checks the bound kit-rm log against the LIVE
-  `.agents/tools/test_kit_rm.sh` source (and its own log against its own
-  source), so a capture sequence that rewrites the kit-rm `# H4-LABEL-HASH:`
-  header *after* the kit-gc capture makes the kit-gc log red — and
-  recomputing a header from a red run then corrupts the source. The correct
-  order is: make all source edits final, then capture kit-rm → re-stage →
-  capture kit-gc → re-stage → verify kit-gc green. The greenness pin is what
-  makes a wrong order loud rather than silent.
+- Every role sandbox must be **≤ 1 GB after a gate closes**. The lead checks
+  with `du -sh .local/*` at each milestone-gate close and resolves every
+  over-cap sandbox before the gate is recorded.
+- **Removal of disposable reviewer scratch is pre-authorized for the lead.**
+  For each directory the lead decides to remove, three checks must be
+  established *for that path* first and recorded in the gate note:
+  **ownership** (which role/round created it, no session still uses it),
+  **inactivity** (last modification, no open review depends on it), and
+  **preservation** (whether the subtree holds anything durable — reports,
+  logs cited by `status.md` or the SOW; copy such artifacts into
+  `.local/shared/evidence/<gate>/` first). Then remove that single named
+  path with `rm -rf <exact-path>` — never a glob, never a hand-typed
+  relative path, never a directory the lead has not individually inspected.
+  `.local/shared/` is never a removal target. There is no deletion-guard
+  tool: the protection is the procedure and the named-path discipline, not
+  machinery (see § What this file deliberately does not do).
+
+## Test selection by area (the time-saver rule)
+
+The requirement this section serves: **when code in area X changes, run the
+tests for area X — not everything.** The full battery runs once per
+milestone gate. Everything below is committed, re-runnable tooling; there is
+no state to maintain between runs.
+
+| area | what it covers | how to run it |
+|---|---|---|
+| rust-unit | Rust engine unit + integration tests | `nice cargo test --manifest-path v4/rust/Cargo.toml` (+ `--all-features`) |
+| rust-abi | generated C header/manifest equality, ABI checks | `nice ./v4/rust/check-source-graph.sh` + the abi tests in the rust-unit run |
+| go-unit | Go engine packages | `nice go -C v4/go test ./...` (per package: `./internal/cli/legacy/` etc.) |
+| cli-matrix | CLI conformance matrices (c / rust / go / cross) | `nice python3 v4/cli/run.py --matrix <name> [--filter <case>]` |
+| cli-races | swap-race / crash-recovery replay | `v4/cli/races/` runner (see its README) |
+| legacy-c | the released C CLI | `nice ./run-tests.sh` (tests.d/), `nice ./run-unit-tests.sh` |
+| sanitizers | ASan/MSan/TSan/valgrind variants | `nice ./run-sanitizer-tests.sh` |
+| battery | full milestone qualification (builds both engines, all matrices, races, coverage, privacy) | the battery script named in the active SOW, once per gate |
+
+Selection rules:
+
+- A step names the areas its change can affect (in the SOW step or the
+  commit note) and runs exactly those. Cross-language format changes always
+  include both engines plus `cli-matrix` cross directions.
+- The mapping is a review signal, not a machine check: a role that believes
+  a step under-tested its blast radius files a finding naming the area it
+  would have run.
+- Repetition is removed, not assertions: a broader run replaces its
+  overlapping subset in the same invocation; no retry-on-failure.
+
+## What this file deliberately does not do
+
+The milestone-4 process once carried an evidence-binding apparatus: a
+manifest of hashes over every log, a checker, staleness/forgery pins, a
+capture-order protocol, a restager, and a deletion guard with eight guards
+and its own adversarial suite. It existed to make staged logs trustworthy
+without re-running tests. That premise was wrong: the suites are committed
+and the full battery runs in ~200 s, so any doubtful claim is cheap to
+re-verify directly. The apparatus produced no product defect, consumed
+five external review rounds and two working days, and was deleted on
+2026-09-22 by user decision. Do not rebuild it. If a future process need
+seems to require pinned evidence, the answer is a re-runnable test, not a
+notarized log.
 
 ## Lead invocation message (exact shape) 
 
@@ -397,8 +303,9 @@ skips this gate.
 
 Binding details recorded from user decisions 2026-09-16:
 
-1. **During a step: targeted tests only** (`--filter`/`-run`/named cases).
-   The full battery never runs per step.
+1. **During a step: targeted tests only** (`--filter`/`-run`/named cases,
+   selected via § Test selection by area). The full battery never runs per
+   step.
 2. **Full battery: once per milestone gate** (milestone gate step 3).
    Expensive axes (full pressure sweep, whole-program static analysis) run
    only inside that battery, at most once per gate, on the real tree.

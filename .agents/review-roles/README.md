@@ -29,14 +29,18 @@ deviations, stale records) is your checklist. Where the skill suggests
 sandbox `.local/<role>/` only — never `/tmp`, never random places, never
 the repo tree.
 
-## Evidence-first — do not rerun suites
+## Evidence-first — review the tests, don't re-run everything
 
 The lead runs every required test and stages the complete, unedited output
-under `.local/shared/evidence/<gate>/` with a `manifest.json` (command, rc,
-wall time, sha256 of each log). Your job regarding tests is to review
-their **suitability, practicality, and gaps** — not to rerun them.
-Rerunning suites is prohibited: if every reviewer reran everything the
-process could never finish.
+under `.local/shared/evidence/<gate>/` as plain `.log` files (each log
+starts with the command line and ends with its rc). Your job regarding
+tests is to review their **suitability, practicality, and gaps** — not to
+re-derive results. Re-running the full battery per role is wasted compute.
+
+It is not forbidden: every suite is committed and re-runnable, so if you
+doubt one specific claim, re-run the narrow test that carries it (under
+`nice`, with a timeout, in your sandbox) and cite what you observed. A log
+is a convenience, not an authority.
 
 You may create and run **small targeted probes in your own sandbox**
 (`.local/<role>/`) to prove or refute a specific finding — under `nice`,
@@ -46,8 +50,9 @@ in `.local/shared/binaries/` with SHASUMS; the shared probes in
 `.local/shared/probes/` are accumulated failure reproducers from past
 reviews — use them, extend them (your extensions go in your sandbox).
 
-A mismatch between the evidence manifest and a log (wrong revision, edited
-output, missing command) is a P1 finding against the lead's process.
+A log that contradicts `status.md` (a test the status claims ran but no log
+shows, or a log whose recorded command could not produce it) is a P1 finding
+against the lead's process.
 
 ## Workspace
 

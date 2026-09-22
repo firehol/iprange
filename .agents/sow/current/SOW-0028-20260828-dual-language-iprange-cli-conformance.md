@@ -21711,3 +21711,57 @@ capture-order bootstrap was executed again cleanly (seed -> declare -> green
 dry-run-unchanged restage).
 
 **Next.** Astra turn 16 on this delta; if PRODUCTION GRADE, push.
+
+## Round 55 — the evidence-binding apparatus is retired by user decision (2026-09-22)
+
+The user ruled the entire review-kit binding machinery scope drift and
+ordered its removal: "fix the mess, remove and cleanup all the stupidity."
+
+Diagnosis accepted by the lead: the requirement was **test selection by
+area** (change X ⇒ run areas A,F,G, not A–Z). What was built instead was
+**evidence provenance** (manifest hashes, binding checker, staleness/forgery
+pins, capture-order protocol, restager, timed wrapper, and a deletion guard
+with eight guards plus its own adversarial suite and falsification driver).
+The binding stack existed to make staged logs trustworthy without re-running
+tests; that premise was false — the suites are committed and the full
+battery runs in ~200 s, so any doubtful claim is re-verifiable in seconds.
+The apparatus produced zero product defects, consumed five external review
+rounds and two working days, and was the direct cause of the milestone-4
+gate's stalling.
+
+Removed (all internal tooling; no product file touched):
+
+- `.agents/tools/kit-rm.py` + `test_kit_rm.sh` (deletion guard, suite,
+  39-leg falsification driver) — deletion is now the named-path human
+  procedure only.
+- `.agents/tools/kit-gc.py` + `test_kit_gc.sh` (usage reporter + its
+  adversarial suite) — sandbox size is checked with `du -sh .local/*`.
+- `.local/lead-r15/{timed.sh, restage-round16.py, b13-battery-update.py,
+  make-mutants.py, mutation-check.sh}` and `.local/shared/tools/`
+  (binding checker, manifest rebuilders, identity generator) — the meta
+  layer.
+- The round16 `manifest.json` machinery is inert; the evidence bytes stay on
+  disk as the historical record of the gate, with no tooling attached.
+
+Kept: every real test (cargo/go suites, `v4/cli/run.py` matrices,
+`v4/cli/races/`, `tests.d/`, sanitizer scripts, the battery script named in
+this SOW) and the product mutation-proof drivers under `.local/lead-r15/`
+(`mutation_proof*.py`, `ast-compare.py`, `g-round12-verify.py`, `mkfarm.py`)
+— these prove the CLI's own guards and are unrelated to the kit.
+
+`REVIEWS.md` rewritten: principle 3 is now "the lead runs the tests, the log
+is the evidence" (`{ nice <cmd>; echo "rc=$?"; } > <gate>/<name>.log`);
+reviewers review suitability/gaps and may re-run the narrow test behind a
+claim they doubt. New § Test selection by area carries the area table
+(rust-unit, rust-abi, go-unit, cli-matrix, cli-races, legacy-c, sanitizers,
+battery). New § What this file deliberately does not do records the retired
+apparatus and forbids rebuilding it. `AGENTS.md` and the reviewer role files
+were updated to match.
+
+**Validation:** `go -C v4/go test ./...` 0 FAIL after the removal;
+`v4/cli/run.py` behaves as designed (matrix skips without staged binaries);
+no tracked file under `v4/` changed in this round.
+
+**Next.** The gate closes without another astra round on kit tooling: the
+kit is gone. Remaining SOW-0028 close-out: user acceptance of the milestone,
+follow-up mapping, SOW completion.
