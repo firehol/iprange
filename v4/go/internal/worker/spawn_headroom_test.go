@@ -43,7 +43,7 @@ import (
 //     into the blanket startup refusal the design rejects.
 
 const (
-	spawnHeadroomEnv    = "IPRANGE_GO_WORKER_SPAWN_HEADROOM_CHILD"
+	spawnHeadroomEnv     = "IPRANGE_GO_WORKER_SPAWN_HEADROOM_CHILD"
 	spawnHeadroomFreeEnv = "IPRANGE_GO_WORKER_SPAWN_HEADROOM_FREE"
 )
 

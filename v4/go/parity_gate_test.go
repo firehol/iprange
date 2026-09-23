@@ -626,3 +626,69 @@ func TestParityRustInventoryIsFullyRecorded(t *testing.T) {
 		t.Errorf("rust inventory drifted from the Go surface (%d):\n%s", len(failures), strings.Join(failures, "\n"))
 	}
 }
+
+// rustSourceExportsRecorded names the public lib.rs exports that were
+// already published when this drift check was added. A name added after
+// this list fails the test until the inventory and ledger record it.
+var rustSourceExportsRecorded = map[string]bool{
+	"c_abi_support": true,
+	"cardinality":   true,
+	"error":         true,
+	"file_identity": true,
+	"identity":      true,
+	"sidecar_path":  true,
+	"key":           true,
+	"publication":   true,
+	"recovery":      true,
+	"snapshot":      true,
+	"validation":    true,
+}
+
+// TestParityRustSourceExportsAreInventoried fails when lib.rs publishes a
+// name the frozen inventory does not record. The inventory is not regenerated
+// by the test; a missing row is the signal to regenerate it and record the
+// Go side in the ledger.
+func TestParityRustSourceExportsAreInventoried(t *testing.T) {
+	source, err := os.ReadFile("../rust/iprange-livedb/src/lib.rs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory := loadRustInventory(t)
+	recorded := map[string]bool{}
+	for _, row := range inventory {
+		recorded[row.ref] = true
+		if slash := strings.LastIndex(row.ref, "::"); slash >= 0 {
+			recorded[row.ref[slash+2:]] = true
+		}
+	}
+	var missing []string
+	for _, line := range strings.Split(string(source), "\n") {
+		line = strings.TrimSpace(line)
+		var prefix string
+		switch {
+		case strings.HasPrefix(line, "pub use "):
+			prefix = "pub use "
+		case strings.HasPrefix(line, "pub mod "):
+			prefix = "pub mod "
+		default:
+			continue
+		}
+		if !strings.HasSuffix(line, ";") || strings.Contains(line, "{") {
+			continue
+		}
+		name := strings.TrimSuffix(strings.TrimPrefix(line, prefix), ";")
+		if space := strings.LastIndex(name, " "); space >= 0 {
+			name = name[space+1:]
+		}
+		if colon := strings.LastIndex(name, "::"); colon >= 0 {
+			name = name[colon+2:]
+		}
+		if name == "" || recorded[name] || rustSourceExportsRecorded[name] {
+			continue
+		}
+		missing = append(missing, name)
+	}
+	if len(missing) > 0 {
+		t.Errorf("Rust public exports missing from parity_rust_public.tsv: %s", strings.Join(missing, ", "))
+	}
+}

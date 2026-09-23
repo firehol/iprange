@@ -19,13 +19,14 @@ Implemented and pushed:
 
 Remaining, in order:
 
-1. Algebra heap constants. Not changed in `f6840027`: the private Rust structs were not measured. Measure first, then change only constants the compiler confirms.
-2. Native FreeBSD check of the live-recovery refusal. The code refuses before routing. `ssh freebsd` is not authorized, so that host has not run it.
+1. Native FreeBSD check of the live-recovery refusal. The code refuses before routing. `ssh freebsd` is not authorized, so that host has not run it.
+2. Commit `v4/cli/battery.sh`. The 2,728-line script in `.local/w1926-durability/` rotates `crash-rust_to_go.json` to `crash.json` while `battery-manifest.json` records the pre-rename name. Committing it unchanged publishes that bug and local `/tmp` paths. Fix the names, then commit.
+3. Regenerate `parity_rust_public.tsv` from current Rust. The new drift test records the current `lib.rs` exports so the next export fails; it does not yet compare methods.
 
 Not in this serial pass:
 
 - Attestation-only gaps (retirement overlap, reclaim guards, tombstone cap, 17-member batch, EOF re-arm, handle_closed, C-ABI corpus, golden wire bytes, mixed-direction cancellation, IPv6 structured fixture, recovery cross-open, projection-report exchange) belong to the milestone-5 harness.
-- Battery commit, parity-TSV regeneration, and `gofmt` are a separate tooling commit.
+- `gofmt` on `spawn_headroom_test.go` is in the tooling commit. Battery commit and full TSV regeneration remain open, as listed above.
 - update-ipsets v2 u128 byte order is a separate SOW. A blind flip breaks its own persisted caches.
 - Go has no drop-abandonment. Record the deviation; do not add a finalizer.
 - Security and publish CI failures are the legacy C suite under coverage, not this wave.
