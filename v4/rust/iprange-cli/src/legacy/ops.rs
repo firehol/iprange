@@ -100,12 +100,12 @@ fn emit(
         Ok(()) => match w.flush() {
             Ok(()) => 0,
             Err(e) => {
-                eprintln!("iprange: {}", e);
+                crate::legacy::argv::eprint_line(&format!("iprange: {}", e));
                 1
             }
         },
         Err(e) => {
-            eprintln!("iprange: {}", e);
+            crate::legacy::argv::eprint_line(&format!("iprange: {}", e));
             1
         }
     };
@@ -664,7 +664,7 @@ fn apply_reduce<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, enabled: &
     optimize_operand(options, set, "combined ipset");
 
     if options.debug {
-        eprintln!("\nCounting prefixes in combined ipset");
+        crate::legacy::argv::eprint_line(&format!("\nCounting prefixes in combined ipset"));
     }
 
     let mut counters = vec![0u64; enabled.len()];
@@ -673,7 +673,7 @@ fn apply_reduce<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, enabled: &
     }
 
     if options.debug {
-        eprintln!("Break down by prefix:");
+        crate::legacy::argv::eprint_line(&format!("Break down by prefix:"));
     }
 
     let mut total = 0u64;
@@ -681,7 +681,7 @@ fn apply_reduce<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, enabled: &
     for i in 0..=max_prefix {
         if counters[i] > 0 {
             if options.debug {
-                eprintln!("\t- prefix /{i} counts {} entries", counters[i]);
+                crate::legacy::argv::eprint_line(&format!("\t- prefix /{i} counts {} entries", counters[i]));
             }
             total += counters[i];
             initial += 1;
@@ -691,7 +691,7 @@ fn apply_reduce<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, enabled: &
         }
     }
     if options.debug {
-        eprintln!("Total {total} entries generated");
+        crate::legacy::argv::eprint_line(&format!("Total {total} entries generated"));
     }
 
     let mut acceptable = total * options.reduce_factor / 100;
@@ -699,7 +699,7 @@ fn apply_reduce<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, enabled: &
         acceptable = options.reduce_entries;
     }
     if options.debug {
-        eprintln!("Acceptable is to reach {acceptable} entries by reducing prefixes");
+        crate::legacy::argv::eprint_line(&format!("Acceptable is to reach {acceptable} entries by reducing prefixes"));
     }
 
     let mut eliminated = 0u64;
@@ -717,9 +717,9 @@ fn apply_reduce<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, enabled: &
                 if counters[j] > 0 {
                     let increase = counters[i] * (multiplier - 1);
                     if options.debug {
-                        eprintln!(
+                        crate::legacy::argv::eprint_line(&format!(
                             "\t\t> Examining merging prefix {i} to {j} (increase by {increase})"
-                        );
+                        ));
                     }
                     if increase < min_increase {
                         min_increase = increase;
@@ -734,7 +734,7 @@ fn apply_reduce<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, enabled: &
 
         let (Some(min), Some(to)) = (min, to) else {
             if options.debug {
-                eprintln!("\tNothing more to reduce");
+                crate::legacy::argv::eprint_line(&format!("\tNothing more to reduce"));
             }
             break;
         };
@@ -748,17 +748,17 @@ fn apply_reduce<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, enabled: &
         }
         let increase = counters[min] * multiplier - counters[min];
         if options.debug {
-            eprintln!(
+            crate::legacy::argv::eprint_line(&format!(
                 "\t\t> Selected prefix {min} ({} entries) to be merged in {to} (total increase by {increase})",
                 counters[min]
-            );
+            ));
         }
 
         if total + increase > acceptable {
             if options.debug {
-                eprintln!(
+                crate::legacy::argv::eprint_line(&format!(
                     "\tCannot proceed to increase total {total} by {increase}, above acceptable {acceptable}."
-                );
+                ));
             }
             break;
         }
@@ -770,18 +770,18 @@ fn apply_reduce<F: FamilyImpl>(options: &Options, set: &mut IpSet<F>, enabled: &
         enabled[min] = false;
         eliminated += 1;
         if options.debug {
-            eprintln!(
+            crate::legacy::argv::eprint_line(&format!(
                 "\t\tEliminating prefix {min} in {to} (had {old_to_counters}, now has {} entries), total is now {total} (increased by {increase})",
                 counters[to]
-            );
+            ));
         }
     }
 
     if options.debug {
-        eprintln!(
+        crate::legacy::argv::eprint_line(&format!(
             "\nEliminated {eliminated} out of {initial} prefixes ({} remain in the final set).\n",
             initial - eliminated
-        );
+        ));
     }
 }
 
@@ -792,14 +792,14 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
     if loaded.sets.is_empty() {
         // Defensive: parse::load_all always produces at least one
         // set (stdin fallback); the C texts are kept for parity.
-        eprintln!(
+        crate::legacy::argv::eprint_line(&format!(
             "iprange: {}",
             if F::FAMILY == Family::V4 {
                 "No valid ipsets to merge from the provided inputs."
             } else {
                 "No valid ipsets to process."
             }
-        );
+        ));
         return 1;
     }
 
@@ -810,7 +810,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
     // twin can reach it with an empty group A (all files after the
     // positional operator).
     if F::FAMILY == Family::V6 && a.is_empty() {
-        eprintln!("iprange: No valid ipsets to process.");
+        crate::legacy::argv::eprint_line(&format!("iprange: No valid ipsets to process."));
         return 1;
     }
 
@@ -824,7 +824,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
         Mode::Reduce => {
             let mut merged = merge_group(options, a, Some(OsStr::new("combined ipset")));
             if F::FAMILY == Family::V6 {
-                eprintln!("iprange: --ipset-reduce is not supported in IPv6 mode");
+                crate::legacy::argv::eprint_line(&format!("iprange: --ipset-reduce is not supported in IPv6 mode"));
                 return 1;
             }
             let mut reduced = options.clone();
@@ -838,14 +838,14 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
 
         Mode::Common => {
             if a.len() < 2 {
-                eprintln!(
+                crate::legacy::argv::eprint_line(&format!(
                     "iprange: {}",
                     if F::FAMILY == Family::V4 {
                         "two ipsets at least are needed to be compared to find their common IPs."
                     } else {
                         "two ipsets at least are needed to find common IPs."
                     }
-                );
+                ));
                 return 1;
             }
             optimize_operand(options, &mut a[0].set, &a[0].name);
@@ -880,7 +880,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
 
         Mode::ExcludeNext => {
             if b.is_empty() {
-                eprintln!("iprange: no files given after the --exclude-next parameter.");
+                crate::legacy::argv::eprint_line(&format!("iprange: no files given after the --exclude-next parameter."));
                 return 1;
             }
             let mut excluded = merge_group(options, a, None);
@@ -910,7 +910,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
 
         Mode::Diff => {
             if a.is_empty() || b.is_empty() {
-                eprintln!("iprange: two ipsets at least are needed to be diffed.");
+                crate::legacy::argv::eprint_line(&format!("iprange: two ipsets at least are needed to be diffed."));
                 return 1;
             }
             let mut merged_a = merge_group(options, a, None);
@@ -953,7 +953,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
 
         Mode::Compare => {
             if a.len() < 2 {
-                eprintln!("iprange: two ipsets at least are needed to be compared.");
+                crate::legacy::argv::eprint_line(&format!("iprange: two ipsets at least are needed to be compared."));
                 return 1;
             }
             let code = emit(|w| {
@@ -988,7 +988,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
 
         Mode::CompareNext => {
             if b.is_empty() {
-                eprintln!("iprange: no files given after the --compare-next parameter.");
+                crate::legacy::argv::eprint_line(&format!("iprange: no files given after the --compare-next parameter."));
                 return 1;
             }
             emit(|w| {
@@ -1025,7 +1025,7 @@ pub fn execute<F: FamilyImpl>(options: &Options, loaded: &mut parse::LoadedAll<F
 
         Mode::CompareFirst => {
             if a.len() < 2 {
-                eprintln!("iprange: two ipsets at least are needed to be compared.");
+                crate::legacy::argv::eprint_line(&format!("iprange: two ipsets at least are needed to be compared."));
                 return 1;
             }
             emit(|w| {

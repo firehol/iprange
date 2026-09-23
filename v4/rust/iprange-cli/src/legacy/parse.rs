@@ -596,11 +596,11 @@ fn load_one<F: FamilyImpl>(
                     match e {
                         DnsError::NotFound(msg) => {
                             if !options.dns_silent {
-                                eprintln!("{msg}");
+                                crate::legacy::argv::eprint_line(&format!("{msg}"));
                             }
                         }
                         DnsError::System(msg) => {
-                            eprintln!("{msg}");
+                            crate::legacy::argv::eprint_line(&format!("{msg}"));
                         }
                     }
                     issues.dns_failed = true;
@@ -666,7 +666,7 @@ fn process_record<F: FamilyImpl>(
 
         LineOutcome::OneIp(tok) => {
             if let Err(inner) = add_token::<F>(&tok, options, set, name) {
-                eprintln!("{inner}");
+                crate::legacy::argv::eprint_line(&format!("{inner}"));
                 fmt_cannot_understand(lineid, name, rec).emit();
                 issues.parse_failed = true;
             }
@@ -676,7 +676,7 @@ fn process_record<F: FamilyImpl>(
             let r1 = match parse_token::<F>(&a, options) {
                 Ok(r) => r,
                 Err(inner) => {
-                    eprintln!("{inner}");
+                    crate::legacy::argv::eprint_line(&format!("{inner}"));
                     fmt_cannot_understand(lineid, name, rec).emit();
                     issues.parse_failed = true;
                     return;
@@ -685,7 +685,7 @@ fn process_record<F: FamilyImpl>(
             let r2 = match parse_token::<F>(&b, options) {
                 Ok(r) => r,
                 Err(inner) => {
-                    eprintln!("{inner}");
+                    crate::legacy::argv::eprint_line(&format!("{inner}"));
                     fmt_cannot_understand(lineid, name, rec).emit();
                     issues.parse_failed = true;
                     return;
@@ -696,7 +696,7 @@ fn process_record<F: FamilyImpl>(
             if F::FAMILY == Family::V6
                 && classify_token(a.as_bytes()) != classify_token(b.as_bytes())
             {
-                eprintln!("{}", fmt_mixed_family(lineid, &a, &b));
+                crate::legacy::argv::eprint_line(&format!("{}", fmt_mixed_family(lineid, &a, &b)));
                 issues.parse_failed = true;
                 return;
             }
@@ -708,9 +708,9 @@ fn process_record<F: FamilyImpl>(
         LineOutcome::WarnedRange { first, warning } => {
             // C prints during line classification and still adds the
             // first IP as a single entry.
-            eprintln!("{warning}");
+            crate::legacy::argv::eprint_line(&format!("{warning}"));
             if let Err(inner) = add_token::<F>(&first, options, set, name) {
-                eprintln!("{inner}");
+                crate::legacy::argv::eprint_line(&format!("{inner}"));
                 fmt_cannot_understand(lineid, name, rec).emit();
                 issues.parse_failed = true;
             }
@@ -749,7 +749,7 @@ fn process_record<F: FamilyImpl>(
                 Ok(()) => {}
                 Err(e) => {
                     // Always printed (C does not gate this class).
-                    eprintln!("{e}");
+                    crate::legacy::argv::eprint_line(&format!("{e}"));
                     issues.request_failed = true;
                 }
             }

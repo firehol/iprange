@@ -97,15 +97,15 @@ pub fn run(prog: &OsStr, args: &[OsString]) -> i32 {
                 return 0;
             }
             "--has-compare" | "--has-reduce" => {
-                eprintln!("yes, compare and reduce is present.");
+                crate::legacy::argv::eprint_line(&format!("yes, compare and reduce is present."));
                 return 0;
             }
             "--has-filelist-loading" | "--has-directory-loading" => {
-                eprintln!("yes, @filename and @directory support is present.");
+                crate::legacy::argv::eprint_line(&format!("yes, @filename and @directory support is present."));
                 return 0;
             }
             "--has-ipv6" => {
-                eprintln!("yes, IPv6 support is present.");
+                crate::legacy::argv::eprint_line(&format!("yes, IPv6 support is present."));
                 return 0;
             }
             "-4" | "--ipv4" => options.family = Family::V4,
@@ -217,7 +217,7 @@ pub fn run(prog: &OsStr, args: &[OsString]) -> i32 {
                         }
                     }
                     Err(message) => {
-                        eprintln!("{message}");
+                        crate::legacy::argv::eprint_line(&format!("{message}"));
                         std::process::exit(1);
                     }
                 }
@@ -336,7 +336,7 @@ pub fn run(prog: &OsStr, args: &[OsString]) -> i32 {
     // the IPv4 twin prints one debug note first).
     if options.sources.is_empty() {
         if options.debug && options.family == Family::V4 {
-            eprintln!("iprange: No input files provided, reading from stdin");
+            crate::legacy::argv::eprint_line(&format!("iprange: No input files provided, reading from stdin"));
         }
         options.sources.push(SourceSpec {
             kind: SourceKind::Path,
@@ -383,13 +383,13 @@ fn run_family<F: FamilyImpl>(options: &Options, started: Instant) -> i32 {
     let ret = ops::execute::<F>(options, &mut loaded);
     let stop = Instant::now();
     if options.debug && options.family == Family::V4 {
-        eprintln!(
+        crate::legacy::argv::eprint_line(&format!(
             "completed in {:.5} seconds (read {:.5} + think {:.5} + speak {:.5})",
             stop.duration_since(started).as_secs_f64(),
             load_done.duration_since(started).as_secs_f64(),
             think_done.duration_since(load_done).as_secs_f64(),
             stop.duration_since(think_done).as_secs_f64(),
-        );
+        ));
     }
     ret
 }
@@ -627,7 +627,7 @@ fn parse_prefix_list(text: &OsStr, family: Family, debug: bool) -> Result<Vec<us
         // `iprange: ` prefix (`src/iprange.c:549`); `iprange6_run()`
         // parses the option without any debug output.
         if debug && family == Family::V4 {
-            eprintln!("Enabling prefix {truncated}");
+            crate::legacy::argv::eprint_line(&format!("Enabling prefix {truncated}"));
         }
         allowed.push(truncated as usize);
         pos += consumed;
@@ -647,6 +647,6 @@ fn require_prior_file(options: &Options, option: &str) {
     if options.family == Family::V6 || !options.sources.is_empty() {
         return;
     }
-    eprintln!("iprange: An ipset is needed before {option}");
+    crate::legacy::argv::eprint_line(&format!("iprange: An ipset is needed before {option}"));
     std::process::exit(1);
 }

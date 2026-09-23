@@ -146,7 +146,7 @@ impl Iterator for Batch {
 impl Drop for Batch {
     fn drop(&mut self) {
         if let Some(line) = self.summary.take() {
-            eprintln!("{line}");
+            crate::legacy::argv::eprint_line(&format!("{line}"));
         }
     }
 }
@@ -326,7 +326,7 @@ impl Resolver {
                 // C dns_request_add() debug line (IPv4 only; the
                 // IPv6 request_add has no equivalent).
                 if self.shared.debug && self.shared.family == Family::V4 {
-                    eprintln!("iprange: Creating new DNS thread");
+                    crate::legacy::argv::eprint_line(&format!("iprange: Creating new DNS thread"));
                 }
                 let shared = self.shared.clone();
                 match std::thread::Builder::new()
@@ -338,7 +338,7 @@ impl Resolver {
                         // C pthread_create failure text (printed once
                         // per run; C prints it per attempt).
                         self.spawn_failed = true;
-                        eprintln!("iprange: Cannot create DNS thread.");
+                        crate::legacy::argv::eprint_line(&format!("iprange: Cannot create DNS thread."));
                         if self.workers.is_empty() {
                             // C dns_request_add(): with no worker yet
                             // the request is rolled back (pending--,
@@ -426,7 +426,7 @@ impl Resolver {
                 stats.made - stats.finished
             };
             if pending > 0 && shared.debug {
-                eprintln!("{}", waiting_line(pending));
+                crate::legacy::argv::eprint_line(&format!("{}", waiting_line(pending)));
             }
         }
 
@@ -663,7 +663,7 @@ fn resolve_host(shared: &Shared, host: &str) -> Result<Vec<u128>, DnsError> {
             // C dns_request_failed(): the retry happens regardless
             // of --dns-silent; only the message is gated.
             if !shared.silent {
-                eprintln!("iprange: DNS: '{host}' will be retried: {}", gai_text(rc));
+                crate::legacy::argv::eprint_line(&format!("iprange: DNS: '{host}' will be retried: {}", gai_text(rc)));
             }
             tries -= 1;
             shared.stats.lock().unwrap().retries += 1;
@@ -784,7 +784,7 @@ fn resolve_host(shared: &Shared, host: &str) -> Result<Vec<u128>, DnsError> {
                 );
                 if retriable && tries > 0 {
                     if !shared.silent {
-                        eprintln!("iprange: DNS: '{host}' will be retried: {error}");
+                        crate::legacy::argv::eprint_line(&format!("iprange: DNS: '{host}' will be retried: {error}"));
                     }
                     tries -= 1;
                     shared.stats.lock().unwrap().retries += 1;
@@ -857,7 +857,7 @@ impl<'a> AddrSink<'a> {
     fn push(&mut self, value: u128) {
         if self.shared.debug && self.shared.family == Family::V4 {
             // C ipset_dns.c:246-249 (no IPv6 equivalent).
-            eprintln!("iprange: DNS: '{}' = {}", self.host, fmt_v4(value as u32));
+            crate::legacy::argv::eprint_line(&format!("iprange: DNS: '{}' = {}", self.host, fmt_v4(value as u32)));
         }
         self.addrs.push(value);
     }

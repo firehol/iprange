@@ -266,18 +266,18 @@ pub fn print_set<F: FamilyImpl, W: io::Write>(
                     // C warning text is family-specific; the range
                     // is skipped either way.
                     if F::FAMILY == Family::V4 {
-                        eprintln!(
+                        crate::legacy::argv::eprint_line(&format!(
                             "iprange: too big range eliminated start={} end={} gives {} IPs",
                             F::fmt_addr(r.lo),
                             F::fmt_addr(r.hi),
                             end - start
-                        );
+                        ));
                     } else {
-                        eprintln!(
+                        crate::legacy::argv::eprint_line(&format!(
                             "iprange: too big range eliminated start={} end={}",
                             F::fmt_addr(r.lo),
                             F::fmt_addr(r.hi)
-                        );
+                        ));
                     }
                     continue;
                 }
@@ -315,12 +315,12 @@ pub fn print_set<F: FamilyImpl, W: io::Write>(
     if options.debug {
         let mut prefixes = 0usize;
         if options.print.mode == PrintMode::Cidr {
-            eprintln!();
-            eprintln!("{total} printed CIDRs, break down by prefix:");
+            crate::legacy::argv::eprint_line("");
+            crate::legacy::argv::eprint_line(&format!("{total} printed CIDRs, break down by prefix:"));
             let mut total_cidrs: u128 = 0;
             for (prefix, &count) in counters.iter().enumerate() {
                 if count > 0 {
-                    eprintln!("\t- prefix /{prefix} counts {count} entries");
+                    crate::legacy::argv::eprint_line(&format!("\t- prefix /{prefix} counts {count} entries"));
                     total_cidrs += count as u128;
                     prefixes += 1;
                 }
@@ -334,11 +334,11 @@ pub fn print_set<F: FamilyImpl, W: io::Write>(
             PrintMode::SingleIps => "IPs",
             _ => "ranges",
         };
-        eprintln!();
-        eprintln!(
+        crate::legacy::argv::eprint_line("");
+        crate::legacy::argv::eprint_line(&format!(
             "totals: {} lines read, {} distinct IP ranges found, {} CIDR prefixes, {} {units} printed, {} unique IPs",
             set.lines, set.entries, prefixes, total, set.unique
-        );
+        ));
     }
     Ok(())
 }

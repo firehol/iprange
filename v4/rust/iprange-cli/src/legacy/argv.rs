@@ -121,6 +121,12 @@ pub(crate) fn path_from_bytes(value: &[u8]) -> PathBuf {
 /// Write `parts` consecutively to stderr, then a newline. `eprintln!`
 /// cannot carry invalid UTF-8, so argv-derived text goes out as bytes,
 /// matching the C `fprintf(stderr, ...)` byte for byte.
+/// Write one text diagnostic to stderr. A closed or full stderr is
+/// ignored, matching C `fprintf`: `eprintln!` would abort the process.
+pub(crate) fn eprint_line(line: &str) {
+    eprint_raw(&[line.as_bytes()]);
+}
+
 pub(crate) fn eprint_raw(parts: &[&[u8]]) {
     use std::io::Write;
     let stderr = std::io::stderr();
