@@ -37,7 +37,7 @@ func TestValidateWriterBudgetObjectRefusesZeroOpenFiles(t *testing.T) {
 	}
 	// The other members stay valid, so the refusal is the lower bound
 	// and not a shape problem.
-	for _, value := range []any{1, 4, 4294967295} {
+	for _, value := range []any{1, 4, uint32(0xFFFFFFFF)} {
 		object, err := decodeObject(writerBudgetJSON(value))
 		if err != nil {
 			t.Fatal(err)
