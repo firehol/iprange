@@ -14,14 +14,14 @@ Implemented and pushed:
 - `7aec04c0` — `maintenance.list` rejects `max_entries` above 65536 in both the validator and the handler.
 - `aeb1345b` — Rust `--version` and mixed `--jsonrpc` no longer panic on `/dev/full`. Verified: version exits 0, mixed JSON-RPC exits 1, version text unchanged.
 - feed-view `start` is rejected by `validate_ranges_open`, so dispatch returns -32602. The handler no longer has a second check.
+- `3601d121` — the remaining legacy diagnostics use the fallible stderr writer. 370 `iprange-cli` tests pass.
+- CLI export, metadata, and removal outputs are created mode `0600` on both engines. The challenge to that rule is pending SOW-0034 and does not change this fix.
 
 Remaining, in order:
 
-1. The other Rust legacy `eprintln!` and `print!` sites (about 58, in `legacy/ops.rs`, `parse.rs`, `dns.rs`, `print.rs`, and `mod.rs`) still panic if stderr is full. Same class as `aeb1345b`, not yet converted.
-5. CLI export, metadata, and removal outputs are created mode `0600`.
-6. Go JSON-RPC ignores SIGPIPE so a broken stdout exits through the tested fatal-write path.
-7. FreeBSD `RecoverLive` refuses before path access. Native check needs `ssh freebsd`.
-6. Algebra heap constants. Not changed in `f6840027`: the private Rust structs were not measured. Measure first, then change only constants the compiler confirms.
+1. Go JSON-RPC ignores SIGPIPE so a broken stdout exits through the tested fatal-write path.
+2. FreeBSD `RecoverLive` refuses before path access. Native check needs `ssh freebsd`.
+3. Algebra heap constants. Not changed in `f6840027`: the private Rust structs were not measured. Measure first, then change only constants the compiler confirms.
 
 Not in this serial pass:
 

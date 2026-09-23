@@ -24,6 +24,20 @@ use sha2::{Digest, Sha256};
 use crate::rpc::dispatch::HandlerError;
 use crate::rpc::new_handle;
 
+/// Make one newly created output creator-private. Windows uses the
+/// process DACL; POSIX must not inherit the umask.
+#[cfg(unix)]
+pub(crate) fn creator_private(file: &File) -> Result<(), HandlerError> {
+    use std::os::unix::fs::PermissionsExt as _;
+    file.set_permissions(fs::Permissions::from_mode(0o600))
+        .map_err(|error| file_error(error, "apply creator-private mode"))
+}
+
+#[cfg(not(unix))]
+pub(crate) fn creator_private(_file: &File) -> Result<(), HandlerError> {
+    Ok(())
+}
+
 /// Caller-supplied export limits (`result_budget`).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct ExportBudget {
@@ -103,6 +117,7 @@ impl ExportWriter {
             .create_new(true)
             .open(&temporary)
             .map_err(|error| file_error(error, "create export output"))?;
+        creator_private(&file)?;
         Ok(Self {
             file: BufWriter::with_capacity(64 * 1024, file),
             temporary,

@@ -1691,6 +1691,7 @@ impl RemovalCollector {
             .create_new(true)
             .open(&temporary)
             .map_err(|error| file_error(error, "create removal output"))?;
+        crate::io::export_writer::creator_private(&file)?;
         Ok(Self {
             file: BufWriter::with_capacity(64 * 1024, file),
             temporary,

@@ -652,6 +652,7 @@ fn publish(
         .create_new(true)
         .open(&temporary)
         .map_err(|error| file_error(error, "create metadata output"))?;
+    crate::io::export_writer::creator_private(&file)?;
     write_and_publish(file, &temporary, path, bytes, policy, sha256)?;
     // The destination name is visible with its complete content. Failing to
     // synchronize the directory now leaves the durability of that namespace
