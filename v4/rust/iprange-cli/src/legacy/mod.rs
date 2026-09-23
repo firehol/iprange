@@ -12,7 +12,7 @@
 //! [`SourceSpec`], [`IpNum`], and [`dns`] (`Resolver`, `DnsError`).
 //! Everything else in this module is crate-internal.
 
-mod argv;
+pub(crate) mod argv;
 mod binary;
 mod diag;
 pub mod dns;
@@ -395,16 +395,21 @@ fn run_family<F: FamilyImpl>(options: &Options, started: Instant) -> i32 {
 }
 
 fn version() {
-    print!(
-        "iprange {VERSION}\n\
-         Copyright (C) 2015-2026 Costa Tsaousis for FireHOL (Refactored and extended)\n\
-         Copyright (C) 2004 Paul Townsend (Adapted)\n\
-         Copyright (C) 2003 Gabriel L. Somlo (Original)\n\
-         \n\
-         License: GPLv2+: GNU GPL version 2 or later <http://gnu.org/licenses/gpl2.html>.\n\
-         This program comes with ABSOLUTELY NO WARRANTY; This is free software, and\n\
-         you are welcome to redistribute it under certain conditions;\n\
-         See COPYING distributed in the source for details.\n"
+    use std::io::Write;
+    let mut stdout = std::io::stdout().lock();
+    let _ = stdout.write_all(
+        format!(
+            "iprange {VERSION}\n\
+             Copyright (C) 2015-2026 Costa Tsaousis for FireHOL (Refactored and extended)\n\
+             Copyright (C) 2004 Paul Townsend (Adapted)\n\
+             Copyright (C) 2003 Gabriel L. Somlo (Original)\n\
+             \n\
+             License: GPLv2+: GNU GPL version 2 or later <http://gnu.org/licenses/gpl2.html>.\n\
+             This program comes with ABSOLUTELY NO WARRANTY; This is free software, and\n\
+             you are welcome to redistribute it under certain conditions;\n\
+             See COPYING distributed in the source for details.\n"
+        )
+        .as_bytes(),
     );
 }
 

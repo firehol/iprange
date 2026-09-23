@@ -30,7 +30,9 @@ fn main() {
             // `--jsonrpc` is exclusive: mixing it with legacy options
             // or inputs is invalid JSON-RPC startup (spec, Legacy
             // coexistence) and must never fall back to legacy parsing.
-            eprintln!("iprange: --jsonrpc cannot be combined with other arguments");
+            legacy::argv::eprint_raw(&[
+                b"iprange: --jsonrpc cannot be combined with other arguments",
+            ]);
             std::process::exit(1);
         }
         std::process::exit(rpc::run());
