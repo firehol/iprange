@@ -620,7 +620,7 @@ func ValidateMaintenanceListParams(params json.RawMessage) error {
 		seen[kind] = true
 	}
 	maxEntries, err := asUint32(object, "max_entries")
-	if err != nil || maxEntries == 0 {
+	if err != nil || maxEntries == 0 || maxEntries > 65536 {
 		return fmt.Errorf("max_entries must be 1 through 65536")
 	}
 	output, err := memberObject(object, "output")
@@ -651,7 +651,7 @@ func MaintenanceList(st *rpc.SessionState, params json.RawMessage) (any, *rpc.Ha
 		return nil, rpc.InvalidParamsError("kinds must be an array of strings")
 	}
 	maxEntries, err := asUint32(object, "max_entries")
-	if err != nil || maxEntries == 0 {
+	if err != nil || maxEntries == 0 || maxEntries > 65536 {
 		return nil, rpc.InvalidParamsError("max_entries must be 1 through 65536")
 	}
 	outputObject, merr := memberObject(object, "output")

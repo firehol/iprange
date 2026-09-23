@@ -310,6 +310,18 @@ func maintenanceListRows(t *testing.T, directory string, kinds []string) [][]byt
 	if err := ValidateMaintenanceListParams(params); err != nil {
 		t.Fatalf("maintenance.list params must validate: %v", err)
 	}
+	over := mustJSON(t, map[string]any{
+		"directory": directory, "kinds": kinds, "max_entries": 65537,
+		"output": map[string]any{
+			"path": rowsPath, "format": "jsonl", "publication_policy": "fail_if_exists",
+			"result_budget": map[string]any{
+				"max_rows": "64", "max_output_bytes": "65536", "max_open_files": 3,
+			},
+		},
+	})
+	if err := ValidateMaintenanceListParams(over); err == nil {
+		t.Fatal("maintenance.list accepted max_entries above 65536")
+	}
 	if _, herr := MaintenanceList(rpc.NewSessionState(), params); herr != nil {
 		t.Fatalf("maintenance.list %v: [%s] %s", kinds, herr.Code, herr.Message)
 	}
