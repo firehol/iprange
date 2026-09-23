@@ -27,14 +27,14 @@ type MembershipAlgebraBudget struct {
 // Rust struct sizes used by the modeled-heap charges (size_of parity;
 // computed from the Rust field layouts cited per constant).
 const (
-	rustFeedNameSize         = 256  // feed.rs FeedName { bytes: [u8;255], len: u8 }
-	rustInputStateSize       = 32   // algebra.rs InputState { expected_ranges: u64, local_to_global: Vec<u32> }
-	rustGenerationReaderSize = 216  // generation.rs GenerationReader { meta: MetaV4(200), mapping: &Mapping, owner_identity: Option<ProcessIdentity> }
-	rustAlgebraSourceSize    = 224  // algebra.rs Source { reader: GenerationReader, scope: &ScopeData }
-	rustAlgebraSourceState4  = 1664 // scan.rs SourceState<Ipv4Key> { input: AlgebraInput(256), ranges: SelectedRanges(1384), range: Option<Range> }
-	rustAlgebraSourceState6  = 1720 // scan.rs SourceState<Ipv6Key>
-	rustAlgebraEvent4        = 16   // scan.rs Event<Ipv4Key> { at, source: u32, kind }
-	rustAlgebraEvent6        = 32   // scan.rs Event<Ipv6Key>
+	rustFeedNameSize         = 256  // measured size_of::<FeedName>()
+	rustInputStateSize       = 32   // measured size_of::<InputState>()
+	rustGenerationReaderSize = 232  // measured size_of::<GenerationReader>()
+	rustAlgebraSourceSize    = 240  // measured size_of::<Source>()
+	rustAlgebraSourceState4  = 1888 // measured size_of::<SourceState<Ipv4Key>>()
+	rustAlgebraSourceState6  = 1952 // measured size_of::<SourceState<Ipv6Key>>()
+	rustAlgebraEvent4        = 12   // measured size_of::<Event<Ipv4Key>>()
+	rustAlgebraEvent6        = 24   // measured size_of::<Event<Ipv6Key>>()
 )
 
 // feedSelectionKind is the internal FeedSelection discriminant.
