@@ -87,7 +87,7 @@ func CreateLive(path string, addressFamily, valueKind, structureKind uint8, valu
 	if err := validateDestination(path, readerCapacity); err != nil {
 		return nil, err
 	}
-	if err := validateKinds(valueKind, structureKind); err != nil {
+	if err := validateKinds(addressFamily, valueKind, structureKind); err != nil {
 		return nil, err
 	}
 	attempt, err := newCreateAttempt(path, addressFamily, valueKind, structureKind, valueTag, readerCapacity)
@@ -307,13 +307,16 @@ func validateDestination(path string, readerCapacity uint32) error {
 	return requireAbsent(sidecarPath)
 }
 
-func validateKinds(valueKind, structureKind uint8) error {
+func validateKinds(addressFamily, valueKind, structureKind uint8) error {
+	if addressFamily != format.AddressFamilyIPv4 && addressFamily != format.AddressFamilyIPv6 {
+		return &format.Error{Code: format.CodeWrongAddressFamily, Detail: "address family must be 4 or 6"}
+	}
 	valid := false
 	switch valueKind {
 	case format.ValueKindDirect, format.ValueKindMembership:
 		valid = structureKind == format.StructureKindNone
 	case format.ValueKindStructured:
-		valid = structureKind != format.StructureKindNone
+		valid = structureKind == format.StructureKindNetworkEnrichmentV1
 	}
 	if !valid {
 		return &format.Error{Code: format.CodeWrongStructureKind, Detail: "value kind and structure kind do not form a valid database"}

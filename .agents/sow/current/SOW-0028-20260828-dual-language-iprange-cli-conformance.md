@@ -1,5 +1,35 @@
 # SOW-0028 - Production `iprange` CLI, JSON-RPC API, And External Qualification
 
+## Review-wave fix ledger (2026-09-23)
+
+Source: `.local/lead-wave/review-wave-001.md`. Serial, one root-cause
+cluster per commit. Reopen this list before starting the next cluster.
+
+Implemented and pushed:
+
+- `59415c6d` — worker identity build tags match amd64/arm64; writer-budget test uses `uint32(0xFFFFFFFF)`. `GOARCH=s390x` build and `GOARCH=386` vet pass.
+- `f3b89821` — workflow mutation closures return the raw internal error and abort through the writer terminal. An I/O or format failure now brands the writer unusable. Workflow package tests pass. A detecting fault test was written and deleted: it stayed green when the fold was restored.
+- `f6840027` — membership scope charges `size_of::<FeedEntry>()`, measured as 260. Aggregation and join tests pass with budgets that still fit the scope.
+
+Remaining, in order:
+
+1. CreateLive rejects a family other than 4 or 6, and a structured kind other than 1.
+2. `maintenance.list` rejects `max_entries` above 65536.
+3. Rust legacy `--version` and `--jsonrpc` do not panic when stdout or stderr is `/dev/full`.
+4. `reader.ranges.open` with a feed view and `start` returns -32602 from Rust, matching the schema contract.
+5. CLI export, metadata, and removal outputs are created mode `0600`.
+6. Go JSON-RPC ignores SIGPIPE so a broken stdout exits through the tested fatal-write path.
+7. FreeBSD `RecoverLive` refuses before path access. Native check needs `ssh freebsd`.
+8. Algebra heap constants. Not changed in `f6840027`: the private Rust structs were not measured. Measure first, then change only constants the compiler confirms.
+
+Not in this serial pass:
+
+- Attestation-only gaps (retirement overlap, reclaim guards, tombstone cap, 17-member batch, EOF re-arm, handle_closed, C-ABI corpus, golden wire bytes, mixed-direction cancellation, IPv6 structured fixture, recovery cross-open, projection-report exchange) belong to the milestone-5 harness.
+- Battery commit, parity-TSV regeneration, and `gofmt` are a separate tooling commit.
+- update-ipsets v2 u128 byte order is a separate SOW. A blind flip breaks its own persisted caches.
+- Go has no drop-abandonment. Record the deviation; do not add a finalizer.
+- Security and publish CI failures are the legacy C suite under coverage, not this wave.
+
 ## Standing Review Rules (user-mandated, read after every compaction)
 
 **Superseded 2026-09-17 by user decision.** The review and implementation

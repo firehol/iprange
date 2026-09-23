@@ -258,6 +258,10 @@ func TestCreateLiveHardErrors(t *testing.T) {
 	expectCode(t, err, format.CodeWrongStructureKind)
 	_, err = CreateLive(main, format.AddressFamilyIPv4, format.ValueKindStructured, format.StructureKindNone, [16]byte{}, 1, neverCheck)
 	expectCode(t, err, format.CodeWrongStructureKind)
+	_, err = CreateLive(main, format.AddressFamilyIPv4, format.ValueKindStructured, 9, [16]byte{}, 1, neverCheck)
+	expectCode(t, err, format.CodeWrongStructureKind)
+	_, err = CreateLive(main, 3, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck)
+	expectCode(t, err, format.CodeWrongAddressFamily)
 
 	// A reserved coordination name cannot name a main file.
 	_, err = CreateLive(filepath.Join(dir, "db.iprdb.readers"), format.AddressFamilyIPv4, format.ValueKindDirect, format.StructureKindNone, [16]byte{}, 1, neverCheck)
