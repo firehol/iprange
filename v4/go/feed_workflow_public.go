@@ -126,7 +126,7 @@ func beginExactFeed(h mutationHost, name FeedName, create bool, cancellation *Ca
 		// setup_feed (Rust feed_workflow.rs): check, select the feed,
 		// and intern the single-member bitmap on the empty handle.
 		if err := cancellation.check(); err != nil {
-			return publicError(err)
+			return err
 		}
 		var feed writer.FeedEntry
 		if create {
@@ -138,14 +138,14 @@ func beginExactFeed(h mutationHost, name FeedName, create bool, cancellation *Ca
 			feed = existing
 		}
 		if err != nil {
-			return publicError(err)
+			return err
 		}
 		member, err = edit.AddFeedToMembership(writer.EmptyMembershipHandle(), feed)
 		if err != nil {
-			return publicError(err)
+			return err
 		}
 		if err := cancellation.check(); err != nil {
-			return publicError(err)
+			return err
 		}
 		if emptyMapCreate {
 			return edit.BeginEmptyMapFeed()
@@ -574,15 +574,15 @@ func beginRenameFeed(h mutationHost, old, new FeedName, cancellation *Cancellati
 	}
 	err = h.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		if err := cancellation.check(); err != nil {
-			return publicError(err)
+			return err
 		}
 		if _, err := edit.RenameCurrentFeedKnownAvailable(feed, string(new)); err != nil {
-			return publicError(err)
+			return err
 		}
 		return edit.FinishMembershipWorkflow(cancellation.check)
 	})
 	if err != nil {
-		return nil, publicError(err)
+		return nil, h.abortAfter(err)
 	}
 	return &PreparedFeedChange{w: h, cancellation: cancellation}, nil
 }
@@ -624,12 +624,12 @@ func beginDeleteFeed(h mutationHost, name FeedName, cancellation *CancellationTo
 	}
 	err = h.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		if err := edit.DeleteCurrentFeedMembership(feed, cancellation.check); err != nil {
-			return publicError(err)
+			return err
 		}
 		return edit.FinishMembershipWorkflow(cancellation.check)
 	})
 	if err != nil {
-		return nil, publicError(err)
+		return nil, h.abortAfter(err)
 	}
 	return &PreparedFeedChange{w: h, cancellation: cancellation}, nil
 }
@@ -754,21 +754,24 @@ func (in *exactFeedWorkflow) finishState() (finishedWorkflow, error) {
 		}
 		return edit.FinishFeedCoverage6(&in.coverage)
 	}); err != nil {
-		return finishedWorkflow{}, publicError(err)
+		return finishedWorkflow{}, in.w.abortAfter(err)
 	}
 	var merged writer.FeedMerge
 	err := in.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		merged, err = edit.MergeFeed(in.member, in.create, in.cancellation.check)
-		return publicError(err)
+		// Raw internal error: abortAfter classifies Io and Format as
+		// fatal. publicError would hide that class and leave the writer
+		// healthy after a failed merge.
+		return err
 	})
 	if err != nil {
-		return finishedWorkflow{}, publicError(err)
+		return finishedWorkflow{}, in.w.abortAfter(err)
 	}
 	if err := in.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.FinalizeMembershipWorkflow(in.cancellation.check)
 	}); err != nil {
-		return finishedWorkflow{}, publicError(err)
+		return finishedWorkflow{}, in.w.abortAfter(err)
 	}
 	report := in.prepareReport(merged)
 	return completeFeedWorkflow(in.w, report, in.cancellation)
@@ -800,15 +803,16 @@ func (in *exactFeedWorkflow) finishEmptyMapCreate() (finishedWorkflow, error) {
 		} else {
 			addresses, hasOrdered, err = edit.FinishEmptyMapFeedRanges6(in.member, &in.coverage)
 		}
-		return publicError(err)
+		// Raw internal error, same reason as the coverage merge above.
+		return err
 	})
 	if err != nil {
-		return finishedWorkflow{}, publicError(err)
+		return finishedWorkflow{}, in.w.abortAfter(err)
 	}
 	if err := in.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.FinalizeMembershipWorkflow(in.cancellation.check)
 	}); err != nil {
-		return finishedWorkflow{}, publicError(err)
+		return finishedWorkflow{}, in.w.abortAfter(err)
 	}
 	before := in.w.coreOf().BaseInfo()
 	after := in.w.coreOf().Draft().Meta()
@@ -890,7 +894,7 @@ func completeFeedWorkflow(h mutationHost, report *WorkflowReport, cancellation *
 	if err := h.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		return edit.FinishMembershipWorkflow(cancellation.check)
 	}); err != nil {
-		return finishedWorkflow{}, publicError(err)
+		return finishedWorkflow{}, h.abortAfter(err)
 	}
 	return finishedWorkflow{report: report, changed: true, cancellation: cancellation}, nil
 }

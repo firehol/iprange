@@ -633,7 +633,10 @@ func (s *directWorkflowState) finishTimestamp(merge func(edit *writer.WriterEdit
 	err := s.w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		var err error
 		merged, err = merge(edit)
-		return publicError(err)
+		// Raw internal error: abortAfter classifies Io and Format as
+		// fatal. publicError would hide that class and leave the writer
+		// healthy after a failed merge.
+		return err
 	})
 	if err != nil {
 		return nil, s.w.abortAfter(err)

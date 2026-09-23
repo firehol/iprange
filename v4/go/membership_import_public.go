@@ -262,7 +262,7 @@ func importFeedMembership(w *LiveWriter, source membershipImportSource, cache *w
 	err := w.coreOf().Mutate(func(edit *writer.WriterEdit) error {
 		destination, isNew, err := edit.EnsureFeed(string(feed.Name))
 		if err != nil {
-			return publicError(err)
+			return err
 		}
 		created = isNew
 		return edit.MapImportFeed(cache, writer.FeedEntry{Name: string(feed.Name), Index: feed.FeedIndex}, destination)
