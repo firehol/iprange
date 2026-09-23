@@ -72,7 +72,7 @@
    "bytes": 125289,
    "content_sha256": "b8174ed8286ec9ed438c45fd122fd03060a72faf961efdc1eea7f913e06e25b6",
    "git_head": "4b42cc0b6622cb42cd501e6e2ff01a9e5887906e",
-   "name": "crash-rust_to_go.json",
+   "name": "crash.json",
    "role": "crash"
   },
   {
@@ -93,7 +93,7 @@
    "bytes": 51680,
    "content_sha256": "2d5694c60161a4d832d9c5743ac77a0d350aa42023d01932070a9c401ef4a9dd",
    "git_head": "4b42cc0b6622cb42cd501e6e2ff01a9e5887906e",
-   "name": "crash-negative-consumer-false.json",
+   "name": "crash-negative.json",
    "role": "crash-negative"
   },
   {
