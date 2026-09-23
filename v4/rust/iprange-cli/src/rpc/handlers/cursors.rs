@@ -40,6 +40,9 @@ pub fn validate_ranges_open(params: &Value) -> Result<(), String> {
     }
     match object.get("start") {
         None => {}
+        Some(_) if object["view"]["kind"] == "feed" => {
+            return Err("start is not valid for a feed view".into());
+        }
         Some(Value::String(address)) => {
             parse_address(address)?;
         }
@@ -207,11 +210,6 @@ pub fn ranges_open(state: &mut SessionState, params: Value) -> Result<Value, Han
             ))
         }
     };
-    if start.is_some() && matches!(view, CursorView::Feed { .. }) {
-        return Err(HandlerError::invalid_params(
-            "start is valid only for direct or structured views",
-        ));
-    }
     open_and_seek(reader, &view, reverse, start)?;
     let cursor = insert_cursor(
         state,

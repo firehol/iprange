@@ -10,17 +10,18 @@ Implemented and pushed:
 - `59415c6d` — worker identity build tags match amd64/arm64; writer-budget test uses `uint32(0xFFFFFFFF)`. `GOARCH=s390x` build and `GOARCH=386` vet pass.
 - `f3b89821` — workflow mutation closures return the raw internal error and abort through the writer terminal. An I/O or format failure now brands the writer unusable. Workflow package tests pass. A detecting fault test was written and deleted: it stayed green when the fold was restored.
 - `f6840027` — membership scope charges `size_of::<FeedEntry>()`, measured as 260. Aggregation and join tests pass with budgets that still fit the scope.
+- `9bb44d25` — CreateLive rejects a family other than 4 or 6, and a structured kind other than 1, before creating files.
+- `7aec04c0` — `maintenance.list` rejects `max_entries` above 65536 in both the validator and the handler.
+- `aeb1345b` — Rust `--version` and mixed `--jsonrpc` no longer panic on `/dev/full`. Verified: version exits 0, mixed JSON-RPC exits 1, version text unchanged.
+- feed-view `start` is rejected by `validate_ranges_open`, so dispatch returns -32602. The handler no longer has a second check.
 
 Remaining, in order:
 
-1. CreateLive rejects a family other than 4 or 6, and a structured kind other than 1.
-2. `maintenance.list` rejects `max_entries` above 65536.
-3. Rust legacy `--version` and `--jsonrpc` do not panic when stdout or stderr is `/dev/full`.
-4. `reader.ranges.open` with a feed view and `start` returns -32602 from Rust, matching the schema contract.
+1. The other Rust legacy `eprintln!` and `print!` sites (about 58, in `legacy/ops.rs`, `parse.rs`, `dns.rs`, `print.rs`, and `mod.rs`) still panic if stderr is full. Same class as `aeb1345b`, not yet converted.
 5. CLI export, metadata, and removal outputs are created mode `0600`.
 6. Go JSON-RPC ignores SIGPIPE so a broken stdout exits through the tested fatal-write path.
 7. FreeBSD `RecoverLive` refuses before path access. Native check needs `ssh freebsd`.
-8. Algebra heap constants. Not changed in `f6840027`: the private Rust structs were not measured. Measure first, then change only constants the compiler confirms.
+6. Algebra heap constants. Not changed in `f6840027`: the private Rust structs were not measured. Measure first, then change only constants the compiler confirms.
 
 Not in this serial pass:
 

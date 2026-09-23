@@ -1437,6 +1437,14 @@ mod tests {
             "batch_size":16
         });
         assert!(cursors::validate_ranges_open(&params).is_ok());
+        let feed = serde_json::json!({
+            "reader": "a0000000000000000000000000000000",
+            "view": {"kind":"feed", "feed":"alpha"},
+            "direction":"forward",
+            "start":"192.0.2.1",
+            "batch_size":16
+        });
+        assert!(cursors::validate_ranges_open(&feed).is_err());
     }
 
     #[test]
