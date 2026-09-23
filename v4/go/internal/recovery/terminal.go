@@ -63,6 +63,11 @@ func (f *RecoveryPreparationFailure) CleanupState() publication.CleanupState {
 // earlyRecoveryFailure builds the fixed early recovery failure (Rust
 // RecoveryPreparationFailure::early: the fixed problem of the cause
 // and the empty facts).
+// EarlyRecoveryFailure is the parent-side refusal before any path access.
+func EarlyRecoveryFailure(cause error) *RecoveryPreparationFailure {
+	return earlyRecoveryFailure(cause)
+}
+
 func earlyRecoveryFailure(cause error) *RecoveryPreparationFailure {
 	return newRecoveryPreparationFailure(problem(cause), RecoveryReport{}, nil, nil, nil, nil)
 }

@@ -25,6 +25,7 @@ import (
 	"syscall"
 
 	"github.com/firehol/iprange/v4/go/internal/format"
+	"github.com/firehol/iprange/v4/go/internal/live"
 	"github.com/firehol/iprange/v4/go/internal/recovery"
 	"github.com/firehol/iprange/v4/go/internal/validation"
 	"github.com/firehol/iprange/v4/go/internal/worker"
@@ -90,11 +91,12 @@ func RecoverOffline(sourcePath string, candidate *recovery.RecoveryCandidate, de
 
 // RecoverLive runs one live worker recovery (Rust recover_live ->
 // worker::recover under the live machine). The live-support refusal
-// runs worker-side before any path access (the worker machine's
-// RecoverLive entry); on this build the parent-side
-// require_live_supported would be the same always-nil check the
-// worker performs.
+// runs here, before the parent creates an output attempt or spawns a
+// worker. On FreeBSD that check is not nil.
 func RecoverLive(sourcePath string, candidate *recovery.RecoveryCandidate, destinationPath string, budget *recovery.RecoveryBudget, check func() error, sink recovery.RecoverySink) (*recovery.RecoveryResult, *recovery.RecoveryPreparationFailure) {
+	if err := live.RequireLiveSupported(); err != nil {
+		return nil, recovery.EarlyRecoveryFailure(err)
+	}
 	return recoverRouted(sourcePath, candidate, destinationPath, worker.WorkerModeLive, budget, check, sink)
 }
 
