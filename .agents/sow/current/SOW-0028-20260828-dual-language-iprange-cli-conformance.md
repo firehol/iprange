@@ -19,9 +19,8 @@ Implemented and pushed:
 
 Remaining, in order:
 
-1. Go JSON-RPC ignores SIGPIPE so a broken stdout exits through the tested fatal-write path.
-2. FreeBSD `RecoverLive` refuses before path access. Native check needs `ssh freebsd`.
-3. Algebra heap constants. Not changed in `f6840027`: the private Rust structs were not measured. Measure first, then change only constants the compiler confirms.
+1. Algebra heap constants. Not changed in `f6840027`: the private Rust structs were not measured. Measure first, then change only constants the compiler confirms.
+2. Native FreeBSD check of the live-recovery refusal. The code refuses before routing. `ssh freebsd` is not authorized, so that host has not run it.
 
 Not in this serial pass:
 
