@@ -8,6 +8,8 @@ package rpc
 import (
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/firehol/iprange/v4/go/internal/calleropen"
 )
@@ -15,6 +17,10 @@ import (
 // Run executes the JSON-RPC transport until EOF or fatal error and
 // returns the process exit code.
 func Run() int {
+	// A broken stdout must reach the session as EPIPE, not as a signal
+	// death. The Go runtime re-raises SIGPIPE on fd 1 and 2. Legacy mode
+	// keeps that C behavior. This process is JSON-RPC only.
+	signal.Ignore(syscall.SIGPIPE)
 	// The poller-readiness decision (design section 6) is taken here,
 	// while the process is still single-goroutine and before the
 	// session starts its reader and worker goroutines, before the
