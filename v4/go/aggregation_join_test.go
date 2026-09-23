@@ -483,8 +483,8 @@ func TestAggregationErrorsAndCancellation(t *testing.T) {
 
 	// An operation heap that cannot fit its own allocations fails with
 	// InsufficientResourceBudget: a scope built with a tight budget still
-	// resolves, but AllPairs needs 70*24 totals bytes plus the pair table.
-	tight, err := q.AllFeeds(MembershipQueryBudget{MaxHeapBytes: 2048}, nil)
+	// resolves, but AllPairs needs the pair table beyond that budget.
+	tight, err := q.AllFeeds(MembershipQueryBudget{MaxHeapBytes: 32768}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1036,9 +1036,9 @@ func TestJoinMembershipErrors(t *testing.T) {
 	if _, err := left.JoinMembership(right6, nil, nil, nil); errorAsCode(err) != ErrorWrongAddressFamily {
 		t.Fatalf("family mismatch error = %v, want WrongAddressFamily", err)
 	}
-	// A small budget fails the op heap: the cross vector needs 70*24
-	// bytes, uncovered 71*24 more.
-	tiny, err := q.AllFeeds(MembershipQueryBudget{MaxHeapBytes: 4096}, nil)
+	// A budget that fits the 70-entry scope but not the join result
+	// table fails the operation heap.
+	tiny, err := q.AllFeeds(MembershipQueryBudget{MaxHeapBytes: 20000}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

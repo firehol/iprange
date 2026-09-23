@@ -195,11 +195,10 @@ func (r *ImmutableReader) ResolveNamedFeeds(names []string, maxHeapBytes uint64,
 // Scope budget parity (Rust membership_query/scope.rs + heap.rs): the
 // budget models the Rust owner's retained heap, not Go's allocator, so
 // identical inputs admit identically. Charges are: the entries vector
-// (count * size_of::<FeedEntry>(); the Rust FeedEntry is 24 bytes: a u32
-// index plus a 16-byte borrowed name slice, so name bytes alias the
-// mapping and are free) and the feed-index map (dense u32 positions when
-// they fit, else sparse slots, whichever is smaller).
-const rustFeedEntrySize = 24
+// (count * size_of::<FeedEntry>(); FeedEntry is FeedName {[u8;255], u8}
+// plus a u32 index, 260 bytes) and the feed-index map (dense u32
+// positions when they fit, else sparse slots, whichever is smaller).
+const rustFeedEntrySize = 260
 
 // chargeEntries applies the entries-vector charge (Rust
 // heap.vector::<FeedEntry>).
