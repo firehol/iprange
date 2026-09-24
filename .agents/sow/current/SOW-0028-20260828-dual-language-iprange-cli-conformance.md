@@ -21910,6 +21910,43 @@ production-sized ceiling run (1,000+ feeds, 10M ranges) at milestone close.
   (mitigated by N-round medians + spread reporting); harness becoming a
   second qualification system (mitigated by reusing `run.py` framing/oracle
   and plain-log evidence).
+### Attestation gaps assigned to this milestone (2026-09-24)
+
+Review wave 001 found these contracts with no detecting test. They are not
+separate patches. Each one is a scenario or a negative case in this harness.
+Closing milestone 5 requires a detecting case for every row.
+
+1. Retirement extents that touch or overlap in one transaction are rejected.
+   `v4/go/internal/validation/retirement.go:119`. Current fixtures avoid adjacency.
+2. Reclaim refuses a reader slot that names an uncommitted transaction.
+   `v4/go/internal/live/reclaim.go:111-113`.
+3. The 1024 closed-handle tombstone evicts the oldest handle, and CloseAll
+   order is deterministic. `v4/go/internal/cli/rpc/state.go:113`.
+4. A 17-member JSON-RPC batch is rejected. The limit is 16.
+   `v4/go/internal/cli/rpc/framing.go:31`.
+5. After EOF, a queued execute keeps the cancelled token and aborts.
+   `v4/go/internal/cli/rpc/session.go:717`.
+6. A closed handle used again returns `handle_closed`.
+   `v4/go/internal/cli/handlers/reader_helpers.go:24-31`.
+7. The C ABI runs the shared semantic conformance cases. `c-abi-v4.md:367`
+   claims this. No C harness reads `cases.json`.
+8. `BUFFER_TOO_SMALL`, `NULL_POINTER`, and `INVALID_LENGTH` are asserted by
+   a C caller. They are defined and currently unasserted.
+9. Golden JSON-RPC response bytes are compared with a product binary.
+   `v4/cli/check_golden.py` does not run one.
+10. Cancellation is covered in both producer and consumer directions.
+    `cancel.json` is consumer-only.
+11. One IPv6 structured fixture is opened by both engines. The current
+    structured fixtures are IPv4.
+12. A recovery output is opened by the other engine in both directions.
+    This is the only durable artifact class with no cross-open case.
+13. A history-projection report, including cutoff edges, is compared across
+    engines. Current fixtures check file counts, not the report.
+14. Rust free-bitmap self, ancestor, and limit guards have a negative case.
+    `v4/rust/iprange-livedb/src/free_bitmap/mutation.rs:230-238`.
+15. Reclaim with an open draft is refused, and the exact `max_pages` boundary
+    is pinned. `v4/rust/iprange-livedb/src/live_writer/reclaim.rs:42-44`.
+
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness
   itself (tester: every scenario detects a seeded wrong-answer mutant;

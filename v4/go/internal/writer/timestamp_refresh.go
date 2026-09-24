@@ -7,6 +7,7 @@
 package writer
 
 import (
+	"github.com/firehol/iprange/v4/go/internal/fault"
 	"github.com/firehol/iprange/v4/go/internal/format"
 )
 
@@ -284,6 +285,11 @@ func (p *lastSeenPolicy[K]) preserveWithoutInput() bool { return false }
 // mergeFirstSeen merges the workflow coverage tree over the committed
 // base with the first-seen policy (Rust DraftStore::merge_first_seen).
 func (s *DraftStore) mergeFirstSeen(base format.Meta, refreshValue uint32, check func() error) (TimestampMerge, error) {
+	// v4work-only. Production builds compile this to nothing. The public
+	// abort test uses it to prove a format error brands the writer unusable.
+	if err := fault.Fail("timestamp.merge_first_seen_fatal"); err != nil {
+		return TimestampMerge{}, corrupt("injected draft corruption: " + err.Error())
+	}
 	if base.AddressFamily == format.AddressFamilyIPv4 {
 		return mergeTimestamp(s, rangeCodec4{}, base, newFirstSeenPolicy(refreshValue, rangeCodec4{}), check)
 	}

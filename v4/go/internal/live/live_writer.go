@@ -443,9 +443,11 @@ func (w *LiveWriter) commitAttempt() (writer.CommitAttempt, error) {
 	if err := w.requireHealthy(); err != nil {
 		return writer.CommitAttempt{}, err
 	}
-	// Rust commit_attempt also requires the operation handle not to be
-	// abandoned; Go has no operation handles (workflows are not yet
-	// ported), so that gate is structurally closed.
+	// Rust marks a dropped prepared operation abandoned and then refuses
+	// this commit. Go has no destructor, so it cannot observe that drop.
+	// The caller must Abort or Commit the prepared handle. A finalizer is
+	// not used: it would run at an unknown time and could discard a draft
+	// the caller still holds.
 	if w.core.HasDraft() && !w.core.DraftChanged() {
 		if err := w.discardDraft(); err != nil {
 			return writer.CommitAttempt{}, err

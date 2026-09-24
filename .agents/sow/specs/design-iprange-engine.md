@@ -409,6 +409,12 @@ Every engine-created artifact starts creator-private (`0600` on POSIX and the
 equivalent protected user-only Windows DACL), independent of process defaults.
 Applications deliberately widen or change ownership only after publication.
 
+Go does not abandon a prepared operation when its handle becomes unreachable.
+Rust does, because dropping the handle runs cleanup. Go has no destructor.
+The caller must commit or abort the prepared handle. A finalizer is not a
+replacement: it runs at an unknown time and can discard a draft the caller
+still holds. This is a recorded deviation, not an unfinished port.
+
 The Rust implementation is measured first against the current update-ipsets
 workflows. After acceptance and the Go port, Rust and Go are compared operation
 by operation. A 5–10% performance band is a target where the runtimes permit it,
