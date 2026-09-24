@@ -47,6 +47,12 @@ def substitute(value, work):
 def field(value, path):
     current = value
     for part in path.split("."):
+        if part.isdigit():
+            index = int(part)
+            if not isinstance(current, list) or index >= len(current):
+                raise KeyError(path)
+            current = current[index]
+            continue
         if not isinstance(current, dict) or part not in current:
             raise KeyError(path)
         current = current[part]

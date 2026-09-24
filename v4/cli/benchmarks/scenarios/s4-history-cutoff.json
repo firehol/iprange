@@ -1,0 +1,87 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s4-history-cutoff",
+  "purpose": "Project one last-seen database at the value boundary. A window keeps addresses whose last-seen value is greater than the cutoff. Cutoff 9 keeps the value-10 range. Cutoff 10 drops it.",
+  "fixtures": [
+    {
+      "path": "seen.csv",
+      "text": "from,to,value\n192.0.2.0,192.0.2.9,10\n"
+    }
+  ],
+  "calls": [
+    {
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/seen.iprange",
+        "family": "ipv4",
+        "value_kind": "direct",
+        "structure_kind": "none",
+        "value_tag": {"text": "last_seen"},
+        "reader_capacity": 4
+      },
+      "compare": ["value_kind", "state"]
+    },
+    {
+      "method": "iprange.v1.direct.replace",
+      "params": {
+        "path": "$WORK/seen.iprange",
+        "input": {"path": "$WORK/seen.csv", "max_line_bytes": 1024},
+        "metadata": {"mode": "keep"},
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": ["report.after_addresses"],
+      "expect": {"report.after_addresses": "10"}
+    },
+    {
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/history.iprange",
+        "family": "ipv4",
+        "value_kind": "membership",
+        "structure_kind": "none",
+        "value_tag": {"text": "membership"},
+        "reader_capacity": 4
+      },
+      "compare": ["value_kind"]
+    },
+    {
+      "method": "iprange.v1.history.project",
+      "params": {
+        "path": "$WORK/history.iprange",
+        "last_seen": {"path": "$WORK/seen.iprange", "mode": "live"},
+        "windows": [
+          {"feed": "keep", "cutoff": 9},
+          {"feed": "drop", "cutoff": 10}
+        ],
+        "metadata": {"mode": "keep"},
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": [
+        "report.windows.0.feed_name",
+        "report.windows.0.cutoff",
+        "report.windows.0.after_addresses",
+        "report.windows.1.feed_name",
+        "report.windows.1.cutoff",
+        "report.windows.1.after_addresses"
+      ],
+      "expect": {
+        "report.windows.0.feed_name": "keep",
+        "report.windows.0.cutoff": 9,
+        "report.windows.0.after_addresses": "10",
+        "report.windows.1.feed_name": "drop",
+        "report.windows.1.cutoff": 10,
+        "report.windows.1.after_addresses": "0"
+      }
+    }
+  ]
+}

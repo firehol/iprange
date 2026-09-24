@@ -21974,8 +21974,15 @@ replaces it from day 2. The fixture diff is 5 before, 6 after, 2
 unchanged, 3 removed, and 4 added. The scenario names those counts.
 Agreement between the engines is not enough: a wrong shared diff fails.
 
-Performance mode, the generator, and the 15 negative cases are not in
-this slice.
+`s4-history-cutoff` loads one direct range whose last-seen value is 10
+and projects two windows. A window keeps addresses whose value is
+greater than the cutoff. Cutoff 9 keeps all 10 addresses. Cutoff 10
+keeps none. The first expected edge was the other way around; the
+scenario now records the edge the engines implement.
+
+This is attestation gap 13 for one cutoff boundary. It is not the full
+projection-report exchange. Performance mode, the generator, and the
+other 14 negative cases are not in this slice.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness
