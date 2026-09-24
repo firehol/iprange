@@ -29,18 +29,18 @@ def load_scenario(path):
         scenario = json.load(stream)
     if scenario.get("schema") != SCHEMA:
         raise ValueError(f"{path}: schema is not {SCHEMA}")
-    if not scenario.get("name") or not scenario.get("calls"):
-        raise ValueError(f"{path}: name and calls are required")
+    if not scenario.get("name") or not (scenario.get("calls") or scenario.get("write")):
+        raise ValueError(f"{path}: name and calls or write are required")
     return scenario
 
 
-def substitute(value, work):
+def substitute(value, work, token="$WORK"):
     if isinstance(value, str):
-        return value.replace("$WORK", work)
+        return value.replace(token, work)
     if isinstance(value, list):
-        return [substitute(item, work) for item in value]
+        return [substitute(item, work, token) for item in value]
     if isinstance(value, dict):
-        return {key: substitute(item, work) for key, item in value.items()}
+        return {key: substitute(item, work, token) for key, item in value.items()}
     return value
 
 
@@ -73,32 +73,69 @@ def write_fixtures(scenario, work):
             stream.write(text)
 
 
-def run_engine(binary, name, scenario, work):
+def published_files(scenario, work):
+    names = []
+    for relative in scenario.get("publish", []):
+        if os.path.isabs(relative) or ".." in relative.split("/"):
+            raise ValueError(f"publish path escapes the work directory: {relative}")
+        names.append(relative)
+        if not os.path.isfile(os.path.join(work, relative)):
+            raise AssertionError(f"published file was not written: {relative}")
+    return names
+
+
+def stage_published(source_work, dest_work, names, incoming):
+    # The reader opens files under incoming/. Those files were written by
+    # the other engine, so this copy is the cross-open.
+    for relative in names:
+        source = os.path.join(source_work, relative)
+        dest = os.path.join(dest_work, incoming, relative)
+        os.makedirs(os.path.dirname(dest), exist_ok=True)
+        shutil.copy2(source, dest)
+
+
+def run_calls(service, name, scenario, work, calls, peer):
+    observed = []
+    for index, call in enumerate(calls, start=1):
+        params = substitute(call["params"], work)
+        if peer is not None:
+            params = substitute(params, peer, token="$PEER")
+        result = service.call(
+            f"{scenario['name']}-{name}-{index}",
+            call["method"],
+            params,
+        )
+        if "error" in result:
+            raise AssertionError(f"{name} {call['method']}: {result['error']}")
+        observed.append(result["result"])
+    return observed
+
+
+def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None):
     # Each engine gets its own directory. Sharing one directory makes the
     # second create fail because the first engine already wrote the file.
-    engine_work = os.path.join(work, name)
-    os.makedirs(engine_work, exist_ok=False)
+    # A cross-open reader passes the writer directory so it can see the
+    # copied snapshot.
+    if engine_work is None:
+        engine_work = os.path.join(work, name)
+    os.makedirs(engine_work, exist_ok=True)
     write_fixtures(scenario, engine_work)
     service = JsonRpcService([binary, "--jsonrpc"], name, cwd=engine_work)
-    observed = []
     try:
-        for index, call in enumerate(scenario["calls"], start=1):
-            result = service.call(
-                f"{scenario['name']}-{index}",
-                call["method"],
-                substitute(call["params"], engine_work),
-            )
-            if "error" in result:
-                raise AssertionError(f"{name} {call['method']}: {result['error']}")
-            observed.append(result["result"])
-        return observed
+        return run_calls(service, name, scenario, engine_work, calls, peer)
     finally:
         service.close()
 
 
+def scenario_calls(scenario):
+    calls = list(scenario.get("write", scenario.get("calls", [])))
+    calls.extend(scenario.get("read", []))
+    return calls
+
+
 def compare(scenario, rust, go):
     mismatches = []
-    for index, call in enumerate(scenario["calls"]):
+    for index, call in enumerate(scenario_calls(scenario)):
         for path in call["compare"]:
             left = field(rust[index], path)
             right = field(go[index], path)
@@ -125,8 +162,19 @@ def main():
     work = args.work_dir or tempfile.mkdtemp(prefix="iprange-bench-")
     os.makedirs(work, exist_ok=True)
     try:
-        rust = run_engine(args.rust, "rust", scenario, work)
-        go = run_engine(args.go, "go", scenario, work)
+        rust_work = os.path.join(work, "rust")
+        go_work = os.path.join(work, "go")
+        write_calls = scenario.get("write", scenario.get("calls", []))
+        read_calls = scenario.get("read", [])
+        rust = run_engine(args.rust, "rust", scenario, work, write_calls)
+        go = run_engine(args.go, "go", scenario, work, write_calls)
+        if read_calls:
+            names = published_files(scenario, rust_work)
+            published_files(scenario, go_work)
+            stage_published(rust_work, go_work, names, "from-rust")
+            stage_published(go_work, rust_work, names, "from-go")
+            rust.extend(run_engine(args.go, "go-reads-rust", scenario, work, read_calls, peer="from-rust", engine_work=go_work))
+            go.extend(run_engine(args.rust, "rust-reads-go", scenario, work, read_calls, peer="from-go", engine_work=rust_work))
         mismatches = compare(scenario, rust, go)
     finally:
         if own_work:
@@ -134,7 +182,7 @@ def main():
     if mismatches:
         return fail(scenario["name"] + "\n" + "\n".join(mismatches))
     print(f"PASS {scenario['name']}")
-    for index, call in enumerate(scenario["calls"]):
+    for index, call in enumerate(scenario_calls(scenario)):
         shown = {path: field(rust[index], path) for path in call["compare"]}
         print(f"  {call['method']} {shown}")
     return 0

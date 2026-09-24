@@ -21987,8 +21987,17 @@ projection-report exchange.
 addresses, right has 4, and 2 are in both. The scenario names the
 overlap and both uncovered counts. A shared wrong overlap fails.
 
-Performance mode, the generator, and the other 14 negative cases are
-not in this slice.
+`s6-snapshot-cross-open` has each engine snapshot the same 5-address
+feed. The runner copies that snapshot into the other engine's directory.
+Go opens the Rust snapshot and Rust opens the Go snapshot. Both report
+2 range records and 1 active feed.
+
+This is a snapshot cross-open. It is not attestation gap 12. That gap
+is a recovery output, and recovery is a different method and a different
+artifact.
+
+Performance mode, the generator, and the 15 negative cases are not in
+this slice. Gap 13 still has only one cutoff boundary.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness
