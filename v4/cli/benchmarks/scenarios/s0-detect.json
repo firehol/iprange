@@ -1,0 +1,12 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s0-detect",
+  "purpose": "Prove the runner fails when a named field differs. This scenario is not a product case.",
+  "calls": [
+    {
+      "method": "iprange.v1.system.describe",
+      "params": {},
+      "compare": ["implementation"]
+    }
+  ]
+}

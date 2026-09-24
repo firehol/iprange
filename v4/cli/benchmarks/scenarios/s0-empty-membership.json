@@ -1,0 +1,26 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s0-empty-membership",
+  "purpose": "Prove both engines create the same empty membership database and report the same committed state.",
+  "calls": [
+    {
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/db.iprange",
+        "family": "ipv4",
+        "value_kind": "membership",
+        "structure_kind": "none",
+        "value_tag": {"text": "membership"},
+        "reader_capacity": 4
+      },
+      "compare": ["address_family", "value_kind", "structure_kind", "value_tag", "reader_capacity", "state"]
+    },
+    {
+      "method": "iprange.v1.database.info",
+      "params": {
+        "source": {"path": "$WORK/db.iprange", "mode": "live"}
+      },
+      "compare": ["method", "info.address_family", "info.value_kind", "info.structure_kind", "info.value_tag", "info.range_record_count", "info.active_feed_count"]
+    }
+  ]
+}

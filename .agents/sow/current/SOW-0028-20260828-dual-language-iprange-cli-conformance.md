@@ -21886,15 +21886,17 @@ production-sized ceiling run (1,000+ feeds, 10M ranges) at milestone close.
 - Test-only necessary-work counters (page visits, range passes) per
   `AGENTS.md`, compiled out of release.
 
-### Open decisions (user, before implementation)
+### Open decisions (resolved 2026-09-24)
 
-1. Harness language: Python stdlib reusing `run.py` framing/oracle
-   (recommended) vs Go vs Rust.
-2. First step: legacy-CLI scenarios + `--jsonrpc` feed workflow together
-   (recommended) vs legacy first.
-3. Whether SOW-0029/0030/0031 must land before the join/projection
-   scenarios can run against real methods (both engines already expose
-   history projection and joins, so recommended: build against what exists).
+The user said proceed on the recommended path. The three recommendations
+are therefore the decisions:
+
+1. Harness language: Python stdlib. The runner reuses `JsonRpcService`
+   from `v4/cli/run.py`. It does not grow a second protocol client.
+2. First step: one `--jsonrpc` correctness scenario, not the legacy CLI.
+   The scenario file is the format. More scenarios use the same file shape.
+3. Join and projection scenarios build against the methods both engines
+   already expose. SOW-0029/0030/0031 are not a prerequisite.
 
 ### Pre-Implementation Gate (milestone 5)
 
@@ -21950,6 +21952,17 @@ Closing milestone 5 requires a detecting case for every row.
     `v4/rust/iprange-livedb/src/free_bitmap/mutation.rs:230-238`.
 15. Reclaim with an open draft is refused, and the exact `max_pages` boundary
     is pinned. `v4/rust/iprange-livedb/src/live_writer/reclaim.rs:42-44`.
+
+### First slice (2026-09-24)
+
+`v4/cli/benchmarks/run.py` drives one scenario against both release
+binaries. Each engine gets its own work directory, because a shared
+directory makes the second create fail on the first engine's file.
+`s0-empty-membership` compares the create result and the live database
+info. It passed on the staged release binaries.
+`s0-detect` compares `implementation` and fails, which is the proof that
+a field difference is not reported as a pass. Performance mode, the
+generator, and the 15 negative cases are not in this slice.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness

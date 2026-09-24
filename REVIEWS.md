@@ -169,6 +169,7 @@ no state to maintain between runs.
 | rust-abi | generated C header/manifest equality, ABI checks | `nice ./v4/rust/check-source-graph.sh` + the abi tests in the rust-unit run |
 | go-unit | Go engine packages | `nice go -C v4/go test ./...` (per package: `./internal/cli/legacy/` etc.) |
 | cli-matrix | CLI conformance matrices (c / rust / go / cross) | `nice python3 v4/cli/run.py --matrix <name> [--filter <case>]` |
+| cli-bench | milestone-5 scenario correctness | `nice python3 v4/cli/benchmarks/run.py --rust <abs> --go <abs> --scenario <file>` |
 | cli-races | swap-race / crash-recovery replay | `v4/cli/races/` runner (see its README) |
 | legacy-c | the released C CLI | `nice ./run-tests.sh` (tests.d/), `nice ./run-unit-tests.sh` |
 | sanitizers | ASan/MSan/TSan/valgrind variants | `nice ./run-sanitizer-tests.sh` |
