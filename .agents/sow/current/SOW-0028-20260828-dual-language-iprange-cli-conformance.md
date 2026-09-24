@@ -21981,8 +21981,14 @@ keeps none. The first expected edge was the other way around; the
 scenario now records the edge the engines implement.
 
 This is attestation gap 13 for one cutoff boundary. It is not the full
-projection-report exchange. Performance mode, the generator, and the
-other 14 negative cases are not in this slice.
+projection-report exchange.
+
+`s5-overlap-join` publishes two feeds and joins them. Left has 6
+addresses, right has 4, and 2 are in both. The scenario names the
+overlap and both uncovered counts. A shared wrong overlap fails.
+
+Performance mode, the generator, and the other 14 negative cases are
+not in this slice.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness
