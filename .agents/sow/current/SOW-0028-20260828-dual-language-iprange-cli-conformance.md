@@ -25,7 +25,11 @@ Remaining, in order:
 
 Not in this serial pass:
 
-- Attestation-only gaps (retirement overlap, reclaim guards, tombstone cap, 17-member batch, EOF re-arm, handle_closed, C-ABI corpus, golden wire bytes, mixed-direction cancellation, IPv6 structured fixture, recovery cross-open, projection-report exchange) belong to the milestone-5 harness.
+- The 15 attestation gaps are listed under Milestone 5, "Attestation gaps assigned to this milestone". They are harness scenarios, not separate patches.
+- `abf9e14a` proves a fatal first-seen merge abort leaves the writer unusable. The test fails if the merge error is wrapped before abort.
+- Go drop-abandonment is recorded in `design-iprange-engine.md`. No finalizer was added.
+- update-ipsets v2 IPv6 byte order is pending SOW-0126 in that repository. It is committed locally and not pushed. A compatibility decision blocks the codec change.
+- Security and publish CI fail because coverage runs compare with `/usr/bin/iprange`, which is not installed in that job. The missing lines are "matches the C reference". This is an environment gap, not a product failure.
 - `gofmt` on `spawn_headroom_test.go` is in the tooling commit. Battery commit and full TSV regeneration remain open, as listed above.
 - update-ipsets v2 u128 byte order is a separate SOW. A blind flip breaks its own persisted caches.
 - Go has no drop-abandonment. Record the deviation; do not add a finalizer.
