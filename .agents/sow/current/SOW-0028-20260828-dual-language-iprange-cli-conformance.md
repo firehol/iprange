@@ -21961,8 +21961,16 @@ directory makes the second create fail on the first engine's file.
 `s0-empty-membership` compares the create result and the live database
 info. It passed on the staged release binaries.
 `s0-detect` compares `implementation` and fails, which is the proof that
-a field difference is not reported as a pass. Performance mode, the
-generator, and the 15 negative cases are not in this slice.
+a field difference is not reported as a pass.
+
+`s1-import-one-feed` writes one unsorted text fixture per engine and
+publishes it. Both engines report 3 input records, 2 normalized ranges,
+and 8 addresses. The database then reports membership, 2 range records,
+and 1 active feed. The overlap in the fixture is what makes a wrong
+merge visible: a copy of the input would report 3 ranges.
+
+Performance mode, the generator, and the 15 negative cases are not in
+this slice.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness

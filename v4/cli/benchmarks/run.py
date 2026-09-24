@@ -53,11 +53,26 @@ def field(value, path):
     return current
 
 
+def write_fixtures(scenario, work):
+    for fixture in scenario.get("fixtures", []):
+        relative = fixture["path"]
+        if os.path.isabs(relative) or ".." in relative.split("/"):
+            raise ValueError(f"fixture path escapes the work directory: {relative}")
+        path = os.path.join(work, relative)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        text = fixture["text"]
+        if not text.endswith("\n"):
+            text += "\n"
+        with open(path, "w", encoding="utf-8") as stream:
+            stream.write(text)
+
+
 def run_engine(binary, name, scenario, work):
     # Each engine gets its own directory. Sharing one directory makes the
     # second create fail because the first engine already wrote the file.
     engine_work = os.path.join(work, name)
     os.makedirs(engine_work, exist_ok=False)
+    write_fixtures(scenario, engine_work)
     service = JsonRpcService([binary, "--jsonrpc"], name, cwd=engine_work)
     observed = []
     try:
@@ -110,6 +125,9 @@ def main():
     if mismatches:
         return fail(scenario["name"] + "\n" + "\n".join(mismatches))
     print(f"PASS {scenario['name']}")
+    for index, call in enumerate(scenario["calls"]):
+        shown = {path: field(rust[index], path) for path in call["compare"]}
+        print(f"  {call['method']} {shown}")
     return 0
 
 
