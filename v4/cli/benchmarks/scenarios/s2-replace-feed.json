@@ -1,0 +1,140 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s2-replace-feed",
+  "purpose": "Replace one feed and compare the added, removed, and unchanged address counts with the fixture diff.",
+  "fixtures": [
+    {
+      "path": "day1.txt",
+      "text": "192.0.2.0/30\n198.51.100.10\n"
+    },
+    {
+      "path": "day2.txt",
+      "text": "192.0.2.2-192.0.2.6\n203.0.113.1\n"
+    }
+  ],
+  "calls": [
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["$WORK/day1.txt"],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "alpha",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "day1"},
+        "destination": "$WORK/day1.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": ["report.addresses"],
+      "expect": {"report.addresses": "5"}
+    },
+    {
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/db.iprange",
+        "family": "ipv4",
+        "value_kind": "membership",
+        "structure_kind": "none",
+        "value_tag": {"text": "membership"},
+        "reader_capacity": 4
+      },
+      "compare": ["state", "value_kind"]
+    },
+    {
+      "method": "iprange.v1.feeds.create",
+      "params": {
+        "path": "$WORK/db.iprange",
+        "feed": "alpha",
+        "current": {
+          "source": {"path": "$WORK/day1.iprange", "mode": "immutable"},
+          "feed": "alpha"
+        },
+        "metadata": {"mode": "keep"},
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": ["report.added_addresses", "report.removed_addresses"],
+      "expect": {
+        "report.added_addresses": "5",
+        "report.removed_addresses": "0"
+      }
+    },
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["$WORK/day2.txt"],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "alpha",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "day2"},
+        "destination": "$WORK/day2.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": ["report.addresses"],
+      "expect": {"report.addresses": "6"}
+    },
+    {
+      "method": "iprange.v1.feeds.replace",
+      "params": {
+        "path": "$WORK/db.iprange",
+        "feed": "alpha",
+        "current": {
+          "source": {"path": "$WORK/day2.iprange", "mode": "immutable"},
+          "feed": "alpha"
+        },
+        "metadata": {"mode": "keep"},
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": [
+        "report.added_addresses",
+        "report.removed_addresses",
+        "report.unchanged_value_addresses",
+        "report.before_addresses",
+        "report.after_addresses"
+      ],
+      "expect": {
+        "report.added_addresses": "4",
+        "report.removed_addresses": "3",
+        "report.unchanged_value_addresses": "2",
+        "report.before_addresses": "5",
+        "report.after_addresses": "6"
+      }
+    }
+  ]
+}

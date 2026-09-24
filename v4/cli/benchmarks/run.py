@@ -98,6 +98,9 @@ def compare(scenario, rust, go):
             right = field(go[index], path)
             if left != right:
                 mismatches.append(f"{call['method']} {path}: rust={left!r} go={right!r}")
+            expected = call.get("expect", {}).get(path)
+            if expected is not None and left != expected:
+                mismatches.append(f"{call['method']} {path}: got={left!r} expect={expected!r}")
     return mismatches
 
 

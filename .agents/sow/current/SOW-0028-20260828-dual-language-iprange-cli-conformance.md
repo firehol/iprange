@@ -21969,6 +21969,11 @@ and 8 addresses. The database then reports membership, 2 range records,
 and 1 active feed. The overlap in the fixture is what makes a wrong
 merge visible: a copy of the input would report 3 ranges.
 
+`s2-replace-feed` publishes two days, creates the feed from day 1, and
+replaces it from day 2. The fixture diff is 5 before, 6 after, 2
+unchanged, 3 removed, and 4 added. The scenario names those counts.
+Agreement between the engines is not enough: a wrong shared diff fails.
+
 Performance mode, the generator, and the 15 negative cases are not in
 this slice.
 
