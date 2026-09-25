@@ -22030,8 +22030,17 @@ checks that count before either engine runs. `s1-generated-feed` imports
 that text and requires both engines to report 47. Agreement between the
 engines is no longer the only proof.
 
-Performance mode is not in this slice. The generator is IPv4 text only.
-It does not build corrupt files or structured fixtures.
+`measure.py` times one child and reads `RUSAGE_CHILDREN` after that
+child exits. On Linux the peak is the largest waited-for child, in KiB.
+A probe of the staged Rust binary reported 14240 KiB. The test allocates
+8 MiB in a child and requires the reported peak to be above 1 MiB, so
+the runner's own memory is not the number. A failed child is not a
+sample. The scenario runner does not call this yet: a scenario command
+is not `--help`, and wiring it to the wrong command would repeat the
+old measurement defect.
+
+The generator is IPv4 text only. It does not build corrupt files or
+structured fixtures.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness
