@@ -22012,8 +22012,20 @@ returns 16 results. A batch of 17 returns JSON-RPC `-32600`. Both
 engines agree. The 16-member call is required: without it, a runner
 that rejected every batch would still pass.
 
-Performance mode, the generator, and the other 13 negative cases are
-not in this slice. Gap 13 still has only one cutoff boundary.
+The remaining attestation gaps are not another scenario file. They need
+a fixture generator, a corrupt-file builder, or a second connection:
+
+- Gaps 1, 2, 14, and 15 need a file the public API cannot create.
+- Gap 3 needs 1024 closes in one session. That is a loop, not a new
+  proof, and it is not the next migration scenario.
+- Gaps 5 and 10 need a request that stays running while another request
+  arrives. This runner sends one call and waits.
+- Gaps 7 and 8 need a C caller. This runner drives the JSON-RPC CLI.
+- Gap 9 needs golden response bytes from a product binary.
+- Gap 11 needs the structured fixture generator.
+
+Performance mode and the seeded generator are the next harness work.
+They are not blocked by another negative scenario.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness
