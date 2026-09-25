@@ -1,0 +1,18 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "n4-batch-limit",
+  "purpose": "A JSON-RPC batch of 17 members is rejected. The limit is 16. A successful batch is a failure.",
+  "calls": [
+    {
+      "batch": 16,
+      "compare": ["result.count"],
+      "expect": {"result.count": 16}
+    },
+    {
+      "batch": 17,
+      "expect_rpc_error": -32600,
+      "compare": ["error.code"],
+      "expect": {"error.code": -32600}
+    }
+  ]
+}

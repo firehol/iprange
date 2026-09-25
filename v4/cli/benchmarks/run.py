@@ -113,15 +113,28 @@ def run_calls(service, name, scenario, work, calls, peer):
     observed = []
     captured = {}
     for index, call in enumerate(calls, start=1):
-        params = substitute(call["params"], work)
-        if peer is not None:
+        if "batch" in call:
+            result = call_batch(service, call["batch"], work)
+        else:
+            params = substitute(call["params"], work)
+        if "batch" not in call and peer is not None:
             params = substitute(params, peer, token="$PEER")
-        params = substitute_capture(params, captured)
-        result = service.call(
+        if "batch" not in call:
+            params = substitute_capture(params, captured)
+            result = service.call(
             f"{scenario['name']}-{name}-{index}",
             call["method"],
             params,
         )
+        if "expect_rpc_error" in call:
+            error = result.get("error", {})
+            if error.get("code") != call["expect_rpc_error"]:
+                raise AssertionError(
+                    f"{name} {call.get('method', 'batch')}: rpc code={error.get('code')!r}, "
+                    f"want {call['expect_rpc_error']!r}"
+                )
+            observed.append({"error": {"code": error.get("code")}})
+            continue
         if "expect_error" in call:
             if "error" not in result:
                 raise AssertionError(f"{name} {call['method']}: expected error, got result")
@@ -135,10 +148,36 @@ def run_calls(service, name, scenario, work, calls, peer):
             continue
         if "error" in result:
             raise AssertionError(f"{name} {call['method']}: {result['error']}")
+        if "batch" in call:
+            observed.append(result)
+            continue
         for item in call.get("capture", []):
             captured[item["name"]] = field(result["result"], item["path"].replace("/", "."))
         observed.append(result["result"])
     return observed
+
+
+def call_batch(service, count, work):
+    members = []
+    for index in range(count):
+        members.append({
+            "jsonrpc": "2.0",
+            "id": f"batch-{index}",
+            "method": "iprange.v1.system.describe",
+            "params": {},
+        })
+    wire = json.dumps(members, separators=(",", ":")).encode("utf-8") + b"\n"
+    service.proc.stdin.write(wire)
+    service.proc.stdin.flush()
+    line = service.proc.stdout.readline(1_048_578)
+    if not line:
+        raise AssertionError("batch response was empty")
+    decoded = json.loads(line)
+    if isinstance(decoded, list):
+        if len(decoded) != count:
+            raise AssertionError(f"batch response has {len(decoded)} members, want {count}")
+        return {"result": {"count": len(decoded)}}
+    return decoded
 
 
 def substitute_capture(value, captured):
@@ -227,7 +266,7 @@ def main():
     print(f"PASS {scenario['name']}")
     for index, call in enumerate(scenario_calls(scenario)):
         shown = {path: field(rust[index], path) for path in call["compare"]}
-        print(f"  {call['method']} {shown}")
+        print(f"  {call.get('method', 'batch')} {shown}")
     return 0
 
 

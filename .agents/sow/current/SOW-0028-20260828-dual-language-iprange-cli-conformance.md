@@ -22007,7 +22007,12 @@ and then used for lookup. Both engines return `handle_closed` with
 outcome `not_started`. A second close is not this case: the contract
 returns `handle_not_found` for close itself.
 
-Performance mode, the generator, and the other 14 negative cases are
+`n4-batch-limit` is attestation gap 4. A batch of 16 describe calls
+returns 16 results. A batch of 17 returns JSON-RPC `-32600`. Both
+engines agree. The 16-member call is required: without it, a runner
+that rejected every batch would still pass.
+
+Performance mode, the generator, and the other 13 negative cases are
 not in this slice. Gap 13 still has only one cutoff boundary.
 
 - Validation plan: each scenario correctness-green on both engines;
