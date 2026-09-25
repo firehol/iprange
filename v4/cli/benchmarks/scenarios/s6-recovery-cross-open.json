@@ -1,0 +1,90 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s6-recovery-cross-open",
+  "purpose": "Each engine recovers the same damaged membership file. The other engine opens the recovered database. The candidate stays with the source file because it carries that file identity.",
+  "fixtures": [
+    {
+      "path": "damaged.iprange",
+      "base64_file": "../fixtures/damaged-membership.b64"
+    }
+  ],
+  "publish": ["recovered.iprange"],
+  "write": [
+    {
+      "method": "iprange.v1.recovery.inspect",
+      "params": {
+        "path": "$WORK/damaged.iprange",
+        "mode": "immutable",
+        "validation_budget": {
+          "max_heap_bytes": "16777216",
+          "max_open_files": 4,
+          "max_scratch_bytes": "0",
+          "max_scratch_files": 0
+        }
+      },
+      "capture": [{"name": "candidate", "path": "candidates/0"}],
+      "compare": ["candidates.0.label", "candidates.0.meta_page", "candidates.0.transaction_id"],
+      "expect": {
+        "candidates.0.label": "newest",
+        "candidates.0.meta_page": 1,
+        "candidates.0.transaction_id": "3"
+      }
+    },
+    {
+      "method": "iprange.v1.recover",
+      "params": {
+        "source_path": "$WORK/damaged.iprange",
+        "source_mode": "immutable",
+        "candidate": "$CAPTURE/candidate",
+        "destination": "$WORK/recovered.iprange",
+        "recovery_budget": {
+          "max_heap_bytes": "16777216",
+          "max_open_files": 4,
+          "max_output_pages": "20000",
+          "max_scratch_bytes": "0",
+          "max_scratch_files": 0
+        },
+        "report_output": {
+          "format": "jsonl",
+          "path": "$WORK/recovery.jsonl",
+          "publication_policy": "fail_if_exists",
+          "result_budget": {
+            "max_open_files": 3,
+            "max_output_bytes": "65536",
+            "max_rows": "64"
+          }
+        }
+      },
+      "compare": [
+        "publication.publication",
+        "report.ranges.accepted",
+        "report.membership_entries.accepted"
+      ],
+      "expect": {
+        "publication.publication": "published",
+        "report.ranges.accepted": "4",
+        "report.membership_entries.accepted": "3"
+      }
+    }
+  ],
+  "read": [
+    {
+      "method": "iprange.v1.database.info",
+      "params": {
+        "source": {"path": "$WORK/$PEER/recovered.iprange", "mode": "immutable"}
+      },
+      "compare": [
+        "info.address_family",
+        "info.value_kind",
+        "info.range_record_count",
+        "info.active_feed_count"
+      ],
+      "expect": {
+        "info.address_family": "ipv4",
+        "info.value_kind": "membership",
+        "info.range_record_count": "4",
+        "info.active_feed_count": "2"
+      }
+    }
+  ]
+}

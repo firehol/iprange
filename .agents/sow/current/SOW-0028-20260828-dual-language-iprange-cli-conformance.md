@@ -21992,9 +21992,15 @@ feed. The runner copies that snapshot into the other engine's directory.
 Go opens the Rust snapshot and Rust opens the Go snapshot. Both report
 2 range records and 1 active feed.
 
-This is a snapshot cross-open. It is not attestation gap 12. That gap
-is a recovery output, and recovery is a different method and a different
-artifact.
+This is a snapshot cross-open. It is not attestation gap 12.
+
+`s6-recovery-cross-open` is gap 12 for one damaged membership file.
+Each engine inspects that file, recovers the newest candidate, and
+writes a recovered database. The other engine opens that database and
+reports 4 range records and 2 active feeds. The candidate is not copied.
+It carries the source file identity, and a copied source has a different
+identity, so recover would reject it. The cross-open is the recovered
+database, in both directions.
 
 Performance mode, the generator, and the 15 negative cases are not in
 this slice. Gap 13 still has only one cutoff boundary.

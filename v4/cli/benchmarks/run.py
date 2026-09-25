@@ -7,6 +7,7 @@ is not implemented: this runner proves agreement, not speed.
 """
 
 import argparse
+import base64
 import json
 import os
 import shutil
@@ -27,6 +28,7 @@ def fail(message):
 def load_scenario(path):
     with open(path, "r", encoding="utf-8") as stream:
         scenario = json.load(stream)
+    scenario["__path"] = path
     if scenario.get("schema") != SCHEMA:
         raise ValueError(f"{path}: schema is not {SCHEMA}")
     if not scenario.get("name") or not (scenario.get("calls") or scenario.get("write")):
@@ -61,11 +63,24 @@ def field(value, path):
 
 def write_fixtures(scenario, work):
     for fixture in scenario.get("fixtures", []):
-        relative = fixture["path"]
-        if os.path.isabs(relative) or ".." in relative.split("/"):
-            raise ValueError(f"fixture path escapes the work directory: {relative}")
-        path = os.path.join(work, relative)
+        output = fixture["path"]
+        if os.path.isabs(output) or ".." in output.split("/"):
+            raise ValueError(f"fixture path escapes the work directory: {output}")
+        path = os.path.join(work, output)
         os.makedirs(os.path.dirname(path), exist_ok=True)
+        if "base64" in fixture or "base64_file" in fixture:
+            encoded = fixture.get("base64")
+            if encoded is None:
+                relative = fixture["base64_file"]
+                root = os.path.realpath(os.path.dirname(os.path.dirname(os.path.dirname(scenario["__path"]))))
+                encoded_path = os.path.realpath(os.path.join(os.path.dirname(scenario["__path"]), relative))
+                if os.path.isabs(relative) or not encoded_path.startswith(root + os.sep):
+                    raise ValueError(f"fixture encoding escapes the benchmark directory: {relative}")
+                with open(encoded_path, "r", encoding="utf-8") as stream:
+                    encoded = stream.read()
+            with open(path, "wb") as stream:
+                stream.write(base64.b64decode("".join(encoded.split()), validate=True))
+            continue
         text = fixture["text"]
         if not text.endswith("\n"):
             text += "\n"
@@ -96,10 +111,12 @@ def stage_published(source_work, dest_work, names, incoming):
 
 def run_calls(service, name, scenario, work, calls, peer):
     observed = []
+    captured = {}
     for index, call in enumerate(calls, start=1):
         params = substitute(call["params"], work)
         if peer is not None:
             params = substitute(params, peer, token="$PEER")
+        params = substitute_capture(params, captured)
         result = service.call(
             f"{scenario['name']}-{name}-{index}",
             call["method"],
@@ -107,8 +124,23 @@ def run_calls(service, name, scenario, work, calls, peer):
         )
         if "error" in result:
             raise AssertionError(f"{name} {call['method']}: {result['error']}")
+        for item in call.get("capture", []):
+            captured[item["name"]] = field(result["result"], item["path"].replace("/", "."))
         observed.append(result["result"])
     return observed
+
+
+def substitute_capture(value, captured):
+    if isinstance(value, str) and value.startswith("$CAPTURE/"):
+        name = value[len("$CAPTURE/"):]
+        if name not in captured:
+            raise KeyError(f"capture {name} was not produced by an earlier call")
+        return captured[name]
+    if isinstance(value, list):
+        return [substitute_capture(item, captured) for item in value]
+    if isinstance(value, dict):
+        return {key: substitute_capture(item, captured) for key, item in value.items()}
+    return value
 
 
 def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None):
