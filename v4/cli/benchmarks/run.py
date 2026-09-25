@@ -61,6 +61,24 @@ def field(value, path):
     return current
 
 
+def write_generated(scenario, work):
+    for item in scenario.get("generate", []):
+        from generate import generate, merged_count, write_text
+        ranges = generate(item["seed"], item["count"], item["span"], item.get("space", 2**32))
+        relative = item["path"]
+        if os.path.isabs(relative) or ".." in relative.split("/"):
+            raise ValueError(f"generated path escapes the work directory: {relative}")
+        path = os.path.join(work, relative)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as stream:
+            write_text(ranges, stream)
+        expected = item.get("expect_merged_addresses")
+        if expected is not None and merged_count(ranges) != expected:
+            raise AssertionError(
+                f"{relative}: generator merged {merged_count(ranges)} addresses, scenario expects {expected}"
+            )
+
+
 def write_fixtures(scenario, work):
     for fixture in scenario.get("fixtures", []):
         output = fixture["path"]
@@ -202,6 +220,7 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None)
         engine_work = os.path.join(work, name)
     os.makedirs(engine_work, exist_ok=True)
     write_fixtures(scenario, engine_work)
+    write_generated(scenario, engine_work)
     service = JsonRpcService([binary, "--jsonrpc"], name, cwd=engine_work)
     try:
         return run_calls(service, name, scenario, engine_work, calls, peer)

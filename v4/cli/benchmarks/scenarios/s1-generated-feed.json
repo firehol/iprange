@@ -1,0 +1,48 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s1-generated-feed",
+  "purpose": "Import a seeded feed and compare the engine address count with the generator count, not with the other engine.",
+  "generate": [
+    {
+      "path": "feed.txt",
+      "seed": 7,
+      "count": 20,
+      "span": 4,
+      "space": 64,
+      "expect_merged_addresses": 47
+    }
+  ],
+  "calls": [
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["$WORK/feed.txt"],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "alpha",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "alpha"},
+        "destination": "$WORK/current.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": ["report.input_record_count", "report.addresses"],
+      "expect": {
+        "report.input_record_count": "20",
+        "report.addresses": "47"
+      }
+    }
+  ]
+}

@@ -22024,8 +22024,14 @@ a fixture generator, a corrupt-file builder, or a second connection:
 - Gap 9 needs golden response bytes from a product binary.
 - Gap 11 needs the structured fixture generator.
 
-Performance mode and the seeded generator are the next harness work.
-They are not blocked by another negative scenario.
+`generate.py` is the seeded ground truth. Seed 7, 20 ranges, span 4,
+inside a 64-address space, merges to 47 addresses. The generator test
+checks that count before either engine runs. `s1-generated-feed` imports
+that text and requires both engines to report 47. Agreement between the
+engines is no longer the only proof.
+
+Performance mode is not in this slice. The generator is IPv4 text only.
+It does not build corrupt files or structured fixtures.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness
