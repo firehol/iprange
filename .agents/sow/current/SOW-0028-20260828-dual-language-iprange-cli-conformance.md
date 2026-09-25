@@ -22002,8 +22002,13 @@ It carries the source file identity, and a copied source has a different
 identity, so recover would reject it. The cross-open is the recovered
 database, in both directions.
 
-Performance mode, the generator, and the 15 negative cases are not in
-this slice. Gap 13 still has only one cutoff boundary.
+`n6-closed-handle` is attestation gap 6. A reader is opened, closed,
+and then used for lookup. Both engines return `handle_closed` with
+outcome `not_started`. A second close is not this case: the contract
+returns `handle_not_found` for close itself.
+
+Performance mode, the generator, and the other 14 negative cases are
+not in this slice. Gap 13 still has only one cutoff boundary.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness

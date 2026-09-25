@@ -1,0 +1,58 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "n6-closed-handle",
+  "purpose": "A lookup on a closed reader returns handle_closed. Close itself returns handle_not_found on a second call, so the detecting operation is lookup.",
+  "fixtures": [
+    {"path": "feed.txt", "text": "192.0.2.1\n"}
+  ],
+  "calls": [
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["$WORK/feed.txt"],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "alpha",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "alpha"},
+        "destination": "$WORK/current.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": ["report.addresses"],
+      "expect": {"report.addresses": "1"}
+    },
+    {
+      "method": "iprange.v1.reader.open",
+      "params": {"source": {"path": "$WORK/current.iprange", "mode": "immutable"}},
+      "capture": [{"name": "reader", "path": "reader"}],
+      "compare": ["info.value_kind"],
+      "expect": {"info.value_kind": "membership"}
+    },
+    {
+      "method": "iprange.v1.reader.close",
+      "params": {"reader": "$CAPTURE/reader"},
+      "compare": ["closed"],
+      "expect": {"closed": true}
+    },
+    {
+      "method": "iprange.v1.reader.lookup",
+      "params": {"reader": "$CAPTURE/reader", "addresses": ["192.0.2.1"]},
+      "expect_error": {"code": "handle_closed", "outcome": "not_started"},
+      "compare": ["error.code", "error.outcome"],
+      "expect": {"error.code": "handle_closed", "error.outcome": "not_started"}
+    }
+  ]
+}

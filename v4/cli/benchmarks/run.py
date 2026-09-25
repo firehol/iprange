@@ -122,6 +122,17 @@ def run_calls(service, name, scenario, work, calls, peer):
             call["method"],
             params,
         )
+        if "expect_error" in call:
+            if "error" not in result:
+                raise AssertionError(f"{name} {call['method']}: expected error, got result")
+            data = result["error"].get("data", {})
+            for key, expected in call["expect_error"].items():
+                if data.get(key) != expected:
+                    raise AssertionError(
+                        f"{name} {call['method']}: error {key}={data.get(key)!r}, want {expected!r}"
+                    )
+            observed.append({"error": data})
+            continue
         if "error" in result:
             raise AssertionError(f"{name} {call['method']}: {result['error']}")
         for item in call.get("capture", []):
