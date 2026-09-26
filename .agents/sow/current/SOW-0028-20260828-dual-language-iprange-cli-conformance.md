@@ -22035,9 +22035,12 @@ child exits. On Linux the peak is the largest waited-for child, in KiB.
 A probe of the staged Rust binary reported 14240 KiB. The test allocates
 8 MiB in a child and requires the reported peak to be above 1 MiB, so
 the runner's own memory is not the number. A failed child is not a
-sample. The scenario runner does not call this yet: a scenario command
-is not `--help`, and wiring it to the wrong command would repeat the
-old measurement defect.
+sample. `perf.py` measures one import. The product binary reads one publish
+request, the runner waits for the response, and only then closes stdin.
+Closing stdin first cancels the import. One staged run reported Rust
+peak 17924 KiB and Go peak 19384 KiB, both for the 47-address import.
+These are child peaks. They are not a performance claim: three rounds
+of a 20-record feed are a wiring proof, not a ceiling.
 
 The generator is IPv4 text only. It does not build corrupt files or
 structured fixtures.

@@ -9,17 +9,25 @@ import subprocess
 import time
 
 
-def run_once(argv):
+def run_once(argv, stdin_bytes=None):
     before = resource.getrusage(resource.RUSAGE_CHILDREN)
     started = time.perf_counter()
-    proc = subprocess.run(argv, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if stdin_bytes is not None:
+        proc.stdin.write(stdin_bytes)
+        proc.stdin.flush()
+        proc.stdout.readline()
+    proc.stdin.close()
+    proc.stdout.read()
+    proc.wait()
+    proc.stdout.close()
     elapsed = time.perf_counter() - started
     after = resource.getrusage(resource.RUSAGE_CHILDREN)
     if proc.returncode != 0:
         raise AssertionError(f"child exited {proc.returncode}: {argv[0]}")
     return {
         "elapsed_seconds": elapsed,
-        "child_max_rss_kib": after.ru_maxrss - before.ru_maxrss,
+        "child_max_rss_kib": after.ru_maxrss,
     }
 
 
@@ -31,10 +39,10 @@ def median(values):
     return (ordered[middle - 1] + ordered[middle]) / 2
 
 
-def measure(argv, rounds):
+def measure(argv, rounds, stdin_bytes=None):
     if rounds < 1:
         raise ValueError("rounds must be positive")
-    samples = [run_once(argv) for _ in range(rounds)]
+    samples = [run_once(argv, stdin_bytes) for _ in range(rounds)]
     elapsed = [sample["elapsed_seconds"] for sample in samples]
     rss = [sample["child_max_rss_kib"] for sample in samples]
     return {
