@@ -22255,10 +22255,10 @@ separate 10M import, is not this ceiling.
 time. The good destination keeps the generator count. The bad
 destination is absent. Both engines passed.
 
-`feed_crash.py` kills `feeds.replace` while that call is still
-outstanding. The prior alpha feed and the untouched beta feed are
-still present after the kill. Both engines passed. A kill after the
-replace commits is not this proof.
+`feed_crash.py` kills `feeds.replace` only after the live file has
+grown. The prior alpha feed and the untouched beta feed are still
+present after the kill. Both engines passed. A kill before that
+growth, or after the process exits, is not this proof.
 
 A mutated expected address count is rejected by `compare`. Agreement
 between the engines does not hide it.
