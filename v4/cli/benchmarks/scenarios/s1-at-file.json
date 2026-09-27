@@ -1,0 +1,40 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s1-at-file",
+  "purpose": "Import two feeds named by one @file list. The list is not an address file.",
+  "fixtures": [
+    {"path": "a.txt", "text": "192.0.2.0/30\n"},
+    {"path": "b.txt", "text": "198.51.100.10\n"},
+    {"path": "list.txt", "text": "$WORK/a.txt\n$WORK/b.txt\n", "expand_work": true}
+  ],
+  "calls": [
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["@$WORK/list.txt"],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": true,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "alpha",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "list"},
+        "destination": "$WORK/current.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": ["report.input_record_count", "report.addresses"],
+      "expect": {"report.input_record_count": "2", "report.addresses": "5"}
+    }
+  ]
+}

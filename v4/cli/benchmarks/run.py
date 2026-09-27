@@ -101,6 +101,8 @@ def write_fixtures(scenario, work):
                 stream.write(base64.b64decode("".join(encoded.split()), validate=True))
             continue
         text = fixture["text"]
+        if fixture.get("expand_work"):
+            text = text.replace("$WORK", work)
         if not text.endswith("\n"):
             text += "\n"
         with open(path, "w", encoding="utf-8") as stream:

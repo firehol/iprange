@@ -22104,6 +22104,11 @@ counts every address twice, so the scenario names the feeds.
 write the same bytes, 2 rows and 5 addresses. This is not the IPv6 v2
 byte-order decision. That remains update-ipsets SOW-0126.
 
+`s1-at-file` imports two feeds named by one `@file` list. Both engines
+report 2 records and 5 addresses. The list is expanded before parsing.
+`--ipset-reduce` is a legacy CLI option. It is not a JSON-RPC method.
+This runner cannot prove it. The legacy C suite owns that option.
+
 S3 crash injection is not a release-binary scenario. The fault hook
 compiles out of the release binary. The failed-commit proof is
 `TestLiveWriterOutcomeUnknownFailClosed` in the v4work suite. A scenario
