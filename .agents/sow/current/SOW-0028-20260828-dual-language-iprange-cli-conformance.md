@@ -22122,7 +22122,13 @@ overlap.
 inside a 64-address space, is written as `2001:db8::` text. The generator
 merges that corpus to 5 ranges and 47 addresses before either engine runs.
 Both engines report those counts. A copy of the 20 input ranges would not
-report 5. This is the small detecting case, not a sized IPv6 run.
+report 5.
+
+One 100k-range IPv6 import, same seed and span, inside a 1,000,000-address
+space, merged to 329808 addresses. Both engines imported that count. Rust
+median peak was 12132 KiB and median time 0.114 s. Go median peak was
+24918 KiB and median time 0.175 s. Three rounds. This is one feed, one
+workstation run, not a ceiling.
 
 `s5-overlap-matrix` loads three feeds and asks for every pair. Both
 engines report 3 pairs. The CSV says alpha,beta has 2 addresses and the
@@ -22171,10 +22177,8 @@ time 15.989 s. This is one feed, one workstation run. It is not the
 
 The remaining close items are not another small scenario:
 
-- A sized IPv6 run. The IPv6 scenario is 20 ranges.
 - Last-seen refresh across the seven-day corpus, including cutoff expiry.
   The seven-day scenario is first-seen only.
-- A sized IPv6 run. The IPv6 scenario is 20 ranges.
 - The 1,000-feed, 10M-range ceiling run. That is the close run, not the
   next slice.
 - The 11 attestation gaps that need a corrupt file, a second connection,

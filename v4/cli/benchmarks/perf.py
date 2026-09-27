@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 
-from generate import generate, merged_count, write_text
+from generate import generate, merged_count, write_ipv6, write_text
 from measure import measure, median
 
 
@@ -50,25 +50,27 @@ PUBLISH = {
 }
 
 
-def write_request(path, feed, destination):
+def write_request(path, feed, destination, family):
     request = json.loads(json.dumps(PUBLISH))
     request["params"]["input"]["paths"] = [feed]
+    request["params"]["input"]["family"] = family
+    request["params"]["input"]["default_prefix"] = 128 if family == "ipv6" else 32
     request["params"]["destination"] = destination
     with open(path, "w", encoding="utf-8") as stream:
         json.dump(request, stream, separators=(",", ":"))
         stream.write("\n")
 
 
-def prepare(work, seed, count, span, space, rounds):
+def prepare(work, seed, count, span, space, rounds, family):
     ranges = generate(seed, count, span, space)
     feed = os.path.join(work, "feed.txt")
     with open(feed, "w", encoding="utf-8") as stream:
-        write_text(ranges, stream)
+        (write_ipv6 if family == "ipv6" else write_text)(ranges, stream)
     requests = []
     for index in range(rounds + 1):
         request = os.path.join(work, f"request-{index}.json")
         destination = os.path.join(work, f"current-{index}.iprange")
-        write_request(request, feed, destination)
+        write_request(request, feed, destination, family)
         requests.append((request, destination))
     return requests, merged_count(ranges)
 
@@ -129,13 +131,14 @@ def main():
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--span", type=int, default=4)
     parser.add_argument("--space", type=int, default=64)
+    parser.add_argument("--family", choices=("ipv4", "ipv6"), default="ipv4")
     args = parser.parse_args()
     for label, path in (("rust", args.rust), ("go", args.go)):
         if not os.path.isabs(path):
             return fail(f"{label} binary must be absolute")
     with tempfile.TemporaryDirectory(prefix="iprange-perf-") as work:
         requests, expected = prepare(
-            work, args.seed, args.count, args.span, args.space, 2 + 2 * args.rounds
+            work, args.seed, args.count, args.span, args.space, 2 + 2 * args.rounds, args.family
         )
         check_output(args.rust, requests[0][0], requests[0][1], expected)
         check_output(args.go, requests[1][0], requests[1][1], expected)
@@ -144,6 +147,7 @@ def main():
             "rust": sample_binary(args.rust, requests[2:2 + args.rounds]),
             "go": sample_binary(args.go, requests[2 + args.rounds:]),
         }
+    report["family"] = args.family
     report["expected_addresses"] = expected
     print(json.dumps(report, sort_keys=True))
     return 0
