@@ -22191,7 +22191,8 @@ The remaining close items are not another small scenario:
   The seven-day scenario is first-seen only.
 - The 1,000-feed, 10M-range ceiling run. That is the close run, not the
   next slice.
-- Attestation gaps 5, 7, 9, 10, and 11. Gap 8's C caller asserts
+- Attestation gaps 5, 7, 10, and 11. Gap 9 compares the golden
+  describe contract with both product binaries. Gap 8's C caller asserts
   NULL_POINTER, INVALID_LENGTH, and BUFFER_TOO_SMALL. Gap 2's reclaim refuses a
   reader slot newer than the committed generation. Gap 14's free-bit self,
   ancestor, and limit guards have a negative case. Gap 1's touching
