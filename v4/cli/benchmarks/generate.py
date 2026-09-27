@@ -102,6 +102,16 @@ def retained_count(ranges, cutoff):
     return total
 
 
+def churn(days):
+    steps = []
+    seen = []
+    for day in days:
+        counts = diff_counts(seen, day) if seen else {"unchanged": 0, "removed": 0, "added": merged_count(day)}
+        steps.append(counts)
+        seen = day
+    return steps
+
+
 def overlap_count(left, right):
     return diff_counts(left, right)["unchanged"]
 

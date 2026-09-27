@@ -2,7 +2,7 @@
 
 import unittest
 
-from generate import diff_counts, generate, merged_count, overlap_count, retained_count
+from generate import churn, diff_counts, generate, merged_count, overlap_count, retained_count
 
 
 class GeneratorTest(unittest.TestCase):
@@ -14,6 +14,12 @@ class GeneratorTest(unittest.TestCase):
 
     def test_adjacent_ranges_merge(self):
         self.assertEqual(merged_count([(0, 1), (2, 3)]), 4)
+
+    def test_churn_names_each_day(self):
+        days = [[(0, 4)], [(2, 6)], [(2, 2)]]
+        steps = churn(days)
+        self.assertEqual(steps[1], {"unchanged": 3, "removed": 2, "added": 2})
+        self.assertEqual(steps[2], {"unchanged": 1, "removed": 4, "added": 0})
 
     def test_retention_keeps_values_above_cutoff(self):
         ranges = [(0, 9, 10), (8, 11, 10), (20, 20, 5)]

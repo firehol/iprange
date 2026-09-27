@@ -22120,6 +22120,10 @@ a seeded IPv6 corpus. This scenario is one hand-written overlap.
 engines report 3 pairs. The CSV says alpha,beta has 2 addresses and the
 other two pairs have 0. The pair count alone does not prove the matrix.
 
+`s2-three-day-churn` replaces one feed across three days. Day 2 keeps
+3, removes 2, and adds 2. Day 3 keeps 1 and removes 4. The generator
+names those counts. Both engines report them.
+
 The remaining close items are not another small scenario:
 
 - IPv6, CIDR-mix, and churn corpora. The generator is IPv4 ranges only.
