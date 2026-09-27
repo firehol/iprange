@@ -299,8 +299,11 @@ func (s *joinDirectSweep) step(check checkpoint) error {
 		return nil
 	}
 
+	// The overlap starts at the later start and ends at the earlier
+	// end. Rust direct.rs uses current.from.max(provider.from). Using
+	// the earlier start counts provider addresses the feed does not hold.
 	from := current.from
-	if provider.from.Less(from) {
+	if from.Less(provider.from) {
 		from = provider.from
 	}
 	to := current.to

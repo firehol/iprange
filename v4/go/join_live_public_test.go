@@ -94,6 +94,99 @@ func liveJoinMembershipPair(t *testing.T) string {
 	return path
 }
 
+// TestJoinDirectContainedFeedStopsAtTheFeed pins a feed that starts
+// inside a provider range. The overlap is the feed, not the provider
+// prefix before it. A sweep that rewinds to the provider start reports
+// 7 for 18-21 inside 15-24.
+func TestJoinDirectContainedFeedStopsAtTheFeed(t *testing.T) {
+	requireLiveCreation(t)
+	requirePublicationSecurity(t)
+	provider := filepath.Join(t.TempDir(), "provider.iprdb")
+	if _, err := CreateLive(provider, AddressFamilyIPv4, ValueKindDirect, StructureKindNone, mustTag(t, "asn"), 2, nil); err != nil {
+		t.Fatal(err)
+	}
+	writer, err := OpenLiveWriter(provider, DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := writer.BeginDirectReplacement(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := replacement.AddRangesV4([]DirectRangeV4{{From: 15, To: 24, Value: 100}}); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := replacement.FinishInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := finished.Commit(); err != nil || result.Status != CommitCommitted {
+		t.Fatalf("provider commit = %v %v", result.Status, err)
+	}
+	if _, err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	membership := filepath.Join(t.TempDir(), "membership.iprdb")
+	if _, err := CreateLive(membership, AddressFamilyIPv4, ValueKindMembership, StructureKindNone, mustTag(t, "feeds"), 2, nil); err != nil {
+		t.Fatal(err)
+	}
+	writer, err = OpenLiveWriter(membership, DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create, err := writer.BeginCreateFeed(feedName(t, "alpha"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := create.AddRangesV4([]AddressRange4{{From: IPv4(18), To: IPv4(21)}}); err != nil {
+		t.Fatal(err)
+	}
+	finished, err = create.FinishInput()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result, err := finished.Commit(); err != nil || result.Status != CommitCommitted {
+		t.Fatalf("feed commit = %v %v", result.Status, err)
+	}
+	if _, err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	member, err := OpenLiveReader(membership, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer member.Close()
+	direct, err := OpenLiveReader(provider, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer direct.Close()
+	query, err := member.MembershipQuery()
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := query.AllFeeds(MembershipQueryBudget{MaxHeapBytes: 1 << 20}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cells []DirectJoinCell
+	report, err := scope.JoinDirect(DirectJoinSourceLive(direct), DirectJoinBudget{MaxResultCells: 16}, func(batch []DirectJoinCell) error {
+		cells = append(cells, batch...)
+		return nil
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.SelectedAddresses.String() != "4" || report.MappedAddresses.String() != "4" || report.UnmappedAddresses.String() != "0" {
+		t.Fatalf("coverage = selected %s mapped %s unmapped %s, want 4/4/0", report.SelectedAddresses, report.MappedAddresses, report.UnmappedAddresses)
+	}
+	if len(cells) != 1 || cells[0].Feed != "alpha" || cells[0].DirectValue == nil || *cells[0].DirectValue != 100 || cells[0].Addresses.String() != "4" {
+		t.Fatalf("cells = %+v, want alpha/100/4", cells)
+	}
+}
+
 // TestJoinDirectLiveSource runs one live membership scope against one
 // live direct provider and pins the exact facts and result cells (Rust
 // provider_joins DirectJoinSource::Live parity): feed x is mapped by
