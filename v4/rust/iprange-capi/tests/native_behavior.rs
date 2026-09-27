@@ -11,6 +11,7 @@ use serde_json::Value;
 const MANIFEST: &str = include_str!("../include/iprange_v4_abi1_manifest.json");
 const NATIVE_SOURCES: &[&str] = &[
     include_str!("native/abi_behavior.c"),
+    include_str!("native/abi_cases.c"),
     include_str!("native/abi_lifecycle.c"),
     include_str!("native/abi_maintenance.c"),
     include_str!("native/abi_membership.c"),
@@ -81,6 +82,24 @@ fn native_c_membership_surface_uses_the_real_shared_library() {
         "native C membership behavior failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn native_c_reads_conformance_cases() {
+    let files = TestFiles::new();
+    let executable = compile_c_fixture(&files, "abi_cases.c", &[]);
+    let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../conformance");
+    let output = run_fixture(&executable, [&corpus]);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "native C cases.json run failed\nstdout:\n{stdout}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        stdout.contains("cases=16 gaps=4"),
+        "cases.json was not applied: {stdout}"
     );
 }
 
