@@ -22077,6 +22077,13 @@ KiB and median time 0.046 s. Go median peak was 10920 KiB and median
 time 0.051 s. Loading the last-seen file is not in the sample. This is
 one workstation run, not a ceiling.
 
+`s1-mixed-import` publishes two files. One has a CIDR and a trailing
+comment. The other has a semicolon comment and a range. Both engines
+report 4 records and 9 addresses. A second publish includes a file with
+`not-an-address`. Both engines return outcome `not_started` and leave
+no destination file. Parallel feeds are not in this scenario: one
+publish reads its paths in order.
+
 The generator is IPv4 text only. It does not build corrupt files or
 structured fixtures.
 

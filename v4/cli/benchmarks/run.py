@@ -153,6 +153,10 @@ def run_calls(service, name, scenario, work, calls, peer):
                 )
             observed.append({"error": {"code": error.get("code")}})
             continue
+        if call.get("expect_no_file"):
+            relative = call["expect_no_file"]
+            if os.path.exists(os.path.join(work, relative)):
+                raise AssertionError(f"{name} left {relative} after a failed publish")
         if "expect_error" in call:
             if "error" not in result:
                 raise AssertionError(f"{name} {call['method']}: expected error, got result")

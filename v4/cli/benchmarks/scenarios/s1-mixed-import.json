@@ -1,0 +1,81 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s1-mixed-import",
+  "purpose": "Two unsorted files, CIDR and range forms, comments ignored, one merged address count.",
+  "fixtures": [
+    {
+      "path": "a.txt",
+      "text": "# comment\n192.0.2.0/30\n\n198.51.100.10 # trailing\n"
+    },
+    {
+      "path": "b.txt",
+      "text": "; semicolon\n192.0.2.2-192.0.2.6\n203.0.113.1\n"
+    },
+    {
+      "path": "bad.txt",
+      "text": "192.0.2.1\nnot-an-address\n"
+    }
+  ],
+  "calls": [
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["$WORK/a.txt", "$WORK/b.txt"],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "alpha",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "mixed"},
+        "destination": "$WORK/current.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": ["report.input_record_count", "report.addresses"],
+      "expect": {
+        "report.input_record_count": "4",
+        "report.addresses": "9"
+      }
+    },
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["$WORK/a.txt", "$WORK/bad.txt"],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "alpha",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "bad"},
+        "destination": "$WORK/bad.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "expect_error": {"outcome": "not_started"},
+      "expect_no_file": "bad.iprange",
+      "compare": ["error.outcome"]
+    }
+  ]
+}
