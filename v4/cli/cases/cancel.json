@@ -39,6 +39,24 @@
       "expect_result": {
         "method": "iprange.v1.system.describe"
       }
+    },
+    {
+      "kind": "rpc",
+      "actor": "producer",
+      "method": "iprange.v1.cancel",
+      "params": {
+        "request_id": "cancel-unknown-request-0001"
+      },
+      "notification": true
+    },
+    {
+      "kind": "rpc",
+      "actor": "producer",
+      "method": "iprange.v1.system.describe",
+      "params": {},
+      "expect_result": {
+        "method": "iprange.v1.system.describe"
+      }
     }
   ]
 }
