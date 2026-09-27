@@ -77,6 +77,10 @@ def diff_counts(before, after):
     return {"unchanged": unchanged, "removed": removed, "added": added}
 
 
+def overlap_count(left, right):
+    return diff_counts(left, right)["unchanged"]
+
+
 def merged_count(ranges):
     ordered = sorted(ranges)
     total = 0

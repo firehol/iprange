@@ -22062,6 +22062,13 @@ the diff first. One 100k-range replacement, span 4, inside a
 median time 0.074 s. The setup imports are not in the sample. This is
 one workstation run, not a ceiling.
 
+`perf_join.py` times the overlap join only. The generator overlap is
+the unchanged count of the same two feeds. One 100k-range join had
+109158 overlapping addresses. Both engines reported that count. Rust
+median peak was 8028 KiB and median time 0.044 s. Go median peak was
+9292 KiB and median time 0.048 s. The two publishes are not in the
+sample. This is one workstation run, not a ceiling.
+
 The generator is IPv4 text only. It does not build corrupt files or
 structured fixtures.
 
