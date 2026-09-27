@@ -23,7 +23,7 @@ Review-wave items closed after this ledger was written:
 2. `v4/cli/battery.sh` is committed. It has not been run end to end.
 3. `parity_rust_public.tsv` method regeneration is still open. The drift test covers `lib.rs` exports only.
 
-Milestone 5 is the active work. Its current state is the "First slice" section at the end of this file. Do not treat the list above as the work queue.
+Milestone 5 is closed in the section at the end of this file. Do not treat the list above as the work queue.
 
 Not in this serial pass:
 
@@ -22236,6 +22236,15 @@ binaries.
 
 The generator emits seeded IPv4 and IPv6 text. It does not build
 corrupt files or structured fixtures.
+
+Closure statement: milestone 5 is CLOSED for the work assigned to it.
+The fifteen attestation rows have detecting cases. The scenario matrix
+covers import, first-seen and last-seen refresh, history cutoff, joins,
+snapshot cross-open, and recovery cross-open. The ceiling run is one
+1,000-feed database and one 10M-range feed, not 1,000 feeds of 10M
+ranges. The Linux gate passed. The ≤1.3x verdict is not this milestone's
+decision; it stays with SOW-0030. Windows evidence stays with the
+Windows leg. update-ipsets was not pushed.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness
