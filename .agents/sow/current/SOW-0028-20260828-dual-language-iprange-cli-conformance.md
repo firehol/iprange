@@ -22115,8 +22115,14 @@ The public JSON-RPC replacement surface now has a small detecting
 scenario for mixed import, failed import, two-day refresh, three-window
 projection, matching feeds, exclude, binary export, and `@file`
 expansion. `s1-ipv6-import` publishes two overlapping IPv6 ranges. Both engines
-merge them to 1 range and 6 addresses. The generator does not yet emit
-a seeded IPv6 corpus. This scenario is one hand-written overlap.
+merge them to 1 range and 6 addresses. That scenario is one hand-written
+overlap.
+
+`s1-generated-ipv6` is the seeded corpus. Seed 7, 20 ranges, span 4,
+inside a 64-address space, is written as `2001:db8::` text. The generator
+merges that corpus to 5 ranges and 47 addresses before either engine runs.
+Both engines report those counts. A copy of the 20 input ranges would not
+report 5. This is the small detecting case, not a sized IPv6 run.
 
 `s5-overlap-matrix` loads three feeds and asks for every pair. Both
 engines report 3 pairs. The CSV says alpha,beta has 2 addresses and the
@@ -22134,8 +22140,10 @@ time 15.989 s. This is one feed, one workstation run. It is not the
 
 The remaining close items are not another small scenario:
 
-- IPv6, CIDR-mix, and churn corpora. The generator is IPv4 ranges only.
-- Many feeds times provider sets. The current join is one pair.
+- A sized IPv6 run, and a 7-day churn corpus at size. The generator now
+  emits seeded IPv6 text. The IPv6 scenario is 20 ranges. Churn is three
+  hand-written days.
+- Many feeds times provider sets. The matrix is three feeds.
 - The 1,000-feed, 10M-range ceiling run. That is the close run, not the
   next slice.
 - The 11 attestation gaps that need a corrupt file, a second connection,
@@ -22148,8 +22156,8 @@ compiles out of the release binary. The failed-commit proof is
 runner that killed a release process would not prove the prior feed
 survived.
 
-The generator is IPv4 text only. It does not build corrupt files or
-structured fixtures.
+The generator emits seeded IPv4 and IPv6 text. It does not build
+corrupt files or structured fixtures.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness

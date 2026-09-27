@@ -1,8 +1,9 @@
-"""Seeded IPv4 feed generator for milestone-5 scenarios.
+"""Seeded feed generator for milestone-5 scenarios.
 
 The generator is the ground truth. It writes text the engines import, and
 it reports the merged address count before either engine runs. A scenario
 that copies the input instead of merging it fails against this count.
+IPv4 and IPv6 text are two encodings of the same integer ranges.
 """
 
 import argparse
@@ -129,10 +130,13 @@ def merged_count(ranges):
     return total + current_end - current_start + 1
 
 
-def ipv6_text(index, span):
-    start = index * span
-    end = start + span - 1
-    return f"2001:db8::{start:x}-2001:db8::{end:x}\n"
+IPV6_BASE = 0x20010DB8000000000000000000000000
+
+
+def ipv6_address(value):
+    if value < 0 or IPV6_BASE + value > 2**128 - 1:
+        raise ValueError("ipv6 offset does not fit in 2001:db8::")
+    return str(ipaddress.IPv6Address(IPV6_BASE + value))
 
 
 def write_text(ranges, stream):
@@ -145,24 +149,50 @@ def write_text(ranges, stream):
             stream.write(f"{left}-{right}\n")
 
 
+def write_ipv6(ranges, stream):
+    for start, end in ranges:
+        left = ipv6_address(start)
+        right = ipv6_address(end)
+        if start == end:
+            stream.write(f"{left}\n")
+        else:
+            stream.write(f"{left}-{right}\n")
+
+
+def parse_ipv6(text):
+    ranges = []
+    for line in text.splitlines():
+        if not line:
+            continue
+        left, separator, right = line.partition("-")
+        start = int(ipaddress.IPv6Address(left)) - IPV6_BASE
+        end = start if not separator else int(ipaddress.IPv6Address(right)) - IPV6_BASE
+        ranges.append((start, end))
+    return ranges
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--seed", type=int, required=True)
     parser.add_argument("--count", type=int, required=True)
     parser.add_argument("--span", type=int, default=4)
     parser.add_argument("--space", type=int, default=2**32)
+    parser.add_argument("--family", choices=("ipv4", "ipv6"), default="ipv4")
     parser.add_argument("--text")
     parser.add_argument("--report")
     args = parser.parse_args()
     ranges = generate(args.seed, args.count, args.span, args.space)
     report = {
         "seed": args.seed,
+        "family": args.family,
         "input_records": len(ranges),
+        "merged_ranges": len(covered(ranges)),
         "merged_addresses": merged_count(ranges),
     }
     if args.text:
+        writer = write_ipv6 if args.family == "ipv6" else write_text
         with open(args.text, "w", encoding="utf-8") as stream:
-            write_text(ranges, stream)
+            writer(ranges, stream)
     if args.report:
         with open(args.report, "w", encoding="utf-8") as stream:
             json.dump(report, stream, indent=2)

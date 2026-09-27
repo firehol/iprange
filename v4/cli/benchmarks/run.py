@@ -64,19 +64,27 @@ def field(value, path):
 
 def write_generated(scenario, work):
     for item in scenario.get("generate", []):
-        from generate import generate, merged_count, write_text
+        from generate import covered, generate, merged_count, write_ipv6, write_text
         ranges = generate(item["seed"], item["count"], item["span"], item.get("space", 2**32))
         relative = item["path"]
         if os.path.isabs(relative) or ".." in relative.split("/"):
             raise ValueError(f"generated path escapes the work directory: {relative}")
+        family = item.get("family", "ipv4")
+        if family not in ("ipv4", "ipv6"):
+            raise ValueError(f"generated family must be ipv4 or ipv6: {family}")
         path = os.path.join(work, relative)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w", encoding="utf-8") as stream:
-            write_text(ranges, stream)
+            (write_ipv6 if family == "ipv6" else write_text)(ranges, stream)
         expected = item.get("expect_merged_addresses")
         if expected is not None and merged_count(ranges) != expected:
             raise AssertionError(
                 f"{relative}: generator merged {merged_count(ranges)} addresses, scenario expects {expected}"
+            )
+        expected_ranges = item.get("expect_merged_ranges")
+        if expected_ranges is not None and len(covered(ranges)) != expected_ranges:
+            raise AssertionError(
+                f"{relative}: generator merged {len(covered(ranges))} ranges, scenario expects {expected_ranges}"
             )
 
 

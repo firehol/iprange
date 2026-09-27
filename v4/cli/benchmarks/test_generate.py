@@ -2,7 +2,22 @@
 
 import unittest
 
-from generate import churn, diff_counts, generate, merged_count, overlap_count, retained_count
+import io
+import ipaddress
+
+from generate import (
+    IPV6_BASE,
+    churn,
+    covered,
+    diff_counts,
+    generate,
+    ipv6_address,
+    merged_count,
+    overlap_count,
+    parse_ipv6,
+    retained_count,
+    write_ipv6,
+)
 
 
 class GeneratorTest(unittest.TestCase):
@@ -39,6 +54,20 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(len(ranges), 20)
         self.assertLess(merged_count(ranges), 80)
         self.assertEqual(merged_count(ranges), merged_count(generate(7, 20, 4, space=64)))
+
+    def test_seeded_ipv6_keeps_the_integer_corpus(self):
+        ranges = generate(7, 20, 4, space=64)
+        self.assertEqual(merged_count(ranges), 47)
+        self.assertEqual(len(covered(ranges)), 5)
+        stream = io.StringIO()
+        write_ipv6(ranges, stream)
+        text = stream.getvalue()
+        self.assertIn("2001:db8::", text)
+        self.assertNotIn(".", text)
+        self.assertEqual(parse_ipv6(text), ranges)
+        self.assertEqual(merged_count(parse_ipv6(text)), 47)
+        self.assertEqual(ipv6_address(1), "2001:db8::1")
+        self.assertEqual(int(ipaddress.IPv6Address(ipv6_address(0))), IPV6_BASE)
 
 
 if __name__ == "__main__":
