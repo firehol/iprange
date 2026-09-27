@@ -191,3 +191,24 @@ func TestProtectedPageIsRejectedBeforeOverwrite(t *testing.T) {
 		t.Fatal("protected page was allocated")
 	}
 }
+
+func TestFreeBitGuardsRejectSelfAncestorAndLimit(t *testing.T) {
+	store := newBitmapMemoryStore(2)
+	ancestor := []freeFrame{{pageNumber: 7, childIndex: 0, level: 1}}
+	if _, err := validateSelected(store, 4, nil, 9, 9); err == nil {
+		t.Fatal("limit guard accepted the bitmap limit")
+	}
+	if _, err := validateSelected(store, 4, nil, 1, 100); err == nil {
+		t.Fatal("limit guard accepted a meta page")
+	}
+	if _, err := validateSelected(store, 4, nil, 4, 100); err == nil {
+		t.Fatal("self guard accepted the leaf page")
+	}
+	if _, err := validateSelected(store, 4, ancestor, 7, 100); err == nil {
+		t.Fatal("ancestor guard accepted a path page")
+	}
+	got, err := validateSelected(store, 4, ancestor, 8, 100)
+	if err != nil || got != 8 {
+		t.Fatalf("unprotected page = %d %v, want 8", got, err)
+	}
+}
