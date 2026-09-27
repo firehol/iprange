@@ -24,11 +24,16 @@ def run_once(argv, stdin_bytes=None):
     started = time.perf_counter()
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     peak = 0
+    deadline = time.perf_counter() + 120
     if stdin_bytes is not None:
         proc.stdin.write(stdin_bytes)
         proc.stdin.flush()
         os.set_blocking(proc.stdout.fileno(), False)
     while proc.poll() is None:
+        if time.perf_counter() > deadline:
+            proc.kill()
+            proc.wait(timeout=5)
+            raise AssertionError("child did not finish within 120s")
         current = child_hwm_kib(proc.pid)
         if current is not None:
             peak = max(peak, current)

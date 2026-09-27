@@ -11,24 +11,14 @@ import subprocess
 import sys
 import tempfile
 
+from client import call_json
 from generate import generate, overlap_count, write_text
 from measure import measure, median, ratio
 from perf import PUBLISH, fail, sample_binary
 
 
 def call(binary, payload):
-    proc = subprocess.Popen([binary, "--jsonrpc"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc.stdin.write(payload)
-    proc.stdin.flush()
-    line = proc.stdout.readline()
-    proc.stdin.close()
-    proc.wait()
-    if proc.returncode != 0:
-        raise AssertionError(proc.stderr.read().decode("utf-8", "replace")[-500:])
-    response = json.loads(line)
-    if "result" not in response:
-        raise AssertionError(response.get("error"))
-    return response["result"]
+    return call_json(binary, payload)
 
 
 def publish(binary, feed, destination, work, index):

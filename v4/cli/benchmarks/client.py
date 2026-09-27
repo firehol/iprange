@@ -4,6 +4,7 @@ The user decision for this harness is that proofs use JsonRpcService
 from v4/cli/run.py. A script must not open its own stdio parser.
 """
 
+import json
 import os
 import sys
 
@@ -44,3 +45,14 @@ class BenchSession:
 
     def close(self):
         self.service.close(allow_forced=True, broken_exchange=True)
+
+
+def call_json(binary, payload):
+    """Run one JSON-RPC request through JsonRpcService and return its result."""
+    if isinstance(payload, (bytes, bytearray)):
+        payload = json.loads(payload)
+    session = BenchSession(binary)
+    try:
+        return session.call(payload["method"], payload.get("params", {}))
+    finally:
+        session.close()

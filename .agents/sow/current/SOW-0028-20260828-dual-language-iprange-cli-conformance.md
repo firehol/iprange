@@ -22230,14 +22230,10 @@ not this proof. The unit suite still has
 `TestLiveWriterOutcomeUnknownFailClosed` for the fail-closed writer
 path. That test is not a substitute for the release crash.
 
-`v4/cli/battery.sh --tier gate` passed on 2026-09-27. Wall time 154.9 s.
-320 steps, 0 mismatches, 9 deferred. The deferred steps are the Windows
-leg, the retired full pressure axis, the repeat-heavy race probes, and
-the launcher header. Linux product steps passed. The kind gate's only
-remaining complaints name `windows-guard.json` and
-`windows-housekeeping.json`, which this host does not author. A no-build
-run still exits before any suite because a fresh work directory has no
-binaries.
+The 2026-09-27 Linux gate log stamps `git_head=203ca5047b84`. It does
+not stamp this revision, and it is not close evidence for milestone 5.
+Windows reports in that log stay with the Windows leg. A gate at the
+final revision is still required before close.
 
 The generator emits seeded IPv4 and IPv6 text. It does not build
 corrupt files or structured fixtures.

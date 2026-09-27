@@ -52,6 +52,34 @@ int main(int argc, char **argv)
     uint32_t value = UINT32_MAX;
 
     CHECK(argc == 2);
+    {
+        iprange_v4_abi1_path empty = {0};
+        iprange_v4_abi1_reader *opened = NULL;
+        uint16_t unit = 'd';
+        uint32_t code = 0;
+        uint8_t caller_present = 0;
+        uint64_t caller_code = 0;
+        empty.kind = IPRANGE_V4_ABI1_PATH_WINDOWS_UTF16;
+        empty.pointer = NULL;
+        empty.length = 1;
+        CHECK(iprange_v4_abi1_open_live_reader(empty, cancellation, &opened, &error) ==
+              IPRANGE_V4_ABI1_STATUS_ERROR);
+        CHECK(opened == NULL);
+        CHECK(iprange_v4_abi1_error_code(error, &code, &caller_present, &caller_code) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(code == IPRANGE_V4_ABI1_ERROR_CODE_NULL_POINTER);
+        CHECK(iprange_v4_abi1_error_destroy(error) == IPRANGE_V4_ABI1_STATUS_OK);
+        error = NULL;
+        empty.pointer = &unit;
+        empty.length = 0;
+        CHECK(iprange_v4_abi1_open_live_reader(empty, cancellation, &opened, &error) ==
+              IPRANGE_V4_ABI1_STATUS_ERROR);
+        CHECK(iprange_v4_abi1_error_code(error, &code, &caller_present, &caller_code) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(code == IPRANGE_V4_ABI1_ERROR_CODE_INVALID_LENGTH);
+        CHECK(iprange_v4_abi1_error_destroy(error) == IPRANGE_V4_ABI1_STATUS_OK);
+        error = NULL;
+    }
     CHECK(utf16_path(argv[1], path_units,
                      sizeof(path_units) / sizeof(path_units[0]), &path) == 0);
     CHECK(path.length + sizeof(database_name) / sizeof(database_name[0]) <=

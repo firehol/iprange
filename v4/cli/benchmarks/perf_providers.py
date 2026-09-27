@@ -32,33 +32,7 @@ WRITER = {
 }
 
 
-class Session:
-    def __init__(self, binary):
-        self.proc = subprocess.Popen(
-            [binary, "--jsonrpc"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-    def call(self, method, params):
-        request = {"jsonrpc": "2.0", "id": method, "method": method, "params": params}
-        self.proc.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
-        self.proc.stdin.flush()
-        line = self.proc.stdout.readline()
-        if not line:
-            err = self.proc.stderr.read().decode("utf-8", "replace")[-500:]
-            raise AssertionError(f"{method} returned no response: {err}")
-        response = json.loads(line)
-        if "error" in response:
-            raise AssertionError(response["error"])
-        return response["result"]
-
-    def close(self):
-        self.proc.stdin.close()
-        self.proc.wait(timeout=20)
-        self.proc.stdout.close()
-        self.proc.stderr.close()
+from client import BenchSession as Session, call_json
 
 
 def feed_name(index):
@@ -175,16 +149,7 @@ def join_request(membership, provider, output):
 
 def check_join(binary, membership, provider, expected, output):
     request = join_request(membership, provider, output)
-    proc = subprocess.Popen([binary, "--jsonrpc"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
-    proc.stdin.flush()
-    line = proc.stdout.readline()
-    proc.stdin.close()
-    proc.wait(timeout=60)
-    response = json.loads(line)
-    if "error" in response:
-        raise AssertionError(response["error"])
-    report = response["result"]["report"]
+    report = call_json(binary, request)["report"]
     got = {
         "selected": int(report["selected_addresses"]),
         "mapped": int(report["mapped_addresses"]),

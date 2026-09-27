@@ -11,6 +11,7 @@ import subprocess
 import sys
 import tempfile
 
+from client import call_json
 from generate import diff_counts, generate, write_text
 from measure import measure, median, ratio
 from perf import PUBLISH, fail, sample_binary
@@ -25,18 +26,7 @@ def publish(binary, feed, destination, work, index):
         json.dump(request, stream, separators=(",", ":"))
         stream.write("\n")
     with open(path, "rb") as stream:
-        payload = stream.read()
-    proc = subprocess.Popen([binary, "--jsonrpc"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc.stdin.write(payload)
-    proc.stdin.flush()
-    line = proc.stdout.readline()
-    proc.stdin.close()
-    proc.wait()
-    if proc.returncode != 0:
-        raise AssertionError(proc.stderr.read().decode("utf-8", "replace")[-500:])
-    response = json.loads(line)
-    if "result" not in response:
-        raise AssertionError(response.get("error"))
+        call_json(binary, stream.read())
 
 
 def database(binary, path):
@@ -53,15 +43,7 @@ def database(binary, path):
             "reader_capacity": 4,
         },
     }
-    proc = subprocess.Popen([binary, "--jsonrpc"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
-    proc.stdin.flush()
-    line = proc.stdout.readline()
-    proc.stdin.close()
-    proc.wait()
-    response = json.loads(line)
-    if "result" not in response:
-        raise AssertionError(response.get("error"))
+    call_json(binary, request)
 
 
 def create_feed(binary, database_path, day1, work):
@@ -88,31 +70,11 @@ def create_feed(binary, database_path, day1, work):
         json.dump(request, stream, separators=(",", ":"))
         stream.write("\n")
     with open(path, "rb") as stream:
-        payload = stream.read()
-    proc = subprocess.Popen([binary, "--jsonrpc"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc.stdin.write(payload)
-    proc.stdin.flush()
-    line = proc.stdout.readline()
-    proc.stdin.close()
-    proc.wait()
-    response = json.loads(line)
-    if "result" not in response:
-        raise AssertionError(response.get("error"))
+        call_json(binary, stream.read())
 
 
 def call(binary, payload):
-    proc = subprocess.Popen([binary, "--jsonrpc"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    proc.stdin.write(payload)
-    proc.stdin.flush()
-    line = proc.stdout.readline()
-    proc.stdin.close()
-    proc.wait()
-    if proc.returncode != 0:
-        raise AssertionError(proc.stderr.read().decode("utf-8", "replace")[-500:])
-    response = json.loads(line)
-    if "result" not in response:
-        raise AssertionError(response.get("error"))
-    return response["result"]
+    return call_json(binary, payload)
 
 
 def prepare_replace(binary, work, before, after, index):
