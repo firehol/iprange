@@ -8,7 +8,7 @@ are not compatibility inputs.
 ## Corpus
 
 `cases.json` is the language-neutral semantic manifest. The corpus contains
-thirteen compact immutable snapshots produced through the public writers of
+fifteen compact immutable snapshots produced through the public writers of
 both implementations. The Rust-produced files come from the public Rust live
 writer plus `snapshot_to`; the Go-produced files come from the public Go
 `CreateLive`/`OpenLiveWriter` transactions and the public live `SnapshotTo`
@@ -26,6 +26,8 @@ like the Rust generator):
 - `rust/structured-ipv4-nothreat.iprdb`: structured values without threat
   feeds (membership id zero), pinning the canonical absence result in both
   readers;
+- `rust/structured-ipv6.iprdb`: the same typed enrichment and clear, on
+  `2001:db8::` through `2001:db8::ff`, opened by both readers;
 - `go/direct-ipv4.iprdb`: the same direct IPv4 semantics produced by the Go
   writer;
 - `go/first-seen-ipv6.iprdb`: the same first-seen IPv6 coverage produced by the
@@ -50,7 +52,9 @@ like the Rust generator):
   transaction (`BeginStructuredTransaction`); and
 - `go/structured-ipv4-nothreat.iprdb`: structured values without threat feeds
   (membership id zero) produced by the Go writer, pinning the canonical absence
-  result in both readers.
+  result in both readers; and
+- `go/structured-ipv6.iprdb`: the same IPv6 structured enrichment and clear as
+  the Rust structured IPv6 fixture, produced by the Go structured transaction.
 
 The Rust test actually opens and explicitly validates every listed file. It
 compares every direct or structured range, typed enrichment field, feed
@@ -79,7 +83,7 @@ outputs against `cases.json`, and only then replaces the committed Rust files.
 ## Cross-language gate
 
 Both producer sets are now committed, and each reader opens and semantically
-verifies both producer sets (Rust conformance opens all thirteen files; the Go
+verifies both producer sets (Rust conformance opens all fifteen files; the Go
 conformance inventory lists each fixture file with its producer and the Go
 reader verifies both sets).
 

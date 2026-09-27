@@ -59,6 +59,7 @@ fn generate(scratch: &Path, output: &Path, fixture: &Fixture) {
         "rust/membership-ipv6.iprdb" => membership_ipv6(&mut writer, fixture),
         "rust/structured-ipv4.iprdb" => structured_ipv4(&mut writer, fixture),
         "rust/structured-ipv4-nothreat.iprdb" => structured_ipv4_nothreat(&mut writer, fixture),
+        "rust/structured-ipv6.iprdb" => structured_ipv6(&mut writer, fixture),
         other => panic!("no Rust fixture generator for {other}"),
     }
     writer.close().unwrap();
@@ -120,6 +121,60 @@ fn structured_ipv4(writer: &mut LiveWriter, fixture: &Fixture) {
         .unwrap();
     transaction
         .clear_v4(key4("10.1.0.100"), key4("10.1.0.109"))
+        .unwrap();
+    transaction
+        .set_metadata_json(&fixture.metadata.bytes().unwrap())
+        .unwrap();
+    transaction.commit().unwrap();
+}
+
+fn structured_ipv6(writer: &mut LiveWriter, fixture: &Fixture) {
+    let cancellation = CancellationToken::new();
+    let mut transaction = writer.begin_structured_transaction(&cancellation).unwrap();
+    let botnet = transaction
+        .ensure_feed(FeedName::new("botnet").unwrap())
+        .unwrap();
+    let scanner = transaction
+        .ensure_feed(FeedName::new("scanner").unwrap())
+        .unwrap();
+    let empty = transaction.empty_membership().unwrap();
+    let botnet_membership = transaction.add_feed(empty, botnet).unwrap();
+    let scanner_membership = transaction.add_feed(empty, scanner).unwrap();
+    let broad = transaction
+        .intern_network_enrichment_v1(
+            NetworkEnrichmentV1 {
+                asn: 64512,
+                country_id: 1,
+                state_id: 2,
+                city_id: 3,
+                location: Some(NetworkEnrichmentV1Location {
+                    latitude_microdegrees: 37_983_810,
+                    longitude_microdegrees: 23_727_539,
+                }),
+            },
+            Some(botnet_membership),
+        )
+        .unwrap();
+    let narrow = transaction
+        .intern_network_enrichment_v1(
+            NetworkEnrichmentV1 {
+                asn: 64513,
+                country_id: 4,
+                state_id: 5,
+                city_id: 6,
+                location: None,
+            },
+            Some(scanner_membership),
+        )
+        .unwrap();
+    transaction
+        .assign_v6(key6("2001:db8::"), key6("2001:db8::ff"), broad)
+        .unwrap();
+    transaction
+        .assign_v6(key6("2001:db8::40"), key6("2001:db8::7f"), narrow)
+        .unwrap();
+    transaction
+        .clear_v6(key6("2001:db8::64"), key6("2001:db8::6d"))
         .unwrap();
     transaction
         .set_metadata_json(&fixture.metadata.bytes().unwrap())

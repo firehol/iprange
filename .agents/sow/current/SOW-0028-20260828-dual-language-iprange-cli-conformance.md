@@ -22197,7 +22197,9 @@ The remaining close items are not another small scenario:
   Cutoff is two values behind the refresh. Day 3 drops 3 addresses stored
   at 1. Both engines matched the generator, including that expiry. The
   seven-day first-seen scenario does not cover this.
-- Attestation gaps 7 and 11. Gap 10 runs cancel on both the producer
+- Attestation gap 7. Gap 11 is `structured-ipv6.iprdb`. Both engines
+  open the Rust file and the Go file. The cleared hole is
+  `2001:db8::64` through `2001:db8::6d`. Gap 10 runs cancel on both the producer
   and the consumer. Gap 5 keeps the cancelled token
   for a request still queued at EOF; that request aborts. Gap 9 compares the golden
   describe contract with both product binaries. Gap 8's C caller asserts
@@ -22210,7 +22212,7 @@ The remaining close items are not another small scenario:
   reclaim on an open draft, and the two-page reclamation boundary is pinned.
   Gap 5 keeps the cancelled token for a queued execute. Gap 10 runs
   cancel on both actors. Gap 7 needs a C caller of cases.json. Gap 11
-  needs an IPv6 structured fixture.
+  is opened by both engines.
 
 S3 crash injection is not a release-binary scenario. The fault hook
 compiles out of the release binary. The failed-commit proof is

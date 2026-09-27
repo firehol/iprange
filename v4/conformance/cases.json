@@ -542,6 +542,83 @@
    ]
   },
   {
+   "file": "rust/structured-ipv6.iprdb",
+   "producer": "rust",
+   "family": "ipv6",
+   "kind": "structured",
+   "structure": "network-enrichment-v1",
+   "tag": "enrichment",
+   "metadata": {
+    "state": "text",
+    "value": "{\"fixture\":\"rust-structured-ipv6\",\"producer\":\"rust\"}"
+   },
+   "address_count": "246",
+   "feeds": [
+    {
+     "name": "botnet",
+     "index": 0
+    },
+    {
+     "name": "scanner",
+     "index": 1
+    }
+   ],
+   "structured_ranges": [
+    {
+     "from": "2001:db8::",
+     "to": "2001:db8::3f",
+     "asn": 64512,
+     "country_id": 1,
+     "state_id": 2,
+     "city_id": 3,
+     "location": {
+      "latitude_microdegrees": 37983810,
+      "longitude_microdegrees": 23727539
+     },
+     "feeds": [
+      "botnet"
+     ]
+    },
+    {
+     "from": "2001:db8::40",
+     "to": "2001:db8::63",
+     "asn": 64513,
+     "country_id": 4,
+     "state_id": 5,
+     "city_id": 6,
+     "feeds": [
+      "scanner"
+     ]
+    },
+    {
+     "from": "2001:db8::6e",
+     "to": "2001:db8::7f",
+     "asn": 64513,
+     "country_id": 4,
+     "state_id": 5,
+     "city_id": 6,
+     "feeds": [
+      "scanner"
+     ]
+    },
+    {
+     "from": "2001:db8::80",
+     "to": "2001:db8::ff",
+     "asn": 64512,
+     "country_id": 1,
+     "state_id": 2,
+     "city_id": 3,
+     "location": {
+      "latitude_microdegrees": 37983810,
+      "longitude_microdegrees": 23727539
+     },
+     "feeds": [
+      "botnet"
+     ]
+    }
+   ]
+  },
+  {
    "file": "go/direct-ipv4.iprdb",
    "producer": "go",
    "family": "ipv4",
@@ -9145,6 +9222,83 @@
      "state_id": 11,
      "city_id": 12,
      "feeds": []
+    }
+   ]
+  },
+  {
+   "file": "go/structured-ipv6.iprdb",
+   "producer": "go",
+   "family": "ipv6",
+   "kind": "structured",
+   "structure": "network-enrichment-v1",
+   "tag": "enrichment",
+   "metadata": {
+    "state": "text",
+    "value": "{\"fixture\":\"go-structured-ipv6\",\"producer\":\"go\"}"
+   },
+   "address_count": "246",
+   "feeds": [
+    {
+     "name": "botnet",
+     "index": 0
+    },
+    {
+     "name": "scanner",
+     "index": 1
+    }
+   ],
+   "structured_ranges": [
+    {
+     "from": "2001:db8::",
+     "to": "2001:db8::3f",
+     "asn": 64512,
+     "country_id": 1,
+     "state_id": 2,
+     "city_id": 3,
+     "location": {
+      "latitude_microdegrees": 37983810,
+      "longitude_microdegrees": 23727539
+     },
+     "feeds": [
+      "botnet"
+     ]
+    },
+    {
+     "from": "2001:db8::40",
+     "to": "2001:db8::63",
+     "asn": 64513,
+     "country_id": 4,
+     "state_id": 5,
+     "city_id": 6,
+     "feeds": [
+      "scanner"
+     ]
+    },
+    {
+     "from": "2001:db8::6e",
+     "to": "2001:db8::7f",
+     "asn": 64513,
+     "country_id": 4,
+     "state_id": 5,
+     "city_id": 6,
+     "feeds": [
+      "scanner"
+     ]
+    },
+    {
+     "from": "2001:db8::80",
+     "to": "2001:db8::ff",
+     "asn": 64512,
+     "country_id": 1,
+     "state_id": 2,
+     "city_id": 3,
+     "location": {
+      "latitude_microdegrees": 37983810,
+      "longitude_microdegrees": 23727539
+     },
+     "feeds": [
+      "botnet"
+     ]
     }
    ]
   }
