@@ -22047,6 +22047,13 @@ One 100k-range run, span 4, inside a 1,000,000-address space, merged to
 median time 0.168 s. This is one workstation run, not a ceiling and not
 the 1.3x verdict.
 
+One 1M-range run, span 4, inside a 10,000,000-address space, merged to
+3,295,206 addresses. Both engines imported that count. Rust median peak
+was 28104 KiB and median time 0.795 s. Go median peak was 36534 KiB and
+median time 1.623 s. The publish budget for this run is 256 MiB heap
+and 200,000 pages. The 20,000-page budget used by the small scenarios
+is not large enough for this feed.
+
 The generator is IPv4 text only. It does not build corrupt files or
 structured fixtures.
 

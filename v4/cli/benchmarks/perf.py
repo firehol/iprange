@@ -41,9 +41,9 @@ PUBLISH = {
         "destination": "OUT",
         "publication_policy": "fail_if_exists",
         "immutable_feed_budget": {
-            "max_heap_bytes": "16777216",
-            "max_output_pages": "20000",
-            "max_workspace_pages": "20000",
+            "max_heap_bytes": "268435456",
+            "max_output_pages": "200000",
+            "max_workspace_pages": "200000",
             "max_open_files": 3,
         },
     },
