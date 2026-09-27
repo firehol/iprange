@@ -1265,6 +1265,37 @@ func TestEOFReachesActiveSlowRequest(t *testing.T) {
 	assertResultID(t, got[1], "fill")
 }
 
+func TestEOFKeepsCancelledTokenForQueuedExecute(t *testing.T) {
+	// A request still queued when stdin closes must keep the token
+	// beginShutdown already cancelled. A worker that installs a fresh
+	// token would wait for release and this test would time out.
+	registerSlowMethod(t)
+	gate := newTestSlowGate()
+	slowGate.Store(gate)
+	t.Cleanup(func() { releaseSlow(t, gate) })
+	in, out, done := startPipedSession(t)
+
+	writeFrame(t, in, `{"jsonrpc":"2.0","id":"active","method":"iprange.v1.database.info","params":{}}`)
+	select {
+	case <-gate.entered:
+	case <-time.After(5 * time.Second):
+		releaseSlow(t, gate)
+		t.Fatal("slow handler did not start")
+	}
+	writeFrame(t, in, `{"jsonrpc":"2.0","id":"queued","method":"iprange.v1.database.info","params":{}}`)
+	outData := drainOutput(t, out)
+	in.Close()
+	if err := waitRun(t, done); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+	got := lines(string(<-outData))
+	if len(got) != 2 {
+		t.Fatalf("got %d response lines, want 2: %q", len(got), got)
+	}
+	assertFactualCancellation(t, got[0], "active")
+	assertFactualCancellation(t, got[1], "queued")
+}
+
 // TestWaitSignalRecordedPinsEOFExitZero pins the primitive the
 // clean-EOF path uses to give a recorded termination signal priority
 // over the exit-zero outcome: a closed sigRecorded channel yields the
