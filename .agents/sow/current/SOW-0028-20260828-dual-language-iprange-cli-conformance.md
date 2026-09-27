@@ -22191,6 +22191,9 @@ The close ceiling run created 1,000 one-address feeds and imported one
 addresses. The 1,000 feeds are not 10M ranges each. The 10M ranges are
 one feed. This is one workstation run, not the 1.3x verdict.
 
+The attestation rows assigned to this milestone now have detecting
+cases. The ≤1.3x verdict stays SOW-0030 and is not decided here.
+
 The remaining close items are not another small scenario:
 
 - Last-seen refresh across the seven-day corpus is `s2-seven-day-last-seen`.
