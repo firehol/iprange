@@ -17,11 +17,13 @@ Implemented and pushed:
 - `3601d121` — the remaining legacy diagnostics use the fallible stderr writer. 370 `iprange-cli` tests pass.
 - CLI export, metadata, and removal outputs are created mode `0600` on both engines. The challenge to that rule is pending SOW-0034 and does not change this fix.
 
-Remaining, in order:
+Review-wave items closed after this ledger was written:
 
-1. Native host checks. FreeBSD 14.1 amd64 passed `TestRecoverLiveRefusesBeforePathAccessOnFreeBSD` at `6e1296be`. Windows 11 amd64 passed the changed handler, fileio, rpc, live, and recovery packages at the same commit.
-2. Commit `v4/cli/battery.sh`. Done in this commit: rotation keeps the manifest names, and the script finds the repo from its own path. It has not been run end to end.
-3. Regenerate `parity_rust_public.tsv` from current Rust. The new drift test records the current `lib.rs` exports so the next export fails; it does not yet compare methods.
+1. Native host checks passed at `6e1296be`.
+2. `v4/cli/battery.sh` is committed. It has not been run end to end.
+3. `parity_rust_public.tsv` method regeneration is still open. The drift test covers `lib.rs` exports only.
+
+Milestone 5 is the active work. Its current state is the "First slice" section at the end of this file. HEAD is `ffbf53d6`. Do not treat the list above as the work queue.
 
 Not in this serial pass:
 
