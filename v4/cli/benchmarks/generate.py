@@ -22,6 +22,61 @@ def generate(seed, count, span, space=2**32):
     return ranges
 
 
+def covered(ranges):
+    ordered = sorted(ranges)
+    merged = []
+    current_start, current_end = ordered[0]
+    for start, end in ordered[1:]:
+        if start <= current_end + 1:
+            current_end = max(current_end, end)
+            continue
+        merged.append((current_start, current_end))
+        current_start, current_end = start, end
+    merged.append((current_start, current_end))
+    return merged
+
+
+def diff_counts(before, after):
+    left = covered(before)
+    right = covered(after)
+    unchanged = 0
+    removed = 0
+    added = 0
+    i = 0
+    j = 0
+    while i < len(left) or j < len(right):
+        if j == len(right) or (i < len(left) and left[i][1] < right[j][0]):
+            removed += left[i][1] - left[i][0] + 1
+            i += 1
+            continue
+        if i == len(left) or right[j][1] < left[i][0]:
+            added += right[j][1] - right[j][0] + 1
+            j += 1
+            continue
+        start = max(left[i][0], right[j][0])
+        end = min(left[i][1], right[j][1])
+        if start <= end:
+            unchanged += end - start + 1
+        if left[i][1] <= right[j][1]:
+            if left[i][0] < start:
+                removed += start - left[i][0]
+            if right[j][0] < start:
+                added += start - right[j][0]
+            i += 1
+            if end == right[j][1]:
+                j += 1
+            else:
+                right[j] = (end + 1, right[j][1])
+        else:
+            if right[j][0] < start:
+                added += start - right[j][0]
+            if left[i][0] < start:
+                removed += start - left[i][0]
+            j += 1
+            left[i] = (end + 1, left[i][1])
+    return {"unchanged": unchanged, "removed": removed, "added": added}
+
+
 def merged_count(ranges):
     ordered = sorted(ranges)
     total = 0

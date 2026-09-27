@@ -22054,6 +22054,14 @@ median time 1.623 s. The publish budget for this run is 256 MiB heap
 and 200,000 pages. The 20,000-page budget used by the small scenarios
 is not large enough for this feed.
 
+`perf_replace.py` times the replacement only. The generator computes
+the diff first. One 100k-range replacement, span 4, inside a
+1,000,000-address space, was 109158 unchanged, 220037 removed, and
+220661 added. Both engines reported that diff. Rust median peak was
+9060 KiB and median time 0.055 s. Go median peak was 11708 KiB and
+median time 0.074 s. The setup imports are not in the sample. This is
+one workstation run, not a ceiling.
+
 The generator is IPv4 text only. It does not build corrupt files or
 structured fixtures.
 

@@ -2,7 +2,7 @@
 
 import unittest
 
-from generate import generate, merged_count
+from generate import diff_counts, generate, merged_count
 
 
 class GeneratorTest(unittest.TestCase):
@@ -14,6 +14,11 @@ class GeneratorTest(unittest.TestCase):
 
     def test_adjacent_ranges_merge(self):
         self.assertEqual(merged_count([(0, 1), (2, 3)]), 4)
+
+    def test_diff_counts_match_the_known_replace(self):
+        before = [(0, 3), (10, 10)]
+        after = [(2, 6), (20, 20)]
+        self.assertEqual(diff_counts(before, after), {"unchanged": 2, "removed": 3, "added": 4})
 
     def test_small_space_overlaps(self):
         ranges = generate(7, 20, 4, space=64)
