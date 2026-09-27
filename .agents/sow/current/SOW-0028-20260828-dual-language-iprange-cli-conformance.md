@@ -22100,6 +22100,10 @@ count is 3. The CSV rows are the proof, not the count.
 4, and 2 are shared. Left-only is 4. Selecting all feeds on two sources
 counts every address twice, so the scenario names the feeds.
 
+`s6-binary-export` exports one IPv4 feed as legacy binary. Both engines
+write the same bytes, 2 rows and 5 addresses. This is not the IPv6 v2
+byte-order decision. That remains update-ipsets SOW-0126.
+
 S3 crash injection is not a release-binary scenario. The fault hook
 compiles out of the release binary. The failed-commit proof is
 `TestLiveWriterOutcomeUnknownFailClosed` in the v4work suite. A scenario

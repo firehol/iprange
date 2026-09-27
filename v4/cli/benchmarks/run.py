@@ -8,6 +8,7 @@ is not implemented: this runner proves agreement, not speed.
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import shutil
@@ -181,7 +182,11 @@ def run_calls(service, name, scenario, work, calls, peer):
             continue
         for item in call.get("capture", []):
             captured[item["name"]] = field(result["result"], item["path"].replace("/", "."))
-        observed.append(result["result"])
+        row = dict(result["result"])
+        if call.get("expect_same_bytes"):
+            relative = call["expect_same_bytes"]
+            row["bytes"] = hashlib.sha256(open(os.path.join(work, relative), "rb").read()).hexdigest()
+        observed.append(row)
     return observed
 
 
@@ -255,6 +260,11 @@ def compare(scenario, rust, go):
             expected = call.get("expect", {}).get(path)
             if expected is not None and left != expected:
                 mismatches.append(f"{call['method']} {path}: got={left!r} expect={expected!r}")
+        if call.get("expect_same_bytes"):
+            left = rust[index].get("bytes")
+            right = go[index].get("bytes")
+            if left != right:
+                mismatches.append(f"{call.get('method', 'batch')} bytes differ")
     return mismatches
 
 
