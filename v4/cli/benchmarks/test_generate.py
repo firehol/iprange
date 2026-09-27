@@ -21,6 +21,8 @@ from generate import (
     parse_ipv6,
     provider_join,
     resolve_direct,
+    last_seen_days,
+    last_seen_refresh,
     retained_count,
     write_ipv6,
 )
@@ -35,6 +37,42 @@ class GeneratorTest(unittest.TestCase):
 
     def test_adjacent_ranges_merge(self):
         self.assertEqual(merged_count([(0, 1), (2, 3)]), 4)
+
+    def test_last_seen_expires_at_the_cutoff(self):
+        # Day 1 stores 1-3 at value 1. Day 2 updates 3 and adds 4.
+        # Day 3 cutoff 1 drops value 1 and keeps value 2. A refresh
+        # that ignored the cutoff would report removed 0.
+        first = last_seen_refresh([], [(1, 3)], 1, 0)
+        self.assertEqual(first["added"], 3)
+        self.assertEqual(first["after"], 3)
+        second = last_seen_refresh(first["stored"], [(3, 4)], 2, 0)
+        self.assertEqual(
+            (second["added"], second["removed"], second["unchanged"], second["changed"], second["after"]),
+            (1, 0, 2, 1, 4),
+        )
+        third = last_seen_refresh(second["stored"], [(4, 4)], 3, 1)
+        self.assertEqual(
+            (third["added"], third["removed"], third["unchanged"], third["changed"], third["after"]),
+            (0, 2, 1, 1, 2),
+        )
+
+    def test_last_seen_seven_day_corpus_expires(self):
+        days = day_feeds(11, 7, 20, 4, 64)
+        steps = last_seen_days(days, range(1, 8), [max(0, day - 2) for day in range(1, 8)])
+        # Cutoff is refresh_value - 2. Day 3 is the first expiry: three
+        # addresses stored at 1 are absent from that day's coverage.
+        self.assertEqual(
+            [(step["added"], step["removed"], step["unchanged"], step["changed"], step["after"]) for step in steps],
+            [
+                (35, 0, 0, 0, 35),
+                (21, 0, 8, 27, 56),
+                (7, 3, 22, 31, 60),
+                (2, 8, 11, 41, 54),
+                (6, 0, 12, 42, 60),
+                (0, 1, 20, 39, 59),
+                (1, 2, 8, 49, 58),
+            ],
+        )
 
     def test_churn_names_each_day(self):
         days = [[(0, 4)], [(2, 6)], [(2, 2)]]
@@ -72,6 +110,23 @@ class GeneratorTest(unittest.TestCase):
             self.assertEqual(int(expect["report.added_addresses"]), step["added"])
             self.assertEqual(int(expect["report.removed_addresses"]), step["removed"])
             self.assertEqual(int(expect["report.unchanged_value_addresses"]), step["unchanged"])
+
+    def test_seven_day_last_seen_scenario_names_the_generator(self):
+        steps = last_seen_days(day_feeds(11, 7, 20, 4, 64), range(1, 8), [max(0, day - 2) for day in range(1, 8)])
+        path = os.path.join(os.path.dirname(__file__), "scenarios", "s2-seven-day-last-seen.json")
+        with open(path, encoding="utf-8") as stream:
+            scenario = json.load(stream)
+        refreshes = [call for call in scenario["calls"] if call["method"] == "iprange.v1.retention.last_seen.refresh"]
+        self.assertEqual(len(refreshes), 7)
+        self.assertEqual(int(refreshes[2]["params"]["cutoff"]), 1)
+        self.assertEqual(int(refreshes[2]["expect"]["report.removed_addresses"]), 3)
+        for call, step in zip(refreshes, steps):
+            expect = call["expect"]
+            self.assertEqual(int(expect["report.added_addresses"]), step["added"])
+            self.assertEqual(int(expect["report.removed_addresses"]), step["removed"])
+            self.assertEqual(int(expect["report.unchanged_value_addresses"]), step["unchanged"])
+            self.assertEqual(int(expect["report.changed_value_addresses"]), step["changed"])
+            self.assertEqual(int(expect["report.after_addresses"]), step["after"])
 
     def test_retention_keeps_values_above_cutoff(self):
         ranges = [(0, 9, 10), (8, 11, 10), (20, 20, 5)]

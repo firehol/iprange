@@ -22193,8 +22193,10 @@ one feed. This is one workstation run, not the 1.3x verdict.
 
 The remaining close items are not another small scenario:
 
-- Last-seen refresh across the seven-day corpus, including cutoff expiry.
-  The seven-day scenario is first-seen only.
+- Last-seen refresh across the seven-day corpus is `s2-seven-day-last-seen`.
+  Cutoff is two values behind the refresh. Day 3 drops 3 addresses stored
+  at 1. Both engines matched the generator, including that expiry. The
+  seven-day first-seen scenario does not cover this.
 - Attestation gaps 7 and 11. Gap 10 runs cancel on both the producer
   and the consumer. Gap 5 keeps the cancelled token
   for a request still queued at EOF; that request aborts. Gap 9 compares the golden

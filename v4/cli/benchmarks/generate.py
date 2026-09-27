@@ -186,6 +186,78 @@ def churn(days):
     return steps
 
 
+def _segments(stored, current):
+    # stored is non-overlapping (start, end, value). current is merged
+    # (start, end). Yield atomic (start, end, old_value or None, in_current).
+    points = set()
+    for start, end, _value in stored:
+        points.add(start)
+        points.add(end + 1)
+    for start, end in current:
+        points.add(start)
+        points.add(end + 1)
+    ordered = sorted(points)
+    for left, right in zip(ordered, ordered[1:]):
+        if right <= left:
+            continue
+        old = None
+        for start, end, value in stored:
+            if start <= left <= end:
+                old = value
+                break
+        inside = any(start <= left <= end for start, end in current)
+        yield left, right - 1, old, inside
+
+
+def last_seen_refresh(stored, current, refresh_value, cutoff):
+    # An address in the current coverage takes max(old, refresh_value).
+    # An address outside it is kept only when its stored value is greater
+    # than the cutoff. A later row does not exist here: stored ranges do
+    # not overlap.
+    added = removed = unchanged = changed = after = 0
+    nxt = []
+    for start, end, old, inside in _segments(stored, current):
+        if inside:
+            new = refresh_value if old is None else max(old, refresh_value)
+        elif old is not None and old > cutoff:
+            new = old
+        else:
+            new = None
+        count = end - start + 1
+        if old is None and new is not None:
+            added += count
+        elif old is not None and new is None:
+            removed += count
+        elif old == new and new is not None:
+            unchanged += count
+        elif old is not None and new is not None:
+            changed += count
+        if new is not None:
+            after += count
+            if nxt and nxt[-1][1] + 1 == start and nxt[-1][2] == new:
+                nxt[-1] = (nxt[-1][0], end, new)
+            else:
+                nxt.append((start, end, new))
+    return {
+        "added": added,
+        "removed": removed,
+        "unchanged": unchanged,
+        "changed": changed,
+        "after": after,
+        "stored": nxt,
+    }
+
+
+def last_seen_days(days, refresh_values, cutoffs):
+    stored = []
+    steps = []
+    for current, refresh_value, cutoff in zip(days, refresh_values, cutoffs):
+        step = last_seen_refresh(stored, covered(current), refresh_value, cutoff)
+        stored = step.pop("stored")
+        steps.append(step)
+    return steps
+
+
 def day_feeds(seed, days, count, span, space=2**32):
     if days < 1:
         raise ValueError("days must be positive")
