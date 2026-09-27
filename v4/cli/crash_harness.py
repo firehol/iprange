@@ -90,12 +90,14 @@ only when every scenario passes and no owned process remains.
 """
 
 import argparse
+import ctypes
 import hashlib
 import json
 import os
 import platform
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import threading
@@ -713,6 +715,119 @@ def reservation_seen(work_dir, magic):
     return False
 
 
+class ReservationWatch:
+    """Wake when a reservation header hits disk, even if the poller is late.
+
+    The publish window is a few milliseconds. A Python poll loop that is
+    not scheduled during that window never sees the file. This watch is
+    armed before the publish starts. Its thread blocks in the kernel, so
+    a create wakes it, and it kills from that wake once the magic is
+    readable.
+    """
+
+    def __init__(self, directory, on_magic):
+        self.fired = threading.Event()
+        self._directory = directory
+        self._on_magic = on_magic
+        self._fd = None
+        self._thread = None
+        self._ready = threading.Event()
+        if os.name == "nt":
+            self._ready.set()
+            return
+        self._thread = threading.Thread(
+            target=self._run, name="reservation-watch", daemon=True)
+        self._thread.start()
+        if not self._ready.wait(2):
+            self.close()
+
+    def _run(self):
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.inotify_init1.argtypes = [ctypes.c_int]
+        libc.inotify_init1.restype = ctypes.c_int
+        libc.inotify_add_watch.argtypes = [
+            ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+        libc.inotify_add_watch.restype = ctypes.c_int
+        libc.read.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t]
+        libc.read.restype = ctypes.c_ssize_t
+        fd = libc.inotify_init1(0x80000)  # IN_CLOEXEC
+        if fd < 0:
+            self._ready.set()
+            return
+        self._fd = fd
+        # IN_CREATE | IN_MOVED_TO | IN_CLOSE_WRITE | IN_MODIFY
+        mask = 0x100 | 0x80 | 0x8 | 0x2
+        if libc.inotify_add_watch(fd, os.fsencode(self._directory), mask) < 0:
+            self._ready.set()
+            return
+        self._ready.set()
+        buf = ctypes.create_string_buffer(4096)
+        header = struct.Struct("iIII")
+        while True:
+            n = libc.read(fd, buf, len(buf))
+            if n <= 0:
+                return
+            offset = 0
+            while offset + header.size <= n:
+                _wd, _mask, _cookie, name_len = header.unpack_from(buf, offset)
+                offset += header.size
+                raw = bytes(buf[offset:offset + name_len])
+                offset += name_len
+                name = raw.split(b"\0", 1)[0].decode("utf-8", "replace")
+                if not name.startswith(RESERVATION_PREFIX):
+                    continue
+                if self._magic_ready(name):
+                    return
+
+    def _magic_ready(self, name):
+        path = os.path.join(self._directory, name)
+        for _ in range(50):
+            try:
+                with open(path, "rb") as stream:
+                    magic = stream.read(8)
+            except OSError:
+                magic = b""
+            if magic == RESERVATION_MAGIC:
+                if not self.fired.is_set():
+                    self.fired.set()
+                    if self._on_magic is not None:
+                        self._on_magic()
+                return True
+            time.sleep(0.0002)
+        return False
+
+    def close(self):
+        fd = self._fd
+        self._fd = None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        if self._thread is not None:
+            self._thread.join(timeout=2)
+            self._thread = None
+
+
+def publish_until_reservation(service, work, request_id, params):
+    """Publish until the reservation header is durable, then return.
+
+    The watch is armed before the request starts. It kills the producer
+    from the kernel wake. The poll remains the fallback when inotify is
+    unavailable.
+    """
+
+    watch = ReservationWatch(work, service.kill_process_group)
+    try:
+        return call_with_worker(
+            service, request_id, "iprange.v1.current.publish", params,
+            POLL_DEADLINE_SECONDS,
+            seen=lambda: watch.fired.is_set() or reservation_seen(
+                work, RESERVATION_MAGIC))
+    finally:
+        watch.close()
+
+
 def reservation_output_sha512(work_dir):
     """Output SHA-512 recorded by the retained reservation (offset 160).
 
@@ -985,10 +1100,8 @@ def scenario_a1(direction, producer, consumer, work_dir, scenario_report):
         read_deadline=CRASH_IO_DEADLINE_SECONDS,
         write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
-        outcome, seen_ms, thread = call_with_worker(
-            producer_service, "1", "iprange.v1.current.publish", params,
-            POLL_DEADLINE_SECONDS,
-            seen=lambda: reservation_seen(work, RESERVATION_MAGIC))
+        outcome, seen_ms, thread = publish_until_reservation(
+            producer_service, work, "1", params)
         if seen_ms is None:
             raise ScenarioFailure(
                 "reservation marker was not observed; "
@@ -1086,10 +1199,8 @@ def scenario_a2(direction, producer, consumer, work_dir, scenario_report):
         read_deadline=CRASH_IO_DEADLINE_SECONDS,
         write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
-        outcome, seen_ms, thread = call_with_worker(
-            producer_service, "9", "iprange.v1.current.publish",
-            replace_params, POLL_DEADLINE_SECONDS,
-            seen=lambda: reservation_seen(work, RESERVATION_MAGIC))
+        outcome, seen_ms, thread = publish_until_reservation(
+            producer_service, work, "9", replace_params)
         if seen_ms is None:
             raise ScenarioFailure(
                 "reservation marker was not observed; "
@@ -1311,10 +1422,8 @@ def scenario_a3(direction, producer, consumer, work_dir, fixture_tool,
         read_deadline=CRASH_IO_DEADLINE_SECONDS,
         write_deadline=CRASH_IO_DEADLINE_SECONDS)
     try:
-        outcome, seen_ms, thread = call_with_worker(
-            producer_service, "9", "iprange.v1.current.publish",
-            replace_params, POLL_DEADLINE_SECONDS,
-            seen=lambda: reservation_seen(work, RESERVATION_MAGIC))
+        outcome, seen_ms, thread = publish_until_reservation(
+            producer_service, work, "9", replace_params)
         if seen_ms is None:
             raise ScenarioFailure(
                 "reservation marker was not observed; "
@@ -2996,7 +3105,7 @@ CRASH_SELF_TEST_CONTROLS = {
     "scratch": 3,
     "sidecar": 2,
     "orphan": 2,
-    "marker": 6,
+    "marker": 7,
     "kinds": 4,
     "provenance": 2,
 }
@@ -3197,6 +3306,19 @@ def _self_test():
               not draft_growth_observed(os.path.join(root, "nope.iprange"), 0))
         check("marker", "a reservation with its magic is the publish kill point",
               reservation_seen(good_reservation, RESERVATION_MAGIC))
+        watched = os.path.join(root, "watched")
+        os.makedirs(watched)
+        hits = []
+        watch = ReservationWatch(watched, lambda: hits.append("kill"))
+        try:
+            with open(os.path.join(
+                    watched, RESERVATION_PREFIX + "self" + PRIVATE_TMP_SUFFIX),
+                    "wb") as stream:
+                stream.write(RESERVATION_MAGIC + b"\0" * 8)
+            check("marker", "a reservation create wakes the directory watch",
+                  watch.fired.wait(2) and hits == ["kill"])
+        finally:
+            watch.close()
 
         # observed_kinds is the shape the kind gate consumes: an artifact
         # kind is credited to the operation that really produced or opened
