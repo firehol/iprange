@@ -22084,6 +22084,11 @@ report 4 records and 9 addresses. A second publish includes a file with
 no destination file. Parallel feeds are not in this scenario: one
 publish reads its paths in order.
 
+`s2-two-day-refresh` runs first-seen refresh on two days. Day 1 stamps
+5 addresses. Day 2 keeps 2, removes 3, and adds 4. An address absent
+from the current feed is removed. The first expected counts kept those
+addresses; the engines do not. Both engines report the removal.
+
 The generator is IPv4 text only. It does not build corrupt files or
 structured fixtures.
 
