@@ -77,6 +77,31 @@ def diff_counts(before, after):
     return {"unchanged": unchanged, "removed": removed, "added": added}
 
 
+def retained_count(ranges, cutoff):
+    # Later rows replace overlapping addresses. The direct loader applies
+    # the CSV in order, so a later value wins. The sweep is one pass over
+    # range endpoints, not one pass over addresses.
+    events = []
+    for index, (start, end, value) in enumerate(ranges):
+        events.append((start, 1, index, value))
+        events.append((end + 1, 0, index, value))
+    events.sort()
+    active = {}
+    total = 0
+    previous = None
+    for point, kind, index, value in events:
+        if previous is not None and point > previous and active:
+            winner = max(active)
+            if active[winner] > cutoff:
+                total += point - previous
+        if kind == 1:
+            active[index] = value
+        else:
+            active.pop(index, None)
+        previous = point
+    return total
+
+
 def overlap_count(left, right):
     return diff_counts(left, right)["unchanged"]
 

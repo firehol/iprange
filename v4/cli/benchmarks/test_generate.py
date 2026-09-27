@@ -2,7 +2,7 @@
 
 import unittest
 
-from generate import diff_counts, generate, merged_count, overlap_count
+from generate import diff_counts, generate, merged_count, overlap_count, retained_count
 
 
 class GeneratorTest(unittest.TestCase):
@@ -14,6 +14,11 @@ class GeneratorTest(unittest.TestCase):
 
     def test_adjacent_ranges_merge(self):
         self.assertEqual(merged_count([(0, 1), (2, 3)]), 4)
+
+    def test_retention_keeps_values_above_cutoff(self):
+        ranges = [(0, 9, 10), (8, 11, 10), (20, 20, 5)]
+        self.assertEqual(retained_count(ranges, 9), 12)
+        self.assertEqual(retained_count(ranges, 10), 0)
 
     def test_overlap_is_the_unchanged_count(self):
         self.assertEqual(overlap_count([(0, 5)], [(4, 9)]), 2)

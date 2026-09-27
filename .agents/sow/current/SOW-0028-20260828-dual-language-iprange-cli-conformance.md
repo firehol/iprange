@@ -22069,6 +22069,14 @@ median peak was 8028 KiB and median time 0.044 s. Go median peak was
 9292 KiB and median time 0.048 s. The two publishes are not in the
 sample. This is one workstation run, not a ceiling.
 
+`perf_history.py` times the history projection only. Later CSV rows
+replace overlapping addresses, and a window keeps values above the
+cutoff. One 100k-range projection at cutoff 7 retained 164314
+addresses. Both engines reported that count. Rust median peak was 8716
+KiB and median time 0.046 s. Go median peak was 10920 KiB and median
+time 0.051 s. Loading the last-seen file is not in the sample. This is
+one workstation run, not a ceiling.
+
 The generator is IPv4 text only. It does not build corrupt files or
 structured fixtures.
 
