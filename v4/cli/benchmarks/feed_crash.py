@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 from generate import generate, write_text
 
@@ -142,6 +143,7 @@ def prove(binary, work):
         raise AssertionError("alpha was not committed before the crash")
     if matches(session, database, "10.0.0.9") != "1":
         raise AssertionError("beta was not committed before the crash")
+    before = os.path.getsize(database)
     session.call("iprange.v1.feeds.replace", {
         "path": database,
         "feed": "alpha",
@@ -152,8 +154,21 @@ def prove(binary, work):
         "metadata": {"mode": "keep"},
         "writer_budget": WRITER,
     }, wait=False)
-    # Kill on the next scheduler turn, while the replace call is outstanding.
-    # A sleep long enough for the replace to commit is not this proof.
+    # The writer grows the live file when the replace starts. Kill then.
+    # Killing before that growth does not prove the call was in progress.
+    # Killing after the process exits does not prove a crash.
+    deadline = time.perf_counter() + 5
+    grew = False
+    while time.perf_counter() < deadline:
+        if session.proc.poll() is not None:
+            raise AssertionError("replace finished before the live file grew")
+        if os.path.getsize(database) > before:
+            grew = True
+            break
+        time.sleep(0.001)
+    if not grew:
+        session.kill()
+        raise AssertionError("replace did not grow the live file before the deadline")
     if session.proc.poll() is not None:
         raise AssertionError("replace finished before the kill; the crash proof did not run")
     session.kill()

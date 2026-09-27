@@ -22219,13 +22219,14 @@ The remaining close items are not another small scenario:
   cancel on both actors. Gap 7 reads cases.json from C. Gap 11
   is opened by both engines.
 
-S3 is `feed_crash.py`. It kills `feeds.replace` on the release binary
-while that call is still outstanding. The prior alpha feed and the
+S3 is `feed_crash.py`. It sends `feeds.replace` on the release binary
+and kills that process only after the live file has grown. That growth
+is the sign the replace has started. The prior alpha feed and the
 untouched beta feed are still present after the kill. Both engines
-passed. A kill after the replace commits is not this proof. The unit
-suite still has `TestLiveWriterOutcomeUnknownFailClosed` for the
-fail-closed writer path. That test is not a substitute for the release
-crash.
+passed. A kill before the file grows, or after the process exits, is
+not this proof. The unit suite still has
+`TestLiveWriterOutcomeUnknownFailClosed` for the fail-closed writer
+path. That test is not a substitute for the release crash.
 
 `v4/cli/battery.sh --tier gate` passed on 2026-09-27. Wall time 154.9 s.
 320 steps, 0 mismatches, 9 deferred. The deferred steps are the Windows
@@ -22264,7 +22265,9 @@ Every committed scenario rejects a seeded wrong answer. The comparator
 reports the mutated expect even when both engines would agree. A batch
 call has no method name; the report still names the mismatch.
 
-Closure statement: milestone 5 is CLOSED for the work assigned to it.
+The product proofs for milestone 5 are in the tree. The close gate is
+the role round and the astra review required by `REVIEWS.md`. Milestone
+5 is not closed until those return.
 The fifteen attestation rows have detecting cases. The scenario matrix
 covers import, first-seen and last-seen refresh, history cutoff, joins,
 snapshot cross-open, and recovery cross-open. Parallel publish isolates
