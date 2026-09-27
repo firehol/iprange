@@ -22112,7 +22112,11 @@ This runner cannot prove it. The legacy C suite owns that option.
 The public JSON-RPC replacement surface now has a small detecting
 scenario for mixed import, failed import, two-day refresh, three-window
 projection, matching feeds, exclude, binary export, and `@file`
-expansion. The remaining close items are not another small scenario:
+expansion. `s1-ipv6-import` publishes two overlapping IPv6 ranges. Both engines
+merge them to 1 range and 6 addresses. The generator does not yet emit
+a seeded IPv6 corpus. This scenario is one hand-written overlap.
+
+The remaining close items are not another small scenario:
 
 - IPv6, CIDR-mix, and churn corpora. The generator is IPv4 ranges only.
 - Many feeds times provider sets. The current join is one pair.

@@ -1,0 +1,42 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s1-ipv6-import",
+  "purpose": "Import one IPv6 range file. The two ranges overlap and merge.",
+  "fixtures": [
+    {"path": "feed.txt", "text": "2001:db8::1-2001:db8::4\n2001:db8::3-2001:db8::6\n"}
+  ],
+  "calls": [
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["$WORK/feed.txt"],
+          "family": "ipv6",
+          "fix_network": true,
+          "default_prefix": 128,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "alpha",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "v6"},
+        "destination": "$WORK/current.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": ["report.input_record_count", "report.normalized_interval_count", "report.addresses"],
+      "expect": {
+        "report.input_record_count": "2",
+        "report.normalized_interval_count": "1",
+        "report.addresses": "6"
+      }
+    }
+  ]
+}

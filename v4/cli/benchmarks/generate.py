@@ -119,6 +119,12 @@ def merged_count(ranges):
     return total + current_end - current_start + 1
 
 
+def ipv6_text(index, span):
+    start = index * span
+    end = start + span - 1
+    return f"2001:db8::{start:x}-2001:db8::{end:x}\n"
+
+
 def write_text(ranges, stream):
     for start, end in ranges:
         left = ipaddress.IPv4Address(start)
