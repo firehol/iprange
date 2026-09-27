@@ -8,11 +8,12 @@ This is one workstation run, not a ratio verdict.
 import argparse
 import json
 import os
-import subprocess
+import shutil
 import sys
 import tempfile
 import time
 
+from client import BenchSession
 from generate import generate, merged_count, write_text
 from measure import child_hwm_kib, median, ratio
 from perf import PUBLISH, fail
@@ -26,33 +27,6 @@ WRITER = {
 }
 
 
-class Session:
-    def __init__(self, binary):
-        self.proc = subprocess.Popen(
-            [binary, "--jsonrpc"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-    def call(self, method, params):
-        request = {"jsonrpc": "2.0", "id": method, "method": method, "params": params}
-        self.proc.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
-        self.proc.stdin.flush()
-        line = self.proc.stdout.readline()
-        if not line:
-            err = self.proc.stderr.read().decode("utf-8", "replace")[-500:]
-            raise AssertionError(f"{method} returned no response: {err}")
-        response = json.loads(line)
-        if "error" in response:
-            raise AssertionError(response["error"])
-        return response["result"]
-
-    def close(self):
-        self.proc.stdin.close()
-        self.proc.wait(timeout=30)
-        self.proc.stdout.close()
-        self.proc.stderr.close()
 
 
 def feed_name(index):
@@ -78,9 +52,20 @@ def sample_peak(proc, peak):
     return max(peak, current)
 
 
+def prepare_feed_texts(work, feeds):
+    prepared = []
+    for name, ranges in feeds:
+        text_path = os.path.join(work, f"{name}.txt")
+        with open(text_path, "w", encoding="utf-8") as stream:
+            write_text(ranges, stream)
+        prepared.append((name, text_path, merged_count(ranges)))
+    return prepared
+
+
 def load_feeds(binary, work, feeds, wide=None):
-    session = Session(binary)
+    prepared = prepare_feed_texts(work, feeds)
     started = time.perf_counter()
+    session = BenchSession(binary)
     peak = 0
     try:
         membership = os.path.join(work, "mem.iprange")
@@ -98,14 +83,11 @@ def load_feeds(binary, work, feeds, wide=None):
             "max_workspace_pages": "20000",
             "max_open_files": 3,
         }
-        for name, ranges in feeds:
+        for name, text_path, expected_count in prepared:
             peak = sample_peak(session.proc, peak)
-            text_path = os.path.join(work, f"{name}.txt")
             destination = os.path.join(work, f"{name}.iprange")
-            with open(text_path, "w", encoding="utf-8") as stream:
-                write_text(ranges, stream)
             published = publish_one(session, text_path, destination, name, budget)
-            if int(published["report"]["addresses"]) != merged_count(ranges):
+            if int(published["report"]["addresses"]) != expected_count:
                 raise AssertionError(f"{name} import did not match the generator")
             session.call("iprange.v1.feeds.create", {
                 "path": membership,
@@ -152,8 +134,8 @@ def import_ranges(binary, work, ranges, expected):
     destination = os.path.join(work, "wide.iprange")
     with open(text_path, "w", encoding="utf-8") as stream:
         write_text(ranges, stream)
-    session = Session(binary)
     started = time.perf_counter()
+    session = BenchSession(binary)
     peak = 0
     try:
         peak = sample_peak(session.proc, peak)
@@ -211,10 +193,15 @@ def main():
                 write_text(wide, stream)
             samples = {"rust": [], "go": []}
             for index in range(args.rounds):
-                for label, binary in (("rust", args.rust), ("go", args.go)):
+                order = [("rust", args.rust), ("go", args.go)]
+                if index % 2:
+                    order.reverse()
+                for label, binary in order:
                     sample_dir = os.path.join(work, f"{label}-{index}")
                     os.makedirs(sample_dir)
-                    sample = load_feeds(binary, sample_dir, feeds, wide=(wide_text, expected))
+                    local_wide = os.path.join(sample_dir, "wide.txt")
+                    shutil.copyfile(wide_text, local_wide)
+                    sample = load_feeds(binary, sample_dir, feeds, wide=(local_wide, expected))
                     if sample["feeds"] != args.feeds or sample["wide_addresses"] != expected:
                         raise AssertionError(
                             f"{label} round {index} feeds={sample['feeds']} "
@@ -227,6 +214,14 @@ def main():
                 "feeds": args.feeds,
                 "ranges": args.ranges,
                 "merged_addresses": expected,
+                "rust_observed": {
+                    "feeds": samples["rust"][-1]["feeds"],
+                    "addresses": samples["rust"][-1]["wide_addresses"],
+                },
+                "go_observed": {
+                    "feeds": samples["go"][-1]["feeds"],
+                    "addresses": samples["go"][-1]["wide_addresses"],
+                },
                 "rust": rust_summary,
                 "go": go_summary,
                 "ratio": ratio(rust_summary, go_summary),

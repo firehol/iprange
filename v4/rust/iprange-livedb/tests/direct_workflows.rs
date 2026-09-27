@@ -814,7 +814,7 @@ fn reclaim_refuses_an_open_draft_and_a_zero_page_limit() {
     }
     assert!(matches!(
         writer.reclaim(1, 1, &CancellationToken::new()),
-        Err(Error::WrongMode(_))
+        Err(Error::WrongMode(message)) if message == "reclamation requires a clean writer"
     ));
     assert_eq!(
         writer.abort().unwrap().outcome,

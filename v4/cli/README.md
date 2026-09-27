@@ -525,10 +525,12 @@ record it.
   assertion. `--self-test` is therefore a required step of the wave
   battery, invoked on its own with its own exit code, not a side
   effect of the gate command.
-- `benchmarks/` — reserved for the consolidated workload manifests
-  and `bench.py` harness of SOW-0028 delivery step 6 (currently
-  empty; also update the `cases/` bullet above and the matrix counts
-  when a new case is added).
+- `benchmarks/` — the milestone-5 scenario runner. `run.py` drives
+  one JSON scenario against both release binaries through
+  `JsonRpcService`. `perf_ceiling.py` measures the close ceiling.
+  `feed_crash.py` and `parallel_feeds.py` are the crash and per-feed
+  failure proofs. Also update the `cases/` bullet above and the
+  matrix counts when a new case is added.
 
 ### Mechanical file-kind ledger and frame sizes
 

@@ -8,14 +8,12 @@ is a failed proof, not a pass.
 """
 
 import argparse
-import json
 import os
-import signal
-import subprocess
 import sys
 import tempfile
 import time
 
+from client import BenchSession
 from generate import generate, write_text
 
 
@@ -33,36 +31,6 @@ PUBLISH_BUDGET = {
 }
 
 
-class Session:
-    def __init__(self, binary):
-        self.proc = subprocess.Popen(
-            [binary, "--jsonrpc"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-        )
-        self.next_id = 1
-
-    def call(self, method, params, wait=True):
-        request_id = str(self.next_id)
-        self.next_id += 1
-        request = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
-        self.proc.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
-        self.proc.stdin.flush()
-        if not wait:
-            return request_id
-        line = self.proc.stdout.readline()
-        if not line:
-            raise AssertionError(f"{method} returned no response")
-        response = json.loads(line)
-        if "error" in response:
-            raise AssertionError(response["error"])
-        return response["result"]
-
-    def kill(self):
-        os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
-        self.proc.wait(timeout=10)
 
 
 def publish(session, text_path, destination, name):
@@ -124,61 +92,62 @@ def prove(binary, work):
         stream.write("10.0.0.9\n")
     with open(huge, "w", encoding="utf-8") as stream:
         write_text(generate(3, 400000, 4, 2_000_000), stream)
-    session = Session(binary)
-    publish(session, alpha, os.path.join(work, "alpha.iprange"), "alpha")
-    publish(session, beta, os.path.join(work, "beta.iprange"), "beta")
-    publish(session, huge, os.path.join(work, "huge.iprange"), "huge")
-    database = os.path.join(work, "db.iprange")
-    session.call("iprange.v1.database.create", {
-        "path": database,
-        "family": "ipv4",
-        "value_kind": "membership",
-        "structure_kind": "none",
-        "value_tag": {"text": "feeds"},
-        "reader_capacity": 4,
-    })
-    create_feed(session, database, "alpha", os.path.join(work, "alpha.iprange"))
-    create_feed(session, database, "beta", os.path.join(work, "beta.iprange"))
-    if matches(session, database, "10.0.0.1") != "1":
-        raise AssertionError("alpha was not committed before the crash")
-    if matches(session, database, "10.0.0.9") != "1":
-        raise AssertionError("beta was not committed before the crash")
-    before = os.path.getsize(database)
-    session.call("iprange.v1.feeds.replace", {
-        "path": database,
-        "feed": "alpha",
-        "current": {
-            "source": {"path": os.path.join(work, "huge.iprange"), "mode": "immutable"},
-            "feed": "huge",
-        },
-        "metadata": {"mode": "keep"},
-        "writer_budget": WRITER,
-    }, wait=False)
-    # The writer grows the live file when the replace starts. Kill then.
-    # Killing before that growth does not prove the call was in progress.
-    # Killing after the process exits does not prove a crash.
-    deadline = time.perf_counter() + 5
-    grew = False
-    while time.perf_counter() < deadline:
+    session = BenchSession(binary, killable=True)
+    try:
+        publish(session, alpha, os.path.join(work, "alpha.iprange"), "alpha")
+        publish(session, beta, os.path.join(work, "beta.iprange"), "beta")
+        publish(session, huge, os.path.join(work, "huge.iprange"), "huge")
+        database = os.path.join(work, "db.iprange")
+        session.call("iprange.v1.database.create", {
+            "path": database,
+            "family": "ipv4",
+            "value_kind": "membership",
+            "structure_kind": "none",
+            "value_tag": {"text": "feeds"},
+            "reader_capacity": 4,
+        })
+        create_feed(session, database, "alpha", os.path.join(work, "alpha.iprange"))
+        create_feed(session, database, "beta", os.path.join(work, "beta.iprange"))
+        if matches(session, database, "10.0.0.1") != "1":
+            raise AssertionError("alpha was not committed before the crash")
+        if matches(session, database, "10.0.0.9") != "1":
+            raise AssertionError("beta was not committed before the crash")
+        before = os.path.getsize(database)
+        session.submit("iprange.v1.feeds.replace", {
+            "path": database,
+            "feed": "alpha",
+            "current": {
+                "source": {"path": os.path.join(work, "huge.iprange"), "mode": "immutable"},
+                "feed": "huge",
+            },
+            "metadata": {"mode": "keep"},
+            "writer_budget": WRITER,
+        })
+        # The writer grows the live file when the replace starts. Kill then.
+        deadline = time.perf_counter() + 5
+        grew = False
+        while time.perf_counter() < deadline:
+            if session.proc.poll() is not None:
+                raise AssertionError("replace finished before the live file grew")
+            if os.path.getsize(database) > before:
+                grew = True
+                break
+            time.sleep(0.001)
+        if not grew:
+            raise AssertionError("replace did not grow the live file before the deadline")
         if session.proc.poll() is not None:
-            raise AssertionError("replace finished before the live file grew")
-        if os.path.getsize(database) > before:
-            grew = True
-            break
-        time.sleep(0.001)
-    if not grew:
+            raise AssertionError("replace finished before the kill; the crash proof did not run")
         session.kill()
-        raise AssertionError("replace did not grow the live file before the deadline")
-    if session.proc.poll() is not None:
-        raise AssertionError("replace finished before the kill; the crash proof did not run")
-    session.kill()
-    opened = Session(binary)
+    finally:
+        if session.proc.poll() is None:
+            session.kill()
+        session.close()
+    opened = BenchSession(binary)
     try:
         alpha_count = matches(opened, database, "10.0.0.1")
         beta_count = matches(opened, database, "10.0.0.9")
     finally:
-        opened.proc.stdin.close()
-        opened.proc.wait(timeout=30)
+        opened.close()
     if alpha_count != "1" or beta_count != "1":
         raise AssertionError(
             f"prior feeds did not survive: alpha={alpha_count} beta={beta_count}")
@@ -199,6 +168,6 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, AssertionError, json.JSONDecodeError, KeyError) as exc:
+    except (OSError, AssertionError, KeyError) as exc:
         print(f"FAIL {exc}", file=sys.stderr)
         sys.exit(1)

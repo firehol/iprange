@@ -71,6 +71,21 @@ def assign(root, path, value):
         cursor[last] = value
 
 
+class HarnessContractTest(unittest.TestCase):
+    def test_backslash_dotdot_is_an_escape(self):
+        with self.assertRaises(ValueError):
+            _bench.refuse_escape("sub\\..\\..\\outside.txt", "generated path")
+
+    def test_batch_of_errors_is_not_sixteen_describes(self):
+        decoded = [{"id": f"batch-{index}", "error": {"code": -32600}} for index in range(16)]
+        with self.assertRaises(AssertionError):
+            _bench.batch_observation(decoded, 16)
+
+    def test_batch_rejection_must_have_a_null_id(self):
+        with self.assertRaises(AssertionError):
+            _bench.batch_observation({"id": "batch-0", "error": {"code": -32600}}, 17)
+
+
 class ScenarioMutantTest(unittest.TestCase):
     def test_every_scenario_rejects_a_wrong_answer(self):
         root = os.path.join(_HERE, "scenarios")

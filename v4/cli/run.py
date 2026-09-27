@@ -31,6 +31,7 @@ import json
 import os
 import platform as platform_module
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -1626,6 +1627,73 @@ class JsonRpcService:
                 return self.decode_response_line(line, request_id)
             except (frame.FrameError, UnicodeDecodeError) as exc:
                 raise AssertionError(str(exc)) from exc
+
+    def submit(self, request_id, method, params):
+        """Write one request and do not read its response.
+
+        A crash proof uses this so the call stays outstanding. The
+        next read on this service would see that unread response, so
+        the caller must kill or close before another call.
+        """
+
+        with self.lock:
+            request = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+            wire = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
+            wire_bytes = wire.encode("utf-8")
+            if len(wire_bytes) > frame.INPUT_FRAME_LIMIT:
+                raise AssertionError("client request frame over limit")
+            if self._poisoned:
+                raise AssertionError(
+                    "service poisoned by a bounded I/O timeout; "
+                    "a later exchange cannot be correlated")
+            try:
+                if self.write_deadline is None:
+                    self.proc.stdin.write(wire_bytes + b"\n")
+                    self.proc.stdin.flush()
+                elif self._use_threads:
+                    self._write_bounded_thread(wire_bytes + b"\n")
+                else:
+                    self._write_bounded(wire_bytes + b"\n")
+            except TimeoutError as exc:
+                raise AssertionError(
+                    f"service did not accept the request within the "
+                    f"bounded write deadline: {exc}") from exc
+            except (BrokenPipeError, OSError) as exc:
+                raise AssertionError(
+                    f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
+
+    def kill_process_group(self):
+        """Stop exactly the process tree this service spawned.
+
+        POSIX uses SIGKILL on the session. Windows cannot do that, so
+        it uses the same TerminateProcess then taskkill /T path as the
+        crash harness. The caller must have set start_new_session.
+        """
+
+        if os.name == "nt":
+            try:
+                os.kill(self.proc.pid, signal.SIGTERM)
+            except OSError:
+                pass
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                subprocess.run(
+                    ["taskkill", "/F", "/T", "/PID", str(self.proc.pid)],
+                    capture_output=True, check=False)
+                try:
+                    self.proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+            return
+        try:
+            os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        try:
+            self.proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
 
     def notify(self, method, params):
         """Send one JSON-RPC notification: no id, no response expected.

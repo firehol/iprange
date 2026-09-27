@@ -7,12 +7,12 @@ failure boundary.
 """
 
 import argparse
-import json
 import os
-import subprocess
 import sys
 import tempfile
+import threading
 
+from client import BenchSession
 from generate import generate, merged_count, write_text
 
 
@@ -47,27 +47,15 @@ def publish_request(text_path, destination, name):
     }
 
 
-def start(binary, request):
-    proc = subprocess.Popen(
-        [binary, "--jsonrpc"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    proc.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
-    proc.stdin.flush()
-    return proc
-
-
-def finish(proc):
-    line = proc.stdout.readline()
+def run_publish(binary, text_path, destination, name, box):
+    session = BenchSession(binary)
     try:
-        proc.stdin.close()
-    except BrokenPipeError:
-        pass
-    err = proc.stderr.read()
-    proc.wait(timeout=60)
-    return proc.returncode, line.decode("utf-8", "replace"), err.decode("utf-8", "replace")
+        box["result"] = session.call("iprange.v1.current.publish", publish_request(
+            text_path, destination, name)["params"])
+    except (AssertionError, OSError) as exc:
+        box["error"] = exc
+    finally:
+        session.close()
 
 
 def prove(binary, work):
@@ -81,20 +69,27 @@ def prove(binary, work):
         stream.write("10.0.0.1\nnot-an-address\n")
     good_dest = os.path.join(work, "good.iprange")
     bad_dest = os.path.join(work, "bad.iprange")
-    good = start(binary, publish_request(good_text, good_dest, "good"))
-    bad = start(binary, publish_request(bad_text, bad_dest, "bad"))
-    good_rc, good_out, good_err = finish(good)
-    bad_rc, bad_out, _bad_err = finish(bad)
-    if good_rc != 0 or "error" in good_out:
-        raise AssertionError(f"good publish failed rc={good_rc} out={good_out[-300:]} err={good_err[-200:]}")
+    good = {}
+    bad = {}
+    good_thread = threading.Thread(
+        target=run_publish, args=(binary, good_text, good_dest, "good", good))
+    bad_thread = threading.Thread(
+        target=run_publish, args=(binary, bad_text, bad_dest, "bad", bad))
+    good_thread.start()
+    bad_thread.start()
+    good_thread.join(timeout=60)
+    bad_thread.join(timeout=60)
+    if good_thread.is_alive() or bad_thread.is_alive():
+        raise AssertionError("a publish did not finish within 60s")
+    if "error" in good or "result" not in good:
+        raise AssertionError(f"good publish failed: {good.get('error')}")
     if not os.path.isfile(good_dest):
         raise AssertionError("good destination is missing")
     if os.path.exists(bad_dest):
         raise AssertionError("bad publish left a destination")
-    if bad_rc == 0 and "error" not in bad_out:
+    if "error" not in bad:
         raise AssertionError("bad publish was accepted")
-    result = json.loads(good_out)
-    got = int(result["result"]["report"]["addresses"])
+    got = int(good["result"]["report"]["addresses"])
     if got != expected:
         raise AssertionError(f"good publish imported {got}, generator says {expected}")
     return expected
@@ -115,6 +110,6 @@ def main():
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (OSError, AssertionError, json.JSONDecodeError, subprocess.TimeoutExpired) as exc:
+    except (OSError, AssertionError, KeyError) as exc:
         print(f"FAIL {exc}", file=sys.stderr)
         sys.exit(1)

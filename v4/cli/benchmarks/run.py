@@ -62,13 +62,20 @@ def field(value, path):
     return current
 
 
+def refuse_escape(relative, label):
+    if not isinstance(relative, str) or not relative or os.path.isabs(relative):
+        raise ValueError(f"{label} escapes the work directory: {relative}")
+    parts = relative.replace("\\", "/").split("/")
+    if ".." in parts or any(":" in part for part in parts):
+        raise ValueError(f"{label} escapes the work directory: {relative}")
+
+
 def write_generated(scenario, work):
     for item in scenario.get("generate", []):
         from generate import covered, generate, merged_count, write_ipv6, write_text
         ranges = generate(item["seed"], item["count"], item["span"], item.get("space", 2**32))
         relative = item["path"]
-        if os.path.isabs(relative) or ".." in relative.split("/"):
-            raise ValueError(f"generated path escapes the work directory: {relative}")
+        refuse_escape(relative, "generated path")
         family = item.get("family", "ipv4")
         if family not in ("ipv4", "ipv6"):
             raise ValueError(f"generated family must be ipv4 or ipv6: {family}")
@@ -91,8 +98,7 @@ def write_generated(scenario, work):
 def write_fixtures(scenario, work):
     for fixture in scenario.get("fixtures", []):
         output = fixture["path"]
-        if os.path.isabs(output) or ".." in output.split("/"):
-            raise ValueError(f"fixture path escapes the work directory: {output}")
+        refuse_escape(output, "fixture path")
         path = os.path.join(work, output)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         if "base64" in fixture or "base64_file" in fixture:
@@ -120,8 +126,7 @@ def write_fixtures(scenario, work):
 def published_files(scenario, work):
     names = []
     for relative in scenario.get("publish", []):
-        if os.path.isabs(relative) or ".." in relative.split("/"):
-            raise ValueError(f"publish path escapes the work directory: {relative}")
+        refuse_escape(relative, "publish path")
         names.append(relative)
         if not os.path.isfile(os.path.join(work, relative)):
             raise AssertionError(f"published file was not written: {relative}")
@@ -200,6 +205,30 @@ def run_calls(service, name, scenario, work, calls, peer):
     return observed
 
 
+def batch_observation(decoded, count):
+    """A batch of 16 must be 16 echoed describe results.
+
+    A rejection must be one error object with a null id. Sixteen error
+    objects, or a rejection that echoes an id, is not this contract.
+    """
+
+    if isinstance(decoded, list):
+        if len(decoded) != count:
+            raise AssertionError(f"batch response has {len(decoded)} members, want {count}")
+        ids = []
+        for index, item in enumerate(decoded):
+            if not isinstance(item, dict) or item.get("id") != f"batch-{index}":
+                raise AssertionError(f"batch member {index} did not echo its id")
+            result = item.get("result")
+            if not isinstance(result, dict) or result.get("method") != "iprange.v1.system.describe":
+                raise AssertionError(f"batch member {index} is not a describe result")
+            ids.append(item["id"])
+        return {"result": {"count": count, "ids": ids}}
+    if not isinstance(decoded, dict) or "error" not in decoded or decoded.get("id") is not None:
+        raise AssertionError("batch rejection must be one error object with id null")
+    return decoded
+
+
 def call_batch(service, count, work):
     members = []
     for index in range(count):
@@ -210,17 +239,13 @@ def call_batch(service, count, work):
             "params": {},
         })
     wire = json.dumps(members, separators=(",", ":")).encode("utf-8") + b"\n"
+    # A batch is one frame. The qualification client owns these pipes.
     service.proc.stdin.write(wire)
     service.proc.stdin.flush()
     line = service.proc.stdout.readline(1_048_578)
     if not line:
         raise AssertionError("batch response was empty")
-    decoded = json.loads(line)
-    if isinstance(decoded, list):
-        if len(decoded) != count:
-            raise AssertionError(f"batch response has {len(decoded)} members, want {count}")
-        return {"result": {"count": len(decoded)}}
-    return decoded
+    return batch_observation(json.loads(line), count)
 
 
 def substitute_capture(value, captured):

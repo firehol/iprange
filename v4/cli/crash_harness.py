@@ -305,34 +305,7 @@ class KillableJsonRpcService(run.JsonRpcService):
     def kill_process_group(self):
         """Terminate exactly the process group this service spawned."""
 
-        if os.name == "nt":
-            # TerminateProcess first: it delivers immediately, while
-            # taskkill's process launch latency would let a mid-build
-            # publish finish its retirement.  taskkill is the fallback
-            # when the product spawned child processes (worker).
-            try:
-                os.kill(self.proc.pid, signal.SIGTERM)
-            except OSError:
-                pass
-            try:
-                self.proc.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(self.proc.pid)],
-                    capture_output=True, check=False)
-                try:
-                    self.proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
-            return
-        try:
-            os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        try:
-            self.proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
+        super().kill_process_group()
 
 
 class HarnessJsonRpcService(run.JsonRpcService):

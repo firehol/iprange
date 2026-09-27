@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 
+from client import BenchSession
 from generate import generate, merged_count, write_ipv6, write_text
 from measure import measure, median, ratio
 
@@ -76,22 +77,13 @@ def prepare(work, seed, count, span, space, rounds, family):
 
 
 def check_output(binary, request, destination, expected):
-    with open(request, "rb") as stream:
-        payload = stream.read()
-    proc = subprocess.Popen(
-        [binary, "--jsonrpc"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    proc.stdin.write(payload)
-    proc.stdin.flush()
-    line = proc.stdout.readline()
-    proc.stdin.close()
-    proc.wait()
-    if proc.returncode != 0:
-        raise AssertionError(proc.stderr.read().decode("utf-8", "replace")[-500:])
-    response = json.loads(line)
+    with open(request, "r", encoding="utf-8") as stream:
+        payload = json.load(stream)
+    session = BenchSession(binary)
+    try:
+        response = session.raw(payload["method"], payload["params"])
+    finally:
+        session.close()
     if "result" not in response:
         raise AssertionError(f"import failed: {response.get('error')}")
     got = int(response["result"]["report"]["addresses"])

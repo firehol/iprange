@@ -8,11 +8,11 @@ lookup. A runner that never evicted would fail the oldest lookup.
 """
 
 import argparse
-import json
 import os
-import subprocess
 import sys
 import tempfile
+
+from client import BenchSession
 
 CAP = 1024
 
@@ -22,38 +22,12 @@ def fail(message):
     return 1
 
 
-class Session:
-    def __init__(self, binary):
-        self.proc = subprocess.Popen(
-            [binary, "--jsonrpc"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-    def call(self, method, params):
-        request = {"jsonrpc": "2.0", "id": method, "method": method, "params": params}
-        self.proc.stdin.write(json.dumps(request).encode("utf-8") + b"\n")
-        self.proc.stdin.flush()
-        line = self.proc.stdout.readline()
-        if not line:
-            raise AssertionError(f"{method} returned no response")
-        response = json.loads(line)
-        return response
-
-    def close(self):
-        self.proc.stdin.close()
-        self.proc.wait(timeout=20)
-        self.proc.stdout.close()
-        self.proc.stderr.close()
-
-
 def publish(session, work):
     feed = os.path.join(work, "feed.txt")
     with open(feed, "w", encoding="utf-8") as stream:
         stream.write("192.0.2.1\n")
     destination = os.path.join(work, "current.iprange")
-    response = session.call("iprange.v1.current.publish", {
+    response = session.raw("iprange.v1.current.publish", {
         "input": {
             "paths": [feed],
             "family": "ipv4",
@@ -82,7 +56,7 @@ def publish(session, work):
 
 
 def open_reader(session, path):
-    response = session.call("iprange.v1.reader.open", {
+    response = session.raw("iprange.v1.reader.open", {
         "source": {"path": path, "mode": "immutable"},
     })
     if "error" in response:
@@ -91,13 +65,13 @@ def open_reader(session, path):
 
 
 def close_reader(session, handle):
-    response = session.call("iprange.v1.reader.close", {"reader": handle})
+    response = session.raw("iprange.v1.reader.close", {"reader": handle})
     if "error" in response:
         raise AssertionError(response["error"])
 
 
 def lookup_code(session, handle):
-    response = session.call("iprange.v1.reader.lookup", {
+    response = session.raw("iprange.v1.reader.lookup", {
         "reader": handle,
         "addresses": ["192.0.2.1"],
     })
@@ -107,7 +81,7 @@ def lookup_code(session, handle):
 
 
 def prove(binary, work):
-    session = Session(binary)
+    session = BenchSession(binary)
     try:
         path = publish(session, work)
         first = open_reader(session, path)

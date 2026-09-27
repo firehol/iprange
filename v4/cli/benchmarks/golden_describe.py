@@ -9,8 +9,9 @@ contract, so they are not required to match the golden.
 import argparse
 import json
 import os
-import subprocess
 import sys
+
+from client import BenchSession
 
 
 STABLE = (
@@ -43,20 +44,12 @@ def golden_exchange(path):
 
 
 def describe(binary, request):
-    proc = subprocess.Popen(
-        [binary, "--jsonrpc"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    proc.stdin.write(json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n")
-    proc.stdin.flush()
-    line = proc.stdout.readline()
-    proc.stdin.close()
-    proc.wait(timeout=20)
-    if not line:
-        raise AssertionError(proc.stderr.read().decode("utf-8", "replace")[-400:])
-    response = json.loads(line)
+    session = BenchSession(binary)
+    try:
+        response = session.service.call(
+            request["id"], request["method"], request.get("params", {}))
+    finally:
+        session.close()
     if "error" in response:
         raise AssertionError(response["error"])
     return response
