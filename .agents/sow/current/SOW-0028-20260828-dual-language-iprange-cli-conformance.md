@@ -22193,7 +22193,8 @@ The remaining close items are not another small scenario:
 
 - Last-seen refresh across the seven-day corpus, including cutoff expiry.
   The seven-day scenario is first-seen only.
-- Attestation gaps 7, 10, and 11. Gap 5 keeps the cancelled token
+- Attestation gaps 7 and 11. Gap 10 runs cancel on both the producer
+  and the consumer. Gap 5 keeps the cancelled token
   for a request still queued at EOF; that request aborts. Gap 9 compares the golden
   describe contract with both product binaries. Gap 8's C caller asserts
   NULL_POINTER, INVALID_LENGTH, and BUFFER_TOO_SMALL. Gap 2's reclaim refuses a
