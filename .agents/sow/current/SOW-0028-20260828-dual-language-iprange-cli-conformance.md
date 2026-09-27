@@ -22182,15 +22182,18 @@ ceiling.
 One 10M-range import, span 4, inside a 100,000,000-address space, merged
 to 32,967,576 addresses. Both engines imported that count. Rust peak was
 223388 KiB and time 8.526 s. Go median peak was 231638 KiB and median
-time 15.989 s. This is one feed, one workstation run. It is not the
-1,000-feed ceiling named by the milestone.
+time 15.989 s. This is one feed, one workstation run.
+
+The close ceiling run created 1,000 one-address feeds and imported one
+10M-range feed. Both engines reported 1,000 active feeds and 32,967,576
+addresses. The 1,000 feeds are not 10M ranges each. The 10M ranges are
+one feed. This is one workstation run, not the 1.3x verdict.
 
 The remaining close items are not another small scenario:
 
 - Last-seen refresh across the seven-day corpus, including cutoff expiry.
   The seven-day scenario is first-seen only.
-- The 1,000-feed, 10M-range ceiling run. That is the close run, not the
-  next slice.
+- `v4/cli/battery.sh`, once, at close. The ceiling run is recorded below.
 - Attestation gaps 5, 7, 10, and 11. Gap 9 compares the golden
   describe contract with both product binaries. Gap 8's C caller asserts
   NULL_POINTER, INVALID_LENGTH, and BUFFER_TOO_SMALL. Gap 2's reclaim refuses a
@@ -22199,9 +22202,8 @@ The remaining close items are not another small scenario:
   retirement extents are rejected by the validation test. Gap 3's public
   eviction is proved. CloseAll's live-reader order is not. Gap 15 refuses
   reclaim on an open draft, and the two-page reclamation boundary is pinned.
-  The remaining gaps need a corrupt file, a second connection, a C
-  caller, a golden product response, or an IPv6 structured fixture.
-- `v4/cli/battery.sh`, once, at close.
+  Gaps 5 and 10 need a second connection. Gap 7 needs a C caller
+  of cases.json. Gap 11 needs an IPv6 structured fixture.
 
 S3 crash injection is not a release-binary scenario. The fault hook
 compiles out of the release binary. The failed-commit proof is
