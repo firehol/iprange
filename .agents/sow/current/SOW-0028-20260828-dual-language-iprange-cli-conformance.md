@@ -22089,6 +22089,12 @@ publish reads its paths in order.
 from the current feed is removed. The first expected counts kept those
 addresses; the engines do not. Both engines report the removal.
 
+S3 crash injection is not a release-binary scenario. The fault hook
+compiles out of the release binary. The failed-commit proof is
+`TestLiveWriterOutcomeUnknownFailClosed` in the v4work suite. A scenario
+runner that killed a release process would not prove the prior feed
+survived.
+
 The generator is IPv4 text only. It does not build corrupt files or
 structured fixtures.
 
