@@ -2267,6 +2267,14 @@ cp "$R/reports/crash-negative-producer-false.json" "$CLI/evidence/crash-negative
 record "[16d] negative producer=false rotated" $? zero
 cp "$R/reports/crash-negative-consumer-false.json" "$CLI/evidence/crash-negative-consumer-false.json"
 record "[16e] negative consumer=false rotated" $? zero
+# The kind gate still opens the legacy names beside the directional
+# reports. Leaving the previous wave's copies there makes the committed
+# pass disagree about the source revision. crash.json is the rust->go
+# set; crash-negative.json is the consumer-false control.
+cp "$R/reports/crash-rust_to_go.json" "$CLI/evidence/crash.json"
+record "[16e2] legacy crash.json rotated" $? zero
+cp "$R/reports/crash-negative-consumer-false.json" "$CLI/evidence/crash-negative.json"
+record "[16e3] legacy crash-negative.json rotated" $? zero
 # Each report rotates on its own and the step then requires the complete
 # Linux-produced set.  They used to be one &&-chain, so a single absent report
 # (the parity gate's refusal in wave-19.25) also stopped every copy after it --

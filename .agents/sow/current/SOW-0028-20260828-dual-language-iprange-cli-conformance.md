@@ -22225,13 +22225,14 @@ compiles out of the release binary. The failed-commit proof is
 runner that killed a release process would not prove the prior feed
 survived.
 
-`v4/cli/battery.sh --build` ran on 2026-09-27. Wall time 125.5 s.
-296 steps, 1 mismatch, 5 deferred. The mismatch is the kind-gate
-self-test: committed evidence still names the previous binary digests,
-and this rebuild staged different ones. Product steps passed, including
-`cargo test` and `go test`. A no-build run exits before any suite
-because the fresh work directory has no binaries. Evidence rotation is
-`--tier gate` or `--tier full`, not this run.
+`v4/cli/battery.sh --tier gate` passed on 2026-09-27. Wall time 154.9 s.
+320 steps, 0 mismatches, 9 deferred. The deferred steps are the Windows
+leg, the retired full pressure axis, the repeat-heavy race probes, and
+the launcher header. Linux product steps passed. The kind gate's only
+remaining complaints name `windows-guard.json` and
+`windows-housekeeping.json`, which this host does not author. A no-build
+run still exits before any suite because a fresh work directory has no
+binaries.
 
 The generator emits seeded IPv4 and IPv6 text. It does not build
 corrupt files or structured fixtures.

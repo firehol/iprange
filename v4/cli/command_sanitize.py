@@ -33,6 +33,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
 
 # Platform discrimination must not depend on ``os.sep`` alone: the
@@ -758,19 +759,24 @@ def recorded_git_identity(root=None):
     import subprocess
 
     root = _CHECKOUT if root is None else root
-    try:
-        completed = subprocess.run(
-            ["git", "-C", root, "rev-parse", "--verify", "HEAD"],
-            capture_output=True, text=True, timeout=10, check=False)
-    except (OSError, ValueError, subprocess.SubprocessError):
-        return None
-    if completed.returncode != 0:
-        return None
-    oid = (completed.stdout or "").strip()
-    if len(oid) not in (40, 64) \
-            or any(c not in "0123456789abcdef" for c in oid.lower()):
-        return None
-    return oid
+    # A 12-wide battery asks git for HEAD from many writers at once. One
+    # locked or timed-out call must not publish a null revision for a
+    # tree that does have one.
+    for attempt in range(4):
+        try:
+            completed = subprocess.run(
+                ["git", "-C", root, "rev-parse", "--verify", "HEAD"],
+                capture_output=True, text=True, timeout=10, check=False)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            completed = None
+        if completed is not None and completed.returncode == 0:
+            oid = (completed.stdout or "").strip()
+            if len(oid) in (40, 64) and all(
+                    c in "0123456789abcdef" for c in oid.lower()):
+                return oid
+        if attempt < 3:
+            time.sleep(0.05 * (attempt + 1))
+    return None
 
 
 def same_path(a, b):
