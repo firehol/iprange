@@ -13,6 +13,7 @@ import sys
 import tempfile
 
 from generate import churn, day_feeds, merged_count, write_text
+from measure import ratio
 from perf import PUBLISH, fail, sample_binary
 
 
@@ -167,6 +168,7 @@ def main():
             "rust": sample_binary(args.rust, [(path, None) for path in rust_requests]),
             "go": sample_binary(args.go, [(path, None) for path in go_requests]),
         }
+    report["ratio"] = ratio(report["rust"], report["go"])
     print(json.dumps(report, sort_keys=True))
     return 0
 

@@ -12,7 +12,7 @@ import sys
 import tempfile
 
 from generate import diff_counts, generate, write_text
-from measure import measure, median
+from measure import measure, median, ratio
 from perf import PUBLISH, fail, sample_binary
 
 
@@ -191,6 +191,7 @@ def main():
             "rust": sample_binary(args.rust, [(path, None) for path in rust_requests]),
             "go": sample_binary(args.go, [(path, None) for path in go_requests]),
         }
+    report["ratio"] = ratio(report["rust"], report["go"])
     print(json.dumps(report, sort_keys=True))
     return 0
 

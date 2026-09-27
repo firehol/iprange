@@ -13,7 +13,7 @@ import sys
 import tempfile
 
 from generate import generate, merged_count, write_ipv6, write_text
-from measure import measure, median
+from measure import measure, median, ratio
 
 
 def median_of(samples, key):
@@ -149,6 +149,7 @@ def main():
         }
     report["family"] = args.family
     report["expected_addresses"] = expected
+    report["ratio"] = ratio(report["rust"], report["go"])
     print(json.dumps(report, sort_keys=True))
     return 0
 

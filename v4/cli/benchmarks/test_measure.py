@@ -1,6 +1,7 @@
 """Detecting checks for measurement ratios and scenario comparison."""
 
 import importlib.util
+import json
 import os
 import sys
 import unittest
@@ -42,3 +43,57 @@ class MeasureTest(unittest.TestCase):
         self.assertTrue(any("expect=" in item for item in mismatches))
         scenario["calls"][0]["expect"]["report.addresses"] = "7"
         self.assertEqual(compare(scenario, rust, go), [])
+
+
+def assign(root, path, value):
+    parts = path.split(".")
+    cursor = root
+    for index, part in enumerate(parts[:-1]):
+        nxt = parts[index + 1]
+        if part.isdigit():
+            slot = int(part)
+            while len(cursor) <= slot:
+                cursor.append(None)
+            if cursor[slot] is None:
+                cursor[slot] = [] if nxt.isdigit() else {}
+            cursor = cursor[slot]
+            continue
+        if part not in cursor or cursor[part] is None:
+            cursor[part] = [] if nxt.isdigit() else {}
+        cursor = cursor[part]
+    last = parts[-1]
+    if last.isdigit():
+        slot = int(last)
+        while len(cursor) <= slot:
+            cursor.append(None)
+        cursor[slot] = value
+    else:
+        cursor[last] = value
+
+
+class ScenarioMutantTest(unittest.TestCase):
+    def test_every_scenario_rejects_a_wrong_answer(self):
+        root = os.path.join(_HERE, "scenarios")
+        names = sorted(name for name in os.listdir(root) if name.endswith(".json"))
+        self.assertGreaterEqual(len(names), 20)
+        for name in names:
+            with open(os.path.join(root, name), encoding="utf-8") as stream:
+                scenario = json.load(stream)
+            calls = _bench.scenario_calls(scenario)
+            rust = []
+            go = []
+            mutated = False
+            for call in calls:
+                result = {"bytes": "same"}
+                for path in call.get("compare", []):
+                    assign(result, path, "kept")
+                    if not mutated:
+                        call.setdefault("expect", {})[path] = "mutant"
+                        mutated = True
+                rust.append(result)
+                go.append(json.loads(json.dumps(result)))
+            self.assertTrue(mutated, name)
+            mismatches = compare(scenario, rust, go)
+            self.assertTrue(
+                any("expect=" in item for item in mismatches),
+                f"{name} accepted a mutated answer: {mismatches}")

@@ -14,7 +14,7 @@ import tempfile
 import time
 
 from generate import generate, merged_count, write_text
-from measure import child_hwm_kib, ratio
+from measure import child_hwm_kib, median, ratio
 from perf import PUBLISH, fail
 
 
@@ -78,7 +78,7 @@ def sample_peak(proc, peak):
     return max(peak, current)
 
 
-def load_feeds(binary, work, feeds):
+def load_feeds(binary, work, feeds, wide=None):
     session = Session(binary)
     started = time.perf_counter()
     peak = 0
@@ -114,12 +114,32 @@ def load_feeds(binary, work, feeds):
                 "metadata": {"mode": "keep"},
                 "writer_budget": WRITER,
             })
+        wide_addresses = None
+        if wide is not None:
+            text_path, expected = wide
+            peak = sample_peak(session.proc, peak)
+            destination = os.path.join(work, "wide.iprange")
+            published = publish_one(
+                session, text_path, destination, "wide",
+                PUBLISH["params"]["immutable_feed_budget"])
+            wide_addresses = int(published["report"]["addresses"])
+            if wide_addresses != expected:
+                raise AssertionError(
+                    f"wide import {wide_addresses}, generator says {expected}")
+            session.call("iprange.v1.feeds.create", {
+                "path": membership,
+                "feed": "wide",
+                "current": {"source": {"path": destination, "mode": "immutable"}, "feed": "wide"},
+                "metadata": {"mode": "keep"},
+                "writer_budget": WRITER,
+            })
         info = session.call("iprange.v1.database.info", {
             "source": {"path": membership, "mode": "live"},
         })
         peak = sample_peak(session.proc, peak)
         return {
             "feeds": int(info["info"]["active_feed_count"]),
+            "wide_addresses": wide_addresses,
             "elapsed_seconds": time.perf_counter() - started,
             "child_max_rss_kib": peak,
         }
@@ -161,42 +181,87 @@ def main():
     parser.add_argument("--ranges", type=int, default=10000000)
     parser.add_argument("--span", type=int, default=4)
     parser.add_argument("--space", type=int, default=100000000)
+    parser.add_argument("--combined", action="store_true")
+    parser.add_argument("--rounds", type=int, default=1)
     args = parser.parse_args()
     for label, path in (("rust", args.rust), ("go", args.go)):
         if not os.path.isabs(path):
             return fail(f"{label} binary must be absolute")
-    feeds = [(feed_name(index), [(index, index)]) for index in range(args.feeds)]
+    if args.rounds < 1:
+        return fail("rounds must be positive")
+    small_count = args.feeds - 1 if args.combined else args.feeds
+    if small_count < 1:
+        return fail("combined mode needs at least 2 feeds")
+    feeds = [(feed_name(index), [(index, index)]) for index in range(small_count)]
     wide = generate(7, args.ranges, args.span, args.space)
     expected = merged_count(wide)
+    def spread(samples):
+        elapsed = [sample["elapsed_seconds"] for sample in samples]
+        rss = [sample["child_max_rss_kib"] for sample in samples]
+        return {
+            "rounds": len(samples),
+            "elapsed_seconds": {"median": median(elapsed), "min": min(elapsed), "max": max(elapsed)},
+            "child_max_rss_kib": {"median": median(rss), "min": min(rss), "max": max(rss)},
+        }
+
     with tempfile.TemporaryDirectory(prefix="iprange-ceiling-") as work:
-        rust_feed_dir = os.path.join(work, "rust-feeds")
-        go_feed_dir = os.path.join(work, "go-feeds")
-        rust_wide_dir = os.path.join(work, "rust-wide")
-        go_wide_dir = os.path.join(work, "go-wide")
-        for path in (rust_feed_dir, go_feed_dir, rust_wide_dir, go_wide_dir):
-            os.makedirs(path)
-        rust_feeds = load_feeds(args.rust, rust_feed_dir, feeds)
-        go_feeds = load_feeds(args.go, go_feed_dir, feeds)
-        if rust_feeds["feeds"] != args.feeds or go_feeds["feeds"] != args.feeds:
-            raise AssertionError(
-                f"active feeds rust={rust_feeds} go={go_feeds}, want {args.feeds}")
-        rust_ranges = import_ranges(args.rust, rust_wide_dir, wide, expected)
-        go_ranges = import_ranges(args.go, go_wide_dir, wide, expected)
-    print(json.dumps({
-        "feeds": args.feeds,
-        "ranges": args.ranges,
-        "merged_addresses": expected,
-        "rust_feeds": rust_feeds,
-        "go_feeds": go_feeds,
-        "rust_import": rust_ranges,
-        "go_import": go_ranges,
-        "import_ratio": ratio(
-            {"elapsed_seconds": {"median": rust_ranges["elapsed_seconds"]},
-             "child_max_rss_kib": {"median": rust_ranges["child_max_rss_kib"]}},
-            {"elapsed_seconds": {"median": go_ranges["elapsed_seconds"]},
-             "child_max_rss_kib": {"median": go_ranges["child_max_rss_kib"]}},
-        ),
-    }, sort_keys=True))
+        if args.combined:
+            wide_text = os.path.join(work, "wide.txt")
+            with open(wide_text, "w", encoding="utf-8") as stream:
+                write_text(wide, stream)
+            samples = {"rust": [], "go": []}
+            for index in range(args.rounds):
+                for label, binary in (("rust", args.rust), ("go", args.go)):
+                    sample_dir = os.path.join(work, f"{label}-{index}")
+                    os.makedirs(sample_dir)
+                    sample = load_feeds(binary, sample_dir, feeds, wide=(wide_text, expected))
+                    if sample["feeds"] != args.feeds or sample["wide_addresses"] != expected:
+                        raise AssertionError(
+                            f"{label} round {index} feeds={sample['feeds']} "
+                            f"addresses={sample['wide_addresses']}")
+                    samples[label].append(sample)
+            rust_summary = spread(samples["rust"])
+            go_summary = spread(samples["go"])
+            report = {
+                "combined": True,
+                "feeds": args.feeds,
+                "ranges": args.ranges,
+                "merged_addresses": expected,
+                "rust": rust_summary,
+                "go": go_summary,
+                "ratio": ratio(rust_summary, go_summary),
+            }
+        else:
+            rust_feed_dir = os.path.join(work, "rust-feeds")
+            go_feed_dir = os.path.join(work, "go-feeds")
+            rust_wide_dir = os.path.join(work, "rust-wide")
+            go_wide_dir = os.path.join(work, "go-wide")
+            for path in (rust_feed_dir, go_feed_dir, rust_wide_dir, go_wide_dir):
+                os.makedirs(path)
+            rust_feeds = load_feeds(args.rust, rust_feed_dir, feeds)
+            go_feeds = load_feeds(args.go, go_feed_dir, feeds)
+            if rust_feeds["feeds"] != args.feeds or go_feeds["feeds"] != args.feeds:
+                raise AssertionError(
+                    f"active feeds rust={rust_feeds} go={go_feeds}, want {args.feeds}")
+            rust_ranges = import_ranges(args.rust, rust_wide_dir, wide, expected)
+            go_ranges = import_ranges(args.go, go_wide_dir, wide, expected)
+            report = {
+                "combined": False,
+                "feeds": args.feeds,
+                "ranges": args.ranges,
+                "merged_addresses": expected,
+                "rust_feeds": rust_feeds,
+                "go_feeds": go_feeds,
+                "rust_import": rust_ranges,
+                "go_import": go_ranges,
+                "import_ratio": ratio(
+                    {"elapsed_seconds": {"median": rust_ranges["elapsed_seconds"]},
+                     "child_max_rss_kib": {"median": rust_ranges["child_max_rss_kib"]}},
+                    {"elapsed_seconds": {"median": go_ranges["elapsed_seconds"]},
+                     "child_max_rss_kib": {"median": go_ranges["child_max_rss_kib"]}},
+                ),
+            }
+    print(json.dumps(report, sort_keys=True))
     return 0
 
 

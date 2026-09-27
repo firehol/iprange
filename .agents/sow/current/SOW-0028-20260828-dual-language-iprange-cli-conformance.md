@@ -22219,11 +22219,13 @@ The remaining close items are not another small scenario:
   cancel on both actors. Gap 7 reads cases.json from C. Gap 11
   is opened by both engines.
 
-S3 crash injection is not a release-binary scenario. The fault hook
-compiles out of the release binary. The failed-commit proof is
-`TestLiveWriterOutcomeUnknownFailClosed` in the v4work suite. A scenario
-runner that killed a release process would not prove the prior feed
-survived.
+S3 is `feed_crash.py`. It kills `feeds.replace` on the release binary
+while that call is still outstanding. The prior alpha feed and the
+untouched beta feed are still present after the kill. Both engines
+passed. A kill after the replace commits is not this proof. The unit
+suite still has `TestLiveWriterOutcomeUnknownFailClosed` for the
+fail-closed writer path. That test is not a substitute for the release
+crash.
 
 `v4/cli/battery.sh --tier gate` passed on 2026-09-27. Wall time 154.9 s.
 320 steps, 0 mismatches, 9 deferred. The deferred steps are the Windows
@@ -22237,13 +22239,14 @@ binaries.
 The generator emits seeded IPv4 and IPv6 text. It does not build
 corrupt files or structured fixtures.
 
-The 1,000-feed create and the 10M-range import were measured on the
-release binaries. Rust created 1,000 feeds in 49.255 s at 12056 KiB.
-Go created them in 43.436 s at 19248 KiB. The 10M-range import merged
-to 32,967,576 addresses. Rust took 7.862 s at 222272 KiB. Go took
-14.398 s at 231944 KiB. The Go/Rust import ratio is 1.831 elapsed and
-1.044 RSS. This is one workstation run of each command. It is not
-1,000 feeds of 10M ranges, and it is not the 1.3x verdict.
+The close ceiling is one database per round: 999 one-address feeds
+plus one 10M-range feed, so the database has 1,000 feeds and
+32,967,576 addresses. Three rounds. Rust median 49.427 s, spread
+49.359–52.902 s, peak 225644 KiB. Go median 63.125 s, spread
+58.576–63.577 s, peak 234004 KiB. The Go/Rust ratio is 1.277 elapsed
+and 1.037 RSS. This is not 1,000 feeds of 10M ranges each, and it is
+not the 1.3x verdict. An earlier split run, 1,000 creates then a
+separate 10M import, is not this ceiling.
 
 `parallel_feeds.py` publishes a good feed and a bad feed at the same
 time. The good destination keeps the generator count. The bad
@@ -22257,13 +22260,18 @@ replace commits is not this proof.
 A mutated expected address count is rejected by `compare`. Agreement
 between the engines does not hide it.
 
+Every committed scenario rejects a seeded wrong answer. The comparator
+reports the mutated expect even when both engines would agree. A batch
+call has no method name; the report still names the mismatch.
+
 Closure statement: milestone 5 is CLOSED for the work assigned to it.
 The fifteen attestation rows have detecting cases. The scenario matrix
 covers import, first-seen and last-seen refresh, history cutoff, joins,
 snapshot cross-open, and recovery cross-open. Parallel publish isolates
-a bad feed. A killed replace leaves the prior feeds. The ceiling run is
-measured above. The ≤1.3x verdict is not this milestone's decision; it
-stays with SOW-0030. Windows evidence stays with the Windows leg.
+a bad feed. A killed replace leaves the prior feeds. The ceiling is one
+database with 1,000 feeds and 10M ranges, three rounds, with the ratio
+above. The ≤1.3x verdict is not this milestone's decision; it stays
+with SOW-0030. Windows evidence stays with the Windows leg.
 update-ipsets was not pushed.
 
 - Validation plan: each scenario correctness-green on both engines;

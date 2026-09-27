@@ -14,7 +14,7 @@ import sys
 import tempfile
 
 from generate import generate, provider_join, resolve_direct, write_text
-from measure import measure, median
+from measure import measure, median, ratio
 from perf import fail
 
 
@@ -265,6 +265,9 @@ def main():
             "rust": [sample_join(args.rust, rust_mem, path, work, args.rounds) for path in rust_providers],
             "go": [sample_join(args.go, go_mem, path, work, args.rounds) for path in go_providers],
         }
+    report["ratio"] = [
+        ratio(left, right) for left, right in zip(report["rust"], report["go"])
+    ]
     print(json.dumps(report, sort_keys=True))
     return 0
 

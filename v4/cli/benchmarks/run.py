@@ -266,10 +266,12 @@ def compare(scenario, rust, go):
             left = field(rust[index], path)
             right = field(go[index], path)
             if left != right:
-                mismatches.append(f"{call['method']} {path}: rust={left!r} go={right!r}")
+                label = call.get("method", "batch")
+                mismatches.append(f"{label} {path}: rust={left!r} go={right!r}")
             expected = call.get("expect", {}).get(path)
             if expected is not None and left != expected:
-                mismatches.append(f"{call['method']} {path}: got={left!r} expect={expected!r}")
+                label = call.get("method", "batch")
+                mismatches.append(f"{label} {path}: got={left!r} expect={expected!r}")
         if call.get("expect_same_bytes"):
             left = rust[index].get("bytes")
             right = go[index].get("bytes")
