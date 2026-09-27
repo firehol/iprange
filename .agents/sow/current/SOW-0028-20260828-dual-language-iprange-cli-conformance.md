@@ -21873,9 +21873,12 @@ production-sized ceiling run (1,000+ feeds, 10M ranges) at milestone close.
 ### Measurement contract (fixes the known defects)
 
 - Timed and sampled from **outside the product**: the harness spawns the
-  real release binary and samples peak RSS via `getrusage(RUSAGE_CHILDREN)`
-  (exact, no polling race); the runner's own memory is excluded. This closes
-  the `v4/cli/resource-record.md:31-40` defect (measured the Python runner,
+  real release binary. Peak RSS is `VmHWM` from `/proc/PID/status`, sampled
+  while that child is alive. `getrusage(RUSAGE_CHILDREN)` is the largest
+  waited-for child so far, so it cannot compare a later smaller child with
+  an earlier larger one. Closing stdin before the response cancels the
+  import. The runner's own memory is excluded. This closes the
+  `v4/cli/resource-record.md:31-40` defect (measured the Python runner,
   not the product) and the engine-side self-sampling limitation
   (`iprange-v4-bench/measure.go:126-128`, `benches/update_ipsets/measure.rs:77`).
 - Release builds only; N rounds; median + spread reported; wall time,
