@@ -22109,6 +22109,19 @@ report 2 records and 5 addresses. The list is expanded before parsing.
 `--ipset-reduce` is a legacy CLI option. It is not a JSON-RPC method.
 This runner cannot prove it. The legacy C suite owns that option.
 
+The public JSON-RPC replacement surface now has a small detecting
+scenario for mixed import, failed import, two-day refresh, three-window
+projection, matching feeds, exclude, binary export, and `@file`
+expansion. The remaining close items are not another small scenario:
+
+- IPv6, CIDR-mix, and churn corpora. The generator is IPv4 ranges only.
+- Many feeds times provider sets. The current join is one pair.
+- The 1,000-feed, 10M-range ceiling run. That is the close run, not the
+  next slice.
+- The 11 attestation gaps that need a corrupt file, a second connection,
+  or a C caller.
+- `v4/cli/battery.sh`, once, at close.
+
 S3 crash injection is not a release-binary scenario. The fault hook
 compiles out of the release binary. The failed-commit proof is
 `TestLiveWriterOutcomeUnknownFailClosed` in the v4work suite. A scenario
