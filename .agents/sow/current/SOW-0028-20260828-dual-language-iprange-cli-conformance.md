@@ -22116,6 +22116,10 @@ expansion. `s1-ipv6-import` publishes two overlapping IPv6 ranges. Both engines
 merge them to 1 range and 6 addresses. The generator does not yet emit
 a seeded IPv6 corpus. This scenario is one hand-written overlap.
 
+`s5-overlap-matrix` loads three feeds and asks for every pair. Both
+engines report 3 pairs. The CSV says alpha,beta has 2 addresses and the
+other two pairs have 0. The pair count alone does not prove the matrix.
+
 The remaining close items are not another small scenario:
 
 - IPv6, CIDR-mix, and churn corpora. The generator is IPv4 ranges only.
