@@ -22037,10 +22037,15 @@ A probe of the staged Rust binary reported 14240 KiB. The test allocates
 the runner's own memory is not the number. A failed child is not a
 sample. `perf.py` measures one import. The product binary reads one publish
 request, the runner waits for the response, and only then closes stdin.
-Closing stdin first cancels the import. One staged run reported Rust
-peak 17924 KiB and Go peak 19384 KiB, both for the 47-address import.
-These are child peaks. They are not a performance claim: three rounds
-of a 20-record feed are a wiring proof, not a ceiling.
+Closing stdin first cancels the import. The child peak is `VmHWM` from `/proc/PID/status`, sampled while that
+child is alive. `RUSAGE_CHILDREN` is the largest child so far, so it
+cannot compare a later smaller child with an earlier larger one.
+
+One 100k-range run, span 4, inside a 1,000,000-address space, merged to
+329808 addresses. Both engines imported that count. Rust median peak was
+8080 KiB and median time 0.104 s. Go median peak was 16320 KiB and
+median time 0.168 s. This is one workstation run, not a ceiling and not
+the 1.3x verdict.
 
 The generator is IPv4 text only. It does not build corrupt files or
 structured fixtures.

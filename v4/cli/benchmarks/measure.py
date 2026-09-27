@@ -4,30 +4,58 @@ getrusage(RUSAGE_CHILDREN) is read after the child exits. On Linux that
 peak is the largest waited-for child, in KiB. It is not the runner.
 """
 
-import resource
+import os
 import subprocess
 import time
 
 
+def child_hwm_kib(pid):
+    try:
+        with open(f"/proc/{pid}/status", "r", encoding="utf-8") as stream:
+            for line in stream:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1])
+    except FileNotFoundError:
+        return None
+    return None
+
+
 def run_once(argv, stdin_bytes=None):
-    before = resource.getrusage(resource.RUSAGE_CHILDREN)
     started = time.perf_counter()
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    peak = 0
     if stdin_bytes is not None:
         proc.stdin.write(stdin_bytes)
         proc.stdin.flush()
-        proc.stdout.readline()
-    proc.stdin.close()
+        os.set_blocking(proc.stdout.fileno(), False)
+    while proc.poll() is None:
+        current = child_hwm_kib(proc.pid)
+        if current is not None:
+            peak = max(peak, current)
+        if stdin_bytes is not None:
+            try:
+                if proc.stdout.readline():
+                    proc.stdin.close()
+                    stdin_bytes = None
+            except BlockingIOError:
+                pass
+        time.sleep(0.001)
+    try:
+        proc.stdin.close()
+    except BrokenPipeError:
+        pass
     proc.stdout.read()
     proc.wait()
     proc.stdout.close()
     elapsed = time.perf_counter() - started
-    after = resource.getrusage(resource.RUSAGE_CHILDREN)
     if proc.returncode != 0:
         raise AssertionError(f"child exited {proc.returncode}: {argv[0]}")
+    if peak == 0:
+        raise AssertionError("child peak was not observed")
     return {
         "elapsed_seconds": elapsed,
-        "child_max_rss_kib": after.ru_maxrss,
+        "child_max_rss_kib": peak,
+        "child_raised_peak": True,
     }
 
 
@@ -49,4 +77,5 @@ def measure(argv, rounds, stdin_bytes=None):
         "rounds": rounds,
         "elapsed_seconds": {"median": median(elapsed), "min": min(elapsed), "max": max(elapsed)},
         "child_max_rss_kib": {"median": median(rss), "min": min(rss), "max": max(rss)},
+        "child_raised_peak": all(sample["child_raised_peak"] for sample in samples),
     }

@@ -98,36 +98,51 @@ def check_output(binary, request, destination, expected):
     os.remove(destination)
 
 
+def sample_binary(binary, requests):
+    samples = []
+    for request, _destination in requests:
+        with open(request, "rb") as stream:
+            sample = measure([binary, "--jsonrpc"], 1, stream.read())
+        if not sample["child_raised_peak"]:
+            raise AssertionError("child did not raise the process peak; sample is inherited")
+        samples.append(sample)
+    return {
+        "elapsed_seconds": {
+            "median": median_of(samples, "elapsed_seconds"),
+            "min": min(sample["elapsed_seconds"]["min"] for sample in samples),
+            "max": max(sample["elapsed_seconds"]["max"] for sample in samples),
+        },
+        "child_max_rss_kib": {
+            "median": median_of(samples, "child_max_rss_kib"),
+            "min": min(sample["child_max_rss_kib"]["min"] for sample in samples),
+            "max": max(sample["child_max_rss_kib"]["max"] for sample in samples),
+        },
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", required=True)
+    parser.add_argument("--rust", required=True)
+    parser.add_argument("--go", required=True)
     parser.add_argument("--rounds", type=int, default=3)
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--count", type=int, default=20)
     parser.add_argument("--span", type=int, default=4)
     parser.add_argument("--space", type=int, default=64)
     args = parser.parse_args()
-    if not os.path.isabs(args.binary):
-        return fail("binary must be absolute")
+    for label, path in (("rust", args.rust), ("go", args.go)):
+        if not os.path.isabs(path):
+            return fail(f"{label} binary must be absolute")
     with tempfile.TemporaryDirectory(prefix="iprange-perf-") as work:
-        requests, expected = prepare(work, args.seed, args.count, args.span, args.space, args.rounds)
-        check_output(args.binary, requests[0][0], requests[0][1], expected)
-        samples = []
-        for request, _destination in requests[1:]:
-            with open(request, "rb") as stream:
-                samples.append(measure([args.binary, "--jsonrpc"], 1, stream.read()))
+        requests, expected = prepare(
+            work, args.seed, args.count, args.span, args.space, 2 + 2 * args.rounds
+        )
+        check_output(args.rust, requests[0][0], requests[0][1], expected)
+        check_output(args.go, requests[1][0], requests[1][1], expected)
         report = {
             "rounds": args.rounds,
-            "elapsed_seconds": {
-                "median": median_of(samples, "elapsed_seconds"),
-                "min": min(sample["elapsed_seconds"]["min"] for sample in samples),
-                "max": max(sample["elapsed_seconds"]["max"] for sample in samples),
-            },
-            "child_max_rss_kib": {
-                "median": median_of(samples, "child_max_rss_kib"),
-                "min": min(sample["child_max_rss_kib"]["min"] for sample in samples),
-                "max": max(sample["child_max_rss_kib"]["max"] for sample in samples),
-            },
+            "rust": sample_binary(args.rust, requests[2:2 + args.rounds]),
+            "go": sample_binary(args.go, requests[2 + args.rounds:]),
         }
     report["expected_addresses"] = expected
     print(json.dumps(report, sort_keys=True))
