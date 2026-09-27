@@ -22193,7 +22193,6 @@ The remaining close items are not another small scenario:
 
 - Last-seen refresh across the seven-day corpus, including cutoff expiry.
   The seven-day scenario is first-seen only.
-- `v4/cli/battery.sh`, once, at close. The ceiling run is recorded below.
 - Attestation gaps 5, 7, 10, and 11. Gap 9 compares the golden
   describe contract with both product binaries. Gap 8's C caller asserts
   NULL_POINTER, INVALID_LENGTH, and BUFFER_TOO_SMALL. Gap 2's reclaim refuses a
@@ -22210,6 +22209,14 @@ compiles out of the release binary. The failed-commit proof is
 `TestLiveWriterOutcomeUnknownFailClosed` in the v4work suite. A scenario
 runner that killed a release process would not prove the prior feed
 survived.
+
+`v4/cli/battery.sh --build` ran on 2026-09-27. Wall time 125.5 s.
+296 steps, 1 mismatch, 5 deferred. The mismatch is the kind-gate
+self-test: committed evidence still names the previous binary digests,
+and this rebuild staged different ones. Product steps passed, including
+`cargo test` and `go test`. A no-build run exits before any suite
+because the fresh work directory has no binaries. Evidence rotation is
+`--tier gate` or `--tier full`, not this run.
 
 The generator emits seeded IPv4 and IPv6 text. It does not build
 corrupt files or structured fixtures.
