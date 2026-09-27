@@ -22089,6 +22089,13 @@ publish reads its paths in order.
 from the current feed is removed. The first expected counts kept those
 addresses; the engines do not. Both engines report the removal.
 
+`s4-history-cutoff` now projects three windows from one scan. Cutoff 0
+and cutoff 9 keep the value-10 range. Cutoff 10 drops it.
+
+`s5-matching-feeds` asks which feeds contain two addresses. The shared
+address is `left;right`. The left-only address is `left`. The response
+count is 3. The CSV rows are the proof, not the count.
+
 S3 crash injection is not a release-binary scenario. The fault hook
 compiles out of the release binary. The failed-commit proof is
 `TestLiveWriterOutcomeUnknownFailClosed` in the v4work suite. A scenario

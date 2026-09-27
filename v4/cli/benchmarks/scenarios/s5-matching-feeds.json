@@ -1,0 +1,132 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s5-matching-feeds",
+  "purpose": "Ask which feeds contain one address. The shared address matches both feeds. The left-only address matches one.",
+  "fixtures": [
+    {"path": "left.txt", "text": "192.0.2.0/30\n"},
+    {"path": "right.txt", "text": "192.0.2.2-192.0.2.5\n"}
+  ],
+  "calls": [
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["$WORK/left.txt"],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "left",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "left"},
+        "destination": "$WORK/left.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": ["report.addresses"],
+      "expect": {"report.addresses": "4"}
+    },
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["$WORK/right.txt"],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "right",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "right"},
+        "destination": "$WORK/right.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": ["report.addresses"],
+      "expect": {"report.addresses": "4"}
+    },
+    {
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/db.iprange",
+        "family": "ipv4",
+        "value_kind": "membership",
+        "structure_kind": "none",
+        "value_tag": {"text": "membership"},
+        "reader_capacity": 4
+      },
+      "compare": ["value_kind"]
+    },
+    {
+      "method": "iprange.v1.feeds.create",
+      "params": {
+        "path": "$WORK/db.iprange",
+        "feed": "left",
+        "current": {"source": {"path": "$WORK/left.iprange", "mode": "immutable"}, "feed": "left"},
+        "metadata": {"mode": "keep"},
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": ["report.added_addresses"],
+      "expect": {"report.added_addresses": "4"}
+    },
+    {
+      "method": "iprange.v1.feeds.create",
+      "params": {
+        "path": "$WORK/db.iprange",
+        "feed": "right",
+        "current": {"source": {"path": "$WORK/right.iprange", "mode": "immutable"}, "feed": "right"},
+        "metadata": {"mode": "keep"},
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": ["report.added_addresses"],
+      "expect": {"report.added_addresses": "4"}
+    },
+    {
+      "method": "iprange.v1.query.matching_feeds",
+      "params": {
+        "source": {"path": "$WORK/db.iprange", "mode": "live"},
+        "addresses": ["192.0.2.2", "192.0.2.0"],
+        "output": {
+          "path": "$WORK/matching.csv",
+          "format": "csv",
+          "publication_policy": "fail_if_exists",
+          "result_budget": {"max_rows": "64", "max_output_bytes": "65536", "max_open_files": 3}
+        }
+      },
+      "compare": ["matching_feed_count"],
+      "expect": {"matching_feed_count": "3"},
+      "expect_file_contains": {
+        "path": "matching.csv",
+        "text": ["192.0.2.2,left;right", "192.0.2.0,left"]
+      }
+    }
+  ]
+}
