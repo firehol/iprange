@@ -22096,6 +22096,10 @@ and cutoff 9 keep the value-10 range. Cutoff 10 drops it.
 address is `left;right`. The left-only address is `left`. The response
 count is 3. The CSV rows are the proof, not the count.
 
+`s5-exclude` compares two named feeds. Left has 6 addresses, right has
+4, and 2 are shared. Left-only is 4. Selecting all feeds on two sources
+counts every address twice, so the scenario names the feeds.
+
 S3 crash injection is not a release-binary scenario. The fault hook
 compiles out of the release binary. The failed-commit proof is
 `TestLiveWriterOutcomeUnknownFailClosed` in the v4work suite. A scenario

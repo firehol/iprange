@@ -1,0 +1,101 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s5-exclude",
+  "purpose": "Compare two feeds. Left has 6 addresses, right has 4, and 2 are shared. Left-only is the exclude count.",
+  "fixtures": [
+    {"path": "left.txt", "text": "192.0.2.0/30\n192.0.2.10/31\n"},
+    {"path": "right.txt", "text": "192.0.2.2-192.0.2.5\n"}
+  ],
+  "calls": [
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["$WORK/left.txt"],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "left",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "left"},
+        "destination": "$WORK/left.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": ["report.addresses"],
+      "expect": {"report.addresses": "6"}
+    },
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": ["$WORK/right.txt"],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {"threads": 1, "silent": true},
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "right",
+        "value_tag": {"text": "feed"},
+        "metadata": {"mode": "replace_utf8", "text": "right"},
+        "destination": "$WORK/right.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": ["report.addresses"],
+      "expect": {"report.addresses": "4"}
+    },
+    {
+      "method": "iprange.v1.algebra.compare",
+      "params": {
+        "sources": [
+          {
+            "source": {"path": "$WORK/left.iprange", "mode": "immutable"},
+            "scope": {"mode": "all"},
+            "membership_query_budget": {"max_heap_bytes": "1048576"}
+          },
+          {
+            "source": {"path": "$WORK/right.iprange", "mode": "immutable"},
+            "scope": {"mode": "all"},
+            "membership_query_budget": {"max_heap_bytes": "1048576"}
+          }
+        ],
+        "left": {"mode": "named", "feeds": ["left"]},
+        "right": {"mode": "named", "feeds": ["right"]},
+        "algebra_budget": {"max_heap_bytes": "1048576", "max_sources": 2}
+      },
+      "compare": [
+        "report.left_addresses",
+        "report.right_addresses",
+        "report.overlap_addresses",
+        "report.left_only_addresses",
+        "report.right_only_addresses"
+      ],
+      "expect": {
+        "report.left_addresses": "6",
+        "report.right_addresses": "4",
+        "report.overlap_addresses": "2",
+        "report.left_only_addresses": "4",
+        "report.right_only_addresses": "2"
+      }
+    }
+  ]
+}
