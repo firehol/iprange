@@ -79,3 +79,15 @@ def measure(argv, rounds, stdin_bytes=None):
         "child_max_rss_kib": {"median": median(rss), "min": min(rss), "max": max(rss)},
         "child_raised_peak": all(sample["child_raised_peak"] for sample in samples),
     }
+
+
+def ratio(rust, go):
+    """Go/Rust median ratio. Above 1 means Go used more time or RSS."""
+    elapsed = rust["elapsed_seconds"]["median"]
+    rss = rust["child_max_rss_kib"]["median"]
+    if elapsed <= 0 or rss <= 0:
+        raise ValueError("rust median must be positive")
+    return {
+        "elapsed": go["elapsed_seconds"]["median"] / elapsed,
+        "rss": go["child_max_rss_kib"]["median"] / rss,
+    }

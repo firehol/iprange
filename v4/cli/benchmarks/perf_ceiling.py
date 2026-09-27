@@ -11,8 +11,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 
 from generate import generate, merged_count, write_text
+from measure import child_hwm_kib, ratio
 from perf import PUBLISH, fail
 
 
@@ -69,8 +71,17 @@ def publish_one(session, text_path, destination, name, budget):
     return session.call("iprange.v1.current.publish", request["params"])
 
 
+def sample_peak(proc, peak):
+    current = child_hwm_kib(proc.pid)
+    if current is None:
+        return peak
+    return max(peak, current)
+
+
 def load_feeds(binary, work, feeds):
     session = Session(binary)
+    started = time.perf_counter()
+    peak = 0
     try:
         membership = os.path.join(work, "mem.iprange")
         session.call("iprange.v1.database.create", {
@@ -88,6 +99,7 @@ def load_feeds(binary, work, feeds):
             "max_open_files": 3,
         }
         for name, ranges in feeds:
+            peak = sample_peak(session.proc, peak)
             text_path = os.path.join(work, f"{name}.txt")
             destination = os.path.join(work, f"{name}.iprange")
             with open(text_path, "w", encoding="utf-8") as stream:
@@ -105,7 +117,12 @@ def load_feeds(binary, work, feeds):
         info = session.call("iprange.v1.database.info", {
             "source": {"path": membership, "mode": "live"},
         })
-        return int(info["info"]["active_feed_count"])
+        peak = sample_peak(session.proc, peak)
+        return {
+            "feeds": int(info["info"]["active_feed_count"]),
+            "elapsed_seconds": time.perf_counter() - started,
+            "child_max_rss_kib": peak,
+        }
     finally:
         session.close()
 
@@ -116,14 +133,24 @@ def import_ranges(binary, work, ranges, expected):
     with open(text_path, "w", encoding="utf-8") as stream:
         write_text(ranges, stream)
     session = Session(binary)
+    started = time.perf_counter()
+    peak = 0
     try:
-        published = publish_one(session, text_path, destination, "wide", PUBLISH["params"]["immutable_feed_budget"])
+        peak = sample_peak(session.proc, peak)
+        published = publish_one(
+            session, text_path, destination, "wide",
+            PUBLISH["params"]["immutable_feed_budget"])
+        peak = sample_peak(session.proc, peak)
     finally:
         session.close()
     got = int(published["report"]["addresses"])
     if got != expected:
         raise AssertionError(f"imported {got} addresses, generator says {expected}")
-    return got
+    return {
+        "addresses": got,
+        "elapsed_seconds": time.perf_counter() - started,
+        "child_max_rss_kib": peak,
+    }
 
 
 def main():
@@ -150,8 +177,9 @@ def main():
             os.makedirs(path)
         rust_feeds = load_feeds(args.rust, rust_feed_dir, feeds)
         go_feeds = load_feeds(args.go, go_feed_dir, feeds)
-        if rust_feeds != args.feeds or go_feeds != args.feeds:
-            raise AssertionError(f"active feeds rust={rust_feeds} go={go_feeds}, want {args.feeds}")
+        if rust_feeds["feeds"] != args.feeds or go_feeds["feeds"] != args.feeds:
+            raise AssertionError(
+                f"active feeds rust={rust_feeds} go={go_feeds}, want {args.feeds}")
         rust_ranges = import_ranges(args.rust, rust_wide_dir, wide, expected)
         go_ranges = import_ranges(args.go, go_wide_dir, wide, expected)
     print(json.dumps({
@@ -160,8 +188,14 @@ def main():
         "merged_addresses": expected,
         "rust_feeds": rust_feeds,
         "go_feeds": go_feeds,
-        "rust_addresses": rust_ranges,
-        "go_addresses": go_ranges,
+        "rust_import": rust_ranges,
+        "go_import": go_ranges,
+        "import_ratio": ratio(
+            {"elapsed_seconds": {"median": rust_ranges["elapsed_seconds"]},
+             "child_max_rss_kib": {"median": rust_ranges["child_max_rss_kib"]}},
+            {"elapsed_seconds": {"median": go_ranges["elapsed_seconds"]},
+             "child_max_rss_kib": {"median": go_ranges["child_max_rss_kib"]}},
+        ),
     }, sort_keys=True))
     return 0
 
