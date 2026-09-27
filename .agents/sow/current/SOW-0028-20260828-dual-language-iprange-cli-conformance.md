@@ -23,7 +23,9 @@ Review-wave items closed after this ledger was written:
 2. `v4/cli/battery.sh` is committed. It has not been run end to end.
 3. `parity_rust_public.tsv` method regeneration is still open. The drift test covers `lib.rs` exports only.
 
-Milestone 5 is closed in the section at the end of this file. Do not treat the list above as the work queue.
+Milestone 5 product proofs are in the section at the end of this file.
+The role round and astra review are still the close gate. Do not treat
+the list above as the work queue.
 
 Not in this serial pass:
 
