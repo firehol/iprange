@@ -103,6 +103,79 @@ def retained_count(ranges, cutoff):
     return total
 
 
+def resolve_direct(rows):
+    # Later rows replace overlapping addresses. The direct loader applies
+    # the CSV in order, so a later value wins. Value 0 is a real provider
+    # id; uncovered addresses are not in this list.
+    events = []
+    for index, (start, end, value) in enumerate(rows):
+        if end < start:
+            raise ValueError("direct row is reversed")
+        events.append((start, 1, index, value))
+        events.append((end + 1, 0, index, 0))
+    events.sort()
+    active = {}
+    resolved = []
+    previous = None
+    for point, kind, index, value in events:
+        if previous is not None and point > previous and active:
+            winner = max(active)
+            value_now = active[winner]
+            if resolved and resolved[-1][1] + 1 == previous and resolved[-1][2] == value_now:
+                resolved[-1] = (resolved[-1][0], point - 1, value_now)
+            else:
+                resolved.append((previous, point - 1, value_now))
+        if kind == 1:
+            active[index] = value
+        else:
+            active.pop(index, None)
+        previous = point
+    return resolved
+
+
+def provider_cells(feed_ranges, resolved):
+    cells = {}
+    cursor_right = 0
+    for start, end in covered(feed_ranges):
+        while cursor_right < len(resolved) and resolved[cursor_right][1] < start:
+            cursor_right += 1
+        index = cursor_right
+        cursor = start
+        while index < len(resolved) and resolved[index][0] <= end:
+            right_start, right_end, value = resolved[index]
+            if cursor < right_start:
+                cells[None] = cells.get(None, 0) + right_start - cursor
+                cursor = right_start
+            stop = min(end, right_end)
+            if cursor <= stop:
+                cells[value] = cells.get(value, 0) + stop - cursor + 1
+                cursor = stop + 1
+            if right_end >= end:
+                break
+            index += 1
+        if cursor <= end:
+            cells[None] = cells.get(None, 0) + end - cursor + 1
+    return {key: count for key, count in cells.items() if count}
+
+
+def provider_join(feeds, provider_rows):
+    resolved = resolve_direct(provider_rows)
+    provider_cover = [(start, end) for start, end, _value in resolved]
+    all_ranges = [item for _name, ranges in feeds for item in ranges]
+    selected = merged_count(all_ranges) if all_ranges else 0
+    mapped = overlap_count(all_ranges, provider_cover) if all_ranges and provider_cover else 0
+    cells = []
+    for name, ranges in feeds:
+        for key, count in provider_cells(ranges, resolved).items():
+            cells.append((name, key, count))
+    return {
+        "selected": selected,
+        "mapped": mapped,
+        "unmapped": selected - mapped,
+        "cells": cells,
+    }
+
+
 def churn(days):
     steps = []
     seen = []

@@ -19,6 +19,8 @@ from generate import (
     merged_count,
     overlap_count,
     parse_ipv6,
+    provider_join,
+    resolve_direct,
     retained_count,
     write_ipv6,
 )
@@ -89,6 +91,65 @@ class GeneratorTest(unittest.TestCase):
         self.assertEqual(len(ranges), 20)
         self.assertLess(merged_count(ranges), 80)
         self.assertEqual(merged_count(ranges), merged_count(generate(7, 20, 4, space=64)))
+
+    def test_later_provider_row_wins(self):
+        resolved = resolve_direct([(0, 9, 1), (5, 12, 2)])
+        self.assertEqual(resolved, [(0, 4, 1), (5, 12, 2)])
+
+    def test_provider_join_matches_the_probed_country(self):
+        feeds = [
+            ("alpha", [(12, 16)]),
+            ("beta", [(18, 21)]),
+            ("gamma", [(35, 36)]),
+            ("delta", [(100, 100)]),
+        ]
+        country = [(10, 19, 1), (30, 39, 2)]
+        report = provider_join(feeds, country)
+        self.assertEqual(report["selected"], 12)
+        self.assertEqual(report["mapped"], 9)
+        self.assertEqual(report["unmapped"], 3)
+        self.assertEqual(sorted(report["cells"], key=lambda cell: (cell[0], cell[1] is None, cell[1] or 0)), [
+            ("alpha", 1, 5),
+            ("beta", 1, 2),
+            ("beta", None, 2),
+            ("delta", None, 1),
+            ("gamma", 2, 2),
+        ])
+
+    def test_provider_scenario_names_both_sets(self):
+        feeds = [
+            ("alpha", [(12, 16)]),
+            ("beta", [(18, 21)]),
+            ("gamma", [(35, 36)]),
+            ("delta", [(100, 100)]),
+        ]
+        path = os.path.join(os.path.dirname(__file__), "scenarios", "s5-provider-joins.json")
+        with open(path, encoding="utf-8") as stream:
+            scenario = json.load(stream)
+        joins = [call for call in scenario["calls"] if call["method"] == "iprange.v1.join.direct"]
+        self.assertEqual(len(joins), 2)
+        providers = {
+            "country": [(10, 19, 1), (30, 39, 2)],
+            "asn": [(15, 24, 100), (50, 54, 200)],
+        }
+        for call, (name, rows) in zip(joins, providers.items()):
+            report = provider_join(feeds, rows)
+            self.assertEqual(call["expect"]["report.selected_addresses"], str(report["selected"]))
+            self.assertEqual(call["expect"]["report.mapped_addresses"], str(report["mapped"]))
+            self.assertEqual(call["expect"]["report.unmapped_addresses"], str(report["unmapped"]))
+            self.assertEqual(int(call["expect"]["report.result_cell_count"]), len(report["cells"]))
+            for feed, value, count in report["cells"]:
+                rendered = "null" if value is None else str(value)
+                self.assertIn(f"{feed},{rendered},{count}", call["expect_file_contains"]["text"])
+            self.assertIn(name, call["params"]["direct"]["path"])
+
+    def test_overlapping_feeds_are_one_selected_union(self):
+        feeds = [("zeta", [(0, 9)]), ("alpha", [(5, 14)])]
+        report = provider_join(feeds, [(0, 9, 1), (5, 12, 2)])
+        self.assertEqual(report["selected"], 15)
+        self.assertEqual(report["mapped"], 13)
+        self.assertEqual(report["unmapped"], 2)
+        self.assertEqual(len(report["cells"]), 4)
 
     def test_seeded_ipv6_keeps_the_integer_corpus(self):
         ranges = generate(7, 20, 4, space=64)

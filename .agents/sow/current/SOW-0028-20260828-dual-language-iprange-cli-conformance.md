@@ -22128,6 +22128,22 @@ report 5. This is the small detecting case, not a sized IPv6 run.
 engines report 3 pairs. The CSV says alpha,beta has 2 addresses and the
 other two pairs have 0. The pair count alone does not prove the matrix.
 
+`s5-provider-joins` loads four feeds and joins them to two provider
+sets. Country maps 9 of 12 selected addresses. ASN maps 6. Beta is
+inside the ASN range, so its cell is 4 addresses, not the provider
+prefix before it. Both engines report the generator cells. A Go sweep
+that started at the earlier provider address was fixed before this
+scenario: 18-21 inside 15-24 is 4, not 7.
+
+One 100-feed by 3-provider join, 20 ranges per feed, span 4, inside a
+10,000-address space. Both engines matched the generator cell multiset
+on every provider. Selected addresses were 5499. Mapped addresses were
+56, 38, and 47. The sample is one join, not the feed import. Rust
+median peak was 12772, 12752, and 12800 KiB, median time 0.037, 0.038,
+and 0.038 s. Go median peak was 22364, 22360, and 24344 KiB, median
+time 0.041, 0.040, and 0.039 s. Three rounds. This is one workstation
+run, not the 1,000-feed ceiling.
+
 `s2-three-day-churn` replaces one feed across three days. Day 2 keeps
 3, removes 2, and adds 2. Day 3 keeps 1 and removes 4. The generator
 names those counts. Both engines report them.
@@ -22158,7 +22174,7 @@ The remaining close items are not another small scenario:
 - A sized IPv6 run. The IPv6 scenario is 20 ranges.
 - Last-seen refresh across the seven-day corpus, including cutoff expiry.
   The seven-day scenario is first-seen only.
-- Many feeds times provider sets. The matrix is three feeds.
+- A sized IPv6 run. The IPv6 scenario is 20 ranges.
 - The 1,000-feed, 10M-range ceiling run. That is the close run, not the
   next slice.
 - The 11 attestation gaps that need a corrupt file, a second connection,

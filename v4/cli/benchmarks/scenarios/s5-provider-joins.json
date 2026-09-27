@@ -1,0 +1,532 @@
+{
+  "schema": "iprange-bench-scenario-v1",
+  "name": "s5-provider-joins",
+  "purpose": "Four feeds times two provider sets. The generator names each feed,value cell. A feed inside a provider is not extended to the provider start.",
+  "fixtures": [
+    {
+      "path": "alpha.txt",
+      "text": "0.0.0.12-0.0.0.16\n"
+    },
+    {
+      "path": "beta.txt",
+      "text": "0.0.0.18-0.0.0.21\n"
+    },
+    {
+      "path": "gamma.txt",
+      "text": "0.0.0.35-0.0.0.36\n"
+    },
+    {
+      "path": "delta.txt",
+      "text": "0.0.0.100\n"
+    },
+    {
+      "path": "country.csv",
+      "text": "from,to,value\n0.0.0.10,0.0.0.19,1\n0.0.0.30,0.0.0.39,2\n"
+    },
+    {
+      "path": "asn.csv",
+      "text": "from,to,value\n0.0.0.15,0.0.0.24,100\n0.0.0.50,0.0.0.54,200\n"
+    }
+  ],
+  "calls": [
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": [
+            "$WORK/alpha.txt"
+          ],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {
+            "threads": 1,
+            "silent": true
+          },
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "alpha",
+        "value_tag": {
+          "text": "feed"
+        },
+        "metadata": {
+          "mode": "replace_utf8",
+          "text": "alpha"
+        },
+        "destination": "$WORK/alpha.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": [
+        "report.addresses"
+      ],
+      "expect": {
+        "report.addresses": "5"
+      }
+    },
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": [
+            "$WORK/beta.txt"
+          ],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {
+            "threads": 1,
+            "silent": true
+          },
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "beta",
+        "value_tag": {
+          "text": "feed"
+        },
+        "metadata": {
+          "mode": "replace_utf8",
+          "text": "beta"
+        },
+        "destination": "$WORK/beta.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": [
+        "report.addresses"
+      ],
+      "expect": {
+        "report.addresses": "4"
+      }
+    },
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": [
+            "$WORK/gamma.txt"
+          ],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {
+            "threads": 1,
+            "silent": true
+          },
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "gamma",
+        "value_tag": {
+          "text": "feed"
+        },
+        "metadata": {
+          "mode": "replace_utf8",
+          "text": "gamma"
+        },
+        "destination": "$WORK/gamma.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": [
+        "report.addresses"
+      ],
+      "expect": {
+        "report.addresses": "2"
+      }
+    },
+    {
+      "method": "iprange.v1.current.publish",
+      "params": {
+        "input": {
+          "paths": [
+            "$WORK/delta.txt"
+          ],
+          "family": "ipv4",
+          "fix_network": true,
+          "default_prefix": 32,
+          "dns": {
+            "threads": 1,
+            "silent": true
+          },
+          "expand_at_paths": false,
+          "max_line_bytes": 1024,
+          "max_expanded_paths": 4
+        },
+        "feed": "delta",
+        "value_tag": {
+          "text": "feed"
+        },
+        "metadata": {
+          "mode": "replace_utf8",
+          "text": "delta"
+        },
+        "destination": "$WORK/delta.iprange",
+        "publication_policy": "fail_if_exists",
+        "immutable_feed_budget": {
+          "max_heap_bytes": "16777216",
+          "max_output_pages": "20000",
+          "max_workspace_pages": "20000",
+          "max_open_files": 3
+        }
+      },
+      "compare": [
+        "report.addresses"
+      ],
+      "expect": {
+        "report.addresses": "1"
+      }
+    },
+    {
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/mem.iprange",
+        "family": "ipv4",
+        "value_kind": "membership",
+        "structure_kind": "none",
+        "value_tag": {
+          "text": "membership"
+        },
+        "reader_capacity": 8
+      },
+      "compare": [
+        "value_kind"
+      ],
+      "expect": {
+        "value_kind": "membership"
+      }
+    },
+    {
+      "method": "iprange.v1.feeds.create",
+      "params": {
+        "path": "$WORK/mem.iprange",
+        "feed": "alpha",
+        "current": {
+          "source": {
+            "path": "$WORK/alpha.iprange",
+            "mode": "immutable"
+          },
+          "feed": "alpha"
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": [
+        "report.added_addresses"
+      ],
+      "expect": {
+        "report.added_addresses": "5"
+      }
+    },
+    {
+      "method": "iprange.v1.feeds.create",
+      "params": {
+        "path": "$WORK/mem.iprange",
+        "feed": "beta",
+        "current": {
+          "source": {
+            "path": "$WORK/beta.iprange",
+            "mode": "immutable"
+          },
+          "feed": "beta"
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": [
+        "report.added_addresses"
+      ],
+      "expect": {
+        "report.added_addresses": "4"
+      }
+    },
+    {
+      "method": "iprange.v1.feeds.create",
+      "params": {
+        "path": "$WORK/mem.iprange",
+        "feed": "gamma",
+        "current": {
+          "source": {
+            "path": "$WORK/gamma.iprange",
+            "mode": "immutable"
+          },
+          "feed": "gamma"
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": [
+        "report.added_addresses"
+      ],
+      "expect": {
+        "report.added_addresses": "2"
+      }
+    },
+    {
+      "method": "iprange.v1.feeds.create",
+      "params": {
+        "path": "$WORK/mem.iprange",
+        "feed": "delta",
+        "current": {
+          "source": {
+            "path": "$WORK/delta.iprange",
+            "mode": "immutable"
+          },
+          "feed": "delta"
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": [
+        "report.added_addresses"
+      ],
+      "expect": {
+        "report.added_addresses": "1"
+      }
+    },
+    {
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/country.iprange",
+        "family": "ipv4",
+        "value_kind": "direct",
+        "structure_kind": "none",
+        "value_tag": {
+          "text": "country"
+        },
+        "reader_capacity": 4
+      },
+      "compare": [
+        "value_kind"
+      ],
+      "expect": {
+        "value_kind": "direct"
+      }
+    },
+    {
+      "method": "iprange.v1.direct.replace",
+      "params": {
+        "path": "$WORK/country.iprange",
+        "input": {
+          "path": "$WORK/country.csv",
+          "max_line_bytes": 1024
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": [
+        "report.after_addresses"
+      ],
+      "expect": {
+        "report.after_addresses": "20"
+      }
+    },
+    {
+      "method": "iprange.v1.join.direct",
+      "params": {
+        "membership": {
+          "source": {
+            "path": "$WORK/mem.iprange",
+            "mode": "live"
+          },
+          "selection": {
+            "mode": "all"
+          },
+          "membership_query_budget": {
+            "max_heap_bytes": "1048576"
+          }
+        },
+        "direct": {
+          "path": "$WORK/country.iprange",
+          "mode": "live"
+        },
+        "output": {
+          "path": "$WORK/country-join.csv",
+          "format": "csv",
+          "publication_policy": "fail_if_exists",
+          "result_budget": {
+            "max_rows": "64",
+            "max_output_bytes": "65536",
+            "max_open_files": 3
+          }
+        },
+        "max_result_cells": "64"
+      },
+      "compare": [
+        "report.selected_addresses",
+        "report.mapped_addresses",
+        "report.unmapped_addresses",
+        "report.result_cell_count"
+      ],
+      "expect": {
+        "report.selected_addresses": "12",
+        "report.mapped_addresses": "9",
+        "report.unmapped_addresses": "3",
+        "report.result_cell_count": "5"
+      },
+      "expect_file_contains": {
+        "path": "country-join.csv",
+        "text": [
+          "alpha,1,5",
+          "beta,1,2",
+          "beta,null,2",
+          "gamma,2,2",
+          "delta,null,1"
+        ]
+      }
+    },
+    {
+      "method": "iprange.v1.database.create",
+      "params": {
+        "path": "$WORK/asn.iprange",
+        "family": "ipv4",
+        "value_kind": "direct",
+        "structure_kind": "none",
+        "value_tag": {
+          "text": "asn"
+        },
+        "reader_capacity": 4
+      },
+      "compare": [
+        "value_kind"
+      ],
+      "expect": {
+        "value_kind": "direct"
+      }
+    },
+    {
+      "method": "iprange.v1.direct.replace",
+      "params": {
+        "path": "$WORK/asn.iprange",
+        "input": {
+          "path": "$WORK/asn.csv",
+          "max_line_bytes": 1024
+        },
+        "metadata": {
+          "mode": "keep"
+        },
+        "writer_budget": {
+          "max_heap_bytes": "16777216",
+          "max_private_pages": "20000",
+          "max_growth_pages": "20000",
+          "max_open_files": 4
+        }
+      },
+      "compare": [
+        "report.after_addresses"
+      ],
+      "expect": {
+        "report.after_addresses": "15"
+      }
+    },
+    {
+      "method": "iprange.v1.join.direct",
+      "params": {
+        "membership": {
+          "source": {
+            "path": "$WORK/mem.iprange",
+            "mode": "live"
+          },
+          "selection": {
+            "mode": "all"
+          },
+          "membership_query_budget": {
+            "max_heap_bytes": "1048576"
+          }
+        },
+        "direct": {
+          "path": "$WORK/asn.iprange",
+          "mode": "live"
+        },
+        "output": {
+          "path": "$WORK/asn-join.csv",
+          "format": "csv",
+          "publication_policy": "fail_if_exists",
+          "result_budget": {
+            "max_rows": "64",
+            "max_output_bytes": "65536",
+            "max_open_files": 3
+          }
+        },
+        "max_result_cells": "64"
+      },
+      "compare": [
+        "report.selected_addresses",
+        "report.mapped_addresses",
+        "report.unmapped_addresses",
+        "report.result_cell_count"
+      ],
+      "expect": {
+        "report.selected_addresses": "12",
+        "report.mapped_addresses": "6",
+        "report.unmapped_addresses": "6",
+        "report.result_cell_count": "5"
+      },
+      "expect_file_contains": {
+        "path": "asn-join.csv",
+        "text": [
+          "alpha,null,3",
+          "alpha,100,2",
+          "beta,100,4",
+          "gamma,null,2",
+          "delta,null,1"
+        ]
+      }
+    }
+  ]
+}
