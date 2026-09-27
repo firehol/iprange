@@ -22124,6 +22124,12 @@ other two pairs have 0. The pair count alone does not prove the matrix.
 3, removes 2, and adds 2. Day 3 keeps 1 and removes 4. The generator
 names those counts. Both engines report them.
 
+One 10M-range import, span 4, inside a 100,000,000-address space, merged
+to 32,967,576 addresses. Both engines imported that count. Rust peak was
+223388 KiB and time 8.526 s. Go median peak was 231638 KiB and median
+time 15.989 s. This is one feed, one workstation run. It is not the
+1,000-feed ceiling named by the milestone.
+
 The remaining close items are not another small scenario:
 
 - IPv6, CIDR-mix, and churn corpora. The generator is IPv4 ranges only.
