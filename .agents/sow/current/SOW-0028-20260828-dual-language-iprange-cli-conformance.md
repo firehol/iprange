@@ -22243,13 +22243,15 @@ The generator emits seeded IPv4 and IPv6 text. It does not build
 corrupt files or structured fixtures.
 
 The close ceiling is one database per round: 999 one-address feeds
-plus one 10M-range feed, so the database has 1,000 feeds and
-32,967,576 addresses. Three rounds. Rust median 49.427 s, spread
-49.359–52.902 s, peak 225644 KiB. Go median 63.125 s, spread
-58.576–63.577 s, peak 234004 KiB. The Go/Rust ratio is 1.277 elapsed
-and 1.037 RSS. This is not 1,000 feeds of 10M ranges each, and it is
-not the 1.3x verdict. An earlier split run, 1,000 creates then a
-separate 10M import, is not this ceiling.
+plus one 10M-range feed. The kit log is
+`.local/shared/evidence/m5-ceiling/combined.log`. It names the command,
+the revision `e29b2024`, the binary SHA-256 values, and ends with `rc=0`.
+Both engines reported 1,000 feeds and 32,967,576 addresses. Three
+rounds, engine order swapped, fixture files written before the clock.
+Rust median 54.471 s, spread 49.447–56.322 s, peak 225252 KiB. Go
+median 63.109 s, spread 58.934–78.156 s, peak 232676 KiB. The Go/Rust
+ratio is 1.159 elapsed and 1.033 RSS. This is not 1,000 feeds of 10M
+ranges each, and it is not the 1.3x verdict.
 
 `parallel_feeds.py` publishes a good feed and a bad feed at the same
 time. The good destination keeps the generator count. The bad
