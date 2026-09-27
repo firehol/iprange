@@ -401,6 +401,89 @@ int main(int argc, char **argv)
           IPRANGE_V4_ABI1_STATUS_OK);
     CHECK(error == NULL);
 
+    {
+        iprange_v4_abi1_path missing = {0};
+        iprange_v4_abi1_reader *opened = NULL;
+        missing.kind = IPRANGE_V4_ABI1_PATH_POSIX_BYTES;
+        missing.pointer = NULL;
+        missing.length = 1;
+        CHECK(iprange_v4_abi1_open_live_reader(missing,
+                                               no_cancellation(),
+                                               &opened,
+                                               &error) ==
+              IPRANGE_V4_ABI1_STATUS_ERROR);
+        CHECK(opened == NULL);
+        code = inspect_error(error, &caller_present, &caller_code);
+        CHECK(code == IPRANGE_V4_ABI1_ERROR_CODE_NULL_POINTER);
+        CHECK(destroy_error(error) == 0);
+        error = NULL;
+
+        missing.length = 0;
+        missing.pointer = "";
+        CHECK(iprange_v4_abi1_open_live_reader(missing,
+                                               no_cancellation(),
+                                               &opened,
+                                               &error) ==
+              IPRANGE_V4_ABI1_STATUS_ERROR);
+        code = inspect_error(error, &caller_present, &caller_code);
+        CHECK(code == IPRANGE_V4_ABI1_ERROR_CODE_INVALID_LENGTH);
+        CHECK(destroy_error(error) == 0);
+        error = NULL;
+    }
+    {
+        char meta_path[4096];
+        char sidecar_path[4096];
+        static const uint8_t metadata[] = "{\"k\":1}";
+        uint8_t changed = 0;
+        uint8_t tiny[1] = {0};
+        uint64_t required = 0;
+        iprange_v4_abi1_mutable_byte_slice output = {tiny, sizeof(tiny)};
+        iprange_v4_abi1_writer *meta_writer = NULL;
+        CHECK(snprintf(meta_path, sizeof(meta_path), "%s.meta-buffer", argv[1]) > 0);
+        CHECK(snprintf(sidecar_path, sizeof(sidecar_path), "%s.readers", meta_path) > 0);
+        CHECK(iprange_v4_abi1_create_live(
+                  path_from(meta_path),
+                  IPRANGE_V4_ABI1_ADDRESS_FAMILY_IPV4,
+                  IPRANGE_V4_ABI1_VALUE_KIND_DIRECT,
+                  IPRANGE_V4_ABI1_STRUCTURE_KIND_NONE,
+                  value_tag,
+                  1,
+                  no_cancellation(),
+                  &report,
+                  &error) == IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(destroy_report(report) == 0);
+        report = NULL;
+        CHECK(iprange_v4_abi1_open_live_writer(path_from(meta_path),
+                                               &budget,
+                                               no_cancellation(),
+                                               &meta_writer,
+                                               &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(iprange_v4_abi1_writer_set_metadata_json(
+                  meta_writer,
+                  metadata,
+                  sizeof(metadata) - 1,
+                  no_cancellation(),
+                  &changed,
+                  &error) == IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(iprange_v4_abi1_writer_metadata_read(
+                  meta_writer, output, &required, &error) ==
+              IPRANGE_V4_ABI1_STATUS_ERROR);
+        code = inspect_error(error, &caller_present, &caller_code);
+        CHECK(code == IPRANGE_V4_ABI1_ERROR_CODE_BUFFER_TOO_SMALL);
+        CHECK(required > sizeof(tiny));
+        CHECK(destroy_error(error) == 0);
+        error = NULL;
+        CHECK(iprange_v4_abi1_writer_close(meta_writer, &report, &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(destroy_report(report) == 0);
+        report = NULL;
+        CHECK(iprange_v4_abi1_writer_destroy(meta_writer, &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(remove(meta_path) == 0);
+        remove(sidecar_path);
+    }
+
     CHECK(iprange_v4_abi1_writer_destroy(writer, &error) ==
           IPRANGE_V4_ABI1_STATUS_ERROR);
     code = inspect_error(error, &caller_present, &caller_code);
