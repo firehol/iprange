@@ -22237,14 +22237,34 @@ binaries.
 The generator emits seeded IPv4 and IPv6 text. It does not build
 corrupt files or structured fixtures.
 
+The 1,000-feed create and the 10M-range import were measured on the
+release binaries. Rust created 1,000 feeds in 49.255 s at 12056 KiB.
+Go created them in 43.436 s at 19248 KiB. The 10M-range import merged
+to 32,967,576 addresses. Rust took 7.862 s at 222272 KiB. Go took
+14.398 s at 231944 KiB. The Go/Rust import ratio is 1.831 elapsed and
+1.044 RSS. This is one workstation run of each command. It is not
+1,000 feeds of 10M ranges, and it is not the 1.3x verdict.
+
+`parallel_feeds.py` publishes a good feed and a bad feed at the same
+time. The good destination keeps the generator count. The bad
+destination is absent. Both engines passed.
+
+`feed_crash.py` kills `feeds.replace` while that call is still
+outstanding. The prior alpha feed and the untouched beta feed are
+still present after the kill. Both engines passed. A kill after the
+replace commits is not this proof.
+
+A mutated expected address count is rejected by `compare`. Agreement
+between the engines does not hide it.
+
 Closure statement: milestone 5 is CLOSED for the work assigned to it.
 The fifteen attestation rows have detecting cases. The scenario matrix
 covers import, first-seen and last-seen refresh, history cutoff, joins,
-snapshot cross-open, and recovery cross-open. The ceiling run is one
-1,000-feed database and one 10M-range feed, not 1,000 feeds of 10M
-ranges. The Linux gate passed. The ≤1.3x verdict is not this milestone's
-decision; it stays with SOW-0030. Windows evidence stays with the
-Windows leg. update-ipsets was not pushed.
+snapshot cross-open, and recovery cross-open. Parallel publish isolates
+a bad feed. A killed replace leaves the prior feeds. The ceiling run is
+measured above. The ≤1.3x verdict is not this milestone's decision; it
+stays with SOW-0030. Windows evidence stays with the Windows leg.
+update-ipsets was not pushed.
 
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness
