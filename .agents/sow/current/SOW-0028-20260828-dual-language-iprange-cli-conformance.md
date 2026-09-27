@@ -22009,6 +22009,13 @@ and then used for lookup. Both engines return `handle_closed` with
 outcome `not_started`. A second close is not this case: the contract
 returns `handle_not_found` for close itself.
 
+`tombstone.py` is attestation gap 3 for the public eviction. One session
+closes the same immutable reader 1025 times. The first closed handle
+then returns `handle_not_found`. The newest closed handle still returns
+`handle_closed`. Both engines agree. CloseAll's sorted live-reader order
+is not this case: shutdown is not a JSON-RPC method, and the existing
+Go test does not open live readers.
+
 `n4-batch-limit` is attestation gap 4. A batch of 16 describe calls
 returns 16 results. A batch of 17 returns JSON-RPC `-32600`. Both
 engines agree. The 16-member call is required: without it, a runner
