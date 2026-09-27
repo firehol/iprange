@@ -56,7 +56,8 @@
         "last_seen": {"path": "$WORK/seen.iprange", "mode": "live"},
         "windows": [
           {"feed": "keep", "cutoff": 9},
-          {"feed": "drop", "cutoff": 10}
+          {"feed": "drop", "cutoff": 10},
+          {"feed": "older", "cutoff": 0}
         ],
         "metadata": {"mode": "keep"},
         "writer_budget": {
@@ -72,7 +73,9 @@
         "report.windows.0.after_addresses",
         "report.windows.1.feed_name",
         "report.windows.1.cutoff",
-        "report.windows.1.after_addresses"
+        "report.windows.1.after_addresses",
+        "report.windows.2.feed_name",
+        "report.windows.2.after_addresses"
       ],
       "expect": {
         "report.windows.0.feed_name": "keep",
@@ -80,7 +83,9 @@
         "report.windows.0.after_addresses": "10",
         "report.windows.1.feed_name": "drop",
         "report.windows.1.cutoff": 10,
-        "report.windows.1.after_addresses": "0"
+        "report.windows.1.after_addresses": "0",
+        "report.windows.2.feed_name": "older",
+        "report.windows.2.after_addresses": "10"
       }
     }
   ]
