@@ -22188,7 +22188,8 @@ The remaining close items are not another small scenario:
   The seven-day scenario is first-seen only.
 - The 1,000-feed, 10M-range ceiling run. That is the close run, not the
   next slice.
-- Attestation gaps 2, 5, 7, 8, 9, 10, 11, and 14. Gap 1's touching
+- Attestation gaps 2, 5, 7, 8, 9, 10, and 11. Gap 14's free-bit self,
+  ancestor, and limit guards have a negative case. Gap 1's touching
   retirement extents are rejected by the validation test. Gap 3's public
   eviction is proved. CloseAll's live-reader order is not. Gap 15 refuses
   reclaim on an open draft, and the two-page reclamation boundary is pinned.
