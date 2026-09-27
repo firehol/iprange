@@ -206,6 +206,14 @@ const CLOSED_TOMBSTONE_CAP: usize = 1024;
 #[cfg(test)]
 const CLOSED_TOMBSTONE_CAP: usize = 8;
 
+/// One shutdown close target. Probes exist only in test builds so
+/// close_all's sort can be observed without a live database.
+enum ShutdownClose {
+    Reader(ReaderValue),
+    #[cfg(test)]
+    Probe(std::sync::Arc<std::sync::Mutex<Vec<String>>>),
+}
+
 /// Mutable per-connection resources. Closed handles are retained as
 /// tombstones so subsequent use can distinguish a closed handle from an
 /// unknown one; tombstones do not count against active limits and are
@@ -234,6 +242,11 @@ pub struct ConnectionState {
     closed_reader_order: VecDeque<String>,
     /// FIFO order of closed-cursor tombstones for bounded eviction.
     closed_cursor_order: VecDeque<String>,
+    /// Shutdown-order probes. Production builds omit the field. Tests
+    /// insert handles here so close_all's one sort is observable
+    /// without opening a live database.
+    #[cfg(test)]
+    close_probes: Vec<(String, std::sync::Arc<std::sync::Mutex<Vec<String>>>)>,
 }
 
 impl ConnectionState {
@@ -259,24 +272,43 @@ impl ConnectionState {
         self.closed_cursors.clear();
         self.closed_cursor_order.clear();
         self.reader_paths.clear();
-        let mut readers: Vec<(String, ReaderValue)> = self.readers.drain().collect();
+        let mut readers: Vec<(String, ShutdownClose)> = self
+            .readers
+            .drain()
+            .map(|(handle, reader)| (handle, ShutdownClose::Reader(reader)))
+            .collect();
         // HashMap iteration order is not deterministic; close in
         // sorted handle order so shutdown never depends on hashing.
+        // Test probes join this same list before the one sort.
+        #[cfg(test)]
+        readers.extend(
+            self.close_probes
+                .drain(..)
+                .map(|(handle, order)| (handle, ShutdownClose::Probe(order))),
+        );
         readers.sort_by(|left, right| left.0.cmp(&right.0));
         let mut failures = Vec::new();
-        for (handle, mut reader) in readers {
-            match reader.close_live() {
-                Ok(Some(result)) if result.outcome != CloseOutcome::Closed || result.cause.is_some() => {
-                    let cause = result.cause.unwrap_or_else(|| {
-                        Error::Io(io::Error::new(
-                            io::ErrorKind::Other,
-                            "live reader close is incomplete",
-                        ))
-                    });
-                    failures.push((handle, cause));
+        for (handle, item) in readers {
+            match item {
+                ShutdownClose::Reader(mut reader) => match reader.close_live() {
+                    Ok(Some(result))
+                        if result.outcome != CloseOutcome::Closed || result.cause.is_some() =>
+                    {
+                        let cause = result.cause.unwrap_or_else(|| {
+                            Error::Io(io::Error::new(
+                                io::ErrorKind::Other,
+                                "live reader close is incomplete",
+                            ))
+                        });
+                        failures.push((handle, cause));
+                    }
+                    Ok(_) => {}
+                    Err(error) => failures.push((handle, error)),
+                },
+                #[cfg(test)]
+                ShutdownClose::Probe(order) => {
+                    order.lock().expect("close probe").push(handle);
                 }
-                Ok(_) => {}
-                Err(error) => failures.push((handle, error)),
             }
         }
         self.closed_readers.clear();
@@ -337,5 +369,23 @@ mod tests {
         assert!(state.close_all().is_empty());
         assert!(state.closed_readers.is_empty());
         assert!(state.closed_cursors.is_empty());
+    }
+
+    #[test]
+    fn close_all_closes_live_readers_in_sorted_handle_order() {
+        // Inserted reverse-lexically. Without the shared sort, close
+        // order is this insertion order and the assertion fails.
+        let mut state = ConnectionState::default();
+        let order = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        for handle in ["m", "a", "z"] {
+            state
+                .close_probes
+                .push((handle.to_string(), std::sync::Arc::clone(&order)));
+        }
+        assert!(state.close_all().is_empty());
+        assert_eq!(
+            order.lock().expect("close order").as_slice(),
+            ["a", "m", "z"]
+        );
     }
 }

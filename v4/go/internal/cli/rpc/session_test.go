@@ -23,6 +23,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+
+	iprangedb "github.com/firehol/iprange/v4/go"
 	"time"
 )
 
@@ -537,6 +539,37 @@ func TestCloseAllDeterministicOrder(t *testing.T) {
 	}
 	if len(state.Resources.Readers) != 0 || len(state.Resources.ClosedReaders) != 0 {
 		t.Fatalf("state not cleared")
+	}
+}
+
+func TestCloseAllClosesLiveReadersInSortedHandleOrder(t *testing.T) {
+	// Handles are inserted in reverse lexical order. Map iteration is
+	// not that order. CloseAll must close m, then z, after a, and must
+	// not close an immutable reader. The failure entry follows the same
+	// order: z is closed after m, so its failure is the second entry.
+	var closed []string
+	state := NewSessionState()
+	state.Resources.Readers = map[string]*ReaderValue{
+		"z": {closeFn: func() (iprangedb.ReaderCloseResult, error) {
+			closed = append(closed, "z")
+			return iprangedb.ReaderCloseResult{}, errors.New("z failed")
+		}},
+		"m": {closeFn: func() (iprangedb.ReaderCloseResult, error) {
+			closed = append(closed, "m")
+			return iprangedb.ReaderCloseResult{Outcome: iprangedb.CloseOutcomeClosed}, nil
+		}},
+		"a": {closeFn: func() (iprangedb.ReaderCloseResult, error) {
+			closed = append(closed, "a")
+			return iprangedb.ReaderCloseResult{Outcome: iprangedb.CloseOutcomeClosed}, nil
+		}},
+		"immutable": {Path: "not-live"},
+	}
+	failures := state.Resources.CloseAll()
+	if strings.Join(closed, ",") != "a,m,z" {
+		t.Fatalf("close order = %v, want a,m,z", closed)
+	}
+	if len(failures) != 1 || !strings.Contains(failures[0], "z failed") {
+		t.Fatalf("failures = %v, want the z close error", failures)
 	}
 }
 

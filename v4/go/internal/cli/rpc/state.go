@@ -41,6 +41,10 @@ type ReaderValue struct {
 	// pathname moved (Rust sidecar identity parity; tester role
 	// wave-19.6).
 	SidecarID *FileIdentity
+	// closeFn, when set, is the shutdown close. Production leaves it
+	// nil and CloseAll calls Live.Close. Tests set it so they can
+	// observe handle order without opening a live database.
+	closeFn func() (iprangedb.ReaderCloseResult, error)
 }
 
 // FileIdentity is the stable identity of one file at a point in
@@ -170,10 +174,16 @@ func (cs *ConnectionState) CloseAll() []string {
 	var failures []string
 	for _, handle := range handles {
 		reader := cs.Readers[handle]
-		if reader == nil || reader.Live == nil {
+		if reader == nil || (reader.Live == nil && reader.closeFn == nil) {
 			continue
 		}
-		result, err := reader.Live.Close()
+		var result iprangedb.ReaderCloseResult
+		var err error
+		if reader.closeFn != nil {
+			result, err = reader.closeFn()
+		} else {
+			result, err = reader.Live.Close()
+		}
 		if err != nil {
 			failures = append(failures, handle+": "+err.Error())
 			continue

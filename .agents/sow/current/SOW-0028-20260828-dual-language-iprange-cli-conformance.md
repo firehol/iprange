@@ -22015,8 +22015,10 @@ returns `handle_not_found` for close itself.
 `tombstone.py` is attestation gap 3 for the public eviction. One session
 closes the same immutable reader 1025 times. The first closed handle
 then returns `handle_not_found`. The newest closed handle still returns
-`handle_closed`. Both engines agree. CloseAll's sorted live-reader order
-is not this case: shutdown is not a JSON-RPC method, and the existing
+`handle_closed`. Both engines agree. CloseAll closes live readers in
+sorted handle order. Handles inserted as m, a, z close as a, m, z. An
+immutable reader is not closed. Removing the sort fails the test.
+Shutdown is not a JSON-RPC method, and the existing
 Go test does not open live readers.
 
 `n4-batch-limit` is attestation gap 4. A batch of 16 describe calls
@@ -22201,10 +22203,12 @@ The remaining close items are not another small scenario:
   reader slot newer than the committed generation. Gap 14's free-bit self,
   ancestor, and limit guards have a negative case. Gap 1's touching
   retirement extents are rejected by the validation test. Gap 3's public
-  eviction is proved. CloseAll's live-reader order is not. Gap 15 refuses
+  eviction is proved. CloseAll closes live readers in sorted handle
+  order. Gap 15 refuses
   reclaim on an open draft, and the two-page reclamation boundary is pinned.
-  Gaps 5 and 10 need a second connection. Gap 7 needs a C caller
-  of cases.json. Gap 11 needs an IPv6 structured fixture.
+  Gap 5 keeps the cancelled token for a queued execute. Gap 10 runs
+  cancel on both actors. Gap 7 needs a C caller of cases.json. Gap 11
+  needs an IPv6 structured fixture.
 
 S3 crash injection is not a release-binary scenario. The fault hook
 compiles out of the release binary. The failed-commit proof is
