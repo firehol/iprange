@@ -106,14 +106,15 @@ COVERMODE = "atomic"
 # harness that ignored the failure would publish a percentage measured over a
 # partial run.  The harness stages the module together with every sibling it
 # reads, and refuses to proceed when a required sibling member is absent.
-STAGED_MEMBERS = ("go", "conformance", "cli")
-REQUIRED_STAGED_MEMBERS = ("go", "conformance", "cli")
+STAGED_MEMBERS = ("go", "conformance", "cli", "rust")
+REQUIRED_STAGED_MEMBERS = ("go", "conformance", "cli", "rust")
 # The file per required member whose absence turns a specific test red rather
 # than making it skip.  Checking them here means an incomplete staging fails
 # with the reason, instead of surfacing as a red suite that reads like a
-# product defect.
+# product defect.  The parity gate reads the Rust library source as a sibling.
 STAGED_REQUIRED_FILES = (("conformance", "cases.json"),
-                         ("cli", "fd_pressure_harness.py"))
+                         ("cli", "fd_pressure_harness.py"),
+                         ("rust", "iprange-livedb", "src", "lib.rs"))
 
 
 def run(command, cwd=None, env=None, timeout=3600):
@@ -432,7 +433,7 @@ def stage_sources(v4_tree, dest, members=STAGED_MEMBERS):
         raise SystemExit(
             f"cannot stage the coverage source tree from {v4_tree}: "
             f"{', '.join(missing)} is missing; the Go unit suite reads "
-            f"../conformance and ../cli as siblings of the module")
+            f"../conformance, ../cli, and ../rust as siblings of the module")
     os.makedirs(dest, exist_ok=True)
     for name in members:
         source = os.path.join(v4_tree, name)
@@ -740,7 +741,7 @@ def _go_version(go):
 # Executed-control count of ``_self_test``, as a literal.  The line used to
 # print "PASSED (N cases)" from whatever the counter reached, so a control
 # that stopped being reached lowered N and still exited 0.
-COVERAGE_SELF_TEST_CONTROLS = 19
+COVERAGE_SELF_TEST_CONTROLS = 20
 
 
 def _unimported_shared_helpers(module_file=None, helper_file=None):
@@ -941,13 +942,19 @@ def _self_test():
         with open(os.path.join(complete, "cli", "fd_pressure_harness.py"),
                   "w", encoding="utf-8") as stream:
             stream.write("# staged sibling harness\n")
+        rust_lib = os.path.join(complete, "rust", "iprange-livedb", "src")
+        os.makedirs(rust_lib, exist_ok=True)
+        with open(os.path.join(rust_lib, "lib.rs"), "w", encoding="utf-8") as stream:
+            stream.write("// staged sibling source\n")
         staged = stage_sources(complete, os.path.join(base, "staged-full"))
         expect("a complete tree stages the module with its sibling trees",
                os.path.isdir(staged) and os.path.isfile(
                    os.path.join(os.path.dirname(staged), "conformance",
                                 "cases.json")) and os.path.isfile(
                    os.path.join(os.path.dirname(staged), "cli",
-                                "fd_pressure_harness.py")), staged)
+                                "fd_pressure_harness.py")) and os.path.isfile(
+                   os.path.join(os.path.dirname(staged), "rust",
+                                "iprange-livedb", "src", "lib.rs")), staged)
 
         empty_v4 = os.path.join(base, "nocorp")
         os.makedirs(os.path.join(empty_v4, "go"), exist_ok=True)
@@ -961,6 +968,14 @@ def _self_test():
         broken = os.path.join(base, "brokenbody")
         os.makedirs(os.path.join(broken, "go"), exist_ok=True)
         os.makedirs(os.path.join(broken, "conformance"), exist_ok=True)
+        os.makedirs(os.path.join(broken, "cli"), exist_ok=True)
+        os.makedirs(os.path.join(broken, "rust", "iprange-livedb", "src"), exist_ok=True)
+        with open(os.path.join(broken, "cli", "fd_pressure_harness.py"), "w",
+                  encoding="utf-8") as stream:
+            stream.write("# staged sibling harness\n")
+        with open(os.path.join(broken, "rust", "iprange-livedb", "src", "lib.rs"), "w",
+                  encoding="utf-8") as stream:
+            stream.write("// staged sibling source\n")
         try:
             stage_sources(broken, os.path.join(base, "staged-broken"))
             refused = False
@@ -976,6 +991,10 @@ def _self_test():
         os.makedirs(os.path.join(noharness, "go"), exist_ok=True)
         os.makedirs(os.path.join(noharness, "conformance"), exist_ok=True)
         os.makedirs(os.path.join(noharness, "cli"), exist_ok=True)
+        os.makedirs(os.path.join(noharness, "rust", "iprange-livedb", "src"), exist_ok=True)
+        with open(os.path.join(noharness, "rust", "iprange-livedb", "src", "lib.rs"), "w",
+                  encoding="utf-8") as stream:
+            stream.write("// staged sibling source\n")
         with open(os.path.join(noharness, "go", "go.mod"), "w",
                   encoding="utf-8") as stream:
             stream.write("module github.com/firehol/iprange/v4/go\n")
@@ -989,6 +1008,26 @@ def _self_test():
             refused = True
         expect("a staged tree whose cli member lacks the harness is refused",
                refused)
+
+        norust = os.path.join(base, "norust")
+        os.makedirs(os.path.join(norust, "go"), exist_ok=True)
+        os.makedirs(os.path.join(norust, "conformance"), exist_ok=True)
+        os.makedirs(os.path.join(norust, "cli"), exist_ok=True)
+        with open(os.path.join(norust, "go", "go.mod"), "w",
+                  encoding="utf-8") as stream:
+            stream.write("module github.com/firehol/iprange/v4/go\n")
+        with open(os.path.join(norust, "conformance", "cases.json"), "w",
+                  encoding="utf-8") as stream:
+            stream.write("{}")
+        with open(os.path.join(norust, "cli", "fd_pressure_harness.py"), "w",
+                  encoding="utf-8") as stream:
+            stream.write("# staged sibling harness\n")
+        try:
+            stage_sources(norust, os.path.join(base, "staged-norust"))
+            refused = False
+        except SystemExit:
+            refused = True
+        expect("staging without the rust sibling is refused", refused)
     finally:
         shutil.rmtree(base, ignore_errors=True)
 

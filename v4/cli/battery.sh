@@ -1025,7 +1025,7 @@ tail -6 "$R/reports/goos.log"
 # work, not an exceptional one.  Control counts live in the harnesses and are
 # read at run time, so a control added elsewhere in the tree needs no edit here.
 track_coverage_selftest() {
-# 19 controls, 0.7 s measured.  The coverage *measurement*, which re-runs the
+# 20 controls, 0.7 s measured.  The coverage *measurement*, which re-runs the
 # unit suite and costs ~66 s, stays exceptional: see [18b].
 echo "### [18a] coverage harness self-test"
 nice python3 "$CLI/coverage_harness.py" --self-test > "$R/reports/log-coverage-self.txt" 2>&1
