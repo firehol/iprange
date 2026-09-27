@@ -113,6 +113,12 @@ def churn(days):
     return steps
 
 
+def day_feeds(seed, days, count, span, space=2**32):
+    if days < 1:
+        raise ValueError("days must be positive")
+    return [generate(seed + day, count, span, space) for day in range(days)]
+
+
 def overlap_count(left, right):
     return diff_counts(left, right)["unchanged"]
 

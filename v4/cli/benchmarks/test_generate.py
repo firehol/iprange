@@ -5,10 +5,14 @@ import unittest
 import io
 import ipaddress
 
+import json
+import os
+
 from generate import (
     IPV6_BASE,
     churn,
     covered,
+    day_feeds,
     diff_counts,
     generate,
     ipv6_address,
@@ -35,6 +39,37 @@ class GeneratorTest(unittest.TestCase):
         steps = churn(days)
         self.assertEqual(steps[1], {"unchanged": 3, "removed": 2, "added": 2})
         self.assertEqual(steps[2], {"unchanged": 1, "removed": 4, "added": 0})
+
+    def test_seven_day_corpus_partitions_each_day(self):
+        days = day_feeds(11, 7, 20, 4, 64)
+        steps = churn(days)
+        self.assertEqual(steps, [
+            {"unchanged": 0, "removed": 0, "added": 35},
+            {"unchanged": 27, "removed": 8, "added": 21},
+            {"unchanged": 26, "removed": 22, "added": 12},
+            {"unchanged": 27, "removed": 11, "added": 16},
+            {"unchanged": 31, "removed": 12, "added": 17},
+            {"unchanged": 28, "removed": 20, "added": 11},
+            {"unchanged": 31, "removed": 8, "added": 19},
+        ])
+        previous = 0
+        for day, step in zip(days, steps):
+            self.assertEqual(step["unchanged"] + step["removed"], previous)
+            self.assertEqual(step["unchanged"] + step["added"], merged_count(day))
+            previous = merged_count(day)
+
+    def test_seven_day_scenario_names_the_generator(self):
+        steps = churn(day_feeds(11, 7, 20, 4, 64))
+        path = os.path.join(os.path.dirname(__file__), "scenarios", "s2-seven-day-refresh.json")
+        with open(path, encoding="utf-8") as stream:
+            scenario = json.load(stream)
+        refreshes = [call for call in scenario["calls"] if call["method"] == "iprange.v1.retention.first_seen.refresh"]
+        self.assertEqual(len(refreshes), 7)
+        for call, step in zip(refreshes, steps):
+            expect = call["expect"]
+            self.assertEqual(int(expect["report.added_addresses"]), step["added"])
+            self.assertEqual(int(expect["report.removed_addresses"]), step["removed"])
+            self.assertEqual(int(expect["report.unchanged_value_addresses"]), step["unchanged"])
 
     def test_retention_keeps_values_above_cutoff(self):
         ranges = [(0, 9, 10), (8, 11, 10), (20, 20, 5)]

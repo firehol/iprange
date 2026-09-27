@@ -23,7 +23,7 @@ Review-wave items closed after this ledger was written:
 2. `v4/cli/battery.sh` is committed. It has not been run end to end.
 3. `parity_rust_public.tsv` method regeneration is still open. The drift test covers `lib.rs` exports only.
 
-Milestone 5 is the active work. Its current state is the "First slice" section at the end of this file. HEAD is `ffbf53d6`. Do not treat the list above as the work queue.
+Milestone 5 is the active work. Its current state is the "First slice" section at the end of this file. Do not treat the list above as the work queue.
 
 Not in this serial pass:
 
@@ -22132,6 +22132,21 @@ other two pairs have 0. The pair count alone does not prove the matrix.
 3, removes 2, and adds 2. Day 3 keeps 1 and removes 4. The generator
 names those counts. Both engines report them.
 
+`s2-seven-day-refresh` refreshes first-seen across seven seeded days.
+Seed 11, 20 ranges, span 4, inside a 64-address space. The generator
+names each day's added, removed, and unchanged counts. Day 2 keeps 27,
+removes 8, and adds 21. Day 7 keeps 31, removes 8, and adds 19. Both
+engines report every day. This is first-seen. It does not refresh
+last-seen, and it does not expire a cutoff.
+
+One 7-day first-seen refresh, 100k ranges per day, span 4, inside a
+1,000,000-address space. Both engines reported the generator diff on
+every day. Day 7 kept 109132, removed 220545, and added 220998. The
+sample is that seventh refresh only. Rust median peak was 10540 KiB
+and median time 0.050 s. Go median peak was 15040 KiB and median time
+0.059 s. Three rounds. This is one feed, one workstation run, not a
+ceiling.
+
 One 10M-range import, span 4, inside a 100,000,000-address space, merged
 to 32,967,576 addresses. Both engines imported that count. Rust peak was
 223388 KiB and time 8.526 s. Go median peak was 231638 KiB and median
@@ -22140,9 +22155,9 @@ time 15.989 s. This is one feed, one workstation run. It is not the
 
 The remaining close items are not another small scenario:
 
-- A sized IPv6 run, and a 7-day churn corpus at size. The generator now
-  emits seeded IPv6 text. The IPv6 scenario is 20 ranges. Churn is three
-  hand-written days.
+- A sized IPv6 run. The IPv6 scenario is 20 ranges.
+- Last-seen refresh across the seven-day corpus, including cutoff expiry.
+  The seven-day scenario is first-seen only.
 - Many feeds times provider sets. The matrix is three feeds.
 - The 1,000-feed, 10M-range ceiling run. That is the close run, not the
   next slice.
