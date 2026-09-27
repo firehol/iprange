@@ -792,3 +792,41 @@ impl RangeSource<DirectRange<Ipv4Key>> for FailingSource {
         }
     }
 }
+
+#[test]
+fn reclaim_refuses_an_open_draft_and_a_zero_page_limit() {
+    let files = TestPair::new("reclaim-draft");
+    create_live(
+        &files.main,
+        AddressFamily::Ipv4,
+        ValueKind::Direct,
+        iprange_livedb::StructureKind::None,
+        ValueTag::new(b"direct").unwrap(),
+        1,
+        &CancellationToken::new(),
+    )
+    .unwrap();
+    let cancellation = CancellationToken::new();
+    let mut writer = LiveWriter::open(&files.main, budget(), &CancellationToken::new()).unwrap();
+    {
+        let mut draft = writer.begin_direct_transaction(&cancellation).unwrap();
+        draft.assign_v4(Ipv4Key(10), Ipv4Key(20), 1).unwrap();
+    }
+    assert!(matches!(
+        writer.reclaim(1, 1, &CancellationToken::new()),
+        Err(Error::WrongMode(_))
+    ));
+    assert_eq!(
+        writer.abort().unwrap().outcome,
+        iprange_livedb::AbortOutcome::Aborted
+    );
+    assert!(matches!(
+        writer.reclaim(1, 0, &CancellationToken::new()),
+        Err(Error::InvalidArgument(_))
+    ));
+    assert!(matches!(
+        writer.reclaim(0, 1, &CancellationToken::new()),
+        Err(Error::InvalidArgument(_))
+    ));
+    writer.close().unwrap();
+}

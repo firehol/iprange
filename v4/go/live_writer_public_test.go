@@ -646,3 +646,34 @@ func TestPublicLiveReclaimWaitsForReadersThenAutoPublishes(t *testing.T) {
 		t.Fatalf("value at 15 = (%d, %v, %v), want (2, true, nil)", value, found, err)
 	}
 }
+
+func TestPublicLiveReclaimRefusesAnOpenDraft(t *testing.T) {
+	requireLiveCreation(t)
+	main, _ := createLivePublicPair(t, 2)
+	writer, err := OpenLiveWriter(main, DefaultBudget(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draft, err := writer.BeginDirect(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := draft.AssignV4(IPv4(10), IPv4(20), 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Reclaim(1, 1, nil); errorAsCode(err) != ErrorWrongState {
+		t.Fatalf("reclaim with an open draft = %v, want WrongState", err)
+	}
+	if _, err := draft.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writer.Reclaim(1, 0, nil); errorAsCode(err) != ErrorInvalidArgument {
+		t.Fatalf("reclaim with max_pages 0 = %v, want InvalidArgument", err)
+	}
+	if _, err := writer.Reclaim(0, 1, nil); errorAsCode(err) != ErrorInvalidArgument {
+		t.Fatalf("reclaim with max_transactions 0 = %v, want InvalidArgument", err)
+	}
+	if _, err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

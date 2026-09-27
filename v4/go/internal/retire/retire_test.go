@@ -234,13 +234,13 @@ func TestReclamationSelectsOnlyCompleteOldestSafeTransactions(t *testing.T) {
 		t.Fatalf("reclamation %#v, want %#v", got, want)
 	}
 
-	got, err = SelectReclamation(m, root, 4, nil, 10, 3, checkpoint)
+	got, err = SelectReclamation(m, root, 4, nil, 10, 2, checkpoint)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want = &Reclamation{Transactions: 1, Pages: 2, ThroughTxn: 2}
 	if got == nil || *got != *want {
-		t.Fatalf("reclamation %#v, want %#v", got, want)
+		t.Fatalf("exact page boundary %#v, want %#v", got, want)
 	}
 
 	if _, err := SelectReclamation(m, root, 4, nil, 10, 1, checkpoint); err == nil {
