@@ -515,3 +515,30 @@ func TestLiveDirectOpFailureAbortsDraft(t *testing.T) {
 		t.Fatalf("LookupDirect4(35) = (%d,%v,%v), want (7,true)", got, ok, err)
 	}
 }
+
+func TestReclaimRefusesAnUncommittedReaderSlot(t *testing.T) {
+	main := createLiveV4Pair(t, 2)
+	writer := openTestLiveWriter(t, main)
+	info, err := writer.BaseInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	readerSidecar, err := open(main, info.DatabaseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot, err := readerSidecar.claimReaderCancellable(info.TransactionID+1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_ = readerSidecar.unlockReader(slot)
+		readerSidecar.Close()
+		_, _ = writer.Close()
+	}()
+	if _, err := writer.oldestReader(nil); err == nil {
+		t.Fatal("reclaim accepted a reader slot newer than the committed generation")
+	} else {
+		expectCode(t, err, format.CodeFormatInvalid)
+	}
+}
