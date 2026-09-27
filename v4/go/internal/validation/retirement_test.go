@@ -151,8 +151,8 @@ func cleanRetirementMeta(t *testing.T, retiredCount uint64) []byte {
 
 // cleanRetirementDBWithLeaf builds a retirement database over the given
 // root leaf and returns the validation findings. Extents in the fixtures
-// never touch the walk pages and never sit adjacent within one
-// transaction (the Rust overlap rule requires coalescing).
+// never touch the walk pages. Adjacent extents in one transaction
+// are a separate negative case: the overlap rule uses >=.
 func cleanRetirementDBWithLeaf(t *testing.T, retiredCount uint64, leaf []byte) []ValidationFinding {
 	t.Helper()
 	path := dbWithMeta(t, cleanRetirementMeta(t, retiredCount), 7, leaf)
@@ -213,6 +213,19 @@ func TestValidateRetirementOverlap(t *testing.T) {
 	if len(findings) != 3 || findings[0].Reason != ReasonRetirementOrderInvalid ||
 		findings[1].Reason != ReasonAllocationPartitionInvalid {
 		t.Fatalf("findings %+v", findings)
+	}
+}
+
+func TestValidateRetirementTouchingExtents(t *testing.T) {
+	// Page 3 then page 4 of the same transaction touch. The overlap rule
+	// uses >=, so a change to > would accept this pair and keep the
+	// overlap fixture green.
+	findings := cleanRetirementDB(t, 2,
+		retirementCell(2, 3, 1),
+		retirementCell(2, 4, 1),
+	)
+	if len(findings) == 0 || findings[0].Reason != ReasonRetirementOrderInvalid {
+		t.Fatalf("touching extents findings %+v, want retirement order invalid", findings)
 	}
 }
 
