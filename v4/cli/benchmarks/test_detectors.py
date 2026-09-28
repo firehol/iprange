@@ -323,6 +323,36 @@ class SilentPeerTest(unittest.TestCase):
                     service.close(allow_forced=True,
                                   broken_exchange=True)
 
+    def test_a_hung_peer_at_eof_fails_qualification_and_closes_the_fd(self):
+        # The non-poisoned forced-teardown contract: a peer that
+        # answered everything but does not exit at stdin EOF must be
+        # reported as a qualification failure — and the detached fd
+        # must be closed even though close() raises (the structural
+        # try/finally, pinned on the raising path).
+        import tempfile
+        from run import JsonRpcService as Service
+        stub = os.path.join(_HERE, "stub_engine.py")
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "hung_engine")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_MODE'] = 'hang-at-eof'\n"
+                    f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            service = Service([wrapper, "--jsonrpc"], "hung",
+                              read_deadline=5, write_deadline=5)
+            try:
+                service.call("h1", "iprange.v1.system.describe", {})
+                with self.assertRaisesRegex(
+                        AssertionError, "did not terminate cleanly"):
+                    service.close()
+                self.assertIsNotNone(service._raw_stdout)
+                self.assertTrue(service._raw_stdout.closed)
+            finally:
+                service.close(allow_forced=True, broken_exchange=True)
+
     def test_a_blocked_write_arms_the_poison_guard(self):
         # The write arm: a deaf peer (reads nothing) and a frame
         # larger than the pipe buffer make the write itself block;

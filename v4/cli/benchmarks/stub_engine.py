@@ -32,6 +32,7 @@ def main():
     die_after = os.environ.get("STUB_MODE") == "die-after-answer"
     silent = os.environ.get("STUB_MODE") == "silent"
     deaf = os.environ.get("STUB_MODE") == "deaf"
+    hang_at_eof = os.environ.get("STUB_MODE") == "hang-at-eof"
     if deaf:
         # Read nothing: a proof that waits for its write to be accepted
         # must fail at the write deadline, not hang (the write-arm test
@@ -81,6 +82,12 @@ def main():
             # check attributes it; the contract — the run fails — is
             # pinned either way. os._exit avoids interpreter teardown.
             os._exit(exit_status)
+    if hang_at_eof:
+        # Answered every request, then hang at stdin EOF: close() must
+        # report the force-termination as a qualification failure
+        # (this is the non-poisoned forced-raise contract).
+        time.sleep(3600)
+        os._exit(exit_status)
     sys.exit(exit_status)
 
 

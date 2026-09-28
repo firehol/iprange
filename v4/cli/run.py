@@ -1925,7 +1925,9 @@ class JsonRpcService:
         reaped with a bounded kill.  A peer that had to be
         force-terminated BY THIS CALL is reported as a qualification
         failure (it did not finish its normal EOF shutdown) unless
-        ``allow_forced`` is set (deliberate-stall controls).  Peers
+        ``allow_forced`` is set (deliberate-stall controls) or the
+        session is poisoned (its bounded-I/O failure already fired;
+        teardown must not mask it).  Peers
         already terminated by the caller (crash scenarios' process
         groups) are reaped silently.
 
@@ -1940,8 +1942,10 @@ class JsonRpcService:
         deliberate-brokenness sensitivity controls (whose leftover
         frames are the evidence of the desync), and the harness's
         intentional crash sessions (peers already terminated by the
-        caller) keep their documented behavior; a poisoned threaded
-        peer's failure was already reported by ``call()``.
+        caller) keep their documented behavior; a poisoned peer's
+        failure was already reported by ``call()`` — the exemption
+        is mode-agnostic (POSIX deadline timeouts arm the same
+        flag).
 
         In threaded mode (Windows deadlines), a peer poisoned by a
         bounded-I/O timeout is reaped before touching buffered
