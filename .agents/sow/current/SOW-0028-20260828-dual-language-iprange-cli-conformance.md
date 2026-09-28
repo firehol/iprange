@@ -22267,13 +22267,15 @@ corrupt files or structured fixtures.
 The close ceiling is one database per round: 999 one-address feeds
 plus one 10M-range feed. The kit log is
 `.local/shared/evidence/m5-ceiling/combined.log`. It names the command,
-the revision `a5ced60a`, the binary SHA-256 values, and ends with
+the revision `85488378`, the binary SHA-256 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 54.894 s elapsed, 11.25 s CPU, spread
-50.494–56.469 s, peak 225640 KiB. Go median 59.862 s elapsed, 21.83 s
-CPU, spread 59.081–61.882 s, peak 234696 KiB. The Go/Rust ratio is
-1.091 elapsed, 1.940 CPU, and 1.040 RSS. The CPU ratio is the highest
+clock. Rust median 19.029 s elapsed, 11.13 s CPU, spread
+18.982–23.664 s, peak 224528 KiB. Go median 30.176 s elapsed, 21.66 s
+CPU, spread 29.459–35.630 s, peak 234512 KiB. The Go/Rust ratio is
+1.586 elapsed, 1.946 CPU, and 1.044 RSS. This run was taken on an
+idle workstation; earlier runs overlapped concurrent review work and
+their wall times were longer. CPU and RSS are stable across both. The CPU ratio is the highest
 of the three and is recorded here because the acceptance contract
 names CPU; the ≤1.3x verdict is SOW-0030's and is not decided here.
 This is not 1,000 feeds of 10M ranges each.
