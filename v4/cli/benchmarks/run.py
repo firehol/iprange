@@ -314,9 +314,12 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None)
         # waits for the process, so the returncode is settled here.
         # close() itself also checks the exit status of a peer that was
         # alive at its entry; this gate covers the peer that was
-        # already dead when close() started. Which check fires for an
-        # answered-then-died engine depends on scheduling; the contract
-        # — the run fails — is pinned by test_detectors.py either way.
+        # already dead when close() started. For an answered-then-died
+        # engine the two checks race, so the pinned contract is the
+        # union — either check's message fails the run
+        # (test_detectors.py accepts both). The gate's already-dead
+        # attribution is deterministic in the die-on-first-request
+        # control, where close() exempts a peer dead at its entry.
         if service.proc.returncode != 0:
             raise AssertionError(
                 f"{name} exited {service.proc.returncode}")

@@ -24,13 +24,17 @@ _spec.loader.exec_module(_bench)
 
 
 class ExitGateTest(unittest.TestCase):
-    """An engine that dies nonzero before answering fails its own run.
+    """An engine that dies nonzero fails its own run.
 
-    The stub reads the first request and exits 1 without answering, so
-    close() sees an already-dead peer and only the runner's exit gate
-    can attribute the failure. The engine that answers every call and
-    then dies at teardown is caught by close() itself, which the main
-    run.py self-test pins with its nonzero-exit control.
+    Two controls pin the two attribution paths. The die-on-first-request
+    stub is dead before any close() starts, so close() exempts it and
+    the runner's exit gate attributes the failure deterministically —
+    the mutation log's failing control is this one. The
+    answered-then-died stub races the two checks: which fires depends
+    on scheduling and cannot be forced from a child process, so that
+    test's pinned contract is the union — either check's message fails
+    the run. Both tests also require the stub's startup marker, proving
+    the wrapper exec'd the stub and the failure is the stub's own.
     """
 
     def test_an_engine_that_answers_then_dies_fails_its_own_run(self):
@@ -66,11 +70,13 @@ class ExitGateTest(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as stream:
                 _json.dump(scenario, stream)
             wrapper = _os.path.join(work, "dying_engine")
+            marker = _os.path.join(work, "stub-ran")
             with open(wrapper, "w", encoding="utf-8") as stream:
                 stream.write(
                     "#!/usr/bin/env python3\n"
                     "import os, sys\n"
                     "os.environ['STUB_MODE'] = 'die-after-answer'\n"
+                    f"os.environ['STUB_MARKER'] = {marker!r}\n"
                     f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
             _os.chmod(wrapper, 0o755)
             completed = subprocess.run(
@@ -78,6 +84,12 @@ class ExitGateTest(unittest.TestCase):
                  "--rust", wrapper, "--go", wrapper, "--scenario", path],
                 capture_output=True, text=True, check=False, cwd=_HERE,
                 timeout=300)
+            # The marker proves the wrapper exec'd the stub: without it,
+            # a wrapper that failed before the exec would exit 1 and
+            # satisfy the exit checks without the stub ever running.
+            self.assertTrue(
+                _os.path.exists(marker),
+                "the stub never ran — the wrapper failed before the exec")
             self.assertNotEqual(completed.returncode, 0)
             self.assertTrue(
                 "rust exited 1" in completed.stderr
@@ -114,11 +126,13 @@ class ExitGateTest(unittest.TestCase):
             with open(path, "w", encoding="utf-8") as stream:
                 _json.dump(scenario, stream)
             wrapper = _os.path.join(work, "dying_engine")
+            marker = _os.path.join(work, "stub-ran")
             with open(wrapper, "w", encoding="utf-8") as stream:
                 stream.write(
                     "#!/usr/bin/env python3\n"
                     "import os, sys\n"
                     "os.environ['STUB_MODE'] = 'die-on-first-request'\n"
+                    f"os.environ['STUB_MARKER'] = {marker!r}\n"
                     f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
             _os.chmod(wrapper, 0o755)
             completed = subprocess.run(
@@ -126,6 +140,10 @@ class ExitGateTest(unittest.TestCase):
                  "--rust", wrapper, "--go", wrapper, "--scenario", path],
                 capture_output=True, text=True, check=False, cwd=_HERE,
                 timeout=300)
+            # Same marker duty as the answered-then-died control.
+            self.assertTrue(
+                _os.path.exists(marker),
+                "the stub never ran — the wrapper failed before the exec")
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("rust exited 1", completed.stderr)
 

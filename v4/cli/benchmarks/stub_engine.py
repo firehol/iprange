@@ -2,10 +2,14 @@
 """A stub JSON-RPC engine for negative controls.
 
 Answers `iprange.v1.system.describe` with a correct, well-formed
-result frame, then exits nonzero once stdin closes. The exit status
-comes from `STUB_EXIT` in the environment, because the harness spawns
-the engine as `[binary, "--jsonrpc"]` and the stub must accept that
-argument shape.
+result frame. The harness spawns the engine as
+`[binary, "--jsonrpc"]`, so the stub must accept that argument
+shape. `STUB_MODE` selects a death mode (see main); `STUB_EXIT`
+optionally overrides the exit status (default 1 — no harness site
+sets it; the modes own the timing). When `STUB_MARKER` names a file,
+the stub writes a line to it at startup, before reading any request:
+the exit tests read the marker to prove this stub actually ran and
+the wrapper did not fail before the exec.
 """
 
 import json
@@ -19,6 +23,10 @@ def main():
             sys.stderr.write(f"stub_engine: unexpected argument {argument!r}\n")
             sys.exit(2)
     exit_status = int(os.environ.get("STUB_EXIT", "1"))
+    marker = os.environ.get("STUB_MARKER")
+    if marker:
+        with open(marker, "w", encoding="utf-8") as stream:
+            stream.write("stub ran\n")
     die_now = os.environ.get("STUB_MODE") == "die-on-first-request"
     die_after = os.environ.get("STUB_MODE") == "die-after-answer"
     for line in sys.stdin:
