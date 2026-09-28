@@ -21891,12 +21891,13 @@ production-sized ceiling run (1,000+ feeds, 10M ranges) at milestone close.
   output-file digests, and a zero exit enforced per engine at session
   close (an engine that exits nonzero fails its own run; there is no
   separate cross-engine exit comparison). Raw stdout byte identity is
-  **not** the contract: the two engines serialize JSON differently (a
-  `system.describe` response is 2256 bytes from Rust and 2254 from Go
-  at the same revision; probe log
+  **not** the contract: the two engines' frames differ by design —
+  the `implementation` member self-names the engine (`rust` vs `go`,
+  a 2-byte difference; a `system.describe` response is 2256 bytes
+  from Rust and 2254 from Go at the same revision; probe log
   `.local/shared/evidence/m5-proofs/describe_bytes.log`), and the
   harness compares the decoded members instead. The wire
-  authority's byte-identity sentence (`iprange-jsonrpc-v1.md`)
+  authority's identity clause (`iprange-jsonrpc-v1.md`)
   governs field-name serialization identity, not whole-frame byte
   identity; the frame-size divergence does not violate that clause.
   It is recorded in SOW-0030's Followup section, which owns whether
@@ -22333,21 +22334,33 @@ dispositioned, not silently carried:
   and the mutation log shows the root cause surfaces when the gate is
   deleted. The masking is a known property; fixing it (conditional
   raise or `from exc`) would change which message a caller sees, not
-  whether the run fails.
+  whether the run fails. The gate's duty split with `close()` is
+  scoped the same way: for an answered-then-died engine, which check
+  fires is scheduling-dependent, and the pinned contract is the union —
+  either check's message fails the run (`test_detectors.py` accepts
+  both). The gate's already-dead-at-close attribution is deterministic
+  in the die-on-first-request control: there the stub is dead before
+  any `close()` starts, `close()` exempts an already-dead peer, and
+  the gate's message is the only one that can appear (the mutation
+  log's failing control is exactly that one).
 - **Byte-divergence scope.** The 2256/2254 `system.describe` frame
-  sizes are real (`describe_bytes.log`). The wire authority's clause
+  sizes are real (`describe_bytes.log`) and by design: the
+  `implementation` member self-names the engine (`rust` vs `go`, a
+  2-byte difference). The wire authority's clause
   (`iprange-jsonrpc-v1.md`) governs field-name serialization identity,
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Four regenerations of the
-  ceiling at byte-identical binaries measured Go/Rust elapsed 1.172,
-  1.185, 1.213, and 1.259 (7.4% relative spread, wall-clock noise).
-  The CPU ratio over the same sessions spans 1.900–1.948. The kit
-  holds the current session's `combined.log`; earlier sessions'
-  figures were recorded in the SOW at their time and are superseded by
-  each rebind. The binding verdict is SOW-0030's and will need to
-  treat the wall-clock spread as measurement noise.
+- **Elapsed-ratio cross-session spread.** Twelve recorded
+  regenerations of the ceiling at byte-identical binaries (rounds
+  5 through 19; the four most recent measured Go/Rust elapsed 1.172,
+  1.185, 1.213, and 1.259) span elapsed 1.091–1.259 (~15.4% relative
+  spread, wall-clock noise); the CPU ratio over the same sessions
+  spans 1.875–1.983. The superseded sessions are enumerated with
+  citations in the kit's role reports (`evidence/m5-roles/`; the
+  tester round-20 report enumerates all twelve). The kit holds the
+  current session's `combined.log`. The binding verdict is SOW-0030's
+  and will need to treat the wall-clock spread as measurement noise.
 - **SOW narrative measurement paragraphs.** The smaller measurement
   paragraphs earlier in this milestone (the 100k import, the joins,
   the seven-day refresh) record their own runs and are not re-staged

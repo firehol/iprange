@@ -115,8 +115,10 @@ the bounded safe-Go leads were measured-and-rejected for the write
 path, but the external single-sol review rejected the floor claim and
 the user chose option 2 - keep SOW-0027 open for a BOUNDED continuation
 (not open-ended optimization). Binding CPU <=1.3x Rust per scenario and
-peak RSS <=1.3x remain in force (SOW-0027-era name; see :899 for the
-binding restatement as elapsed time and peak RSS); no unsafe code is
+peak RSS <=1.3x remain in force (SOW-0027-era name; the binding
+restatement is the 2026-08-29 performance acceptance recorded under
+Historical milestone records — elapsed time and peak RSS — and
+governs); no unsafe code is
 authorized. The
 bounded scope (recorded from the review direction):
 
@@ -143,7 +145,9 @@ bounded scope (recorded from the review direction):
    win. No unsafe code.
 5. Repair SOW tracking: remove the stale "complete/accepted write
    envelope" Outcome; update SOW-0030 to cover every accepted residual
-   under the binding <=1.3x CPU/RSS contract (the SOW-0027-era name; the binding quantity was restated as elapsed time and peak RSS at SOW-0027:899 and governs) or keep the work inside
+   under the binding <=1.3x CPU/RSS contract (the SOW-0027-era name; the binding quantity was restated as elapsed
+   time and peak RSS in the 2026-08-29 performance acceptance under
+   Historical milestone records, and governs) or keep the work inside
    SOW-0027; give the IPv6 benchmark and counter-parity work real SOW
    ownership.
 6. Run the five-reviewer final round on the actual final commit after
