@@ -141,7 +141,7 @@ bounded scope (recorded from the review direction):
    win. No unsafe code.
 5. Repair SOW tracking: remove the stale "complete/accepted write
    envelope" Outcome; update SOW-0030 to cover every accepted residual
-   under the binding <=1.3x CPU/RSS contract or keep the work inside
+   under the binding <=1.3x CPU/RSS contract (the SOW-0027-era name; the binding quantity was restated as elapsed time and peak RSS at SOW-0027:897 and governs) or keep the work inside
    SOW-0027; give the IPv6 benchmark and counter-parity work real SOW
    ownership.
 6. Run the five-reviewer final round on the actual final commit after
