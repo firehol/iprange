@@ -5,11 +5,14 @@ import json
 import os
 import sys
 import unittest
-
-from measure import child_cpu_seconds, measure, parse_stat_cpu, ratio, run_once
+from unittest import mock
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.dirname(_HERE))
+
+from measure import child_cpu_seconds, measure, parse_stat_cpu, ratio, run_once  # noqa: E402
+from perf_ceiling import summarize_rounds  # noqa: E402
 _spec = importlib.util.spec_from_file_location(
     "bench_runner", os.path.join(_HERE, "run.py"))
 _bench = importlib.util.module_from_spec(_spec)
@@ -79,6 +82,23 @@ class MeasureTest(unittest.TestCase):
         rust = {
             "elapsed_seconds": {"median": 2.0, "min": 2.0, "max": 2.0},
             "child_cpu_seconds": {"median": -1.0, "min": -1.0, "max": -1.0},
+            "child_max_rss_kib": {"median": 1000, "min": 1000, "max": 1000},
+        }
+        go = {
+            "elapsed_seconds": {"median": 3.0, "min": 3.0, "max": 3.0},
+            "child_cpu_seconds": {"median": 1.5, "min": 1.5, "max": 1.5},
+            "child_max_rss_kib": {"median": 1500, "min": 1500, "max": 1500},
+        }
+        with self.assertRaises(ValueError):
+            ratio(rust, go)
+
+    def test_ratio_refuses_a_zero_rust_cpu_median(self):
+        # The zero boundary of the rust prong: an all-zero CPU sample
+        # must refuse exactly like a negative one, not read as a
+        # pass-through zero ratio.
+        rust = {
+            "elapsed_seconds": {"median": 2.0, "min": 2.0, "max": 2.0},
+            "child_cpu_seconds": {"median": 0.0, "min": 0.0, "max": 0.0},
             "child_max_rss_kib": {"median": 1000, "min": 1000, "max": 1000},
         }
         go = {
@@ -184,6 +204,59 @@ class StatCpuParseTest(unittest.TestCase):
 
     def test_garbage_is_none(self):
         self.assertIsNone(parse_stat_cpu("not a stat record"))
+
+
+class SamplingGuardTest(unittest.TestCase):
+    """The run_once sampling guards refuse absence instead of zero.
+
+    A platform where the peak or CPU reader observes nothing must
+    fail the measurement, not report a zero that would read as a
+    sample downstream (security round-6 finding, closed here).
+    """
+
+    def test_a_child_whose_peak_was_never_observed_is_refused(self):
+        with mock.patch("measure.child_hwm_kib", return_value=None):
+            with self.assertRaisesRegex(
+                    AssertionError, "peak was not observed"):
+                run_once(["/bin/true"])
+
+    def test_a_child_whose_cpu_was_never_sampled_is_refused(self):
+        with mock.patch("measure.child_hwm_kib", return_value=4096), \
+                mock.patch("measure.child_cpu_seconds", return_value=None):
+            with self.assertRaisesRegex(
+                    AssertionError, "cpu was not sampled"):
+                run_once(["/bin/true"])
+
+
+class CeilingSummaryTest(unittest.TestCase):
+    """The ceiling round summary refuses a round without a CPU sample."""
+
+    def test_a_round_without_a_cpu_sample_is_refused(self):
+        samples = [
+            {"elapsed_seconds": 1.0, "child_cpu_seconds": 0.0,
+             "child_max_rss_kib": 100},
+            {"elapsed_seconds": 1.1, "child_cpu_seconds": 0.5,
+             "child_max_rss_kib": 110},
+        ]
+        with self.assertRaisesRegex(AssertionError, "no cpu sample"):
+            summarize_rounds(samples)
+
+    def test_rounds_summarize_with_median_min_max(self):
+        samples = [
+            {"elapsed_seconds": 1.0, "child_cpu_seconds": 0.5,
+             "child_max_rss_kib": 100},
+            {"elapsed_seconds": 3.0, "child_cpu_seconds": 1.5,
+             "child_max_rss_kib": 300},
+            {"elapsed_seconds": 2.0, "child_cpu_seconds": 1.0,
+             "child_max_rss_kib": 200},
+        ]
+        summary = summarize_rounds(samples)
+        self.assertEqual(summary["rounds"], 3)
+        self.assertEqual(summary["elapsed_seconds"]["median"], 2.0)
+        self.assertEqual(summary["elapsed_seconds"]["min"], 1.0)
+        self.assertEqual(summary["elapsed_seconds"]["max"], 3.0)
+        self.assertEqual(summary["child_cpu_seconds"]["median"], 1.0)
+        self.assertEqual(summary["child_max_rss_kib"]["median"], 200)
 
 
 class CancelCpuSampleTest(unittest.TestCase):

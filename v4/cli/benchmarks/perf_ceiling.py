@@ -173,6 +173,26 @@ def import_ranges(binary, work, ranges, expected):
     }
 
 
+def summarize_rounds(samples):
+    """Median/min/max summary of one ceiling's rounds.
+
+    A round that recorded no CPU sample is refused: a fabricated zero
+    would read as a real sample in the summary (and `measure.ratio`
+    refuses the same absence the same way).
+    """
+    elapsed = [sample["elapsed_seconds"] for sample in samples]
+    cpu = [sample["child_cpu_seconds"] for sample in samples]
+    rss = [sample["child_max_rss_kib"] for sample in samples]
+    if any(value <= 0 for value in cpu):
+        raise AssertionError("a ceiling round recorded no cpu sample")
+    return {
+        "rounds": len(samples),
+        "elapsed_seconds": {"median": median(elapsed), "min": min(elapsed), "max": max(elapsed)},
+        "child_cpu_seconds": {"median": median(cpu), "min": min(cpu), "max": max(cpu)},
+        "child_max_rss_kib": {"median": median(rss), "min": min(rss), "max": max(rss)},
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust", required=True)
@@ -195,18 +215,6 @@ def main():
     feeds = [(feed_name(index), [(index, index)]) for index in range(small_count)]
     wide = generate(7, args.ranges, args.span, args.space)
     expected = merged_count(wide)
-    def spread(samples):
-        elapsed = [sample["elapsed_seconds"] for sample in samples]
-        cpu = [sample["child_cpu_seconds"] for sample in samples]
-        rss = [sample["child_max_rss_kib"] for sample in samples]
-        if any(value <= 0 for value in cpu):
-            raise AssertionError("a ceiling round recorded no cpu sample")
-        return {
-            "rounds": len(samples),
-            "elapsed_seconds": {"median": median(elapsed), "min": min(elapsed), "max": max(elapsed)},
-            "child_cpu_seconds": {"median": median(cpu), "min": min(cpu), "max": max(cpu)},
-            "child_max_rss_kib": {"median": median(rss), "min": min(rss), "max": max(rss)},
-        }
 
     with tempfile.TemporaryDirectory(prefix="iprange-ceiling-") as work:
         if args.combined:
@@ -229,8 +237,8 @@ def main():
                             f"{label} round {index} feeds={sample['feeds']} "
                             f"addresses={sample['wide_addresses']}")
                     samples[label].append(sample)
-            rust_summary = spread(samples["rust"])
-            go_summary = spread(samples["go"])
+            rust_summary = summarize_rounds(samples["rust"])
+            go_summary = summarize_rounds(samples["go"])
             report = {
                 "combined": True,
                 "feeds": args.feeds,
