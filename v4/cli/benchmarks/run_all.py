@@ -13,6 +13,20 @@ import subprocess
 import sys
 
 
+def s0_detect_verdict(returncode, output):
+    """Why s0-detect passed, or why it did not.
+
+    s0-detect is the mismatch detector. A nonzero exit is not enough:
+    a crash, a missing worker, or a dead binary also exits nonzero and
+    compares no field. The failure must name the compared field.
+    """
+    if returncode == 0:
+        return "passed; a field difference must fail"
+    if "implementation" not in output or "rust=" not in output:
+        return f"failed without naming the compared field: {output[-300:]!r}"
+    return ""
+
+
 def run_one(runner, rust, go, scenario):
     completed = subprocess.run(
         [sys.executable, runner, "--rust", rust, "--go", go, "--scenario", scenario],
@@ -38,13 +52,10 @@ def main():
         name = os.path.basename(scenario)
         completed = run_one(runner, args.rust, args.go, scenario)
         if name == "s0-detect.json":
-            output = completed.stdout + completed.stderr
-            if completed.returncode == 0:
-                failed.append(f"{name} passed; a field difference must fail")
-            elif "implementation" not in output or "rust=" not in output:
-                failed.append(
-                    f"{name} failed without naming the compared field: "
-                    f"{output[-300:]!r}")
+            reason = s0_detect_verdict(
+                completed.returncode, completed.stdout + completed.stderr)
+            if reason:
+                failed.append(f"{name} {reason}")
             else:
                 print(f"PASS {name} detected the implementation mismatch",
                       flush=True)

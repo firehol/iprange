@@ -29,17 +29,26 @@ PUBLISH_ID = "cancel-inflight-1"
 PROBE_ID = "cancel-probe-1"
 
 
-def check_cancelled_answer(response):
-    """A delivered answer for a cancelled request must be factual."""
+def cancelled_result(response):
+    """Reason the cancelled request is not a pass, or "" if it is fine.
 
+    A cancelled request that answers with a result means the producer
+    ignored the cancel. A delivered answer must be the factual cancelled
+    outcome. A suppressed request is fine.
+    """
+    if response is None:
+        return ""
+    if "result" in response:
+        return "cancelled publish answered with a result"
     error = response.get("error", {})
     data = error.get("data", {})
     if error.get("code") != -32010:
-        raise AssertionError(f"cancelled request answered {error!r}")
+        return f"cancelled request answered {error!r}"
     if data.get("code") != "cancelled":
-        raise AssertionError(f"cancelled outcome lost its code: {data!r}")
+        return f"cancelled outcome lost its code: {data!r}"
     if data.get("outcome") is None:
-        raise AssertionError(f"cancelled outcome lost its state: {data!r}")
+        return f"cancelled outcome lost its state: {data!r}"
+    return ""
 
 
 def prove(binary, work):
@@ -96,10 +105,9 @@ def prove(binary, work):
         if "result" not in seen[PROBE_ID]:
             raise AssertionError(f"probe was not answered: {seen[PROBE_ID]!r}")
         cancelled = seen.get(PUBLISH_ID)
-        if cancelled is not None and "result" in cancelled:
-            raise AssertionError("cancelled publish answered with a result")
-        if cancelled is not None:
-            check_cancelled_answer(cancelled)
+        reason = cancelled_result(cancelled)
+        if reason:
+            raise AssertionError(reason)
     finally:
         signal.signal(signal.SIGTERM, previous)
         if service.proc.poll() is None:
