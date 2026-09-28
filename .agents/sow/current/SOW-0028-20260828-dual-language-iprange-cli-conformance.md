@@ -7049,7 +7049,11 @@ this section.
   the checks by default at every proof; the no-deadline readline is
   bounded and an oversized frame poisons the service.
 - Finding 4: `close(allow_forced=False)` reports a peer that this
-  close had to force-terminate as a qualification failure;
+  close had to force-terminate as a qualification failure, except a
+  poisoned session (its bounded-I/O failure already fired; teardown
+  does not re-report or mask it — pinned by tests both ways:
+  `test_a_poisoned_sessions_close_does_not_mask_or_leak` and
+  `test_a_hung_peer_at_eof_fails_qualification_and_closes_the_fd`);
   deliberate-stall self-test controls pass `allow_forced=True`; a
   peer already terminated externally (crash scenario process groups)
   is reaped silently.
@@ -22276,10 +22280,10 @@ the revision on its own second line, the binary SHA-256
 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 50.468 s elapsed, 11.23 s CPU, spread
-49.232–51.292 s, peak 225500 KiB. Go median 63.906 s elapsed, 21.99 s
-CPU, spread 58.249–63.956 s, peak 232060 KiB. The Go/Rust ratio is
-1.266 elapsed, 1.958 CPU, and 1.029 RSS. Wall time moves with
+clock. Rust median 49.863 s elapsed, 11.52 s CPU, spread
+49.460–52.299 s, peak 225360 KiB. Go median 59.160 s elapsed, 22.38 s
+CPU, spread 58.553–61.559 s, peak 231416 KiB. The Go/Rust ratio is
+1.186 elapsed, 1.943 CPU, and 1.027 RSS. Wall time moves with
 workstation load between runs. The binding acceptance metric
 (SOW-0030, user decisions 1A/2A) is **elapsed time** ≤1.3x Rust and
 **peak RSS** ≤1.3x; process CPU time (utime+stime) is not part
@@ -22352,31 +22356,31 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Twenty-three recorded
-  ceiling sessions at byte-identical binaries (r2 1.159, r4 1.244,
-  each of rounds 5 through 19, the round-32/33/34/35 rebinds at
-  1.184, 1.193, 1.266, 1.203, and the two round-36 runs) span
-  elapsed **0.916–1.586** — wall-clock noise that crosses both 1.0
-  and the 1.3x bound: the round-7 session measured 1.586 on an
-  idle machine with CPU work near-identical to today's (Rust
-  11.13 s / Go 21.66 s); the first round-36 run measured **0.916**
-  — Go faster than Rust — because the Rust rounds hit transient
-  load (49.8–73.8 s across three rounds) while Go's stayed tight;
-  it was immediately re-run and the staged session measures 1.266
-  with tight Rust rounds (49.2–51.3 s). The CPU ratio over every
-  recorded session spans 1.875–1.983 — tight while elapsed swings
-  by more than 70% relative. The verdict owner (SOW-0030) must
-  treat elapsed wall-clock as run-condition-dominated: no session's
+- **Elapsed-ratio cross-session spread.** Twenty-four recorded
+  ceiling sessions at byte-identical binaries (r2 1.159 — elapsed
+  and RSS only, no CPU recorded; r4 1.244; each of rounds 5 through
+  19; the round-32/33/34/35/37 rebinds at 1.184, 1.193, 1.266,
+  1.203, and 1.186; and the two round-36 runs) span elapsed
+  **0.916–1.586** — wall-clock noise that crosses both 1.0 and the
+  1.3x bound: the round-7 session measured 1.586 on an idle machine
+  with CPU work near-identical to today's (Rust 11.13 s / Go
+  21.66 s); the first round-36 run measured **0.916** — Go faster
+  than Rust — because the Rust rounds hit transient load (49.8–73.8
+  s across three rounds) while Go's stayed tight (observed values
+  preserved at `evidence/m5-ceiling/superseded-round36-run1.md`);
+  it was immediately re-run. The CPU ratio over every session that
+  recorded CPU spans 1.875–1.983 — tight while elapsed swings by
+  more than 70% relative. The verdict owner (SOW-0030) must treat
+  elapsed wall-clock as run-condition-dominated: no session's
   elapsed ratio is evidence of an engine difference, and the
   recorded spread crosses the bound it must judge in both
-  directions. (The tester round-20 report enumerates at least
-  twelve of the rounds-5-19 sessions; rounds 7, 9, and 13 are
-  recorded in their own rounds' role reports.) The superseded sessions are recorded with
-  citations in the kit's role reports (`evidence/m5-roles/`; the
-  tester round-20 report enumerates at least twelve, and rounds 7,
-  9, and 13 in their own reports). The kit holds the current
-  session's `combined.log`. The binding verdict is SOW-0030's
-  and will need to treat the wall-clock spread as measurement noise.
+  directions. The superseded sessions are recorded in the kit's
+  role reports (the tester round-20 report enumerates at least
+  twelve of the rounds-5-19 sessions; rounds 7, 9, and 13 in their
+  own rounds' reports) or as preserved kit artifacts (the round-36
+  first run, above). The kit holds the current session's
+  `combined.log`. The binding verdict is SOW-0030's and will need
+  to treat the wall-clock spread as measurement noise.
 - **SOW narrative measurement paragraphs.** The smaller measurement
   paragraphs earlier in this milestone (the 100k import, the joins,
   the seven-day refresh) record their own runs and are not re-staged
