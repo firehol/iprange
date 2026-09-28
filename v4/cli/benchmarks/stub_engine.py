@@ -53,9 +53,10 @@ def main():
         sys.stdout.flush()
         if die_after:
             # Immediate termination: the runner has consumed the
-            # response, and the exit must land before close() can poll,
-            # so the gate is the only catcher. sys.exit unwinds the
-            # interpreter for milliseconds and loses that race.
+            # response. Whether the exit lands before close() polls is
+            # scheduling-dependent, so either the gate or close()'s own
+            # check attributes it; the contract — the run fails — is
+            # pinned either way. os._exit avoids interpreter teardown.
             os._exit(exit_status)
     sys.exit(exit_status)
 

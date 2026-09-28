@@ -73,6 +73,22 @@ class MeasureTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ratio(rust, go)
 
+    def test_ratio_refuses_a_non_positive_rust_cpu_median(self):
+        # The CPU guard has two prongs; a negative rust CPU must also
+        # refuse, not fabricate a negative ratio.
+        rust = {
+            "elapsed_seconds": {"median": 2.0, "min": 2.0, "max": 2.0},
+            "child_cpu_seconds": {"median": -1.0, "min": -1.0, "max": -1.0},
+            "child_max_rss_kib": {"median": 1000, "min": 1000, "max": 1000},
+        }
+        go = {
+            "elapsed_seconds": {"median": 3.0, "min": 3.0, "max": 3.0},
+            "child_cpu_seconds": {"median": 1.5, "min": 1.5, "max": 1.5},
+            "child_max_rss_kib": {"median": 1500, "min": 1500, "max": 1500},
+        }
+        with self.assertRaises(ValueError):
+            ratio(rust, go)
+
     def test_ratio_refuses_a_non_positive_cpu_median(self):
         rust = {
             "elapsed_seconds": {"median": 2.0, "min": 2.0, "max": 2.0},
