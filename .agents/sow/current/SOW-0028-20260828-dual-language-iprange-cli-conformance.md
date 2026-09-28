@@ -4974,8 +4974,8 @@ evidence.
   methodology and acceptance will be recorded in the step-6
   implementation plan before any implementation starts, following
   the SOW-0027 performance-gate lessons (matched, alternating,
-  same-host samples; measured ceilings per the user's 1.3x CPU /
-  peak-RSS acceptance contract).
+  same-host samples; measured ceilings per the user's 1.3x elapsed /
+  peak-RSS acceptance contract; instruction-level CPU is not part of it).
 
 
 ### 2026-09-04 (continued) — fourth fix wave: D1-A crash scope, D2-A resource proofs, D3-B recovery wording, and kind-gate provenance
