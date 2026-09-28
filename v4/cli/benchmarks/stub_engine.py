@@ -31,6 +31,13 @@ def main():
     die_now = os.environ.get("STUB_MODE") == "die-on-first-request"
     die_after = os.environ.get("STUB_MODE") == "die-after-answer"
     silent = os.environ.get("STUB_MODE") == "silent"
+    deaf = os.environ.get("STUB_MODE") == "deaf"
+    if deaf:
+        # Read nothing: a proof that waits for its write to be accepted
+        # must fail at the write deadline, not hang (the write-arm test
+        # pins this with a frame larger than the pipe buffer).
+        time.sleep(3600)
+        os._exit(exit_status)
     for line in sys.stdin:
         line = line.strip()
         if not line:

@@ -1995,13 +1995,14 @@ class JsonRpcService:
         # intentional crash session) and deliberate-stall controls are
         # exempt; a forced teardown reports itself instead.
         if forced and not allow_forced:
+            self._close_raw_stdout()
             raise AssertionError(
                 "service did not terminate cleanly at stdin EOF and had "
                 f"to be force-terminated (returncode "
                 f"{self.proc.returncode})")
         if not already_dead and not allow_forced and \
                 not broken_exchange and \
-                not (self._use_threads and self._poisoned):
+                not self._poisoned:
             try:
                 trailing = self._drain_trailing_stdout()
                 if trailing.strip():

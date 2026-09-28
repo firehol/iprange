@@ -288,6 +288,37 @@ class SilentPeerTest(unittest.TestCase):
             finally:
                 service.close(allow_forced=True, broken_exchange=True)
 
+    def test_a_blocked_write_arms_the_poison_guard(self):
+        # The write arm: a deaf peer (reads nothing) and a frame
+        # larger than the pipe buffer make the write itself block;
+        # the write deadline fires, the service is poisoned, and a
+        # later exchange is refused instead of attempted.
+        import tempfile
+        from run import JsonRpcService as Service
+        stub = os.path.join(_HERE, "stub_engine.py")
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "deaf_engine")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_MODE'] = 'deaf'\n"
+                    f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            service = Service([wrapper, "--jsonrpc"], "deaf",
+                              read_deadline=5, write_deadline=0.5)
+            try:
+                payload = "x" * (256 * 1024)
+                with self.assertRaisesRegex(
+                        AssertionError, "bounded write deadline"):
+                    service.call("w1", "iprange.v1.system.describe",
+                                 {"padding": payload})
+                with self.assertRaisesRegex(
+                        AssertionError, "poisoned by a bounded I/O timeout"):
+                    service.call("w2", "iprange.v1.system.describe", {})
+            finally:
+                service.close(allow_forced=True, broken_exchange=True)
+
 
 class CallPathWiringTest(unittest.TestCase):
     """The proof harness wires the deadlines into every engine.
