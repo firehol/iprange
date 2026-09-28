@@ -1909,7 +1909,19 @@ class JsonRpcService:
     def close(self, allow_forced=False, broken_exchange=False):
         """Close stdin and wait for this owned subprocess to terminate.
 
-        Bounded teardown: a peer that does not exit after stdin EOF is
+        The teardown itself is `_close_impl`; this wrapper guarantees
+        the detached stdout fd is closed on EVERY exit path, including
+        raises inside the implementation (idempotent helper).
+        """
+        try:
+            self._close_impl(allow_forced, broken_exchange)
+        finally:
+            self._close_raw_stdout()
+
+    def _close_impl(self, allow_forced, broken_exchange):
+        """Bounded teardown of the owned subprocess.
+
+        A peer that does not exit after stdin EOF is
         reaped with a bounded kill.  A peer that had to be
         force-terminated BY THIS CALL is reported as a qualification
         failure (it did not finish its normal EOF shutdown) unless
@@ -1994,7 +2006,7 @@ class JsonRpcService:
         # call shut down.  A peer that was already gone at entry (an
         # intentional crash session) and deliberate-stall controls are
         # exempt; a forced teardown reports itself instead.
-        if forced and not allow_forced:
+        if forced and not allow_forced and not self._poisoned:
             self._close_raw_stdout()
             raise AssertionError(
                 "service did not terminate cleanly at stdin EOF and had "

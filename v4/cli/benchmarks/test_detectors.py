@@ -288,6 +288,41 @@ class SilentPeerTest(unittest.TestCase):
             finally:
                 service.close(allow_forced=True, broken_exchange=True)
 
+    def test_a_poisoned_sessions_close_does_not_mask_or_leak(self):
+        # A poisoned session already reported its failure; teardown
+        # must not re-report it (the force-termination message would
+        # mask the deadline error as the sole recorded output) and
+        # must close the detached fd on every path.
+        import tempfile
+        from run import JsonRpcService as Service
+        stub = os.path.join(_HERE, "stub_engine.py")
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "silent_engine")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_MODE'] = 'silent'\n"
+                    f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            service = Service([wrapper, "--jsonrpc"], "silent",
+                              read_deadline=0.5, write_deadline=5)
+            closed = False
+            try:
+                with self.assertRaisesRegex(
+                        AssertionError, "bounded read deadline"):
+                    service.call("p1", "iprange.v1.system.describe", {})
+                # Plain close: the hung peer is force-killed, but the
+                # poisoned session's failure is not re-reported.
+                service.close()
+                closed = True
+                self.assertIsNotNone(service._raw_stdout)
+                self.assertTrue(service._raw_stdout.closed)
+            finally:
+                if not closed:
+                    service.close(allow_forced=True,
+                                  broken_exchange=True)
+
     def test_a_blocked_write_arms_the_poison_guard(self):
         # The write arm: a deaf peer (reads nothing) and a frame
         # larger than the pipe buffer make the write itself block;
@@ -321,13 +356,16 @@ class SilentPeerTest(unittest.TestCase):
 
 
 class CallPathWiringTest(unittest.TestCase):
-    """The proof harness wires the deadlines into every engine.
+    """The proof harness wires the deadlines into both deadline-bearing
+    construction sites (run_engine and BenchSession).
 
     SilentPeerTest pins the mechanism (a deadline-bounded service
     fails on a silent peer); this pins the wiring: both construction
     sites must pass read_deadline=120/write_deadline=30, so deleting
     the deadlines from the call sites fails here even though the
-    mechanism test still greens.
+    mechanism test still greens. The deadline-free constructions
+    (cancel_inflight's raw drain, describe_bytes' bounded probe)
+    are separate by design.
     """
 
     def test_run_engine_constructs_its_service_with_deadlines(self):
