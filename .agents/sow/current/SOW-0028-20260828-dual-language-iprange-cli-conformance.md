@@ -22280,10 +22280,10 @@ the revision on its own second line, the binary SHA-256
 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 49.863 s elapsed, 11.52 s CPU, spread
-49.460–52.299 s, peak 225360 KiB. Go median 59.160 s elapsed, 22.38 s
-CPU, spread 58.553–61.559 s, peak 231416 KiB. The Go/Rust ratio is
-1.186 elapsed, 1.943 CPU, and 1.027 RSS. Wall time moves with
+clock. Rust median 49.810 s elapsed, 11.35 s CPU, spread
+49.312–53.639 s, peak 225880 KiB. Go median 61.821 s elapsed, 21.76 s
+CPU, spread 58.688–64.308 s, peak 234912 KiB. The Go/Rust ratio is
+1.241 elapsed, 1.917 CPU, and 1.040 RSS. Wall time moves with
 workstation load between runs. The binding acceptance metric
 (SOW-0030, user decisions 1A/2A) is **elapsed time** ≤1.3x Rust and
 **peak RSS** ≤1.3x; process CPU time (utime+stime) is not part
@@ -22356,11 +22356,11 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Twenty-four recorded
+- **Elapsed-ratio cross-session spread.** Twenty-five recorded
   ceiling sessions at byte-identical binaries (r2 1.159 — elapsed
   and RSS only, no CPU recorded; r4 1.244; each of rounds 5 through
-  19; the round-32/33/34/35/37 rebinds at 1.184, 1.193, 1.266,
-  1.203, and 1.186; and the two round-36 runs) span elapsed
+  19; the round-32/33/34/35/37/38 rebinds at 1.184, 1.193, 1.266,
+  1.203, 1.186, and 1.241; and the two round-36 runs) span elapsed
   **0.916–1.586** — wall-clock noise that crosses both 1.0 and the
   1.3x bound: the round-7 session measured 1.586 on an idle machine
   with CPU work near-identical to today's (Rust 11.13 s / Go
