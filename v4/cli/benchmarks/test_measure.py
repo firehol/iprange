@@ -184,9 +184,15 @@ def assign(root, path, value):
 
 
 class MeasureRoundsTest(unittest.TestCase):
-    def test_zero_rounds_is_refused(self):
-        with self.assertRaises(ValueError):
-            measure(["/bin/true"], 0)
+    def test_zero_and_negative_rounds_are_refused(self):
+        # The guard is `rounds < 1`: zero and negative inputs must both
+        # refuse with the message, so a weakened `rounds < 0` guard
+        # cannot pass the zero case through to an empty-sample crash.
+        for rounds in (0, -1):
+            with self.subTest(rounds=rounds):
+                with self.assertRaisesRegex(
+                        ValueError, "rounds must be positive"):
+                    measure(["/bin/true"], rounds)
 
 
 class StatCpuParseTest(unittest.TestCase):
@@ -221,11 +227,17 @@ class SamplingGuardTest(unittest.TestCase):
                 run_once(["/bin/true"])
 
     def test_a_child_whose_cpu_was_never_sampled_is_refused(self):
+        # A busy child guarantees at least one sampling iteration, so
+        # the patched peak reader (4096) is observed and the refusal is
+        # the CPU guard's, not the peak guard's firing early on a child
+        # that exited before the first poll.
+        busy = ["/bin/sh", "-c",
+                "i=0; while [ $i -lt 200000 ]; do i=$((i+1)); done"]
         with mock.patch("measure.child_hwm_kib", return_value=4096), \
                 mock.patch("measure.child_cpu_seconds", return_value=None):
             with self.assertRaisesRegex(
                     AssertionError, "cpu was not sampled"):
-                run_once(["/bin/true"])
+                run_once(busy)
 
 
 class CeilingSummaryTest(unittest.TestCase):

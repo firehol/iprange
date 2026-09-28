@@ -226,7 +226,50 @@ class BoundedReadTest(unittest.TestCase):
                 _bench.readline_bounded(reader, seconds=0.2)
 
 
+class SilentPeerTest(unittest.TestCase):
+    """A peer that never answers fails at the service read deadline.
+
+    The scenario runner constructs its engines with read/write
+    deadlines, so the ordinary call path is wall-clock bounded the
+    same way the frame reads are. This pins that mechanism against a
+    stub that accepts the request and holds it.
+    """
+
+    def test_a_silent_peer_fails_at_the_read_deadline(self):
+        import subprocess
+        import tempfile
+        from run import JsonRpcService as Service
+        stub = os.path.join(_HERE, "stub_engine.py")
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "silent_engine")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_MODE'] = 'silent'\n"
+                    f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            service = Service([wrapper, "--jsonrpc"], "silent",
+                              read_deadline=0.5, write_deadline=5)
+            try:
+                started = time.monotonic()
+                with self.assertRaisesRegex(
+                        AssertionError, "bounded read deadline"):
+                    service.call("s1", "iprange.v1.system.describe", {})
+                self.assertLess(time.monotonic() - started, 10)
+            finally:
+                service.close(allow_forced=True, broken_exchange=True)
+
+
 class CancelDetectorTest(unittest.TestCase):
+    def test_a_cancelled_answer_without_outcome_fails(self):
+        # The cancelled code without its state must not read as a pass:
+        # an answer that drops its outcome is a lost state, not the
+        # factual cancelled outcome.
+        response = {"id": "p", "error": {
+            "code": -32010, "data": {"code": "cancelled"}}}
+        self.assertIn("lost its state", cancelled_result(response))
+
     def test_a_result_for_the_cancelled_request_fails(self):
         # A producer whose cancel is dead code finishes the import and
         # answers with a result. That must not pass.

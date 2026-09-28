@@ -34,7 +34,8 @@ Go matrix, fresh work dir, under `/usr/bin/time -v` (final
 qualification binaries, two runs): peak RSS **25,924 kB** and
 **26,044 kB** (Python runner + product child measured together),
 elapsed ~0.05 s, exit 0.  Milestone-5 methodology note (wave-10):
-the step-6 elapsed/peak-RSS 1.3x acceptance contract (instruction-level CPU is not part of it) needs
+the step-6 elapsed/peak-RSS 1.3x acceptance contract (process CPU time
+(utime+stime) is not part of it) needs
 product-child-only attribution; the recorded number measures the
 runner and the product child together (`/usr/bin/time -v` around
 the matrix run), so it cannot support the ceiling claim without

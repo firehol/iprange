@@ -15,6 +15,7 @@ the wrapper did not fail before the exec.
 import json
 import os
 import sys
+import time
 
 
 def main():
@@ -29,6 +30,7 @@ def main():
             stream.write("stub ran\n")
     die_now = os.environ.get("STUB_MODE") == "die-on-first-request"
     die_after = os.environ.get("STUB_MODE") == "die-after-answer"
+    silent = os.environ.get("STUB_MODE") == "silent"
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -39,6 +41,12 @@ def main():
             # no interpreter teardown, so the engine is dead before the
             # runner can poll it; the exit gate is then the only check
             # that can attribute the nonzero exit.
+            os._exit(exit_status)
+        if silent:
+            # Read the request and hold it: a proof waiting for an
+            # answer must fail at its deadline, not hang (SilentPeerTest
+            # pins this against a short service read deadline).
+            time.sleep(3600)
             os._exit(exit_status)
         request = json.loads(line)
         response = {

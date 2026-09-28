@@ -304,7 +304,12 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None)
     os.makedirs(engine_work, exist_ok=True)
     write_fixtures(scenario, engine_work)
     write_generated(scenario, engine_work)
-    service = JsonRpcService([binary, "--jsonrpc"], name, cwd=engine_work)
+    service = JsonRpcService(
+        [binary, "--jsonrpc"], name, cwd=engine_work,
+        read_deadline=120, write_deadline=30)
+    # The call path is deadline-bounded like the frame reads: a peer
+    # that never answers fails at 120 s instead of hanging the proof
+    # (SilentPeerTest pins the mechanism).
     try:
         result = run_calls(service, name, scenario, engine_work, calls, peer)
         return result
