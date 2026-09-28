@@ -22339,13 +22339,14 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Three sessions at
-  byte-identical binaries measured Go/Rust elapsed 1.185, 1.259, and
-  1.213 (6.2% relative spread, wall-clock noise). The CPU ratio spread
-  over the same sessions is 1.905–1.948. Each session's figures are
-  recorded in its own `combined.log`; the binding verdict is
-  SOW-0030's and will need to treat the wall-clock spread as
-  measurement noise.
+- **Elapsed-ratio cross-session spread.** Four regenerations of the
+  ceiling at byte-identical binaries measured Go/Rust elapsed 1.172,
+  1.185, 1.213, and 1.259 (7.4% relative spread, wall-clock noise).
+  The CPU ratio over the same sessions spans 1.900–1.948. The kit
+  holds the current session's `combined.log`; earlier sessions'
+  figures were recorded in the SOW at their time and are superseded by
+  each rebind. The binding verdict is SOW-0030's and will need to
+  treat the wall-clock spread as measurement noise.
 - **SOW narrative measurement paragraphs.** The smaller measurement
   paragraphs earlier in this milestone (the 100k import, the joins,
   the seven-day refresh) record their own runs and are not re-staged
