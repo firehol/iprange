@@ -22262,10 +22262,10 @@ plus one 10M-range feed. The kit log is
 the revision `7ddc8062`, the binary SHA-256 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 50.251 s elapsed, 11.37 s CPU, spread
-49.867–52.345 s, peak 225728 KiB. Go median 59.593 s elapsed, 21.85 s
-CPU, spread 59.108–62.560 s, peak 234720 KiB. The Go/Rust ratio is
-1.186 elapsed, 1.922 CPU, and 1.040 RSS. The CPU ratio is the highest
+clock. Rust median 54.894 s elapsed, 11.25 s CPU, spread
+50.494–56.469 s, peak 225640 KiB. Go median 59.862 s elapsed, 21.83 s
+CPU, spread 59.081–61.882 s, peak 234696 KiB. The Go/Rust ratio is
+1.091 elapsed, 1.940 CPU, and 1.040 RSS. The CPU ratio is the highest
 of the three and is recorded here because the acceptance contract
 names CPU; the ≤1.3x verdict is SOW-0030's and is not decided here.
 This is not 1,000 feeds of 10M ranges each.
