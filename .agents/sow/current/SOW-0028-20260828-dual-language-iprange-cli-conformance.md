@@ -22258,13 +22258,16 @@ corrupt files or structured fixtures.
 The close ceiling is one database per round: 999 one-address feeds
 plus one 10M-range feed. The kit log is
 `.local/shared/evidence/m5-ceiling/combined.log`. It names the command,
-the revision `e29b2024`, the binary SHA-256 values, and ends with `rc=0`.
-Both engines reported 1,000 feeds and 32,967,576 addresses. Three
-rounds, engine order swapped, fixture files written before the clock.
-Rust median 54.471 s, spread 49.447–56.322 s, peak 225252 KiB. Go
-median 63.109 s, spread 58.934–78.156 s, peak 232676 KiB. The Go/Rust
-ratio is 1.159 elapsed and 1.033 RSS. This is not 1,000 feeds of 10M
-ranges each, and it is not the 1.3x verdict.
+the revision, the binary SHA-256 values, and ends with `rc=0`. Both
+engines reported 1,000 feeds and 32,967,576 addresses. Three rounds,
+engine order swapped, fixture files written before the clock. Rust
+median 49.933 s elapsed, 11.30 s CPU, spread 49.649–53.255 s, peak
+225224 KiB. Go median 62.115 s elapsed, 22.00 s CPU, spread
+61.374–64.010 s, peak 233188 KiB. The Go/Rust ratio is 1.244 elapsed,
+1.947 CPU, and 1.035 RSS. The CPU ratio is the higher of the two time
+measures and is recorded here because the acceptance contract names
+CPU; the ≤1.3x verdict is SOW-0030's and is not decided here. This is
+not 1,000 feeds of 10M ranges each.
 
 `parallel_feeds.py` publishes a good feed and a bad feed at the same
 time. The good destination keeps the generator count. The bad
