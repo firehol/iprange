@@ -2009,7 +2009,9 @@ class JsonRpcService:
         # frame and a nonzero exit is an unclean end to a session this
         # call shut down.  A peer that was already gone at entry (an
         # intentional crash session) and deliberate-stall controls are
-        # exempt; a forced teardown reports itself instead.
+        # exempt; a forced teardown reports itself instead — unless
+        # the session is poisoned (its bounded-I/O failure already
+        # fired; teardown must not mask it).
         if forced and not allow_forced and not self._poisoned:
             self._close_raw_stdout()
             raise AssertionError(

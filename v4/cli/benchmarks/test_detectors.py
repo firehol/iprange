@@ -353,6 +353,34 @@ class SilentPeerTest(unittest.TestCase):
             finally:
                 service.close(allow_forced=True, broken_exchange=True)
 
+    def test_close_closes_the_detached_fd_even_when_the_impl_raises(self):
+        # The structural try/finally contract itself: any raise out of
+        # the teardown implementation — including ones no inner close
+        # precedes — still closes the detached fd.
+        import tempfile
+        from run import JsonRpcService as Service
+        from unittest import mock
+        stub = os.path.join(_HERE, "stub_engine.py")
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "stub_engine")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            service = Service([wrapper, "--jsonrpc"], "boom",
+                              read_deadline=5, write_deadline=5)
+            try:
+                with mock.patch.object(service, "_close_impl",
+                                       side_effect=AssertionError("boom")):
+                    with self.assertRaisesRegex(AssertionError, "boom"):
+                        service.close()
+                self.assertIsNotNone(service._raw_stdout)
+                self.assertTrue(service._raw_stdout.closed)
+            finally:
+                service.close(allow_forced=True, broken_exchange=True)
+
     def test_a_blocked_write_arms_the_poison_guard(self):
         # The write arm: a deaf peer (reads nothing) and a frame
         # larger than the pipe buffer make the write itself block;
