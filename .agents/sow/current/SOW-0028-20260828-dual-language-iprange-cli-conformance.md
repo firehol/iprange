@@ -22273,10 +22273,13 @@ plus one 10M-range feed. The kit log is
 the revision `85488378`, the binary SHA-256 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 19.029 s elapsed, 11.13 s CPU, spread
-18.982–23.664 s, peak 224528 KiB. Go median 30.176 s elapsed, 21.66 s
-CPU, spread 29.459–35.630 s, peak 234512 KiB. The Go/Rust ratio is
-1.586 elapsed, 1.946 CPU, and 1.044 RSS. This run was taken on an
+clock. Rust median 50.374 s elapsed, 11.36 s CPU, spread
+49.588–51.802 s, peak 224924 KiB. Go median 62.631 s elapsed, 22.1 s
+CPU, spread 59.328–62.703 s, peak 234040 KiB. The Go/Rust ratio is
+1.243 elapsed, 1.945 CPU, and 1.041 RSS. Wall time moves with
+workstation load between runs (19–55 s medians across runs); the
+CPU ratio is stable at 1.94–1.95 in every run and is the contract
+quantity. This run was taken on an
 idle workstation; earlier runs overlapped concurrent review work and
 their wall times were longer. CPU and RSS are stable across both. The CPU ratio is the highest
 of the three and is recorded here because the acceptance contract
