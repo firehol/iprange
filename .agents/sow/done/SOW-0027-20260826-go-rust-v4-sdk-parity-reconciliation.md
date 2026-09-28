@@ -115,7 +115,7 @@ the bounded safe-Go leads were measured-and-rejected for the write
 path, but the external single-sol review rejected the floor claim and
 the user chose option 2 - keep SOW-0027 open for a BOUNDED continuation
 (not open-ended optimization). Binding CPU <=1.3x Rust per scenario and
-peak RSS <=1.3x remain in force (SOW-0027-era name; see :897 for the
+peak RSS <=1.3x remain in force (SOW-0027-era name; see :899 for the
 binding restatement as elapsed time and peak RSS); no unsafe code is
 authorized. The
 bounded scope (recorded from the review direction):
