@@ -43,6 +43,50 @@ class MeasureTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             ratio(rust, go)
 
+    def test_ratio_refuses_a_non_positive_rust_median(self):
+        # A zero or negative rust elapsed or RSS median must refuse
+        # rather than fabricate a division.
+        rust = {
+            "elapsed_seconds": {"median": 0.0, "min": 0.0, "max": 0.0},
+            "child_max_rss_kib": {"median": 1000, "min": 1000, "max": 1000},
+        }
+        go = {
+            "elapsed_seconds": {"median": 3.0, "min": 3.0, "max": 3.0},
+            "child_max_rss_kib": {"median": 1500, "min": 1500, "max": 1500},
+        }
+        with self.assertRaises(ValueError):
+            ratio(rust, go)
+        rust["elapsed_seconds"]["median"] = 2.0
+        rust["child_max_rss_kib"]["median"] = 0
+        with self.assertRaises(ValueError):
+            ratio(rust, go)
+
+    def test_ratio_refuses_a_non_positive_go_elapsed_median(self):
+        rust = {
+            "elapsed_seconds": {"median": 2.0, "min": 2.0, "max": 2.0},
+            "child_max_rss_kib": {"median": 1000, "min": 1000, "max": 1000},
+        }
+        go = {
+            "elapsed_seconds": {"median": 0.0, "min": 0.0, "max": 0.0},
+            "child_max_rss_kib": {"median": 1500, "min": 1500, "max": 1500},
+        }
+        with self.assertRaises(ValueError):
+            ratio(rust, go)
+
+    def test_ratio_refuses_a_non_positive_cpu_median(self):
+        rust = {
+            "elapsed_seconds": {"median": 2.0, "min": 2.0, "max": 2.0},
+            "child_cpu_seconds": {"median": 1.0, "min": 1.0, "max": 1.0},
+            "child_max_rss_kib": {"median": 1000, "min": 1000, "max": 1000},
+        }
+        go = {
+            "elapsed_seconds": {"median": 3.0, "min": 3.0, "max": 3.0},
+            "child_cpu_seconds": {"median": 0.0, "min": 0.0, "max": 0.0},
+            "child_max_rss_kib": {"median": 1500, "min": 1500, "max": 1500},
+        }
+        with self.assertRaises(ValueError):
+            ratio(rust, go)
+
     def test_ratio_refuses_a_one_sided_cpu_sample(self):
         # A fabricated cpu 0.0 would read as a pass of the 1.3x CPU
         # ceiling. A missing sample on one engine must refuse, not pass.
