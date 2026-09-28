@@ -1,7 +1,9 @@
 """Child-only timing and peak RSS for one release binary.
 
-getrusage(RUSAGE_CHILDREN) is read after the child exits. On Linux that
-peak is the largest waited-for child, in KiB. It is not the runner.
+Peak RSS is `VmHWM` from `/proc/PID/status`, sampled while the child
+is alive. `getrusage(RUSAGE_CHILDREN)` is the largest waited-for child
+so far, so it cannot compare a later smaller child with an earlier
+larger one. The runner's own memory is excluded.
 """
 
 import os

@@ -1,15 +1,22 @@
 """Cancel a request that is still running.
 
-Unknown-id cancel does not prove the producer honors cancel. This
-script submits current.publish, cancels that request id, and shows the
-session stays responsive. The cancelled request must never answer with
-a result. A producer that ignores cancel finishes the import and
-answers with one, which fails the proof.
+Unknown-id cancel does not prove the producer honors cancel, and a
+proof that closes stdin proves nothing: EOF shutdown itself requests
+cancellation of active work, so a producer whose `iprange.v1.cancel`
+is dead code still passes. This script keeps stdin open across the
+whole discriminating window. The probe must answer while stdin is
+still open, so only `iprange.v1.cancel` can have stopped the publish.
+
+A producer that ignores cancel finishes the import and answers the
+cancelled id with a result, which fails. A producer that drops the
+request without cancelling fails the probe. If the cancelled id is
+answered at all, it must carry the factual cancelled outcome.
 """
 
 import argparse
 import json
 import os
+import signal
 import sys
 import tempfile
 
@@ -18,6 +25,22 @@ from run import JsonRpcService  # noqa: E402
 
 from generate import generate, write_text
 
+PUBLISH_ID = "cancel-inflight-1"
+PROBE_ID = "cancel-probe-1"
+
+
+def check_cancelled_answer(response):
+    """A delivered answer for a cancelled request must be factual."""
+
+    error = response.get("error", {})
+    data = error.get("data", {})
+    if error.get("code") != -32010:
+        raise AssertionError(f"cancelled request answered {error!r}")
+    if data.get("code") != "cancelled":
+        raise AssertionError(f"cancelled outcome lost its code: {data!r}")
+    if data.get("outcome") is None:
+        raise AssertionError(f"cancelled outcome lost its state: {data!r}")
+
 
 def prove(binary, work):
     text_path = os.path.join(work, "slow.txt")
@@ -25,9 +48,16 @@ def prove(binary, work):
     with open(text_path, "w", encoding="utf-8") as stream:
         write_text(generate(3, 800000, 4, 4_000_000), stream)
     service = JsonRpcService([binary, "--jsonrpc"], "bench", start_new_session=True)
-    seen = []
+
+    def forward(signum, frame):
+        del signum, frame
+        service.kill_process_group()
+        raise SystemExit(143)
+
+    previous = signal.signal(signal.SIGTERM, forward)
+    seen = {}
     try:
-        service.submit("cancel-inflight-1", "iprange.v1.current.publish", {
+        service.submit(PUBLISH_ID, "iprange.v1.current.publish", {
             "input": {
                 "paths": [text_path],
                 "family": "ipv4",
@@ -50,26 +80,33 @@ def prove(binary, work):
                 "max_open_files": 3,
             },
         })
-        service.notify("iprange.v1.cancel", {"request_id": "cancel-inflight-1"})
-        service.submit("cancel-probe-1", "iprange.v1.system.describe", {})
-        service.proc.stdin.close()
-        while True:
+        service.notify("iprange.v1.cancel", {"request_id": PUBLISH_ID})
+        # The probe is submitted before stdin closes and must answer
+        # before stdin closes. Until it does, the only thing that can
+        # have stopped the publish is the cancel notification above.
+        service.submit(PROBE_ID, "iprange.v1.system.describe", {})
+        while PROBE_ID not in seen and PUBLISH_ID not in seen:
             line = service.proc.stdout.readline(1_048_578)
             if not line:
                 break
-            seen.append(json.loads(line))
+            response = json.loads(line)
+            seen[response.get("id")] = response
+        if PROBE_ID not in seen:
+            raise AssertionError("the probe never answered while stdin was open")
+        if "result" not in seen[PROBE_ID]:
+            raise AssertionError(f"probe was not answered: {seen[PROBE_ID]!r}")
+        cancelled = seen.get(PUBLISH_ID)
+        if cancelled is not None and "result" in cancelled:
+            raise AssertionError("cancelled publish answered with a result")
+        if cancelled is not None:
+            check_cancelled_answer(cancelled)
     finally:
+        signal.signal(signal.SIGTERM, previous)
         if service.proc.poll() is None:
             service.kill_process_group()
         service.close(allow_forced=True, broken_exchange=True)
-    for response in seen:
-        if response.get("id") == "cancel-inflight-1" and "result" in response:
-            raise AssertionError("cancelled publish answered with a result")
-    if not any(
-        response.get("id") == "cancel-probe-1" and "result" in response
-        for response in seen
-    ):
-        raise AssertionError("the session did not stay responsive after cancel")
+    if os.path.exists(destination):
+        raise AssertionError("cancelled publish left a destination")
 
 
 def main():
