@@ -19,6 +19,7 @@ def main():
             sys.stderr.write(f"stub_engine: unexpected argument {argument!r}\n")
             sys.exit(2)
     exit_status = int(os.environ.get("STUB_EXIT", "1"))
+    die_immediately = os.environ.get("STUB_MODE") == "die-after-answer"
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -42,6 +43,11 @@ def main():
         }
         sys.stdout.write(json.dumps(response) + "\n")
         sys.stdout.flush()
+        if die_immediately:
+            # Die before the harness closes stdin, so close() sees an
+            # already-dead peer and only the runner's own exit gate
+            # can catch this.
+            sys.exit(exit_status)
     sys.exit(exit_status)
 
 

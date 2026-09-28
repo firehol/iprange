@@ -29,22 +29,22 @@ class ExitGateTest(unittest.TestCase):
     """
 
     def test_a_dying_engine_fails_its_own_run(self):
-        import json
         import os as _os
-        stub = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "stub_engine.py")
-        scenario = {
-            "name": "exit-gate",
-            "calls": [{
-                "method": "iprange.v1.system.describe",
-                "params": {},
-                "compare": ["method"],
-                "expect": {"method": "iprange.v1.system.describe"},
-            }],
-        }
-        with self.assertRaises(AssertionError) as caught:
-            _bench.run_engine(stub, "stub", scenario, _os.path.join(
-                _os.path.dirname(stub), "..", "..", "..", "..", "/tmp"), scenario["calls"])
-        self.assertIn("exited", str(caught.exception))
+        import subprocess
+        stub = _os.path.join(_HERE, "stub_engine.py")
+        scenario = _os.path.join(_HERE, "scenarios", "n4-batch-limit.json")
+        # STUB_MODE=die-after-answer makes the stub exit nonzero right
+        # after answering, so close() sees an already-dead peer and only
+        # the runner's exit gate can catch it. Deleting that gate must
+        # make this test pass, which is why it asserts the gate's own
+        # message.
+        env = dict(_os.environ, STUB_MODE="die-after-answer", STUB_EXIT="1")
+        completed = subprocess.run(
+            [sys.executable, _bench.__file__ if hasattr(_bench, "__file__") else "",
+             "--rust", stub, "--go", stub, "--scenario", scenario],
+            capture_output=True, text=True, check=False, env=env, cwd=_HERE)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("after answering its calls", completed.stderr)
 
 
 class ScenarioDetectorTest(unittest.TestCase):
