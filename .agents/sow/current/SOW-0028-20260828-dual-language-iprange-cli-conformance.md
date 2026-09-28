@@ -22276,10 +22276,10 @@ the revision on its own second line, the binary SHA-256
 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 48.920 s elapsed, 10.82 s CPU, spread
-48.493–52.747 s, peak 225536 KiB. Go median 57.928 s elapsed, 21.21 s
-CPU, spread 57.783–58.762 s, peak 232772 KiB. The Go/Rust ratio is
-1.184 elapsed, 1.960 CPU, and 1.032 RSS. Wall time moves with
+clock. Rust median 49.610 s elapsed, 11.28 s CPU, spread
+49.485–49.636 s, peak 224616 KiB. Go median 59.179 s elapsed, 21.74 s
+CPU, spread 58.538–62.026 s, peak 233112 KiB. The Go/Rust ratio is
+1.193 elapsed, 1.927 CPU, and 1.038 RSS. Wall time moves with
 workstation load between runs. The binding acceptance metric
 (SOW-0030, user decisions 1A/2A) is **elapsed time** ≤1.3x Rust and
 **peak RSS** ≤1.3x; process CPU time (utime+stime) is not part
@@ -22357,8 +22357,8 @@ dispositioned, not silently carried:
   5 through 19; the four most recent of those measured Go/Rust elapsed
   1.172, 1.185, 1.213, and 1.259) span elapsed 1.091–1.259 (~15.4%
   relative spread, wall-clock noise); the CPU ratio over the same
-  sessions spans 1.875–1.983. The round-32 rebind measured 1.184
-  elapsed / 1.960 CPU / 1.032 RSS — inside both envelopes. The superseded sessions are enumerated with
+  sessions spans 1.875–1.983. The round-32 and round-33 rebinds measured
+  1.184 and 1.193 elapsed (CPU 1.960 / 1.927) — inside both envelopes. The superseded sessions are enumerated with
   citations in the kit's role reports (`evidence/m5-roles/`; the
   tester round-20 report enumerates all twelve). The kit holds the
   current session's `combined.log`. The binding verdict is SOW-0030's
