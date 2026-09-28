@@ -2,17 +2,23 @@
 """A stub JSON-RPC engine for negative controls.
 
 Answers `iprange.v1.system.describe` with a correct, well-formed
-result frame, then exits with the status given as argv[1]. Used to
-prove that the scenario runner fails an engine that answers every
-call correctly and then dies nonzero.
+result frame, then exits nonzero once stdin closes. The exit status
+comes from `STUB_EXIT` in the environment, because the harness spawns
+the engine as `[binary, "--jsonrpc"]` and the stub must accept that
+argument shape.
 """
 
 import json
+import os
 import sys
 
 
 def main():
-    exit_status = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    for argument in sys.argv[1:]:
+        if argument != "--jsonrpc":
+            sys.stderr.write(f"stub_engine: unexpected argument {argument!r}\n")
+            sys.exit(2)
+    exit_status = int(os.environ.get("STUB_EXIT", "1"))
     for line in sys.stdin:
         line = line.strip()
         if not line:

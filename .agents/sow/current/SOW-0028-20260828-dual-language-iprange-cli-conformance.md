@@ -22278,11 +22278,12 @@ clock. Rust median 50.355 s elapsed, 11.52 s CPU, spread
 49.765–50.771 s, peak 225356 KiB. Go median 62.748 s elapsed, 22.84 s
 CPU, spread 58.610–68.126 s, peak 232556 KiB. The Go/Rust ratio is
 1.246 elapsed, 1.983 CPU, and 1.032 RSS. Wall time moves with
-workstation load between runs; the CPU ratio is stable at
-1.94–1.98 across every run and is the contract quantity, recorded
-here because the acceptance contract names CPU. The ≤1.3x verdict is
-SOW-0030's and is not decided here. This is not 1,000 feeds of 10M
-ranges each.
+workstation load between runs. The binding acceptance metric
+(SOW-0030, user decisions 1A/2A) is **elapsed time** ≤1.3x Rust and
+**peak RSS** ≤1.3x; instruction-level CPU is not part of that
+contract and is recorded here only as additional data for SOW-0030.
+The ≤1.3x verdict is SOW-0030's and is not decided here. This is not
+1,000 feeds of 10M ranges each.
 
 `parallel_feeds.py` publishes a good feed and a bad feed at the same
 time. The good destination keeps the generator count. The bad

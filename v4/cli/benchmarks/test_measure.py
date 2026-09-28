@@ -31,6 +31,18 @@ class MeasureTest(unittest.TestCase):
         }
         self.assertEqual(ratio(rust, go), {"elapsed": 1.5, "rss": 1.5, "cpu": 1.5})
 
+    def test_ratio_refuses_a_non_positive_go_median(self):
+        rust = {
+            "elapsed_seconds": {"median": 2.0, "min": 2.0, "max": 2.0},
+            "child_max_rss_kib": {"median": 1000, "min": 1000, "max": 1000},
+        }
+        go = {
+            "elapsed_seconds": {"median": 3.0, "min": 3.0, "max": 3.0},
+            "child_max_rss_kib": {"median": 0, "min": 0, "max": 0},
+        }
+        with self.assertRaises(ValueError):
+            ratio(rust, go)
+
     def test_ratio_refuses_a_one_sided_cpu_sample(self):
         # A fabricated cpu 0.0 would read as a pass of the 1.3x CPU
         # ceiling. A missing sample on one engine must refuse, not pass.
