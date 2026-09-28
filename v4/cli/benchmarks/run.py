@@ -283,7 +283,7 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None)
         # before teardown.
         if service.proc.returncode != 0:
             raise AssertionError(
-                f"{name} exited {service.proc.returncode} after answering its calls")
+                f"{name} exited {service.proc.returncode}")
 
 
 def scenario_calls(scenario):

@@ -19,11 +19,19 @@ def main():
             sys.stderr.write(f"stub_engine: unexpected argument {argument!r}\n")
             sys.exit(2)
     exit_status = int(os.environ.get("STUB_EXIT", "1"))
-    die_immediately = os.environ.get("STUB_MODE") == "die-after-answer"
+    die_now = os.environ.get("STUB_MODE") == "die-on-first-request"
+    die_after = os.environ.get("STUB_MODE") == "die-after-answer"
     for line in sys.stdin:
         line = line.strip()
         if not line:
             continue
+        if die_now:
+            # Die on the first request, before answering it and before
+            # any close() starts. os._exit terminates immediately, with
+            # no interpreter teardown, so the engine is dead before the
+            # runner can poll it; the exit gate is then the only check
+            # that can attribute the nonzero exit.
+            os._exit(exit_status)
         request = json.loads(line)
         response = {
             "jsonrpc": "2.0",
@@ -43,10 +51,7 @@ def main():
         }
         sys.stdout.write(json.dumps(response) + "\n")
         sys.stdout.flush()
-        if die_immediately:
-            # Die before the harness closes stdin, so close() sees an
-            # already-dead peer and only the runner's own exit gate
-            # can catch this.
+        if die_after:
             sys.exit(exit_status)
     sys.exit(exit_status)
 
