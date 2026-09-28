@@ -14,6 +14,7 @@ import os
 import shutil
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from run import JsonRpcService  # noqa: E402
@@ -24,6 +25,40 @@ SCHEMA = "iprange-bench-scenario-v1"
 def fail(message):
     print(f"FAIL {message}", file=sys.stderr)
     return 1
+
+
+def readline_bounded(pipe, limit=1_048_578, seconds=120.0):
+    """Read one newline-terminated frame under a wall-clock bound.
+
+    A peer that never answers, never completes a frame, or has closed
+    the stream fails at the deadline instead of hanging the proof.
+    On a non-blocking descriptor `readline` returns whatever is
+    buffered — including a partial line without its newline — so the
+    helper accumulates chunks until one ends the frame, the same
+    accumulating pattern the main harness reader uses; co-read bytes
+    are never stranded.
+    """
+    descriptor = pipe.fileno()
+    was_blocking = os.get_blocking(descriptor)
+    os.set_blocking(descriptor, False)
+    deadline = time.monotonic() + seconds
+    pending = b""
+    try:
+        while True:
+            try:
+                chunk = pipe.readline(limit)
+            except (BlockingIOError, OSError):
+                chunk = b""
+            if chunk:
+                if chunk.endswith(b"\n"):
+                    return pending + chunk
+                pending += chunk
+            if time.monotonic() >= deadline:
+                raise AssertionError(
+                    f"frame did not arrive within {seconds:g}s")
+            time.sleep(0.001)
+    finally:
+        os.set_blocking(descriptor, was_blocking)
 
 
 def load_scenario(path):
@@ -242,9 +277,7 @@ def call_batch(service, count, work):
     # A batch is one frame. The qualification client owns these pipes.
     service.proc.stdin.write(wire)
     service.proc.stdin.flush()
-    line = service.proc.stdout.readline(1_048_578)
-    if not line:
-        raise AssertionError("batch response was empty")
+    line = readline_bounded(service.proc.stdout)
     return batch_observation(json.loads(line), count)
 
 

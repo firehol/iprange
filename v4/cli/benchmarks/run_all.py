@@ -30,7 +30,7 @@ def s0_detect_verdict(returncode, output):
 def run_one(runner, rust, go, scenario):
     completed = subprocess.run(
         [sys.executable, runner, "--rust", rust, "--go", go, "--scenario", scenario],
-        capture_output=True, text=True, check=False,
+        capture_output=True, text=True, check=False, timeout=600,
     )
     sys.stdout.write(completed.stdout)
     sys.stdout.flush()

@@ -8,9 +8,10 @@ whole discriminating window. The probe must answer while stdin is
 still open, so only `iprange.v1.cancel` can have stopped the publish.
 
 A producer that ignores cancel finishes the import and answers the
-cancelled id with a result, which fails. A producer that drops the
-request without cancelling fails the probe. If the cancelled id is
-answered at all, it must carry the factual cancelled outcome.
+cancelled id with a result, which fails. A producer that suppresses
+the request outright passes the probe (the cancel took effect); if
+the cancelled id is answered at all, it must carry the factual
+cancelled outcome.
 """
 
 import argparse

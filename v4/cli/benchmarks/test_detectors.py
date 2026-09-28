@@ -8,13 +8,15 @@ Both are asserted here so the claims are committed tests, not prose.
 import importlib.util
 import os
 import sys
+import threading
+import time
 import unittest
-
-from cancel_inflight import cancelled_result
-from run_all import s0_detect_verdict
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
+from cancel_inflight import cancelled_result  # noqa: E402
+from run_all import s0_detect_verdict  # noqa: E402
+
 _spec = importlib.util.spec_from_file_location(
     "detectors_runner", os.path.join(_HERE, "run.py"))
 _bench = importlib.util.module_from_spec(_spec)
@@ -74,7 +76,8 @@ class ExitGateTest(unittest.TestCase):
             completed = subprocess.run(
                 [sys.executable, _os.path.join(_HERE, "run.py"),
                  "--rust", wrapper, "--go", wrapper, "--scenario", path],
-                capture_output=True, text=True, check=False, cwd=_HERE)
+                capture_output=True, text=True, check=False, cwd=_HERE,
+                timeout=300)
             self.assertNotEqual(completed.returncode, 0)
             self.assertTrue(
                 "rust exited 1" in completed.stderr
@@ -121,7 +124,8 @@ class ExitGateTest(unittest.TestCase):
             completed = subprocess.run(
                 [sys.executable, _os.path.join(_HERE, "run.py"),
                  "--rust", wrapper, "--go", wrapper, "--scenario", path],
-                capture_output=True, text=True, check=False, cwd=_HERE)
+                capture_output=True, text=True, check=False, cwd=_HERE,
+                timeout=300)
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("rust exited 1", completed.stderr)
 
@@ -145,6 +149,63 @@ class ScenarioDetectorTest(unittest.TestCase):
 
     def test_a_pass_is_not_a_field_difference(self):
         self.assertEqual(s0_detect_verdict(0, ""), "passed; a field difference must fail")
+
+
+class BoundedReadTest(unittest.TestCase):
+    """The bounded frame read fails loudly instead of hanging.
+
+    A proof must not hang when a peer never answers or has closed
+    the stream; both reach the deadline. A complete frame — even a
+    co-written partial-then-completed one — is returned whole.
+    """
+
+    def test_a_complete_frame_is_returned(self):
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(write_fd, "wb") as writer, \
+                os.fdopen(read_fd, "rb") as reader:
+            writer.write(b'{"id": "1"}\n')
+            writer.flush()
+            self.assertEqual(
+                _bench.readline_bounded(reader, seconds=5),
+                b'{"id": "1"}\n')
+
+    def test_a_frame_completed_after_a_partial_write_is_returned(self):
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(write_fd, "wb") as writer, \
+                os.fdopen(read_fd, "rb") as reader:
+            writer.write(b'{"id":')
+            writer.flush()
+            delivered = []
+
+            def complete():
+                time.sleep(0.05)
+                writer.write(b' "1"}\n')
+                writer.flush()
+
+            thread = threading.Thread(target=complete)
+            thread.start()
+            self.assertEqual(
+                _bench.readline_bounded(reader, seconds=5),
+                b'{"id": "1"}\n')
+            thread.join()
+
+    def test_silence_reaches_the_deadline(self):
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(write_fd, "wb") as writer, \
+                os.fdopen(read_fd, "rb") as reader:
+            with self.assertRaisesRegex(
+                    AssertionError, "did not arrive within"):
+                _bench.readline_bounded(reader, seconds=0.2)
+            writer.close()
+
+    def test_a_closed_stream_reaches_the_deadline(self):
+        read_fd, write_fd = os.pipe()
+        with os.fdopen(write_fd, "wb") as writer, \
+                os.fdopen(read_fd, "rb") as reader:
+            writer.close()
+            with self.assertRaisesRegex(
+                    AssertionError, "did not arrive within"):
+                _bench.readline_bounded(reader, seconds=0.2)
 
 
 class CancelDetectorTest(unittest.TestCase):
