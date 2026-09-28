@@ -1569,6 +1569,7 @@ class JsonRpcService:
             else:
                 self._write_bounded(wire_bytes + b"\n")
         except TimeoutError as exc:
+            self._poisoned = True
             raise AssertionError(
                 f"service did not accept the request within the "
                 f"bounded write deadline: {exc}") from exc
@@ -1589,6 +1590,7 @@ class JsonRpcService:
             try:
                 line = self._readline_bounded_thread()
             except TimeoutError as exc:
+                self._poisoned = True
                 raise AssertionError(
                     f"service did not answer within the bounded read "
                     f"deadline: {exc}") from exc
@@ -1599,6 +1601,7 @@ class JsonRpcService:
             try:
                 line = self._readline_bounded()
             except TimeoutError as exc:
+                self._poisoned = True
                 raise AssertionError(
                     f"service did not answer within the bounded read "
                     f"deadline: {exc}") from exc
@@ -1708,27 +1711,7 @@ class JsonRpcService:
             wire = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
             wire_bytes = wire.encode("utf-8")
             request_bytes = len(wire_bytes) + 1
-            if len(wire_bytes) > frame.INPUT_FRAME_LIMIT:
-                raise AssertionError("client notification frame over limit")
-            if self._poisoned:
-                raise AssertionError(
-                    "service poisoned by a bounded I/O timeout; "
-                    "a later exchange cannot be correlated")
-            try:
-                if self.write_deadline is None:
-                    self.proc.stdin.write(wire_bytes + b"\n")
-                    self.proc.stdin.flush()
-                elif self._use_threads:
-                    self._write_bounded_thread(wire_bytes + b"\n")
-                else:
-                    self._write_bounded(wire_bytes + b"\n")
-            except TimeoutError as exc:
-                raise AssertionError(
-                    f"service did not accept the notification within the "
-                    f"bounded write deadline: {exc}") from exc
-            except (BrokenPipeError, OSError) as exc:
-                raise AssertionError(
-                    f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
+            self._send_frame(wire_bytes)
             # A notification has no response frame; only the request side
             # contributes to the per-method frame-size record.
             record_frame_size(method, request_bytes)
@@ -2019,17 +2002,20 @@ class JsonRpcService:
         if not already_dead and not allow_forced and \
                 not broken_exchange and \
                 not (self._use_threads and self._poisoned):
-            trailing = self._drain_trailing_stdout()
-            if trailing.strip():
-                raise AssertionError(
-                    f"service wrote {len(trailing)} unexpected "
-                    f"trailing byte(s) on stdout after the response "
-                    f"set (expected zero): {trailing[:120]!r}")
-            status = self.proc.returncode
-            if status != 0:
-                raise AssertionError(
-                    f"service exited with status {status} after a "
-                    f"successful session (expected 0)")
+            try:
+                trailing = self._drain_trailing_stdout()
+                if trailing.strip():
+                    raise AssertionError(
+                        f"service wrote {len(trailing)} unexpected "
+                        f"trailing byte(s) on stdout after the response "
+                        f"set (expected zero): {trailing[:120]!r}")
+                status = self.proc.returncode
+                if status != 0:
+                    raise AssertionError(
+                        f"service exited with status {status} after a "
+                        f"successful session (expected 0)")
+            finally:
+                self._close_raw_stdout()
         # Close the buffered wrappers only after the peer is gone: a
         # still-blocked writer's write fails once the peer's pipe end
         # closes, releasing the lock.
@@ -2038,6 +2024,17 @@ class JsonRpcService:
                 if stream is not None and not stream.closed:
                     stream.close()
             except Exception:
+                pass
+        self._close_raw_stdout()
+
+    def _close_raw_stdout(self):
+        if self._raw_stdout is not None:
+            # Deadline-bounded POSIX branch: the buffered wrapper was
+            # detached, so its fd is owned here — closing the detached
+            # wrapper cannot close it. Idempotent on every close path.
+            try:
+                self._raw_stdout.close()
+            except OSError:
                 pass
 
     def _drain_trailing_stdout(self):

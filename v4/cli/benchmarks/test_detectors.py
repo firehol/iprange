@@ -260,6 +260,105 @@ class SilentPeerTest(unittest.TestCase):
             finally:
                 service.close(allow_forced=True, broken_exchange=True)
 
+    def test_a_second_exchange_after_the_deadline_is_refused(self):
+        # A timed-out stream is desynchronized: the late response
+        # would correlate as the next reply. The service must refuse
+        # with the poison message, not attempt the exchange.
+        import tempfile
+        from run import JsonRpcService as Service
+        stub = os.path.join(_HERE, "stub_engine.py")
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "silent_engine")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_MODE'] = 'silent'\n"
+                    f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            service = Service([wrapper, "--jsonrpc"], "silent",
+                              read_deadline=0.5, write_deadline=5)
+            try:
+                with self.assertRaisesRegex(
+                        AssertionError, "bounded read deadline"):
+                    service.call("s1", "iprange.v1.system.describe", {})
+                with self.assertRaisesRegex(
+                        AssertionError, "poisoned by a bounded I/O timeout"):
+                    service.call("s2", "iprange.v1.system.describe", {})
+            finally:
+                service.close(allow_forced=True, broken_exchange=True)
+
+
+class CallPathWiringTest(unittest.TestCase):
+    """The proof harness wires the deadlines into every engine.
+
+    SilentPeerTest pins the mechanism (a deadline-bounded service
+    fails on a silent peer); this pins the wiring: both construction
+    sites must pass read_deadline=120/write_deadline=30, so deleting
+    the deadlines from the call sites fails here even though the
+    mechanism test still greens.
+    """
+
+    def test_run_engine_constructs_its_service_with_deadlines(self):
+        import json
+        import tempfile
+        import types
+        recorded = {}
+
+        class FakeService:
+            def __init__(self, argv, name, **kwargs):
+                recorded["kwargs"] = kwargs
+                self.proc = types.SimpleNamespace(returncode=0)
+
+            def close(self, **kwargs):
+                pass
+
+        scenario = {
+            "schema": "iprange-bench-scenario-v1",
+            "name": "wiring",
+            "calls": [{
+                "method": "iprange.v1.system.describe",
+                "params": {},
+                "compare": ["method"],
+                "expect": {"method": "iprange.v1.system.describe"},
+            }],
+        }
+        with tempfile.TemporaryDirectory() as work:
+            path = os.path.join(work, "wiring.json")
+            with open(path, "w", encoding="utf-8") as stream:
+                json.dump(scenario, stream)
+            loaded = _bench.load_scenario(path)
+            from unittest import mock
+            with mock.patch.object(_bench, "JsonRpcService", FakeService):
+                try:
+                    _bench.run_engine("/nonexistent-engine", "rust",
+                                      loaded, work,
+                                      _bench.scenario_calls(loaded))
+                except Exception:
+                    pass  # run_calls fails on the fake; the wiring is
+                    # recorded at the construction site
+        self.assertEqual(recorded["kwargs"].get("read_deadline"), 120)
+        self.assertEqual(recorded["kwargs"].get("write_deadline"), 30)
+
+    def test_bench_session_constructs_its_service_with_deadlines(self):
+        import types
+        import client
+        from unittest import mock
+        recorded = {}
+
+        class FakeService:
+            def __init__(self, argv, name, **kwargs):
+                recorded["kwargs"] = kwargs
+                self.proc = types.SimpleNamespace(returncode=0)
+
+            def close(self, **kwargs):
+                pass
+
+        with mock.patch.object(client, "JsonRpcService", FakeService):
+            session = client.BenchSession("/nonexistent-engine")
+        self.assertEqual(recorded["kwargs"].get("read_deadline"), 120)
+        self.assertEqual(recorded["kwargs"].get("write_deadline"), 30)
+
 
 class CancelDetectorTest(unittest.TestCase):
     def test_a_cancelled_answer_without_outcome_fails(self):
