@@ -15,7 +15,7 @@ import time
 
 from client import BenchSession
 from generate import generate, merged_count, write_text
-from measure import child_hwm_kib, median, ratio
+from measure import child_cpu_seconds, child_hwm_kib, median, ratio
 from perf import PUBLISH, fail
 
 
@@ -52,6 +52,10 @@ def sample_peak(proc, peak):
     return max(peak, current)
 
 
+def sample_cpu(proc, cpu):
+    return max(cpu, child_cpu_seconds(proc.pid))
+
+
 def prepare_feed_texts(work, feeds):
     prepared = []
     for name, ranges in feeds:
@@ -67,6 +71,7 @@ def load_feeds(binary, work, feeds, wide=None):
     started = time.perf_counter()
     session = BenchSession(binary)
     peak = 0
+    cpu = 0.0
     try:
         membership = os.path.join(work, "mem.iprange")
         session.call("iprange.v1.database.create", {
@@ -85,6 +90,7 @@ def load_feeds(binary, work, feeds, wide=None):
         }
         for name, text_path, expected_count in prepared:
             peak = sample_peak(session.proc, peak)
+            cpu = sample_cpu(session.proc, cpu)
             destination = os.path.join(work, f"{name}.iprange")
             published = publish_one(session, text_path, destination, name, budget)
             if int(published["report"]["addresses"]) != expected_count:
@@ -100,10 +106,13 @@ def load_feeds(binary, work, feeds, wide=None):
         if wide is not None:
             text_path, expected = wide
             peak = sample_peak(session.proc, peak)
+            cpu = sample_cpu(session.proc, cpu)
             destination = os.path.join(work, "wide.iprange")
             published = publish_one(
                 session, text_path, destination, "wide",
                 PUBLISH["params"]["immutable_feed_budget"])
+            peak = sample_peak(session.proc, peak)
+            cpu = sample_cpu(session.proc, cpu)
             wide_addresses = int(published["report"]["addresses"])
             if wide_addresses != expected:
                 raise AssertionError(
@@ -119,10 +128,12 @@ def load_feeds(binary, work, feeds, wide=None):
             "source": {"path": membership, "mode": "live"},
         })
         peak = sample_peak(session.proc, peak)
+        cpu = sample_cpu(session.proc, cpu)
         return {
             "feeds": int(info["info"]["active_feed_count"]),
             "wide_addresses": wide_addresses,
             "elapsed_seconds": time.perf_counter() - started,
+            "child_cpu_seconds": cpu,
             "child_max_rss_kib": peak,
         }
     finally:
@@ -137,12 +148,15 @@ def import_ranges(binary, work, ranges, expected):
     started = time.perf_counter()
     session = BenchSession(binary)
     peak = 0
+    cpu = 0.0
     try:
         peak = sample_peak(session.proc, peak)
+        cpu = sample_cpu(session.proc, cpu)
         published = publish_one(
             session, text_path, destination, "wide",
             PUBLISH["params"]["immutable_feed_budget"])
         peak = sample_peak(session.proc, peak)
+        cpu = sample_cpu(session.proc, cpu)
     finally:
         session.close()
     got = int(published["report"]["addresses"])
@@ -151,6 +165,7 @@ def import_ranges(binary, work, ranges, expected):
     return {
         "addresses": got,
         "elapsed_seconds": time.perf_counter() - started,
+        "child_cpu_seconds": cpu,
         "child_max_rss_kib": peak,
     }
 
@@ -179,10 +194,12 @@ def main():
     expected = merged_count(wide)
     def spread(samples):
         elapsed = [sample["elapsed_seconds"] for sample in samples]
+        cpu = [sample.get("child_cpu_seconds", 0) for sample in samples]
         rss = [sample["child_max_rss_kib"] for sample in samples]
         return {
             "rounds": len(samples),
             "elapsed_seconds": {"median": median(elapsed), "min": min(elapsed), "max": max(elapsed)},
+            "child_cpu_seconds": {"median": median(cpu), "min": min(cpu), "max": max(cpu)},
             "child_max_rss_kib": {"median": median(rss), "min": min(rss), "max": max(rss)},
         }
 
