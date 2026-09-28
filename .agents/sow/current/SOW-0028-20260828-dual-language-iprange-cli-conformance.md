@@ -21905,6 +21905,18 @@ are therefore the decisions:
 3. Join and projection scenarios build against the methods both engines
    already expose. SOW-0029/0030/0031 are not a prerequisite.
 
+### Reviewer model deviation (2026-09-28)
+
+`REVIEWS.md` runs the role round on the lead's own model. The lead model
+`grok-4.7` ran out of credits (provider 403
+`personal-team-blocked:spending-limit`), so the round-3 role reviews
+failed at launch. The user directed that the reviewers run on
+`mimo-v2.6-pro` instead. The role round and re-review run on that model.
+The seven roles, the kit, the verdicts, and the adjudication rules are
+unchanged. The prior round-2 findings are staged in
+`.local/shared/evidence/m5-roles/` so a fresh session can verify its own
+prior findings at the reviewed HEAD.
+
 ### Pre-Implementation Gate (milestone 5)
 
 - Problem: no committed CLI benchmark exists; existing RSS numbers sample
