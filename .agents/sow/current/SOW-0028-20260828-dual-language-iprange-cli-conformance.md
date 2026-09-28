@@ -16270,7 +16270,7 @@ of binaries give Go 18,026.3 / 17,689.4 / 17,683.7 and Rust 55,471.5 /
 58,367.0 / 53,618.9 replies/s, so the Rust rate varies about 8.8% round to
 round under load alone. The conclusion the paragraph defends — no Go/Rust
 ratio may be drawn from these figures, and they are not evidence for the
-1.3x relative-rate contract — is unchanged, and is now supported by a number
+1.3x elapsed / peak-RSS acceptance contract — is unchanged, and is now supported by a number
 a reader can recompute from `v4/cli/evidence/throughput.json`.
 
 ### Corrected: cost class of the parity and pressure runs

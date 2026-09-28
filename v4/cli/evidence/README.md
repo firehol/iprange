@@ -2274,7 +2274,7 @@ the binding that field provides.
   median per product, so no second quieter-host figure can be cited from
   it; the 17,689.4/55,471.5 and 35,464.7/50,535.9 pairs that appeared
   here earlier match no member of the committed artifact.  No Go/Rust ratio from these figures is evidence for the 1.3x
-  relative-rate contract planned for milestone 5, which needs a load-isolated
+  elapsed / peak-RSS acceptance contract planned for milestone 5, which needs a load-isolated
   measurement protocol this harness does not implement.  The report is
   identity-bound (binary SHA-256 plus the `system.describe` implementation
   label of each executed actor, checked against the staged SHASUMS ledger when

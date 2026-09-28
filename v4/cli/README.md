@@ -404,7 +404,8 @@ host, the three rounds of `evidence/throughput.json` give Go 7,755.4 /
 the Rust rate varies by about 10.3% round to round with nothing but load
 changing. No ratio between the two engines is therefore implied
 by these numbers, and they are explicitly **not** usable as evidence for
-the 1.3x relative-rate contract planned for milestone 5 — that contract
+the 1.3x elapsed / peak-RSS acceptance contract planned
+for milestone 5 — that contract
 needs a load-isolated measurement protocol of its own (pinned cores, idle
 host, repeated trials, a stated statistic), which this harness does not
 implement and does not claim.
