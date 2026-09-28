@@ -287,7 +287,7 @@ Pending.
   not serialize identical JSON-RPC bytes. A `system.describe` response
   is 2256 bytes from Rust and 2254 from Go at the same revision
   (probe log `.local/shared/evidence/m5-proofs/describe_bytes.log`,
-  stamped at SOW-0028's revision `621b3905`). The wire authority's sentence
+  whose second line names the revision it was produced at). The wire authority's sentence
   `iprange-jsonrpc-v1.md` "must serialize identically" does not hold
   between the products today. This SOW, as the parity owner, decides
   whether the two serializations must be unified byte-for-byte or the

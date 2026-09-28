@@ -5,10 +5,46 @@
 Both are asserted here so the claims are committed tests, not prose.
 """
 
+import importlib.util
+import os
+import sys
 import unittest
 
 from cancel_inflight import cancelled_result
 from run_all import s0_detect_verdict
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(_HERE))
+_spec = importlib.util.spec_from_file_location(
+    "detectors_runner", os.path.join(_HERE, "run.py"))
+_bench = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_bench)
+
+
+class ExitGateTest(unittest.TestCase):
+    """An engine that answers every call and then dies nonzero fails.
+
+    The stub answers a describe correctly and exits 1, so the scenario
+    run must fail on the exit check, not on any protocol error.
+    """
+
+    def test_a_dying_engine_fails_its_own_run(self):
+        import json
+        import os as _os
+        stub = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "stub_engine.py")
+        scenario = {
+            "name": "exit-gate",
+            "calls": [{
+                "method": "iprange.v1.system.describe",
+                "params": {},
+                "compare": ["method"],
+                "expect": {"method": "iprange.v1.system.describe"},
+            }],
+        }
+        with self.assertRaises(AssertionError) as caught:
+            _bench.run_engine(stub, "stub", scenario, _os.path.join(
+                _os.path.dirname(stub), "..", "..", "..", "..", "/tmp"), scenario["calls"])
+        self.assertIn("exited", str(caught.exception))
 
 
 class ScenarioDetectorTest(unittest.TestCase):

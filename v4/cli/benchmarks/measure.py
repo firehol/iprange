@@ -140,6 +140,8 @@ def ratio(rust, go):
         "elapsed": go["elapsed_seconds"]["median"] / elapsed,
         "rss": go["child_max_rss_kib"]["median"] / rss,
     }
+    if go["elapsed_seconds"]["median"] <= 0 or go["child_max_rss_kib"]["median"] <= 0:
+        raise ValueError("go median must be positive")
     rust_cpu = rust.get("child_cpu_seconds", {}).get("median")
     go_cpu = go.get("child_cpu_seconds", {}).get("median")
     if (rust_cpu is None) != (go_cpu is None):
