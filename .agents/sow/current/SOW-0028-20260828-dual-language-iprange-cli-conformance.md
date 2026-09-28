@@ -22274,10 +22274,10 @@ the revision on its own second line, the binary SHA-256
 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 50.355 s elapsed, 11.52 s CPU, spread
-49.765–50.771 s, peak 225356 KiB. Go median 62.748 s elapsed, 22.84 s
-CPU, spread 58.610–68.126 s, peak 232556 KiB. The Go/Rust ratio is
-1.246 elapsed, 1.983 CPU, and 1.032 RSS. Wall time moves with
+clock. Rust median 48.937 s elapsed, 11.16 s CPU, spread
+48.645–50.268 s, peak 225324 KiB. Go median 59.472 s elapsed, 21.95 s
+CPU, spread 58.895–61.425 s, peak 232120 KiB. The Go/Rust ratio is
+1.215 elapsed, 1.967 CPU, and 1.030 RSS. Wall time moves with
 workstation load between runs. The binding acceptance metric
 (SOW-0030, user decisions 1A/2A) is **elapsed time** ≤1.3x Rust and
 **peak RSS** ≤1.3x; instruction-level CPU is not part of that
