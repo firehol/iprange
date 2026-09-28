@@ -16,9 +16,11 @@ answered at all, it must carry the factual cancelled outcome.
 import argparse
 import json
 import os
+import select
 import signal
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from run import JsonRpcService  # noqa: E402
@@ -90,21 +92,43 @@ def prove(binary, work):
             },
         })
         service.notify("iprange.v1.cancel", {"request_id": PUBLISH_ID})
-        # The probe is submitted before stdin closes and must answer
-        # before stdin closes. Until it does, the only thing that can
-        # have stopped the publish is the cancel notification above.
+        # The probe is submitted before stdin closes. Until it answers,
+        # the only thing that can have stopped the publish is the cancel
+        # notification above. Then the publish itself must reach a
+        # terminal state while stdin is still open: a producer that
+        # ignores cancel finishes the import and answers with a result,
+        # so the classifier below is reachable, not dead code. Killing
+        # the producer first would hide exactly that answer.
         service.submit(PROBE_ID, "iprange.v1.system.describe", {})
-        while PROBE_ID not in seen and PUBLISH_ID not in seen:
+        deadline = time.monotonic() + 60
+        probe_at = None
+        while time.monotonic() < deadline:
+            ready = select.select([service.proc.stdout], [], [], 0.5)[0]
+            if not ready:
+                if service.proc.poll() is not None:
+                    break
+                continue
             line = service.proc.stdout.readline(1_048_578)
             if not line:
                 break
             response = json.loads(line)
             seen[response.get("id")] = response
+            if PROBE_ID in seen and probe_at is None:
+                probe_at = time.monotonic()
+            if probe_at is not None and PUBLISH_ID in seen:
+                break
+            if probe_at is not None and time.monotonic() - probe_at > 20:
+                break
         if PROBE_ID not in seen:
             raise AssertionError("the probe never answered while stdin was open")
         if "result" not in seen[PROBE_ID]:
             raise AssertionError(f"probe was not answered: {seen[PROBE_ID]!r}")
         cancelled = seen.get(PUBLISH_ID)
+        # If the publish never answered: this corpus imports in about
+        # half a second un-cancelled, so twenty seconds without an
+        # answer means the import was aborted by the cancel. The
+        # process staying alive is normal — the session waits for
+        # stdin to close.
         reason = cancelled_result(cancelled)
         if reason:
             raise AssertionError(reason)

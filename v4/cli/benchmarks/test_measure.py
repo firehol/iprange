@@ -6,7 +6,7 @@ import os
 import sys
 import unittest
 
-from measure import ratio
+from measure import child_cpu_seconds, ratio, run_once
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
@@ -69,6 +69,12 @@ def assign(root, path, value):
         cursor[slot] = value
     else:
         cursor[last] = value
+
+
+class CancelCpuSampleTest(unittest.TestCase):
+    def test_child_cpu_seconds_is_measured(self):
+        sample = run_once(["/bin/sh", "-c", "i=0; while [ $i -lt 200000 ]; do i=$((i+1)); done"])
+        self.assertGreater(sample["child_cpu_seconds"], 0.0)
 
 
 class HarnessContractTest(unittest.TestCase):
