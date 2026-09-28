@@ -22,10 +22,30 @@ def child_hwm_kib(pid):
     return None
 
 
+def child_cpu_seconds(pid):
+    """CPU seconds of this child so far, from its own process record.
+
+    `getrusage(RUSAGE_CHILDREN)` accumulates across every waited child,
+    so a delta is this child's CPU only when nothing else was waited for
+    in between. `/proc/<pid>/stat` names one process, so it is the child
+    under measurement and not an inherited total.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as stream:
+            fields = stream.read().rsplit(")", 1)[1].split()
+        # utime and stime are fields 14 and 15 of the full record,
+        # which is fields 0 and 1 after the split above.
+        ticks = int(fields[11]) + int(fields[12])
+        return ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError):
+        return 0.0
+
+
 def run_once(argv, stdin_bytes=None):
     started = time.perf_counter()
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     peak = 0
+    cpu = 0.0
     deadline = time.perf_counter() + 120
     if stdin_bytes is not None:
         proc.stdin.write(stdin_bytes)
@@ -39,6 +59,7 @@ def run_once(argv, stdin_bytes=None):
         current = child_hwm_kib(proc.pid)
         if current is not None:
             peak = max(peak, current)
+        cpu = max(cpu, child_cpu_seconds(proc.pid))
         if stdin_bytes is not None:
             try:
                 if proc.stdout.readline():
@@ -61,6 +82,7 @@ def run_once(argv, stdin_bytes=None):
         raise AssertionError("child peak was not observed")
     return {
         "elapsed_seconds": elapsed,
+        "child_cpu_seconds": cpu,
         "child_max_rss_kib": peak,
         "child_raised_peak": True,
     }
@@ -79,10 +101,12 @@ def measure(argv, rounds, stdin_bytes=None):
         raise ValueError("rounds must be positive")
     samples = [run_once(argv, stdin_bytes) for _ in range(rounds)]
     elapsed = [sample["elapsed_seconds"] for sample in samples]
+    cpu = [sample["child_cpu_seconds"] for sample in samples]
     rss = [sample["child_max_rss_kib"] for sample in samples]
     return {
         "rounds": rounds,
         "elapsed_seconds": {"median": median(elapsed), "min": min(elapsed), "max": max(elapsed)},
+        "child_cpu_seconds": {"median": median(cpu), "min": min(cpu), "max": max(cpu)},
         "child_max_rss_kib": {"median": median(rss), "min": min(rss), "max": max(rss)},
         "child_raised_peak": all(sample["child_raised_peak"] for sample in samples),
     }
@@ -91,10 +115,14 @@ def measure(argv, rounds, stdin_bytes=None):
 def ratio(rust, go):
     """Go/Rust median ratio. Above 1 means Go used more time or RSS."""
     elapsed = rust["elapsed_seconds"]["median"]
+    cpu = rust.get("child_cpu_seconds", {}).get("median", 0)
     rss = rust["child_max_rss_kib"]["median"]
     if elapsed <= 0 or rss <= 0:
         raise ValueError("rust median must be positive")
-    return {
+    result = {
         "elapsed": go["elapsed_seconds"]["median"] / elapsed,
         "rss": go["child_max_rss_kib"]["median"] / rss,
     }
+    if cpu > 0:
+        result["cpu"] = go.get("child_cpu_seconds", {}).get("median", 0) / cpu
+    return result

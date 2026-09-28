@@ -21891,7 +21891,12 @@ production-sized ceiling run (1,000+ feeds, 10M ranges) at milestone close.
   digests across Rust/Go, plus oracle invariants (scalar interval oracle
   from `v4/cli/run.py`; generator ground truth for churn/cohorts).
 - Test-only necessary-work counters (page visits, range passes) per
-  `AGENTS.md`, compiled out of release.
+  `AGENTS.md`, compiled out of release. These live in the engine test
+  builds (`v4/rust/iprange-livedb/src/necessary_work_tests.rs`,
+  `v4/go/cmd/iprange-v4-bench/necessary_work_v4work_test.go`) and are
+  owned by SOW-0030. The release-binary harness of this milestone
+  cannot read them and does not claim to; it records wall time, child
+  CPU time, and child peak RSS.
 
 ### Open decisions (resolved 2026-09-24)
 
@@ -22277,9 +22282,6 @@ Every committed scenario rejects a seeded wrong answer. The comparator
 reports the mutated expect even when both engines would agree. A batch
 call has no method name; the report still names the mismatch.
 
-The product proofs for milestone 5 are in the tree. The close gate is
-the role round and the astra review required by `REVIEWS.md`. Milestone
-5 is not closed until those return.
 The fifteen attestation rows have detecting cases. The scenario matrix
 covers import, first-seen and last-seen refresh, history cutoff, joins,
 snapshot cross-open, and recovery cross-open. Parallel publish isolates
@@ -22292,4 +22294,15 @@ update-ipsets was not pushed.
 - Validation plan: each scenario correctness-green on both engines;
   performance logs plain-text per REVIEWS.md; role round on the harness
   itself (tester: every scenario detects a seeded wrong-answer mutant;
-  performance: measurement contract enforced).
+  performance: measurement contract enforced). Costed steps over two
+  wall-minutes, named before they run: the close ceiling is one
+  database of 999 small feeds plus a 10M-range feed per round, three
+  rounds per engine, about six wall-minutes plus corpus generation;
+  the final-revision `--tier gate` battery is about three wall-minutes.
+
+**Milestone 5 status: OPEN.** The paragraphs above record what is in
+the tree and what has been measured. They are not a close claim. The
+milestone stays open until the seven-role round approves the exact
+revision, astra returns `PRODUCTION GRADE`, and the gate battery is
+recorded at the final revision. Any of those can still fail and send
+the milestone back to implementation.
