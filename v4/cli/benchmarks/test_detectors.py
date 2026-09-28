@@ -31,6 +31,56 @@ class ExitGateTest(unittest.TestCase):
     run.py self-test pins with its nonzero-exit control.
     """
 
+    def test_an_engine_that_answers_then_dies_fails_its_own_run(self):
+        """An answered-then-died engine fails its own run.
+
+        The stub answers the describe correctly, flushes it, and exits
+        nonzero immediately. run_calls succeeds, so only the exit
+        checks remain: the runner's gate if the engine died before
+        close() could poll it, or close()'s own check if it survived
+        that far. Which one fires depends on scheduling — the death
+        cannot be made to precede the poll deterministically from a
+        child process — so this test requires either message and pins
+        the contract: the run fails.
+        """
+        import json as _json
+        import os as _os
+        import subprocess
+        import tempfile
+        stub = _os.path.join(_HERE, "stub_engine.py")
+        scenario = {
+            "schema": "iprange-bench-scenario-v1",
+            "name": "exit-gate-answered",
+            "purpose": "The stub answers this describe correctly and then dies.",
+            "calls": [{
+                "method": "iprange.v1.system.describe",
+                "params": {},
+                "compare": ["method"],
+                "expect": {"method": "iprange.v1.system.describe"},
+            }],
+        }
+        with tempfile.TemporaryDirectory() as work:
+            path = _os.path.join(work, "exit-gate.json")
+            with open(path, "w", encoding="utf-8") as stream:
+                _json.dump(scenario, stream)
+            wrapper = _os.path.join(work, "dying_engine")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_MODE'] = 'die-after-answer'\n"
+                    f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            _os.chmod(wrapper, 0o755)
+            completed = subprocess.run(
+                [sys.executable, _os.path.join(_HERE, "run.py"),
+                 "--rust", wrapper, "--go", wrapper, "--scenario", path],
+                capture_output=True, text=True, check=False, cwd=_HERE)
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertTrue(
+                "rust exited 1" in completed.stderr
+                or "exited with status 1" in completed.stderr,
+                f"neither exit check fired: {completed.stderr!r}")
+
     def test_a_dying_engine_fails_its_own_run(self):
         import json as _json
         import os as _os

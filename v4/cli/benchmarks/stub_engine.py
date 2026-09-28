@@ -52,7 +52,11 @@ def main():
         sys.stdout.write(json.dumps(response) + "\n")
         sys.stdout.flush()
         if die_after:
-            sys.exit(exit_status)
+            # Immediate termination: the runner has consumed the
+            # response, and the exit must land before close() can poll,
+            # so the gate is the only catcher. sys.exit unwinds the
+            # interpreter for milliseconds and loses that race.
+            os._exit(exit_status)
     sys.exit(exit_status)
 
 

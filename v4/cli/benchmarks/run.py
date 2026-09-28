@@ -277,10 +277,13 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None)
         return result
     finally:
         service.close()
-        # An engine that answers every call and then dies nonzero must
-        # still fail its own run. close() waits for the process, so the
-        # returncode is settled here whether or not the engine died
-        # before teardown.
+        # An engine that exits nonzero fails its own run. close()
+        # waits for the process, so the returncode is settled here.
+        # close() itself also checks the exit status of a peer that was
+        # alive at its entry; this gate covers the peer that was
+        # already dead when close() started. Which check fires for an
+        # answered-then-died engine depends on scheduling; the contract
+        # — the run fails — is pinned by test_detectors.py either way.
         if service.proc.returncode != 0:
             raise AssertionError(
                 f"{name} exited {service.proc.returncode}")
