@@ -273,11 +273,11 @@ def call_batch(service, count, work):
             "method": "iprange.v1.system.describe",
             "params": {},
         })
-    wire = json.dumps(members, separators=(",", ":")).encode("utf-8") + b"\n"
-    # A batch is one frame. The qualification client owns these pipes.
-    service.proc.stdin.write(wire)
-    service.proc.stdin.flush()
-    line = readline_bounded(service.proc.stdout)
+    wire = json.dumps(members, separators=(",", ":")).encode("utf-8")
+    # A batch is one frame. The exchange (bounded write, bounded read)
+    # is the service's own — the deadline-bounded modes detach the
+    # buffered wrappers, so the pipes must not be driven directly.
+    line = service.exchange_raw(wire)
     return batch_observation(json.loads(line), count)
 
 

@@ -1551,75 +1551,94 @@ class JsonRpcService:
         self.drainer = threading.Thread(target=_drain, daemon=True)
         self.drainer.start()
 
+    def _send_frame(self, wire_bytes):
+        # Raw wire bytes of the request frame, LF terminator added by
+        # the transport (one physical line per frame).
+        if len(wire_bytes) > frame.INPUT_FRAME_LIMIT:
+            raise AssertionError("client request frame over limit")
+        if self._poisoned:
+            raise AssertionError(
+                "service poisoned by a bounded I/O timeout; "
+                "a later exchange cannot be correlated")
+        try:
+            if self.write_deadline is None:
+                self.proc.stdin.write(wire_bytes + b"\n")
+                self.proc.stdin.flush()
+            elif self._use_threads:
+                self._write_bounded_thread(wire_bytes + b"\n")
+            else:
+                self._write_bounded(wire_bytes + b"\n")
+        except TimeoutError as exc:
+            raise AssertionError(
+                f"service did not accept the request within the "
+                f"bounded write deadline: {exc}") from exc
+        except (BrokenPipeError, OSError) as exc:
+            raise AssertionError(
+                f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
+
+    def _receive_frame(self):
+        if self.read_deadline is None:
+            # Bound the no-deadline readline: the buffered
+            # wrapper's readline(size) never buffers more than
+            # size bytes, so a peer emitting an unterminated frame
+            # can no longer accumulate unbounded output (external
+            # review finding).
+            line = self.proc.stdout.readline(
+                frame.OUTPUT_FRAME_LIMIT + 2)
+        elif self._use_threads:
+            try:
+                line = self._readline_bounded_thread()
+            except TimeoutError as exc:
+                raise AssertionError(
+                    f"service did not answer within the bounded read "
+                    f"deadline: {exc}") from exc
+            except frame.FrameError as exc:
+                self._poisoned = True
+                raise AssertionError(str(exc)) from exc
+        else:
+            try:
+                line = self._readline_bounded()
+            except TimeoutError as exc:
+                raise AssertionError(
+                    f"service did not answer within the bounded read "
+                    f"deadline: {exc}") from exc
+            except frame.FrameError as exc:
+                self._poisoned = True
+                raise AssertionError(str(exc)) from exc
+        if not line:
+            raise AssertionError(
+                f"service closed stdout; stderr={''.join(self.stderr_tail[-5:])}")
+        if len(line) > frame.OUTPUT_FRAME_LIMIT + 1:
+            # One response frame at or over the output ceiling
+            # (payload + terminator): violating the ceiling on a
+            # shared stream poisons it, later bytes cannot be
+            # correlated (external review finding).
+            self._poisoned = True
+            raise AssertionError(
+                f"response frame of {len(line)} bytes exceeds the "
+                f"{frame.OUTPUT_FRAME_LIMIT} byte output ceiling")
+        return line
+
+    def exchange_raw(self, wire_bytes):
+        """Write one pre-built request frame and read one response frame.
+
+        A batch request is one physical frame whose members this class
+        does not model individually; the bounded exchange itself is
+        identical to `call`. Returns the raw response line, LF
+        terminator included.
+        """
+        with self.lock:
+            self._send_frame(wire_bytes)
+            return self._receive_frame()
+
     def call(self, request_id, method, params):
         with self.lock:
             request = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
             wire = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
             wire_bytes = wire.encode("utf-8")
-            # Raw wire bytes of the request frame, including the LF
-            # terminator (the transport is one physical line per frame).
             request_bytes = len(wire_bytes) + 1
-            if len(wire_bytes) > frame.INPUT_FRAME_LIMIT:
-                raise AssertionError("client request frame over limit")
-            if self._poisoned:
-                raise AssertionError(
-                    "service poisoned by a bounded I/O timeout; "
-                    "a later exchange cannot be correlated")
-            try:
-                if self.write_deadline is None:
-                    self.proc.stdin.write(wire_bytes + b"\n")
-                    self.proc.stdin.flush()
-                elif self._use_threads:
-                    self._write_bounded_thread(wire_bytes + b"\n")
-                else:
-                    self._write_bounded(wire_bytes + b"\n")
-            except TimeoutError as exc:
-                raise AssertionError(
-                    f"service did not accept the request within the "
-                    f"bounded write deadline: {exc}") from exc
-            except (BrokenPipeError, OSError) as exc:
-                raise AssertionError(
-                    f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
-            if self.read_deadline is None:
-                # Bound the no-deadline readline: the buffered
-                # wrapper's readline(size) never buffers more than
-                # size bytes, so a peer emitting an unterminated frame
-                # can no longer accumulate unbounded output (external
-                # review finding).
-                line = self.proc.stdout.readline(
-                    frame.OUTPUT_FRAME_LIMIT + 2)
-            elif self._use_threads:
-                try:
-                    line = self._readline_bounded_thread()
-                except TimeoutError as exc:
-                    raise AssertionError(
-                        f"service did not answer within the bounded read "
-                        f"deadline: {exc}") from exc
-                except frame.FrameError as exc:
-                    self._poisoned = True
-                    raise AssertionError(str(exc)) from exc
-            else:
-                try:
-                    line = self._readline_bounded()
-                except TimeoutError as exc:
-                    raise AssertionError(
-                        f"service did not answer within the bounded read "
-                        f"deadline: {exc}") from exc
-                except frame.FrameError as exc:
-                    self._poisoned = True
-                    raise AssertionError(str(exc)) from exc
-            if not line:
-                raise AssertionError(
-                    f"service closed stdout; stderr={''.join(self.stderr_tail[-5:])}")
-            if len(line) > frame.OUTPUT_FRAME_LIMIT + 1:
-                # One response frame at or over the output ceiling
-                # (payload + terminator): violating the ceiling on a
-                # shared stream poisons it, later bytes cannot be
-                # correlated (external review finding).
-                self._poisoned = True
-                raise AssertionError(
-                    f"response frame of {len(line)} bytes exceeds the "
-                    f"{frame.OUTPUT_FRAME_LIMIT} byte output ceiling")
+            self._send_frame(wire_bytes)
+            line = self._receive_frame()
             # Raw response frame as read, LF terminator included; same
             # unit as the request frame.
             record_frame_size(method, request_bytes, len(line))
@@ -1640,27 +1659,7 @@ class JsonRpcService:
             request = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
             wire = json.dumps(request, separators=(",", ":"), ensure_ascii=False)
             wire_bytes = wire.encode("utf-8")
-            if len(wire_bytes) > frame.INPUT_FRAME_LIMIT:
-                raise AssertionError("client request frame over limit")
-            if self._poisoned:
-                raise AssertionError(
-                    "service poisoned by a bounded I/O timeout; "
-                    "a later exchange cannot be correlated")
-            try:
-                if self.write_deadline is None:
-                    self.proc.stdin.write(wire_bytes + b"\n")
-                    self.proc.stdin.flush()
-                elif self._use_threads:
-                    self._write_bounded_thread(wire_bytes + b"\n")
-                else:
-                    self._write_bounded(wire_bytes + b"\n")
-            except TimeoutError as exc:
-                raise AssertionError(
-                    f"service did not accept the request within the "
-                    f"bounded write deadline: {exc}") from exc
-            except (BrokenPipeError, OSError) as exc:
-                raise AssertionError(
-                    f"service closed stdin: {''.join(self.stderr_tail[-5:])}") from exc
+            self._send_frame(wire_bytes)
 
     def kill_process_group(self):
         """Stop exactly the process tree this service spawned.
