@@ -22276,10 +22276,10 @@ the revision on its own second line, the binary SHA-256
 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 49.774 s elapsed, 11.46 s CPU, spread
-49.678–52.718 s, peak 225168 KiB. Go median 59.869 s elapsed, 22.14 s
-CPU, spread 59.167–63.713 s, peak 233040 KiB. The Go/Rust ratio is
-1.203 elapsed, 1.932 CPU, and 1.035 RSS. Wall time moves with
+clock. Rust median 50.468 s elapsed, 11.23 s CPU, spread
+49.232–51.292 s, peak 225500 KiB. Go median 63.906 s elapsed, 21.99 s
+CPU, spread 58.249–63.956 s, peak 232060 KiB. The Go/Rust ratio is
+1.266 elapsed, 1.958 CPU, and 1.029 RSS. Wall time moves with
 workstation load between runs. The binding acceptance metric
 (SOW-0030, user decisions 1A/2A) is **elapsed time** ≤1.3x Rust and
 **peak RSS** ≤1.3x; process CPU time (utime+stime) is not part
@@ -22352,22 +22352,26 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Nineteen recorded
-  regenerations of the ceiling at byte-identical binaries (each of
-  rounds 5 through 19 rebound `combined.log`, plus the
-  round-32/33/34/35 rebinds at 1.184, 1.193, 1.266, and 1.203) span
-  elapsed **1.091–1.586** — wall-clock noise that crosses the 1.3x
-  bound: the round-7 session measured 1.586 on an idle machine with
-  CPU work near-identical to today's (Rust 11.13 s / Go 21.66 s),
-  and the round-6 low of 1.091 is the same run-condition variance
-  in the flattering direction. The CPU ratio over the same sessions
-  spans 1.875–1.983. The verdict owner (SOW-0030) must treat elapsed
-  wall-clock as run-condition-sensitive: the extremes reflect
-  machine conditions, not engine differences, and the recorded
-  spread crosses the bound it must judge. (The tester round-20
-  report enumerates at least twelve of the rounds-5-19 sessions;
-  rounds 7, 9, and 13 are recorded in their own rounds' role
-  reports.) The superseded sessions are recorded with
+- **Elapsed-ratio cross-session spread.** Twenty-three recorded
+  ceiling sessions at byte-identical binaries (r2 1.159, r4 1.244,
+  each of rounds 5 through 19, the round-32/33/34/35 rebinds at
+  1.184, 1.193, 1.266, 1.203, and the two round-36 runs) span
+  elapsed **0.916–1.586** — wall-clock noise that crosses both 1.0
+  and the 1.3x bound: the round-7 session measured 1.586 on an
+  idle machine with CPU work near-identical to today's (Rust
+  11.13 s / Go 21.66 s); the first round-36 run measured **0.916**
+  — Go faster than Rust — because the Rust rounds hit transient
+  load (49.8–73.8 s across three rounds) while Go's stayed tight;
+  it was immediately re-run and the staged session measures 1.266
+  with tight Rust rounds (49.2–51.3 s). The CPU ratio over every
+  recorded session spans 1.875–1.983 — tight while elapsed swings
+  by more than 70% relative. The verdict owner (SOW-0030) must
+  treat elapsed wall-clock as run-condition-dominated: no session's
+  elapsed ratio is evidence of an engine difference, and the
+  recorded spread crosses the bound it must judge in both
+  directions. (The tester round-20 report enumerates at least
+  twelve of the rounds-5-19 sessions; rounds 7, 9, and 13 are
+  recorded in their own rounds' role reports.) The superseded sessions are recorded with
   citations in the kit's role reports (`evidence/m5-roles/`; the
   tester round-20 report enumerates at least twelve, and rounds 7,
   9, and 13 in their own reports). The kit holds the current
