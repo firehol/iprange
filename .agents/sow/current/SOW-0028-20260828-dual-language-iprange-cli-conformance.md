@@ -21895,11 +21895,12 @@ production-sized ceiling run (1,000+ feeds, 10M ranges) at milestone close.
   `system.describe` response is 2256 bytes from Rust and 2254 from Go
   at the same revision; probe log
   `.local/shared/evidence/m5-proofs/describe_bytes.log`), and the
-  harness compares the decoded members instead. The wire authority's
-  byte-identity sentence (`iprange-jsonrpc-v1.md` "must serialize
-  identically") does not hold between the products today; that
-  divergence is recorded in SOW-0030's Followup section, which owns
-  the parity decision. Oracle invariants: scalar interval oracle
+  harness compares the decoded members instead. The wire
+  authority's byte-identity sentence (`iprange-jsonrpc-v1.md`)
+  governs field-name serialization identity, not whole-frame byte
+  identity; the frame-size divergence does not violate that clause.
+  It is recorded in SOW-0030's Followup section, which owns whether
+  to also require byte-identical frames. Oracle invariants: scalar interval oracle
   from `v4/cli/run.py`; generator ground truth for churn/cohorts.
 - Test-only necessary-work counters (page visits, range passes) per
   `AGENTS.md`, compiled out of release. These live in the engine test

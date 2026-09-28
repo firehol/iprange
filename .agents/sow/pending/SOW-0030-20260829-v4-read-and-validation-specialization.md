@@ -288,8 +288,9 @@ Pending.
   is 2256 bytes from Rust and 2254 from Go at the same revision
   (probe log `.local/shared/evidence/m5-proofs/describe_bytes.log`,
   whose second line names the revision it was produced at). The wire authority's sentence
-  `iprange-jsonrpc-v1.md` "must serialize identically" does not hold
-  between the products today. This SOW, as the parity owner, decides
+  (`iprange-jsonrpc-v1.md`) governs field-name serialization identity,
+  not whole-frame byte identity; the frame-size divergence does not
+  violate that clause. This SOW, as the parity owner, decides
   whether the two serializations must be unified byte-for-byte or the
   wire authority's sentence is rescoped to member identity.
 
