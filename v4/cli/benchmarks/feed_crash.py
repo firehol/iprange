@@ -9,6 +9,7 @@ is a failed proof, not a pass.
 
 import argparse
 import os
+import signal
 import sys
 import tempfile
 import time
@@ -93,6 +94,13 @@ def prove(binary, work):
     with open(huge, "w", encoding="utf-8") as stream:
         write_text(generate(3, 400000, 4, 2_000_000), stream)
     session = BenchSession(binary, killable=True)
+
+    def forward(signum, frame):
+        del signum, frame
+        session.kill()
+        raise SystemExit(143)
+
+    previous = signal.signal(signal.SIGTERM, forward)
     try:
         publish(session, alpha, os.path.join(work, "alpha.iprange"), "alpha")
         publish(session, beta, os.path.join(work, "beta.iprange"), "beta")
@@ -139,6 +147,7 @@ def prove(binary, work):
             raise AssertionError("replace finished before the kill; the crash proof did not run")
         session.kill()
     finally:
+        signal.signal(signal.SIGTERM, previous)
         if session.proc.poll() is None:
             session.kill()
         session.close()

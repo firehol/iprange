@@ -91,6 +91,8 @@ def run_once(argv, stdin_bytes=None):
         raise AssertionError(f"child exited {proc.returncode}: {argv[0]}")
     if peak == 0:
         raise AssertionError("child peak was not observed")
+    if cpu <= 0:
+        raise AssertionError("child cpu was not sampled")
     return {
         "elapsed_seconds": elapsed,
         "child_cpu_seconds": cpu,
@@ -124,9 +126,13 @@ def measure(argv, rounds, stdin_bytes=None):
 
 
 def ratio(rust, go):
-    """Go/Rust median ratio. Above 1 means Go used more time or RSS."""
+    """Go/Rust median ratio. Above 1 means Go used more time or RSS.
+
+    A missing CPU sample is never turned into a zero: a fabricated
+    `cpu: 0.0` would read as a pass of the 1.3x CPU ceiling. If either
+    engine carries CPU data, both must.
+    """
     elapsed = rust["elapsed_seconds"]["median"]
-    cpu = rust.get("child_cpu_seconds", {}).get("median", 0)
     rss = rust["child_max_rss_kib"]["median"]
     if elapsed <= 0 or rss <= 0:
         raise ValueError("rust median must be positive")
@@ -134,6 +140,14 @@ def ratio(rust, go):
         "elapsed": go["elapsed_seconds"]["median"] / elapsed,
         "rss": go["child_max_rss_kib"]["median"] / rss,
     }
-    if cpu > 0:
-        result["cpu"] = go.get("child_cpu_seconds", {}).get("median", 0) / cpu
+    rust_cpu = rust.get("child_cpu_seconds", {}).get("median")
+    go_cpu = go.get("child_cpu_seconds", {}).get("median")
+    if (rust_cpu is None) != (go_cpu is None):
+        raise ValueError(
+            "cpu was sampled for one engine only; refusing to fabricate "
+            "a cpu ratio")
+    if rust_cpu is not None:
+        if rust_cpu <= 0 or go_cpu <= 0:
+            raise ValueError("cpu medians must be positive when present")
+        result["cpu"] = go_cpu / rust_cpu
     return result

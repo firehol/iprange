@@ -197,8 +197,10 @@ def main():
     expected = merged_count(wide)
     def spread(samples):
         elapsed = [sample["elapsed_seconds"] for sample in samples]
-        cpu = [sample.get("child_cpu_seconds", 0) for sample in samples]
+        cpu = [sample["child_cpu_seconds"] for sample in samples]
         rss = [sample["child_max_rss_kib"] for sample in samples]
+        if any(value <= 0 for value in cpu):
+            raise AssertionError("a ceiling round recorded no cpu sample")
         return {
             "rounds": len(samples),
             "elapsed_seconds": {"median": median(elapsed), "min": min(elapsed), "max": max(elapsed)},
@@ -271,8 +273,10 @@ def main():
                 "go_import": go_ranges,
                 "import_ratio": ratio(
                     {"elapsed_seconds": {"median": rust_ranges["elapsed_seconds"]},
+                     "child_cpu_seconds": {"median": rust_ranges["child_cpu_seconds"]},
                      "child_max_rss_kib": {"median": rust_ranges["child_max_rss_kib"]}},
                     {"elapsed_seconds": {"median": go_ranges["elapsed_seconds"]},
+                     "child_cpu_seconds": {"median": go_ranges["child_cpu_seconds"]},
                      "child_max_rss_kib": {"median": go_ranges["child_max_rss_kib"]}},
                 ),
             }

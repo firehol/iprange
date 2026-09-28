@@ -21,13 +21,32 @@ class MeasureTest(unittest.TestCase):
     def test_ratio_names_go_over_rust(self):
         rust = {
             "elapsed_seconds": {"median": 2.0, "min": 2.0, "max": 2.0},
+            "child_cpu_seconds": {"median": 1.0, "min": 1.0, "max": 1.0},
             "child_max_rss_kib": {"median": 1000, "min": 1000, "max": 1000},
         }
         go = {
             "elapsed_seconds": {"median": 3.0, "min": 3.0, "max": 3.0},
+            "child_cpu_seconds": {"median": 1.5, "min": 1.5, "max": 1.5},
             "child_max_rss_kib": {"median": 1500, "min": 1500, "max": 1500},
         }
-        self.assertEqual(ratio(rust, go), {"elapsed": 1.5, "rss": 1.5})
+        self.assertEqual(ratio(rust, go), {"elapsed": 1.5, "rss": 1.5, "cpu": 1.5})
+
+    def test_ratio_refuses_a_one_sided_cpu_sample(self):
+        # A fabricated cpu 0.0 would read as a pass of the 1.3x CPU
+        # ceiling. A missing sample on one engine must refuse, not pass.
+        with_cpu = {
+            "elapsed_seconds": {"median": 2.0, "min": 2.0, "max": 2.0},
+            "child_cpu_seconds": {"median": 1.0, "min": 1.0, "max": 1.0},
+            "child_max_rss_kib": {"median": 1000, "min": 1000, "max": 1000},
+        }
+        without_cpu = {
+            "elapsed_seconds": {"median": 3.0, "min": 3.0, "max": 3.0},
+            "child_max_rss_kib": {"median": 1500, "min": 1500, "max": 1500},
+        }
+        with self.assertRaises(ValueError):
+            ratio(with_cpu, without_cpu)
+        with self.assertRaises(ValueError):
+            ratio(without_cpu, with_cpu)
 
     def test_mutated_expect_is_not_a_pass(self):
         scenario = {

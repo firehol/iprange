@@ -283,6 +283,15 @@ Pending.
 ## Followup
 
 - This SOW's own residuals are recorded here at its close.
+- Referred from SOW-0028 milestone 5 (2026-09-28): the two engines do
+  not serialize identical JSON-RPC bytes. A `system.describe` response
+  is 2256 bytes from Rust and 2254 from Go at the same revision
+  (measured at `e8dc0691`; probe log staged in SOW-0028's kit as
+  `m5-proofs/describe_bytes.log`). The wire authority's sentence
+  `iprange-jsonrpc-v1.md` "must serialize identically" does not hold
+  between the products today. This SOW, as the parity owner, decides
+  whether the two serializations must be unified byte-for-byte or the
+  wire authority's sentence is rescoped to member identity.
 
 ## Follow-up items from the SOW-0028 milestone-4 record review (2026-09-15)
 

@@ -21888,16 +21888,19 @@ production-sized ceiling run (1,000+ feeds, 10M ranges) at milestone close.
   as the honest input for the ≤1.3x requirement (the requirement itself
   stays SOW-0030's verdict).
 - Correctness mode: identical named fields across Rust/Go, identical
-  output-file digests, and identical exit status. Raw stdout byte
-  identity is **not** the contract: the two engines serialize JSON
-  differently (a `system.describe` response is 2256 bytes from Rust
-  and 2254 from Go at the same revision), and the harness compares the
-  decoded members instead. The wire authority's byte-identity sentence
-  (`iprange-jsonrpc-v1.md` "must serialize identically") does not hold
-  between the products today; that divergence is a parity finding for
-  SOW-0030/0031, tracked there, not a claim of this harness. Oracle
-  invariants: scalar interval oracle from `v4/cli/run.py`; generator
-  ground truth for churn/cohorts.
+  output-file digests, and a zero exit enforced per engine at session
+  close (an engine that exits nonzero fails its own run; there is no
+  separate cross-engine exit comparison). Raw stdout byte identity is
+  **not** the contract: the two engines serialize JSON differently (a
+  `system.describe` response is 2256 bytes from Rust and 2254 from Go
+  at the same revision; probe log
+  `.local/shared/evidence/m5-proofs/describe_bytes.log`), and the
+  harness compares the decoded members instead. The wire authority's
+  byte-identity sentence (`iprange-jsonrpc-v1.md` "must serialize
+  identically") does not hold between the products today; that
+  divergence is recorded in SOW-0030's Followup section, which owns
+  the parity decision. Oracle invariants: scalar interval oracle
+  from `v4/cli/run.py`; generator ground truth for churn/cohorts.
 - Test-only necessary-work counters (page visits, range passes) per
   `AGENTS.md`, compiled out of release. These live in the engine test
   builds (`v4/rust/iprange-livedb/src/necessary_work_tests.rs`,
