@@ -6,7 +6,7 @@ import os
 import sys
 import unittest
 
-from measure import child_cpu_seconds, ratio, run_once
+from measure import child_cpu_seconds, parse_stat_cpu, ratio, run_once
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
@@ -69,6 +69,23 @@ def assign(root, path, value):
         cursor[slot] = value
     else:
         cursor[last] = value
+
+
+class StatCpuParseTest(unittest.TestCase):
+    # A real-shaped /proc stat record: after ")" the fields are state,
+    # ppid, ... utime and stime are indices 11 and 12.
+    STAT = "12345 (iprange) R 1 12345 12345 0 -1 4194560 100 0 0 0 46 9 0 0 20 0 5 0"
+
+    def test_parse_reads_utime_and_stime(self):
+        # 46 + 9 = 55 ticks.
+        self.assertAlmostEqual(parse_stat_cpu(self.STAT), 55 / os.sysconf("SC_CLK_TCK"))
+
+    def test_a_truncated_record_is_none_not_zero(self):
+        truncated = "12345 (iprange) R 1 12345 12345 0"
+        self.assertIsNone(parse_stat_cpu(truncated))
+
+    def test_garbage_is_none(self):
+        self.assertIsNone(parse_stat_cpu("not a stat record"))
 
 
 class CancelCpuSampleTest(unittest.TestCase):

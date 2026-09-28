@@ -16,7 +16,6 @@ answered at all, it must carry the factual cancelled outcome.
 import argparse
 import json
 import os
-import select
 import signal
 import sys
 import tempfile
@@ -100,23 +99,29 @@ def prove(binary, work):
         # so the classifier below is reachable, not dead code. Killing
         # the producer first would hide exactly that answer.
         service.submit(PROBE_ID, "iprange.v1.system.describe", {})
+        # Read without select: a buffered readline driven by a raw-fd
+        # select can strand a co-written frame inside the Python buffer,
+        # where select never sees it again. Non-blocking reads drain the
+        # buffer itself.
+        os.set_blocking(service.proc.stdout.fileno(), False)
         deadline = time.monotonic() + 60
         probe_at = None
         while time.monotonic() < deadline:
-            ready = select.select([service.proc.stdout], [], [], 0.5)[0]
-            if not ready:
+            try:
+                line = service.proc.stdout.readline(1_048_578)
+            except (BlockingIOError, OSError):
+                line = ""
+            if line:
+                response = json.loads(line)
+                seen[response.get("id")] = response
+                if PROBE_ID in seen and probe_at is None:
+                    probe_at = time.monotonic()
+                if probe_at is not None and PUBLISH_ID in seen:
+                    break
+            else:
                 if service.proc.poll() is not None:
                     break
-                continue
-            line = service.proc.stdout.readline(1_048_578)
-            if not line:
-                break
-            response = json.loads(line)
-            seen[response.get("id")] = response
-            if PROBE_ID in seen and probe_at is None:
-                probe_at = time.monotonic()
-            if probe_at is not None and PUBLISH_ID in seen:
-                break
+                time.sleep(0.05)
             if probe_at is not None and time.monotonic() - probe_at > 20:
                 break
         if PROBE_ID not in seen:

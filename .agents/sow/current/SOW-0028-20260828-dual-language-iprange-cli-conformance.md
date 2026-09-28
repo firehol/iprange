@@ -21887,9 +21887,17 @@ production-sized ceiling run (1,000+ feeds, 10M ranges) at milestone close.
   child-only peak RSS, throughput per scenario; Go/Rust ratio per scenario
   as the honest input for the ≤1.3x requirement (the requirement itself
   stays SOW-0030's verdict).
-- Correctness mode: byte-identical stdout/stderr/exit and output-file
-  digests across Rust/Go, plus oracle invariants (scalar interval oracle
-  from `v4/cli/run.py`; generator ground truth for churn/cohorts).
+- Correctness mode: identical named fields across Rust/Go, identical
+  output-file digests, and identical exit status. Raw stdout byte
+  identity is **not** the contract: the two engines serialize JSON
+  differently (a `system.describe` response is 2256 bytes from Rust
+  and 2254 from Go at the same revision), and the harness compares the
+  decoded members instead. The wire authority's byte-identity sentence
+  (`iprange-jsonrpc-v1.md` "must serialize identically") does not hold
+  between the products today; that divergence is a parity finding for
+  SOW-0030/0031, tracked there, not a claim of this harness. Oracle
+  invariants: scalar interval oracle from `v4/cli/run.py`; generator
+  ground truth for churn/cohorts.
 - Test-only necessary-work counters (page visits, range passes) per
   `AGENTS.md`, compiled out of release. These live in the engine test
   builds (`v4/rust/iprange-livedb/src/necessary_work_tests.rs`,
@@ -22259,7 +22267,7 @@ corrupt files or structured fixtures.
 The close ceiling is one database per round: 999 one-address feeds
 plus one 10M-range feed. The kit log is
 `.local/shared/evidence/m5-ceiling/combined.log`. It names the command,
-the revision `7ddc8062`, the binary SHA-256 values, and ends with
+the revision `a5ced60a`, the binary SHA-256 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
 clock. Rust median 54.894 s elapsed, 11.25 s CPU, spread

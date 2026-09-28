@@ -53,7 +53,10 @@ def sample_peak(proc, peak):
 
 
 def sample_cpu(proc, cpu):
-    return max(cpu, child_cpu_seconds(proc.pid))
+    current = child_cpu_seconds(proc.pid)
+    if current is None:
+        return cpu
+    return max(cpu, current)
 
 
 def prepare_feed_texts(work, feeds):

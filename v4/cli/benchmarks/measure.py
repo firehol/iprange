@@ -22,23 +22,32 @@ def child_hwm_kib(pid):
     return None
 
 
-def child_cpu_seconds(pid):
-    """CPU seconds of this child so far, from its own process record.
+def parse_stat_cpu(stat_text):
+    """CPU seconds from one `/proc/<pid>/stat` record.
 
     `getrusage(RUSAGE_CHILDREN)` accumulates across every waited child,
-    so a delta is this child's CPU only when nothing else was waited for
-    in between. `/proc/<pid>/stat` names one process, so it is the child
-    under measurement and not an inherited total.
+    so a delta is this child's CPU only when nothing else was waited
+    for in between. `/proc/<pid>/stat` names one process, so it is the
+    child under measurement and not an inherited total. Returns None
+    when the record cannot be parsed; the caller decides what that
+    means instead of silently reporting zero.
     """
     try:
-        with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as stream:
-            fields = stream.read().rsplit(")", 1)[1].split()
+        fields = stat_text.rsplit(")", 1)[1].split()
         # utime and stime are fields 14 and 15 of the full record,
-        # which is fields 0 and 1 after the split above.
+        # which are indices 11 and 12 after the comm-field split.
         ticks = int(fields[11]) + int(fields[12])
         return ticks / os.sysconf("SC_CLK_TCK")
-    except (OSError, ValueError, IndexError):
-        return 0.0
+    except (ValueError, IndexError):
+        return None
+
+
+def child_cpu_seconds(pid):
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as stream:
+            return parse_stat_cpu(stream.read())
+    except OSError:
+        return None
 
 
 def run_once(argv, stdin_bytes=None):
@@ -59,7 +68,9 @@ def run_once(argv, stdin_bytes=None):
         current = child_hwm_kib(proc.pid)
         if current is not None:
             peak = max(peak, current)
-        cpu = max(cpu, child_cpu_seconds(proc.pid))
+        current = child_cpu_seconds(proc.pid)
+        if current is not None:
+            cpu = max(cpu, current)
         if stdin_bytes is not None:
             try:
                 if proc.stdout.readline():
