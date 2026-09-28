@@ -32,9 +32,26 @@ typedef struct {
 static inline iprange_v4_abi1_path path_from(const char *path)
 {
     iprange_v4_abi1_path value = {0};
+#if defined(_WIN32)
+    /* The Windows ABI refuses POSIX path kinds, so a caller that only
+     * passes bytes cannot reach any fixture.  The corpus names are
+     * ASCII here; the conversion lives in the test support, not the
+     * product. */
+    static uint16_t units[1024];
+    size_t index = 0;
+    while (path[index] != '\0' && index + 1 < sizeof(units) / sizeof(units[0])) {
+        units[index] = (uint16_t)(unsigned char)path[index];
+        ++index;
+    }
+    units[index] = 0;
+    value.kind = IPRANGE_V4_ABI1_PATH_WINDOWS_UTF16;
+    value.pointer = units;
+    value.length = index;
+#else
     value.kind = IPRANGE_V4_ABI1_PATH_POSIX_BYTES;
     value.pointer = path;
     value.length = strlen(path);
+#endif
     return value;
 }
 

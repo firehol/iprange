@@ -97,6 +97,51 @@ int main(int argc, char **argv)
           IPRANGE_V4_ABI1_STATUS_OK);
     CHECK(error == NULL);
 
+    {
+        static const uint8_t metadata[] = "{\"k\":1}";
+        uint8_t tiny[1] = {0};
+        uint8_t changed = 0;
+        uint64_t required = 0;
+        uint32_t code = 0;
+        uint8_t caller_present = 0;
+        uint64_t caller_code = 0;
+        iprange_v4_abi1_mutable_byte_slice output = {tiny, sizeof(tiny)};
+        iprange_v4_abi1_transaction_budget budget = {0};
+        iprange_v4_abi1_writer *meta_writer = NULL;
+        budget.abi_version = IPRANGE_V4_ABI1_ABI_VERSION;
+        budget.struct_size = sizeof(budget);
+        budget.max_heap_bytes = 2 * 1024 * 1024;
+        budget.max_private_pages = 20000;
+        budget.max_file_growth_pages = 20000;
+        budget.max_open_files = 2;
+        CHECK(iprange_v4_abi1_open_live_writer(path, &budget, cancellation,
+                                               &meta_writer, &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(error == NULL);
+        CHECK(iprange_v4_abi1_writer_set_metadata_json(
+                  meta_writer, metadata, sizeof(metadata) - 1, cancellation,
+                  &changed, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(error == NULL);
+        CHECK(iprange_v4_abi1_writer_metadata_read(meta_writer, output, &required,
+                                                   &error) ==
+              IPRANGE_V4_ABI1_STATUS_ERROR);
+        CHECK(iprange_v4_abi1_error_code(error, &code, &caller_present,
+                                         &caller_code) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(code == IPRANGE_V4_ABI1_ERROR_CODE_BUFFER_TOO_SMALL);
+        CHECK(required > sizeof(tiny));
+        CHECK(iprange_v4_abi1_error_destroy(error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        error = NULL;
+        CHECK(iprange_v4_abi1_writer_close(meta_writer, &report, &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(report != NULL);
+        CHECK(iprange_v4_abi1_report_destroy(report, &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        report = NULL;
+        CHECK(error == NULL);
+    }
+
     CHECK(iprange_v4_abi1_open_live_reader(path, cancellation, &reader, &error) ==
           IPRANGE_V4_ABI1_STATUS_OK);
     CHECK(reader != NULL && error == NULL);
