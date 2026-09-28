@@ -129,8 +129,10 @@ def ratio(rust, go):
     """Go/Rust median ratio. Above 1 means Go used more time or RSS.
 
     A missing CPU sample is never turned into a zero: a fabricated
-    `cpu: 0.0` would read as a pass of the 1.3x CPU ceiling. If either
-    engine carries CPU data, both must.
+    `cpu: 0.0` would read as a pass of a CPU-ratio acceptance check.
+    The binding acceptance metric is elapsed time and peak RSS
+    (SOW-0030, user decisions 1A/2A); CPU is additional data. If
+    either engine carries CPU data, both must.
     """
     elapsed = rust["elapsed_seconds"]["median"]
     rss = rust["child_max_rss_kib"]["median"]

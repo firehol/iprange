@@ -6,7 +6,7 @@ import os
 import sys
 import unittest
 
-from measure import child_cpu_seconds, parse_stat_cpu, ratio, run_once
+from measure import child_cpu_seconds, measure, parse_stat_cpu, ratio, run_once
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(_HERE))
@@ -160,6 +160,12 @@ def assign(root, path, value):
         cursor[slot] = value
     else:
         cursor[last] = value
+
+
+class MeasureRoundsTest(unittest.TestCase):
+    def test_zero_rounds_is_refused(self):
+        with self.assertRaises(ValueError):
+            measure(["/bin/true"], 0)
 
 
 class StatCpuParseTest(unittest.TestCase):
