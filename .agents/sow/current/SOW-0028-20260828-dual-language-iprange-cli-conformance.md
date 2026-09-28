@@ -22276,10 +22276,10 @@ the revision on its own second line, the binary SHA-256
 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 49.610 s elapsed, 11.28 s CPU, spread
-49.485–49.636 s, peak 224616 KiB. Go median 59.179 s elapsed, 21.74 s
-CPU, spread 58.538–62.026 s, peak 233112 KiB. The Go/Rust ratio is
-1.193 elapsed, 1.927 CPU, and 1.038 RSS. Wall time moves with
+clock. Rust median 50.350 s elapsed, 11.55 s CPU, spread
+49.556–51.253 s, peak 225596 KiB. Go median 63.733 s elapsed, 21.93 s
+CPU, spread 58.580–64.558 s, peak 233752 KiB. The Go/Rust ratio is
+1.266 elapsed, 1.899 CPU, and 1.036 RSS. Wall time moves with
 workstation load between runs. The binding acceptance metric
 (SOW-0030, user decisions 1A/2A) is **elapsed time** ≤1.3x Rust and
 **peak RSS** ≤1.3x; process CPU time (utime+stime) is not part
@@ -22352,13 +22352,14 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Twelve recorded
+- **Elapsed-ratio cross-session spread.** Fifteen recorded
   regenerations of the ceiling at byte-identical binaries (rounds
-  5 through 19; the four most recent of those measured Go/Rust elapsed
-  1.172, 1.185, 1.213, and 1.259) span elapsed 1.091–1.259 (~15.4%
-  relative spread, wall-clock noise); the CPU ratio over the same
-  sessions spans 1.875–1.983. The round-32 and round-33 rebinds measured
-  1.184 and 1.193 elapsed (CPU 1.960 / 1.927) — inside both envelopes. The superseded sessions are enumerated with
+  5 through 19 plus the round-32/33/34 rebinds; the four most recent
+  of the rounds-5-19 set measured Go/Rust elapsed 1.172, 1.185,
+  1.213, and 1.259) span elapsed 1.091–1.266 (~16.0% relative
+  spread, wall-clock noise — the round-34 rebind measured 1.266,
+  a new maximum, under load); the CPU ratio over the same sessions
+  spans 1.875–1.983. Every session remains under 1.3x. The superseded sessions are enumerated with
   citations in the kit's role reports (`evidence/m5-roles/`; the
   tester round-20 report enumerates all twelve). The kit holds the
   current session's `combined.log`. The binding verdict is SOW-0030's
