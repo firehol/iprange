@@ -22,10 +22,13 @@ _spec.loader.exec_module(_bench)
 
 
 class ExitGateTest(unittest.TestCase):
-    """An engine that answers every call and then dies nonzero fails.
+    """An engine that dies nonzero before answering fails its own run.
 
-    The stub answers a describe correctly and exits 1, so the scenario
-    run must fail on the exit check, not on any protocol error.
+    The stub reads the first request and exits 1 without answering, so
+    close() sees an already-dead peer and only the runner's exit gate
+    can attribute the failure. The engine that answers every call and
+    then dies at teardown is caught by close() itself, which the main
+    run.py self-test pins with its nonzero-exit control.
     """
 
     def test_a_dying_engine_fails_its_own_run(self):
@@ -41,7 +44,7 @@ class ExitGateTest(unittest.TestCase):
         scenario = {
             "schema": "iprange-bench-scenario-v1",
             "name": "exit-gate",
-            "purpose": "The stub answers this describe correctly and then dies.",
+            "purpose": "The stub reads the first request and dies without answering.",
             "calls": [{
                 "method": "iprange.v1.system.describe",
                 "params": {},
