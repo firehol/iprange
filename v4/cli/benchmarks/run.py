@@ -273,9 +273,17 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None)
     write_generated(scenario, engine_work)
     service = JsonRpcService([binary, "--jsonrpc"], name, cwd=engine_work)
     try:
-        return run_calls(service, name, scenario, engine_work, calls, peer)
+        result = run_calls(service, name, scenario, engine_work, calls, peer)
+        return result
     finally:
         service.close()
+        # An engine that answers every call and then dies nonzero must
+        # still fail its own run. close() waits for the process, so the
+        # returncode is settled here whether or not the engine died
+        # before teardown.
+        if service.proc.returncode != 0:
+            raise AssertionError(
+                f"{name} exited {service.proc.returncode} after answering its calls")
 
 
 def scenario_calls(scenario):
