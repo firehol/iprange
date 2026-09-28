@@ -22319,6 +22319,40 @@ update-ipsets was not pushed.
   rounds per engine, about six wall-minutes plus corpus generation;
   the final-revision `--tier gate` battery is about three wall-minutes.
 
+### Documented residuals (round 18, recorded for the roles)
+
+These are properties of the harness that reviewer roles have carried as
+P2 findings. They are recorded here with their rationale so they are
+dispositioned, not silently carried:
+
+- **Exit-gate exception masking.** `run_engine`'s `finally` gate raises
+  unconditionally, replacing an in-flight `run_calls` failure with the
+  engine-exit message (Python `finally` semantics). The contract — an
+  engine that exits nonzero fails its own run — is enforced either way,
+  and the mutation log shows the root cause surfaces when the gate is
+  deleted. The masking is a known property; fixing it (conditional
+  raise or `from exc`) would change which message a caller sees, not
+  whether the run fails.
+- **Byte-divergence scope.** The 2256/2254 `system.describe` frame
+  sizes are real (`describe_bytes.log`). The wire authority's clause
+  (`iprange-jsonrpc-v1.md`) governs field-name serialization identity,
+  not whole-frame byte identity; the divergence record in SOW-0030's
+  Followup names the sizes and leaves the decision to that SOW. This
+  milestone does not decide it.
+- **Elapsed-ratio cross-session spread.** Three sessions at
+  byte-identical binaries measured Go/Rust elapsed 1.185, 1.259, and
+  1.213 (6.2% relative spread, wall-clock noise). The CPU ratio spread
+  over the same sessions is 1.905–1.948. Each session's figures are
+  recorded in its own `combined.log`; the binding verdict is
+  SOW-0030's and will need to treat the wall-clock spread as
+  measurement noise.
+- **SOW narrative measurement paragraphs.** The smaller measurement
+  paragraphs earlier in this milestone (the 100k import, the joins,
+  the seven-day refresh) record their own runs and are not re-staged
+  per round; they are historical narrative, and the close evidence is
+  the staged log set under `evidence/m5-proofs/` and
+  `evidence/m5-ceiling/`.
+
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
 milestone stays open until the seven-role round approves the exact

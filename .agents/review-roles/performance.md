@@ -26,7 +26,7 @@ Hunting ground:
   durations contradict these limits (e.g. a package-total figure used to
   claim per-test compliance).
 - Benchmark methodology (milestone 5 prep): matched, alternating,
-  same-host samples; measured ceilings per the user's 1.3x CPU / peak-RSS
+  same-host samples; measured ceilings per the user's 1.3x elapsed / peak-RSS
   acceptance contract; no estimates presented as measurements.
 - Suitability review of the lead's staged performance evidence: do the
   recorded timings come from release builds at the reviewed HEAD, with the

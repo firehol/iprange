@@ -104,8 +104,9 @@ class MeasureTest(unittest.TestCase):
             ratio(rust, go)
 
     def test_ratio_refuses_a_one_sided_cpu_sample(self):
-        # A fabricated cpu 0.0 would read as a pass of the 1.3x CPU
-        # ceiling. A missing sample on one engine must refuse, not pass.
+        # A fabricated cpu 0.0 would read as a pass of a CPU-ratio acceptance
+        # check. The binding metric is elapsed and peak RSS; CPU is
+        # additional data. A missing sample must refuse, not pass.
         with_cpu = {
             "elapsed_seconds": {"median": 2.0, "min": 2.0, "max": 2.0},
             "child_cpu_seconds": {"median": 1.0, "min": 1.0, "max": 1.0},
