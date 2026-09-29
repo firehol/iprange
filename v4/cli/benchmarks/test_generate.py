@@ -195,7 +195,12 @@ class GeneratorTest(unittest.TestCase):
             self.assertEqual(int(call["expect"]["report.result_cell_count"]), len(report["cells"]))
             for feed, value, count in report["cells"]:
                 rendered = "null" if value is None else str(value)
-                self.assertIn(f"{feed},{rendered},{count}", call["expect_file_contains"]["text"])
+                self.assertIn(f"{feed},{rendered},{count}",
+                              call["expect_file_csv_rows"]["rows"])
+            self.assertEqual(
+                sorted(call["expect_file_csv_rows"]["rows"]),
+                sorted(f"{feed},{'null' if value is None else value},{count}"
+                       for feed, value, count in report["cells"]))
             self.assertIn(name, call["params"]["direct"]["path"])
 
     def test_overlapping_feeds_are_one_selected_union(self):

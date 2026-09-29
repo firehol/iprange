@@ -6,6 +6,7 @@ the providers are not part of the sample.
 """
 
 import argparse
+from collections import Counter
 import ipaddress
 import json
 import os
@@ -164,13 +165,15 @@ def check_join(binary, membership, provider, expected, output):
     }
     if got != want:
         raise AssertionError(f"join totals {got}, generator says {want}")
-    rows = set()
+    # Multiset comparison: a set would silently accept duplicated
+    # rows and lose multiplicity.
+    rows = Counter()
     with open(output, encoding="utf-8") as stream:
         next(stream)
         for line in stream:
             feed, value, count = line.rstrip("\n").split(",")
-            rows.add((feed, None if value == "null" else int(value), int(count)))
-    if rows != set(expected["cells"]):
+            rows[(feed, None if value == "null" else int(value), int(count))] += 1
+    if rows != Counter(tuple(cell) for cell in expected["cells"]):
         raise AssertionError("join cells differ from the generator")
     os.remove(output)
 

@@ -1,90 +1,293 @@
 {
-  "schema": "iprange-bench-scenario-v1",
-  "name": "s5-overlap-matrix",
-  "purpose": "Three feeds. One pair overlaps. The other pairs do not. The CSV names the overlapping pair.",
-  "fixtures": [
-    {"path": "a.txt", "text": "192.0.2.0/30\n"},
-    {"path": "b.txt", "text": "192.0.2.2-192.0.2.3\n"},
-    {"path": "c.txt", "text": "198.51.100.10\n"}
-  ],
-  "calls": [
-    {
-      "method": "iprange.v1.current.publish",
-      "params": {
-        "input": {"paths": ["$WORK/a.txt"], "family": "ipv4", "fix_network": true, "default_prefix": 32, "dns": {"threads": 1, "silent": true}, "expand_at_paths": false, "max_line_bytes": 1024, "max_expanded_paths": 4},
-        "feed": "alpha",
-        "value_tag": {"text": "feed"},
-        "metadata": {"mode": "replace_utf8", "text": "a"},
-        "destination": "$WORK/a.iprange",
-        "publication_policy": "fail_if_exists",
-        "immutable_feed_budget": {"max_heap_bytes": "16777216", "max_output_pages": "20000", "max_workspace_pages": "20000", "max_open_files": 3}
-      },
-      "compare": ["report.addresses"],
-      "expect": {"report.addresses": "4"}
+ "schema": "iprange-bench-scenario-v1",
+ "name": "s5-overlap-matrix",
+ "purpose": "Three feeds. One pair overlaps. The other pairs do not. The CSV names the overlapping pair.",
+ "fixtures": [
+  {
+   "path": "a.txt",
+   "text": "192.0.2.0/30\n"
+  },
+  {
+   "path": "b.txt",
+   "text": "192.0.2.2-192.0.2.3\n"
+  },
+  {
+   "path": "c.txt",
+   "text": "198.51.100.10\n"
+  }
+ ],
+ "calls": [
+  {
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/a.txt"
+     ],
+     "family": "ipv4",
+     "fix_network": true,
+     "default_prefix": 32,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
     },
-    {
-      "method": "iprange.v1.current.publish",
-      "params": {
-        "input": {"paths": ["$WORK/b.txt"], "family": "ipv4", "fix_network": true, "default_prefix": 32, "dns": {"threads": 1, "silent": true}, "expand_at_paths": false, "max_line_bytes": 1024, "max_expanded_paths": 4},
-        "feed": "beta",
-        "value_tag": {"text": "feed"},
-        "metadata": {"mode": "replace_utf8", "text": "b"},
-        "destination": "$WORK/b.iprange",
-        "publication_policy": "fail_if_exists",
-        "immutable_feed_budget": {"max_heap_bytes": "16777216", "max_output_pages": "20000", "max_workspace_pages": "20000", "max_open_files": 3}
-      },
-      "compare": ["report.addresses"],
-      "expect": {"report.addresses": "2"}
+    "feed": "alpha",
+    "value_tag": {
+     "text": "feed"
     },
-    {
-      "method": "iprange.v1.current.publish",
-      "params": {
-        "input": {"paths": ["$WORK/c.txt"], "family": "ipv4", "fix_network": true, "default_prefix": 32, "dns": {"threads": 1, "silent": true}, "expand_at_paths": false, "max_line_bytes": 1024, "max_expanded_paths": 4},
-        "feed": "gamma",
-        "value_tag": {"text": "feed"},
-        "metadata": {"mode": "replace_utf8", "text": "c"},
-        "destination": "$WORK/c.iprange",
-        "publication_policy": "fail_if_exists",
-        "immutable_feed_budget": {"max_heap_bytes": "16777216", "max_output_pages": "20000", "max_workspace_pages": "20000", "max_open_files": 3}
-      },
-      "compare": ["report.addresses"],
-      "expect": {"report.addresses": "1"}
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "a"
     },
-    {
-      "method": "iprange.v1.database.create",
-      "params": {"path": "$WORK/db.iprange", "family": "ipv4", "value_kind": "membership", "structure_kind": "none", "value_tag": {"text": "membership"}, "reader_capacity": 4},
-      "compare": ["value_kind"]
-    },
-    {
-      "method": "iprange.v1.feeds.create",
-      "params": {"path": "$WORK/db.iprange", "feed": "alpha", "current": {"source": {"path": "$WORK/a.iprange", "mode": "immutable"}, "feed": "alpha"}, "metadata": {"mode": "keep"}, "writer_budget": {"max_heap_bytes": "16777216", "max_private_pages": "20000", "max_growth_pages": "20000", "max_open_files": 4}},
-      "compare": ["report.added_addresses"],
-      "expect": {"report.added_addresses": "4"}
-    },
-    {
-      "method": "iprange.v1.feeds.create",
-      "params": {"path": "$WORK/db.iprange", "feed": "beta", "current": {"source": {"path": "$WORK/b.iprange", "mode": "immutable"}, "feed": "beta"}, "metadata": {"mode": "keep"}, "writer_budget": {"max_heap_bytes": "16777216", "max_private_pages": "20000", "max_growth_pages": "20000", "max_open_files": 4}},
-      "compare": ["report.added_addresses"],
-      "expect": {"report.added_addresses": "2"}
-    },
-    {
-      "method": "iprange.v1.feeds.create",
-      "params": {"path": "$WORK/db.iprange", "feed": "gamma", "current": {"source": {"path": "$WORK/c.iprange", "mode": "immutable"}, "feed": "gamma"}, "metadata": {"mode": "keep"}, "writer_budget": {"max_heap_bytes": "16777216", "max_private_pages": "20000", "max_growth_pages": "20000", "max_open_files": 4}},
-      "compare": ["report.added_addresses"],
-      "expect": {"report.added_addresses": "1"}
-    },
-    {
-      "method": "iprange.v1.query.overlaps",
-      "params": {
-        "source": {"path": "$WORK/db.iprange", "mode": "live"},
-        "selection": {"mode": "all"},
-        "membership_query_budget": {"max_heap_bytes": "1048576"},
-        "mode": {"kind": "all_pairs"},
-        "output": {"path": "$WORK/overlaps.csv", "format": "csv", "publication_policy": "fail_if_exists", "result_budget": {"max_rows": "64", "max_output_bytes": "65536", "max_open_files": 3}}
-      },
-      "compare": ["report.pair_result_count"],
-      "expect": {"report.pair_result_count": "3"},
-      "expect_file_contains": {"path": "overlaps.csv", "text": ["alpha,beta,2", "alpha,gamma,0", "beta,gamma,0"]}
+    "destination": "$WORK/a.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
     }
-  ]
+   },
+   "compare": [
+    "report.addresses"
+   ],
+   "expect": {
+    "report.addresses": "4"
+   }
+  },
+  {
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/b.txt"
+     ],
+     "family": "ipv4",
+     "fix_network": true,
+     "default_prefix": 32,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
+    },
+    "feed": "beta",
+    "value_tag": {
+     "text": "feed"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "b"
+    },
+    "destination": "$WORK/b.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "compare": [
+    "report.addresses"
+   ],
+   "expect": {
+    "report.addresses": "2"
+   }
+  },
+  {
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/c.txt"
+     ],
+     "family": "ipv4",
+     "fix_network": true,
+     "default_prefix": 32,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
+    },
+    "feed": "gamma",
+    "value_tag": {
+     "text": "feed"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "c"
+    },
+    "destination": "$WORK/c.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "compare": [
+    "report.addresses"
+   ],
+   "expect": {
+    "report.addresses": "1"
+   }
+  },
+  {
+   "method": "iprange.v1.database.create",
+   "params": {
+    "path": "$WORK/db.iprange",
+    "family": "ipv4",
+    "value_kind": "membership",
+    "structure_kind": "none",
+    "value_tag": {
+     "text": "membership"
+    },
+    "reader_capacity": 4
+   },
+   "compare": [
+    "value_kind"
+   ]
+  },
+  {
+   "method": "iprange.v1.feeds.create",
+   "params": {
+    "path": "$WORK/db.iprange",
+    "feed": "alpha",
+    "current": {
+     "source": {
+      "path": "$WORK/a.iprange",
+      "mode": "immutable"
+     },
+     "feed": "alpha"
+    },
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "compare": [
+    "report.added_addresses"
+   ],
+   "expect": {
+    "report.added_addresses": "4"
+   }
+  },
+  {
+   "method": "iprange.v1.feeds.create",
+   "params": {
+    "path": "$WORK/db.iprange",
+    "feed": "beta",
+    "current": {
+     "source": {
+      "path": "$WORK/b.iprange",
+      "mode": "immutable"
+     },
+     "feed": "beta"
+    },
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "compare": [
+    "report.added_addresses"
+   ],
+   "expect": {
+    "report.added_addresses": "2"
+   }
+  },
+  {
+   "method": "iprange.v1.feeds.create",
+   "params": {
+    "path": "$WORK/db.iprange",
+    "feed": "gamma",
+    "current": {
+     "source": {
+      "path": "$WORK/c.iprange",
+      "mode": "immutable"
+     },
+     "feed": "gamma"
+    },
+    "metadata": {
+     "mode": "keep"
+    },
+    "writer_budget": {
+     "max_heap_bytes": "16777216",
+     "max_private_pages": "20000",
+     "max_growth_pages": "20000",
+     "max_open_files": 4
+    }
+   },
+   "compare": [
+    "report.added_addresses"
+   ],
+   "expect": {
+    "report.added_addresses": "1"
+   }
+  },
+  {
+   "method": "iprange.v1.query.overlaps",
+   "params": {
+    "source": {
+     "path": "$WORK/db.iprange",
+     "mode": "live"
+    },
+    "selection": {
+     "mode": "all"
+    },
+    "membership_query_budget": {
+     "max_heap_bytes": "1048576"
+    },
+    "mode": {
+     "kind": "all_pairs"
+    },
+    "output": {
+     "path": "$WORK/overlaps.csv",
+     "format": "csv",
+     "publication_policy": "fail_if_exists",
+     "result_budget": {
+      "max_rows": "64",
+      "max_output_bytes": "65536",
+      "max_open_files": 3
+     }
+    }
+   },
+   "compare": [
+    "report.pair_result_count"
+   ],
+   "expect": {
+    "report.pair_result_count": "3"
+   },
+   "expect_file_csv_rows": {
+    "path": "overlaps.csv",
+    "rows": [
+     "alpha,beta,2",
+     "alpha,gamma,0",
+     "beta,gamma,0"
+    ]
+   },
+   "expect_same_bytes": "overlaps.csv"
+  }
+ ]
 }

@@ -2,13 +2,16 @@
 """Correctness runner for milestone-5 SDK scenarios.
 
 One scenario file drives both release binaries. The runner compares the
-fields the scenario names. A difference is a failure. Performance mode
-is not implemented: this runner proves agreement, not speed.
+fields the scenario names. A difference is a failure. Correctness mode
+runs each scenario once; performance mode (--mode perf) times the same
+declarative file per engine with the correctness checks intact.
 """
 
 import argparse
 import base64
 import hashlib
+import threading
+from collections import Counter
 import json
 import os
 import shutil
@@ -18,6 +21,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from run import JsonRpcService  # noqa: E402
+
+from measure import child_hwm_kib, median, ratio  # noqa: E402
 
 SCHEMA = "iprange-bench-scenario-v1"
 
@@ -210,6 +215,26 @@ def run_calls(service, name, scenario, work, calls, peer):
             for needle in call["expect_file_contains"]["text"]:
                 if needle not in text:
                     raise AssertionError(f"{name} {relative} missing {needle!r}")
+        if call.get("expect_file_csv_rows"):
+            # Exact row oracle: rows are compared as a multiset, so a
+            # missing row, an extra row, a duplicated row, or a row
+            # whose fields merely prefix another ("alpha,1,5" vs
+            # "alpha,1,50") all fail — a substring check cannot see
+            # any of these.
+            spec = call["expect_file_csv_rows"]
+            relative = spec["path"]
+            path = os.path.join(work, relative)
+            with open(path, encoding="utf-8") as stream:
+                next(stream)
+                rows = Counter(
+                    line.rstrip("\n") for line in stream if line.strip())
+            want = Counter(spec["rows"])
+            if rows != want:
+                missing = list((want - rows).elements())
+                unexpected = list((rows - want).elements())
+                raise AssertionError(
+                    f"{name} {relative}: rows differ (missing {missing!r}, "
+                    f"unexpected {unexpected!r})")
         if call.get("expect_no_file"):
             relative = call["expect_no_file"]
             if os.path.exists(os.path.join(work, relative)):
@@ -294,7 +319,7 @@ def substitute_capture(value, captured):
     return value
 
 
-def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None):
+def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None, peak=None):
     # Each engine gets its own directory. Sharing one directory makes the
     # second create fail because the first engine already wrote the file.
     # A cross-open reader passes the writer directory so it can see the
@@ -310,6 +335,17 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None)
     # The call path is deadline-bounded like the frame reads: a peer
     # that never answers fails at 120 s instead of hanging the proof
     # (SilentPeerTest pins the mechanism).
+    if peak is not None:
+        # Performance mode samples the child's VmHWM while it runs;
+        # the sampler stops when the child exits.
+        def sample_peak():
+            while service.proc.poll() is None:
+                current = child_hwm_kib(service.proc.pid)
+                if current is not None and current > peak["kib"]:
+                    peak["kib"] = current
+                time.sleep(0.001)
+        sampler = threading.Thread(target=sample_peak, daemon=True)
+        sampler.start()
     try:
         result = run_calls(service, name, scenario, engine_work, calls, peer)
         return result
@@ -357,12 +393,74 @@ def compare(scenario, rust, go):
     return mismatches
 
 
+def run_perf(scenario, rust, go, rounds, work):
+    """The same declarative scenario, timed (performance mode).
+
+    Each round executes the full scenario flow — writes, then the
+    staged cross-open reads when the scenario has them — with every
+    correctness check intact. Per engine: wall time per round, the
+    child's peak RSS (VmHWM sampled while alive, max across rounds),
+    throughput, and the Go/Rust ratio as the honest ≤1.3x input.
+    """
+    write_calls = scenario.get("write", scenario.get("calls", []))
+    read_calls = scenario.get("read", [])
+    elapsed = {"rust": [], "go": []}
+    peaks = {"rust": {"kib": 0}, "go": {"kib": 0}}
+    for round_index in range(rounds):
+        rust_work = os.path.join(work, f"perf-rust-{round_index}")
+        go_work = os.path.join(work, f"perf-go-{round_index}")
+        for label, binary, engine_work in (
+                ("rust", rust, rust_work),
+                ("go", go, go_work)):
+            started = time.perf_counter()
+            run_engine(binary, label, scenario, work, write_calls,
+                       engine_work=engine_work, peak=peaks[label])
+            elapsed[label].append(time.perf_counter() - started)
+        if read_calls:
+            names = published_files(scenario, rust_work)
+            published_files(scenario, go_work)
+            stage_published(rust_work, go_work, names, "from-rust")
+            stage_published(go_work, rust_work, names, "from-go")
+            started = time.perf_counter()
+            run_engine(go, "go-reads-rust", scenario, work, read_calls,
+                       peer="from-rust", engine_work=go_work,
+                       peak=peaks["go"])
+            elapsed["go"][-1] += time.perf_counter() - started
+            started = time.perf_counter()
+            run_engine(rust, "rust-reads-go", scenario, work, read_calls,
+                       peer="from-go", engine_work=rust_work,
+                       peak=peaks["rust"])
+            elapsed["rust"][-1] += time.perf_counter() - started
+    report = {"scenario": scenario["name"], "rounds": rounds}
+    for label in ("rust", "go"):
+        times = elapsed[label]
+        report[label] = {
+            "rounds": rounds,
+            "elapsed_seconds": {
+                "median": median(times), "min": min(times), "max": max(times)},
+            "child_max_rss_kib": {
+                "median": peaks[label]["kib"],
+                "min": peaks[label]["kib"],
+                "max": peaks[label]["kib"]},
+            "throughput_rounds_per_s": rounds / sum(times),
+        }
+    report["ratio"] = ratio(report["rust"], report["go"])
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rust", required=True)
     parser.add_argument("--go", required=True)
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--work-dir")
+    parser.add_argument("--mode", choices=("correctness", "perf"),
+                        default="correctness",
+                        help="correctness: one run, compared across engines. "
+                             "perf: the same scenario file, timed per engine "
+                             "with the correctness checks intact")
+    parser.add_argument("--rounds", type=int, default=3,
+                        help="performance-mode rounds per engine")
     args = parser.parse_args()
     for label, path in (("rust", args.rust), ("go", args.go)):
         if not os.path.isabs(path) or not os.access(path, os.X_OK):
@@ -371,6 +469,16 @@ def main():
     own_work = args.work_dir is None
     work = args.work_dir or tempfile.mkdtemp(prefix="iprange-bench-")
     os.makedirs(work, exist_ok=True)
+    if args.mode == "perf":
+        if args.rounds < 1:
+            return fail("rounds must be positive")
+        try:
+            report = run_perf(scenario, args.rust, args.go, args.rounds, work)
+        finally:
+            if own_work:
+                shutil.rmtree(work, ignore_errors=True)
+        print(json.dumps(report, sort_keys=True))
+        return 0
     try:
         rust_work = os.path.join(work, "rust")
         go_work = os.path.join(work, "go")
