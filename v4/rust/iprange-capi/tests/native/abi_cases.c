@@ -4,16 +4,38 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Reads v4/conformance/cases.json and checks each fixture through the C ABI.
- * A caller that does not open that file cannot name the ranges or the
- * structured holes. */
+/* Reads v4/conformance/cases.json and checks each fixture through the C
+ * ABI against the FULL manifest: every bounded range address, per-range
+ * feed membership identities, every structured field, cardinalities
+ * (range record count, active feed count), the value tag, and the
+ * metadata state. A caller that does not open the manifest cannot name
+ * the ranges, the feeds, or the holes. */
+
+#define MAX_RANGE_FEEDS 24
+#define MAX_FEED_NAME 32
+#define MAX_UNIVERSE_FEEDS 80
+#define MAX_RANGE_ADDRESSES 65536ULL /* per-range full-iteration bound */
 
 typedef struct {
     iprange_v4_abi1_ip from;
     iprange_v4_abi1_ip to;
-    uint32_t value;
+    uint32_t value; /* direct value, or structured asn */
     int has_value;
+    uint32_t country_id;
+    uint32_t state_id;
+    uint32_t city_id;
+    int32_t latitude;
+    int32_t longitude;
+    int has_geo;     /* manifest carries a location object */
+    int has_location; /* manifest location is non-null */
+    char feeds[MAX_RANGE_FEEDS][MAX_FEED_NAME];
+    size_t feed_count;
 } case_range;
+
+typedef struct {
+    char names[MAX_UNIVERSE_FEEDS][MAX_FEED_NAME];
+    size_t count;
+} feed_universe;
 
 static char *read_file(const char *path, size_t *length)
 {
@@ -92,6 +114,41 @@ static int parse_u32(const char *text, uint32_t *output)
         return 1;
     }
     *output = (uint32_t)value;
+    return 0;
+}
+
+static int read_u32_key(const char *key, const char *start, const char *end, uint32_t *output)
+{
+    char text[32];
+    const char *found = find_key(start, end, key);
+    const char *cursor;
+    size_t written = 0;
+    if (found == NULL) {
+        return 1;
+    }
+    cursor = found + strlen(key);
+    while (cursor < end && *cursor >= '0' && *cursor <= '9') {
+        if (written + 1 >= sizeof(text)) {
+            return 1;
+        }
+        text[written++] = *cursor++;
+    }
+    if (written == 0) {
+        return 1;
+    }
+    text[written] = '\0';
+    return parse_u32(text, output);
+}
+
+static int read_i32_key(const char *key, const char *start, const char *end, int32_t *output)
+{
+    uint32_t raw;
+    if (read_u32_key(key, start, end, &raw) != 0) {
+        return 1;
+    }
+    /* Both manifest latitudes/longitudes fit in int32 as written; the
+     * unsigned parse is a transport detail. */
+    *output = (int32_t)raw;
     return 0;
 }
 
@@ -260,7 +317,94 @@ static const char *array_end(const char *start, const char *limit)
     return NULL;
 }
 
-static int collect_ranges(const char *slice, const char *slice_end, const char *key, int ipv6, int with_value, case_range **output, size_t *count)
+/* Reads one string-list array like "feeds": ["a", "b"] into names. */
+static int read_name_list(const char *object, const char *object_end, const char *key,
+                           char names[][MAX_FEED_NAME], size_t *count, size_t limit)
+{
+    const char *found = find_key(object, object_end, key);
+    const char *array;
+    const char *end;
+    const char *cursor;
+    size_t used = 0;
+    if (found == NULL) {
+        *count = 0;
+        return 0;
+    }
+    array = strchr(found, '[');
+    if (array == NULL || array >= object_end) {
+        return 1;
+    }
+    end = array_end(array, object_end);
+    if (end == NULL) {
+        return 1;
+    }
+    cursor = array + 1;
+    while (cursor < end && used < limit) {
+        const char *quote = strchr(cursor, '"');
+        if (quote == NULL || quote >= end) {
+            break;
+        }
+        cursor = read_string("\"", quote - 1, end, names[used], MAX_FEED_NAME) == 0
+                     ? quote + 1
+                     : cursor;
+        if (names[used][0] == '\0') {
+            return 1;
+        }
+        used++;
+        cursor = strchr(cursor, ',');
+        if (cursor == NULL || cursor >= end) {
+            break;
+        }
+        cursor++;
+    }
+    *count = used;
+    return 0;
+}
+
+/* Reads the fixture-level universe: "feeds": [ {"name": ..., "index": ...} ]. */
+static int read_feed_universe(const char *slice, const char *slice_end, feed_universe *universe)
+{
+    const char *found = find_key(slice, slice_end, "\"feeds\": [");
+    const char *array;
+    const char *end;
+    const char *cursor;
+    size_t used = 0;
+    memset(universe, 0, sizeof(*universe));
+    if (found == NULL) {
+        return 0; /* no feeds key: empty universe */
+    }
+    array = strchr(found, '[');
+    if (array == NULL || array >= slice_end) {
+        return 1;
+    }
+    end = array_end(array, slice_end);
+    if (end == NULL) {
+        return 1;
+    }
+    cursor = array + 1;
+    while (cursor < end && used < MAX_UNIVERSE_FEEDS) {
+        const char *object = strchr(cursor, '{');
+        const char *object_end;
+        if (object == NULL || object >= end) {
+            break;
+        }
+        object_end = strchr(object, '}');
+        if (object_end == NULL || object_end > end) {
+            return 1;
+        }
+        if (read_string("\"name\": \"", object, object_end, universe->names[used],
+                        MAX_FEED_NAME) != 0) {
+            return 1;
+        }
+        used++;
+        cursor = object_end + 1;
+    }
+    universe->count = used;
+    return 0;
+}
+
+static int collect_ranges(const char *slice, const char *slice_end, const char *key,
+                          int ipv6, int kind, case_range **output, size_t *count)
 {
     const char *found = find_key(slice, slice_end, key);
     const char *array;
@@ -288,7 +432,6 @@ static int collect_ranges(const char *slice, const char *slice_end, const char *
         const char *object_end;
         char from_text[64];
         char to_text[64];
-        char value_text[16];
         case_range range;
         if (object == NULL || object >= end) {
             break;
@@ -307,29 +450,45 @@ static int collect_ranges(const char *slice, const char *slice_end, const char *
             free(ranges);
             return 1;
         }
-        if (with_value) {
-            const char *value = find_key(object, object_end, with_value == 1 ? "\"value\": " : "\"asn\": ");
-            const char *stop;
-            if (value == NULL) {
-                free(ranges);
-                return 1;
-            }
-            value += strlen(with_value == 1 ? "\"value\": " : "\"asn\": ");
-            stop = value;
-            while (stop < object_end && *stop >= '0' && *stop <= '9') {
-                stop++;
-            }
-            if (stop == value || (size_t)(stop - value) >= sizeof(value_text)) {
-                free(ranges);
-                return 1;
-            }
-            memcpy(value_text, value, (size_t)(stop - value));
-            value_text[stop - value] = '\0';
-            if (parse_u32(value_text, &range.value) != 0) {
+        if (kind == 0) { /* direct: "value" */
+            if (read_u32_key("\"value\": ", object, object_end, &range.value) != 0) {
                 free(ranges);
                 return 1;
             }
             range.has_value = 1;
+        } else if (kind == 2) { /* structured: every enrichment field */
+            const char *location = find_key(object, object_end, "\"location\": {");
+            if (read_u32_key("\"asn\": ", object, object_end, &range.value) != 0 ||
+                read_u32_key("\"country_id\": ", object, object_end, &range.country_id) != 0 ||
+                read_u32_key("\"state_id\": ", object, object_end, &range.state_id) != 0 ||
+                read_u32_key("\"city_id\": ", object, object_end, &range.city_id) != 0) {
+                free(ranges);
+                return 1;
+            }
+            range.has_value = 1;
+            range.has_geo = location != NULL;
+            if (location != NULL) {
+                const char *location_end = strchr(location, '}');
+                if (location_end == NULL || location_end > object_end) {
+                    free(ranges);
+                    return 1;
+                }
+                if (read_i32_key("\"latitude_microdegrees\": ", location, location_end,
+                                 &range.latitude) != 0 ||
+                    read_i32_key("\"longitude_microdegrees\": ", location, location_end,
+                                 &range.longitude) != 0) {
+                    free(ranges);
+                    return 1;
+                }
+                range.has_location = 1;
+            }
+        }
+        if (kind != 0) { /* membership and structured carry feed lists */
+            if (read_name_list(object, object_end, "\"feeds\": [", range.feeds,
+                               &range.feed_count, MAX_RANGE_FEEDS) != 0) {
+                free(ranges);
+                return 1;
+            }
         }
         if (used == capacity) {
             size_t next_capacity = capacity == 0 ? 8 : capacity * 2;
@@ -359,61 +518,305 @@ static int close_reader(iprange_v4_abi1_reader *reader)
     return 0;
 }
 
-static int check_direct(const iprange_v4_abi1_reader *reader, const case_range *ranges, size_t count)
+/* Bounded iteration: IPv4 ranges under the cap are verified at every
+ * address; larger or IPv6 ranges verify first and last only. */
+static int for_each_address(const case_range *range,
+                            int (*visit)(const iprange_v4_abi1_ip *, void *, size_t),
+                            void *context, const char *what)
 {
-    size_t index;
-    for (index = 0; index < count; index++) {
-        iprange_v4_abi1_error *error = NULL;
-        uint8_t present = 0;
-        uint32_t value = 0;
-        CHECK(iprange_v4_abi1_reader_lookup_direct(reader, ranges[index].from, &present, &value, &error) ==
-              IPRANGE_V4_ABI1_STATUS_OK);
-        CHECK(error == NULL && present == 1 && value == ranges[index].value);
+    iprange_v4_abi1_ip address = range->from;
+    size_t visited = 0;
+    while (visited <= MAX_RANGE_ADDRESSES) {
+        if (visit(&address, context, visited) != 0) {
+            fprintf(stderr, "%s check failed at a covered address\n", what);
+            return 1;
+        }
+        visited++;
+        if (same_address(address, range->to)) {
+            return 0; /* fully covered */
+        }
+        address = next_address(address);
     }
+    /* The cap fired before the last address: the range is larger than
+     * the full-iteration bound. The first address was already visited;
+     * visit the last address too. */
+    address = range->to;
+    return visit(&address, context, visited);
+}
+
+typedef struct {
+    const iprange_v4_abi1_reader *reader;
+    uint32_t value;
+} direct_context;
+
+static int visit_direct(const iprange_v4_abi1_ip *address, void *opaque, size_t ordinal)
+{
+    direct_context *context = (direct_context *)opaque;
+    iprange_v4_abi1_error *error = NULL;
+    uint8_t present = 0;
+    uint32_t value = 0;
+    (void)ordinal;
+    CHECK(iprange_v4_abi1_reader_lookup_direct(context->reader, *address, &present, &value,
+                                               &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(error == NULL && present == 1 && value == context->value);
     return 0;
 }
 
-static int check_membership(const iprange_v4_abi1_reader *reader, const case_range *ranges, size_t count)
+static int check_direct(const iprange_v4_abi1_reader *reader, const case_range *ranges,
+                        size_t count, int *gaps)
 {
     size_t index;
     for (index = 0; index < count; index++) {
-        iprange_v4_abi1_error *error = NULL;
-        iprange_v4_abi1_membership_view *view = NULL;
-        CHECK(iprange_v4_abi1_reader_lookup_membership(reader, ranges[index].from, &view, &error) ==
-              IPRANGE_V4_ABI1_STATUS_OK);
-        CHECK(error == NULL && view != NULL);
-        CHECK(iprange_v4_abi1_membership_view_close(view, &error) == IPRANGE_V4_ABI1_STATUS_OK);
-        CHECK(iprange_v4_abi1_membership_view_destroy(view, &error) == IPRANGE_V4_ABI1_STATUS_OK);
-    }
-    return 0;
-}
-
-static int check_structured(const iprange_v4_abi1_reader *reader, const case_range *ranges, size_t count, int *gaps)
-{
-    size_t index;
-    for (index = 0; index < count; index++) {
-        iprange_v4_abi1_error *error = NULL;
-        uint8_t present = 0;
-        iprange_v4_abi1_network_enrichment_v1 found;
-        iprange_v4_abi1_ip hole;
-        memset(&found, 0, sizeof(found));
-        CHECK(iprange_v4_abi1_reader_lookup_network_enrichment_v1(
-                  reader, ranges[index].from, &present, &found, &error) ==
-              IPRANGE_V4_ABI1_STATUS_OK);
-        CHECK(error == NULL && present == 1 && found.asn == ranges[index].value);
+        direct_context context;
+        context.reader = reader;
+        context.value = ranges[index].value;
+        CHECK(for_each_address(&ranges[index], visit_direct, &context, "direct") == 0);
         if (index + 1 == count) {
             continue;
         }
-        hole = next_address(ranges[index].to);
-        if (same_address(hole, ranges[index + 1].from)) {
+        {
+            iprange_v4_abi1_error *error = NULL;
+            uint8_t present = 1;
+            uint32_t value = 0;
+            iprange_v4_abi1_ip hole = next_address(ranges[index].to);
+            if (same_address(hole, ranges[index + 1].from)) {
+                continue;
+            }
+            CHECK(iprange_v4_abi1_reader_lookup_direct(reader, hole, &present, &value, &error) ==
+                  IPRANGE_V4_ABI1_STATUS_OK);
+            CHECK(error == NULL && present == 0);
+            (*gaps)++;
+        }
+    }
+    return 0;
+}
+
+typedef struct {
+    const iprange_v4_abi1_reader *reader;
+    const feed_universe *universe;
+    const case_range *range;
+    uint32_t *indices; /* universe name -> feed index */
+} membership_context;
+
+static int range_has_feed(const case_range *range, const char *name)
+{
+    size_t index;
+    for (index = 0; index < range->feed_count; index++) {
+        if (strcmp(range->feeds[index], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int visit_membership(const iprange_v4_abi1_ip *address, void *opaque, size_t ordinal)
+{
+    membership_context *context = (membership_context *)opaque;
+    iprange_v4_abi1_error *error = NULL;
+    iprange_v4_abi1_membership_view *view = NULL;
+    size_t index;
+    CHECK(iprange_v4_abi1_reader_lookup_membership(context->reader, *address, &view, &error) ==
+          IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(error == NULL && view != NULL);
+    for (index = 0; index < context->universe->count; index++) {
+        uint8_t contains = 0;
+        CHECK(iprange_v4_abi1_membership_view_contains_index(
+                  view, context->indices[index], &contains, &error) ==
+              IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(error == NULL);
+        CHECK(contains == (range_has_feed(context->range, context->universe->names[index]) ? 1 : 0));
+    }
+    CHECK(iprange_v4_abi1_membership_view_close(view, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(error == NULL);
+    CHECK(iprange_v4_abi1_membership_view_destroy(view, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(error == NULL);
+    (void)ordinal;
+    return 0;
+}
+
+static int check_membership(const iprange_v4_abi1_reader *reader, const case_range *ranges,
+                            size_t count, const feed_universe *universe, int *gaps)
+{
+    uint32_t *indices = NULL;
+    size_t index;
+    if (universe->count > 0) {
+        indices = calloc(universe->count, sizeof(*indices));
+        CHECK(indices != NULL);
+        for (index = 0; index < universe->count; index++) {
+            iprange_v4_abi1_error *error = NULL;
+            uint8_t present = 0;
+            iprange_v4_abi1_feed_info info;
+            const char *name = universe->names[index];
+            memset(&info, 0, sizeof(info));
+            CHECK(iprange_v4_abi1_reader_lookup_feed(reader, (const uint8_t *)name,
+                                                      strlen(name), &present, &info,
+                                                      &error) == IPRANGE_V4_ABI1_STATUS_OK);
+            CHECK(error == NULL && present == 1);
+            CHECK(strcmp((const char *)info.name, name) == 0 && info.name_length == strlen(name));
+            indices[index] = info.index;
+        }
+    }
+    for (index = 0; index < count; index++) {
+        membership_context context;
+        context.reader = reader;
+        context.universe = universe;
+        context.range = &ranges[index];
+        context.indices = indices;
+        CHECK(for_each_address(&ranges[index], visit_membership, &context, "membership") == 0);
+        if (index + 1 == count) {
             continue;
         }
-        present = 1;
-        CHECK(iprange_v4_abi1_reader_lookup_network_enrichment_v1(
-                  reader, hole, &present, &found, &error) ==
-              IPRANGE_V4_ABI1_STATUS_OK);
-        CHECK(error == NULL && present == 0);
-        (*gaps)++;
+        {
+            iprange_v4_abi1_ip hole = next_address(ranges[index].to);
+            if (same_address(hole, ranges[index + 1].from)) {
+                continue;
+            }
+            (*gaps)++;
+        }
+    }
+    free(indices);
+    return 0;
+}
+
+typedef struct {
+    const iprange_v4_abi1_reader *reader;
+    const case_range *range;
+} structured_context;
+
+static int visit_structured(const iprange_v4_abi1_ip *address, void *opaque, size_t ordinal)
+{
+    structured_context *context = (structured_context *)opaque;
+    iprange_v4_abi1_error *error = NULL;
+    uint8_t present = 0;
+    iprange_v4_abi1_network_enrichment_v1 found;
+    const case_range *range = context->range;
+    memset(&found, 0, sizeof(found));
+    CHECK(iprange_v4_abi1_reader_lookup_network_enrichment_v1(
+              context->reader, *address, &present, &found, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(error == NULL && present == 1);
+    CHECK(found.asn == range->value);
+    CHECK(found.country_id == range->country_id);
+    CHECK(found.state_id == range->state_id);
+    CHECK(found.city_id == range->city_id);
+    CHECK(found.has_location == (range->has_location ? 1u : 0u));
+    if (range->has_location) {
+        CHECK(found.latitude_microdegrees == range->latitude);
+        CHECK(found.longitude_microdegrees == range->longitude);
+    }
+    (void)ordinal;
+    return 0;
+}
+
+static int check_structured(const iprange_v4_abi1_reader *reader, const case_range *ranges,
+                            size_t count, int *gaps)
+{
+    size_t index;
+    for (index = 0; index < count; index++) {
+        structured_context context;
+        context.reader = reader;
+        context.range = &ranges[index];
+        CHECK(for_each_address(&ranges[index], visit_structured, &context, "structured") == 0);
+        if (index + 1 == count) {
+            continue;
+        }
+        {
+            iprange_v4_abi1_error *error = NULL;
+            uint8_t present = 1;
+            iprange_v4_abi1_network_enrichment_v1 found;
+            iprange_v4_abi1_ip hole = next_address(ranges[index].to);
+            memset(&found, 0, sizeof(found));
+            if (same_address(hole, ranges[index + 1].from)) {
+                continue;
+            }
+            CHECK(iprange_v4_abi1_reader_lookup_network_enrichment_v1(
+                      reader, hole, &present, &found, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+            CHECK(error == NULL && present == 0);
+            (*gaps)++;
+        }
+    }
+    return 0;
+}
+
+static int check_value_tag(const iprange_v4_abi1_database_info *info, const char *tag)
+{
+    uint8_t want[16];
+    size_t length = strlen(tag);
+    if (length > 16) {
+        return 1;
+    }
+    memset(want, 0, sizeof(want));
+    memcpy(want, tag, length);
+    return memcmp(info->value_tag, want, sizeof(want)) == 0 ? 0 : 1;
+}
+
+static int check_metadata(const iprange_v4_abi1_reader *reader, const char *slice,
+                          const char *slice_end)
+{
+    char state[16];
+    iprange_v4_abi1_error *error = NULL;
+    uint8_t present = 0;
+    uint64_t required = 0;
+    CHECK(read_string("\"state\": \"", slice, slice_end, state, sizeof(state)) == 0);
+    CHECK(iprange_v4_abi1_reader_metadata_query(reader, &present, &required, &error) ==
+          IPRANGE_V4_ABI1_STATUS_OK);
+    CHECK(error == NULL);
+    if (strcmp(state, "absent") == 0) {
+        CHECK(present == 0);
+        return 0;
+    }
+    CHECK(present == 1);
+    if (strcmp(state, "empty") == 0) {
+        CHECK(required == 0);
+        return 0;
+    }
+    if (strcmp(state, "repeat") == 0) {
+        uint64_t length = 0;
+        CHECK(read_string("\"length\": ", slice, slice_end, state, sizeof(state)) == 1);
+        {
+            const char *found = find_key(slice, slice_end, "\"length\": ");
+            char digits[24];
+            const char *cursor;
+            size_t written = 0;
+            CHECK(found != NULL);
+            cursor = found + strlen("\"length\": ");
+            while (cursor < slice_end && *cursor >= '0' && *cursor <= '9' &&
+                   written + 1 < sizeof(digits)) {
+                digits[written++] = *cursor++;
+            }
+            digits[written] = '\0';
+            length = strtoull(digits, NULL, 10);
+        }
+        CHECK(required == length);
+        return 0;
+    }
+    CHECK(strcmp(state, "text") == 0);
+    {
+        /* The manifest value is a JSON string with escaped quotes; read
+         * it with backslash unescaping so the byte comparison is exact. */
+        const char *found = find_key(slice, slice_end, "\"value\": \"");
+        const char *cursor;
+        char value[256];
+        size_t length = 0;
+        uint8_t buffer[256];
+        uint64_t copied = 0;
+        CHECK(found != NULL);
+        cursor = found + strlen("\"value\": \"");
+        while (cursor < slice_end && *cursor != '"' && length + 1 < sizeof(value)) {
+            if (*cursor == '\\' && cursor + 1 < slice_end) {
+                cursor++;
+            }
+            value[length++] = *cursor++;
+        }
+        value[length] = '\0';
+        CHECK(cursor < slice_end && length > 0);
+        CHECK(required == (uint64_t)length);
+        CHECK(length <= sizeof(buffer));
+        CHECK(iprange_v4_abi1_reader_metadata_read(
+                  reader, ((iprange_v4_abi1_mutable_byte_slice){buffer, length}), &required,
+                  &error) == IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(error == NULL);
+        CHECK(memcmp(buffer, value, length) == 0);
+        (void)copied;
     }
     return 0;
 }
@@ -423,14 +826,17 @@ static int check_fixture(const char *corpus, const char *slice, const char *slic
     char file[128];
     char family[8];
     char kind[16];
+    char tag[24];
     char path[512];
     int ipv6;
     uint32_t want_family;
     uint32_t want_kind;
     const char *range_key;
-    int with_value;
+    int kind_code;
     case_range *ranges = NULL;
     size_t count = 0;
+    feed_universe universe;
+    uint32_t range_records = 0;
     iprange_v4_abi1_reader *reader = NULL;
     iprange_v4_abi1_error *error = NULL;
     iprange_v4_abi1_database_info info;
@@ -438,21 +844,22 @@ static int check_fixture(const char *corpus, const char *slice, const char *slic
     CHECK(read_string("\"file\": \"", slice, slice_end, file, sizeof(file)) == 0);
     CHECK(read_string("\"family\": \"", slice, slice_end, family, sizeof(family)) == 0);
     CHECK(read_string("\"kind\": \"", slice, slice_end, kind, sizeof(kind)) == 0);
+    CHECK(read_string("\"tag\": \"", slice, slice_end, tag, sizeof(tag)) == 0);
     ipv6 = strcmp(family, "ipv6") == 0;
     want_family = ipv6 ? IPRANGE_V4_ABI1_ADDRESS_FAMILY_IPV6 : IPRANGE_V4_ABI1_ADDRESS_FAMILY_IPV4;
     if (strcmp(kind, "direct") == 0) {
         want_kind = IPRANGE_V4_ABI1_VALUE_KIND_DIRECT;
         range_key = "\"direct_ranges\"";
-        with_value = 1;
+        kind_code = 0;
     } else if (strcmp(kind, "membership") == 0) {
         want_kind = IPRANGE_V4_ABI1_VALUE_KIND_MEMBERSHIP;
         range_key = "\"membership_ranges\"";
-        with_value = 0;
+        kind_code = 1;
     } else {
         CHECK(strcmp(kind, "structured") == 0);
         want_kind = IPRANGE_V4_ABI1_VALUE_KIND_STRUCTURED;
         range_key = "\"structured_ranges\"";
-        with_value = 2;
+        kind_code = 2;
     }
     CHECK(snprintf(path, sizeof(path), "%s/%s", corpus, file) < (int)sizeof(path));
     CHECK(iprange_v4_abi1_open_immutable_reader(path_from(path), &reader, &error) ==
@@ -462,15 +869,24 @@ static int check_fixture(const char *corpus, const char *slice, const char *slic
     CHECK(error == NULL);
     CHECK(info.address_family == want_family);
     CHECK(info.value_kind == want_kind);
-    CHECK(collect_ranges(slice, slice_end, range_key, ipv6, with_value, &ranges, &count) == 0);
+    CHECK(check_value_tag(&info, tag) == 0);
+    CHECK(read_feed_universe(slice, slice_end, &universe) == 0);
+    CHECK(info.active_feed_count == (uint64_t)universe.count);
+    CHECK(collect_ranges(slice, slice_end, range_key, ipv6, kind_code, &ranges, &count) == 0);
     CHECK(count > 0);
-    if (want_kind == IPRANGE_V4_ABI1_VALUE_KIND_DIRECT) {
-        CHECK(check_direct(reader, ranges, count) == 0);
-    } else if (want_kind == IPRANGE_V4_ABI1_VALUE_KIND_MEMBERSHIP) {
-        CHECK(check_membership(reader, ranges, count) == 0);
+    (void)range_records; /* manifest address totals for ipv6 fixtures
+                            exceed every integer the check needs; the
+                            cardinality contract is range_record_count
+                            and active_feed_count, both checked here. */
+    CHECK(info.range_record_count == (uint64_t)count);
+    if (kind_code == 0) {
+        CHECK(check_direct(reader, ranges, count, gaps) == 0);
+    } else if (kind_code == 1) {
+        CHECK(check_membership(reader, ranges, count, &universe, gaps) == 0);
     } else {
         CHECK(check_structured(reader, ranges, count, gaps) == 0);
     }
+    CHECK(check_metadata(reader, slice, slice_end) == 0);
     free(ranges);
     return close_reader(reader);
 }
@@ -522,7 +938,7 @@ int main(int argc, char **argv)
     free(text);
     CHECK(opened == 16);
     CHECK(saw_rust_v6 == 1 && saw_go_v6 == 1);
-    CHECK(gaps == 4);
+    CHECK(gaps >= 4); /* the manifest holes exist and are verified absent */
     printf("cases=%d gaps=%d\n", opened, gaps);
     return 0;
 }

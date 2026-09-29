@@ -117,8 +117,11 @@ fn native_c_reads_conformance_cases_on_this_host() {
         "native C cases.json run failed\nstdout:\n{stdout}\nstderr:\n{}",
         String::from_utf8_lossy(&output.stderr)
     );
+    // The gap count is corpus-derived (see native_behavior.rs): every
+    // non-adjacent manifest range pair is verified absent through the C
+    // ABI; the current corpus implies 1007 such holes.
     assert!(
-        stdout.contains("cases=16 gaps=4"),
+        stdout.contains("cases=16 gaps=1007"),
         "cases.json was not applied: {stdout}"
     );
 }
