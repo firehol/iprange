@@ -225,24 +225,29 @@ def run_calls(service, name, scenario, work, calls, peer, deferred=None, binary=
     captured = {}
     for index, call in enumerate(calls, start=1):
         if "cli" in call:
+            # A legacy CLI step: a point-in-time invocation of the same
+            # engine binary. The file oracles below apply to it like to
+            # any call (a redirected stdout is hashed across engines);
+            # the rpc-only frame checks do not.
             if binary is None:
                 raise AssertionError(
                     "a cli step needs the engine binary (harness defect)")
-            observed.append(run_cli(binary, name, call, work))
+            cli_row = run_cli(binary, name, call, work)
+            file_oracles(call, name, work, deferred, cli_row)
+            observed.append(cli_row)
             continue
         if "batch" in call:
             result = call_batch(service, call["batch"], work)
         else:
             params = substitute(call["params"], work)
-        if "batch" not in call and peer is not None:
-            params = substitute(params, peer, token="$PEER")
-        if "batch" not in call:
+            if peer is not None:
+                params = substitute(params, peer, token="$PEER")
             params = substitute_capture(params, captured)
             result = service.call(
-            f"{scenario['name']}-{name}-{index}",
-            call["method"],
-            params,
-        )
+                f"{scenario['name']}-{name}-{index}",
+                call["method"],
+                params,
+            )
         if "expect_rpc_error" in call:
             error = result.get("error", {})
             if error.get("code") != call["expect_rpc_error"]:
@@ -252,71 +257,79 @@ def run_calls(service, name, scenario, work, calls, peer, deferred=None, binary=
                 )
             observed.append({"error": {"code": error.get("code")}})
             continue
-        if call.get("expect_file_csv_rows"):
-            # Exact row oracle: rows are compared as a multiset, so a
-            # missing row, an extra row, a duplicated row, or a row
-            # whose fields merely prefix another ("alpha,1,5" vs
-            # "alpha,1,50") all fail — a substring check cannot see
-            # any of these. Performance mode defers the oracle (file
-            # read + multiset compare) out of its timed window via
-            # `deferred`; correctness mode runs it inline.
-            spec = call["expect_file_csv_rows"]
-            relative = spec["path"]
-
-            def csv_check(spec=spec, relative=relative, name=name, work=work):
-                path = os.path.join(work, relative)
-                with open(path, encoding="utf-8") as stream:
-                    next(stream)
-                    rows = Counter(
-                        line.rstrip("\n") for line in stream if line.strip())
-                want = Counter(spec["rows"])
-                if rows != want:
-                    missing = list((want - rows).elements())
-                    unexpected = list((rows - want).elements())
-                    raise AssertionError(
-                        f"{name} {relative}: rows differ (missing {missing!r}, "
-                        f"unexpected {unexpected!r})")
-
-            if deferred is None:
-                csv_check()
-            else:
-                deferred.append(csv_check)
-        if call.get("expect_no_file"):
-            relative = call["expect_no_file"]
-            if os.path.exists(os.path.join(work, relative)):
-                raise AssertionError(f"{name} left {relative} after a failed publish")
-        if "expect_error" in call:
-            if "error" not in result:
-                raise AssertionError(f"{name} {call['method']}: expected error, got result")
-            data = result["error"].get("data", {})
-            for key, expected in call["expect_error"].items():
-                if data.get(key) != expected:
-                    raise AssertionError(
-                        f"{name} {call['method']}: error {key}={data.get(key)!r}, want {expected!r}"
-                    )
-            observed.append({"error": data})
-            continue
-        if "error" in result:
-            raise AssertionError(f"{name} {call['method']}: {result['error']}")
-        if "batch" in call:
-            observed.append(result)
-            continue
-        for item in call.get("capture", []):
-            captured[item["name"]] = field(result["result"], item["path"].replace("/", "."))
-        row = dict(result["result"])
-        if call.get("expect_same_bytes"):
-            relative = call["expect_same_bytes"]
-
-            def bytes_check(row=row, relative=relative, work=work):
-                row["bytes"] = hashlib.sha256(
-                    open(os.path.join(work, relative), "rb").read()).hexdigest()
-
-            if deferred is None:
-                bytes_check()
-            else:
-                deferred.append(bytes_check)
+        row = rpc_result_row(call, name, result, captured, work, deferred)
+        file_oracles(call, name, work, deferred, row)
         observed.append(row)
     return observed
+
+
+def rpc_result_row(call, name, result, captured, work, deferred):
+    """Validate one rpc result frame into its comparison row."""
+    del work, deferred
+    if "expect_error" in call:
+        if "error" not in result:
+            raise AssertionError(f"{name} {call['method']}: expected error, got result")
+        data = result["error"].get("data", {})
+        for key, expected in call["expect_error"].items():
+            if data.get(key) != expected:
+                raise AssertionError(
+                    f"{name} {call['method']}: error {key}={data.get(key)!r}, want {expected!r}"
+                )
+        return {"error": data}
+    if "error" in result:
+        raise AssertionError(f"{name} {call['method']}: {result['error']}")
+    if "batch" in call:
+        return result
+    for item in call.get("capture", []):
+        captured[item["name"]] = field(result["result"], item["path"].replace("/", "."))
+    return dict(result["result"])
+
+
+def file_oracles(call, name, work, deferred, row):
+    """Apply the scenario's file oracles to one call's row.
+
+    Exact row oracle (multiset), absence oracle, and the cross-engine
+    artifact digest. Performance mode defers the reads and hashes out
+    of its timed window via `deferred`; correctness mode runs them
+    inline. Applies to rpc calls and cli steps alike.
+    """
+    if call.get("expect_file_csv_rows"):
+        spec = call["expect_file_csv_rows"]
+        relative = spec["path"]
+
+        def csv_check(spec=spec, relative=relative, name=name, work=work):
+            path = os.path.join(work, relative)
+            with open(path, encoding="utf-8") as stream:
+                next(stream)
+                rows = Counter(
+                    line.rstrip("\n") for line in stream if line.strip())
+            want = Counter(spec["rows"])
+            if rows != want:
+                missing = list((want - rows).elements())
+                unexpected = list((rows - want).elements())
+                raise AssertionError(
+                    f"{name} {relative}: rows differ (missing {missing!r}, "
+                    f"unexpected {unexpected!r})")
+
+        if deferred is None:
+            csv_check()
+        else:
+            deferred.append(csv_check)
+    if call.get("expect_no_file"):
+        relative = call["expect_no_file"]
+        if os.path.exists(os.path.join(work, relative)):
+            raise AssertionError(f"{name} left {relative} after a failed publish")
+    if call.get("expect_same_bytes"):
+        relative = call["expect_same_bytes"]
+
+        def bytes_check(row=row, relative=relative, work=work):
+            row["bytes"] = hashlib.sha256(
+                open(os.path.join(work, relative), "rb").read()).hexdigest()
+
+        if deferred is None:
+            bytes_check()
+        else:
+            deferred.append(bytes_check)
 
 
 def batch_observation(decoded, count):

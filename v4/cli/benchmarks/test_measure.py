@@ -605,3 +605,41 @@ class CliStepDetectingTest(unittest.TestCase):
     def test_a_matching_answer_passes(self):
         report = self._run(self._scenario(stdout="10.0.0.1/32\n"))
         self.assertEqual(report["rounds"], 1)
+
+
+class CliArtifactDigestTest(unittest.TestCase):
+    """Astra r91: the artifact digest oracle applies to cli steps — a
+    byte-different redirected stdout across engines must fail the run
+    (the pre-fix code compared None == None)."""
+
+    def test_a_differing_cli_artifact_fails(self):
+        import tempfile
+        stub = os.path.join(_HERE, "stub_engine.py")
+
+        def wrapper(work, label):
+            path = os.path.join(work, f"engine-{label}")
+            with open(path, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_EXIT'] = '0'\n"
+                    f"os.environ['STUB_CLI_STDOUT'] = {label!r}\n"
+                    f"os.execv({sys.executable!r}, [{sys.executable!r}, {stub!r}] + sys.argv[1:])\n")
+            os.chmod(path, 0o755)
+            return path
+
+        scenario = {
+            "name": "cli-artifact-detect",
+            "cli": [{
+                "cli": {"args": ["a.txt"], "redirect_stdout": "merged.bin"},
+                "compare": ["exit"],
+                "expect": {"exit": 0},
+                "expect_same_bytes": "merged.bin",
+            }],
+            "fixtures": [{"path": "a.txt", "text": "10.0.0.1\n"}],
+        }
+        with tempfile.TemporaryDirectory() as work:
+            rust = wrapper(work, "AAA")
+            go = wrapper(work, "BBB")
+            with self.assertRaisesRegex(AssertionError, "bytes differ"):
+                _bench.run_perf(scenario, rust, go, 1, work)
