@@ -1,0 +1,346 @@
+{
+ "schema": "iprange-bench-scenario-v1",
+ "name": "s5-bogon-split",
+ "purpose": "The bogon split and algebra aggregation: algebra.publish an exclusion (left minus bogons) and a union (left plus bogons), and verify the published feeds' exact membership \u2014 clean addresses map to the clean feed, bogon addresses map to nothing there and to the merged feed in the union, and the union's CSV is byte-identical across engines.",
+ "fixtures": [
+  {
+   "path": "left.txt",
+   "text": "192.0.2.0/30\n192.0.2.10/31\n"
+  },
+  {
+   "path": "bogons.txt",
+   "text": "192.0.2.2-192.0.2.5\n"
+  }
+ ],
+ "calls": [
+  {
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/left.txt"
+     ],
+     "family": "ipv4",
+     "fix_network": true,
+     "default_prefix": 32,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
+    },
+    "feed": "left",
+    "value_tag": {
+     "text": "feed"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "left"
+    },
+    "destination": "$WORK/left.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "compare": [
+    "report.addresses"
+   ],
+   "expect": {
+    "report.addresses": "6"
+   }
+  },
+  {
+   "method": "iprange.v1.current.publish",
+   "params": {
+    "input": {
+     "paths": [
+      "$WORK/bogons.txt"
+     ],
+     "family": "ipv4",
+     "fix_network": true,
+     "default_prefix": 32,
+     "dns": {
+      "threads": 1,
+      "silent": true
+     },
+     "expand_at_paths": false,
+     "max_line_bytes": 1024,
+     "max_expanded_paths": 4
+    },
+    "feed": "bogons",
+    "value_tag": {
+     "text": "feed"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "bogons"
+    },
+    "destination": "$WORK/bogons.iprange",
+    "publication_policy": "fail_if_exists",
+    "immutable_feed_budget": {
+     "max_heap_bytes": "16777216",
+     "max_output_pages": "20000",
+     "max_workspace_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "compare": [
+    "report.addresses"
+   ],
+   "expect": {
+    "report.addresses": "4"
+   }
+  },
+  {
+   "method": "iprange.v1.algebra.publish",
+   "params": {
+    "sources": [
+     {
+      "source": {
+       "path": "$WORK/left.iprange",
+       "mode": "immutable"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      }
+     },
+     {
+      "source": {
+       "path": "$WORK/bogons.iprange",
+       "mode": "immutable"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      }
+     }
+    ],
+    "operation": {
+     "kind": "exclusion",
+     "included": {
+      "mode": "named",
+      "feeds": [
+       "left"
+      ]
+     },
+     "excluded": {
+      "mode": "named",
+      "feeds": [
+       "bogons"
+      ]
+     }
+    },
+    "output_mode": {
+     "kind": "flat",
+     "feed": "clean"
+    },
+    "value_tag": {
+     "text": "feed"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "clean"
+    },
+    "destination": "$WORK/clean.iprange",
+    "publication_policy": "fail_if_exists",
+    "algebra_budget": {
+     "max_heap_bytes": "1048576",
+     "max_sources": 2
+    },
+    "algebra_output_budget": {
+     "max_output_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "compare": [
+    "report.output_addresses",
+    "report.output_feed_count",
+    "report.output_range_count",
+    "report.source_count"
+   ],
+   "expect": {
+    "report.output_addresses": "4",
+    "report.output_feed_count": "1",
+    "report.output_range_count": "2",
+    "report.source_count": "2"
+   }
+  },
+  {
+   "method": "iprange.v1.query.matching_feeds",
+   "params": {
+    "source": {
+     "path": "$WORK/clean.iprange",
+     "mode": "immutable"
+    },
+    "addresses": [
+     "192.0.2.0",
+     "192.0.2.1",
+     "192.0.2.2",
+     "192.0.2.3",
+     "192.0.2.4",
+     "192.0.2.5",
+     "192.0.2.10",
+     "192.0.2.11"
+    ],
+    "output": {
+     "path": "$WORK/clean.csv",
+     "format": "csv",
+     "publication_policy": "replace_existing",
+     "result_budget": {
+      "max_rows": "16",
+      "max_output_bytes": "4096",
+      "max_open_files": 3
+     }
+    }
+   },
+   "compare": [
+    "matching_feed_count"
+   ],
+   "expect": {
+    "matching_feed_count": "4"
+   },
+   "expect_file_csv_rows": {
+    "path": "clean.csv",
+    "rows": [
+     "192.0.2.0,clean",
+     "192.0.2.1,clean",
+     "192.0.2.2,",
+     "192.0.2.3,",
+     "192.0.2.4,",
+     "192.0.2.5,",
+     "192.0.2.10,clean",
+     "192.0.2.11,clean"
+    ]
+   },
+   "expect_same_bytes": "clean.csv"
+  },
+  {
+   "method": "iprange.v1.algebra.publish",
+   "params": {
+    "sources": [
+     {
+      "source": {
+       "path": "$WORK/left.iprange",
+       "mode": "immutable"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      }
+     },
+     {
+      "source": {
+       "path": "$WORK/bogons.iprange",
+       "mode": "immutable"
+      },
+      "scope": {
+       "mode": "all"
+      },
+      "membership_query_budget": {
+       "max_heap_bytes": "1048576"
+      }
+     }
+    ],
+    "operation": {
+     "kind": "union",
+     "selection": {
+      "mode": "all"
+     }
+    },
+    "output_mode": {
+     "kind": "flat",
+     "feed": "merged"
+    },
+    "value_tag": {
+     "text": "feed"
+    },
+    "metadata": {
+     "mode": "replace_utf8",
+     "text": "merged"
+    },
+    "destination": "$WORK/merged.iprange",
+    "publication_policy": "fail_if_exists",
+    "algebra_budget": {
+     "max_heap_bytes": "1048576",
+     "max_sources": 2
+    },
+    "algebra_output_budget": {
+     "max_output_pages": "20000",
+     "max_open_files": 3
+    }
+   },
+   "compare": [
+    "report.output_addresses",
+    "report.output_feed_count",
+    "report.source_count"
+   ],
+   "expect": {
+    "report.output_addresses": "8",
+    "report.output_feed_count": "1",
+    "report.source_count": "2"
+   }
+  },
+  {
+   "method": "iprange.v1.query.matching_feeds",
+   "params": {
+    "source": {
+     "path": "$WORK/merged.iprange",
+     "mode": "immutable"
+    },
+    "addresses": [
+     "192.0.2.0",
+     "192.0.2.1",
+     "192.0.2.2",
+     "192.0.2.3",
+     "192.0.2.4",
+     "192.0.2.5",
+     "192.0.2.10",
+     "192.0.2.11"
+    ],
+    "output": {
+     "path": "$WORK/merged.csv",
+     "format": "csv",
+     "publication_policy": "replace_existing",
+     "result_budget": {
+      "max_rows": "16",
+      "max_output_bytes": "4096",
+      "max_open_files": 3
+     }
+    }
+   },
+   "compare": [
+    "matching_feed_count"
+   ],
+   "expect": {
+    "matching_feed_count": "8"
+   },
+   "expect_file_csv_rows": {
+    "path": "merged.csv",
+    "rows": [
+     "192.0.2.0,merged",
+     "192.0.2.1,merged",
+     "192.0.2.2,merged",
+     "192.0.2.3,merged",
+     "192.0.2.4,merged",
+     "192.0.2.5,merged",
+     "192.0.2.10,merged",
+     "192.0.2.11,merged"
+    ]
+   },
+   "expect_same_bytes": "merged.csv"
+  }
+ ]
+}
