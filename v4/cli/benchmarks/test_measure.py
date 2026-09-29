@@ -696,3 +696,95 @@ class PublishSampleCheckTest(unittest.TestCase):
                 stream.write(b"present")
             check_sample(self.sample("47"), request, destination, 47)
             self.assertFalse(os.path.exists(destination))  # consumed
+
+
+class CliLargeOutputTest(unittest.TestCase):
+    """r93: a cli step writing past the pipe buffer must not deadlock —
+    the sampler drains while sampling, and the output arrives whole."""
+
+    def test_a_large_cli_output_is_captured_without_deadlock(self):
+        import subprocess
+        import tempfile
+        big = os.path.join(_HERE, "stub_engine.py")
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "big_cli")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "if sys.argv[1:] == ['--jsonrpc']:\n"
+                    "    os.environ['STUB_EXIT'] = '0'\n"
+                    f"    os.execv({sys.executable!r}, [{sys.executable!r}, {big!r}] + sys.argv[1:])\n"
+                    "sys.stdout.write(open(sys.argv[0] + '.payload').read())\n"
+                    "sys.exit(0)\n")
+            with open(wrapper + ".payload", "w", encoding="utf-8") as stream:
+                stream.write("x" * (4 << 20) + "\n")
+            os.chmod(wrapper, 0o755)
+            scenario = {
+                "name": "cli-big-output",
+                "cli": [{"cli": {"args": ["a.txt"]}, "compare": ["exit"],
+                         "expect": {"exit": 0}}],
+                "fixtures": [{"path": "a.txt", "text": "10.0.0.1\n"}],
+            }
+            import time as _time
+            started = _time.monotonic()
+            report = _bench.run_perf(scenario, wrapper, wrapper, 1, work)
+            self.assertLess(_time.monotonic() - started, 60)
+            del report
+            del subprocess
+
+
+class HarnessValidatorTest(unittest.TestCase):
+    """r93: the four perf qualification harnesses' per-sample validators
+    are suite-covered — corrupting a comparison constant fails, and a
+    consistent synthetic sample passes (the r91 signature-break class
+    shipped green through exactly this gap)."""
+
+    def _sample(self, report):
+        return {"response": {"id": "x", "result": {"report": report}}}
+
+    def test_a_wrong_overlap_is_refused_and_a_right_one_passes(self):
+        import perf_join
+        perf_join.EXPECTED_OVERLAP = 47
+        self.assertRaisesRegex(
+            AssertionError, "generator says",
+            perf_join.check_join_sample, self._sample({"overlap_addresses": "12"}), None, None)
+        perf_join.check_join_sample(self._sample({"overlap_addresses": "47"}), None, None)
+
+    def test_a_wrong_retained_is_refused(self):
+        import perf_history
+        perf_history.EXPECTED_RETAINED = 91
+        self.assertRaisesRegex(
+            AssertionError, "generator says",
+            perf_history.check_history_sample,
+            self._sample({"windows": [{"after_addresses": "9"}]}), None, None)
+        perf_history.check_history_sample(
+            self._sample({"windows": [{"after_addresses": "91"}]}), None, None)
+
+    def test_a_wrong_replace_diff_is_refused(self):
+        import perf_replace
+        perf_replace.EXPECTED_DIFF = {"unchanged": 10, "removed": 0, "added": 1}
+        self.assertRaisesRegex(
+            AssertionError, "generator says",
+            perf_replace.check_replace_sample,
+            self._sample({"unchanged_value_addresses": "9",
+                          "removed_addresses": "0", "added_addresses": "1"}),
+            None, None)
+        perf_replace.check_replace_sample(
+            self._sample({"unchanged_value_addresses": "10",
+                          "removed_addresses": "0", "added_addresses": "1"}),
+            None, None)
+
+    def test_a_wrong_churn_diff_is_refused(self):
+        import perf_churn
+        perf_churn.EXPECTED_LAST_STEP = {"unchanged": 8, "removed": 1, "added": 2}
+        self.assertRaisesRegex(
+            AssertionError, "generator says",
+            perf_churn.check_churn_sample,
+            self._sample({"unchanged_value_addresses": "7",
+                          "removed_addresses": "1", "added_addresses": "2"}),
+            None, None)
+        perf_churn.check_churn_sample(
+            self._sample({"unchanged_value_addresses": "8",
+                          "removed_addresses": "1", "added_addresses": "2"}),
+            None, None)

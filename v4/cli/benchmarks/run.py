@@ -204,13 +204,55 @@ def run_cli(binary, name, call, work, peak=None):
         proc = subprocess.Popen(
             argv, cwd=work, stdin=stdin_stream,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        if peak is not None:
-            while proc.poll() is None:
-                current = child_hwm_kib(proc.pid)
-                if current is not None and current > peak["kib"]:
-                    peak["kib"] = current
-                time.sleep(0.001)
-        stdout, stderr = proc.communicate(timeout=300)
+        # Drain while sampling: a CLI step can write more than the pipe
+        # buffer to stdout (the realistic large-output workload), and a
+        # sampler that only polls would deadlock the child on a full
+        # pipe. The whole wait is bounded (deadline); reads are
+        # non-blocking; the sampler folds VmHWM into the round
+        # accumulator whenever it observes the child.
+        import selectors as _selectors
+        deadline = time.monotonic() + 300
+        chunks = []
+        os.set_blocking(proc.stdout.fileno(), False)
+        selector = _selectors.DefaultSelector()
+        selector.register(proc.stdout.fileno(), _selectors.EVENT_READ)
+        try:
+            while True:
+                if time.monotonic() > deadline:
+                    proc.kill()
+                    proc.wait(timeout=5)
+                    raise AssertionError(
+                        "cli step did not finish within 300 s")
+                for key, _mask in selector.select(0.001):
+                    try:
+                        chunk = os.read(key.fd, 1 << 20)
+                    except BlockingIOError:
+                        chunk = b""
+                    if chunk:
+                        chunks.append(chunk)
+                        continue
+                    break
+                if peak is not None:
+                    current = child_hwm_kib(proc.pid)
+                    if current is not None and current > peak["kib"]:
+                        peak["kib"] = current
+                if proc.poll() is not None:
+                    # Drain any residue after the child's exit, then stop.
+                    while True:
+                        try:
+                            chunk = os.read(proc.stdout.fileno(), 1 << 20)
+                        except BlockingIOError:
+                            break
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                    break
+        finally:
+            selector.close()
+        stdout = b"".join(chunks)
+        stderr = proc.stderr.read()
+        proc.stderr.close()
+        proc.stdout.close()
         returncode = proc.returncode
     finally:
         if stdin_stream is not subprocess.DEVNULL:
@@ -333,8 +375,8 @@ def file_oracles(call, name, work, deferred, row):
         relative = call["expect_same_bytes"]
 
         def bytes_check(row=row, relative=relative, work=work):
-            row["bytes"] = hashlib.sha256(
-                open(os.path.join(work, relative), "rb").read()).hexdigest()
+            with open(os.path.join(work, relative), "rb") as stream:
+                row["bytes"] = hashlib.sha256(stream.read()).hexdigest()
 
         if deferred is None:
             bytes_check()
@@ -480,11 +522,15 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
 
 
 def scenario_calls(scenario):
+    # The order matches execution order: write, then cli (both run in
+    # the write phase; a cli step is a point-in-time invocation of the
+    # same binary), then read. compare() consumes observations
+    # index-wise, so a spec order that diverged from execution order
+    # would mispair them (r93: latent for any scenario mixing
+    # cross-open reads with cli steps).
     calls = list(scenario.get("write", scenario.get("calls", [])))
-    calls.extend(scenario.get("read", []))
-    # Legacy CLI steps are point-in-time invocations of the same binary
-    # (no --jsonrpc): the workload surface update-ipsets uses today.
     calls.extend(scenario.get("cli", []))
+    calls.extend(scenario.get("read", []))
     return calls
 
 

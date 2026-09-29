@@ -975,6 +975,92 @@ static int check_metadata(const iprange_v4_abi1_reader *reader, const char *slic
     return 0;
 }
 
+/* Borrow-safe span between two packed big-endian addresses: IPv4 fits
+ * one 64-bit word (width < 8 packs wholly into the low word); IPv6
+ * splits into hi/lo words with a borrow. Returns 0 and sets
+ * *unrepresentable when the difference does not fit 64 bits. */
+static int packed_span(const iprange_v4_abi1_ip *from, const iprange_v4_abi1_ip *to,
+                       int width, unsigned long long *span, int *unrepresentable)
+{
+    unsigned long long to_high = 0, to_low = 0;
+    unsigned long long from_high = 0, from_low = 0;
+    unsigned long long borrow, low, high;
+    int position;
+    *unrepresentable = 0;
+    *span = 0;
+    for (position = 0; position < width; position++) {
+        if (position < width - 8) {
+            to_high = (to_high << 8) | to->bytes[position];
+            from_high = (from_high << 8) | from->bytes[position];
+        } else {
+            to_low = (to_low << 8) | to->bytes[position];
+            from_low = (from_low << 8) | from->bytes[position];
+        }
+    }
+    borrow = from_low > to_low ? 1u : 0u;
+    low = to_low - from_low;
+    high = to_high - from_high - borrow;
+    if (high != 0) {
+        *unrepresentable = 1;
+        return 0;
+    }
+    if (low + 1 == 0) {
+        /* The full low word plus one wraps: unrepresentable. */
+        *unrepresentable = 1;
+        return 0;
+    }
+    *span = low + 1;
+    return 0;
+}
+
+/* The five-shape pin for packed_span (r93): borrow, simple, v4
+ * universe, v6 universe, v6 documentation range. Runs before the
+ * corpus walk; a regression in the arithmetic fails the whole run. */
+static int selftest_packed_span(void)
+{
+    iprange_v4_abi1_ip from, to;
+    unsigned long long span;
+    int unrepresentable;
+
+    memset(&from, 0, sizeof(from));
+    memset(&to, 0, sizeof(to));
+
+    /* borrow: 10.0.0.5 -> 10.0.1.3 = 255 */
+    from.family = to.family = IPRANGE_V4_ABI1_ADDRESS_FAMILY_IPV4;
+    from.bytes[0] = 10; to.bytes[0] = 10;
+    to.bytes[2] = 1; to.bytes[3] = 3; from.bytes[3] = 5;
+    CHECK(packed_span(&from, &to, 4, &span, &unrepresentable) == 0);
+    CHECK(!unrepresentable && span == 255);
+
+    /* simple: 10.0.0.1 -> 10.0.0.3 = 3 */
+    from.bytes[3] = 1; to.bytes[2] = 0; to.bytes[3] = 3;
+    CHECK(packed_span(&from, &to, 4, &span, &unrepresentable) == 0);
+    CHECK(!unrepresentable && span == 3);
+
+    /* v4 universe: 0.0.0.0 -> 255.255.255.255 = 2^32 */
+    memset(from.bytes, 0, 16);
+    memset(to.bytes, 0xff, 4);
+    CHECK(packed_span(&from, &to, 4, &span, &unrepresentable) == 0);
+    CHECK(!unrepresentable && span == 4294967296ull);
+
+    /* v6 universe: :: -> ffff:...:ffff is unrepresentable */
+    memset(from.bytes, 0, 16);
+    memset(to.bytes, 0xff, 16);
+    packed_span(&from, &to, 16, &span, &unrepresentable);
+    CHECK(unrepresentable);
+
+    /* v6 documentation range: 2001:db8::1 -> 2001:db8::ffff = 65535 */
+    memset(from.bytes, 0, 16);
+    memset(to.bytes, 0, 16);
+    from.bytes[0] = 0x20; from.bytes[1] = 0x01; from.bytes[2] = 0x0d; from.bytes[3] = 0xb8;
+    to.bytes[0] = 0x20; to.bytes[1] = 0x01; to.bytes[2] = 0x0d; to.bytes[3] = 0xb8;
+    to.bytes[15] = 0xff; to.bytes[14] = 0xff; from.bytes[15] = 1;
+    CHECK(packed_span(&from, &to, 16, &span, &unrepresentable) == 0);
+    CHECK(!unrepresentable && span == 65535);
+
+    return 0;
+}
+
 static int check_fixture(const char *corpus, const char *slice, const char *slice_end, int *gaps)
 {
     char file[128];
@@ -1064,33 +1150,18 @@ static int check_fixture(const char *corpus, const char *slice, const char *slic
                 int unrepresentable = 0;
                 size_t index2;
                 for (index2 = 0; index2 < count && !unrepresentable; index2++) {
-                    const uint8_t *from = ranges[index2].from.bytes;
-                    const uint8_t *to = ranges[index2].to.bytes;
+                    unsigned long long span;
+                    int span_unrepresentable;
                     int width = ipv6 ? 16 : 4;
-                    unsigned long long to_high = 0, to_low = 0;
-                    unsigned long long from_high = 0, from_low = 0;
-                    unsigned long long borrow, low, high, span;
-                    int position;
-                    for (position = 0; position < width; position++) {
-                        if (position < width - 8) {
-                            to_high = (to_high << 8) | to[position];
-                            from_high = (from_high << 8) | from[position];
-                        } else {
-                            to_low = (to_low << 8) | to[position];
-                            from_low = (from_low << 8) | from[position];
-                        }
-                    }
-                    borrow = from_low > to_low ? 1u : 0u;
-                    low = to_low - from_low;
-                    high = to_high - from_high - borrow;
-                    if (high != 0) {
+                    packed_span(&ranges[index2].from, &ranges[index2].to, width,
+                                &span, &span_unrepresentable);
+                    if (span_unrepresentable) {
                         unrepresentable = 1;
                         break;
                     }
-                    span = low + 1;
-                    if (span == 0 || total > UINT64_MAX - span) {
-                        /* span wrapped (the full low word) or the total
-                         * would overflow: unverifiable at 64 bits. */
+                    if (total > UINT64_MAX - span) {
+                        /* the total would overflow: unverifiable at
+                         * 64 bits. */
                         unrepresentable = 1;
                         break;
                     }
@@ -1130,6 +1201,7 @@ int main(int argc, char **argv)
         return 1;
     }
     CHECK(snprintf(cases_path, sizeof(cases_path), "%s/cases.json", argv[1]) < (int)sizeof(cases_path));
+    CHECK(selftest_packed_span() == 0);
     text = read_file(cases_path, &length);
     CHECK(text != NULL);
     cursor = text;

@@ -1429,11 +1429,12 @@ class CaseRunner:
         A product service lives from its first request until the runner closes
         its stdin, so a service already exited at that point did not end its
         own session: it crashed, was killed, or left its request loop.  The
-        check cannot live in ``JsonRpcService.close()`` because the crash
-        battery legitimately kills its own peers and then closes them, and the
-        already-dead exemption is what lets those scenarios report a crash as
-        evidence; the matrix runner never kills a peer, so the rule belongs
-        here.
+        check lives here — not in ``JsonRpcService.close()`` — because
+        close() validates every ordinary session (including a peer that
+        already exited) and the intentional-crash surfaces pass their
+        explicit exemptions (``allow_forced``/``broken_exchange``/
+        ``close_forced``); the matrix runner never kills a peer, so an
+        already-exited service is always its own finding here.
         """
 
         if self.owned_services and any(
