@@ -236,6 +236,26 @@ class TimedResponseValidationTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "neither result nor error"):
             validate_response(self.REQUEST, response)
 
+    def test_extra_trailing_frames_are_refused(self):
+        # A timed operation answers exactly once: a second frame in the
+        # stream (here delivered post-exit) must fail the sample.
+        import subprocess
+        engine = "/bin/sh"
+        script = (
+            "read line; "
+            "printf '%s\\n' '$FRAME1'; "
+            "printf '%s\\n' '$FRAME2'; "
+            "exit 0")
+        request = (b'{"jsonrpc": "2.0", "id": "t2", '
+                   b'"method": "iprange.v1.system.describe", "params": {}}\n')
+        frame = ('{"jsonrpc": "2.0", "id": "t2", "result": {}}')
+        with mock.patch.dict(os.environ, {}):
+            command = [engine, "-c",
+                       script.replace("$FRAME1", frame).replace("$FRAME2", frame)]
+            with self.assertRaisesRegex(AssertionError,
+                                        "delivered more than one frame"):
+                run_once(command, request)
+
     def test_run_once_validates_a_real_exchange(self):
         from unittest import mock
         stub = os.path.join(_HERE, "stub_engine.py")
