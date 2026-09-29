@@ -1,4 +1,5 @@
 #include <errno.h>
+#include <limits.h>
 
 #include "abi_test_support.h"
 
@@ -1051,29 +1052,51 @@ static int check_fixture(const char *corpus, const char *slice, const char *slic
             errno = 0;
             claimed = strtoull(digits, &parse_end, 10);
             if (errno == 0 && parse_end != NULL && *parse_end == '\0') {
+                /* Sum of the range spans, borrow-safe: subtract the
+                 * packed big-endian addresses (IPv4 fits one 64-bit
+                 * word; IPv6 splits into hi/lo with a borrow). A span
+                 * — or the running total — that does not fit 64 bits
+                 * (the whole-universe fixtures) makes the fixture's
+                 * claimed total unverifiable at this width and skips
+                 * the comparison; range_record_count remains its
+                 * cardinality contract. */
                 unsigned long long total = 0;
-                int overflow = 0;
+                int unrepresentable = 0;
                 size_t index2;
-                for (index2 = 0; index2 < count && !overflow; index2++) {
-                    unsigned long long span;
+                for (index2 = 0; index2 < count && !unrepresentable; index2++) {
                     const uint8_t *from = ranges[index2].from.bytes;
                     const uint8_t *to = ranges[index2].to.bytes;
                     int width = ipv6 ? 16 : 4;
+                    unsigned long long to_high = 0, to_low = 0;
+                    unsigned long long from_high = 0, from_low = 0;
+                    unsigned long long borrow, low, high, span;
                     int position;
-                    unsigned long long accumulated = 0;
-                    /* big-endian to-from over the family width */
                     for (position = 0; position < width; position++) {
-                        accumulated = accumulated * 256 +
-                                      (unsigned)(to[position] - from[position]);
+                        if (position < width - 8) {
+                            to_high = (to_high << 8) | to[position];
+                            from_high = (from_high << 8) | from[position];
+                        } else {
+                            to_low = (to_low << 8) | to[position];
+                            from_low = (from_low << 8) | from[position];
+                        }
                     }
-                    span = accumulated + 1;
-                    if (total > UINT64_MAX - span) {
-                        overflow = 1;
-                    } else {
-                        total += span;
+                    borrow = from_low > to_low ? 1u : 0u;
+                    low = to_low - from_low;
+                    high = to_high - from_high - borrow;
+                    if (high != 0) {
+                        unrepresentable = 1;
+                        break;
                     }
+                    span = low + 1;
+                    if (span == 0 || total > UINT64_MAX - span) {
+                        /* span wrapped (the full low word) or the total
+                         * would overflow: unverifiable at 64 bits. */
+                        unrepresentable = 1;
+                        break;
+                    }
+                    total += span;
                 }
-                if (!overflow) {
+                if (!unrepresentable) {
                     CHECK(total == claimed);
                 }
             }
