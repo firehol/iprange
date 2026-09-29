@@ -373,6 +373,17 @@ def substitute_capture(value, captured):
     return value
 
 
+def exit_gate(name, status):
+    """An engine that exits nonzero fails its own run (the one gate).
+
+    Called both after a successful session and on a failure path whose
+    peer died nonzero (the sharper, engine-attributed message); the
+    mutation check deletes exactly this raise.
+    """
+    if status not in (None, 0):
+        raise AssertionError(f"{name} exited {status}")
+
+
 def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None, peak=None,
                prepare=True, deferred=None):
     # Each engine gets its own directory. Sharing one directory makes the
@@ -426,8 +437,10 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
         # original failure (deadline, oracle) as the message.
         exit_status = service.proc.poll()
         if exit_status not in (None, 0):
-            raise AssertionError(
-                f"{name} exited {exit_status}") from exc
+            try:
+                exit_gate(name, exit_status)
+            except AssertionError as gate:
+                raise gate from exc
         raise
     service.close()
     # An engine that exits nonzero fails its own run. close() waits
@@ -439,9 +452,7 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
     # this gate's or close()'s message fails the run). Intentional
     # crash/stall sessions use close_forced and are the only exempt
     # class.
-    if service.proc.returncode != 0:
-        raise AssertionError(
-            f"{name} exited {service.proc.returncode}")
+    exit_gate(name, service.proc.returncode)
     return result
 
 
