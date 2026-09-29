@@ -22462,8 +22462,18 @@ evidence-notarization machinery was retired (the self-audit script,
 the kit-restage prescriptions, and the per-round audit loop —
 REVIEWS.md:189-201). The legacy CLI workload surface is now exercised
 by nine committed scenarios (l1–l9) verified byte-identical across
-both engines. The seven-role re-review of the wave and the astra
-re-review are the pending gates.
+both engines. The r91 seven-role re-review verified the wave's ten repairs true at
+source and filed the residue; the round-92 fix wave closed every filed
+item (`c0570c59` crash-battery teardown exemptions + per-sample
+validation in the four perf harnesses + tree-CPU sampling, `584d7fff`
+cli-step file oracles, `9267fab0` borrow-safe span arithmetic,
+`465d7b65` CLI-child RSS sampling, `27ee8271` cancel duplicate-drain +
+strict success close, `419530b0` read_only_failure refused for a
+cancelled publish, `1c6e9ae7` @directory + bounded pagination +
+publish-check detectors), staged the perf-mode scenario sweep
+(`scenarios-perf.log`, 34 scenarios), and restaged all kit logs from
+the clean tree `1c6e9ae7`. The seven-role re-review of the round-92
+wave and the astra re-review are the pending gates.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
