@@ -8,6 +8,7 @@ is a failed proof, not a pass.
 """
 
 import argparse
+from collections import Counter
 import os
 import signal
 import sys
@@ -106,7 +107,7 @@ def baseline_rows(session, database, csv_path):
     })
     with open(csv_path, encoding="utf-8") as stream:
         next(stream)
-        rows = {tuple(line.rstrip("\n").split(",", 1)) for line in stream if line.strip()}
+        rows = Counter(tuple(line.rstrip("\n").split(",", 1)) for line in stream if line.strip())
     return result["matching_feed_count"], rows
 
 
@@ -145,7 +146,8 @@ def prove(binary, work):
         create_feed(session, database, "beta", os.path.join(work, "beta.iprange"))
         baseline_csv = os.path.join(work, "baseline.csv")
         count, rows = baseline_rows(session, database, baseline_csv)
-        expected = {("10.0.0.1", "alpha"), ("10.0.0.2", "alpha"), ("10.0.0.9", "beta")}
+        expected = Counter({("10.0.0.1", "alpha"): 1, ("10.0.0.2", "alpha"): 1,
+                            ("10.0.0.9", "beta"): 1})
         if rows != expected or count != "3":
             raise AssertionError(
                 f"pre-crash baseline differs: count={count} rows={sorted(rows)}")
@@ -186,7 +188,8 @@ def prove(binary, work):
         count, rows = baseline_rows(opened, database, survived_csv)
     finally:
         opened.close()
-    expected = {("10.0.0.1", "alpha"), ("10.0.0.2", "alpha"), ("10.0.0.9", "beta")}
+    expected = Counter({("10.0.0.1", "alpha"): 1, ("10.0.0.2", "alpha"): 1,
+                        ("10.0.0.9", "beta"): 1})
     if rows != expected or count != "3":
         raise AssertionError(
             f"prior feeds did not survive intact: count={count} rows={sorted(rows)}")

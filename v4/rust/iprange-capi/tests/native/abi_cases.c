@@ -671,6 +671,17 @@ static int check_membership(const iprange_v4_abi1_reader *reader, const case_ran
             if (same_address(hole, ranges[index + 1].from)) {
                 continue;
             }
+            /* The hole must carry no membership: verified, not just
+             * counted. An address with no coverage answers OK with a
+             * NULL view (the Option::None shape). */
+            {
+                iprange_v4_abi1_error *error = NULL;
+                iprange_v4_abi1_membership_view *view = (iprange_v4_abi1_membership_view *)1;
+                CHECK(iprange_v4_abi1_reader_lookup_membership(reader, hole, &view,
+                                                                &error) ==
+                      IPRANGE_V4_ABI1_STATUS_OK);
+                CHECK(error == NULL && view == NULL);
+            }
             (*gaps)++;
         }
     }

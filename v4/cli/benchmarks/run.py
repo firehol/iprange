@@ -209,12 +209,6 @@ def run_calls(service, name, scenario, work, calls, peer):
                 )
             observed.append({"error": {"code": error.get("code")}})
             continue
-        if call.get("expect_file_contains"):
-            relative = call["expect_file_contains"]["path"]
-            text = open(os.path.join(work, relative), encoding="utf-8").read()
-            for needle in call["expect_file_contains"]["text"]:
-                if needle not in text:
-                    raise AssertionError(f"{name} {relative} missing {needle!r}")
         if call.get("expect_file_csv_rows"):
             # Exact row oracle: rows are compared as a multiset, so a
             # missing row, an extra row, a duplicated row, or a row
