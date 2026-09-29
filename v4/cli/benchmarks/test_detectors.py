@@ -668,6 +668,17 @@ class CallerKillTeardownTest(unittest.TestCase):
                 service.close(allow_forced=True, broken_exchange=True)
             except AssertionError as exc:
                 self.fail(f"explicit-exemption teardown failed: {exc}")
+            for owner in (service._raw_stdin, service._raw_stdout,
+                          service.proc.stdin, service.proc.stdout,
+                          service.proc.stderr):
+                # Deadline-bounded services detach the buffered wrappers
+                # (accessing .closed on one raises); close whichever
+                # owners exist and are open, skipping detached ones.
+                try:
+                    if owner is not None and not owner.closed:
+                        owner.close()
+                except (OSError, ValueError):
+                    pass
 
     def test_the_same_killed_peer_fails_the_ordinary_close(self):
         # The exemption really is the flag: without it the killed
@@ -691,6 +702,17 @@ class CallerKillTeardownTest(unittest.TestCase):
             service.kill_process_group()
             with self.assertRaisesRegex(AssertionError, "status -9"):
                 service.close()
+            for owner in (service._raw_stdin, service._raw_stdout,
+                          service.proc.stdin, service.proc.stdout,
+                          service.proc.stderr):
+                # Deadline-bounded services detach the buffered wrappers
+                # (accessing .closed on one raises); close whichever
+                # owners exist and are open, skipping detached ones.
+                try:
+                    if owner is not None and not owner.closed:
+                        owner.close()
+                except (OSError, ValueError):
+                    pass
 
 
 class DuplicateAnswerTest(unittest.TestCase):
@@ -728,3 +750,87 @@ class DuplicateAnswerTest(unittest.TestCase):
             finally:
                 service.close(allow_forced=True, broken_exchange=True)
             del subprocess
+
+
+
+
+class CancelDrainBoundsTest(unittest.TestCase):
+    """r99: the cancel duplicate-drain is bounded both ways — a trickle
+    forger (one frame per 0.4 s) cannot stretch the 0.5 s quiet window
+    past the 10 s aggregate cap, and a busy stream cannot stretch it at
+    all beyond the cap."""
+
+    def test_a_trickle_stream_fails_within_the_aggregate_bound(self):
+        import json as _json
+        import time as _time
+        from cancel_inflight import drain_terminal_answers
+
+        class FakeProc:
+            def poll(self):
+                return None  # alive forever: only the bounds can end it
+
+        class FakeService:
+            proc = FakeProc()
+
+        frames = [{"jsonrpc": "2.0", "id": f"trickle-{n}", "result": {}} for n in range(64)]
+        state = {"next": 0, "last": _time.monotonic()}
+
+        def trickle_read():
+            # One frame every 0.4 s — each resets the quiet window.
+            now = _time.monotonic()
+            if now - state["last"] < 0.4:
+                return ""
+            state["last"] = now
+            if state["next"] >= len(frames):
+                return ""
+            frame = frames[state["next"]]
+            state["next"] += 1
+            return _json.dumps(frame) + "\n"
+
+        started = _time.monotonic()
+        with self.assertRaisesRegex(AssertionError, "aggregate bound"):
+            drain_terminal_answers(FakeService(), {}, trickle_read,
+                                   quiet_window=0.5, aggregate_cap=2.0,
+                                   poll_interval=0.02)
+        self.assertLess(_time.monotonic() - started, 6)
+
+    def test_a_busy_stream_also_ends_at_the_cap(self):
+        import json as _json
+        import time as _time
+        from cancel_inflight import drain_terminal_answers
+
+        class FakeProc:
+            def poll(self):
+                return None
+
+        class FakeService:
+            proc = FakeProc()
+
+        counter = {"n": 0}
+
+        def busy_read():
+            counter["n"] += 1
+            return _json.dumps({"jsonrpc": "2.0", "id": f"b{counter['n']}",
+                                "result": {}}) + "\n"
+
+        with self.assertRaisesRegex(AssertionError, "aggregate bound"):
+            drain_terminal_answers(FakeService(), {}, busy_read,
+                                   quiet_window=0.5, aggregate_cap=1.0,
+                                   poll_interval=0.001)
+
+    def test_quiet_ends_the_drain(self):
+        import time as _time
+        from cancel_inflight import drain_terminal_answers
+
+        class FakeProc:
+            def poll(self):
+                return None
+
+        class FakeService:
+            proc = FakeProc()
+
+        started = _time.monotonic()
+        drain_terminal_answers(FakeService(), {}, lambda: "",
+                               quiet_window=0.2, aggregate_cap=5.0,
+                               poll_interval=0.01)
+        self.assertLess(_time.monotonic() - started, 2)

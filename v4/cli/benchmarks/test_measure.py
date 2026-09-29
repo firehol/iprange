@@ -996,3 +996,31 @@ class CliOnlyNoServiceTest(unittest.TestCase):
             # sample came from the cli child alone.
             for label in ("rust", "go"):
                 self.assertGreater(report[label]["child_max_rss_kib"]["max"], 0)
+
+
+class HarnessMainWiringTest(unittest.TestCase):
+    """r99: the four perf harness mains wire their per-sample validators
+    into sample_binary (a signature change at the call site — exactly
+    the r91 break — ships green without this)."""
+
+    def test_every_harness_main_passes_its_validator(self):
+        import inspect
+        import perf_churn
+        import perf_history
+        import perf_join
+        import perf_replace
+        pairs = [
+            (perf_join, "check_join_sample"),
+            (perf_history, "check_history_sample"),
+            (perf_replace, "check_replace_sample"),
+            (perf_churn, "check_churn_sample"),
+        ]
+        for module, checker in pairs:
+            source = inspect.getsource(module.main)
+            self.assertIn(
+                f"check={checker}", source,
+                f"{module.__name__}.main does not wire {checker} into "
+                f"sample_binary")
+            self.assertIn("sample_binary(", source, module.__name__)
+            # The validator itself is exercised by HarnessValidatorTest;
+            # this pins the wiring (the call-site contract).

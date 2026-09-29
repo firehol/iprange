@@ -250,17 +250,22 @@ def run_cli(binary, name, call, work, peak=None):
                     if chunk:
                         sink.append(chunk)
                 if proc.poll() is not None:
-                    # Drain any residue after the child's exit, then stop.
-                    for fd, sink in ((proc.stdout.fileno(), chunks),
-                                     (proc.stderr.fileno(), err_chunks)):
-                        while True:
+                    # Drain any residue after the child's exit, then stop —
+                    # bounded by the same deadline (a leaked writer holding
+                    # the pipe's other end cannot pin this loop).
+                    while time.monotonic() <= deadline:
+                        moved = False
+                        for fd, sink in ((proc.stdout.fileno(), chunks),
+                                         (proc.stderr.fileno(), err_chunks)):
                             try:
                                 chunk = os.read(fd, 1 << 20)
                             except BlockingIOError:
-                                break
-                            if not chunk:
-                                break
-                            sink.append(chunk)
+                                chunk = b""
+                            if chunk:
+                                sink.append(chunk)
+                                moved = True
+                        if not moved:
+                            break
                     break
         finally:
             selector.close()

@@ -103,6 +103,42 @@ def record_answer(seen, response):
     seen[identifier] = response
 
 
+
+
+def _read_service_line(service):
+    """One non-blocking stdout line from the service (or '')."""
+    try:
+        return service.proc.stdout.readline(1_048_578)
+    except (BlockingIOError, OSError):
+        return ""
+
+
+def drain_terminal_answers(service, seen, read_line, *,
+                           quiet_window=0.5, aggregate_cap=10.0,
+                           poll_interval=0.01):
+    """Drain remaining frames after the terminal pair, both bounds:
+
+    0.5 s of quiet resets on each frame (a busy forger cannot stretch
+    it), and a 10 s aggregate cap ends the drain whatever arrives (a
+    frame-per-0.4s trickle cannot pin the proof).
+    """
+    quiet = time.monotonic() + quiet_window
+    hard_stop = time.monotonic() + aggregate_cap
+    while time.monotonic() < quiet:
+        if time.monotonic() >= hard_stop:
+            raise AssertionError(
+                f"duplicate-drain window exceeded its aggregate bound "
+                f"({aggregate_cap:.0f} s)")
+        extra = read_line()
+        if extra:
+            record_answer(seen, json.loads(extra))
+            quiet = time.monotonic() + quiet_window
+            continue
+        if service.proc.poll() is not None:
+            break
+        time.sleep(poll_interval)
+
+
 def prove(binary, work):
     text_path = os.path.join(work, "slow.txt")
     destination = os.path.join(work, "slow.iprange")
@@ -192,29 +228,11 @@ def prove(binary, work):
                     # frame through record_answer before closing (a
                     # duplicate hidden behind the first terminal answer
                     # used to escape with the forced teardown).
-                    # Bounded both ways: 0.5 s of quiet resets on each
-                    # frame (a busy forger cannot stretch it), and a 10 s
-                    # aggregate cap ends the drain whatever arrives (a
-                    # frame-per-0.4s trickle cannot pin the proof).
-                    quiet = time.monotonic() + 0.5
-                    hard_stop = time.monotonic() + 10
-                    while time.monotonic() < quiet:
-                        if time.monotonic() >= hard_stop:
-                            raise AssertionError(
-                                "duplicate-drain window exceeded its "
-                                "aggregate bound (10 s)")
-                        try:
-                            extra = service.proc.stdout.readline(1_048_578)
-                        except (BlockingIOError, OSError):
-                            extra = ""
-                        if extra:
-                            record_answer(seen, json.loads(extra))
-                            quiet = time.monotonic() + 0.5
-                            continue
-                        if service.proc.poll() is not None:
-                            break
-                        time.sleep(0.01)
+                    drain_terminal_answers(
+                        service, seen,
+                        read_line=lambda: _read_service_line(service))
                     break
+
             else:
                 if service.proc.poll() is not None:
                     break
