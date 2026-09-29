@@ -22279,12 +22279,15 @@ plus one 10M-range feed. The kit log is
 the revision on its own second line, the binary SHA-256
 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
-Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 49.924 s elapsed, 11.15 s CPU, spread
-49.498–52.515 s, median child peak 225288 KiB. Go median 62.287 s
-elapsed, 21.84 s CPU, spread 59.058–63.490 s, median child peak
-234268 KiB. The Go/Rust ratio is 1.248 elapsed, 1.959 CPU, and
-1.040 RSS. Wall time moves with
+(Historical narrative — the round-47 session; the staged log has
+since been overwritten by later restages, its numbers preserved here.
+The current staged session and the superseded ones are enumerated in
+the kit's status.md ceiling block.) Three rounds, engine order
+swapped, fixture files written before the clock. Rust median 49.924 s
+elapsed, 11.15 s CPU, spread 49.498–52.515 s, median child peak
+225288 KiB. Go median 62.287 s elapsed, 21.84 s CPU, spread
+59.058–63.490 s, median child peak 234268 KiB. The Go/Rust ratio is
+1.248 elapsed, 1.959 CPU, and 1.040 RSS. Wall time moves with
 workstation load between runs. The binding acceptance metric
 (SOW-0030, user decisions 1A/2A) is **elapsed time** ≤1.3x Rust and
 **peak RSS** ≤1.3x; process CPU time (utime+stime) is not part
@@ -22357,12 +22360,13 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Thirty recorded
+- **Elapsed-ratio cross-session spread.** Thirty-four recorded
   ceiling sessions at byte-identical binaries (r2 1.159 — elapsed
   and RSS only, no CPU recorded; r4 1.244; each of rounds 5 through
   19; the round-32 through round-46 rebinds at 1.184, 1.193, 1.266,
-  1.203, 1.186, 1.241, 1.234, 1.203, 1.193, 1.108, and 1.248; and
-  the two round-36 runs) span elapsed
+  1.203, 1.186, 1.241, 1.234, 1.203, 1.193, 1.108, and 1.248; the
+  two round-36 runs; and the later restage rebinds — round-89 1.247,
+  round-92 1.050, round-94 1.170, round-96 1.305) span elapsed
   **0.916–1.586** — wall-clock noise that crosses both 1.0 and the
   1.3x bound: the round-7 session measured 1.586 on an idle machine
   with CPU work near-identical to today's (Rust 11.13 s / Go
@@ -22372,8 +22376,8 @@ dispositioned, not silently carried:
   (61.1–75.6 s, one round ~21% over its median; observed values
   preserved at `evidence/m5-ceiling/superseded-round36-run1.md`);
   it was immediately re-run. The CPU ratio over every session that
-  recorded CPU spans 1.875–1.993 (the round-44 rebind measured
-  1.993, a new maximum) — tight while elapsed swings by
+  recorded CPU spans 1.873–2.001 (the round-96 restage measured
+  2.001, the current maximum) — tight while elapsed swings by
   more than 70% relative. The verdict owner (SOW-0030) must treat
   elapsed wall-clock as run-condition-dominated: no session's
   elapsed ratio is evidence of an engine difference, and the
@@ -22479,15 +22483,23 @@ packed_span five-shape self-test, the explicit-exemption
 owned_service_deaths docstring, harness-validator coverage; the
 ceiling record restored to one session with superseded sessions
 preserved; the perf sweep restaged in kit form). The r95 panel verified the round-94 fixes genuine and filed the
-residue; the round-96 wave closed it (`f5f30083`: stderr drain +
+residue; the round-96 wave closed its enumerated clusters (`f5f30083`: stderr drain +
 first-tick RSS sampling in run_cli, no idle service for cli-only
 scenarios, the expect_rpc_error/expect_same_bytes combination
 refused, the cancel drain bounded both ways, the cross-word-borrow
 span shape pinned, both @directory arms in l10, the sample_binary
 enforcement seam detected; the preserved round-89 figures corrected;
 the ceiling's 34th session recorded — CPU ratio 2.001, a new honest
-maximum). The seven-role re-review of the round-96 wave and the astra
-re-review are the pending gates.
+maximum). The r97 panel verified the round-96 fixes true and filed detector
+gaps and records drift; the round-98 wave closed those (`b0929fde`:
+the digest-hole detector, the execution-order pin, the stderr drain
+detector and whole-arrival assertion, the cli-only no-service proof,
+the per-sample check driver, the span wrap arm, the entry-selection
+arm; the records restored site by site — sweep row, CPU envelope,
+header, Round-46 graft, inventory, digest sentence, the SOW's
+historical session labeling and 34-session spread). The seven-role
+re-review of the round-98 wave and the astra re-review are the
+pending gates.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
