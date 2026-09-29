@@ -643,3 +643,56 @@ class CliArtifactDigestTest(unittest.TestCase):
             go = wrapper(work, "BBB")
             with self.assertRaisesRegex(AssertionError, "bytes differ"):
                 _bench.run_perf(scenario, rust, go, 1, work)
+
+
+class PublishSampleCheckTest(unittest.TestCase):
+    """Astra r91: the destination/semantic half of the timed-sample
+    validation needs its own detector — a sample that answered with a
+    wrong count, or wrote no destination, must fail."""
+
+    @staticmethod
+    def sample(addresses):
+        return {"response": {"id": "perf-import",
+                             "result": {"report": {"addresses": addresses}}}}
+
+    def _work(self):
+        import tempfile
+        return tempfile.TemporaryDirectory()
+
+    def test_a_wrong_count_is_refused(self):
+        import tempfile
+        from perf import check_sample
+        with tempfile.TemporaryDirectory() as work:
+            request = os.path.join(work, "request.json")
+            destination = os.path.join(work, "out.iprange")
+            with open(request, "w") as stream:
+                stream.write("{}\n")
+            with open(destination, "wb") as stream:
+                stream.write(b"present")
+            with self.assertRaisesRegex(AssertionError, "generator says"):
+                check_sample(self.sample("12"), request, destination, 47)
+            os.remove(destination)
+
+    def test_a_missing_destination_is_refused(self):
+        import tempfile
+        from perf import check_sample
+        with tempfile.TemporaryDirectory() as work:
+            request = os.path.join(work, "request.json")
+            destination = os.path.join(work, "absent.iprange")
+            with open(request, "w") as stream:
+                stream.write("{}\n")
+            with self.assertRaisesRegex(AssertionError, "wrote no destination"):
+                check_sample(self.sample("47"), request, destination, 47)
+
+    def test_a_consistent_sample_passes(self):
+        import tempfile
+        from perf import check_sample
+        with tempfile.TemporaryDirectory() as work:
+            request = os.path.join(work, "request.json")
+            destination = os.path.join(work, "out.iprange")
+            with open(request, "w") as stream:
+                stream.write("{}\n")
+            with open(destination, "wb") as stream:
+                stream.write(b"present")
+            check_sample(self.sample("47"), request, destination, 47)
+            self.assertFalse(os.path.exists(destination))  # consumed

@@ -1,0 +1,59 @@
+{
+ "schema": "iprange-bench-scenario-v1",
+ "name": "l7-at-filelist-directory",
+ "purpose": "Legacy @ expansion: a @file list and a @directory (two text ipsets inside) both expand to the same merged set.",
+ "fixtures": [
+  {
+   "path": "a.txt",
+   "text": "10.0.0.1\n10.0.0.2\n10.0.0.3\n"
+  },
+  {
+   "path": "b.txt",
+   "text": "10.0.0.2\n10.0.0.3\n10.0.0.9\n"
+  },
+  {
+   "path": "list.txt",
+   "text": "a.txt\nb.txt\n"
+  },
+  {
+   "path": "scandir/a.txt",
+   "text": "10.0.0.1\n10.0.0.2\n10.0.0.3\n"
+  },
+  {
+   "path": "scandir/b.txt",
+   "text": "10.0.0.2\n10.0.0.3\n10.0.0.9\n"
+  }
+ ],
+ "cli": [
+  {
+   "cli": {
+    "args": [
+     "@$WORK/list.txt"
+    ]
+   },
+   "compare": [
+    "exit",
+    "stdout"
+   ],
+   "expect": {
+    "exit": 0,
+    "stdout": "10.0.0.1\n10.0.0.2/31\n10.0.0.9\n"
+   }
+  },
+  {
+   "cli": {
+    "args": [
+     "@$WORK/scandir"
+    ]
+   },
+   "compare": [
+    "exit",
+    "stdout"
+   ],
+   "expect": {
+    "exit": 0,
+    "stdout": "10.0.0.1\n10.0.0.2/31\n10.0.0.9\n"
+   }
+  }
+ ]
+}

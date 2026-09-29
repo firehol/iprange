@@ -133,25 +133,33 @@ def complete_baseline(session, database):
         cursor = session.call("iprange.v1.reader.feeds.open", {
             "reader": reader, "batch_size": 64})["cursor"]
         names = []
-        while True:
+        # Bounded pagination: the committed baseline is three rows; a
+        # cursor that never reports done must not pin the proof.
+        for _ in range(64):
             page = session.call("iprange.v1.reader.feeds.next",
                                 {"cursor": cursor})
             names.extend(feed["name"] for feed in page.get("feeds", []))
             if page.get("done"):
                 break
+        else:
+            raise AssertionError("feeds cursor never completed")
         spans = {}
         for name in names:
             ranges = session.call("iprange.v1.reader.ranges.open", {
                 "reader": reader, "view": {"kind": "feed", "feed": name},
                 "direction": "forward", "batch_size": 4096})["cursor"]
             records = []
-            while True:
+            # Bounded pagination: a baseline feed is one span; a few
+            # pages is generous, a never-done cursor is a failure.
+            for _ in range(64):
                 page = session.call("iprange.v1.reader.ranges.next",
                                     {"cursor": ranges})
                 records.extend(
                     (item["from"], item["to"]) for item in page.get("records", []))
                 if page.get("done"):
                     break
+            else:
+                raise AssertionError(f"ranges cursor for {name} never completed")
             spans[name] = sorted(records)
         return sorted(names), spans
     finally:
