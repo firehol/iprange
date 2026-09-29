@@ -700,6 +700,11 @@ class ReservationWatch:
 
     def __init__(self, directory, on_magic):
         self.fired = threading.Event()
+        # Explicit capability: True only when the kernel watch is armed
+        # (POSIX with inotify). Windows and inotify-less POSIX report
+        # False — the production kill point is then the poll fallback
+        # (reservation_seen), never this watch.
+        self.supported = False
         self._directory = directory
         self._on_magic = on_magic
         self._fd = None
@@ -733,6 +738,7 @@ class ReservationWatch:
         if libc.inotify_add_watch(fd, os.fsencode(self._directory), mask) < 0:
             self._ready.set()
             return
+        self.supported = True
         self._ready.set()
         buf = ctypes.create_string_buffer(4096)
         header = struct.Struct("iIII")
@@ -3288,8 +3294,16 @@ def _self_test():
                     watched, RESERVATION_PREFIX + "self" + PRIVATE_TMP_SUFFIX),
                     "wb") as stream:
                 stream.write(RESERVATION_MAGIC + b"\0" * 8)
-            check("marker", "a reservation create wakes the directory watch",
-                  watch.fired.wait(2) and hits == ["kill"])
+            if watch.supported:
+                check("marker", "a reservation create wakes the directory watch",
+                      watch.fired.wait(2) and hits == ["kill"])
+            else:
+                # Capability fallback: without a kernel watch the
+                # production kill point is the poll (reservation_seen,
+                # pinned by its own markers); this watch reports
+                # unsupported and must never fire.
+                check("marker", "an unsupported platform keeps the poll fallback",
+                      not watch.fired.is_set() and hits == [])
         finally:
             watch.close()
 

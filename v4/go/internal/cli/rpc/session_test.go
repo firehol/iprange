@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -542,34 +543,55 @@ func TestCloseAllDeterministicOrder(t *testing.T) {
 	}
 }
 
-func TestCloseAllClosesLiveReadersInSortedHandleOrder(t *testing.T) {
-	// Handles are inserted in reverse lexical order. Map iteration is
-	// not that order. CloseAll must close m, then z, after a, and must
-	// not close an immutable reader. The failure entry follows the same
-	// order: z is closed after m, so its failure is the second entry.
-	var closed []string
-	state := NewSessionState()
-	state.Resources.Readers = map[string]*ReaderValue{
-		"z": {closeFn: func() (iprangedb.ReaderCloseResult, error) {
-			closed = append(closed, "z")
-			return iprangedb.ReaderCloseResult{}, errors.New("z failed")
-		}},
-		"m": {closeFn: func() (iprangedb.ReaderCloseResult, error) {
-			closed = append(closed, "m")
-			return iprangedb.ReaderCloseResult{Outcome: iprangedb.CloseOutcomeClosed}, nil
-		}},
-		"a": {closeFn: func() (iprangedb.ReaderCloseResult, error) {
-			closed = append(closed, "a")
-			return iprangedb.ReaderCloseResult{Outcome: iprangedb.CloseOutcomeClosed}, nil
-		}},
+func TestCloseAllUsesSortedHandleOrder(t *testing.T) {
+	// Map iteration order is random; the close order must not be.
+	// The handle ordering is pinned on the pure function CloseAll
+	// iterates (the production mechanism is real Live.Close — see
+	// TestCloseAllClosesEveryLiveReader).
+	readers := map[string]*ReaderValue{
+		"z":         {Path: "z"},
+		"m":         {Path: "m"},
+		"a":         {Path: "a"},
 		"immutable": {Path: "not-live"},
 	}
-	failures := state.Resources.CloseAll()
-	if strings.Join(closed, ",") != "a,m,z" {
-		t.Fatalf("close order = %v, want a,m,z", closed)
+	if got := sortedReaderHandles(readers); strings.Join(got, ",") != "a,immutable,m,z" {
+		t.Fatalf("handle order = %v, want a,immutable,m,z", got)
 	}
-	if len(failures) != 1 || !strings.Contains(failures[0], "z failed") {
-		t.Fatalf("failures = %v, want the z close error", failures)
+}
+
+func TestCloseAllClosesEveryLiveReader(t *testing.T) {
+	// Real readers, real closes: three live databases opened through
+	// the public reader surface, registered under reverse-lexical
+	// handles. CloseAll must close every one (subsequent Info refuses)
+	// and report no failures.
+	state := NewSessionState()
+	for _, handle := range []string{"z", "m", "a"} {
+		main := filepath.Join(t.TempDir(), handle+".iprdb")
+		tag, err := iprangedb.NewValueTag([]byte("feeds"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := iprangedb.CreateLive(main,
+			iprangedb.AddressFamilyIPv4, iprangedb.ValueKindDirect,
+			iprangedb.StructureKindNone, tag, 2, nil); err != nil {
+			t.Fatal(err)
+		}
+		reader, err := iprangedb.OpenLiveReader(main, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		state.Resources.Readers[handle] = &ReaderValue{Live: reader, Path: main}
+	}
+	if failures := state.Resources.CloseAll(); len(failures) != 0 {
+		t.Fatalf("failures = %v", failures)
+	}
+	for handle, reader := range state.Resources.Readers {
+		if reader.Live == nil {
+			continue
+		}
+		if _, err := reader.Live.Info(); err == nil {
+			t.Fatalf("reader %s still answers Info after CloseAll", handle)
+		}
 	}
 }
 

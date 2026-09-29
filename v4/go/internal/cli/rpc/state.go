@@ -41,10 +41,6 @@ type ReaderValue struct {
 	// pathname moved (Rust sidecar identity parity; tester role
 	// wave-19.6).
 	SidecarID *FileIdentity
-	// closeFn, when set, is the shutdown close. Production leaves it
-	// nil and CloseAll calls Live.Close. Tests set it so they can
-	// observe handle order without opening a live database.
-	closeFn func() (iprangedb.ReaderCloseResult, error)
 }
 
 // FileIdentity is the stable identity of one file at a point in
@@ -157,6 +153,18 @@ func (cs *ConnectionState) recordClosed(set map[string]bool, order *[]string, ha
 	}
 }
 
+// sortedReaderHandles returns the registered reader handles in
+// deterministic sorted order. Map iteration order is random; the
+// transport-shutdown close order must not be.
+func sortedReaderHandles(readers map[string]*ReaderValue) []string {
+	handles := make([]string, 0, len(readers))
+	for handle := range readers {
+		handles = append(handles, handle)
+	}
+	sort.Strings(handles)
+	return handles
+}
+
 // CloseAll is the transport-shutdown cleanup: drop every cursor
 // checkpoint and close each registered live reader in deterministic
 // handle order (immutable readers need no close). Returns one entry
@@ -166,24 +174,13 @@ func (cs *ConnectionState) CloseAll() []string {
 	cs.Cursors = make(map[string]*CursorValue)
 	cs.ClosedCursors = make(map[string]bool)
 	cs.closedCursorOrder = nil
-	handles := make([]string, 0, len(cs.Readers))
-	for handle := range cs.Readers {
-		handles = append(handles, handle)
-	}
-	sort.Strings(handles)
 	var failures []string
-	for _, handle := range handles {
+	for _, handle := range sortedReaderHandles(cs.Readers) {
 		reader := cs.Readers[handle]
-		if reader == nil || (reader.Live == nil && reader.closeFn == nil) {
+		if reader == nil || reader.Live == nil {
 			continue
 		}
-		var result iprangedb.ReaderCloseResult
-		var err error
-		if reader.closeFn != nil {
-			result, err = reader.closeFn()
-		} else {
-			result, err = reader.Live.Close()
-		}
+		result, err := reader.Live.Close()
 		if err != nil {
 			failures = append(failures, handle+": "+err.Error())
 			continue

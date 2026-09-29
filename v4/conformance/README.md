@@ -8,8 +8,9 @@ are not compatibility inputs.
 ## Corpus
 
 `cases.json` is the language-neutral semantic manifest. The corpus contains
-fifteen compact immutable snapshots produced through the public writers of
-both implementations. The Rust-produced files come from the public Rust live
+sixteen compact immutable snapshots produced through the public writers of
+both implementations (seven Rust-produced and nine Go-produced, including
+the Go immutable-feed membership fixture). The Rust-produced files come from the public Rust live
 writer plus `snapshot_to`; the Go-produced files come from the public Go
 `CreateLive`/`OpenLiveWriter` transactions and the public live `SnapshotTo`
 (the generator stages every fixture and snapshots the closed live pair exactly
@@ -83,7 +84,7 @@ outputs against `cases.json`, and only then replaces the committed Rust files.
 ## Cross-language gate
 
 Both producer sets are now committed, and each reader opens and semantically
-verifies both producer sets (Rust conformance opens all fifteen files; the Go
+verifies both producer sets (Rust conformance opens the Rust files; the Go
 conformance inventory lists each fixture file with its producer and the Go
 reader verifies both sets).
 
