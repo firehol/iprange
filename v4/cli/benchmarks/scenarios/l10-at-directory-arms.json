@@ -1,0 +1,49 @@
+{
+ "schema": "iprange-bench-scenario-v1",
+ "name": "l10-at-directory-arms",
+ "purpose": "Legacy @directory arms: a file inside the directory expands (exit 0, exact stdout), and an empty directory answers the documented nonzero exit (no expandable input).",
+ "fixtures": [
+  {
+   "path": "a.txt",
+   "text": "10.0.0.1\n"
+  },
+  {
+   "path": "scandir/a.txt",
+   "text": "10.0.0.1\n"
+  },
+  {
+   "path": "emptydir",
+   "directory": true
+  }
+ ],
+ "cli": [
+  {
+   "cli": {
+    "args": [
+     "@$WORK/scandir"
+    ]
+   },
+   "compare": [
+    "exit",
+    "stdout"
+   ],
+   "expect": {
+    "exit": 0,
+    "stdout": "10.0.0.1\n"
+   }
+  },
+  {
+   "cli": {
+    "args": [
+     "@$WORK/emptydir"
+    ]
+   },
+   "compare": [
+    "exit"
+   ],
+   "expect": {
+    "exit": 1
+   }
+  }
+ ]
+}

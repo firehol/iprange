@@ -139,6 +139,13 @@ def write_generated(scenario, work):
 
 def write_fixtures(scenario, work):
     for fixture in scenario.get("fixtures", []):
+        if fixture.get("directory"):
+            # An empty directory fixture (a @directory error arm needs
+            # a directory with no expandable files in it).
+            relative = fixture["path"]
+            refuse_escape(relative, "fixture directory")
+            os.makedirs(os.path.join(work, relative), exist_ok=True)
+            continue
         output = fixture["path"]
         refuse_escape(output, "fixture path")
         path = os.path.join(work, output)
@@ -213,9 +220,12 @@ def run_cli(binary, name, call, work, peak=None):
         import selectors as _selectors
         deadline = time.monotonic() + 300
         chunks = []
+        err_chunks = []
         os.set_blocking(proc.stdout.fileno(), False)
+        os.set_blocking(proc.stderr.fileno(), False)
         selector = _selectors.DefaultSelector()
         selector.register(proc.stdout.fileno(), _selectors.EVENT_READ)
+        selector.register(proc.stderr.fileno(), _selectors.EVENT_READ)
         try:
             while True:
                 if time.monotonic() > deadline:
@@ -223,34 +233,39 @@ def run_cli(binary, name, call, work, peak=None):
                     proc.wait(timeout=5)
                     raise AssertionError(
                         "cli step did not finish within 300 s")
+                # Sample before draining: a cli step can exit within the
+                # first millisecond, and a sampler that slept first would
+                # never read its VmHWM (VmHWM exists from process
+                # creation).
+                if peak is not None:
+                    current = child_hwm_kib(proc.pid)
+                    if current is not None and current > peak["kib"]:
+                        peak["kib"] = current
                 for key, _mask in selector.select(0.001):
+                    sink = chunks if key.fd == proc.stdout.fileno() else err_chunks
                     try:
                         chunk = os.read(key.fd, 1 << 20)
                     except BlockingIOError:
                         chunk = b""
                     if chunk:
-                        chunks.append(chunk)
-                        continue
-                    break
-                if peak is not None:
-                    current = child_hwm_kib(proc.pid)
-                    if current is not None and current > peak["kib"]:
-                        peak["kib"] = current
+                        sink.append(chunk)
                 if proc.poll() is not None:
                     # Drain any residue after the child's exit, then stop.
-                    while True:
-                        try:
-                            chunk = os.read(proc.stdout.fileno(), 1 << 20)
-                        except BlockingIOError:
-                            break
-                        if not chunk:
-                            break
-                        chunks.append(chunk)
+                    for fd, sink in ((proc.stdout.fileno(), chunks),
+                                     (proc.stderr.fileno(), err_chunks)):
+                        while True:
+                            try:
+                                chunk = os.read(fd, 1 << 20)
+                            except BlockingIOError:
+                                break
+                            if not chunk:
+                                break
+                            sink.append(chunk)
                     break
         finally:
             selector.close()
         stdout = b"".join(chunks)
-        stderr = proc.stderr.read()
+        stderr = b"".join(err_chunks)
         proc.stderr.close()
         proc.stdout.close()
         returncode = proc.returncode
@@ -307,6 +322,15 @@ def run_calls(service, name, scenario, work, calls, peer, deferred=None, binary=
                     f"{name} {call.get('method', 'batch')}: rpc code={error.get('code')!r}, "
                     f"want {call['expect_rpc_error']!r}"
                 )
+            if call.get("expect_same_bytes"):
+                # An error answer produces no artifact to hash; a call
+                # declaring both would compare None == None across
+                # engines — refuse the combination instead of passing
+                # vacuously (r95: the None==None digest hole).
+                raise AssertionError(
+                    f"{name} {call.get('method', 'batch')}: expect_rpc_error "
+                    f"cannot combine with expect_same_bytes (no artifact "
+                    f"is produced to hash)")
             observed.append({"error": {"code": error.get("code")}})
             continue
         row = rpc_result_row(call, name, result, captured, work, deferred)
@@ -463,15 +487,22 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
         # window; `prepare=False` requires an already-prepared dir.
         write_fixtures(scenario, engine_work)
         write_generated(scenario, engine_work)
-    service = JsonRpcService(
-        [binary, "--jsonrpc"], name, cwd=engine_work,
-        read_deadline=120, write_deadline=30)
+    cli_only = all("cli" in call for call in calls) if calls else False
+    service = None
+    if not cli_only:
+        # A cli-only scenario never speaks JSON-RPC: spawning an idle
+        # --jsonrpc service would ride the timed window and pollute the
+        # round's RSS with a process that does no work (r95).
+        service = JsonRpcService(
+            [binary, "--jsonrpc"], name, cwd=engine_work,
+            read_deadline=120, write_deadline=30)
     # The call path is deadline-bounded like the frame reads: a peer
     # that never answers fails at 120 s instead of hanging the proof
     # (SilentPeerTest pins the mechanism).
-    if peak is not None:
-        # Performance mode samples the child's VmHWM while it runs;
-        # the sampler stops when the child exits.
+    if peak is not None and service is not None:
+        # Performance mode samples the service child's VmHWM while it
+        # runs; the sampler stops when the child exits. A cli-only run
+        # has no service — its workload child is sampled inside run_cli.
         def sample_peak():
             while service.proc.poll() is None:
                 current = child_hwm_kib(service.proc.pid)
@@ -490,24 +521,26 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
         # is best-effort: a teardown fault (e.g. I/O on a pipe the
         # dead peer already closed) must not replace the original
         # failure either.
-        try:
-            service.close(broken_exchange=True)
-        except Exception:
-            pass
+        if service is not None:
+            try:
+                service.close(broken_exchange=True)
+            except Exception:
+                pass
         # When the peer is also dead with a nonzero status, the exit
         # gate's message is the sharper, engine-attributed failure
         # (the die-on-first-request control's deterministic
         # attribution); the original failure rides along as the
         # exception context. A hung or cleanly-exited peer keeps the
         # original failure (deadline, oracle) as the message.
-        exit_status = service.proc.poll()
+        exit_status = service.proc.poll() if service is not None else None
         if exit_status not in (None, 0):
             try:
                 exit_gate(name, exit_status)
             except AssertionError as gate:
                 raise gate from exc
         raise
-    service.close()
+    if service is not None:
+        service.close()
     # An engine that exits nonzero fails its own run. close() waits
     # for the process, so the returncode is settled here. close()
     # itself validates the exit status and residue of every ordinary
@@ -517,7 +550,7 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
     # this gate's or close()'s message fails the run). Intentional
     # crash/stall sessions use close_forced and are the only exempt
     # class.
-    exit_gate(name, service.proc.returncode)
+    exit_gate(name, service.proc.returncode if service is not None else 0)
     return result
 
 

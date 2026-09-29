@@ -730,7 +730,11 @@ class CliLargeOutputTest(unittest.TestCase):
             started = _time.monotonic()
             report = _bench.run_perf(scenario, wrapper, wrapper, 1, work)
             self.assertLess(_time.monotonic() - started, 60)
-            del report
+            # The RSS sample is the cli child's, not an idle service's:
+            # the 4 MiB python child's VmHWM must be recorded per engine.
+            for label in ("rust", "go"):
+                stats = report[label]["child_max_rss_kib"]
+                self.assertGreater(stats["max"], 0, label)
             del subprocess
 
 
@@ -788,3 +792,52 @@ class HarnessValidatorTest(unittest.TestCase):
             self._sample({"unchanged_value_addresses": "8",
                           "removed_addresses": "1", "added_addresses": "2"}),
             None, None)
+
+
+class SampleBinaryDetectorTest(unittest.TestCase):
+    """r95: the enforcement seam — sample_binary runs its per-sample
+    check — is itself detected (the r91 signature-break class shipped
+    green through exactly this gap)."""
+
+    REQUEST = {"jsonrpc": "2.0", "id": "s", "method": "iprange.v1.system.describe",
+               "params": {}}
+
+    def _run(self, check):
+        import json as _json
+        import tempfile
+        stub = os.path.join(_HERE, "stub_engine.py")
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "exit0_stub")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_EXIT'] = '0'\n"
+                    f"os.execv({sys.executable!r}, [{sys.executable!r}, {stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            request = os.path.join(work, "request.json")
+            with open(request, "w") as stream:
+                _json.dump(self.REQUEST, stream)
+                stream.write("\n")
+            destination = os.path.join(work, "out.iprange")
+            from perf import sample_binary
+            return sample_binary(wrapper, [(request, destination)], check=check)
+
+    def test_the_check_runs_per_sample_and_can_fail_the_run(self):
+        def refusing_check(sample, request, destination):
+            del sample, request, destination
+            raise AssertionError("generator says 47, got 12")
+
+        with self.assertRaisesRegex(AssertionError, "generator says"):
+            self._run(refusing_check)
+
+    def test_a_passing_check_completes_the_sample(self):
+        seen = []
+
+        def accepting_check(sample, request, destination):
+            seen.append(sample.get("response", {}).get("id"))
+            self.assertIn("response", sample)
+
+        report = self._run(accepting_check)
+        self.assertEqual(len(seen), 1)
+        self.assertGreater(report["elapsed_seconds"]["median"], 0)

@@ -192,8 +192,17 @@ def prove(binary, work):
                     # frame through record_answer before closing (a
                     # duplicate hidden behind the first terminal answer
                     # used to escape with the forced teardown).
+                    # Bounded both ways: 0.5 s of quiet resets on each
+                    # frame (a busy forger cannot stretch it), and a 10 s
+                    # aggregate cap ends the drain whatever arrives (a
+                    # frame-per-0.4s trickle cannot pin the proof).
                     quiet = time.monotonic() + 0.5
+                    hard_stop = time.monotonic() + 10
                     while time.monotonic() < quiet:
+                        if time.monotonic() >= hard_stop:
+                            raise AssertionError(
+                                "duplicate-drain window exceeded its "
+                                "aggregate bound (10 s)")
                         try:
                             extra = service.proc.stdout.readline(1_048_578)
                         except (BlockingIOError, OSError):

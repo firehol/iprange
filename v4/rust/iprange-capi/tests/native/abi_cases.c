@@ -1058,6 +1058,20 @@ static int selftest_packed_span(void)
     CHECK(packed_span(&from, &to, 16, &span, &unrepresentable) == 0);
     CHECK(!unrepresentable && span == 65535);
 
+    /* cross-word borrow: the low word of `to` is numerically BELOW the
+     * low word of `from` and the high word advances by one — the exact
+     * shape the digit-wise form wrapped on (r91/r95). from high=1,
+     * low=0x0000000000000100; to high=2, low=0. True span =
+     * 2^64 - 0x100 + 1. */
+    memset(from.bytes, 0, 16);
+    memset(to.bytes, 0, 16);
+    from.bytes[7] = 1; from.bytes[15] = 0x00; from.bytes[14] = 0x01;
+    to.bytes[0] = 0; to.bytes[7] = 2;
+    /* from = 0x00000001_00000000_00000000_00000100 → high=1, low=0x100
+     * to   = 0x00000002_00000000_00000000_00000000 → high=2, low=0 */
+    packed_span(&from, &to, 16, &span, &unrepresentable);
+    CHECK(!unrepresentable && span == 0xffffffffffffff01ull);
+
     return 0;
 }
 
