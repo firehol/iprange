@@ -61,6 +61,25 @@ def child_cpu_seconds(pid):
         return None
 
 
+def child_tree_cpu_seconds(pid):
+    """CPU seconds of the process and its waited-for children.
+
+    The engine delegates heavy work to a worker subprocess: its own
+    utime+stime stays near zero while cutime/cstime (fields 13-14) add
+    the children it has reaped. For a resident worker (never reaped
+    during the exchange) this still reads what the engine itself
+    accumulated — a measured 0.0, not a missing sample; the caller's
+    guard distinguishes the two.
+    """
+    try:
+        with open(f"/proc/{pid}/stat", "r", encoding="utf-8") as stream:
+            fields = stream.read().rsplit(")", 1)[1].split()
+            ticks = int(fields[11]) + int(fields[12]) + int(fields[13]) + int(fields[14])
+            return ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def validate_response(request, response):
     """A timed operation must succeed: one correlated, non-empty result.
 
@@ -114,17 +133,24 @@ def run_once(argv, stdin_bytes=None, cwd=None):
     service = JsonRpcService(
         list(argv), implementation, cwd=cwd,
         read_deadline=120, write_deadline=30)
-    peak = {"kib": 0}
-    cpu = {"seconds": 0.0}
+    peak = {"kib": 0, "observed": False}
+    cpu = {"seconds": 0.0, "observed": False}
 
     def sample():
         while service.proc.poll() is None:
             current = child_hwm_kib(service.proc.pid)
-            if current is not None and current > peak["kib"]:
-                peak["kib"] = current
-            current = child_cpu_seconds(service.proc.pid)
-            if current is not None and current > cpu["seconds"]:
-                cpu["seconds"] = current
+            if current is not None:
+                peak["observed"] = True
+                if current > peak["kib"]:
+                    peak["kib"] = current
+            current = child_tree_cpu_seconds(service.proc.pid)
+            if current is not None:
+                # A measured 0.0 is a sample (an engine whose work runs
+                # in a resident worker legitimately reads zero); only a
+                # reader that observes nothing is a missing sample.
+                cpu["observed"] = True
+                if current > cpu["seconds"]:
+                    cpu["seconds"] = current
             time.sleep(0.001)
 
     sampler = threading.Thread(target=sample, daemon=True)
@@ -154,9 +180,9 @@ def run_once(argv, stdin_bytes=None, cwd=None):
     elapsed = time.perf_counter() - started
     if service.proc.returncode != 0:
         raise AssertionError(f"child exited {service.proc.returncode}: {argv[0]}")
-    if peak["kib"] == 0:
+    if not peak["observed"]:
         raise AssertionError("child peak was not observed")
-    if cpu["seconds"] <= 0:
+    if not cpu["observed"]:
         raise AssertionError("child cpu was not sampled")
     sample_result = {
         "elapsed_seconds": elapsed,

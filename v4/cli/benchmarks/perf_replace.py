@@ -17,6 +17,22 @@ from measure import measure, median, ratio
 from perf import PUBLISH, fail, sample_binary
 
 
+EXPECTED_DIFF = None  # set by main() before sampling
+
+
+def check_replace_sample(sample, request, destination):
+    """Every timed replace must report the generator's diff counts."""
+    del request, destination
+    report = sample["response"]["result"]["report"]
+    got = {
+        "unchanged": int(report["unchanged_value_addresses"]),
+        "removed": int(report["removed_addresses"]),
+        "added": int(report["added_addresses"]),
+    }
+    if got != EXPECTED_DIFF:
+        raise AssertionError(f"timed replace diff {got}, generator says {EXPECTED_DIFF}")
+
+
 def publish(binary, feed, destination, work, index):
     request = json.loads(json.dumps(PUBLISH))
     request["params"]["input"]["paths"] = [feed]
@@ -127,7 +143,9 @@ def main():
     args = parser.parse_args()
     before = generate(1, args.count, args.span, args.space)
     after = generate(2, args.count, args.span, args.space)
+    global EXPECTED_DIFF
     expected = diff_counts(before, after)
+    EXPECTED_DIFF = expected
     def check(binary, work, index):
         request = prepare_replace(binary, work, before, after, index)
         with open(request, "rb") as stream:
@@ -150,8 +168,10 @@ def main():
         report = {
             "expected": expected,
             "rounds": args.rounds,
-            "rust": sample_binary(args.rust, [(path, None) for path in rust_requests]),
-            "go": sample_binary(args.go, [(path, None) for path in go_requests]),
+            "rust": sample_binary(args.rust, [(path, None) for path in rust_requests],
+                                  check=check_replace_sample),
+            "go": sample_binary(args.go, [(path, None) for path in go_requests],
+                                check=check_replace_sample),
         }
     report["ratio"] = ratio(report["rust"], report["go"])
     print(json.dumps(report, sort_keys=True))

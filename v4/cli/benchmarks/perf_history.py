@@ -18,6 +18,16 @@ from generate import generate, retained_count
 from measure import measure, median, ratio
 from perf import fail, sample_binary
 
+EXPECTED_RETAINED = None  # set by main() before sampling
+
+
+def check_history_sample(sample, request, destination):
+    """Every timed projection must retain the generator's addresses."""
+    del request, destination
+    got = int(sample["response"]["result"]["report"]["windows"][0]["after_addresses"])
+    if got != EXPECTED_RETAINED:
+        raise AssertionError(f"timed projection retained {got}, generator says {EXPECTED_RETAINED}")
+
 
 def call(binary, payload):
     return call_json(binary, payload)
@@ -129,7 +139,9 @@ def main():
     parser.add_argument("--cutoff", type=int, default=7)
     args = parser.parse_args()
     ranges = valued_ranges(1, args.count, args.span, args.space)
+    global EXPECTED_RETAINED
     expected = retained_count(ranges, args.cutoff)
+    EXPECTED_RETAINED = expected
 
     def check(binary, work, index):
         request = prepare_projection(binary, work, ranges, args.cutoff, index)
@@ -149,8 +161,10 @@ def main():
             "expected_retained": expected,
             "cutoff": args.cutoff,
             "rounds": args.rounds,
-            "rust": sample_binary(args.rust, [(path, None) for path in rust_requests]),
-            "go": sample_binary(args.go, [(path, None) for path in go_requests]),
+            "rust": sample_binary(args.rust, [(path, None) for path in rust_requests],
+                                  check=check_history_sample),
+            "go": sample_binary(args.go, [(path, None) for path in go_requests],
+                                check=check_history_sample),
         }
     report["ratio"] = ratio(report["rust"], report["go"])
     print(json.dumps(report, sort_keys=True))

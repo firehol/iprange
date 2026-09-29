@@ -17,6 +17,21 @@ from generate import churn, day_feeds, merged_count, write_text
 from measure import ratio
 from perf import PUBLISH, fail, sample_binary
 
+EXPECTED_LAST_STEP = None  # set by main() before sampling
+
+
+def check_churn_sample(sample, request, destination):
+    """Every timed final-day refresh must report the generator's diff."""
+    del request, destination
+    report = sample["response"]["result"]["report"]
+    got = {
+        "unchanged": int(report["unchanged_value_addresses"]),
+        "removed": int(report["removed_addresses"]),
+        "added": int(report["added_addresses"]),
+    }
+    if got != EXPECTED_LAST_STEP:
+        raise AssertionError(f"timed refresh diff {got}, generator says {EXPECTED_LAST_STEP}")
+
 
 WRITER = {
     "max_heap_bytes": "268435456",
@@ -138,7 +153,9 @@ def main():
         if not os.path.isabs(path):
             return fail(f"{label} binary must be absolute")
     days = day_feeds(args.seed, args.days, args.count, args.span, args.space)
+    global EXPECTED_LAST_STEP
     steps = churn(days)
+    EXPECTED_LAST_STEP = steps[-1]
     with tempfile.TemporaryDirectory(prefix="iprange-churn-") as work:
         check_corpus(args.rust, work, days, steps, "rust-check")
         check_corpus(args.go, work, days, steps, "go-check")
@@ -150,8 +167,10 @@ def main():
             "expected": steps,
             "merged_addresses": [merged_count(day) for day in days],
             "rounds": args.rounds,
-            "rust": sample_binary(args.rust, [(path, None) for path in rust_requests]),
-            "go": sample_binary(args.go, [(path, None) for path in go_requests]),
+            "rust": sample_binary(args.rust, [(path, None) for path in rust_requests],
+                                  check=check_churn_sample),
+            "go": sample_binary(args.go, [(path, None) for path in go_requests],
+                                check=check_churn_sample),
         }
     report["ratio"] = ratio(report["rust"], report["go"])
     print(json.dumps(report, sort_keys=True))

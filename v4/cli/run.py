@@ -1925,27 +1925,26 @@ class JsonRpcService:
         reaped with a bounded kill.  A peer that had to be
         force-terminated BY THIS CALL is reported as a qualification
         failure (it did not finish its normal EOF shutdown) unless
-        ``allow_forced`` is set (deliberate-stall controls) or the
-        session is poisoned (its bounded-I/O failure already fired;
-        teardown must not mask it).  Peers
-        already terminated by the caller (crash scenarios' process
-        groups) are reaped silently.
+        ``allow_forced`` is set (deliberate-stall controls and the
+        harness's intentional-crash teardowns) or the session is
+        poisoned (its bounded-I/O failure already fired; teardown must
+        not mask it).
 
         An ordinary successful session ends with a bounded final drain
         of stdout and a clean exit: after the response set is
         satisfied, every remaining stdout byte is validated (any
         non-whitespace residue is a stray trailing frame) and the
-        process exit status must be 0.  Both checks apply only to a
-        session this call shuts down (the peer was still alive at
-        entry) and only when ``allow_forced`` and ``broken_exchange``
-        are not set, so the deliberate-stall controls, the
-        deliberate-brokenness sensitivity controls (whose leftover
-        frames are the evidence of the desync), and the harness's
-        intentional crash sessions (peers already terminated by the
-        caller) keep their documented behavior; a poisoned peer's
-        failure was already reported by ``call()`` — the exemption
-        is mode-agnostic (POSIX deadline timeouts arm the same
-        flag).
+        process exit status must be 0.  These checks apply to every
+        session this call shuts down — including a peer that already
+        exited before the close began (an answered-then-died-nonzero
+        session is a clean-session violation wherever its death
+        landed; the timing inference is not an exemption) — and are
+        skipped only when ``allow_forced`` or ``broken_exchange`` is
+        set (the explicit intentional-crash/deliberate-stall/
+        brokenness-control exemptions) or the session is poisoned (its
+        bounded-I/O failure was already reported by ``call()`` — the
+        exemption is mode-agnostic; POSIX deadline timeouts arm the
+        same flag).
 
         In threaded mode (Windows deadlines), a peer poisoned by a
         bounded-I/O timeout is reaped before touching buffered
@@ -1954,12 +1953,6 @@ class JsonRpcService:
         finding).
         """
 
-        # Whether the peer was already gone before this call acted on
-        # it.  Peers pre-terminated by the harness (crash scenarios'
-        # process groups) are a separate, intentional class: their
-        # exit status and any residue are the crash evidence, not a
-        # clean-session violation.
-        already_dead = self.proc.poll() is not None
         forced = False
         if self._use_threads and self._poisoned:
             # A timed-out writer may still hold the buffered stdin

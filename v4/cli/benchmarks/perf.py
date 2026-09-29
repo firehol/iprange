@@ -117,14 +117,23 @@ def check_sample(sample, request, destination, expected):
     os.remove(destination)
 
 
-def sample_binary(binary, requests, expected):
+def sample_binary(binary, requests, check=None):
+    """Time one operation per request, validating every sample.
+
+    `check` receives the sample (whose "response" is the timed
+    operation's parsed result frame) and raises on a semantic
+    mismatch; None means the structural validation validate_response
+    already applied (non-null, non-empty result) is the whole
+    contract for this operation.
+    """
     samples = []
     for request, destination in requests:
         with open(request, "rb") as stream:
             sample = run_once([binary, "--jsonrpc"], stream.read())
         if not sample["child_raised_peak"]:
             raise AssertionError("child did not raise the process peak; sample is inherited")
-        check_sample(sample, request, destination, expected)
+        if check is not None:
+            check(sample, request, destination)
         samples.append(sample)
     return {
         "elapsed_seconds": {
@@ -166,10 +175,13 @@ def main():
         go_requests = requests[2 + args.rounds:2 + 2 * args.rounds]
         if len(rust_requests) != args.rounds or len(go_requests) != args.rounds:
             raise AssertionError("sample populations differ between engines")
+        def check_publish(sample, request, destination):
+            check_sample(sample, request, destination, expected)
+
         report = {
             "rounds": args.rounds,
-            "rust": sample_binary(args.rust, rust_requests, expected),
-            "go": sample_binary(args.go, go_requests, expected),
+            "rust": sample_binary(args.rust, rust_requests, check=check_publish),
+            "go": sample_binary(args.go, go_requests, check=check_publish),
         }
     report["family"] = args.family
     report["expected_addresses"] = expected

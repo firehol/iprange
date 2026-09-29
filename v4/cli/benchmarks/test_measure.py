@@ -335,10 +335,23 @@ class SamplingGuardTest(unittest.TestCase):
         busy = ["/bin/sh", "-c",
                 "i=0; while [ $i -lt 200000 ]; do i=$((i+1)); done"]
         with mock.patch("measure.child_hwm_kib", return_value=4096), \
-                mock.patch("measure.child_cpu_seconds", return_value=None):
+                mock.patch("measure.child_tree_cpu_seconds", return_value=None):
             with self.assertRaisesRegex(
                     AssertionError, "cpu was not sampled"):
                 run_once(busy)
+
+
+    def test_a_measured_zero_cpu_is_a_sample_not_a_missing_one(self):
+        # An engine whose work runs in a resident worker legitimately
+        # reads zero CPU: the sample is measured, not missing, and must
+        # not fail the round (the r91 wave's join/refresh harnesses
+        # hit exactly this against their own engines).
+        busy = ["/bin/sh", "-c",
+                "i=0; while [ $i -lt 200000 ]; do i=$((i+1)); done"]
+        with mock.patch("measure.child_hwm_kib", return_value=4096), \
+                mock.patch("measure.child_tree_cpu_seconds", return_value=0.0):
+            sample = run_once(busy)
+        self.assertEqual(sample["child_cpu_seconds"], 0.0)
 
 
 class CeilingSummaryTest(unittest.TestCase):

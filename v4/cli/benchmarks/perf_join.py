@@ -16,6 +16,16 @@ from generate import generate, overlap_count, write_text
 from measure import measure, median, ratio
 from perf import PUBLISH, fail, sample_binary
 
+EXPECTED_OVERLAP = None  # set by main() before sampling
+
+
+def check_join_sample(sample, request, destination):
+    """Every timed join must report the generator's overlap count."""
+    del request, destination
+    got = int(sample["response"]["result"]["report"]["overlap_addresses"])
+    if got != EXPECTED_OVERLAP:
+        raise AssertionError(f"timed join overlap {got}, generator says {EXPECTED_OVERLAP}")
+
 
 def call(binary, payload):
     return call_json(binary, payload)
@@ -89,7 +99,9 @@ def main():
     args = parser.parse_args()
     left = generate(1, args.count, args.span, args.space)
     right = generate(2, args.count, args.span, args.space)
+    global EXPECTED_OVERLAP
     expected = overlap_count(left, right)
+    EXPECTED_OVERLAP = expected
 
     def check(binary, work, index):
         request = prepare_join(binary, work, left, right, index)
@@ -108,8 +120,10 @@ def main():
         report = {
             "expected_overlap": expected,
             "rounds": args.rounds,
-            "rust": sample_binary(args.rust, [(path, None) for path in rust_requests]),
-            "go": sample_binary(args.go, [(path, None) for path in go_requests]),
+            "rust": sample_binary(args.rust, [(path, None) for path in rust_requests],
+                                  check=check_join_sample),
+            "go": sample_binary(args.go, [(path, None) for path in go_requests],
+                                check=check_join_sample),
         }
     report["ratio"] = ratio(report["rust"], report["go"])
     print(json.dumps(report, sort_keys=True))

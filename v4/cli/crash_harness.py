@@ -1148,7 +1148,10 @@ def scenario_a1(direction, producer, consumer, work_dir, scenario_report):
             producer, consumer, work, dest, scenario_report, True)
     finally:
         producer_service.kill_process_group()
-        producer_service.close()
+        # The kill is this scenario's own crash injection: the teardown
+        # is the explicit intentional-crash exemption (astra turn-2:
+        # exemptions are explicit, never inferred from process timing).
+        producer_service.close(allow_forced=True, broken_exchange=True)
     return work
 
 
@@ -1240,7 +1243,10 @@ def scenario_a2(direction, producer, consumer, work_dir, scenario_report):
             producer, consumer, work, dest, scenario_report, False)
     finally:
         producer_service.kill_process_group()
-        producer_service.close()
+        # The kill is this scenario's own crash injection: the teardown
+        # is the explicit intentional-crash exemption (astra turn-2:
+        # exemptions are explicit, never inferred from process timing).
+        producer_service.close(allow_forced=True, broken_exchange=True)
     return work
 
 
@@ -1463,7 +1469,10 @@ def scenario_a3(direction, producer, consumer, work_dir, fixture_tool,
         probe_consumer_open(consumer, work, dest, scenario_report, False)
     finally:
         producer_service.kill_process_group()
-        producer_service.close()
+        # The kill is this scenario's own crash injection: the teardown
+        # is the explicit intentional-crash exemption (astra turn-2:
+        # exemptions are explicit, never inferred from process timing).
+        producer_service.close(allow_forced=True, broken_exchange=True)
     return work
 
 
@@ -1651,7 +1660,10 @@ def scenario_b(direction, producer, consumer, work_dir, fixture_tool,
             resolver.close()
     finally:
         producer_service.kill_process_group()
-        producer_service.close()
+        # The kill is this scenario's own crash injection: the teardown
+        # is the explicit intentional-crash exemption (astra turn-2:
+        # exemptions are explicit, never inferred from process timing).
+        producer_service.close(allow_forced=True, broken_exchange=True)
     return work
 
 
@@ -1847,7 +1859,10 @@ def scenario_c(direction, producer, consumer, work_dir, scenario_report):
             resolver.close()
     finally:
         producer_service.kill_process_group()
-        producer_service.close()
+        # The kill is this scenario's own crash injection: the teardown
+        # is the explicit intentional-crash exemption (astra turn-2:
+        # exemptions are explicit, never inferred from process timing).
+        producer_service.close(allow_forced=True, broken_exchange=True)
     return work
 
 
@@ -2298,7 +2313,10 @@ def scenario_d(direction, producer, consumer, work_dir, fixture_tool,
             resolver.close()
     finally:
         producer_service.kill_process_group()
-        producer_service.close()
+        # The kill is this scenario's own crash injection: the teardown
+        # is the explicit intentional-crash exemption (astra turn-2:
+        # exemptions are explicit, never inferred from process timing).
+        producer_service.close(allow_forced=True, broken_exchange=True)
     return work
 
 
@@ -2461,7 +2479,10 @@ def scenario_e(direction, producer, consumer, work_dir, scenario_report):
             resolver.close()
     finally:
         producer_service.kill_process_group()
-        producer_service.close()
+        # The kill is this scenario's own crash injection: the teardown
+        # is the explicit intentional-crash exemption (astra turn-2:
+        # exemptions are explicit, never inferred from process timing).
+        producer_service.close(allow_forced=True, broken_exchange=True)
     return work
 
 
@@ -2813,7 +2834,10 @@ def scenario_f(direction, producer, consumer, work_dir, scenario_report):
             resolver.close()
     finally:
         producer_service.kill_process_group()
-        producer_service.close()
+        # The kill is this scenario's own crash injection: the teardown
+        # is the explicit intentional-crash exemption (astra turn-2:
+        # exemptions are explicit, never inferred from process timing).
+        producer_service.close(allow_forced=True, broken_exchange=True)
     return work
 
 

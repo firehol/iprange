@@ -626,3 +626,61 @@ class CancelDetectorTest(unittest.TestCase):
         response = {"id": "p", "error": {
             "code": -32010, "data": {"code": "io", "outcome": "not_started"}}}
         self.assertIn("lost its code", cancelled_result(response, False))
+
+
+class CallerKillTeardownTest(unittest.TestCase):
+    # tempfile imported per-test (module-level imports stay minimal).
+    """The intentional-crash teardown is explicit, not timing-inferred.
+
+    A caller that kills its peer (crash scenarios' process groups)
+    must tear down with the explicit exemption and pass; a peer that
+    answers then dies nonzero on its own must still fail the ordinary
+    close. The distinction is the flag, not the process state.
+    """
+
+    def test_a_killed_peer_closes_with_the_explicit_exemption(self):
+        import tempfile
+        stub = os.path.join(_HERE, "stub_engine.py")
+        from run import JsonRpcService as Service
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "hang_engine")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_MODE'] = 'silent'\n"
+                    f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            service = Service([wrapper, "--jsonrpc"], "killed",
+                              read_deadline=5, write_deadline=5,
+                              start_new_session=True)
+            try:
+                # The crash-scenario pattern: kill the process group,
+                # then tear down with the explicit exemption.
+                service.kill_process_group()
+                service.close(allow_forced=True, broken_exchange=True)
+            except AssertionError as exc:
+                self.fail(f"explicit-exemption teardown failed: {exc}")
+
+    def test_the_same_killed_peer_fails_the_ordinary_close(self):
+        # The exemption really is the flag: without it the killed
+        # peer's nonzero exit fails the close (nothing about the
+        # process state grants it silently).
+        import tempfile
+        stub = os.path.join(_HERE, "stub_engine.py")
+        from run import JsonRpcService as Service
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "hang_engine")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_MODE'] = 'silent'\n"
+                    f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            service = Service([wrapper, "--jsonrpc"], "killed",
+                              read_deadline=5, write_deadline=5,
+                              start_new_session=True)
+            service.kill_process_group()
+            with self.assertRaisesRegex(AssertionError, "status -9"):
+                service.close()

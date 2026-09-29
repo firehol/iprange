@@ -895,7 +895,10 @@ def proof_c(binary, label, work_dir, outcome):
         thread.join(timeout=5)
     finally:
         producer.kill_process_group()
-        producer.close()
+        # The kill is this proof's own resource-exhaustion crash
+        # injection: the teardown is the explicit intentional-crash
+        # exemption (astra turn-2: explicit, never timing-inferred).
+        producer.close(allow_forced=True, broken_exchange=True)
 
     listed = HarnessJsonRpcService(
         [binary, "--jsonrpc"], f"c-{label}", cwd=work,
