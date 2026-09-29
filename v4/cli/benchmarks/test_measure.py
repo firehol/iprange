@@ -256,6 +256,21 @@ class TimedResponseValidationTest(unittest.TestCase):
                                         "delivered more than one frame"):
                 run_once(command, request)
 
+    def test_an_incomplete_frame_is_refused(self):
+        # The other refusal arm: a frame without its terminator never
+        # becomes a sample.
+        engine = "/bin/sh"
+        frame = '{"jsonrpc": "2.0", "id": "t3", "result": {}}'
+        # The short sleep lets the sampler observe the child (the
+        # peak guard), so the refusal under test is what can fail.
+        script = ("read line; printf '%s' '$FRAME'; sleep 0.3; exit 0"
+                  ).replace("$FRAME", frame)
+        request = (b'{"jsonrpc": "2.0", "id": "t3", '
+                   b'"method": "iprange.v1.system.describe", "params": {}}\n')
+        with self.assertRaisesRegex(AssertionError,
+                                    "did not deliver a full frame"):
+            run_once([engine, "-c", script], request)
+
     def test_run_once_validates_a_real_exchange(self):
         from unittest import mock
         stub = os.path.join(_HERE, "stub_engine.py")
