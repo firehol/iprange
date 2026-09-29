@@ -22478,9 +22478,16 @@ sampling for cli steps, execution-order scenario_calls, the
 packed_span five-shape self-test, the explicit-exemption
 owned_service_deaths docstring, harness-validator coverage; the
 ceiling record restored to one session with superseded sessions
-preserved; the perf sweep restaged in kit form). The seven-role
-re-review of the round-94 wave and the astra re-review are the
-pending gates.
+preserved; the perf sweep restaged in kit form). The r95 panel verified the round-94 fixes genuine and filed the
+residue; the round-96 wave closed it (`f5f30083`: stderr drain +
+first-tick RSS sampling in run_cli, no idle service for cli-only
+scenarios, the expect_rpc_error/expect_same_bytes combination
+refused, the cancel drain bounded both ways, the cross-word-borrow
+span shape pinned, both @directory arms in l10, the sample_binary
+enforcement seam detected; the preserved round-89 figures corrected;
+the ceiling's 34th session recorded — CPU ratio 2.001, a new honest
+maximum). The seven-role re-review of the round-96 wave and the astra
+re-review are the pending gates.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
