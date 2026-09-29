@@ -1,3 +1,5 @@
+#include <errno.h>
+
 #include "abi_test_support.h"
 
 #include <stdio.h>
@@ -32,8 +34,11 @@ typedef struct {
     size_t feed_count;
 } case_range;
 
+#define FEED_INDEX_ABSENT 0xFFFFFFFFu
+
 typedef struct {
     char names[MAX_UNIVERSE_FEEDS][MAX_FEED_NAME];
+    uint32_t indices[MAX_UNIVERSE_FEEDS]; /* manifest-declared index */
     size_t count;
 } feed_universe;
 
@@ -317,6 +322,28 @@ static const char *array_end(const char *start, const char *limit)
     return NULL;
 }
 
+/* The matching closing brace of the object at `start` (which must point
+ * at '{'). A nested object (for example a structured range's location)
+ * would otherwise end the slice at its own '}', silently dropping every
+ * key that follows it. */
+static const char *matching_brace(const char *start, const char *limit)
+{
+    int depth = 0;
+    const char *cursor = start;
+    while (cursor < limit) {
+        if (*cursor == '{') {
+            depth++;
+        } else if (*cursor == '}') {
+            depth--;
+            if (depth == 0) {
+                return cursor;
+            }
+        }
+        cursor++;
+    }
+    return NULL;
+}
+
 /* Reads one string-list array like "feeds": ["a", "b"] into names. */
 static int read_name_list(const char *object, const char *object_end, const char *key,
                            char names[][MAX_FEED_NAME], size_t *count, size_t limit)
@@ -396,6 +423,29 @@ static int read_feed_universe(const char *slice, const char *slice_end, feed_uni
                         MAX_FEED_NAME) != 0) {
             return 1;
         }
+        universe->indices[used] = FEED_INDEX_ABSENT;
+        {
+            /* The manifest declares each feed's index; the checker must
+             * hold the implementation to it, not take the index from the
+             * implementation's own answer (astra turn-2). */
+            const char *index_at = find_key(object, object_end, "\"index\": ");
+            if (index_at != NULL) {
+                char digits[24];
+                const char *cursor = index_at + strlen("\"index\": ");
+                size_t written = 0;
+                unsigned long parsed;
+                while (cursor < object_end && *cursor >= '0' && *cursor <= '9' &&
+                       written + 1 < sizeof(digits)) {
+                    digits[written++] = *cursor++;
+                }
+                digits[written] = '\0';
+                parsed = strtoul(digits, NULL, 10);
+                if (written == 0 || parsed > 0xFFFFFFFFul) {
+                    return 1;
+                }
+                universe->indices[used] = (uint32_t)parsed;
+            }
+        }
         used++;
         cursor = object_end + 1;
     }
@@ -436,8 +486,8 @@ static int collect_ranges(const char *slice, const char *slice_end, const char *
         if (object == NULL || object >= end) {
             break;
         }
-        object_end = strchr(object, '}');
-        if (object_end == NULL || object_end > end) {
+        object_end = matching_brace(object, end);
+        if (object_end == NULL) {
             free(ranges);
             return 1;
         }
@@ -653,6 +703,12 @@ static int check_membership(const iprange_v4_abi1_reader *reader, const case_ran
                                                       &error) == IPRANGE_V4_ABI1_STATUS_OK);
             CHECK(error == NULL && present == 1);
             CHECK(strcmp((const char *)info.name, name) == 0 && info.name_length == strlen(name));
+            /* The returned index is the implementation's answer; the
+             * manifest's declared index is the expectation. A reader
+             * renumbering feeds silently would otherwise go unseen. */
+            if (universe->indices[index] != FEED_INDEX_ABSENT) {
+                CHECK(info.index == universe->indices[index]);
+            }
             indices[index] = info.index;
         }
     }
@@ -692,6 +748,8 @@ static int check_membership(const iprange_v4_abi1_reader *reader, const case_ran
 typedef struct {
     const iprange_v4_abi1_reader *reader;
     const case_range *range;
+    const feed_universe *universe;
+    const uint32_t *indices;
 } structured_context;
 
 static int visit_structured(const iprange_v4_abi1_ip *address, void *opaque, size_t ordinal)
@@ -700,10 +758,17 @@ static int visit_structured(const iprange_v4_abi1_ip *address, void *opaque, siz
     iprange_v4_abi1_error *error = NULL;
     uint8_t present = 0;
     iprange_v4_abi1_network_enrichment_v1 found;
+    iprange_v4_abi1_membership_view *view = NULL;
+    size_t index;
     const case_range *range = context->range;
     memset(&found, 0, sizeof(found));
-    CHECK(iprange_v4_abi1_reader_lookup_network_enrichment_v1(
-              context->reader, *address, &present, &found, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+    /* The with-membership lookup returns the enrichment value together
+     * with the threat-feed membership it carries: the structured record
+     * must not only hold the scalar fields, its feed set must match the
+     * manifest per range (astra turn-2). */
+    CHECK(iprange_v4_abi1_reader_lookup_network_enrichment_v1_with_membership(
+              context->reader, *address, &present, &found, &view, &error) ==
+          IPRANGE_V4_ABI1_STATUS_OK);
     CHECK(error == NULL && present == 1);
     CHECK(found.asn == range->value);
     CHECK(found.country_id == range->country_id);
@@ -714,18 +779,60 @@ static int visit_structured(const iprange_v4_abi1_ip *address, void *opaque, siz
         CHECK(found.latitude_microdegrees == range->latitude);
         CHECK(found.longitude_microdegrees == range->longitude);
     }
+    if (context->universe != NULL && context->universe->count > 0) {
+        CHECK(view != NULL);
+        for (index = 0; index < context->universe->count; index++) {
+            uint8_t contains = 0;
+            CHECK(iprange_v4_abi1_membership_view_contains_index(
+                      view, context->indices[index], &contains, &error) ==
+                  IPRANGE_V4_ABI1_STATUS_OK);
+            CHECK(error == NULL);
+            CHECK(contains ==
+                  (range_has_feed(range, context->universe->names[index]) ? 1u : 0u));
+        }
+        CHECK(iprange_v4_abi1_membership_view_close(view, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(error == NULL);
+        CHECK(iprange_v4_abi1_membership_view_destroy(view, &error) == IPRANGE_V4_ABI1_STATUS_OK);
+        CHECK(error == NULL);
+    } else {
+        CHECK(view == NULL);
+    }
     (void)ordinal;
     return 0;
 }
 
 static int check_structured(const iprange_v4_abi1_reader *reader, const case_range *ranges,
-                            size_t count, int *gaps)
+                            size_t count, const feed_universe *universe, int *gaps)
 {
     size_t index;
+    uint32_t *indices = NULL;
+    if (universe != NULL && universe->count > 0) {
+        indices = calloc(universe->count, sizeof(*indices));
+        CHECK(indices != NULL);
+        for (index = 0; index < universe->count; index++) {
+            iprange_v4_abi1_error *error = NULL;
+            uint8_t present = 0;
+            iprange_v4_abi1_feed_info info;
+            const char *name = universe->names[index];
+            memset(&info, 0, sizeof(info));
+            CHECK(iprange_v4_abi1_reader_lookup_feed(reader, (const uint8_t *)name,
+                                                      strlen(name), &present, &info,
+                                                      &error) == IPRANGE_V4_ABI1_STATUS_OK);
+            CHECK(error == NULL && present == 1);
+            CHECK(strcmp((const char *)info.name, name) == 0 &&
+                  info.name_length == strlen(name));
+            if (universe->indices[index] != FEED_INDEX_ABSENT) {
+                CHECK(info.index == universe->indices[index]);
+            }
+            indices[index] = info.index;
+        }
+    }
     for (index = 0; index < count; index++) {
         structured_context context;
         context.reader = reader;
         context.range = &ranges[index];
+        context.universe = universe;
+        context.indices = indices;
         CHECK(for_each_address(&ranges[index], visit_structured, &context, "structured") == 0);
         if (index + 1 == count) {
             continue;
@@ -745,6 +852,7 @@ static int check_structured(const iprange_v4_abi1_reader *reader, const case_ran
             (*gaps)++;
         }
     }
+    free(indices);
     return 0;
 }
 
@@ -782,6 +890,7 @@ static int check_metadata(const iprange_v4_abi1_reader *reader, const char *slic
     }
     if (strcmp(state, "repeat") == 0) {
         uint64_t length = 0;
+        unsigned long repeat_byte = 256; /* absent sentinel */
         CHECK(read_string("\"length\": ", slice, slice_end, state, sizeof(state)) == 1);
         {
             const char *found = find_key(slice, slice_end, "\"length\": ");
@@ -797,7 +906,40 @@ static int check_metadata(const iprange_v4_abi1_reader *reader, const char *slic
             digits[written] = '\0';
             length = strtoull(digits, NULL, 10);
         }
+        {
+            /* The manifest names the repeated byte; the length check
+             * alone cannot see a wrong payload (astra turn-2). */
+            const char *found = find_key(slice, slice_end, "\"byte\": ");
+            if (found != NULL) {
+                char digits[24];
+                const char *cursor = found + strlen("\"byte\": ");
+                size_t written = 0;
+                while (cursor < slice_end && *cursor >= '0' && *cursor <= '9' &&
+                       written + 1 < sizeof(digits)) {
+                    digits[written++] = *cursor++;
+                }
+                digits[written] = '\0';
+                CHECK(written > 0);
+                repeat_byte = strtoul(digits, NULL, 10);
+                CHECK(repeat_byte <= 255);
+            }
+        }
         CHECK(required == length);
+        if (repeat_byte <= 255) {
+            uint8_t *buffer = malloc(length > 0 ? (size_t)length : 1);
+            uint64_t copied = 0;
+            size_t index;
+            CHECK(buffer != NULL);
+            CHECK(iprange_v4_abi1_reader_metadata_read(
+                      reader, ((iprange_v4_abi1_mutable_byte_slice){buffer, length}), &copied,
+                      &error) == IPRANGE_V4_ABI1_STATUS_OK);
+            CHECK(error == NULL);
+            CHECK(copied == length);
+            for (index = 0; index < length; index++) {
+                CHECK(buffer[index] == (uint8_t)repeat_byte);
+            }
+            free(buffer);
+        }
         return 0;
     }
     CHECK(strcmp(state, "text") == 0);
@@ -885,17 +1027,65 @@ static int check_fixture(const char *corpus, const char *slice, const char *slic
     CHECK(info.active_feed_count == (uint64_t)universe.count);
     CHECK(collect_ranges(slice, slice_end, range_key, ipv6, kind_code, &ranges, &count) == 0);
     CHECK(count > 0);
-    (void)range_records; /* manifest address totals for ipv6 fixtures
-                            exceed every integer the check needs; the
-                            cardinality contract is range_record_count
-                            and active_feed_count, both checked here. */
     CHECK(info.range_record_count == (uint64_t)count);
+    /* The manifest's address_count is the sum of the range spans. It
+     * is checked wherever the total fits a uint64: a reader whose
+     * covered address set differed from the manifest's would otherwise
+     * pass with only the per-range walks agreeing with itself. Totals
+     * beyond uint64 (the ipv6 whole-universe fixtures) stay out of
+     * scope of this comparison; range_record_count and
+     * active_feed_count remain the cardinality contract there. */
+    {
+        const char *found = find_key(slice, slice_end, "\"address_count\": \"");
+        if (found != NULL) {
+            char digits[48];
+            const char *cursor = found + strlen("\"address_count\": \"");
+            size_t written = 0;
+            unsigned long long claimed;
+            char *parse_end = NULL;
+            while (cursor < slice_end && *cursor != '"' && written + 1 < sizeof(digits)) {
+                digits[written++] = *cursor++;
+            }
+            digits[written] = '\0';
+            CHECK(written > 0);
+            errno = 0;
+            claimed = strtoull(digits, &parse_end, 10);
+            if (errno == 0 && parse_end != NULL && *parse_end == '\0') {
+                unsigned long long total = 0;
+                int overflow = 0;
+                size_t index2;
+                for (index2 = 0; index2 < count && !overflow; index2++) {
+                    unsigned long long span;
+                    const uint8_t *from = ranges[index2].from.bytes;
+                    const uint8_t *to = ranges[index2].to.bytes;
+                    int width = ipv6 ? 16 : 4;
+                    int position;
+                    unsigned long long accumulated = 0;
+                    /* big-endian to-from over the family width */
+                    for (position = 0; position < width; position++) {
+                        accumulated = accumulated * 256 +
+                                      (unsigned)(to[position] - from[position]);
+                    }
+                    span = accumulated + 1;
+                    if (total > UINT64_MAX - span) {
+                        overflow = 1;
+                    } else {
+                        total += span;
+                    }
+                }
+                if (!overflow) {
+                    CHECK(total == claimed);
+                }
+            }
+        }
+    }
+    (void)range_records;
     if (kind_code == 0) {
         CHECK(check_direct(reader, ranges, count, gaps) == 0);
     } else if (kind_code == 1) {
         CHECK(check_membership(reader, ranges, count, &universe, gaps) == 0);
     } else {
-        CHECK(check_structured(reader, ranges, count, gaps) == 0);
+        CHECK(check_structured(reader, ranges, count, &universe, gaps) == 0);
     }
     CHECK(check_metadata(reader, slice, slice_end) == 0);
     free(ranges);
