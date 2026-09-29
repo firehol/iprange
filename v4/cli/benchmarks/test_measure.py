@@ -11,7 +11,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.dirname(_HERE))
 
-from measure import child_cpu_seconds, measure, parse_stat_cpu, ratio, run_once  # noqa: E402
+from measure import child_cpu_seconds, measure, parse_stat_cpu, ratio, run_once, validate_response  # noqa: E402
 from perf_ceiling import summarize_rounds  # noqa: E402
 _spec = importlib.util.spec_from_file_location(
     "bench_runner", os.path.join(_HERE, "run.py"))
@@ -210,6 +210,40 @@ class StatCpuParseTest(unittest.TestCase):
 
     def test_garbage_is_none(self):
         self.assertIsNone(parse_stat_cpu("not a stat record"))
+
+
+class TimedResponseValidationTest(unittest.TestCase):
+    """A timed operation must succeed: correlated result frames only."""
+
+    REQUEST = b'{"jsonrpc": "2.0", "id": "t1", "method": "iprange.v1.current.publish", "params": {}}'
+
+    def test_a_correlated_result_passes(self):
+        response = b'{"jsonrpc": "2.0", "id": "t1", "result": {"report": {}}}'
+        validate_response(self.REQUEST, response)  # must not raise
+
+    def test_an_error_response_is_refused(self):
+        response = b'{"jsonrpc": "2.0", "id": "t1", "error": {"code": -32000}}'
+        with self.assertRaisesRegex(AssertionError, "timed operation failed"):
+            validate_response(self.REQUEST, response)
+
+    def test_an_uncorrelated_response_is_refused(self):
+        response = b'{"jsonrpc": "2.0", "id": "other", "result": {}}'
+        with self.assertRaisesRegex(AssertionError, "does not correlate"):
+            validate_response(self.REQUEST, response)
+
+    def test_a_frame_without_result_or_error_is_refused(self):
+        response = b'{"jsonrpc": "2.0", "id": "t1"}'
+        with self.assertRaisesRegex(AssertionError, "neither result nor error"):
+            validate_response(self.REQUEST, response)
+
+    def test_run_once_validates_a_real_exchange(self):
+        from unittest import mock
+        stub = os.path.join(_HERE, "stub_engine.py")
+        request = (b'{"jsonrpc": "2.0", "id": "m1", '
+                   b'"method": "iprange.v1.system.describe", "params": {}}\n')
+        with mock.patch.dict(os.environ, {"STUB_EXIT": "0"}):
+            sample = run_once([sys.executable, stub, "--jsonrpc"], request)
+        self.assertGreater(sample["elapsed_seconds"], 0.0)
 
 
 class SamplingGuardTest(unittest.TestCase):

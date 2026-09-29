@@ -62,18 +62,18 @@ def write_request(path, feed, destination, family):
         stream.write("\n")
 
 
-def prepare(work, seed, count, span, space, rounds, family):
+def prepare(work, seed, count, span, space, requests, family):
     ranges = generate(seed, count, span, space)
     feed = os.path.join(work, "feed.txt")
     with open(feed, "w", encoding="utf-8") as stream:
         (write_ipv6 if family == "ipv6" else write_text)(ranges, stream)
-    requests = []
-    for index in range(rounds + 1):
+    paths = []
+    for index in range(requests):
         request = os.path.join(work, f"request-{index}.json")
         destination = os.path.join(work, f"current-{index}.iprange")
         write_request(request, feed, destination, family)
-        requests.append((request, destination))
-    return requests, merged_count(ranges)
+        paths.append((request, destination))
+    return paths, merged_count(ranges)
 
 
 def check_output(binary, request, destination, expected):
@@ -134,10 +134,16 @@ def main():
         )
         check_output(args.rust, requests[0][0], requests[0][1], expected)
         check_output(args.go, requests[1][0], requests[1][1], expected)
+        # Exactly two warm-ups plus N samples per engine: the medians
+        # compare equal sample populations.
+        rust_requests = requests[2:2 + args.rounds]
+        go_requests = requests[2 + args.rounds:2 + 2 * args.rounds]
+        if len(rust_requests) != args.rounds or len(go_requests) != args.rounds:
+            raise AssertionError("sample populations differ between engines")
         report = {
             "rounds": args.rounds,
-            "rust": sample_binary(args.rust, requests[2:2 + args.rounds]),
-            "go": sample_binary(args.go, requests[2 + args.rounds:]),
+            "rust": sample_binary(args.rust, rust_requests),
+            "go": sample_binary(args.go, go_requests),
         }
     report["family"] = args.family
     report["expected_addresses"] = expected

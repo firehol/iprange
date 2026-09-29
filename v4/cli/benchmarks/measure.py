@@ -6,6 +6,7 @@ so far, so it cannot compare a later smaller child with an earlier
 larger one. The runner's own memory is excluded.
 """
 
+import json
 import os
 import subprocess
 import time
@@ -50,12 +51,34 @@ def child_cpu_seconds(pid):
         return None
 
 
+def validate_response(request_bytes, response_bytes):
+    """A timed operation must succeed: one correlated result frame.
+
+    The measurement contract times real work: an operation that
+    answers an error (I/O failure, budget rejection) is not a valid
+    sample, and a partial or uncorrelated frame is a harness defect.
+    The spec answers every request exactly once.
+    """
+    request = json.loads(request_bytes)
+    response = json.loads(response_bytes)
+    if response.get("id") != request.get("id"):
+        raise AssertionError(
+            f"response id {response.get('id')!r} does not correlate "
+            f"with request {request.get('id')!r}")
+    if "error" in response:
+        raise AssertionError(f"timed operation failed: {response['error']}")
+    if "result" not in response:
+        raise AssertionError("response carries neither result nor error")
+
+
 def run_once(argv, stdin_bytes=None):
     started = time.perf_counter()
     proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
     peak = 0
     cpu = 0.0
     deadline = time.perf_counter() + 120
+    request_frame = stdin_bytes
+    response_chunks = []
     if stdin_bytes is not None:
         proc.stdin.write(stdin_bytes)
         proc.stdin.flush()
@@ -73,9 +96,13 @@ def run_once(argv, stdin_bytes=None):
             cpu = max(cpu, current)
         if stdin_bytes is not None:
             try:
-                if proc.stdout.readline():
-                    proc.stdin.close()
-                    stdin_bytes = None
+                chunk = proc.stdout.readline()
+                if chunk:
+                    response_chunks.append(chunk)
+                    if chunk.endswith(b"\n"):
+                        # The full response frame has arrived; EOF now.
+                        proc.stdin.close()
+                        stdin_bytes = None
             except BlockingIOError:
                 pass
         time.sleep(0.001)
@@ -89,6 +116,11 @@ def run_once(argv, stdin_bytes=None):
     elapsed = time.perf_counter() - started
     if proc.returncode != 0:
         raise AssertionError(f"child exited {proc.returncode}: {argv[0]}")
+    if request_frame is not None:
+        response = b"".join(response_chunks)
+        if not response.endswith(b"\n"):
+            raise AssertionError("timed operation did not deliver a full frame")
+        validate_response(request_frame, response)
     if peak == 0:
         raise AssertionError("child peak was not observed")
     if cpu <= 0:
