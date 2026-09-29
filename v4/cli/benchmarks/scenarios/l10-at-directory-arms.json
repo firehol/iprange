@@ -1,7 +1,7 @@
 {
  "schema": "iprange-bench-scenario-v1",
  "name": "l10-at-directory-arms",
- "purpose": "Legacy @directory arms: a file inside the directory expands (exit 0, exact stdout), and an empty directory answers the documented nonzero exit (no expandable input).",
+ "purpose": "Legacy @directory arms: a file inside the directory expands, an empty directory answers the documented nonzero exit, and entry selection counts only expandable files (a subdirectory and a non-ipset file are skipped).",
  "fixtures": [
   {
    "path": "a.txt",
@@ -14,6 +14,18 @@
   {
    "path": "emptydir",
    "directory": true
+  },
+  {
+   "path": "mixdir/only.txt",
+   "text": "10.0.0.5\n"
+  },
+  {
+   "path": "mixdir/notanipset.bin",
+   "text": "\u0000\u0001garbage\n"
+  },
+  {
+   "path": "mixdir/subdir/.keep",
+   "text": "\n"
   }
  ],
  "cli": [
@@ -43,6 +55,21 @@
    ],
    "expect": {
     "exit": 1
+   }
+  },
+  {
+   "cli": {
+    "args": [
+     "@$WORK/mixdir"
+    ]
+   },
+   "compare": [
+    "exit",
+    "stdout"
+   ],
+   "expect": {
+    "exit": 0,
+    "stdout": "10.0.0.5\n"
    }
   }
  ]

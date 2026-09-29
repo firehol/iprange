@@ -1072,6 +1072,22 @@ static int selftest_packed_span(void)
     packed_span(&from, &to, 16, &span, &unrepresentable);
     CHECK(!unrepresentable && span == 0xffffffffffffff01ull);
 
+    /* wrap arm: an exact 2^64 span (from = H:0, to = H:UINT64_MAX)
+     * does not fit low+1 — the unrepresentable skip must fire, not
+     * wrap to 0 (r97: the wrap arm was unpinned). */
+    memset(from.bytes, 0, 16);
+    memset(to.bytes, 0, 16);
+    from.bytes[7] = 1;
+    to.bytes[7] = 1;
+    {
+        int byte;
+        for (byte = 8; byte < 16; byte++) {
+            to.bytes[byte] = 0xff;
+        }
+    }
+    packed_span(&from, &to, 16, &span, &unrepresentable);
+    CHECK(unrepresentable);
+
     return 0;
 }
 

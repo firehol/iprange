@@ -66,6 +66,18 @@ def main():
             time.sleep(3600)
             os._exit(exit_status)
         request = json.loads(line)
+        if os.environ.get("STUB_RPC_ERROR_CODE"):
+            # Answer every request with a JSON-RPC error frame carrying
+            # the given code (error-arm controls).
+            response = {
+                "jsonrpc": "2.0",
+                "id": request.get("id"),
+                "error": {"code": int(os.environ["STUB_RPC_ERROR_CODE"]),
+                          "message": "stub error"},
+            }
+            sys.stdout.write(json.dumps(response) + "\n")
+            sys.stdout.flush()
+            continue
         response = {
             "jsonrpc": "2.0",
             "id": request.get("id"),

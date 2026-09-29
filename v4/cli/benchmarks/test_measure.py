@@ -722,8 +722,9 @@ class CliLargeOutputTest(unittest.TestCase):
             os.chmod(wrapper, 0o755)
             scenario = {
                 "name": "cli-big-output",
-                "cli": [{"cli": {"args": ["a.txt"]}, "compare": ["exit"],
-                         "expect": {"exit": 0}}],
+                "cli": [{"cli": {"args": ["a.txt"]},
+                         "compare": ["exit", "stdout"],
+                         "expect": {"exit": 0, "stdout": "x" * (4 << 20) + "\n"}}],
                 "fixtures": [{"path": "a.txt", "text": "10.0.0.1\n"}],
             }
             import time as _time
@@ -831,6 +832,39 @@ class SampleBinaryDetectorTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "generator says"):
             self._run(refusing_check)
 
+    def test_the_check_runs_on_every_sample(self):
+        # A multi-request population drives one check per sample — a
+        # check invoked only on the first sample would pass this with
+        # len(seen) == 1 (the r97 per-sample half).
+        import json as _json
+        import tempfile
+        stub = os.path.join(_HERE, "stub_engine.py")
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "exit0_stub")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_EXIT'] = '0'\n"
+                    f"os.execv({sys.executable!r}, [{sys.executable!r}, {stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            requests = []
+            for index in range(3):
+                request = os.path.join(work, f"request-{index}.json")
+                with open(request, "w") as stream:
+                    payload = dict(self.REQUEST, id=f"s{index}")
+                    _json.dump(payload, stream)
+                    stream.write("\n")
+                requests.append((request, os.path.join(work, f"out-{index}")))
+            seen = []
+
+            def counting_check(sample, request, destination):
+                seen.append(sample["response"]["id"])
+
+            from perf import sample_binary
+            sample_binary(wrapper, requests, check=counting_check)
+            self.assertEqual(seen, ["s0", "s1", "s2"])
+
     def test_a_passing_check_completes_the_sample(self):
         seen = []
 
@@ -841,3 +875,124 @@ class SampleBinaryDetectorTest(unittest.TestCase):
         report = self._run(accepting_check)
         self.assertEqual(len(seen), 1)
         self.assertGreater(report["elapsed_seconds"]["median"], 0)
+
+
+class RpcErrorDigestCombinationTest(unittest.TestCase):
+    """r97: expect_rpc_error refuses to combine with expect_same_bytes —
+    an error answer produces no artifact and the pair compared
+    None == None across engines (the digest hole r95 filed)."""
+
+    def test_the_combination_is_refused(self):
+        import sys as _sys
+        import tempfile
+        stub = os.path.join(_HERE, "stub_engine.py")
+        call = {
+            "method": "iprange.v1.current.publish",
+            "params": {},
+            "expect_rpc_error": -32010,
+            "expect_same_bytes": "out.bin",
+            "compare": [],
+        }
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "err_stub")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_RPC_ERROR_CODE'] = '-32010'\n"
+                    f"os.execv({_sys.executable!r}, [{_sys.executable!r}, {stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            from run import JsonRpcService as Service
+            service = Service([wrapper, "--jsonrpc"], "combo",
+                              read_deadline=10, write_deadline=10)
+            try:
+                with self.assertRaisesRegex(
+                        AssertionError,
+                        "cannot combine with expect_same_bytes"):
+                    _bench.run_calls(service, "x", {"name": "c"}, work,
+                                     [call], None)
+            finally:
+                service.close(allow_forced=True, broken_exchange=True)
+
+
+class ScenarioOrderTest(unittest.TestCase):
+    """r97: scenario_calls lists cli steps in execution order (write,
+    cli, read) — the index-wise compare() pairing depends on it."""
+
+    def test_cli_steps_precede_read_steps(self):
+        scenario = {
+            "name": "order",
+            "write": [{"method": "write-call"}],
+            "cli": [{"cli": {"args": ["a"]}}],
+            "read": [{"method": "read-call"}],
+        }
+        calls = _bench.scenario_calls(scenario)
+        methods = [c.get("method", "cli") for c in calls]
+        self.assertEqual(methods, ["write-call", "cli", "read-call"])
+
+
+class CliStderrDrainTest(unittest.TestCase):
+    """r97: a cli step writing past the stderr pipe buffer must not
+    deadlock — the drain covers both pipes (the stdout twin is
+    CliLargeOutputTest)."""
+
+    def test_a_large_stderr_output_does_not_deadlock(self):
+        import tempfile
+        import time as _time
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "big_err")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import sys\n"
+                    "sys.stderr.write('e' * (4 << 20) + chr(10))\n"
+                    "sys.stderr.flush()\n"
+                    "sys.stdout.write('out\\n')\n"
+                    "sys.exit(0)\n")
+            os.chmod(wrapper, 0o755)
+            scenario = {
+                "name": "cli-big-stderr",
+                "cli": [{"cli": {"args": ["a.txt"]}, "compare": ["exit", "stdout"],
+                         "expect": {"exit": 0, "stdout": "out\n"}}],
+                "fixtures": [{"path": "a.txt", "text": "10.0.0.1\n"}],
+            }
+            started = _time.monotonic()
+            _bench.run_perf(scenario, wrapper, wrapper, 1, work)
+            self.assertLess(_time.monotonic() - started, 60)
+
+
+class CliOnlyNoServiceTest(unittest.TestCase):
+    """r97: a cli-only scenario spawns no idle --jsonrpc service — the
+    engine binary is invoked only as the cli child. A stub that exits
+    nonzero when started with --jsonrpc (but succeeds as the cli child)
+    proves no service round-trip happens."""
+
+    def test_a_cli_only_run_never_starts_the_service(self):
+        import tempfile
+        stub = os.path.join(_HERE, "stub_engine.py")
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "rpc_rejecting")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "if sys.argv[1:] == ['--jsonrpc']:\n"
+                    "    sys.stderr.write('service must not start\\n')\n"
+                    "    sys.exit(9)\n"
+                    "os.environ['STUB_CLI_STDOUT'] = '10.0.0.1' + chr(10)\n"
+                    "os.environ['STUB_CLI_EXIT'] = '0'\n"
+                    f"os.execv({sys.executable!r}, [{sys.executable!r}, {stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            scenario = {
+                "name": "cli-only-no-service",
+                "cli": [{"cli": {"args": ["a.txt"]},
+                         "compare": ["exit", "stdout"],
+                         "expect": {"exit": 0, "stdout": "10.0.0.1" + chr(10)}}],
+                "fixtures": [{"path": "a.txt", "text": "10.0.0.1" + chr(10)}],
+            }
+            report = _bench.run_perf(scenario, wrapper, wrapper, 1, work)
+            # The run passed, the service never started (a service start
+            # would fail the run through the strict close), and the RSS
+            # sample came from the cli child alone.
+            for label in ("rust", "go"):
+                self.assertGreater(report[label]["child_max_rss_kib"]["max"], 0)
