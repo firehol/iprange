@@ -721,13 +721,21 @@ class ReservationWatch:
 
     def _run(self):
         libc = ctypes.CDLL(None, use_errno=True)
-        libc.inotify_init1.argtypes = [ctypes.c_int]
-        libc.inotify_init1.restype = ctypes.c_int
-        libc.inotify_add_watch.argtypes = [
-            ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
-        libc.inotify_add_watch.restype = ctypes.c_int
-        libc.read.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t]
-        libc.read.restype = ctypes.c_ssize_t
+        try:
+            libc.inotify_init1.argtypes = [ctypes.c_int]
+            libc.inotify_init1.restype = ctypes.c_int
+            libc.inotify_add_watch.argtypes = [
+                ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32]
+            libc.inotify_add_watch.restype = ctypes.c_int
+            libc.read.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_size_t]
+            libc.read.restype = ctypes.c_ssize_t
+        except AttributeError:
+            # A libc without the inotify symbols (an inotify-less
+            # platform) must report unsupported immediately, not die
+            # in the thread and stall the constructor for its full
+            # readiness wait before the poll fallback takes over.
+            self._ready.set()
+            return
         fd = libc.inotify_init1(0x80000)  # IN_CLOEXEC
         if fd < 0:
             self._ready.set()

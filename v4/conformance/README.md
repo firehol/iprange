@@ -38,6 +38,9 @@ like the Rust generator):
   points, projected through three last-seen feeds (cutoffs 9/10/11 over
   `last_seen = 10 + index % 3`), pinning the Rust `one_source_pass` vector and
   window semantics in both readers;
+- `go/immutable-feed-ipv4.iprdb`: the Go immutable-feed membership fixture —
+  a membership value written through the public Go immutable-feed path,
+  opened by both readers;
 - `go/membership-ipv4.iprdb`: the same 70-feed delete-and-reuse membership
   coverage as the Rust membership IPv4 fixture, produced by the Go
   `BeginMembershipTransaction` workflow (feed-005 deleted, its index reused,
@@ -84,9 +87,10 @@ outputs against `cases.json`, and only then replaces the committed Rust files.
 ## Cross-language gate
 
 Both producer sets are now committed, and each reader opens and semantically
-verifies both producer sets (Rust conformance opens the Rust files; the Go
-conformance inventory lists each fixture file with its producer and the Go
-reader verifies both sets).
+verifies both producer sets: the Rust conformance suite opens every fixture
+in `cases.json` — the seven Rust-produced and the nine Go-produced files
+alike — and the Go conformance inventory lists each fixture file with its
+producer, the Go reader verifying both sets.
 
 - Mixed subprocess smoke gates run the same cross-open verdicts from a
   fresh process: `v4/go/subprocess_cross_open_test.go` spawns the Go test
