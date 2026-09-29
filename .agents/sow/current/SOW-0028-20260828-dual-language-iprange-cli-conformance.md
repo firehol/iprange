@@ -22360,13 +22360,14 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Thirty-five recorded
+- **Elapsed-ratio cross-session spread.** Thirty-six recorded
   ceiling sessions at byte-identical binaries (r2 1.159 — elapsed
   and RSS only, no CPU recorded; r4 1.244; each of rounds 5 through
   19; the round-32 through round-46 rebinds at 1.184, 1.193, 1.266,
   1.203, 1.186, 1.241, 1.234, 1.203, 1.193, 1.108, and 1.248; the
   two round-36 runs; and the later restage rebinds — round-89 1.247,
-  round-92 1.050, round-94 1.170, round-96 1.305, round-98 1.188) span
+  round-92 1.050, round-94 1.170, round-96 1.305, round-98 1.188,
+  round-100 1.172) span
   elapsed
   **0.916–1.586** — wall-clock noise that crosses both 1.0 and the
   1.3x bound: the round-7 session measured 1.586 on an idle machine
@@ -22498,9 +22499,14 @@ detector and whole-arrival assertion, the cli-only no-service proof,
 the per-sample check driver, the span wrap arm, the entry-selection
 arm; the records restored site by site — sweep row, CPU envelope,
 header, Round-46 graft, inventory, digest sentence, the SOW's
-historical session labeling and 34-session spread). The seven-role
-re-review of the round-98 wave and the astra re-review are the
-pending gates.
+historical session labeling and 34-session spread). The r99 panel verified the round-98 fixes true and filed the
+residue; the round-100 wave fixed its enumerated items (`383b4c33`:
+the bounded residue drain, the extracted and detected cancel-drain
+bounds, the harness wiring pins, the ResourceWarning closure, the
+s0-detect field print, the l10 wording) and the records (test-count
+rows read from the log; restage-history provenance; the 36-session
+spread). The seven-role re-review of the latest wave and the astra
+re-review are the pending gates.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
