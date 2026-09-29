@@ -1,10 +1,14 @@
-"""Kill a named-feed replace and prove the prior feeds survive.
+"""Kill a named-feed replace and prove the committed generation intact.
 
 The replace is a live transaction. Killing the process before it
-answers must leave the committed generation unchanged. Beta is not the
-feed being replaced, so its address must still match. Alpha's original
-address must still match too. A replace that finished before the kill
-is a failed proof, not a pass.
+answers must leave the committed generation unchanged. The proof is
+complete enumeration, not point probes: every active feed and every
+range of every feed must match the pre-crash baseline exactly, so a
+partially exposed replacement (anywhere in the address space, not just
+at the probed addresses) fails. Beta is not the feed being replaced,
+so its address must still match. Alpha's original spans must still
+match too. A replace that finished before the kill is a failed proof,
+not a pass.
 """
 
 import argparse
@@ -111,6 +115,49 @@ def baseline_rows(session, database, csv_path):
     return result["matching_feed_count"], rows
 
 
+def complete_baseline(session, database):
+    """Enumerate the complete committed baseline: feeds and their spans.
+
+    Point queries on the three baseline addresses cannot prove atomic
+    replacement — uncommitted replacement coverage anywhere else would
+    be invisible. This enumerates every active feed and every range of
+    every feed through the reader cursors, so any additional feed, any
+    changed span, and any exposed replacement row changes the result:
+    exposing part of the interrupted huge-for-alpha replacement shows
+    up as alpha spans far beyond 10.0.0.1-10.0.0.2 (or as a new feed).
+    """
+    opened = session.call("iprange.v1.reader.open", {
+        "source": {"path": database, "mode": "live"}})
+    reader = opened["reader"]
+    try:
+        cursor = session.call("iprange.v1.reader.feeds.open", {
+            "reader": reader, "batch_size": 64})["cursor"]
+        names = []
+        while True:
+            page = session.call("iprange.v1.reader.feeds.next",
+                                {"cursor": cursor})
+            names.extend(feed["name"] for feed in page.get("feeds", []))
+            if page.get("done"):
+                break
+        spans = {}
+        for name in names:
+            ranges = session.call("iprange.v1.reader.ranges.open", {
+                "reader": reader, "view": {"kind": "feed", "feed": name},
+                "direction": "forward", "batch_size": 4096})["cursor"]
+            records = []
+            while True:
+                page = session.call("iprange.v1.reader.ranges.next",
+                                    {"cursor": ranges})
+                records.extend(
+                    (item["from"], item["to"]) for item in page.get("records", []))
+                if page.get("done"):
+                    break
+            spans[name] = sorted(records)
+        return sorted(names), spans
+    finally:
+        session.call("iprange.v1.reader.close", {"reader": reader})
+
+
 def prove(binary, work):
     alpha = os.path.join(work, "alpha.txt")
     beta = os.path.join(work, "beta.txt")
@@ -151,6 +198,12 @@ def prove(binary, work):
         if rows != expected or count != "3":
             raise AssertionError(
                 f"pre-crash baseline differs: count={count} rows={sorted(rows)}")
+        names, spans = complete_baseline(session, database)
+        if names != ["alpha", "beta"] or spans != {
+                "alpha": [("10.0.0.1", "10.0.0.2")],
+                "beta": [("10.0.0.9", "10.0.0.9")]}:
+            raise AssertionError(
+                f"pre-crash complete baseline differs: names={names} spans={spans}")
         before = os.path.getsize(database)
         session.submit("iprange.v1.feeds.replace", {
             "path": database,
@@ -193,6 +246,22 @@ def prove(binary, work):
     if rows != expected or count != "3":
         raise AssertionError(
             f"prior feeds did not survive intact: count={count} rows={sorted(rows)}")
+    # The complete enumeration is the atomic-replacement proof: the
+    # committed generation holds exactly the two feeds and their exact
+    # spans — no additional feed, no changed span, no exposed part of
+    # the interrupted replacement (astra turn-2: point queries on the
+    # originally present addresses cannot prove this).
+    survived = BenchSession(binary)
+    try:
+        names, spans = complete_baseline(survived, database)
+    finally:
+        survived.close()
+    if names != ["alpha", "beta"] or spans != {
+            "alpha": [("10.0.0.1", "10.0.0.2")],
+            "beta": [("10.0.0.9", "10.0.0.9")]}:
+        raise AssertionError(
+            f"committed generation changed across the crash: names={names} "
+            f"spans={spans}")
 
 
 def main():
