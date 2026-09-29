@@ -213,33 +213,53 @@ class StatCpuParseTest(unittest.TestCase):
 
 
 class TimedResponseValidationTest(unittest.TestCase):
-    """A timed operation must succeed: correlated result frames only."""
+    """A timed operation must succeed: correlated, non-empty results."""
 
-    REQUEST = b'{"jsonrpc": "2.0", "id": "t1", "method": "iprange.v1.current.publish", "params": {}}'
+    REQUEST = {"jsonrpc": "2.0", "id": "t1", "method": "iprange.v1.current.publish", "params": {}}
 
     def test_a_correlated_result_passes(self):
-        response = b'{"jsonrpc": "2.0", "id": "t1", "result": {"report": {}}}'
+        response = {"jsonrpc": "2.0", "id": "t1",
+                    "result": {"report": {"addresses": 47}}}
         validate_response(self.REQUEST, response)  # must not raise
 
     def test_an_error_response_is_refused(self):
-        response = b'{"jsonrpc": "2.0", "id": "t1", "error": {"code": -32000}}'
+        response = {"jsonrpc": "2.0", "id": "t1", "error": {"code": -32000}}
         with self.assertRaisesRegex(AssertionError, "timed operation failed"):
             validate_response(self.REQUEST, response)
 
     def test_an_uncorrelated_response_is_refused(self):
-        response = b'{"jsonrpc": "2.0", "id": "other", "result": {}}'
+        response = {"jsonrpc": "2.0", "id": "other", "result": {}}
         with self.assertRaisesRegex(AssertionError, "does not correlate"):
             validate_response(self.REQUEST, response)
 
     def test_a_frame_without_result_or_error_is_refused(self):
-        response = b'{"jsonrpc": "2.0", "id": "t1"}'
+        response = {"jsonrpc": "2.0", "id": "t1"}
         with self.assertRaisesRegex(AssertionError, "neither result nor error"):
+            validate_response(self.REQUEST, response)
+
+    def test_a_null_result_is_refused(self):
+        # A null result is not real work: the timed operation must have
+        # done something for the sample to count (astra turn-2 finding).
+        response = {"jsonrpc": "2.0", "id": "t1", "result": None}
+        with self.assertRaisesRegex(AssertionError, "null result"):
+            validate_response(self.REQUEST, response)
+
+    def test_an_empty_result_is_refused(self):
+        response = {"jsonrpc": "2.0", "id": "t1", "result": {}}
+        with self.assertRaisesRegex(AssertionError, "empty result"):
+            validate_response(self.REQUEST, response)
+
+    def test_an_empty_report_is_refused(self):
+        response = {"jsonrpc": "2.0", "id": "t1",
+                    "result": {"report": {}}}
+        with self.assertRaisesRegex(AssertionError, "empty report"):
             validate_response(self.REQUEST, response)
 
     def test_extra_trailing_frames_are_refused(self):
         # A timed operation answers exactly once: a second frame in the
-        # stream (here delivered post-exit) must fail the sample.
-        import subprocess
+        # stream (here delivered post-exit) must fail the sample. Under
+        # the shared service the second frame surfaces at close() as
+        # unexpected trailing bytes on stdout.
         engine = "/bin/sh"
         script = (
             "read line; "
@@ -248,37 +268,49 @@ class TimedResponseValidationTest(unittest.TestCase):
             "exit 0")
         request = (b'{"jsonrpc": "2.0", "id": "t2", '
                    b'"method": "iprange.v1.system.describe", "params": {}}\n')
-        frame = ('{"jsonrpc": "2.0", "id": "t2", "result": {}}')
+        frame = ('{"jsonrpc": "2.0", "id": "t2", "result": {"report": {"x": 1}}}')
         with mock.patch.dict(os.environ, {}):
             command = [engine, "-c",
                        script.replace("$FRAME1", frame).replace("$FRAME2", frame)]
             with self.assertRaisesRegex(AssertionError,
-                                        "delivered more than one frame"):
+                                        "trailing"):
                 run_once(command, request)
 
     def test_an_incomplete_frame_is_refused(self):
         # The other refusal arm: a frame without its terminator never
-        # becomes a sample.
+        # becomes a sample. Under the shared service the partial frame
+        # is refused at decode (FrameError) once the peer exits.
         engine = "/bin/sh"
-        frame = '{"jsonrpc": "2.0", "id": "t3", "result": {}}'
+        frame = '{"jsonrpc": "2.0", "id": "t3", "result": {"report": {"x": 1}}}'
         # The short sleep lets the sampler observe the child (the
         # peak guard), so the refusal under test is what can fail.
         script = ("read line; printf '%s' '$FRAME'; sleep 0.3; exit 0"
                   ).replace("$FRAME", frame)
         request = (b'{"jsonrpc": "2.0", "id": "t3", '
                    b'"method": "iprange.v1.system.describe", "params": {}}\n')
-        with self.assertRaisesRegex(AssertionError,
-                                    "did not deliver a full frame"):
+        with self.assertRaisesRegex(AssertionError, "frame"):
             run_once([engine, "-c", script], request)
 
     def test_run_once_validates_a_real_exchange(self):
-        from unittest import mock
+        import tempfile
         stub = os.path.join(_HERE, "stub_engine.py")
-        request = (b'{"jsonrpc": "2.0", "id": "m1", '
-                   b'"method": "iprange.v1.system.describe", "params": {}}\n')
-        with mock.patch.dict(os.environ, {"STUB_EXIT": "0"}):
-            sample = run_once([sys.executable, stub, "--jsonrpc"], request)
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "exit0_stub")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_EXIT'] = '0'\n"
+                    f"os.execv({sys.executable!r}, [{sys.executable!r}, {stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            request = (b'{"jsonrpc": "2.0", "id": "m1", '
+                       b'"method": "iprange.v1.system.describe", "params": {}}\n')
+            sample = run_once([wrapper, "--jsonrpc"], request)
         self.assertGreater(sample["elapsed_seconds"], 0.0)
+        # The timed exchange's response travels with the sample: the
+        # caller can (and must) validate the semantic result.
+        self.assertIn("response", sample)
+        self.assertEqual(sample["response"]["id"], "m1")
 
 
 class SamplingGuardTest(unittest.TestCase):

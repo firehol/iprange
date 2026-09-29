@@ -14,11 +14,13 @@ import tempfile
 
 from client import BenchSession
 from generate import generate, merged_count, write_ipv6, write_text
-from measure import measure, median, ratio
+from measure import median, ratio, run_once
 
 
 def median_of(samples, key):
-    return median([sample[key]["median"] for sample in samples])
+    # run_once samples carry flat scalars (the per-request aggregate of
+    # one round is the round); the median spans the request population.
+    return median([sample[key] for sample in samples])
 
 
 PUBLISH = {
@@ -92,24 +94,48 @@ def check_output(binary, request, destination, expected):
     os.remove(destination)
 
 
-def sample_binary(binary, requests):
+def check_sample(sample, request, destination, expected):
+    """A timed sample is only valid when the operation did its work.
+
+    The publish answered (a non-empty result whose report matches the
+    generator) and the destination exists on disk. Without this, a
+    warm-up could validate the workload while every timed round
+    silently failed into a null/empty result.
+    """
+    response = sample.get("response")
+    if not isinstance(response, dict) or "result" not in response:
+        raise AssertionError(f"timed publish did not answer: {response!r}")
+    result = response["result"]
+    got = int(result["report"]["addresses"])
+    if got != expected:
+        raise AssertionError(
+            f"timed publish imported {got} addresses, generator says {expected}")
+    if not os.path.isfile(destination):
+        raise AssertionError(
+            f"timed publish reported success but wrote no destination: "
+            f"{destination}")
+    os.remove(destination)
+
+
+def sample_binary(binary, requests, expected):
     samples = []
-    for request, _destination in requests:
+    for request, destination in requests:
         with open(request, "rb") as stream:
-            sample = measure([binary, "--jsonrpc"], 1, stream.read())
+            sample = run_once([binary, "--jsonrpc"], stream.read())
         if not sample["child_raised_peak"]:
             raise AssertionError("child did not raise the process peak; sample is inherited")
+        check_sample(sample, request, destination, expected)
         samples.append(sample)
     return {
         "elapsed_seconds": {
             "median": median_of(samples, "elapsed_seconds"),
-            "min": min(sample["elapsed_seconds"]["min"] for sample in samples),
-            "max": max(sample["elapsed_seconds"]["max"] for sample in samples),
+            "min": min(sample["elapsed_seconds"] for sample in samples),
+            "max": max(sample["elapsed_seconds"] for sample in samples),
         },
         "child_max_rss_kib": {
             "median": median_of(samples, "child_max_rss_kib"),
-            "min": min(sample["child_max_rss_kib"]["min"] for sample in samples),
-            "max": max(sample["child_max_rss_kib"]["max"] for sample in samples),
+            "min": min(sample["child_max_rss_kib"] for sample in samples),
+            "max": max(sample["child_max_rss_kib"] for sample in samples),
         },
     }
 
@@ -142,8 +168,8 @@ def main():
             raise AssertionError("sample populations differ between engines")
         report = {
             "rounds": args.rounds,
-            "rust": sample_binary(args.rust, rust_requests),
-            "go": sample_binary(args.go, go_requests),
+            "rust": sample_binary(args.rust, rust_requests, expected),
+            "go": sample_binary(args.go, go_requests, expected),
         }
     report["family"] = args.family
     report["expected_addresses"] = expected

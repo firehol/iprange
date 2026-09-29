@@ -15,7 +15,7 @@ import sys
 import tempfile
 
 from generate import generate, provider_join, resolve_direct, write_text
-from measure import measure, median, ratio
+from measure import median, ratio, run_once
 from perf import fail
 
 
@@ -178,7 +178,7 @@ def check_join(binary, membership, provider, expected, output):
     os.remove(output)
 
 
-def sample_join(binary, membership, provider, work, rounds):
+def sample_join(binary, membership, provider, work, rounds, expected):
     requests = []
     for index in range(rounds):
         path = os.path.join(work, f"request-{os.path.basename(provider)}-{index}.json")
@@ -186,13 +186,38 @@ def sample_join(binary, membership, provider, work, rounds):
         with open(path, "w", encoding="utf-8") as stream:
             json.dump(join_request(membership, provider, output), stream, separators=(",", ":"))
             stream.write("\n")
-        requests.append(path)
+        requests.append((path, output))
     samples = []
-    for path in requests:
+    for path, output in requests:
         with open(path, "rb") as stream:
-            samples.append(measure([binary, "--jsonrpc"], 1, stream.read()))
-    elapsed = [sample["elapsed_seconds"]["median"] for sample in samples]
-    rss = [sample["child_max_rss_kib"]["median"] for sample in samples]
+            sample = run_once([binary, "--jsonrpc"], stream.read())
+        # Every timed round must have done the join: the report
+        # matches the generator and the cells were written.
+        response = sample.get("response")
+        if not isinstance(response, dict) or "result" not in response:
+            raise AssertionError(f"timed join did not answer: {response!r}")
+        report = response["result"]["report"]
+        got = {
+            "selected": int(report["selected_addresses"]),
+            "mapped": int(report["mapped_addresses"]),
+            "unmapped": int(report["unmapped_addresses"]),
+            "cells": int(report["result_cell_count"]),
+        }
+        want = {
+            "selected": expected["selected"],
+            "mapped": expected["mapped"],
+            "unmapped": expected["unmapped"],
+            "cells": len(expected["cells"]),
+        }
+        if got != want:
+            raise AssertionError(f"timed join totals {got}, generator says {want}")
+        if not os.path.isfile(output):
+            raise AssertionError(
+                f"timed join reported success but wrote no output: {output}")
+        os.remove(output)
+        samples.append(sample)
+    elapsed = [sample["elapsed_seconds"] for sample in samples]
+    rss = [sample["child_max_rss_kib"] for sample in samples]
     return {
         "elapsed_seconds": {"median": median(elapsed), "min": min(elapsed), "max": max(elapsed)},
         "child_max_rss_kib": {"median": median(rss), "min": min(rss), "max": max(rss)},
@@ -230,8 +255,10 @@ def main():
             "selected": [item["selected"] for item in expected],
             "mapped": [item["mapped"] for item in expected],
             "rounds": args.rounds,
-            "rust": [sample_join(args.rust, rust_mem, path, work, args.rounds) for path in rust_providers],
-            "go": [sample_join(args.go, go_mem, path, work, args.rounds) for path in go_providers],
+            "rust": [sample_join(args.rust, rust_mem, path, work, args.rounds, expected[index])
+                     for index, path in enumerate(rust_providers)],
+            "go": [sample_join(args.go, go_mem, path, work, args.rounds, expected[index])
+                   for index, path in enumerate(go_providers)],
         }
     report["ratio"] = [
         ratio(left, right) for left, right in zip(report["rust"], report["go"])

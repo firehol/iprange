@@ -4,12 +4,22 @@ Peak RSS is `VmHWM` from `/proc/PID/status`, sampled while the child
 is alive. `getrusage(RUSAGE_CHILDREN)` is the largest waited-for child
 so far, so it cannot compare a later smaller child with an earlier
 larger one. The runner's own memory is excluded.
+
+Process creation, framing, and response parsing are JsonRpcService's
+(v4/cli/run.py) — the resolved harness decision forbids a second
+protocol client, so `run_once` composes the shared service plus the
+samplers instead of owning pipes itself.
 """
 
 import json
 import os
 import subprocess
+import sys
+import threading
 import time
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from run import JsonRpcService  # noqa: E402
 
 
 def child_hwm_kib(pid):
@@ -51,16 +61,18 @@ def child_cpu_seconds(pid):
         return None
 
 
-def validate_response(request_bytes, response_bytes):
-    """A timed operation must succeed: one correlated result frame.
+def validate_response(request, response):
+    """A timed operation must succeed: one correlated, non-empty result.
 
     The measurement contract times real work: an operation that
     answers an error (I/O failure, budget rejection) is not a valid
-    sample, and a partial or uncorrelated frame is a harness defect.
-    The spec answers every request exactly once.
+    sample, a partial or uncorrelated frame is a harness defect, and
+    a null or empty result is not real work either — the sample must
+    be an operation that did something. The spec answers every
+    request exactly once.
     """
-    request = json.loads(request_bytes)
-    response = json.loads(response_bytes)
+    if not isinstance(response, dict):
+        raise AssertionError(f"response is not an object: {response!r}")
     if response.get("id") != request.get("id"):
         raise AssertionError(
             f"response id {response.get('id')!r} does not correlate "
@@ -69,72 +81,92 @@ def validate_response(request_bytes, response_bytes):
         raise AssertionError(f"timed operation failed: {response['error']}")
     if "result" not in response:
         raise AssertionError("response carries neither result nor error")
+    result = response["result"]
+    if result is None:
+        raise AssertionError("timed operation returned a null result")
+    if isinstance(result, dict) and not result:
+        raise AssertionError("timed operation returned an empty result")
+    if isinstance(result, dict):
+        report = result.get("report")
+        if report is not None and isinstance(report, dict) and not report:
+            raise AssertionError("timed operation returned an empty report")
 
 
-def run_once(argv, stdin_bytes=None):
-    started = time.perf_counter()
-    proc = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
-    peak = 0
-    cpu = 0.0
-    deadline = time.perf_counter() + 120
-    request_frame = stdin_bytes
-    response_chunks = []
+def run_once(argv, stdin_bytes=None, cwd=None):
+    """One timed round: spawn, one frame exchange, strict close.
+
+    The timed window spans the spawn, the exchange (when a request is
+    given), and the strict close — the same end-to-end scope the raw
+    implementation measured. The exchange itself is JsonRpcService's;
+    this function adds the VmHWM/CPU samplers and returns the timed
+    response with the sample so callers can validate the semantic
+    result (and the output it claims to have written), not just the
+    frame shape.
+    """
+    request = None
     if stdin_bytes is not None:
-        proc.stdin.write(stdin_bytes)
-        proc.stdin.flush()
-        os.set_blocking(proc.stdout.fileno(), False)
-    while proc.poll() is None:
-        if time.perf_counter() > deadline:
-            proc.kill()
-            proc.wait(timeout=5)
-            raise AssertionError("child did not finish within 120s")
-        current = child_hwm_kib(proc.pid)
-        if current is not None:
-            peak = max(peak, current)
-        current = child_cpu_seconds(proc.pid)
-        if current is not None:
-            cpu = max(cpu, current)
-        if stdin_bytes is not None:
-            try:
-                chunk = proc.stdout.readline()
-                if chunk:
-                    response_chunks.append(chunk)
-                    if chunk.endswith(b"\n"):
-                        # The full response frame has arrived; EOF now.
-                        proc.stdin.close()
-                        stdin_bytes = None
-            except BlockingIOError:
-                pass
-        time.sleep(0.001)
+        request = json.loads(stdin_bytes)
+        if not isinstance(request, dict) or "method" not in request:
+            raise AssertionError(
+                "timed request must be exactly one JSON-RPC request frame")
+    implementation = os.path.basename(argv[0])
+    started = time.perf_counter()
+    service = JsonRpcService(
+        list(argv), implementation, cwd=cwd,
+        read_deadline=120, write_deadline=30)
+    peak = {"kib": 0}
+    cpu = {"seconds": 0.0}
+
+    def sample():
+        while service.proc.poll() is None:
+            current = child_hwm_kib(service.proc.pid)
+            if current is not None and current > peak["kib"]:
+                peak["kib"] = current
+            current = child_cpu_seconds(service.proc.pid)
+            if current is not None and current > cpu["seconds"]:
+                cpu["seconds"] = current
+            time.sleep(0.001)
+
+    sampler = threading.Thread(target=sample, daemon=True)
+    sampler.start()
+    response = None
     try:
-        proc.stdin.close()
-    except BrokenPipeError:
-        pass
-    # The pipe delivers EOF once the child is gone; capture (do not
-    # discard) whatever is left — it belongs to the validated frame.
-    trailing = proc.stdout.read()
-    proc.wait()
-    proc.stdout.close()
+        if request is not None:
+            response = service.call(
+                request.get("id"), request["method"],
+                request.get("params", {}))
+            validate_response(request, response)
+            service.close()
+        else:
+            # No frame: a bare point-in-time child. It owes the
+            # protocol nothing, so the service's stalled-peer grace
+            # (kill at 0.2 s past EOF) does not apply — wait for the
+            # child's own natural end (the original patience, 120 s).
+            raw = getattr(service, "_raw_stdin", None)
+            if raw is not None:
+                raw.close()
+            elif service.proc.stdin and not service.proc.stdin.closed:
+                service.proc.stdin.close()
+            service.proc.wait(timeout=120)
+    finally:
+        service.close(allow_forced=True, broken_exchange=True)
+        sampler.join(timeout=5)
     elapsed = time.perf_counter() - started
-    if proc.returncode != 0:
-        raise AssertionError(f"child exited {proc.returncode}: {argv[0]}")
-    if request_frame is not None:
-        response = b"".join(response_chunks) + trailing
-        if not response.endswith(b"\n"):
-            raise AssertionError("timed operation did not deliver a full frame")
-        if response.count(b"\n") != 1:
-            raise AssertionError("timed operation delivered more than one frame")
-        validate_response(request_frame, response)
-    if peak == 0:
+    if service.proc.returncode != 0:
+        raise AssertionError(f"child exited {service.proc.returncode}: {argv[0]}")
+    if peak["kib"] == 0:
         raise AssertionError("child peak was not observed")
-    if cpu <= 0:
+    if cpu["seconds"] <= 0:
         raise AssertionError("child cpu was not sampled")
-    return {
+    sample_result = {
         "elapsed_seconds": elapsed,
-        "child_cpu_seconds": cpu,
-        "child_max_rss_kib": peak,
+        "child_cpu_seconds": cpu["seconds"],
+        "child_max_rss_kib": peak["kib"],
         "child_raised_peak": True,
     }
+    if response is not None:
+        sample_result["response"] = response
+    return sample_result
 
 
 def median(values):
