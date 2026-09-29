@@ -77,6 +77,13 @@ def cancelled_result(response, destination_exists):
             and destination_exists:
         return (f"cancelled outcome {outcome!r} claims no publication, "
                 f"but the destination exists: {data!r}")
+    if outcome == "read_only_failure":
+        # The spec maps read_only_failure only from a read-only
+        # operation; this proof cancels a publish — an operation the
+        # proof already observed executing (the CPU floor) — so a
+        # read_only outcome here is a method-outcome forgery.
+        return ("cancelled publish claimed read_only_failure, but a "
+                f"publish is never a read-only operation: {data!r}")
     return ""
 
 

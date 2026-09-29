@@ -238,11 +238,18 @@ class CancelOutcomeClassifierTest(unittest.TestCase):
                                 ("not_committed", False),
                                 ("not_started", False),
                                 ("committed", False),
-                                ("outcome_unknown", False),
-                                ("read_only_failure", False)):
+                                ("outcome_unknown", False)):
             self.assertEqual(
                 cancelled_result(self.cancelled(outcome), exists), "",
                 outcome)
+
+    def test_a_read_only_outcome_is_refused_for_a_publish(self):
+        # The proof cancels a publish, which is never a read-only
+        # operation: read_only_failure is a method-outcome forgery
+        # (r91: the wave's classifier accepted it).
+        from cancel_inflight import cancelled_result
+        reason = cancelled_result(self.cancelled("read_only_failure"), False)
+        self.assertIn("never a read-only operation", reason)
 
     def test_a_duplicate_answer_is_refused(self):
         from cancel_inflight import record_answer
