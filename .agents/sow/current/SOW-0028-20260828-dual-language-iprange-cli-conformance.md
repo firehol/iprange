@@ -22414,6 +22414,47 @@ metadata, cardinalities, 1007 verified holes); the portable
 reservation-watch self-test; and no test hooks in Go production.
 The astra re-review of the repair wave is the pending gate.
 
+**Astra milestone gate, turn 2 (2026-09-29, same session
+`ca3adec1808d4ffa87380361edc214c9`; re-review after the
+records-convergence series reached a 7/7 role PASS at round 87).**
+Verdict: **NEEDS CHANGES** — ten in-scope P2 findings and two P3
+(the round-1 creator-private P1 re-reported unchanged, outside
+the blast radius, owned by pending SOW-0034). The P2s: (1) the
+staged Go release binary predates the repair — closeFn visible in
+disassembly; the release-proof logs' source stamps do not
+establish the the repaired Go release was tested; rebuild and
+requalify. (2) the declarative performance mode discards the
+run_engine observations and never compares — s0-detect's purpose
+can pass in perf mode. (3) the perf report fabricates
+min/median/max from a single per-engine accumulator; per-round
+peaks are required. (4) the perf timer includes generator and
+oracle work. (5) validate_response accepts result:null/empty and
+perf.py ignores destinations; measure.py is a second protocol
+client (the resolved decision requires JsonRpcService). (6)
+ordinary close accepts already-dead peers — exit status and
+residue are unchecked for pre-exited children. (7) the cancel
+proof accepts forged outcomes and duplicate response ids are
+hidden. (8) the crash baseline queries only three addresses —
+uncommitted additions elsewhere are invisible. (9) the C
+attestation still ignores manifest semantics (address_count,
+threat membership, repeated metadata bytes, manifest-derived
+feed indices). (10) the legacy workload surface (merge/optimize,
+common/intersect, diff/compare, count-unique, ipset-reduce,
+@filelist/@directory, legacy binary write, query-overlap as CLI
+workloads) has no scenario execution mode — the runner always
+starts --jsonrpc, and closing this milestone requires the matrix
+to cover the full replacement surface. Process finding: the
+records-convergence series reintroduced the evidence-notarization
+apparatus REVIEWS.md:189-201 expressly prohibits (the self-audit
+script, kit-restage prescriptions, per-round audit restaging);
+retire it — the answer to a doubtful claim is a re-runnable test,
+not a notarized log. P3s: the non-Linux reservation watch raises
+AttributeError before its fallback; the conformance README
+inventory omits go/immutable-feed-ipv4.iprdb and misstates the
+Rust verifier's fixture scope. All ten P2s and both P3s are being
+fixed in the round-89 wave; the astra re-review of that wave is
+the pending gate.
+
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
 milestone stays open until the seven-role round approves the exact
