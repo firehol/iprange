@@ -22280,10 +22280,11 @@ the revision on its own second line, the binary SHA-256
 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 51.092 s elapsed, 11.85 s CPU, spread
-49.447–55.638 s, peak 225592 KiB. Go median 63.066 s elapsed, 22.61 s
-CPU, spread 60.179–64.845 s, peak 232812 KiB. The Go/Rust ratio is
-1.234 elapsed, 1.908 CPU, and 1.032 RSS. Wall time moves with
+clock. Rust median 50.194 s elapsed, 11.46 s CPU, spread
+49.667–50.456 s, median child peak 225440 KiB. Go median 60.382 s
+elapsed, 22.47 s CPU, spread 59.353–63.393 s, median child peak
+231644 KiB. The Go/Rust ratio is 1.203 elapsed, 1.961 CPU, and
+1.028 RSS. Wall time moves with
 workstation load between runs. The binding acceptance metric
 (SOW-0030, user decisions 1A/2A) is **elapsed time** ≤1.3x Rust and
 **peak RSS** ≤1.3x; process CPU time (utime+stime) is not part
@@ -22356,18 +22357,19 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Twenty-six recorded
+- **Elapsed-ratio cross-session spread.** Twenty-seven recorded
   ceiling sessions at byte-identical binaries (r2 1.159 — elapsed
   and RSS only, no CPU recorded; r4 1.244; each of rounds 5 through
-  19; the round-32/33/34/35/37/38/39 rebinds at 1.184, 1.193,
-  1.266, 1.203, 1.186, 1.241, and 1.234; and the two round-36 runs)
+  19; the round-32 through round-40 rebinds at 1.184, 1.193, 1.266,
+  1.203, 1.186, 1.241, 1.234, and 1.203; and the two round-36 runs)
   span elapsed
   **0.916–1.586** — wall-clock noise that crosses both 1.0 and the
   1.3x bound: the round-7 session measured 1.586 on an idle machine
   with CPU work near-identical to today's (Rust 11.13 s / Go
   21.66 s); the first round-36 run measured **0.916** — Go faster
   than Rust — because the Rust rounds hit transient load (49.8–73.8
-  s across three rounds) while Go's stayed tight (observed values
+  s across three rounds) while Go's rounds stayed mostly tight
+  (61.1–75.6 s, one round ~21% over its median; observed values
   preserved at `evidence/m5-ceiling/superseded-round36-run1.md`);
   it was immediately re-run. The CPU ratio over every session that
   recorded CPU spans 1.875–1.983 — tight while elapsed swings by
