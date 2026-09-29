@@ -22451,9 +22451,19 @@ retire it — the answer to a doubtful claim is a re-runnable test,
 not a notarized log. P3s: the non-Linux reservation watch raises
 AttributeError before its fallback; the conformance README
 inventory omits go/immutable-feed-ipv4.iprdb and misstates the
-Rust verifier's fixture scope. All ten P2s and both P3s are being
-fixed in the round-89 wave; the astra re-review of that wave is
-the pending gate.
+Rust verifier's fixture scope. All ten P2s and both P3s were fixed in
+the round-89 wave (one commit per root-cause cluster: `379d4a3a`,
+`52fbbc2f`, `c4eff94c`, `5cff0de1`, `42ce4075`, `f4f081b6`,
+`249d3251`, `385783f0`, `e85edb12`); the release binaries were rebuilt
+from the fixed tree (`2bc7c14dc75b…` rust, `7a2bcb9c97d6…` go), all
+kit logs restaged once from the clean tree at `e85edb12cb6a` (the
+previous logs had exercised the stale Go binary), and the
+evidence-notarization machinery was retired (the self-audit script,
+the kit-restage prescriptions, and the per-round audit loop —
+REVIEWS.md:189-201). The legacy CLI workload surface is now exercised
+by nine committed scenarios (l1–l9) verified byte-identical across
+both engines. The seven-role re-review of the wave and the astra
+re-review are the pending gates.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
