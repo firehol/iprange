@@ -34,7 +34,7 @@ PUBLISH_ID = "cancel-inflight-1"
 PROBE_ID = "cancel-probe-1"
 
 
-def cancelled_result(response):
+def cancelled_result(response, destination_exists):
     """Reason the cancelled request is not a pass, or "" if it is fine.
 
     The spec answers every request exactly once: a cancelled request
@@ -42,7 +42,11 @@ def cancelled_result(response):
     is a dropped request — indistinguishable from a producer that
     ignored the cancel and lost the response, so it is a failure.
     A delivered answer must be the factual cancelled outcome; a
-    result means the producer ignored the cancel.
+    result means the producer ignored the cancel. The outcome must
+    be one the spec names (iprange-jsonrpc-v1.md) and must agree
+    with the observed operation state: an outcome claiming the
+    publication landed requires the destination, and one claiming it
+    did not forbids it.
     """
     if response is None:
         return ("cancelled request never answered: the spec answers "
@@ -55,9 +59,41 @@ def cancelled_result(response):
         return f"cancelled request answered {error!r}"
     if data.get("code") != "cancelled":
         return f"cancelled outcome lost its code: {data!r}"
-    if data.get("outcome") is None:
+    outcome = data.get("outcome")
+    if outcome is None:
         return f"cancelled outcome lost its state: {data!r}"
+    permitted = {
+        "not_started", "not_committed", "committed",
+        "not_published", "published", "outcome_unknown",
+        "read_only_failure",
+    }
+    if outcome not in permitted:
+        return (f"cancelled outcome {outcome!r} is not one the spec "
+                f"names: {data!r}")
+    if outcome == "published" and not destination_exists:
+        return ("cancelled outcome claims the publication landed, but "
+                f"the destination is absent: {data!r}")
+    if outcome in ("not_started", "not_committed", "not_published") \
+            and destination_exists:
+        return (f"cancelled outcome {outcome!r} claims no publication, "
+                f"but the destination exists: {data!r}")
     return ""
+
+
+def record_answer(seen, response):
+    """File one response under its id, refusing a duplicate answer.
+
+    The spec answers every request exactly once: a second terminal
+    frame for the same id cannot silently replace the first — that
+    would hide an exactly-once violation from the proof.
+    """
+    identifier = response.get("id")
+    if identifier in seen:
+        raise AssertionError(
+            f"duplicate answer for {identifier!r}: the spec answers "
+            f"every request exactly once (first={seen[identifier]!r}, "
+            f"second={response!r})")
+    seen[identifier] = response
 
 
 def prove(binary, work):
@@ -138,7 +174,7 @@ def prove(binary, work):
                 line = ""
             if line:
                 response = json.loads(line)
-                seen[response.get("id")] = response
+                record_answer(seen, response)
                 if PROBE_ID in seen and probe_at is None:
                     probe_at = time.monotonic()
                 if probe_at is not None and PUBLISH_ID in seen:
@@ -158,8 +194,9 @@ def prove(binary, work):
         # window: the spec answers every request exactly once, and the
         # engines answer a cancelled request with the factual -32010
         # outcome (verified against both staged binaries). Silence is a
-        # dropped request, not a cancelled one.
-        reason = cancelled_result(cancelled)
+        # dropped request, not a cancelled one. The outcome is checked
+        # against the observed publication state (destination on disk).
+        reason = cancelled_result(cancelled, os.path.exists(destination))
         if reason:
             raise AssertionError(reason)
     finally:

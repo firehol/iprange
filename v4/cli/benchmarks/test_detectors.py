@@ -206,6 +206,52 @@ class ExitGateTest(unittest.TestCase):
             self.assertIn("exited with status 7", completed.stderr)
 
 
+class CancelOutcomeClassifierTest(unittest.TestCase):
+    """Astra turn-2: the cancel proof refuses forged outcomes and
+    duplicate terminal answers, and checks the outcome against the
+    observed publication state."""
+
+    @staticmethod
+    def cancelled(outcome):
+        return {"error": {"code": -32010,
+                          "data": {"code": "cancelled", "outcome": outcome}}}
+
+    def test_a_forged_outcome_is_refused(self):
+        # "banana" is not an outcome the spec names.
+        from cancel_inflight import cancelled_result
+        reason = cancelled_result(self.cancelled("banana"), False)
+        self.assertIn("not one the spec names", reason)
+
+    def test_published_without_destination_is_refused(self):
+        from cancel_inflight import cancelled_result
+        reason = cancelled_result(self.cancelled("published"), False)
+        self.assertIn("destination is absent", reason)
+
+    def test_not_published_with_destination_is_refused(self):
+        from cancel_inflight import cancelled_result
+        reason = cancelled_result(self.cancelled("not_published"), True)
+        self.assertIn("destination exists", reason)
+
+    def test_a_state_consistent_outcome_passes(self):
+        from cancel_inflight import cancelled_result
+        for outcome, exists in (("not_published", False),
+                                ("not_committed", False),
+                                ("not_started", False),
+                                ("committed", False),
+                                ("outcome_unknown", False),
+                                ("read_only_failure", False)):
+            self.assertEqual(
+                cancelled_result(self.cancelled(outcome), exists), "",
+                outcome)
+
+    def test_a_duplicate_answer_is_refused(self):
+        from cancel_inflight import record_answer
+        seen = {}
+        record_answer(seen, {"id": "a", "result": 1})
+        with self.assertRaisesRegex(AssertionError, "duplicate answer"):
+            record_answer(seen, {"id": "a", "result": 2})
+
+
 class ScenarioDetectorTest(unittest.TestCase):
     def test_a_crash_is_not_a_field_difference(self):
         # /bin/false as both binaries: nonzero, but no field was compared.
@@ -552,31 +598,31 @@ class CancelDetectorTest(unittest.TestCase):
         # factual cancelled outcome.
         response = {"id": "p", "error": {
             "code": -32010, "data": {"code": "cancelled"}}}
-        self.assertIn("lost its state", cancelled_result(response))
+        self.assertIn("lost its state", cancelled_result(response, False))
 
     def test_a_result_for_the_cancelled_request_fails(self):
         # A producer whose cancel is dead code finishes the import and
         # answers with a result. That must not pass.
         self.assertEqual(
-            cancelled_result({"id": "p", "result": {"report": {"addresses": "1"}}}),
+            cancelled_result({"id": "p", "result": {"report": {"addresses": "1"}}}, False),
             "cancelled publish answered with a result")
 
     def test_no_answer_is_refused(self):
         # The spec answers every request exactly once: silence is a
         # dropped request, indistinguishable from an ignored cancel.
-        self.assertIn("never answered", cancelled_result(None))
+        self.assertIn("never answered", cancelled_result(None, False))
 
     def test_the_factual_cancelled_outcome_is_a_pass(self):
         response = {"id": "p", "error": {
             "code": -32010,
             "data": {"code": "cancelled", "outcome": "not_started"}}}
-        self.assertEqual(cancelled_result(response), "")
+        self.assertEqual(cancelled_result(response, False), "")
 
     def test_a_wrong_error_code_fails(self):
         self.assertIn("cancelled request answered",
-                      cancelled_result({"id": "p", "error": {"code": -32000}}))
+                      cancelled_result({"id": "p", "error": {"code": -32000}}, False))
 
     def test_a_lost_cancelled_code_fails(self):
         response = {"id": "p", "error": {
             "code": -32010, "data": {"code": "io", "outcome": "not_started"}}}
-        self.assertIn("lost its code", cancelled_result(response))
+        self.assertIn("lost its code", cancelled_result(response, False))
