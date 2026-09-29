@@ -87,7 +87,7 @@ def matches(session, database, address):
 def baseline_rows(session, database, csv_path):
     """Exact post-state baseline: address → feed identities.
 
-    The rows are compared as a set with identities, not substrings:
+    The rows are compared as a multiset with identities, not substrings:
     losing an address, reassigning it to another feed, or exposing
     uncommitted replacement coverage all change the row set.
     """

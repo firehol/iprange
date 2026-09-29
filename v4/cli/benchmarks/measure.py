@@ -110,16 +110,20 @@ def run_once(argv, stdin_bytes=None):
         proc.stdin.close()
     except BrokenPipeError:
         pass
-    proc.stdout.read()
+    # The pipe delivers EOF once the child is gone; capture (do not
+    # discard) whatever is left — it belongs to the validated frame.
+    trailing = proc.stdout.read()
     proc.wait()
     proc.stdout.close()
     elapsed = time.perf_counter() - started
     if proc.returncode != 0:
         raise AssertionError(f"child exited {proc.returncode}: {argv[0]}")
     if request_frame is not None:
-        response = b"".join(response_chunks)
+        response = b"".join(response_chunks) + trailing
         if not response.endswith(b"\n"):
             raise AssertionError("timed operation did not deliver a full frame")
+        if response.count(b"\n") != 1:
+            raise AssertionError("timed operation delivered more than one frame")
         validate_response(request_frame, response)
     if peak == 0:
         raise AssertionError("child peak was not observed")

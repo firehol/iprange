@@ -582,14 +582,19 @@ func TestCloseAllClosesEveryLiveReader(t *testing.T) {
 		}
 		state.Resources.Readers[handle] = &ReaderValue{Live: reader, Path: main}
 	}
+	// Capture the readers BEFORE CloseAll: CloseAll clears the
+	// registration map, so iterating it afterward would prove nothing.
+	pre := make(map[string]*iprangedb.LiveReader, len(state.Resources.Readers))
+	for handle, reader := range state.Resources.Readers {
+		if reader.Live != nil {
+			pre[handle] = reader.Live
+		}
+	}
 	if failures := state.Resources.CloseAll(); len(failures) != 0 {
 		t.Fatalf("failures = %v", failures)
 	}
-	for handle, reader := range state.Resources.Readers {
-		if reader.Live == nil {
-			continue
-		}
-		if _, err := reader.Live.Info(); err == nil {
+	for handle, reader := range pre {
+		if _, err := reader.Info(); err == nil {
 			t.Fatalf("reader %s still answers Info after CloseAll", handle)
 		}
 	}
