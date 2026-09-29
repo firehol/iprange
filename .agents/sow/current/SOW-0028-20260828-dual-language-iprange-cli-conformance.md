@@ -22280,10 +22280,10 @@ the revision on its own second line, the binary SHA-256
 values, and ends with
 `rc=0`. Both engines reported 1,000 feeds and 32,967,576 addresses.
 Three rounds, engine order swapped, fixture files written before the
-clock. Rust median 49.810 s elapsed, 11.35 s CPU, spread
-49.312–53.639 s, peak 225880 KiB. Go median 61.821 s elapsed, 21.76 s
-CPU, spread 58.688–64.308 s, peak 234912 KiB. The Go/Rust ratio is
-1.241 elapsed, 1.917 CPU, and 1.040 RSS. Wall time moves with
+clock. Rust median 51.092 s elapsed, 11.85 s CPU, spread
+49.447–55.638 s, peak 225592 KiB. Go median 63.066 s elapsed, 22.61 s
+CPU, spread 60.179–64.845 s, peak 232812 KiB. The Go/Rust ratio is
+1.234 elapsed, 1.908 CPU, and 1.032 RSS. Wall time moves with
 workstation load between runs. The binding acceptance metric
 (SOW-0030, user decisions 1A/2A) is **elapsed time** ≤1.3x Rust and
 **peak RSS** ≤1.3x; process CPU time (utime+stime) is not part
@@ -22356,11 +22356,12 @@ dispositioned, not silently carried:
   not whole-frame byte identity; the divergence record in SOW-0030's
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
-- **Elapsed-ratio cross-session spread.** Twenty-five recorded
+- **Elapsed-ratio cross-session spread.** Twenty-six recorded
   ceiling sessions at byte-identical binaries (r2 1.159 — elapsed
   and RSS only, no CPU recorded; r4 1.244; each of rounds 5 through
-  19; the round-32/33/34/35/37/38 rebinds at 1.184, 1.193, 1.266,
-  1.203, 1.186, and 1.241; and the two round-36 runs) span elapsed
+  19; the round-32/33/34/35/37/38/39 rebinds at 1.184, 1.193,
+  1.266, 1.203, 1.186, 1.241, and 1.234; and the two round-36 runs)
+  span elapsed
   **0.916–1.586** — wall-clock noise that crosses both 1.0 and the
   1.3x bound: the round-7 session measured 1.586 on an idle machine
   with CPU work near-identical to today's (Rust 11.13 s / Go
@@ -22387,6 +22388,28 @@ dispositioned, not silently carried:
   per round; they are historical narrative, and the close evidence is
   the staged log set under `evidence/m5-proofs/` and
   `evidence/m5-ceiling/`.
+
+**Astra milestone gate, turn 1 (2026-09-29, new session
+`ca3adec1808d4ffa87380361edc214c9` after the milestone-4 session
+`b5dd923d…`; lead-session handoff).** Verdict: **NEEDS CHANGES** with
+eleven in-scope P2 findings and one P3 (plus one P1 reported outside
+the blast radius — the creator-private repair from the earlier
+review-wave ledger, unchanged by this milestone). All eleven P2s and
+the P3 were verified against the tree, fixed, and re-staged as the
+round-39 repair wave (`1d0fd5c5`, `44550d81`, `9cb7624c`, `9a005f18`,
+`0fc94b70`, `e1287a56`): timed operations must deliver correlated
+result frames; equal sample populations; strict ordinary close; the
+in-flight cancel must answer with the factual outcome (verified
+against both engines); the exact crash baseline; exact CSV row
+oracles with cross-engine digests; the declarative perf mode; the
+bogon-split/aggregation algebra publications (which also discovered
+that binary .iprange artifacts are non-reproducible even for the
+same engine — creation-security commitments; recorded, CSV oracles
+carry the artifact checks); the full-manifest C attestation (every
+bounded address, feed identities, all structured fields, tags,
+metadata, cardinalities, 1007 verified holes); the portable
+reservation-watch self-test; and no test hooks in Go production.
+The astra re-review of the repair wave is the pending gate.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
