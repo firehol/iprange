@@ -10,6 +10,7 @@ declarative file per engine with the correctness checks intact.
 import argparse
 import base64
 import hashlib
+import subprocess
 import threading
 from collections import Counter
 import json
@@ -72,8 +73,9 @@ def load_scenario(path):
     scenario["__path"] = path
     if scenario.get("schema") != SCHEMA:
         raise ValueError(f"{path}: schema is not {SCHEMA}")
-    if not scenario.get("name") or not (scenario.get("calls") or scenario.get("write")):
-        raise ValueError(f"{path}: name and calls or write are required")
+    if not scenario.get("name") or not (
+            scenario.get("calls") or scenario.get("write") or scenario.get("cli")):
+        raise ValueError(f"{path}: name and calls, write, or cli steps are required")
     return scenario
 
 
@@ -183,10 +185,51 @@ def stage_published(source_work, dest_work, names, incoming):
         shutil.copy2(source, dest)
 
 
-def run_calls(service, name, scenario, work, calls, peer, deferred=None):
+def run_cli(binary, name, call, work):
+    """Run one legacy CLI step: the engine as a point-in-time process.
+
+    The step's args substitute $WORK like every other path; optional
+    stdin_file feeds the process; redirect_stdout writes the captured
+    stdout to a file (a binary artifact to hash across engines). The
+    observation is {exit, stdout} and rides the same compare/expect
+    machinery the JSON-RPC calls use.
+    """
+    spec = call["cli"]
+    argv = [binary] + [substitute(argument, work) for argument in spec["args"]]
+    stdin_path = spec.get("stdin_file")
+    stdin_stream = open(os.path.join(work, stdin_path), "rb") if stdin_path else subprocess.DEVNULL
+    try:
+        proc = subprocess.run(
+            argv, cwd=work, stdin=stdin_stream,
+            capture_output=True, timeout=300)
+    finally:
+        if stdin_stream is not subprocess.DEVNULL:
+            stdin_stream.close()
+    redirect = spec.get("redirect_stdout")
+    if redirect:
+        refuse_escape(redirect, "cli stdout path")
+        with open(os.path.join(work, redirect), "wb") as stream:
+            stream.write(proc.stdout)
+    if proc.returncode != 0 and proc.stderr:
+        # A failed CLI run's stderr names the reason; keep it in the
+        # observation so the failure output carries it.
+        sys.stderr.write(f"{name} cli stderr: {proc.stderr.decode('utf-8', 'replace')[:400]}\n")
+    return {
+        "exit": proc.returncode,
+        "stdout": proc.stdout.decode("utf-8", "replace"),
+    }
+
+
+def run_calls(service, name, scenario, work, calls, peer, deferred=None, binary=None):
     observed = []
     captured = {}
     for index, call in enumerate(calls, start=1):
+        if "cli" in call:
+            if binary is None:
+                raise AssertionError(
+                    "a cli step needs the engine binary (harness defect)")
+            observed.append(run_cli(binary, name, call, work))
+            continue
         if "batch" in call:
             result = call_batch(service, call["batch"], work)
         else:
@@ -363,7 +406,7 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
         sampler.start()
     try:
         result = run_calls(service, name, scenario, engine_work, calls, peer,
-                           deferred=deferred)
+                           deferred=deferred, binary=binary)
     except BaseException as exc:
         # The exchange or an oracle already failed: close must not
         # mask it with its own strict-session verdict (a peer that
@@ -405,6 +448,9 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
 def scenario_calls(scenario):
     calls = list(scenario.get("write", scenario.get("calls", [])))
     calls.extend(scenario.get("read", []))
+    # Legacy CLI steps are point-in-time invocations of the same binary
+    # (no --jsonrpc): the workload surface update-ipsets uses today.
+    calls.extend(scenario.get("cli", []))
     return calls
 
 
@@ -415,11 +461,11 @@ def compare(scenario, rust, go):
             left = field(rust[index], path)
             right = field(go[index], path)
             if left != right:
-                label = call.get("method", "batch")
+                label = call.get("method", "cli" if "cli" in call else "batch")
                 mismatches.append(f"{label} {path}: rust={left!r} go={right!r}")
             expected = call.get("expect", {}).get(path)
             if expected is not None and left != expected:
-                label = call.get("method", "batch")
+                label = call.get("method", "cli" if "cli" in call else "batch")
                 mismatches.append(f"{label} {path}: got={left!r} expect={expected!r}")
         if call.get("expect_same_bytes"):
             left = rust[index].get("bytes")
@@ -444,6 +490,9 @@ def run_perf(scenario, rust, go, rounds, work):
     over the rounds, and the Go/Rust ratio as the honest ≤1.3x input.
     """
     write_calls = scenario.get("write", scenario.get("calls", []))
+    # Legacy CLI steps execute inside the timed write phase: they are
+    # point-in-time subprocess runs of the same engine binary.
+    write_calls = write_calls + scenario.get("cli", [])
     read_calls = scenario.get("read", [])
     elapsed = {"rust": [], "go": []}
     peaks = {"rust": [], "go": []}
@@ -559,6 +608,7 @@ def main():
         rust_work = os.path.join(work, "rust")
         go_work = os.path.join(work, "go")
         write_calls = scenario.get("write", scenario.get("calls", []))
+        write_calls = write_calls + scenario.get("cli", [])
         read_calls = scenario.get("read", [])
         rust = run_engine(args.rust, "rust", scenario, work, write_calls)
         go = run_engine(args.go, "go", scenario, work, write_calls)

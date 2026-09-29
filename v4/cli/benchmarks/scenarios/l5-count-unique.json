@@ -1,0 +1,35 @@
+{
+ "schema": "iprange-bench-scenario-v1",
+ "name": "l5-count-unique",
+ "purpose": "Legacy count-unique CSV: exact totals with the header.",
+ "fixtures": [
+  {
+   "path": "a.txt",
+   "text": "10.0.0.1\n10.0.0.2\n10.0.0.3\n"
+  },
+  {
+   "path": "b.txt",
+   "text": "10.0.0.2\n10.0.0.3\n10.0.0.9\n"
+  }
+ ],
+ "cli": [
+  {
+   "cli": {
+    "args": [
+     "--count-unique",
+     "--header",
+     "$WORK/a.txt",
+     "$WORK/b.txt"
+    ]
+   },
+   "compare": [
+    "exit",
+    "stdout"
+   ],
+   "expect": {
+    "exit": 0,
+    "stdout": "entries,unique_ips\n2,4\n"
+   }
+  }
+ ]
+}

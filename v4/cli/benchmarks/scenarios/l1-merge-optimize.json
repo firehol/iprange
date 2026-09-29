@@ -1,0 +1,33 @@
+{
+ "schema": "iprange-bench-scenario-v1",
+ "name": "l1-merge-optimize",
+ "purpose": "Legacy merge/optimize: union of two text ipsets on stdout.",
+ "fixtures": [
+  {
+   "path": "a.txt",
+   "text": "10.0.0.1\n10.0.0.2\n10.0.0.3\n"
+  },
+  {
+   "path": "b.txt",
+   "text": "10.0.0.2\n10.0.0.3\n10.0.0.9\n"
+  }
+ ],
+ "cli": [
+  {
+   "cli": {
+    "args": [
+     "$WORK/a.txt",
+     "$WORK/b.txt"
+    ]
+   },
+   "compare": [
+    "exit",
+    "stdout"
+   ],
+   "expect": {
+    "exit": 0,
+    "stdout": "10.0.0.1\n10.0.0.2/31\n10.0.0.9\n"
+   }
+  }
+ ]
+}

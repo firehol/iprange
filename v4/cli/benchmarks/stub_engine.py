@@ -19,10 +19,18 @@ import time
 
 
 def main():
-    for argument in sys.argv[1:]:
-        if argument != "--jsonrpc":
-            sys.stderr.write(f"stub_engine: unexpected argument {argument!r}\n")
-            sys.exit(2)
+    if sys.argv[1:] != ["--jsonrpc"]:
+        # Legacy CLI mode: a point-in-time invocation with real CLI
+        # arguments. The stub answers with a fixed stdout (STUB_CLI_STDOUT,
+        # default empty) and exits STUB_CLI_EXIT (default 0), so cli-step
+        # detection tests can drive both a pass and a wrong answer.
+        if sys.argv[1:] and os.environ.get("STUB_CLI_STDOUT") is not None:
+            sys.stdout.write(os.environ["STUB_CLI_STDOUT"])
+            sys.exit(int(os.environ.get("STUB_CLI_EXIT", "0")))
+        for argument in sys.argv[1:]:
+            if argument != "--jsonrpc":
+                sys.stderr.write(f"stub_engine: unexpected argument {argument!r}\n")
+                sys.exit(2)
     exit_status = int(os.environ.get("STUB_EXIT", "1"))
     marker = os.environ.get("STUB_MARKER")
     if marker:

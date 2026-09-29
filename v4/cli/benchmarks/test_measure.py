@@ -542,3 +542,53 @@ class PerfModeDetectingTest(unittest.TestCase):
                 for key in ("min", "median", "max"):
                     self.assertIn(key, entry[section])
             self.assertIn("ratio", report)
+
+
+class CliStepDetectingTest(unittest.TestCase):
+    """Astra turn-2: the legacy CLI workload steps are compared like
+    every other scenario call — a wrong exit, a wrong stdout, or a
+    differing binary artifact fails the run in both modes."""
+
+    def _wrapper(self, work, cli_stdout, cli_exit="0"):
+        import sys
+        stub = os.path.join(_HERE, "stub_engine.py")
+        wrapper = os.path.join(work, "cli_stub")
+        with open(wrapper, "w", encoding="utf-8") as stream:
+            stream.write(
+                "#!/usr/bin/env python3\n"
+                "import os, sys\n"
+                f"os.environ['STUB_CLI_STDOUT'] = {cli_stdout!r}\n"
+                f"os.environ['STUB_CLI_EXIT'] = {cli_exit!r}\n"
+                f"os.environ['STUB_EXIT'] = '0'\n"
+                f"os.execv({sys.executable!r}, [{sys.executable!r}, {stub!r}] + sys.argv[1:])\n")
+        os.chmod(wrapper, 0o755)
+        return wrapper
+
+    def _scenario(self, stdout=None, exit_code=0, compare=("exit", "stdout")):
+        return {
+            "name": "cli-detect",
+            "cli": [{
+                "cli": {"args": ["a.txt"]},
+                "compare": list(compare),
+                "expect": {"exit": exit_code, **({"stdout": stdout} if stdout is not None else {})},
+            }],
+            "fixtures": [{"path": "a.txt", "text": "10.0.0.1\n"}],
+        }
+
+    def _run(self, scenario, rounds=1):
+        import tempfile
+        with tempfile.TemporaryDirectory() as work:
+            stub = self._wrapper(work, "10.0.0.1/32\n")
+            return _bench.run_perf(scenario, stub, stub, rounds, work)
+
+    def test_a_wrong_stdout_fails(self):
+        with self.assertRaisesRegex(AssertionError, "expect="):
+            self._run(self._scenario(stdout="10.0.0.2/32\n"))
+
+    def test_a_wrong_exit_fails(self):
+        with self.assertRaisesRegex(AssertionError, "expect="):
+            self._run(self._scenario(exit_code=3))
+
+    def test_a_matching_answer_passes(self):
+        report = self._run(self._scenario(stdout="10.0.0.1/32\n"))
+        self.assertEqual(report["rounds"], 1)

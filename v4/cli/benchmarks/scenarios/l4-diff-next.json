@@ -1,0 +1,34 @@
+{
+ "schema": "iprange-bench-scenario-v1",
+ "name": "l4-diff-next",
+ "purpose": "Legacy diff/compare-next: the symmetric difference of two sets.",
+ "fixtures": [
+  {
+   "path": "a.txt",
+   "text": "10.0.0.1\n10.0.0.2\n10.0.0.3\n"
+  },
+  {
+   "path": "b.txt",
+   "text": "10.0.0.2\n10.0.0.3\n10.0.0.9\n"
+  }
+ ],
+ "cli": [
+  {
+   "cli": {
+    "args": [
+     "$WORK/a.txt",
+     "--diff",
+     "$WORK/b.txt"
+    ]
+   },
+   "compare": [
+    "exit",
+    "stdout"
+   ],
+   "expect": {
+    "exit": 1,
+    "stdout": "10.0.0.1\n10.0.0.9\n"
+   }
+  }
+ ]
+}

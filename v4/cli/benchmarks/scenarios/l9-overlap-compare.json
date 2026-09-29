@@ -1,0 +1,35 @@
+{
+ "schema": "iprange-bench-scenario-v1",
+ "name": "l9-overlap-compare",
+ "purpose": "Legacy query-overlap: the compare-all CSV matrix with its header.",
+ "fixtures": [
+  {
+   "path": "a.txt",
+   "text": "10.0.0.1\n10.0.0.2\n10.0.0.3\n"
+  },
+  {
+   "path": "b.txt",
+   "text": "10.0.0.2\n10.0.0.3\n10.0.0.9\n"
+  }
+ ],
+ "cli": [
+  {
+   "cli": {
+    "args": [
+     "--compare",
+     "--header",
+     "a.txt",
+     "b.txt"
+    ]
+   },
+   "compare": [
+    "exit",
+    "stdout"
+   ],
+   "expect": {
+    "exit": 0,
+    "stdout": "name1,name2,entries1,entries2,ips1,ips2,combined_ips,common_ips\na.txt,b.txt,1,2,3,3,4,2\n"
+   }
+  }
+ ]
+}
