@@ -364,22 +364,42 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
     try:
         result = run_calls(service, name, scenario, engine_work, calls, peer,
                            deferred=deferred)
-        return result
-    finally:
-        service.close()
-        # An engine that exits nonzero fails its own run. close()
-        # waits for the process, so the returncode is settled here.
-        # close() itself also checks the exit status of a peer that was
-        # alive at its entry; this gate covers the peer that was
-        # already dead when close() started. For an answered-then-died
-        # engine the two checks race, so the pinned contract is the
-        # union — either check's message fails the run
-        # (test_detectors.py accepts both). The gate's already-dead
-        # attribution is deterministic in the die-on-first-request
-        # control, where close() exempts a peer dead at its entry.
-        if service.proc.returncode != 0:
+    except BaseException as exc:
+        # The exchange or an oracle already failed: close must not
+        # mask it with its own strict-session verdict (a peer that
+        # died mid-call is broken by that failure). The cleanup close
+        # is best-effort: a teardown fault (e.g. I/O on a pipe the
+        # dead peer already closed) must not replace the original
+        # failure either.
+        try:
+            service.close(broken_exchange=True)
+        except Exception:
+            pass
+        # When the peer is also dead with a nonzero status, the exit
+        # gate's message is the sharper, engine-attributed failure
+        # (the die-on-first-request control's deterministic
+        # attribution); the original failure rides along as the
+        # exception context. A hung or cleanly-exited peer keeps the
+        # original failure (deadline, oracle) as the message.
+        exit_status = service.proc.poll()
+        if exit_status not in (None, 0):
             raise AssertionError(
-                f"{name} exited {service.proc.returncode}")
+                f"{name} exited {exit_status}") from exc
+        raise
+    service.close()
+    # An engine that exits nonzero fails its own run. close() waits
+    # for the process, so the returncode is settled here. close()
+    # itself validates the exit status and residue of every ordinary
+    # close — including a peer that already exited before the close
+    # began (answered-then-died is a clean-session violation wherever
+    # its death lands, and test_detectors.py pins the union: either
+    # this gate's or close()'s message fails the run). Intentional
+    # crash/stall sessions use close_forced and are the only exempt
+    # class.
+    if service.proc.returncode != 0:
+        raise AssertionError(
+            f"{name} exited {service.proc.returncode}")
+    return result
 
 
 def scenario_calls(scenario):

@@ -2007,18 +2007,24 @@ class JsonRpcService:
         # Ordinary-session final validation: the response set is
         # complete, so any remaining stdout bytes are a stray trailing
         # frame and a nonzero exit is an unclean end to a session this
-        # call shut down.  A peer that was already gone at entry (an
-        # intentional crash session) and deliberate-stall controls are
-        # exempt; a forced teardown reports itself instead — unless
-        # the session is poisoned (its bounded-I/O failure already
-        # fired; teardown must not mask it).
+        # call shut down.  Deliberate-stall controls and intentional
+        # crash sessions pass allow_forced and are exempt; a forced
+        # teardown reports itself instead — unless the session is
+        # poisoned (its bounded-I/O failure already fired; teardown
+        # must not mask it).  A peer that already exited before this
+        # close began is NOT exempt: an ordinary session owes a clean
+        # end wherever its death landed — exit status 0 and zero
+        # residue — so an answered-then-died-nonzero peer fails here
+        # too (the timing inference is not an exemption; astra turn-2
+        # finding: intentional-crash exemptions are explicit, not
+        # inferred from process timing).
         if forced and not allow_forced and not self._poisoned:
             self._close_raw_stdout()
             raise AssertionError(
                 "service did not terminate cleanly at stdin EOF and had "
                 f"to be force-terminated (returncode "
                 f"{self.proc.returncode})")
-        if not already_dead and not allow_forced and \
+        if not allow_forced and \
                 not broken_exchange and \
                 not self._poisoned:
             try:
@@ -2962,6 +2968,15 @@ def describe_capabilities(binary):
             try:
                 response = service.call(
                     "capability-probe", "iprange.v1.system.describe", {})
+            except BaseException:
+                # The probe exchange already failed; close must not
+                # mask it with its own strict-session verdict, nor may
+                # a teardown fault replace it (best-effort cleanup).
+                try:
+                    service.close(broken_exchange=True)
+                except Exception:
+                    pass
+                raise
             finally:
                 service.close()
             if "result" in response:

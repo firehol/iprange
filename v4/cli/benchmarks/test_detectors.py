@@ -147,6 +147,64 @@ class ExitGateTest(unittest.TestCase):
             self.assertNotEqual(completed.returncode, 0)
             self.assertIn("rust exited 1", completed.stderr)
 
+    def test_an_engine_that_answers_then_dies_fails_the_close(self):
+        """Answered-then-died-nonzero fails at close (astra turn-2).
+
+        The stub answers the describe correctly, flushes it, and exits
+        nonzero immediately — it is already dead when the ordinary
+        close begins. An intentional-crash exemption may not be inferred
+        from process timing: the ordinary close must validate the exit
+        status of a peer that completed its exchanges, wherever its
+        death landed.
+        """
+        import json as _json
+        import os as _os
+        import subprocess
+        import tempfile
+        scenario = {
+            "schema": "iprange-bench-scenario-v1",
+            "name": "exit-gate-answered-then-died",
+            "purpose": "The stub answers and exits nonzero before close.",
+            "write": [{
+                "method": "iprange.v1.system.describe",
+                "params": {},
+                "compare": ["method"],
+                "expect": {"method": "iprange.v1.system.describe"},
+            }],
+        }
+        with tempfile.TemporaryDirectory() as work:
+            path = _os.path.join(work, "exit-gate.json")
+            with open(path, "w", encoding="utf-8") as stream:
+                _json.dump(scenario, stream)
+            dying = _os.path.join(work, "answered_then_died")
+            marker = _os.path.join(work, "stub-ran")
+            with open(dying, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import json, os, sys\n"
+                    "with open({marker!r}, 'w') as ran:\n"
+                    "    ran.write('ran\\n')\n"
+                    "for line in sys.stdin:\n"
+                    "    if not line.strip():\n"
+                    "        continue\n"
+                    "    request = json.loads(line)\n"
+                    "    response = {{\"jsonrpc\": \"2.0\", \"id\": request[\"id\"],\n"
+                    "                 \"result\": {{\"method\": request[\"method\"]}}}}\n"
+                    "    sys.stdout.write(json.dumps(response) + \"\\n\")\n"
+                    "    sys.stdout.flush()\n"
+                    "    sys.exit(7)\n".format(marker=marker))
+            _os.chmod(dying, 0o755)
+            completed = subprocess.run(
+                [sys.executable, _os.path.join(_HERE, "run.py"),
+                 "--rust", dying, "--go", dying, "--scenario", path],
+                capture_output=True, text=True, check=False, cwd=_HERE,
+                timeout=300)
+            self.assertTrue(
+                _os.path.exists(marker),
+                "the dying engine never ran — the wrapper failed first")
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn("exited with status 7", completed.stderr)
+
 
 class ScenarioDetectorTest(unittest.TestCase):
     def test_a_crash_is_not_a_field_difference(self):
