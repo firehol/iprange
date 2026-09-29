@@ -1024,3 +1024,19 @@ class HarnessMainWiringTest(unittest.TestCase):
             self.assertIn("sample_binary(", source, module.__name__)
             # The validator itself is exercised by HarnessValidatorTest;
             # this pins the wiring (the call-site contract).
+
+
+
+
+class CliResidueDrainBoundTest(unittest.TestCase):
+    """r101: the post-exit residue drain is deadline-bounded — a source
+    pin in the HarnessMainWiringTest pattern (the r101 panel verified
+    the bound TRUE at source; this pins it against regression): the
+    residue loop must consult the same deadline the outer loop does,
+    so a leaked pipe-writer cannot pin it."""
+
+    def test_the_residue_loop_consults_the_deadline(self):
+        import inspect
+        source = inspect.getsource(_bench.run_cli)
+        self.assertIn("while time.monotonic() <= deadline", source,
+                      "run_cli's residue drain must be deadline-bounded")

@@ -1,7 +1,7 @@
 {
  "schema": "iprange-bench-scenario-v1",
  "name": "l10-at-directory-arms",
- "purpose": "Legacy @directory arms: a file inside the directory expands, an empty directory answers the implementation's nonzero exit (src/iprange.c's no-valid-files error, both engines), and entry selection counts only expandable files (a subdirectory and a non-ipset file are skipped).",
+ "purpose": "Legacy @directory arms: a file inside the directory expands, an empty directory answers the implementation's nonzero exit (src/iprange.c's no-valid-files error, both engines), and entry selection loads every regular file while non-regular entries are skipped (a subdirectory is not traversed; a non-ipset regular file contributes no addresses).",
  "fixtures": [
   {
    "path": "a.txt",
