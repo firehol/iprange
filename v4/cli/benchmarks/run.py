@@ -183,7 +183,7 @@ def stage_published(source_work, dest_work, names, incoming):
         shutil.copy2(source, dest)
 
 
-def run_calls(service, name, scenario, work, calls, peer):
+def run_calls(service, name, scenario, work, calls, peer, deferred=None):
     observed = []
     captured = {}
     for index, call in enumerate(calls, start=1):
@@ -214,21 +214,30 @@ def run_calls(service, name, scenario, work, calls, peer):
             # missing row, an extra row, a duplicated row, or a row
             # whose fields merely prefix another ("alpha,1,5" vs
             # "alpha,1,50") all fail — a substring check cannot see
-            # any of these.
+            # any of these. Performance mode defers the oracle (file
+            # read + multiset compare) out of its timed window via
+            # `deferred`; correctness mode runs it inline.
             spec = call["expect_file_csv_rows"]
             relative = spec["path"]
-            path = os.path.join(work, relative)
-            with open(path, encoding="utf-8") as stream:
-                next(stream)
-                rows = Counter(
-                    line.rstrip("\n") for line in stream if line.strip())
-            want = Counter(spec["rows"])
-            if rows != want:
-                missing = list((want - rows).elements())
-                unexpected = list((rows - want).elements())
-                raise AssertionError(
-                    f"{name} {relative}: rows differ (missing {missing!r}, "
-                    f"unexpected {unexpected!r})")
+
+            def csv_check(spec=spec, relative=relative, name=name, work=work):
+                path = os.path.join(work, relative)
+                with open(path, encoding="utf-8") as stream:
+                    next(stream)
+                    rows = Counter(
+                        line.rstrip("\n") for line in stream if line.strip())
+                want = Counter(spec["rows"])
+                if rows != want:
+                    missing = list((want - rows).elements())
+                    unexpected = list((rows - want).elements())
+                    raise AssertionError(
+                        f"{name} {relative}: rows differ (missing {missing!r}, "
+                        f"unexpected {unexpected!r})")
+
+            if deferred is None:
+                csv_check()
+            else:
+                deferred.append(csv_check)
         if call.get("expect_no_file"):
             relative = call["expect_no_file"]
             if os.path.exists(os.path.join(work, relative)):
@@ -254,7 +263,15 @@ def run_calls(service, name, scenario, work, calls, peer):
         row = dict(result["result"])
         if call.get("expect_same_bytes"):
             relative = call["expect_same_bytes"]
-            row["bytes"] = hashlib.sha256(open(os.path.join(work, relative), "rb").read()).hexdigest()
+
+            def bytes_check(row=row, relative=relative, work=work):
+                row["bytes"] = hashlib.sha256(
+                    open(os.path.join(work, relative), "rb").read()).hexdigest()
+
+            if deferred is None:
+                bytes_check()
+            else:
+                deferred.append(bytes_check)
         observed.append(row)
     return observed
 
@@ -313,7 +330,8 @@ def substitute_capture(value, captured):
     return value
 
 
-def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None, peak=None):
+def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None, peak=None,
+               prepare=True, deferred=None):
     # Each engine gets its own directory. Sharing one directory makes the
     # second create fail because the first engine already wrote the file.
     # A cross-open reader passes the writer directory so it can see the
@@ -321,8 +339,11 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
     if engine_work is None:
         engine_work = os.path.join(work, name)
     os.makedirs(engine_work, exist_ok=True)
-    write_fixtures(scenario, engine_work)
-    write_generated(scenario, engine_work)
+    if prepare:
+        # Performance mode prepares the directory before its timed
+        # window; `prepare=False` requires an already-prepared dir.
+        write_fixtures(scenario, engine_work)
+        write_generated(scenario, engine_work)
     service = JsonRpcService(
         [binary, "--jsonrpc"], name, cwd=engine_work,
         read_deadline=120, write_deadline=30)
@@ -341,7 +362,8 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
         sampler = threading.Thread(target=sample_peak, daemon=True)
         sampler.start()
     try:
-        result = run_calls(service, name, scenario, engine_work, calls, peer)
+        result = run_calls(service, name, scenario, engine_work, calls, peer,
+                           deferred=deferred)
         return result
     finally:
         service.close()
@@ -391,40 +413,80 @@ def run_perf(scenario, rust, go, rounds, work):
     """The same declarative scenario, timed (performance mode).
 
     Each round executes the full scenario flow — writes, then the
-    staged cross-open reads when the scenario has them — with every
-    correctness check intact. Per engine: wall time per round, the
-    child's peak RSS (VmHWM sampled while alive, max across rounds),
-    throughput, and the Go/Rust ratio as the honest ≤1.3x input.
+    staged cross-open reads when the scenario has them — and every
+    correctness check runs: protocol checks inside the timed window,
+    file oracles and the cross-engine comparison after it. Timing
+    boundaries: input preparation (fixtures, generated files,
+    cross-open staging) is un-timed; the timed window carries the
+    protocol exchanges and the engine work they drive. Per engine and
+    round: wall time, the child's peak RSS (VmHWM sampled while
+    alive, one accumulator per round), then actual min/median/max
+    over the rounds, and the Go/Rust ratio as the honest ≤1.3x input.
     """
     write_calls = scenario.get("write", scenario.get("calls", []))
     read_calls = scenario.get("read", [])
     elapsed = {"rust": [], "go": []}
-    peaks = {"rust": {"kib": 0}, "go": {"kib": 0}}
+    peaks = {"rust": [], "go": []}
     for round_index in range(rounds):
         rust_work = os.path.join(work, f"perf-rust-{round_index}")
         go_work = os.path.join(work, f"perf-go-{round_index}")
-        for label, binary, engine_work in (
-                ("rust", rust, rust_work),
-                ("go", go, go_work)):
+        # Un-timed input preparation: one directory per engine per
+        # round, so the timed window never carries fixture or
+        # generator work.
+        for engine_work in (rust_work, go_work):
+            os.makedirs(engine_work, exist_ok=True)
+            write_fixtures(scenario, engine_work)
+            write_generated(scenario, engine_work)
+        round_peak = {"rust": {"kib": 0}, "go": {"kib": 0}}
+        deferred = []
+
+        def timed(label, binary, name, calls, engine_work, peer=None, extend=False):
             started = time.perf_counter()
-            run_engine(binary, label, scenario, work, write_calls,
-                       engine_work=engine_work, peak=peaks[label])
-            elapsed[label].append(time.perf_counter() - started)
+            observations = run_engine(
+                binary, name, scenario, work, calls, peer=peer,
+                engine_work=engine_work, peak=round_peak[label],
+                prepare=False, deferred=deferred)
+            span = time.perf_counter() - started
+            # A cross-open read joins its engine's round: the round's
+            # elapsed is that engine's write plus read time.
+            if extend:
+                elapsed[label][-1] += span
+            else:
+                elapsed[label].append(span)
+            return observations
+
+        rust_obs = timed("rust", rust, "rust", write_calls, rust_work)
+        go_obs = timed("go", go, "go", write_calls, go_work)
+        rust_reads = []
+        go_reads = []
         if read_calls:
             names = published_files(scenario, rust_work)
             published_files(scenario, go_work)
             stage_published(rust_work, go_work, names, "from-rust")
             stage_published(go_work, rust_work, names, "from-go")
-            started = time.perf_counter()
-            run_engine(go, "go-reads-rust", scenario, work, read_calls,
-                       peer="from-rust", engine_work=go_work,
-                       peak=peaks["go"])
-            elapsed["go"][-1] += time.perf_counter() - started
-            started = time.perf_counter()
-            run_engine(rust, "rust-reads-go", scenario, work, read_calls,
-                       peer="from-go", engine_work=rust_work,
-                       peak=peaks["rust"])
-            elapsed["rust"][-1] += time.perf_counter() - started
+            # Cross-open reads, paired exactly like correctness mode:
+            # the go engine reads what rust published (joining the go
+            # round), and vice versa.
+            rust_reads = timed("go", go, "go-reads-rust", read_calls,
+                               go_work, peer="from-rust", extend=True)
+            go_reads = timed("rust", rust, "rust-reads-go", read_calls,
+                             rust_work, peer="from-go", extend=True)
+        # Every clock is stopped: run the deferred file oracles, then
+        # the same comparison correctness mode applies to the same
+        # observation pairing — a wrong answer fails the perf run.
+        for check in deferred:
+            check()
+        for label in ("rust", "go"):
+            if round_peak[label]["kib"] <= 0:
+                raise AssertionError(
+                    f"{label} round {round_index}: no RSS sample was "
+                    f"observed for the round")
+            peaks[label].append(round_peak[label]["kib"])
+        mismatches = compare(scenario, rust_obs + rust_reads, go_obs + go_reads)
+        if mismatches:
+            raise AssertionError(
+                f"{scenario['name']} round {round_index}: "
+                + "; ".join(mismatches))
     report = {"scenario": scenario["name"], "rounds": rounds}
     for label in ("rust", "go"):
         times = elapsed[label]
@@ -433,9 +495,9 @@ def run_perf(scenario, rust, go, rounds, work):
             "elapsed_seconds": {
                 "median": median(times), "min": min(times), "max": max(times)},
             "child_max_rss_kib": {
-                "median": peaks[label]["kib"],
-                "min": peaks[label]["kib"],
-                "max": peaks[label]["kib"]},
+                "median": median(peaks[label]),
+                "min": min(peaks[label]),
+                "max": max(peaks[label])},
             "throughput_rounds_per_s": rounds / sum(times),
         }
     report["ratio"] = ratio(report["rust"], report["go"])

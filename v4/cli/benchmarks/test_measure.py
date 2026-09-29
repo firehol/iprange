@@ -387,3 +387,126 @@ class ScenarioMutantTest(unittest.TestCase):
             self.assertTrue(
                 any("expect=" in item for item in mismatches),
                 f"{name} accepted a mutated answer: {mismatches}")
+
+
+class PerfModeDetectingTest(unittest.TestCase):
+    """Astra turn-2 repairs: performance mode applies the scenario's
+    assertions (expectations, cross-engine comparison, file oracles),
+    reports real per-round RSS statistics, and refuses a round whose
+    RSS was never sampled. Each test fails the mode the old code
+    green-blessed."""
+
+    DESCRIBE = {
+        "method": "iprange.v1.system.describe",
+        "params": {},
+    }
+
+    def _scenario(self, **call):
+        return {"name": "perf-detect", "write": [dict(self.DESCRIBE, **call)]}
+
+    def _stub(self, work):
+        """The stub answers describe with a well-formed frame but exits
+        1 by design (negative-control default); an ordinary perf round
+        needs the exit-0 wrapper."""
+        stub = os.path.join(_HERE, "stub_engine.py")
+        wrapper = os.path.join(work, "perf_stub")
+        with open(wrapper, "w", encoding="utf-8") as stream:
+            stream.write(
+                "#!/usr/bin/env python3\n"
+                "import os, sys\n"
+                "os.environ['STUB_EXIT'] = '0'\n"
+                f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+        os.chmod(wrapper, 0o755)
+        return wrapper
+
+    def _run_perf(self, scenario, rounds=1, sampler=None):
+        import contextlib
+        import tempfile
+        with tempfile.TemporaryDirectory() as work:
+            stub = self._stub(work)
+            context = (
+                mock.patch.object(_bench, "child_hwm_kib", sampler)
+                if sampler is not None
+                else contextlib.nullcontext())
+            with context:
+                return _bench.run_perf(scenario, stub, stub, rounds, work)
+
+    def test_a_wrong_expectation_fails_performance_mode(self):
+        scenario = self._scenario(
+            compare=["method"], expect={"method": "mutant"})
+        with self.assertRaisesRegex(AssertionError, "expect="):
+            self._run_perf(scenario)
+
+    def test_a_cross_engine_difference_fails_performance_mode(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as work:
+            stub = self._stub(work)
+            scenario = self._scenario(compare=["product"])
+            # The second engine answers a different product name: the
+            # comparison the correctness mode applies must fail the
+            # perf run too, not only after the timed window.
+            variant = os.path.join(work, "variant_engine")
+            with open(variant, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import json, sys\n"
+                    "for line in sys.stdin:\n"
+                    "    if not line.strip():\n"
+                    "        continue\n"
+                    "    request = json.loads(line)\n"
+                    "    response = {\"jsonrpc\": \"2.0\", \"id\": request[\"id\"],\n"
+                    "                 \"result\": {\"product\": \"other\"}}\n"
+                    "    sys.stdout.write(json.dumps(response) + \"\\n\")\n"
+                    "    sys.stdout.flush()\n")
+            os.chmod(variant, 0o755)
+            with self.assertRaisesRegex(AssertionError, "product"):
+                _bench.run_perf(scenario, stub, variant, 1, work)
+
+    def test_a_wrong_file_oracle_fails_performance_mode(self):
+        scenario = {
+            "name": "perf-detect",
+            "fixtures": [{"path": "out.csv", "text": "header\nalpha,1\n"}],
+            "write": [dict(self.DESCRIBE,
+                           expect_file_csv_rows={"path": "out.csv",
+                                                 "rows": ["alpha,2"]})],
+        }
+        with self.assertRaisesRegex(AssertionError, "rows differ"):
+            self._run_perf(scenario)
+
+    def test_rss_statistics_report_real_per_round_spread(self):
+        scenario = self._scenario(
+            compare=["method"],
+            expect={"method": "iprange.v1.system.describe"})
+        state = {"value": 1000}
+
+        def sampler(pid):
+            state["value"] += 500
+            return state["value"]
+
+        report = self._run_perf(scenario, rounds=3, sampler=sampler)
+        for label in ("rust", "go"):
+            stats = report[label]["child_max_rss_kib"]
+            self.assertLessEqual(stats["min"], stats["median"], label)
+            self.assertLessEqual(stats["median"], stats["max"], label)
+            self.assertLess(stats["min"], stats["max"], label)
+
+    def test_a_round_without_an_rss_sample_is_refused(self):
+        scenario = self._scenario(
+            compare=["method"],
+            expect={"method": "iprange.v1.system.describe"})
+        with self.assertRaisesRegex(AssertionError, "no RSS sample"):
+            self._run_perf(scenario, sampler=lambda pid: None)
+
+    def test_a_valid_round_reports_all_fields(self):
+        scenario = self._scenario(
+            compare=["method"],
+            expect={"method": "iprange.v1.system.describe"})
+        report = self._run_perf(scenario)
+        self.assertEqual(report["rounds"], 1)
+        for label in ("rust", "go"):
+            entry = report[label]
+            self.assertEqual(entry["rounds"], 1)
+            for section in ("elapsed_seconds", "child_max_rss_kib"):
+                for key in ("min", "median", "max"):
+                    self.assertIn(key, entry[section])
+            self.assertIn("ratio", report)
