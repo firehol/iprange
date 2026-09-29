@@ -22472,8 +22472,15 @@ strict success close, `419530b0` read_only_failure refused for a
 cancelled publish, `1c6e9ae7` @directory + bounded pagination +
 publish-check detectors), staged the perf-mode scenario sweep
 (`scenarios-perf.log`, 34 scenarios), and restaged all kit logs from
-the clean tree `1c6e9ae7`. The seven-role re-review of the round-92
-wave and the astra re-review are the pending gates.
+the clean tree `1c6e9ae7`. The r93 panel verified every round-92 fix true at source and filed
+the residue; the round-94 wave closed it (`be1feafe`: drain-while-
+sampling for cli steps, execution-order scenario_calls, the
+packed_span five-shape self-test, the explicit-exemption
+owned_service_deaths docstring, harness-validator coverage; the
+ceiling record restored to one session with superseded sessions
+preserved; the perf sweep restaged in kit form). The seven-role
+re-review of the round-94 wave and the astra re-review are the
+pending gates.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
