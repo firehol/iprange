@@ -178,6 +178,26 @@ def prove(binary, work):
                 if PROBE_ID in seen and probe_at is None:
                     probe_at = time.monotonic()
                 if probe_at is not None and PUBLISH_ID in seen:
+                    # Terminal pair seen. The spec answers every request
+                    # exactly once: a second frame for either id would be
+                    # an exactly-once violation, so drain the remaining
+                    # stdout under a short quiet bound and file every
+                    # frame through record_answer before closing (a
+                    # duplicate hidden behind the first terminal answer
+                    # used to escape with the forced teardown).
+                    quiet = time.monotonic() + 0.5
+                    while time.monotonic() < quiet:
+                        try:
+                            extra = service.proc.stdout.readline(1_048_578)
+                        except (BlockingIOError, OSError):
+                            extra = ""
+                        if extra:
+                            record_answer(seen, json.loads(extra))
+                            quiet = time.monotonic() + 0.5
+                            continue
+                        if service.proc.poll() is not None:
+                            break
+                        time.sleep(0.01)
                     break
             else:
                 if service.proc.poll() is not None:
@@ -199,6 +219,11 @@ def prove(binary, work):
         reason = cancelled_result(cancelled, os.path.exists(destination))
         if reason:
             raise AssertionError(reason)
+        # The session answered everything it was asked: close strictly.
+        # The ordinary close's residue and exit-status checks are part
+        # of the proof; the forced teardown below is only the failure
+        # path's cleanup.
+        service.close()
     finally:
         signal.signal(signal.SIGTERM, previous)
         if service.proc.poll() is None:

@@ -47,6 +47,7 @@ def main():
         # pins this with a frame larger than the pipe buffer).
         time.sleep(3600)
         os._exit(exit_status)
+    duplicate = os.environ.get("STUB_DUPLICATE") == "1"
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -83,6 +84,12 @@ def main():
         }
         sys.stdout.write(json.dumps(response) + "\n")
         sys.stdout.flush()
+        if duplicate:
+            # An exactly-once violation: re-send the same frame a beat
+            # later, after the reader has likely consumed the first.
+            time.sleep(0.05)
+            sys.stdout.write(json.dumps(response) + "\n")
+            sys.stdout.flush()
         if die_after:
             # Immediate termination: the runner has consumed the
             # response. Whether the exit lands before close() polls is

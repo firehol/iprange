@@ -684,3 +684,40 @@ class CallerKillTeardownTest(unittest.TestCase):
             service.kill_process_group()
             with self.assertRaisesRegex(AssertionError, "status -9"):
                 service.close()
+
+
+class DuplicateAnswerTest(unittest.TestCase):
+    """A duplicate terminal frame is caught end to end.
+
+    The stub's STUB_DUPLICATE mode re-sends every answer frame 50 ms
+    later — an exactly-once violation. The ordinary strict close's
+    residue check must fail the session (the cancel proof's drain runs
+    record_answer over the same bytes and fails with 'duplicate
+    answer'; this test pins the wire-level twin).
+    """
+
+    def test_a_duplicate_frame_fails_the_strict_close(self):
+        import subprocess
+        import tempfile
+        from run import JsonRpcService as Service
+        stub = os.path.join(_HERE, "stub_engine.py")
+        with tempfile.TemporaryDirectory() as work:
+            wrapper = os.path.join(work, "duplicate_engine")
+            with open(wrapper, "w", encoding="utf-8") as stream:
+                stream.write(
+                    "#!/usr/bin/env python3\n"
+                    "import os, sys\n"
+                    "os.environ['STUB_DUPLICATE'] = '1'\n"
+                    "os.environ['STUB_EXIT'] = '0'\n"
+                    f"os.execv({stub!r}, [{stub!r}] + sys.argv[1:])\n")
+            os.chmod(wrapper, 0o755)
+            service = Service([wrapper, "--jsonrpc"], "duplicate",
+                              read_deadline=10, write_deadline=10)
+            try:
+                response = service.call("d1", "iprange.v1.system.describe", {})
+                self.assertIn("result", response)
+                with self.assertRaisesRegex(AssertionError, "trailing"):
+                    service.close()
+            finally:
+                service.close(allow_forced=True, broken_exchange=True)
+            del subprocess
