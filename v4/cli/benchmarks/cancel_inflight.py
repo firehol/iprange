@@ -7,11 +7,13 @@ is dead code still passes. This script keeps stdin open across the
 whole discriminating window. The probe must answer while stdin is
 still open, so only `iprange.v1.cancel` can have stopped the publish.
 
-A producer that ignores cancel finishes the import and answers the
-cancelled id with a result, which fails. A producer that suppresses
-the request outright passes the probe (the cancel took effect); if
-the cancelled id is answered at all, it must carry the factual
-cancelled outcome.
+The cancel is sent only after execution is observed to have begun
+(the engine's own CPU time crossed a floor), and the cancelled
+request must answer with the factual cancelled outcome — the spec
+answers every request exactly once, so a dropped request and a
+cancelled one must not both read as a pass. A producer that ignores
+cancel finishes the import and answers with a result, which fails;
+the destination must never appear.
 """
 
 import argparse
@@ -26,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from run import JsonRpcService  # noqa: E402
 
 from generate import generate, write_text
+from measure import child_cpu_seconds
 
 PUBLISH_ID = "cancel-inflight-1"
 PROBE_ID = "cancel-probe-1"
@@ -34,12 +37,16 @@ PROBE_ID = "cancel-probe-1"
 def cancelled_result(response):
     """Reason the cancelled request is not a pass, or "" if it is fine.
 
-    A cancelled request that answers with a result means the producer
-    ignored the cancel. A delivered answer must be the factual cancelled
-    outcome. A suppressed request is fine.
+    The spec answers every request exactly once: a cancelled request
+    must answer with the factual cancelled outcome. No answer at all
+    is a dropped request — indistinguishable from a producer that
+    ignored the cancel and lost the response, so it is a failure.
+    A delivered answer must be the factual cancelled outcome; a
+    result means the producer ignored the cancel.
     """
     if response is None:
-        return ""
+        return ("cancelled request never answered: the spec answers "
+                "every request exactly once")
     if "result" in response:
         return "cancelled publish answered with a result"
     error = response.get("error", {})
@@ -91,6 +98,23 @@ def prove(binary, work):
                 "max_open_files": 3,
             },
         })
+        # Observed start: the cancel must land while the import is
+        # executing, not before admission — otherwise "cancelled"
+        # proves nothing about in-flight work. The engine's own CPU
+        # time is the observable that execution began.
+        start_deadline = time.monotonic() + 30
+        started = False
+        while time.monotonic() < start_deadline:
+            cpu = child_cpu_seconds(service.proc.pid)
+            if cpu is not None and cpu >= 0.3:
+                started = True
+                break
+            if service.proc.poll() is not None:
+                break
+            time.sleep(0.02)
+        if not started:
+            raise AssertionError(
+                "publish never began executing; the cancel window is vacuous")
         service.notify("iprange.v1.cancel", {"request_id": PUBLISH_ID})
         # The probe is submitted before stdin closes. Until it answers,
         # the only thing that can have stopped the publish is the cancel
@@ -130,11 +154,11 @@ def prove(binary, work):
         if "result" not in seen[PROBE_ID]:
             raise AssertionError(f"probe was not answered: {seen[PROBE_ID]!r}")
         cancelled = seen.get(PUBLISH_ID)
-        # If the publish never answered: this corpus imports in about
-        # half a second un-cancelled, so twenty seconds without an
-        # answer means the import was aborted by the cancel. The
-        # process staying alive is normal — the session waits for
-        # stdin to close.
+        # The cancelled request must reach a terminal answer within the
+        # window: the spec answers every request exactly once, and the
+        # engines answer a cancelled request with the factual -32010
+        # outcome (verified against both staged binaries). Silence is a
+        # dropped request, not a cancelled one.
         reason = cancelled_result(cancelled)
         if reason:
             raise AssertionError(reason)

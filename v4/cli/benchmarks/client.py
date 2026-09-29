@@ -44,6 +44,15 @@ class BenchSession:
         self.service.kill_process_group()
 
     def close(self):
+        """Ordinary close: every exchange completed, so teardown is
+        strict — a peer that hangs at EOF or exits nonzero fails the
+        proof (the milestone's per-engine zero-exit requirement)."""
+        self.service.close()
+
+    def close_forced(self):
+        """Deliberate crash/stall teardown: the session is already
+        broken by design (killed mid-flight); exempt from the strict
+        checks."""
         self.service.close(allow_forced=True, broken_exchange=True)
 
 

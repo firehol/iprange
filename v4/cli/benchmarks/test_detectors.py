@@ -503,8 +503,10 @@ class CancelDetectorTest(unittest.TestCase):
             cancelled_result({"id": "p", "result": {"report": {"addresses": "1"}}}),
             "cancelled publish answered with a result")
 
-    def test_a_suppressed_request_is_a_pass(self):
-        self.assertEqual(cancelled_result(None), "")
+    def test_no_answer_is_refused(self):
+        # The spec answers every request exactly once: silence is a
+        # dropped request, indistinguishable from an ignored cancel.
+        self.assertIn("never answered", cancelled_result(None))
 
     def test_the_factual_cancelled_outcome_is_a_pass(self):
         response = {"id": "p", "error": {

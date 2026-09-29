@@ -83,6 +83,33 @@ def matches(session, database, address):
     return result["matching_feed_count"]
 
 
+def baseline_rows(session, database, csv_path):
+    """Exact post-state baseline: address → feed identities.
+
+    The rows are compared as a set with identities, not substrings:
+    losing an address, reassigning it to another feed, or exposing
+    uncommitted replacement coverage all change the row set.
+    """
+    result = session.call("iprange.v1.query.matching_feeds", {
+        "source": {"path": database, "mode": "live"},
+        "addresses": ["10.0.0.1", "10.0.0.2", "10.0.0.9"],
+        "output": {
+            "path": csv_path,
+            "format": "csv",
+            "publication_policy": "replace_existing",
+            "result_budget": {
+                "max_rows": "16",
+                "max_output_bytes": "4096",
+                "max_open_files": 3,
+            },
+        },
+    })
+    with open(csv_path, encoding="utf-8") as stream:
+        next(stream)
+        rows = {tuple(line.rstrip("\n").split(",", 1)) for line in stream if line.strip()}
+    return result["matching_feed_count"], rows
+
+
 def prove(binary, work):
     alpha = os.path.join(work, "alpha.txt")
     beta = os.path.join(work, "beta.txt")
@@ -116,10 +143,12 @@ def prove(binary, work):
         })
         create_feed(session, database, "alpha", os.path.join(work, "alpha.iprange"))
         create_feed(session, database, "beta", os.path.join(work, "beta.iprange"))
-        if matches(session, database, "10.0.0.1") != "1":
-            raise AssertionError("alpha was not committed before the crash")
-        if matches(session, database, "10.0.0.9") != "1":
-            raise AssertionError("beta was not committed before the crash")
+        baseline_csv = os.path.join(work, "baseline.csv")
+        count, rows = baseline_rows(session, database, baseline_csv)
+        expected = {("10.0.0.1", "alpha"), ("10.0.0.2", "alpha"), ("10.0.0.9", "beta")}
+        if rows != expected or count != "3":
+            raise AssertionError(
+                f"pre-crash baseline differs: count={count} rows={sorted(rows)}")
         before = os.path.getsize(database)
         session.submit("iprange.v1.feeds.replace", {
             "path": database,
@@ -150,16 +179,17 @@ def prove(binary, work):
         signal.signal(signal.SIGTERM, previous)
         if session.proc.poll() is None:
             session.kill()
-        session.close()
+        session.close_forced()
     opened = BenchSession(binary)
     try:
-        alpha_count = matches(opened, database, "10.0.0.1")
-        beta_count = matches(opened, database, "10.0.0.9")
+        survived_csv = os.path.join(work, "survived.csv")
+        count, rows = baseline_rows(opened, database, survived_csv)
     finally:
         opened.close()
-    if alpha_count != "1" or beta_count != "1":
+    expected = {("10.0.0.1", "alpha"), ("10.0.0.2", "alpha"), ("10.0.0.9", "beta")}
+    if rows != expected or count != "3":
         raise AssertionError(
-            f"prior feeds did not survive: alpha={alpha_count} beta={beta_count}")
+            f"prior feeds did not survive intact: count={count} rows={sorted(rows)}")
 
 
 def main():
