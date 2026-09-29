@@ -185,23 +185,33 @@ def stage_published(source_work, dest_work, names, incoming):
         shutil.copy2(source, dest)
 
 
-def run_cli(binary, name, call, work):
+def run_cli(binary, name, call, work, peak=None):
     """Run one legacy CLI step: the engine as a point-in-time process.
 
     The step's args substitute $WORK like every other path; optional
     stdin_file feeds the process; redirect_stdout writes the captured
     stdout to a file (a binary artifact to hash across engines). The
     observation is {exit, stdout} and rides the same compare/expect
-    machinery the JSON-RPC calls use.
+    machinery the JSON-RPC calls use. The CLI child is the workload:
+    its VmHWM is sampled into the round's accumulator (the rpc
+    sampler watches the service process, not this subprocess).
     """
     spec = call["cli"]
     argv = [binary] + [substitute(argument, work) for argument in spec["args"]]
     stdin_path = spec.get("stdin_file")
     stdin_stream = open(os.path.join(work, stdin_path), "rb") if stdin_path else subprocess.DEVNULL
     try:
-        proc = subprocess.run(
+        proc = subprocess.Popen(
             argv, cwd=work, stdin=stdin_stream,
-            capture_output=True, timeout=300)
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if peak is not None:
+            while proc.poll() is None:
+                current = child_hwm_kib(proc.pid)
+                if current is not None and current > peak["kib"]:
+                    peak["kib"] = current
+                time.sleep(0.001)
+        stdout, stderr = proc.communicate(timeout=300)
+        returncode = proc.returncode
     finally:
         if stdin_stream is not subprocess.DEVNULL:
             stdin_stream.close()
@@ -209,18 +219,18 @@ def run_cli(binary, name, call, work):
     if redirect:
         refuse_escape(redirect, "cli stdout path")
         with open(os.path.join(work, redirect), "wb") as stream:
-            stream.write(proc.stdout)
-    if proc.returncode != 0 and proc.stderr:
+            stream.write(stdout)
+    if returncode != 0 and stderr:
         # A failed CLI run's stderr names the reason; keep it in the
         # observation so the failure output carries it.
-        sys.stderr.write(f"{name} cli stderr: {proc.stderr.decode('utf-8', 'replace')[:400]}\n")
+        sys.stderr.write(f"{name} cli stderr: {stderr.decode('utf-8', 'replace')[:400]}\n")
     return {
-        "exit": proc.returncode,
-        "stdout": proc.stdout.decode("utf-8", "replace"),
+        "exit": returncode,
+        "stdout": stdout.decode("utf-8", "replace"),
     }
 
 
-def run_calls(service, name, scenario, work, calls, peer, deferred=None, binary=None):
+def run_calls(service, name, scenario, work, calls, peer, deferred=None, binary=None, peak=None):
     observed = []
     captured = {}
     for index, call in enumerate(calls, start=1):
@@ -232,7 +242,7 @@ def run_calls(service, name, scenario, work, calls, peer, deferred=None, binary=
             if binary is None:
                 raise AssertionError(
                     "a cli step needs the engine binary (harness defect)")
-            cli_row = run_cli(binary, name, call, work)
+            cli_row = run_cli(binary, name, call, work, peak=peak)
             file_oracles(call, name, work, deferred, cli_row)
             observed.append(cli_row)
             continue
@@ -430,7 +440,7 @@ def run_engine(binary, name, scenario, work, calls, peer=None, engine_work=None,
         sampler.start()
     try:
         result = run_calls(service, name, scenario, engine_work, calls, peer,
-                           deferred=deferred, binary=binary)
+                           deferred=deferred, binary=binary, peak=peak)
     except BaseException as exc:
         # The exchange or an oracle already failed: close must not
         # mask it with its own strict-session verdict (a peer that
