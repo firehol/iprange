@@ -26,6 +26,10 @@
   {
    "path": "mixdir/subdir/.keep",
    "text": "\n"
+  },
+  {
+   "path": "mixdir/valid-noext",
+   "text": "10.0.0.7\n"
   }
  ],
  "cli": [
@@ -69,7 +73,7 @@
    ],
    "expect": {
     "exit": 0,
-    "stdout": "10.0.0.5\n"
+    "stdout": "10.0.0.5\n10.0.0.7\n"
    }
   }
  ]

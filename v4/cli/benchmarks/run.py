@@ -249,6 +249,15 @@ def run_cli(binary, name, call, work, peak=None):
                         chunk = b""
                     if chunk:
                         sink.append(chunk)
+                # NOTE on peak RSS: VmHWM is sampled at ~1 ms granularity
+                # while the child lives (the loop-top sample); wait4's
+                # ru_maxrss is NOT usable here — a forked child inherits
+                # the parent's address space pre-exec, so its ru_maxrss
+                # floor is the parent python's RSS (~14-25 MiB), not the
+                # exec'd engine's peak. Sub-10ms CLI steps may therefore
+                # report an early-instant VmHWM (a lower bound); the
+                # acceptance ceiling (seconds-long children) is
+                # unaffected — recorded as a measurement limitation.
                 if proc.poll() is not None:
                     # Drain any residue after the child's exit, then stop —
                     # bounded by the same deadline (a leaked writer holding
@@ -274,15 +283,6 @@ def run_cli(binary, name, call, work, peak=None):
         proc.stderr.close()
         proc.stdout.close()
         returncode = proc.returncode
-        if peak is not None:
-            # The authoritative peak: the child's ru_maxrss from wait4 —
-            # a sub-millisecond child's VmHWM sampled mid-flight can be
-            # a pre-workload partial (r101/r103 carried P2).
-            try:
-                _pid, _status, usage = os.wait4(proc.pid, 0)
-                peak["kib"] = max(peak["kib"], int(usage.ru_maxrss))
-            except (ChildProcessError, OSError):
-                pass
     finally:
         if stdin_stream is not subprocess.DEVNULL:
             stdin_stream.close()
@@ -670,10 +670,17 @@ def run_perf(scenario, rust, go, rounds, work):
             # Cross-open reads, paired exactly like correctness mode:
             # the go engine reads what rust published (joining the go
             # round), and vice versa.
-            rust_reads = timed("go", go, "go-reads-rust", read_calls,
-                               go_work, peer="from-rust", extend=True)
-            go_reads = timed("rust", rust, "rust-reads-go", read_calls,
-                             rust_work, peer="from-go", extend=True)
+            # Alternate the read leg with the write leg's order.
+            if round_index % 2 == 0:
+                rust_reads = timed("go", go, "go-reads-rust", read_calls,
+                                   go_work, peer="from-rust", extend=True)
+                go_reads = timed("rust", rust, "rust-reads-go", read_calls,
+                                 rust_work, peer="from-go", extend=True)
+            else:
+                go_reads = timed("rust", rust, "rust-reads-go", read_calls,
+                                 rust_work, peer="from-go", extend=True)
+                rust_reads = timed("go", go, "go-reads-rust", read_calls,
+                                   go_work, peer="from-rust", extend=True)
         # Every clock is stopped: run the deferred file oracles, then
         # the same comparison correctness mode applies to the same
         # observation pairing — a wrong answer fails the perf run.
