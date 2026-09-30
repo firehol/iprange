@@ -274,6 +274,15 @@ def run_cli(binary, name, call, work, peak=None):
         proc.stderr.close()
         proc.stdout.close()
         returncode = proc.returncode
+        if peak is not None:
+            # The authoritative peak: the child's ru_maxrss from wait4 —
+            # a sub-millisecond child's VmHWM sampled mid-flight can be
+            # a pre-workload partial (r101/r103 carried P2).
+            try:
+                _pid, _status, usage = os.wait4(proc.pid, 0)
+                peak["kib"] = max(peak["kib"], int(usage.ru_maxrss))
+            except (ChildProcessError, OSError):
+                pass
     finally:
         if stdin_stream is not subprocess.DEVNULL:
             stdin_stream.close()
@@ -642,8 +651,15 @@ def run_perf(scenario, rust, go, rounds, work):
                 elapsed[label].append(span)
             return observations
 
-        rust_obs = timed("rust", rust, "rust", write_calls, rust_work)
-        go_obs = timed("go", go, "go", write_calls, go_work)
+        # Alternate the engine order each round (run-order-correlated
+        # drift — e.g. a first-run warm-up effect — must not bias every
+        # timed pair the same direction; the ceiling alternates too).
+        if round_index % 2 == 0:
+            rust_obs = timed("rust", rust, "rust", write_calls, rust_work)
+            go_obs = timed("go", go, "go", write_calls, go_work)
+        else:
+            go_obs = timed("go", go, "go", write_calls, go_work)
+            rust_obs = timed("rust", rust, "rust", write_calls, rust_work)
         rust_reads = []
         go_reads = []
         if read_calls:
