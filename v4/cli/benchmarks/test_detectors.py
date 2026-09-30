@@ -842,3 +842,39 @@ class CancelDrainBoundsTest(unittest.TestCase):
                                quiet_window=0.2, aggregate_cap=5.0,
                                poll_interval=0.01)
         self.assertLess(_time.monotonic() - started, 2)
+
+
+class AstraTurn3DetectorTest(unittest.TestCase):
+    """Pins for the three astra turn-3 fixes that shipped without
+    detecting tests: the capability probe's close-once, the buffered
+    drain bound, and the C cursor extension class (source pins in the
+    established pattern)."""
+
+    def test_capability_probe_closes_exactly_once(self):
+        import inspect
+        import run as cli_run
+        source = inspect.getsource(cli_run.describe_capabilities)
+        self.assertNotIn("finally:\n                service.close()", source,
+                         "the probe must not double-close in a finally")
+        self.assertIn("close(broken_exchange=True)", source)
+        self.assertIn("capability probe close failed", source)
+
+    def test_buffered_drain_is_bounded(self):
+        import inspect
+        import run as cli_run
+        source = inspect.getsource(cli_run.JsonRpcService._drain_trailing_stdout)
+        self.assertIn("watcher.join(timeout=5.0)", source,
+                      "the buffered drain must be time-bounded")
+        self.assertIn("no EOF within 5s", source,
+                      "a missing EOF must be reported explicitly")
+
+    def test_c_corpus_compares_reader_cursor_boundaries(self):
+        path = "v4/rust/iprange-capi/tests/native/abi_cases.c"
+        with open(path, encoding="utf-8") as stream:
+            source = stream.read()
+        self.assertIn("iprange_v4_abi1_reader_open_direct_cursor", source)
+        self.assertIn("iprange_v4_abi1_reader_open_membership_cursor", source)
+        self.assertIn("iprange_v4_abi1_reader_open_network_enrichment_v1_cursor", source)
+        self.assertIn("CHECK(seen < count); /* the reader yields no extra ranges */", source)
+        self.assertIn("CHECK(same_address(got.from, ranges[seen].from));", source)
+        self.assertIn("CHECK(same_address(got.to, ranges[seen].to));", source)

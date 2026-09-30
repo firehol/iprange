@@ -22361,7 +22361,7 @@ dispositioned, not silently carried:
   Followup names the sizes and leaves the decision to that SOW. This
   milestone does not decide it.
 - **Elapsed-ratio cross-session spread.** Forty-three recorded
-  ceiling sessions at byte-identical binaries (r2 1.159 — elapsed
+  ceiling sessions (the first thirty at the pre-rebuild binaries, the rest at the rebuilt pair — each population byte-identical within itself; r2 1.159 — elapsed
   and RSS only, no CPU recorded; r4 1.244; each of rounds 5 through
   19; the round-32 through round-46 rebinds at 1.184, 1.193, 1.266,
   1.203, 1.186, 1.241, 1.234, 1.203, 1.193, 1.108, and 1.248; the
