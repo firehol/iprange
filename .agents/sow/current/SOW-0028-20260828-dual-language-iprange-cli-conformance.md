@@ -22507,14 +22507,13 @@ s0-detect field print, the l10 wording); the round-102 wave
 (`fbff22ff`) pinned the residue-drain bound at source and made the
 l10 mechanism gloss accurate, and its records pass re-did the
 records edits that had silently not landed (test-count rows,
-restage-history provenance, the header topology, the 37-session
-spread). The r105 panel verified the round-105 code; its wait4 peak-RSS
+restage-history provenance, the 37-session spread — the header
+topology landed in round 107). The r105 panel verified the round-105 code; its wait4 peak-RSS
 attempt was reverted in round 107 (fork-inheritance: a forked child's
 ru_maxrss floors at the parent python's RSS — the limitation is
 documented at the code site), the read leg alternates with the write
 leg, and l10's entry selection now distinguishes extension-agnostic
-loading with a valid extensionless ipset fixture. The ceiling census
-counts thirty-nine sessions. The seven-role re-review of the latest wave and the astra
+loading with a valid extensionless ipset fixture. The ceiling census count is the kit census row's (forty sessions as of the round-109 rebind). The seven-role re-review of the latest wave and the astra
 re-review are the pending gates.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
