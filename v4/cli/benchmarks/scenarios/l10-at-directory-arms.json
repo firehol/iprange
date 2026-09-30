@@ -24,8 +24,8 @@
    "text": "\u0000\u0001garbage\n"
   },
   {
-   "path": "mixdir/subdir/.keep",
-   "text": "\n"
+   "path": "mixdir/subdir/inner.txt",
+   "text": "10.0.0.9\n"
   },
   {
    "path": "mixdir/valid-noext",

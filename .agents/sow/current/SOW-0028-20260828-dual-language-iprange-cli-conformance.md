@@ -22506,9 +22506,9 @@ bounds, the harness wiring pins, the ResourceWarning closure, the
 s0-detect field print, the l10 wording); the round-102 wave
 (`fbff22ff`) pinned the residue-drain bound at source and made the
 l10 mechanism gloss accurate, and its records pass re-did the
-records edits that had silently not landed (test-count rows,
-restage-history provenance, the 37-session spread — the header
-topology landed in round 107). The r105 panel verified the round-105 code; its wait4 peak-RSS
+records edits that had silently not landed (test-count rows, restage-history provenance, the 37-session
+spread; the header topology itself landed in the round-104 records
+pass, the header provenance wording generalization in round 107). The r105 panel verified the round-105 code; its wait4 peak-RSS
 attempt was reverted in round 107 (fork-inheritance: a forked child's
 ru_maxrss floors at the parent python's RSS — the limitation is
 documented at the code site), the read leg alternates with the write
