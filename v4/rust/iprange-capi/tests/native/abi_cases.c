@@ -1264,7 +1264,8 @@ static int check_fixture(const char *corpus, const char *slice, const char *slic
                 }
                 seen++;
             }
-            CHECK(1); /* the loop above pinned every boundary */
+            CHECK(seen == count); /* the reader yielded exactly the
+             * manifest's ranges — no short yield */
             (void)cursor_error;
         }
         CHECK(iprange_v4_abi1_cursor_close(cursor, &cursor_error) ==

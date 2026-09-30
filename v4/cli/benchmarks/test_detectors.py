@@ -876,5 +876,7 @@ class AstraTurn3DetectorTest(unittest.TestCase):
         self.assertIn("iprange_v4_abi1_reader_open_membership_cursor", source)
         self.assertIn("iprange_v4_abi1_reader_open_network_enrichment_v1_cursor", source)
         self.assertIn("CHECK(seen < count); /* the reader yields no extra ranges */", source)
+        self.assertIn("CHECK(seen == count);", source,
+                      "the under-yield direction must be pinned too")
         self.assertIn("CHECK(same_address(got.from, ranges[seen].from));", source)
         self.assertIn("CHECK(same_address(got.to, ranges[seen].to));", source)
