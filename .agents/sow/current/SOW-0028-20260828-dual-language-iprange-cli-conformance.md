@@ -22524,10 +22524,15 @@ C corpus compares reader cursor boundaries with the manifest in both
 directions (extension and under-yield); the cancelled publish refuses
 commit-phase outcomes; l11 exercises the IPv6 binary v2 write; the
 buffered drain is bounded with an explicit missing-EOF report; the
-perf sweep driver enforces its gate contract with a private scratch
-directory; the SOW's binary-continuity wording corrected (two
-populations). The seven-role re-review and astra turn 4 are the
-pending gates.
+perf sweep driver enforces its gate contract (the negative control
+must fail naming its field, every other scenario must succeed, report
+failures propagate); the perf sweep driver runs from a private scratch
+directory with no shared /tmp names; the SOW's binary-continuity
+wording corrected (two populations). The turn-3 finding texts are
+staged at `.local/shared/evidence/m5-astra/turn-3-review.txt` (nine
+in-scope slugs; the tenth — the export-writer creation-time mode — is
+SOW-0034's, excluded from this verdict). The seven-role re-review and
+astra turn 4 are the pending gates.
 
 **Milestone 5 status: OPEN.** The paragraphs above record what is in
 the tree and what has been measured. They are not a close claim. The
